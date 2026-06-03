@@ -248,6 +248,70 @@ func main() {
 	assertMethodWithReceiver(t, rows, "Box.Speak", "*example.test/fixture.Box[int]")
 }
 
+func TestEmitDeduplicatesMethodSetForSamePackageGenericAlias(t *testing.T) {
+	// FIX-07 (review #4): a SAME-PACKAGE type alias to a GENERIC INSTANTIATION
+	// (`type IntBox = Box[int]`) is harvested by TWO independent method_set emitters that
+	// produce the IDENTICAL canonical stable_key when `Box[int]` is reachable both ways:
+	//   - emitInstantiatedMethodSets sees the reachable RuntimeTypes() instantiation Box[int]
+	//     (from the DIRECT `Box[int]{...}` conversion below) and emits a method_set keyed
+	//     `stableKey(pkg,"method_set","...Box[int]")`.
+	//   - emitMethodSets walks package scope, finds the alias TypeName IntBox, and (since
+	//     FIX-05) canonicalizes it through types.Unalias to the SAME underlying `...Box[int]`,
+	//     emitting a method_set with the IDENTICAL stable_key.
+	// They use SEPARATE per-function `seen` maps, so BOTH rows survive — a duplicate
+	// non-empty stable_key. Downstream `validate_unique("method_set", ...)` then rejects the
+	// whole Go fact set (zero functions/callsites/edges repo-wide). The emit must produce AT
+	// MOST ONE method_set row per canonical stable_key across BOTH emitters.
+	root := writeFixture(t, map[string]string{
+		"go.mod": "module example.test/fixture\n\ngo 1.24\n",
+		"main.go": `package main
+
+import "fmt"
+
+type Speaker interface{ Speak() string }
+
+type Box[T any] struct{ v T }
+
+func (b Box[T]) Speak() string { return fmt.Sprint(b.v) }
+
+// IntBox is a SAME-PACKAGE type ALIAS for the generic INSTANTIATION Box[int].
+type IntBox = Box[int]
+
+// useDirect makes Box[int] reachable via its NON-alias spelling too, so the SSA
+// RuntimeTypes() set records the instantiation and emitInstantiatedMethodSets fires on
+// Box[int] — colliding with emitMethodSets' alias-canonicalized Box[int] row.
+func useDirect() Speaker { return Box[int]{v: 2} }
+
+func main() {
+	var s Speaker = IntBox{v: 1}
+	fmt.Println(s.Speak())
+	fmt.Println(useDirect().Speak())
+}
+`,
+	})
+	rows, err := Emit(Config{Root: root, ModuleRoots: []string{"."}, Patterns: []string{"./..."}, IncludeTests: false})
+	if err != nil {
+		t.Fatalf("Emit failed: %v", err)
+	}
+
+	// No two method_set rows may share a stable_key (the alias↔instantiation collision must
+	// be coordinated to a single keep-first row).
+	assertNoDuplicateMethodSetStableKey(t, rows)
+	// Exactly one method_set row is keyed by the canonical instantiated identity Box[int].
+	assertSingleMethodSetKeyedBy(t, rows, "example.test/fixture.Box[int]")
+	// The surviving row still carries the satisfying method.
+	assertMethodSetContains(t, rows, "example.test/fixture.Box[int]", "Speak")
+	// The concrete instantiated method VALUE is STILL emitted (gating the duplicate method_set
+	// row must not suppress the method row emitInstantiatedMethodSets also produces).
+	assertMethodWithReceiver(t, rows, "Box.Speak", "*example.test/fixture.Box[int]")
+	// The SECOND collision the alias+direct scenario surfaces: the instantiated method VALUE
+	// `(*Box[int]).Speak` is harvested via BOTH the ssaFunctions walk AND
+	// emitInstantiatedMethodSets, so its function/method row must be emitted exactly ONCE — a
+	// duplicate function stable_key fails validate_unique (a STRUCTURAL family) and zeroes the
+	// whole Go fact set just as a duplicate method_set would.
+	assertNoDuplicateFunctionStableKey(t, rows)
+}
+
 func TestEmitCanonicalizesTypeAliasToUnderlyingForDispatch(t *testing.T) {
 	// FIX 3: a value of a type ALIAS converted to an interface must dispatch to the
 	// underlying type's method. For `type AliasDog = Dog; var s Speaker = AliasDog{}`,
@@ -586,6 +650,57 @@ func assertNoMethodSetKeyedBy(t *testing.T, rows []Row, typeName string) {
 		if row["kind"] == "method_set" && row["type"] == typeName {
 			t.Fatalf("unexpected method_set keyed by %q (must canonicalize to underlying): %#v", typeName, row)
 		}
+	}
+}
+
+func assertNoDuplicateMethodSetStableKey(t *testing.T, rows []Row) {
+	t.Helper()
+	seen := make(map[string]bool)
+	for _, row := range rows {
+		if row["kind"] != "method_set" {
+			continue
+		}
+		key, ok := row["stable_key"].(string)
+		if !ok || key == "" {
+			t.Fatalf("method_set row missing stable_key: %#v", row)
+		}
+		if seen[key] {
+			t.Fatalf("duplicate method_set stable_key %q (alias↔instantiation collision): %#v", key, row)
+		}
+		seen[key] = true
+	}
+}
+
+func assertNoDuplicateFunctionStableKey(t *testing.T, rows []Row) {
+	t.Helper()
+	seen := make(map[string]bool)
+	for _, row := range rows {
+		switch row["kind"] {
+		case "function", "method", "init_function":
+		default:
+			continue
+		}
+		key, ok := row["stable_key"].(string)
+		if !ok || key == "" {
+			t.Fatalf("%v row missing stable_key: %#v", row["kind"], row)
+		}
+		if seen[key] {
+			t.Fatalf("duplicate %v stable_key %q (cross-harvest-path collision): %#v", row["kind"], key, row)
+		}
+		seen[key] = true
+	}
+}
+
+func assertSingleMethodSetKeyedBy(t *testing.T, rows []Row, typeName string) {
+	t.Helper()
+	count := 0
+	for _, row := range rows {
+		if row["kind"] == "method_set" && row["type"] == typeName {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly one method_set keyed by %q, got %d in %#v", typeName, count, rows)
 	}
 }
 

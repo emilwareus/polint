@@ -339,6 +339,71 @@ fn generic_dispatch_fixture_resolves_method_on_instantiated_generic_type() {
 }
 
 #[test]
+fn alias_generic_dispatch_fixture_keeps_facts_and_resolves_through_same_package_alias() {
+    // Review #4 (HIGH / catastrophic): a SAME-PACKAGE alias to a generic INSTANTIATION
+    // (`type IntBox = Box[int]`) whose `Box[int]` is ALSO directly reachable makes TWO
+    // independent sidecar method_set emitters both emit a method_set keyed by the canonical
+    // instantiated identity `...Box[int]`: emitMethodSets canonicalizes the alias TypeName
+    // through types.Unalias (FIX-05), and emitInstantiatedMethodSets harvests the reachable
+    // RuntimeTypes() instantiation. With separate `seen` maps both rows survived → a
+    // DUPLICATE non-empty method_set stable_key → `validate_unique("method_set", ...)`
+    // rejected the WHOLE Go fact set → `replace_go_semantic_facts` stored NOTHING → RTA
+    // derived ZERO edges repo-wide. The fix coordinates the two emitters (keep-first one row
+    // per canonical stable_key), so the Go facts stay NON-EMPTY and the dispatch resolves to
+    // the instantiated (Box[int]).Speak.
+    let dir = go_rta_fixture_dir("alias-generic-dispatch");
+    let output = run_fixture_kernel(&dir);
+    let budget = solver_budget_for_fixture(&dir);
+    let solver_output = solver_output_for_db(&output.db, budget);
+    let nodes = function_nodes(&output.db);
+
+    // (a) The Go semantic facts are NON-ZERO — the duplicate method_set must NOT zero the
+    // whole fact set. Before the fix `validate_unique` rejected the output and the DB held
+    // zero Go functions; after the fix the functions (including the dispatched method) survive.
+    assert!(
+        !output.db.go_semantic_functions().is_empty(),
+        "the duplicate alias↔instantiation method_set must NOT zero the Go fact set: \
+         go_semantic_functions is empty (the whole repository's RTA collapses to zero edges)"
+    );
+
+    // (b) The interface invoke resolves to the instantiated generic type's method.
+    let box_speak = nodes
+        .iter()
+        .find(|(qualified, _)| qualified.contains("Box[int]") && qualified.ends_with(".Speak"))
+        .map(|(_, node)| *node)
+        .unwrap_or_else(|| {
+            panic!("(Box[int]).Speak must have a semantic node; got nodes {nodes:#?}")
+        });
+    assert!(
+        solver_output
+            .derived_edges
+            .iter()
+            .any(|edge| edge.target == box_speak),
+        "RTA must resolve the interface invoke to the instantiated (Box[int]).Speak despite \
+         the same-package alias collision: {:#?}",
+        solver_output.derived_edges
+    );
+    for edge in &solver_output.derived_edges {
+        assert!(
+            edge.honors_precision_ceiling(),
+            "RTA derived edges must never claim exact precision (D-08): {edge:#?}"
+        );
+    }
+    assert_eq!(solver_output.budget_status, BudgetStatus::WithinBudget);
+
+    // The KERNEL-PERSISTED edges (the rows the provider actually stored) must also carry the
+    // resolved dispatch — catches a provider-wiring regression the recompute masks, and is
+    // the end-to-end proof the fact set survived storage.
+    let persisted = output.db.solver_derived_edges();
+    assert!(
+        persisted.iter().any(|edge| edge.target == box_speak),
+        "the kernel-PERSISTED solver edges must include the (Box[int]).Speak edge: {persisted:#?}"
+    );
+
+    assert_solver_output_byte_stable(&output.db, budget);
+}
+
+#[test]
 fn static_reachability_fixture_resolves_dispatch_in_statically_reached_function() {
     // FINDING 1 / standard RTA: `main` (a root) makes a DIRECT (static) call to the
     // UNEXPORTED helper `runDispatch` (NOT a root). The interface invoke `s.Speak()`

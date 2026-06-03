@@ -1,0 +1,30 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "go-rta-alias-generic-dispatch"
+area = "go-rta"
+
+# Phase 48 review #4 — same-package alias-to-generic-instantiation method_set collision.
+#
+# repo/main.go declares a Speaker interface satisfied by a method on a GENERIC type Box[T],
+# plus `type IntBox = Box[int]` (a SAME-PACKAGE alias to the generic INSTANTIATION) AND a
+# direct `Box[int]{...}` conversion. Two independent sidecar method_set emitters then BOTH
+# emit a method_set keyed by the canonical instantiated identity `...Box[int]`:
+#   - emitMethodSets canonicalizes the alias TypeName IntBox through types.Unalias (FIX-05),
+#   - emitInstantiatedMethodSets harvests the reachable RuntimeTypes() instantiation Box[int].
+# With separate `seen` maps both rows survived → a DUPLICATE non-empty method_set stable_key
+# → `validate_unique("method_set", ...)` rejected the WHOLE Go fact set → RTA derived ZERO
+# edges repo-wide (a HIGH/catastrophic "one bad row zeroes the whole fact set" regression).
+# The fix coordinates the two emitters to keep exactly ONE method_set row per canonical
+# stable_key, so the Go facts stay non-empty and the interface invoke of `Speak` resolves to
+# the instantiated (Box[int]).Speak.
+#
+# The executable proof lives in `eval::go_rta` (it asserts the Go semantic functions are
+# NON-empty and >= 1 RTA-resolved derived edge targets (Box[int]).Speak); this manifest
+# documents the contract. No `[[expected]]` row is captured because the solver-derived edges
+# are crate-private and not observable manifest facts (Phase 52 wires them into the
+# observable refined-call projection).
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 120000

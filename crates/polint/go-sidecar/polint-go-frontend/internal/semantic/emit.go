@@ -46,6 +46,33 @@ type emitter struct {
 	root string
 	fset *token.FileSet
 	rows []Row
+	// emittedMethodSetKeys coordinates the TWO method_set emitters (emitMethodSets and
+	// emitInstantiatedMethodSets) so AT MOST ONE method_set row is emitted per canonical
+	// stable_key across BOTH. A SAME-PACKAGE alias to a generic instantiation
+	// (`type IntBox = Box[int]`) is canonicalized by emitMethodSets through types.Unalias to
+	// `...Box[int]`, while emitInstantiatedMethodSets independently harvests the reachable
+	// RuntimeTypes() instantiation `Box[int]` — two rows with the IDENTICAL stable_key. The
+	// store does NOT dedup method_sets (they are keyed by unique declaration identity), so a
+	// duplicate non-empty key is a hard `validate_unique` conflict that zeroes the ENTIRE Go
+	// fact set (review #4). This emitter-scoped set suppresses the SECOND row (keep-first):
+	// for the alias↔instantiation collision both rows' method lists are identical, so
+	// keep-first is lossless. A package with no such collision never triggers a skip, so its
+	// emitted rows are byte-identical to before this set existed.
+	emittedMethodSetKeys map[string]bool
+	// emittedFunctionKeys makes emitFunction idempotent per (package_id, fn.String()) stable
+	// key. A concrete method VALUE of a reachable generic instantiation can be harvested via
+	// TWO entry points — the per-function `ssaFunctions` walk in emitSSAPackage AND
+	// emitInstantiatedMethodSets' `emitFunction` on the instantiated method-set — yielding
+	// two function/method rows with the IDENTICAL stable_key. When the SAME instantiation is
+	// reachable via BOTH a same-package alias (`type IntBox = Box[int]`) AND its direct
+	// spelling, x/tools surfaces `(*Box[int]).Speak` through both paths, so without this guard
+	// the row duplicates → `validate_unique("function", ...)` rejects the ENTIRE Go fact set
+	// (a STRUCTURAL family is, correctly, NOT row-resilient) → RTA derives zero edges
+	// repo-wide (review #4). Keep-first at the SOURCE keeps the validator strict while
+	// suppressing the spurious duplicate. `fn.String()` is the official SSA identity, so two
+	// genuinely-distinct functions never share a key; a package without the cross-path
+	// collision never repeats one, so its rows stay byte-identical.
+	emittedFunctionKeys map[string]bool
 }
 
 func Emit(config Config) ([]Row, error) {
@@ -102,7 +129,12 @@ func Emit(config Config) ([]Row, error) {
 		return packageID(ssaPkgs[i]) < packageID(ssaPkgs[j])
 	})
 
-	e := &emitter{root: root, fset: fset}
+	e := &emitter{
+		root:                 root,
+		fset:                 fset,
+		emittedMethodSetKeys: make(map[string]bool),
+		emittedFunctionKeys:  make(map[string]bool),
+	}
 	e.add(Row{
 		"kind":            "session_begin",
 		"schema":          SchemaVersion,
@@ -197,6 +229,19 @@ func (e *emitter) emitFunction(pkg *ssa.Package, fn *ssa.Function) {
 		})
 		return
 	}
+	// Keep-first per (package_id, fn.String()) so a method VALUE reachable via two harvest
+	// paths (the ssaFunctions walk AND emitInstantiatedMethodSets) emits exactly ONE
+	// function/method row — never a duplicate stable_key that fails validate_unique and
+	// zeroes the whole Go fact set (review #4). Gating here also suppresses the duplicate's
+	// sibling receiver_type row (its key would likewise collide). A package without the
+	// cross-path collision never repeats a key, so this is a no-op and rows stay
+	// byte-identical. The `unsupported`-synthetic early return above is intentionally
+	// ungated (no stable_key, distinct kind, not a validate_unique family).
+	functionKey := stableKey(packageID(pkg), fn.String())
+	if e.emittedFunctionKeys[functionKey] {
+		return
+	}
+	e.emittedFunctionKeys[functionKey] = true
 	kind := "function"
 	if isInit {
 		kind = "init_function"
@@ -226,7 +271,7 @@ func (e *emitter) emitFunction(pkg *ssa.Package, fn *ssa.Function) {
 		"name":         name,
 		"qualified":    fn.String(),
 		"signature":    signatureString(fn.Signature),
-		"stable_key":   stableKey(packageID(pkg), fn.String()),
+		"stable_key":   functionKey,
 	}
 	if syntax := fn.Syntax(); syntax != nil {
 		if pos := e.positionSpan(syntax.Pos(), syntax.End()); pos != nil {
@@ -516,6 +561,35 @@ func callSyntax(fn *ssa.Function, call ssa.CallInstruction) ast.Node {
 	return best
 }
 
+// addMethodSet emits a single `method_set` row for `identity` (already the canonical,
+// alias-resolved type string) carrying `methods`, coordinating the TWO method_set emitters
+// so AT MOST ONE row survives per canonical stable_key across BOTH (review #4). The two
+// emitters compute the IDENTICAL stable_key for the same canonical identity, so a
+// SAME-PACKAGE alias to a generic instantiation (`type IntBox = Box[int]`) would otherwise
+// emit two rows with the same key — a hard `validate_unique` conflict that zeroes the whole
+// Go fact set. Keep-first: if the key was already emitted (by either emitter) the row is
+// SKIPPED. This gates ONLY the method_set row; emitInstantiatedMethodSets still emits its
+// concrete method VALUE rows regardless. A package without such a collision never repeats a
+// key, so this is a no-op there and the emitted rows are byte-identical to before.
+func (e *emitter) addMethodSet(pkg *ssa.Package, identity string, methods []string) {
+	if identity == "" {
+		return
+	}
+	key := stableKey(packageID(pkg), "method_set", identity)
+	if e.emittedMethodSetKeys[key] {
+		return
+	}
+	e.emittedMethodSetKeys[key] = true
+	e.add(Row{
+		"kind":         "method_set",
+		"package_id":   packageID(pkg),
+		"package_path": packagePath(pkg),
+		"type":         identity,
+		"methods":      methods,
+		"stable_key":   key,
+	})
+}
+
 func (e *emitter) emitMethodSets(pkg *ssa.Package) {
 	scope := pkg.Pkg.Scope()
 	// De-duplicate by the CANONICAL (alias-resolved) identity (FIX 3). Package scope can
@@ -526,8 +600,10 @@ func (e *emitter) emitMethodSets(pkg *ssa.Package) {
 	// hard validation conflict that zeroes the whole Go fact set, so keep the FIRST
 	// occurrence (its method-set is identical — go/types resolves both through the alias). A
 	// package with no aliases has a unique canonical identity per type, so this is a no-op
-	// and byte-identity is preserved.
-	seen := make(map[string]bool)
+	// and byte-identity is preserved. The keep-first guard now lives in `addMethodSet`'s
+	// emitter-scoped set, which ALSO coordinates with emitInstantiatedMethodSets so an alias
+	// to a generic INSTANTIATION (`type IntBox = Box[int]`) cannot collide with the
+	// instantiated harvest (review #4).
 	for _, name := range scope.Names() {
 		obj := scope.Lookup(name)
 		typeName, ok := obj.(*types.TypeName)
@@ -540,10 +616,9 @@ func (e *emitter) emitMethodSets(pkg *ssa.Package) {
 		}
 		// Key by the underlying identity so an alias and its target collapse to one row.
 		identity := canonicalTypeString(typeName.Type())
-		if identity == "" || seen[identity] {
+		if identity == "" {
 			continue
 		}
-		seen[identity] = true
 		var methods []string
 		for i := 0; i < methodSet.Len(); i++ {
 			// The method-set carries the bare method NAME (the identifier, e.g.
@@ -557,15 +632,9 @@ func (e *emitter) emitMethodSets(pkg *ssa.Package) {
 		sort.Strings(methods)
 		// `identity` is the canonical (alias-resolved) type string computed above, so the
 		// method_set, the canonicalized instantiated_type, and the concrete method's
-		// receiver all share one identity and the RTA join succeeds.
-		e.add(Row{
-			"kind":         "method_set",
-			"package_id":   packageID(pkg),
-			"package_path": packagePath(pkg),
-			"type":         identity,
-			"methods":      methods,
-			"stable_key":   stableKey(packageID(pkg), "method_set", identity),
-		})
+		// receiver all share one identity and the RTA join succeeds. addMethodSet keeps the
+		// FIRST row per canonical stable_key across BOTH method_set emitters.
+		e.addMethodSet(pkg, identity, methods)
 	}
 }
 
@@ -637,19 +706,21 @@ func (e *emitter) emitInstantiatedMethodSets(pkg *ssa.Package) {
 			// Emit the concrete method VALUE so the resolved edge has a target node. A
 			// promotion/instantiation wrapper has a valid source position pointing back
 			// at the generic declaration, so emitFunction can join it to the core node.
+			// This is emitted UNCONDITIONALLY (before the method_set gate below) so a
+			// skipped duplicate method_set row never suppresses the method value — the gate
+			// covers ONLY the method_set row (review #4).
 			if fn := prog.MethodValue(methodSet.At(i)); fn != nil {
 				e.emitFunction(pkg, fn)
 			}
 		}
 		sort.Strings(methods)
-		e.add(Row{
-			"kind":         "method_set",
-			"package_id":   packageID(pkg),
-			"package_path": packagePath(pkg),
-			"type":         inst.named.String(),
-			"methods":      methods,
-			"stable_key":   stableKey(packageID(pkg), "method_set", inst.named.String()),
-		})
+		// addMethodSet keeps the FIRST method_set row per canonical stable_key across BOTH
+		// emitters. For a SAME-PACKAGE alias to this instantiation (`type IntBox = Box[int]`),
+		// emitMethodSets already emitted the IDENTICAL canonical `...Box[int]` key (its method
+		// list is identical), so this row is skipped keep-first — never a duplicate that
+		// zeroes the whole Go fact set. `inst.named.String()` is the canonical instantiated
+		// identity (no alias to resolve).
+		e.addMethodSet(pkg, inst.named.String(), methods)
 	}
 }
 
