@@ -89,7 +89,7 @@ use crate::go::semantic::facts::{
     GoSemanticFunctionFact, GoSemanticInstantiatedTypeFact, GoSemanticMethodSetFact,
     GoSemanticPackageErrorFact, GoSemanticPackageFact,
 };
-use crate::go::semantic::store::{GoSemanticFactsOutput, GoSemanticStore};
+use crate::go::semantic::store::{GoSemanticFactsOutput, GoSemanticStore, GoSemanticStoreReport};
 use crate::module_graph::topology::{
     DependencyRequirementFact, ImportToPackageFact, RepoTopologyOverlayFact,
     ResolvedDependencyEdgeFact, SourceSetFact, TopologyOutput, TopologyPackageFact,
@@ -1475,13 +1475,14 @@ impl AnalysisDb {
         &self.solver_derived_edges
     }
 
-    /// Store the Go semantic facts, returning the count of malformed RTA-signal harvest
-    /// rows dropped (FIX 3) so the provider can surface an observable diagnostic. Zero on a
+    /// Store the Go semantic facts, returning the resilience report (malformed RTA-signal
+    /// harvest rows dropped, FIX 3; plus duplicate structural rows collapsed keep-first,
+    /// FIX-08) so the provider can surface observable diagnostics. All counts are zero on a
     /// clean frontend run.
     pub(crate) fn replace_go_semantic_facts(
         &mut self,
         output: GoSemanticFactsOutput,
-    ) -> Result<usize, AnalysisError> {
+    ) -> Result<GoSemanticStoreReport, AnalysisError> {
         let store = GoSemanticStore::from_output(output)?;
         self.go_semantic_packages = store.output().packages.clone();
         self.go_semantic_functions = store.output().functions.clone();
@@ -1491,7 +1492,7 @@ impl AnalysisDb {
         self.go_semantic_instantiated_types = store.output().instantiated_types.clone();
         self.go_semantic_dynamic_dispatch = store.output().dynamic_dispatch.clone();
         self.go_semantic_package_errors = store.output().package_errors.clone();
-        Ok(store.dropped_harvest_rows())
+        Ok(store.report())
     }
 
     pub(crate) fn go_semantic_packages(&self) -> &[GoSemanticPackageFact] {

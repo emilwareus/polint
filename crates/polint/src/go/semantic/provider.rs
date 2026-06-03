@@ -14,7 +14,7 @@ use crate::go::semantic::diagnostics::{
 };
 use crate::go::semantic::lower::lower_go_semantic;
 use crate::go::semantic::process::GoSemanticProcessError;
-use crate::go::semantic::store::GoSemanticFactsOutput;
+use crate::go::semantic::store::{GoSemanticFactsOutput, StructuralDuplicateReport};
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct GoSemanticProviderRunOutput {
@@ -246,15 +246,21 @@ fn store_output(
         &output,
     );
     match db.replace_go_semantic_facts(output) {
-        // `replace_go_semantic_facts` returns the count of malformed RTA-signal harvest
-        // rows it dropped (FIX 3). Surface a counted diagnostic when any were dropped so a
-        // systematic frontend regression (e.g. every method_set losing its stable_key) is
-        // OBSERVABLE rather than silently under-resolving repo-wide.
-        Ok(dropped_harvest_rows) => {
+        // `replace_go_semantic_facts` returns the resilience report: the count of malformed
+        // RTA-signal harvest rows it dropped (FIX 3) and the duplicate STRUCTURAL rows it
+        // collapsed keep-first (FIX-08). Surface a counted diagnostic for each so a systematic
+        // frontend regression (e.g. every method_set losing its stable_key, or an emitter
+        // double-emitting one structural key) is OBSERVABLE rather than silently
+        // under-resolving — or, in the structural case, no longer catastrophically zeroing all
+        // Go RTA repo-wide.
+        Ok(report) => {
             let mut diagnostics = parts.diagnostics;
-            if dropped_harvest_rows > 0 {
-                diagnostics.push(dropped_harvest_rows_diagnostic(dropped_harvest_rows));
+            if report.dropped_harvest_rows > 0 {
+                diagnostics.push(dropped_harvest_rows_diagnostic(report.dropped_harvest_rows));
             }
+            diagnostics.extend(structural_duplicate_diagnostics(
+                &report.structural_duplicates,
+            ));
             GoSemanticProviderRunOutput {
                 diagnostics,
                 cache_stats: parts.cache_stats,
@@ -449,6 +455,42 @@ fn dropped_harvest_rows_diagnostic(dropped: usize) -> Diagnostic {
     )
 }
 
+/// Observable signal that duplicate STRUCTURAL rows (packages/functions/method_sets) were
+/// collapsed keep-first (FIX-08). A SINGLE duplicate structural stable key used to make
+/// `validate_unique` reject the whole output, leaving the DB with ZERO Go facts and driving
+/// RTA to zero edges repo-wide (recurring 3×); the store now collapses the duplicate and
+/// surfaces this counted diagnostic so the emitter regression is loud instead of catastrophic.
+/// A "conflicting" duplicate (same stable_key, DIFFERING rows) can only come from a
+/// stable-key-recipe bug, so its message is ESCALATED. Empty (no diagnostics) on a clean run.
+fn structural_duplicate_diagnostics(report: &StructuralDuplicateReport) -> Vec<Diagnostic> {
+    if report.total() == 0 {
+        return Vec::new();
+    }
+    let families = [
+        ("package", report.packages),
+        ("function", report.functions),
+        ("method_set", report.method_sets),
+    ];
+    families
+        .into_iter()
+        .filter(|(_, dropped)| *dropped > 0)
+        .map(|(family, dropped)| {
+            let message = if report.conflicting {
+                format!(
+                    "conflicting duplicate Go {family} stable key — {dropped} row(s) collapsed \
+                     keep-first; possible identity-recipe bug (rows differ for one stable key)."
+                )
+            } else {
+                format!(
+                    "{dropped} duplicate Go {family} stable key row(s) collapsed keep-first \
+                     (byte-identical double-emit); facts preserved."
+                )
+            };
+            category_diagnostic(category_for_package_error(), message)
+        })
+        .collect()
+}
+
 fn client_error_diagnostic(error: GoSemanticClientError) -> Diagnostic {
     let category = match &error {
         GoSemanticClientError::Process(GoSemanticProcessError::Timeout(_)) => {
@@ -627,6 +669,90 @@ mod tests {
                     && diagnostic.message.contains('1')
             }),
             "a dropped harvest row must surface a counted diagnostic: {:#?}",
+            output.diagnostics
+        );
+    }
+
+    #[test]
+    fn provider_surfaces_a_diagnostic_when_duplicate_structural_rows_are_collapsed() {
+        // FIX-08 (CATASTROPHIC, recurring 3×): a SINGLE duplicate stable key in a structural
+        // family (here two byte-identical `function` rows) used to make `validate_unique` →
+        // Err → the provider stored ZERO Go facts → RTA derived zero edges repo-wide. The
+        // store now collapses the duplicate keep-first BEFORE validation, so the valid facts
+        // SURVIVE; the provider surfaces a counted diagnostic so the emitter regression is
+        // OBSERVABLE rather than silently swallowed.
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join("go.mod"),
+            "module example.test/app\n\ngo 1.25\n",
+        )
+        .expect("write go.mod");
+        std::fs::write(
+            temp.path().join("main.go"),
+            "package main\nfunc main() {}\n",
+        )
+        .expect("write main.go");
+        let loaded = load_config(temp.path()).expect("config loads");
+        let mut db = AnalysisDb::new();
+        db.add_source_file(
+            PathBuf::from("main.go"),
+            "main.go".to_string(),
+            Language::Go,
+            "package main\nfunc main() {}\n".into(),
+            "hash".to_string(),
+        );
+        let input_snapshot = input_snapshot_for(&loaded, &db);
+        let manifest = go_semantic_manifest();
+
+        let output = derive_go_semantic_with_runner(
+            &mut db,
+            &loaded,
+            &input_snapshot,
+            manifest,
+            Digest::absent(DigestKind::ProviderOutput, "polint.go.syntax"),
+            |_config| {
+                // TWO byte-identical `function` rows with the SAME stable_key `fn|main`.
+                let output = decode_ndjson_str(
+                    r#"{"schema":"polint-go-semantic-2","kind":"session_begin","go_version":"go1.25.0","x_tools_version":"v0.45.0"}
+{"schema":"polint-go-semantic-2","kind":"package","package_id":"example.test/app","package_path":"example.test/app","files":["main.go"],"stable_key":"pkg"}
+{"schema":"polint-go-semantic-2","kind":"function","package_id":"example.test/app","package_path":"example.test/app","name":"main","qualified":"example.test/app.main","stable_key":"fn|main"}
+{"schema":"polint-go-semantic-2","kind":"function","package_id":"example.test/app","package_path":"example.test/app","name":"main","qualified":"example.test/app.main","stable_key":"fn|main"}
+{"schema":"polint-go-semantic-2","kind":"session_end"}
+"#,
+                )
+                .expect("protocol decodes");
+                Ok(GoSemanticClientRun {
+                    output,
+                    frontend_digest: "sidecar".to_string(),
+                })
+            },
+        );
+
+        // The duplicate did NOT zero the fact set: a digest was assigned and the function
+        // survives EXACTLY ONCE (keep-first).
+        assert!(output.output_digest.is_some());
+        assert_eq!(db.go_semantic_functions().len(), 1);
+        assert_eq!(
+            db.go_semantic_functions()[0].qualified,
+            "example.test/app.main"
+        );
+        // The collapse is surfaced as a diagnostic (observable, not silent). It is a benign
+        // byte-identical double-emit, so it must NOT be flagged as "conflicting".
+        assert!(
+            output.diagnostics.iter().any(|diagnostic| {
+                diagnostic.message.contains("duplicate")
+                    && diagnostic.message.contains("function")
+                    && diagnostic.message.contains("collapsed")
+            }),
+            "a collapsed structural duplicate must surface a diagnostic: {:#?}",
+            output.diagnostics
+        );
+        assert!(
+            !output
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("conflicting")),
+            "a byte-identical double-emit must NOT be flagged conflicting: {:#?}",
             output.diagnostics
         );
     }

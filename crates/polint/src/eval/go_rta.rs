@@ -350,7 +350,10 @@ fn alias_generic_dispatch_fixture_keeps_facts_and_resolves_through_same_package_
     // rejected the WHOLE Go fact set → `replace_go_semantic_facts` stored NOTHING → RTA
     // derived ZERO edges repo-wide. The fix coordinates the two emitters (keep-first one row
     // per canonical stable_key), so the Go facts stay NON-EMPTY and the dispatch resolves to
-    // the instantiated (Box[int]).Speak.
+    // the instantiated (Box[int]).Speak. (FIX-08 additionally added a generalized store-level
+    // net — `collapse_duplicate_structural_keys` collapses ANY duplicate structural stable key
+    // keep-first before validation — so even a future emitter regression here is no longer
+    // catastrophic; this fixture exercises the coordinated emitters, where that net is dormant.)
     let dir = go_rta_fixture_dir("alias-generic-dispatch");
     let output = run_fixture_kernel(&dir);
     let budget = solver_budget_for_fixture(&dir);
