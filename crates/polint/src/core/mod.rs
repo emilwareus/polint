@@ -1495,6 +1495,24 @@ impl AnalysisDb {
         Ok(store.report())
     }
 
+    /// The normalized Go semantic output currently stored in the database.
+    ///
+    /// Used by the provider after `replace_go_semantic_facts` so its output digest certifies
+    /// the rows that survived store-time resilience passes (invalid harvest-row drops and
+    /// duplicate structural-key collapse), not the raw sidecar/lowering rows.
+    pub(crate) fn go_semantic_facts_output(&self) -> GoSemanticFactsOutput {
+        GoSemanticFactsOutput {
+            packages: self.go_semantic_packages.clone(),
+            functions: self.go_semantic_functions.clone(),
+            callsites: self.go_semantic_callsites.clone(),
+            method_sets: self.go_semantic_method_sets.clone(),
+            address_taken: self.go_semantic_address_taken.clone(),
+            instantiated_types: self.go_semantic_instantiated_types.clone(),
+            dynamic_dispatch: self.go_semantic_dynamic_dispatch.clone(),
+            package_errors: self.go_semantic_package_errors.clone(),
+        }
+    }
+
     pub(crate) fn go_semantic_packages(&self) -> &[GoSemanticPackageFact] {
         &self.go_semantic_packages
     }

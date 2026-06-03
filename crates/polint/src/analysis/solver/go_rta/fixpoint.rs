@@ -142,16 +142,9 @@ pub(crate) fn solve_go_rta(inputs: &GoRtaInputs, budget: &SolverBudget) -> Solve
     // do with the func-value surface. The set is seeded once and never grows, so this is
     // loop-invariant (review IN-03): evaluate once.
     let resolve_func_values = address_taken.len() <= budget.go.address_taken_threshold;
-    // Latch BudgetExceeded for the disabled func-value resolution ONLY when func-value
-    // resolution is actually NEEDED — i.e. at least one reachable callsite is a func-value
-    // (signature-bearing) callsite (FIX 2). If there are no func-value callsites, disabling
-    // func-value resolution costs nothing (interface dispatch still resolves every real
-    // obligation), so a large address-taken surface alone must NOT produce a false
-    // exhaustion signal on a codebase with many address-taken functions but no indirect
-    // func-value calls.
-    if !resolve_func_values && inputs.callsites.iter().any(|c| c.signature.is_some()) {
-        budget_exceeded = true;
-    }
+    // Latch BudgetExceeded for disabled func-value resolution ONLY when the fixpoint reaches
+    // a signature-bearing callsite and therefore actually skips work. An unreachable
+    // func-value callsite must not taint the run-level budget status.
 
     // A frontier member carries PENDING WORK only if it has a static-call target or a
     // dynamic callsite to resolve. A non-empty frontier whose members have neither is
@@ -224,6 +217,12 @@ pub(crate) fn solve_go_rta(inputs: &GoRtaInputs, budget: &SolverBudget) -> Solve
                 }
 
                 let callsite = &inputs.callsites[index];
+                if !resolve_func_values
+                    && callsite.interface_method.is_none()
+                    && callsite.signature.is_some()
+                {
+                    budget_exceeded = true;
+                }
                 let resolution = resolve_callsite(
                     callsite,
                     inputs,
@@ -999,6 +998,67 @@ mod tests {
             BudgetStatus::WithinBudget,
             "a large address-taken surface with NO func-value callsite must NOT latch \
              BudgetExceeded (func-value resolution was never needed)"
+        );
+    }
+
+    #[test]
+    fn large_address_taken_with_only_unreachable_func_value_callsite_stays_within_budget() {
+        // A signature-bearing func-value callsite that is NOT reachable from any RTA root
+        // must not latch BudgetExceeded. The threshold signal is about skipped reachable
+        // work, not dormant obligations in disconnected functions.
+        let mut inputs = interface_scenario(&["pkg.File"]);
+        inputs
+            .function_node
+            .insert("pkg.unreachable".to_string(), SemanticNodeId(50));
+        inputs
+            .function_node
+            .insert("pkg.h1".to_string(), SemanticNodeId(51));
+        inputs
+            .function_node
+            .insert("pkg.h2".to_string(), SemanticNodeId(52));
+        inputs
+            .function_signature
+            .insert("pkg.h1".to_string(), "func()".to_string());
+        inputs
+            .function_signature
+            .insert("pkg.h2".to_string(), "func()".to_string());
+        inputs.address_taken = BTreeSet::from(["pkg.h1".to_string(), "pkg.h2".to_string()]);
+        inputs.address_taken_keys = BTreeMap::from([
+            ("pkg.h1".to_string(), "at|h1".to_string()),
+            ("pkg.h2".to_string(), "at|h2".to_string()),
+        ]);
+        inputs.callsites.push(GoRtaCallsite {
+            caller: "pkg.unreachable".to_string(),
+            callsite_node: SemanticNodeId(53),
+            callsite_stable_key: "cs|unreachable:fv".to_string(),
+            interface_method: None,
+            signature: Some("func()".to_string()),
+            dispatch_stable_key: "dd|unreachable:fv".to_string(),
+        });
+
+        let mut budget = SolverBudget::default();
+        budget.go.address_taken_threshold = 1;
+        let output = solve_go_rta(&inputs.finalize_indexes(), &budget);
+
+        assert!(
+            output
+                .derived_edges
+                .iter()
+                .any(|e| e.source == SemanticNodeId(1) && e.target == SemanticNodeId(3)),
+            "reachable interface dispatch must still resolve: {:#?}",
+            output.derived_edges
+        );
+        assert!(
+            !output
+                .derived_edges
+                .iter()
+                .any(|e| e.target == SemanticNodeId(51) || e.target == SemanticNodeId(52)),
+            "the unreachable func-value callsite must not resolve"
+        );
+        assert_eq!(
+            output.budget_status,
+            BudgetStatus::WithinBudget,
+            "an unreachable func-value callsite must not produce a false BudgetExceeded"
         );
     }
 

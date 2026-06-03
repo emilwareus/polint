@@ -237,14 +237,6 @@ fn store_output(
     parts: StoreOutputParts,
 ) -> GoSemanticProviderRunOutput {
     let output = parts.output.normalized();
-    let output_digest = go_semantic_output_digest(
-        manifest,
-        input_snapshot,
-        &parts.go_syntax_output_digest,
-        &parts.digest_inputs,
-        &parts.lifecycle,
-        &output,
-    );
     match db.replace_go_semantic_facts(output) {
         // `replace_go_semantic_facts` returns the resilience report: the count of malformed
         // RTA-signal harvest rows it dropped (FIX 3) and the duplicate STRUCTURAL rows it
@@ -254,6 +246,19 @@ fn store_output(
         // under-resolving — or, in the structural case, no longer catastrophically zeroing all
         // Go RTA repo-wide.
         Ok(report) => {
+            // Compute the digest after store-time resilience has run, over the rows that were
+            // actually persisted. This keeps the output digest aligned with the certified DB
+            // state even when invalid harvest rows are dropped or duplicate structural rows are
+            // collapsed keep-first.
+            let stored_output = db.go_semantic_facts_output();
+            let output_digest = go_semantic_output_digest(
+                manifest,
+                input_snapshot,
+                &parts.go_syntax_output_digest,
+                &parts.digest_inputs,
+                &parts.lifecycle,
+                &stored_output,
+            );
             let mut diagnostics = parts.diagnostics;
             if report.dropped_harvest_rows > 0 {
                 diagnostics.push(dropped_harvest_rows_diagnostic(report.dropped_harvest_rows));
@@ -671,6 +676,24 @@ mod tests {
             "a dropped harvest row must surface a counted diagnostic: {:#?}",
             output.diagnostics
         );
+
+        let expected_digest = go_semantic_output_digest(
+            manifest,
+            &input_snapshot,
+            &Digest::absent(DigestKind::ProviderOutput, "polint.go.syntax"),
+            &DigestInputs {
+                sidecar_digest: "sidecar".to_string(),
+                go_version: "go1.25.0".to_string(),
+                x_tools_version: "v0.45.0".to_string(),
+            },
+            &default_lifecycle(),
+            &db.go_semantic_facts_output(),
+        );
+        assert_eq!(
+            output.output_digest,
+            Some(expected_digest),
+            "the go.semantic digest must certify the stored output after dropped-row cleanup"
+        );
     }
 
     #[test]
@@ -754,6 +777,24 @@ mod tests {
                 .any(|diagnostic| diagnostic.message.contains("conflicting")),
             "a byte-identical double-emit must NOT be flagged conflicting: {:#?}",
             output.diagnostics
+        );
+
+        let expected_digest = go_semantic_output_digest(
+            manifest,
+            &input_snapshot,
+            &Digest::absent(DigestKind::ProviderOutput, "polint.go.syntax"),
+            &DigestInputs {
+                sidecar_digest: "sidecar".to_string(),
+                go_version: "go1.25.0".to_string(),
+                x_tools_version: "v0.45.0".to_string(),
+            },
+            &default_lifecycle(),
+            &db.go_semantic_facts_output(),
+        );
+        assert_eq!(
+            output.output_digest,
+            Some(expected_digest),
+            "the go.semantic digest must certify the stored output after duplicate collapse"
         );
     }
 
