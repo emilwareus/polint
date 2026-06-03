@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Graph Engine Precision
 status: executing
-last_updated: "2026-06-03T17:03:15.117Z"
-last_activity: 2026-06-03 -- Phase 49 Plan 01 complete; Wave 2 ready
+last_updated: "2026-06-03T18:27:54Z"
+last_activity: 2026-06-03 -- Phase 49 Plan 02 complete; Wave 3 ready
 progress:
   total_phases: 13
   completed_phases: 7
   total_plans: 29
-  completed_plans: 27
+  completed_plans: 28
   percent: 54
 ---
 
@@ -41,9 +41,9 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 ## Current Position
 
 Phase: 49
-Plan: 02
+Plan: 03
 Status: Ready to execute
-Last activity: 2026-06-03 -- Phase 49 Plan 01 complete; Wave 2 ready
+Last activity: 2026-06-03 -- Phase 49 Plan 02 complete; Wave 3 ready
 
 ### Open repo-admin action (T-42-04-10)
 
@@ -168,6 +168,7 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 | 41 | Complete | 5/5 plans complete; public SDK query helpers, agent JSON commands, generated fixture ergonomics, public docs/skills, review fixes, and final verification done; requirement SAE-PROM-02 |
 | 42 | Complete | 5/5 plans complete; identity substrate + dedup, Go RelString/Jelly span renderers + CRLF fixture + jelly_oracle_coverage, closed IdentityCategory taxonomy + categorized_failures counter map, public-surface-leak CI gate, and Plan 05 gap closure (Go package-NAME qualification via PackageFact + go_relstring_v2 cache bump + dedup literal total order) done; requirements IDENT-01/02/03 |
 | 48 | Complete | 3/3 plans complete; Plan 01 Go-frontend RTA-signal emission + Plan 02 go_rta RTA driver (analysis::solver::go_rta fixpoint via SolverEngine::run_to_solver_output, points-to byte-identical; GoRtaSubBudget + [solver].go config + go_rta_fixpoint_v1 cache key; BudgetExceeded latching) + Plan 03 verification (iteration-cap BudgetExceeded + interface-dispatch instantiated-type filter + address-taken func-value + polyglot Go+TS canary + go_rta determinism fixtures, all green; determinism + leak + provider-order snapshots unchanged). Plan 03 surfaced + auto-fixed 3 Rule-1 Go-frontend bugs (set-fact dedup, bare method-set names, method node-mapping by span-containment) without which RTA resolved zero real interface edges. Requirement GO-05 COMPLETE |
+| 49 | In Progress | 2/3 plans complete; Plan 01 JS token budgets/config/cache handoff complete; Plan 02 private ts_tokens closed inputs + deterministic token fixpoint + too-many-tokens sentinel + token DerivedEdgeFact dispatch + real TsTokensPolicy complete; Plan 03 fixture/eval/determinism/Jelly proof ready. Requirement JS-04 in progress |
 
 ## Accumulated Context
 
