@@ -15,17 +15,10 @@
 //! engine produces a result byte-identical to calling `solve_points_to`
 //! directly.
 //!
-//! **Reserved multi-policy orchestration (Phase 47 scope — intentional).**
-//! Production derives edges via the free [`derive_edges`] function (the `CopyEdge`
-//! transitive closure the `polint.solver` provider calls directly). The
-//! [`SolverEngine`] + [`super::policy::SolverPolicy`] multi-policy layer is the
-//! reserved seam Phases 48/49 extend: when the Go RTA and TS token drivers register
-//! as policies, production will route through the engine so multiple sub-domains
-//! converge under one budget. Until then it is exercised by this module's tests
-//! (deterministic worklist, budget projection, points-to fold), mirroring how the
-//! Go/TS policy stubs and `ConstraintKind::ModelEdge` are reserved-but-unused until
-//! their producing phase lands. This is deliberate scaffolding, not dead code — a
-//! thin production wrapper today would be pure indirection over a single policy.
+//! Production uses [`SolverEngine::run_to_solver_output`] to merge the free
+//! [`derive_edges`] CopyEdge closure with edge-contributing language policies such as
+//! Go RTA and JS/TS function tokens. This keeps multiple sub-domains under one budget
+//! and one normalization path.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -631,10 +624,9 @@ mod tests {
     }
 
     #[test]
-    fn engine_drives_empty_go_rta_and_ts_stub_to_zero_results() {
-        // A Go RTA policy with an EMPTY input snapshot (no roots/callsites) and the TS
-        // stub both derive nothing — proving the engine drives them and an empty Go
-        // snapshot is honest (no fabricated edges).
+    fn engine_drives_empty_go_rta_and_ts_inputs_to_zero_results() {
+        // Empty Go RTA and TS token snapshots derive nothing, proving the engine drives
+        // both policies without fabricating edges.
         let budget = SolverBudget::default();
         let engine = SolverEngine::new(
             vec![
@@ -1053,7 +1045,7 @@ mod tests {
             copy_constraint("copy|b-c", 2, 3),
         ];
 
-        // The PRODUCTION engine shape (PointsToPolicy + GoRtaPolicy + TS stub) under a
+        // The PRODUCTION engine shape (PointsToPolicy + GoRtaPolicy + TS token policy) under a
         // tight object budget that the Andersen fold exhausts.
         let mut budget = SolverBudget::default();
         budget.points_to.max_objects_per_var = 1;

@@ -5,6 +5,9 @@
 //! framework dispatch. Those families remain honest unresolved reasons until their
 //! own object-model/adaptation phases land.
 
+pub(crate) mod dispatch;
+pub(crate) mod fixpoint;
 pub(crate) mod inputs;
 
+pub(crate) use fixpoint::solve_ts_tokens;
 pub(crate) use inputs::TsTokenInputs;
