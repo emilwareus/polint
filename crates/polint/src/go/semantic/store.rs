@@ -105,11 +105,20 @@ impl GoSemanticFactsOutput {
     /// [`validate_go_semantic_output`] must still reject. Uses the same rejection predicates
     /// as the validator, so "valid" means identically in both places. Deterministic: retains
     /// source order of the surviving rows (the caller re-`normalized()`s afterward).
-    fn drop_invalid_harvest_rows(mut self) -> Self {
+    ///
+    /// Returns the COUNT of rows dropped so the drop is OBSERVABLE rather than silent
+    /// (FIX 3): the count is surfaced as a provider diagnostic, so a systematic frontend
+    /// regression (e.g. every method_set losing its stable_key → repo-wide under-resolution)
+    /// fails loudly instead of being swallowed.
+    fn drop_invalid_harvest_rows(mut self) -> (Self, usize) {
         use crate::go::semantic::validate::{
             address_taken_rejection, dynamic_dispatch_rejection, instantiated_type_rejection,
             method_set_rejection,
         };
+        let before = self.method_sets.len()
+            + self.address_taken.len()
+            + self.instantiated_types.len()
+            + self.dynamic_dispatch.len();
         self.method_sets
             .retain(|fact| method_set_rejection(fact).is_none());
         self.address_taken
@@ -118,27 +127,47 @@ impl GoSemanticFactsOutput {
             .retain(|fact| instantiated_type_rejection(fact).is_none());
         self.dynamic_dispatch
             .retain(|fact| dynamic_dispatch_rejection(fact).is_none());
-        self
+        let after = self.method_sets.len()
+            + self.address_taken.len()
+            + self.instantiated_types.len()
+            + self.dynamic_dispatch.len();
+        let dropped = before - after;
+        (self, dropped)
     }
 }
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct GoSemanticStore {
     output: GoSemanticFactsOutput,
+    /// Count of malformed RTA-signal harvest rows dropped while building this store
+    /// (FIX 3). The provider surfaces a diagnostic when this is non-zero, so a systematic
+    /// frontend regression is observable rather than silently under-resolving.
+    dropped_harvest_rows: usize,
 }
 
 impl GoSemanticStore {
     pub(crate) fn from_output(output: GoSemanticFactsOutput) -> Result<Self, AnalysisError> {
         // Drop malformed RTA-signal harvest rows FIRST so a single bad row never zeroes the
         // whole Go fact set (FINDING B/C), then normalize (re-sort + dense-id over the
-        // survivors) and validate. The structural families stay strictly validated.
-        let output = output.drop_invalid_harvest_rows().normalized();
+        // survivors) and validate. The structural families stay strictly validated. The
+        // dropped-row COUNT is retained so the drop is observable (FIX 3).
+        let (output, dropped_harvest_rows) = output.drop_invalid_harvest_rows();
+        let output = output.normalized();
         validate_go_semantic_output(&output)?;
-        Ok(Self { output })
+        Ok(Self {
+            output,
+            dropped_harvest_rows,
+        })
     }
 
     pub(crate) fn output(&self) -> &GoSemanticFactsOutput {
         &self.output
+    }
+
+    /// The number of malformed RTA-signal harvest rows dropped while building this store
+    /// (FIX 3). Zero on a clean frontend run; non-zero surfaces a provider diagnostic.
+    pub(crate) fn dropped_harvest_rows(&self) -> usize {
+        self.dropped_harvest_rows
     }
 }
 
@@ -267,6 +296,66 @@ mod tests {
         assert_eq!(store.output().callsites.len(), 1);
         // The bad harvest row was dropped.
         assert!(store.output().dynamic_dispatch.is_empty());
+    }
+
+    #[test]
+    fn from_output_counts_dropped_invalid_harvest_rows() {
+        // FIX 3 (LOW): dropping invalid harvest rows must be OBSERVABLE, not silent — a
+        // systematic frontend regression (e.g. every method_set loses its stable_key)
+        // would otherwise be swallowed into repo-wide under-resolution. The store exposes
+        // a count the provider surfaces as a diagnostic. Here THREE rows are invalid (a
+        // discriminant-less dynamic_dispatch, an empty-identity address_taken, and a
+        // stable-key-less method_set); valid siblings survive.
+        let output = GoSemanticFactsOutput {
+            functions: vec![valid_function()],
+            dynamic_dispatch: vec![GoSemanticDynamicDispatchFact {
+                id: GoSemanticDynamicDispatchId(0),
+                stable_key: "dd|bad".to_string(),
+                package_id: "pkg".to_string(),
+                package_path: "example.com/pkg".to_string(),
+                caller: "example.com/pkg.main".to_string(),
+                callsite_stable_key: "cs|main".to_string(),
+                interface_type: None,
+                method: None,
+                signature: None,
+            }],
+            address_taken: vec![GoSemanticAddressTakenFact {
+                id: GoSemanticAddressTakenId(0),
+                stable_key: "at|bad".to_string(),
+                package_id: "pkg".to_string(),
+                package_path: "example.com/pkg".to_string(),
+                function: String::new(),
+            }],
+            method_sets: vec![GoSemanticMethodSetFact {
+                id: GoSemanticMethodSetId(0),
+                stable_key: String::new(),
+                package_id: "pkg".to_string(),
+                package_path: "example.com/pkg".to_string(),
+                type_name: "example.com/pkg.U".to_string(),
+                methods: vec!["N".to_string()],
+            }],
+            ..GoSemanticFactsOutput::default()
+        };
+
+        let store = GoSemanticStore::from_output(output)
+            .expect("bad harvest rows must be dropped, not fatal");
+        // The count is the observable signal: exactly three invalid rows were dropped.
+        assert_eq!(store.dropped_harvest_rows(), 3);
+        // The valid structural fact still survives.
+        assert_eq!(store.output().functions.len(), 1);
+    }
+
+    #[test]
+    fn from_output_reports_zero_dropped_rows_when_all_valid() {
+        // The observable count is zero when nothing is dropped (so the provider stays
+        // quiet on a clean frontend run).
+        let output = GoSemanticFactsOutput {
+            functions: vec![valid_function()],
+            callsites: vec![valid_callsite()],
+            ..GoSemanticFactsOutput::default()
+        };
+        let store = GoSemanticStore::from_output(output).expect("valid output stores");
+        assert_eq!(store.dropped_harvest_rows(), 0);
     }
 
     #[test]

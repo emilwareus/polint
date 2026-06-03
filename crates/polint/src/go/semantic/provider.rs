@@ -246,11 +246,21 @@ fn store_output(
         &output,
     );
     match db.replace_go_semantic_facts(output) {
-        Ok(()) => GoSemanticProviderRunOutput {
-            diagnostics: parts.diagnostics,
-            cache_stats: parts.cache_stats,
-            output_digest: Some(output_digest),
-        },
+        // `replace_go_semantic_facts` returns the count of malformed RTA-signal harvest
+        // rows it dropped (FIX 3). Surface a counted diagnostic when any were dropped so a
+        // systematic frontend regression (e.g. every method_set losing its stable_key) is
+        // OBSERVABLE rather than silently under-resolving repo-wide.
+        Ok(dropped_harvest_rows) => {
+            let mut diagnostics = parts.diagnostics;
+            if dropped_harvest_rows > 0 {
+                diagnostics.push(dropped_harvest_rows_diagnostic(dropped_harvest_rows));
+            }
+            GoSemanticProviderRunOutput {
+                diagnostics,
+                cache_stats: parts.cache_stats,
+                output_digest: Some(output_digest),
+            }
+        }
         Err(error) => GoSemanticProviderRunOutput {
             diagnostics: vec![provider_error_diagnostic(error.to_string())],
             cache_stats: parts.cache_stats,
@@ -387,6 +397,21 @@ fn setup_missing_diagnostic(reason: &str) -> Diagnostic {
     category_diagnostic(category_for_package_error(), reason.to_string())
 }
 
+/// Observable signal that malformed RTA-signal harvest rows were dropped (FIX 3). Routed
+/// through the same diagnostic channel the provider uses for setup/diagnostic messages so
+/// a systematic frontend regression surfaces loudly instead of being swallowed into
+/// repo-wide under-resolution. NOT fatal (the row-resilience contract, FINDING B) — just
+/// visible.
+fn dropped_harvest_rows_diagnostic(dropped: usize) -> Diagnostic {
+    category_diagnostic(
+        category_for_package_error(),
+        format!(
+            "{dropped} Go RTA-signal rows dropped (invalid identity/stable_key); \
+             interface/func-value dispatch may under-resolve."
+        ),
+    )
+}
+
 fn client_error_diagnostic(error: GoSemanticClientError) -> Diagnostic {
     let category = match &error {
         GoSemanticClientError::Process(GoSemanticProcessError::Timeout(_)) => {
@@ -499,6 +524,74 @@ mod tests {
 
         assert!(output.output_digest.is_some());
         assert_eq!(db.go_semantic_packages().len(), 1);
+    }
+
+    #[test]
+    fn provider_surfaces_a_diagnostic_when_invalid_harvest_rows_are_dropped() {
+        // FIX 3 (LOW): dropping invalid RTA-signal harvest rows must be OBSERVABLE. The
+        // sidecar emits one discriminant-less dynamic_dispatch row (no interface_type, no
+        // method, no signature); the store drops it (row-resilience, FINDING B) but the
+        // provider must surface a counted diagnostic so a systematic frontend regression is
+        // visible rather than silently under-resolving repo-wide.
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join("go.mod"),
+            "module example.test/app\n\ngo 1.25\n",
+        )
+        .expect("write go.mod");
+        std::fs::write(
+            temp.path().join("main.go"),
+            "package main\nfunc main() {}\n",
+        )
+        .expect("write main.go");
+        let loaded = load_config(temp.path()).expect("config loads");
+        let mut db = AnalysisDb::new();
+        db.add_source_file(
+            PathBuf::from("main.go"),
+            "main.go".to_string(),
+            Language::Go,
+            "package main\nfunc main() {}\n".into(),
+            "hash".to_string(),
+        );
+        let input_snapshot = input_snapshot_for(&loaded, &db);
+        let manifest = go_semantic_manifest();
+
+        let output = derive_go_semantic_with_runner(
+            &mut db,
+            &loaded,
+            &input_snapshot,
+            manifest,
+            Digest::absent(DigestKind::ProviderOutput, "polint.go.syntax"),
+            |_config| {
+                let output = decode_ndjson_str(
+                    r#"{"schema":"polint-go-semantic-2","kind":"session_begin","go_version":"go1.25.0","x_tools_version":"v0.45.0"}
+{"schema":"polint-go-semantic-2","kind":"package","package_id":"example.test/app","package_path":"example.test/app","files":["main.go"],"stable_key":"pkg"}
+{"schema":"polint-go-semantic-2","kind":"dynamic_dispatch","package_id":"example.test/app","package_path":"example.test/app","caller":"example.test/app.main","callsite_stable_key":"cs","stable_key":"dd|bad"}
+{"schema":"polint-go-semantic-2","kind":"session_end"}
+"#,
+                )
+                .expect("protocol decodes");
+                Ok(GoSemanticClientRun {
+                    output,
+                    frontend_digest: "sidecar".to_string(),
+                })
+            },
+        );
+
+        assert!(output.output_digest.is_some());
+        // The discriminant-less row was dropped, so the DB holds zero dynamic-dispatch rows.
+        assert!(db.go_semantic_dynamic_dispatch().is_empty());
+        // The drop is surfaced as a diagnostic mentioning the count of dropped RTA-signal
+        // rows (observable, not silent).
+        assert!(
+            output.diagnostics.iter().any(|diagnostic| {
+                diagnostic.message.contains("RTA-signal")
+                    && diagnostic.message.contains("dropped")
+                    && diagnostic.message.contains('1')
+            }),
+            "a dropped harvest row must surface a counted diagnostic: {:#?}",
+            output.diagnostics
+        );
     }
 
     #[test]
