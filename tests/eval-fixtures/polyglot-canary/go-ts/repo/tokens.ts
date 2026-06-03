@@ -1,17 +1,30 @@
-// The TS half of the polyglot canary. It declares local functions and a direct
-// callsite so the TS frontend genuinely analyzes TS functions in the same run as the
-// Go RTA driver. The TS token-propagation solver (`TsTokensPolicy`) is still a STUB
-// in Phase 48, so the unified solver must derive NO TS-endpoint edge — the canary
-// asserts this to prove there is no cross-language interference through the shared
-// solver core (D-16). Phase 49 (JS-04) makes the TS driver real.
+// The TS half of the polyglot canary. It is deliberately written so the TS frontend
+// emits SOLVER-RELEVANT constraints (a `CopyEdge` from a local function alias plus a
+// `CallConstraint` for the aliased call), not just zero-constraint LocalFunction calls —
+// so "the solver derives NO TS-endpoint edge" is a MEANINGFUL statement about the shared
+// solver core (the TS constraints exist and COULD propagate) rather than a vacuous
+// "there was nothing to propagate". The TS token-propagation solver (`TsTokensPolicy`) is
+// still a STUB in Phase 48, so despite the live TS CopyEdge the unified solver must derive
+// NO edge whose endpoints are TS function nodes — proving there is no cross-language
+// interference through the shared solver core (D-16). Phase 49 (JS-04) makes the TS driver
+// real.
 
 function makeToken(): string {
   return "token";
 }
 
+// `aliasMake` aliases makeToken (a CopyEdge in the semantic graph); calling through the
+// alias is a CallConstraint that the shared solver core sees — the constraint surface the
+// canary asserts the stub does not turn into a derived edge.
+const aliasMake = makeToken;
+
 function useToken(token: string): string {
   return token.toUpperCase();
 }
 
-const value = makeToken();
-useToken(value);
+function run(): string {
+  const value = aliasMake();
+  return useToken(value);
+}
+
+run();

@@ -18,9 +18,12 @@
 //!   method does not.
 //! - **address-taken** (D-15): a func-value indirect call resolves via the
 //!   address-taken set + signature match.
-//! - **polyglot Go+TS canary** (D-16): Go RTA edges resolve AND TS behavior is
-//!   unchanged (no TS token-propagation edges — `TsTokensPolicy` is still a stub), so
-//!   there is no cross-language interference through the shared solver core.
+//! - **polyglot Go+TS canary** (D-16): Go RTA edges resolve AND there is no
+//!   cross-language interference. The TS half genuinely feeds the shared solver core a
+//!   CopyEdge constraint (an aliased local call); the language-agnostic points-to closure
+//!   propagates it INTRA-TS, but NO derived edge crosses the Go<->TS boundary and the
+//!   TS-specific `TsTokensPolicy` (still a stub) contributes no `call_constraint` edge —
+//!   so the two halves never reach across the language boundary through the shared core.
 //!
 //! The RTA edges are sourced from the kernel-built `AnalysisDb` (`solver_derived_edges`
 //! /`GoRtaInputs`), NOT through the call-graph projection — Phase 52 (GRAPH-05) wires
@@ -326,35 +329,71 @@ fn static_reachability_fixture_resolves_dispatch_in_statically_reached_function(
 #[test]
 fn address_taken_fixture_resolves_func_value_by_signature() {
     // D-15: the func() indirect call in main resolves via the address-taken set +
-    // signature match. `handler`/`other` (func()) resolve through the func() callsite;
-    // `noise` (func(int)) is EXCLUDED from the func() callsite by its signature (it only
-    // resolves through the separate func(int) callsite). The proof that the signature
-    // filter holds: the func()-CALLSITE edges (the ones whose caller is main and whose
-    // target is a func() address-taken function) never include noise.
+    // signature match. The SINGLE func-value callsite is `funcs[0]()` (a func()); it fans
+    // out to BOTH same-signature address-taken functions `handler` AND `other`. `noise`
+    // (func(int)) is ALSO address-taken (in a never-invoked []func(int) slice), so it is in
+    // the candidate universe — but its signature does not match the func() callsite, and
+    // there is NO func(int) callsite, so it must NEVER be a resolved target. This is the
+    // non-vacuous signature-filter proof: a same-set-but-wrong-signature candidate is
+    // EXCLUDED, not flooded in (the previous test only checked targets were address-taken,
+    // which `noise` is — so a regression resolving func() to noise would have passed).
     let dir = go_rta_fixture_dir("address-taken");
     let output = run_fixture_kernel(&dir);
     let budget = solver_budget_for_fixture(&dir);
     let solver_output = solver_output_for_db(&output.db, budget);
     let nodes = function_nodes(&output.db);
 
-    let handler = nodes
-        .iter()
-        .find(|(qualified, _)| qualified.ends_with(".handler"))
-        .map(|(_, node)| *node)
-        .expect("handler must have a semantic node");
-
-    // The func-value indirect call resolves to the address-taken `handler` (func()).
-    assert!(
-        solver_output
-            .derived_edges
+    let node_for = |suffix: &str| -> SemanticNodeId {
+        nodes
             .iter()
-            .any(|edge| edge.target == handler),
-        "RTA must resolve the func-value indirect call to the address-taken `handler`: {:#?}",
+            .find(|(qualified, _)| qualified.ends_with(suffix))
+            .map(|(_, node)| *node)
+            .unwrap_or_else(|| panic!("{suffix} must have a semantic node; got {nodes:#?}"))
+    };
+    let handler = node_for(".handler");
+    let other = node_for(".other");
+    let noise = node_for(".noise");
+
+    let targets: std::collections::BTreeSet<SemanticNodeId> = solver_output
+        .derived_edges
+        .iter()
+        .filter(|edge| edge.provenance.constraint_kind == "call_constraint")
+        .map(|edge| edge.target)
+        .collect();
+
+    // The func() callsite fans out to BOTH same-signature address-taken funcs.
+    assert!(
+        targets.contains(&handler),
+        "RTA must resolve the func() indirect call to the address-taken `handler`: {:#?}",
         solver_output.derived_edges
     );
+    assert!(
+        targets.contains(&other),
+        "RTA must ALSO resolve the func() indirect call to the same-signature `other` \
+         (fans out to BOTH func() address-taken funcs): {:#?}",
+        solver_output.derived_edges
+    );
+    // The signature filter EXCLUDES noise (func(int)): it is address-taken (in the candidate
+    // universe) but never a resolved target — no func(int) callsite, and its signature does
+    // not match the func() callsite.
+    assert!(
+        !targets.contains(&noise),
+        "RTA must NOT resolve any callsite to `noise` (func(int)) — the signature filter \
+         excludes a same-set-but-wrong-signature candidate: {:#?}",
+        solver_output.derived_edges
+    );
+    // `noise` IS in the address-taken set (so the exclusion is a real signature-filter
+    // decision, not merely an absent candidate).
+    assert!(
+        GoRtaInputs::from_db(&output.db)
+            .address_taken
+            .iter()
+            .any(|qualified| qualified.ends_with(".noise")),
+        "noise must be genuinely address-taken (a candidate the signature filter excludes)"
+    );
+
     // Honest func-value resolution (no flooding): every RTA-resolved (call_constraint)
-    // edge targets an ADDRESS-TAKEN function — never an arbitrary function. This is the
-    // func-value discipline (the address-taken set is the candidate universe).
+    // edge targets an ADDRESS-TAKEN function — never an arbitrary function.
     let address_taken_nodes: std::collections::BTreeSet<SemanticNodeId> =
         GoRtaInputs::from_db(&output.db)
             .address_taken
@@ -404,9 +443,13 @@ fn polyglot_go_ts_canary_resolves_go_edges_without_ts_interference() {
         solver_output.derived_edges
     );
 
-    // (b) TS behavior unchanged: the TS sources ARE analyzed (TS functions exist), but
-    // the TS token policy is a STUB, so the solver derives NO edge whose endpoints are
-    // TS function nodes — no cross-language interference.
+    // (b) The TS sources are analyzed AND genuinely feed the shared solver core a
+    // solver-relevant constraint that COULD propagate. The cross-language NON-INTERFERENCE
+    // proof is then non-vacuous (FINDING F2): no derived edge crosses the Go<->TS language
+    // boundary, and the TS-specific token policy (TsTokensPolicy, still a Phase-48 stub)
+    // contributes nothing. (The language-agnostic points-to CopyEdge closure DOES propagate
+    // the TS CopyEdge INTRA-TS — that is the shared core working uniformly, not cross-
+    // language interference; we assert specifically that no Go<->TS edge appears.)
     let ts_function_ids: std::collections::BTreeSet<crate::core::FunctionId> = output
         .db
         .functions()
@@ -418,6 +461,22 @@ fn polyglot_go_ts_canary_resolves_go_edges_without_ts_interference() {
         !ts_function_ids.is_empty(),
         "the polyglot canary must actually analyze TS functions (the TS half is live)"
     );
+    let node_language = |node_id: SemanticNodeId| -> Option<crate::core::Language> {
+        output.db.semantic_nodes().iter().find_map(|node| {
+            if node.id != node_id {
+                return None;
+            }
+            match node.kind {
+                NodeKind::Function(function_id) => output
+                    .db
+                    .functions()
+                    .iter()
+                    .find(|function| function.id == function_id)
+                    .map(|function| function.language),
+                _ => None,
+            }
+        })
+    };
     let ts_nodes: std::collections::BTreeSet<SemanticNodeId> = output
         .db
         .semantic_nodes()
@@ -429,14 +488,59 @@ fn polyglot_go_ts_canary_resolves_go_edges_without_ts_interference() {
             _ => None,
         })
         .collect();
+
+    // NON-VACUITY: the TS half emits >= 1 CopyEdge with a TS function-node endpoint (the
+    // `const aliasMake = makeToken` alias), so the constraint surface that COULD leak into
+    // the shared solver core genuinely exists.
+    let ts_copy_edges = output
+        .db
+        .semantic_constraints()
+        .iter()
+        .filter(|constraint| match &constraint.kind {
+            crate::analysis::semantic_graph::constraints::ConstraintKind::CopyEdge { dst, src } => {
+                ts_nodes.contains(dst) || ts_nodes.contains(src)
+            }
+            _ => false,
+        })
+        .count();
     assert!(
-        !solver_output
-            .derived_edges
-            .iter()
-            .any(|edge| ts_nodes.contains(&edge.source) || ts_nodes.contains(&edge.target)),
-        "TsTokensPolicy is a stub: the solver must derive NO TS-endpoint edge \
-         (no cross-language interference, D-16): {:#?}",
-        solver_output.derived_edges
+        ts_copy_edges >= 1,
+        "the polyglot canary's TS half must emit >= 1 CopyEdge with a TS function-node \
+         endpoint (so the non-interference assertion is non-vacuous), got {ts_copy_edges}"
     );
+
+    // NO CROSS-LANGUAGE INTERFERENCE: no derived edge connects a Go node to a TS node (in
+    // either direction). The shared core may propagate the TS CopyEdge intra-TS, and resolve
+    // the Go interface invoke Go-internally, but the two halves never reach across the
+    // language boundary through the shared solver core (D-16).
+    for edge in &solver_output.derived_edges {
+        let source_ts = ts_nodes.contains(&edge.source);
+        let target_ts = ts_nodes.contains(&edge.target);
+        if source_ts ^ target_ts {
+            // Exactly one endpoint is a TS function node — the other must NOT be a Go node.
+            let other = if source_ts { edge.target } else { edge.source };
+            assert_ne!(
+                node_language(other),
+                Some(crate::core::Language::Go),
+                "no derived edge may cross the Go<->TS boundary (cross-language interference): {edge:#?}"
+            );
+        }
+    }
+
+    // The TS-specific token policy adds nothing: every TS-endpoint derived edge is a
+    // language-agnostic `copy_edge` from the shared points-to closure, NEVER a
+    // `call_constraint` (the TsTokensPolicy stub resolves no dynamic TS dispatch).
+    for edge in solver_output
+        .derived_edges
+        .iter()
+        .filter(|edge| ts_nodes.contains(&edge.source) || ts_nodes.contains(&edge.target))
+    {
+        assert_eq!(
+            edge.provenance.constraint_kind, "copy_edge",
+            "a TS-endpoint derived edge must come only from the shared points-to CopyEdge \
+             closure, never the TsTokensPolicy stub (which is empty in Phase 48): {edge:#?}"
+        );
+    }
+
     assert_solver_output_byte_stable(&output.db, budget);
 }

@@ -4,15 +4,19 @@ area = "go-rta"
 
 # Phase 48 Plan 03 — native address-taken / func-value RTA fixture (D-15, criterion 4).
 #
-# repo/main.go takes the address of `handler` (a func()) and invokes it indirectly
-# through a func-typed variable. RTA resolves the func-value dispatch via the
-# address-taken set + signature match: main -> handler. `noise` (a func(int)) is
-# also address-taken but has a mismatching signature, so it is excluded.
+# repo/main.go takes the addresses of `handler` and `other` (both func(), in a
+# []func()) and invokes a func() element indirectly. RTA resolves the func-value
+# dispatch via the address-taken set + signature match, fanning out to BOTH
+# same-signature funcs: main -> handler AND main -> other. `noise` (a func(int)) is
+# ALSO address-taken (in a never-invoked []func(int) slice), so it is in the candidate
+# universe — but its signature does not match the func() callsite and there is no
+# func(int) callsite, so it is NEVER a resolved target. That is the non-vacuous
+# signature-filter proof: a same-set-but-wrong-signature candidate is EXCLUDED.
 #
-# The `eval::go_rta` gate asserts the indirect call's RTA edge to `handler` is
-# derived (the func_value_resolved invariant); this manifest documents the
-# acceptance contract. No `[[expected]]` row is captured because the solver-derived
-# edges are crate-private and not observable manifest facts.
+# The `eval::go_rta` gate asserts the func() callsite resolves to BOTH handler and
+# other AND that no edge targets noise (which is genuinely address-taken); this
+# manifest documents the acceptance contract. No `[[expected]]` row is captured
+# because the solver-derived edges are crate-private and not observable manifest facts.
 
 [repo]
 path = "repo"
