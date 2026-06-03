@@ -559,7 +559,7 @@ impl AnalysisKernel {
                 go_dependency_output_digest.clone(),
                 ts_dependency_output_digest.clone(),
                 entrypoints_semantic_mir_digest.clone(),
-                go_semantic_dependency_output_digest,
+                go_semantic_dependency_output_digest.clone(),
             );
         let polint_semantic_graph_cache_stats = semantic_graph.cache_stats.clone();
         let semantic_graph_output_digest = semantic_graph.output_digest.clone();
@@ -583,11 +583,17 @@ impl AnalysisKernel {
         // (D-13, the slot Phase 44 reserved). It drives the unified solver engine over
         // the closed input snapshot (the stored semantic-graph constraints), emits
         // derived edges + provenance, and folds the semantic_graph + points-to source
-        // (type_value_alias) output digests plus the SolverBudget into its own output
-        // digest (D-15). Auto-enrolls in the Phase 43 determinism gate (D-14).
-        // Thread the [solver].go config into SolverBudget.go (D-10/D-11), mirroring how
-        // the reachability provider reaches `reachability.roots`. Cross-domain fields
-        // stay at their defaults; absent config falls back to GoRtaSubBudget::default().
+        // (type_value_alias) + go.semantic output digests plus the SolverBudget into its
+        // own output digest (D-15). The go.semantic digest is folded because the Go RTA
+        // policy reads the stored go.semantic RTA-signal families (instantiated_types /
+        // address_taken / dynamic_dispatch / method_sets) via GoRtaInputs::from_db, so a Go
+        // edit touching ONLY those families changes the RTA-resolved edges and must
+        // invalidate the solver cache (FIX 4 — without this the provider docstring's "any
+        // upstream change invalidates the solver cache" was false). Auto-enrolls in the
+        // Phase 43 determinism gate (D-14). Thread the [solver].go config into
+        // SolverBudget.go (D-10/D-11), mirroring how the reachability provider reaches
+        // `reachability.roots`. Cross-domain fields stay at their defaults; absent config
+        // falls back to GoRtaSubBudget::default().
         let solver_budget = crate::analysis::solver::budget::SolverBudget {
             go: input.loaded.config.solver.to_go_sub_budget(),
             ..crate::analysis::solver::budget::SolverBudget::default()
@@ -599,6 +605,7 @@ impl AnalysisKernel {
             solver_budget,
             semantic_graph_dependency_output_digest,
             type_value_alias_dependency_output_digest.clone(),
+            go_semantic_dependency_output_digest,
         );
         let polint_solver_cache_stats = solver.cache_stats.clone();
         let solver_output_digest = solver.output_digest.clone();

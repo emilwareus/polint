@@ -337,6 +337,40 @@ fn go_semantic_output_digest(
             method_set.methods.join(",")
         )
     }));
+    // FIX 4: the three RTA-signal harvest families (`instantiated_types`, `address_taken`,
+    // `dynamic_dispatch`) change the RTA-resolved derived edges but were NOT folded here, so
+    // a Go edit touching ONLY them changed neither this digest nor the downstream solver
+    // digest — a stale-edge false-cache-hit risk once a persistent cache lands. Fold each
+    // row's content (mirroring `method_sets`); the output is `parts.sort()`-ed below, so
+    // insertion order does not matter. The instantiated_type FILTER is the RTA discriminant,
+    // so its membership must invalidate; the address-taken set drives func-value resolution;
+    // the dynamic-dispatch discriminant decides which callees a callsite resolves to.
+    parts.extend(output.instantiated_types.iter().map(|instantiated_type| {
+        format!(
+            "instantiated_type={} package={} type={}",
+            instantiated_type.stable_key,
+            instantiated_type.package_path,
+            instantiated_type.type_name
+        )
+    }));
+    parts.extend(output.address_taken.iter().map(|address_taken| {
+        format!(
+            "address_taken={} package={} function={}",
+            address_taken.stable_key, address_taken.package_path, address_taken.function
+        )
+    }));
+    parts.extend(output.dynamic_dispatch.iter().map(|dynamic_dispatch| {
+        format!(
+            "dynamic_dispatch={} package={} caller={} callsite={} interface={} method={} signature={}",
+            dynamic_dispatch.stable_key,
+            dynamic_dispatch.package_path,
+            dynamic_dispatch.caller,
+            dynamic_dispatch.callsite_stable_key,
+            dynamic_dispatch.interface_type.as_deref().unwrap_or(""),
+            dynamic_dispatch.method.as_deref().unwrap_or(""),
+            dynamic_dispatch.signature.as_deref().unwrap_or("")
+        )
+    }));
     parts.extend(output.package_errors.iter().map(|package_error| {
         format!(
             "package_error={} package={} message={}",
@@ -347,6 +381,9 @@ fn go_semantic_output_digest(
         && output.functions.is_empty()
         && output.callsites.is_empty()
         && output.method_sets.is_empty()
+        && output.instantiated_types.is_empty()
+        && output.address_taken.is_empty()
+        && output.dynamic_dispatch.is_empty()
         && output.package_errors.is_empty()
     {
         parts.push("go_semantic_output=empty".to_string());
@@ -687,5 +724,118 @@ mod tests {
             .iter()
             .find(|manifest| manifest.id == "polint.go.semantic")
             .expect("manifest exists")
+    }
+
+    /// Compute `go_semantic_output_digest` for `output` with fixed (irrelevant-to-this-test)
+    /// provider/lifecycle inputs, so a test can isolate the effect of the OUTPUT row content.
+    fn output_digest_for(output: &GoSemanticFactsOutput) -> Digest {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(temp.path().join(".polint.toml"), "").expect("config");
+        let loaded = load_config(temp.path()).expect("config loads");
+        let db = AnalysisDb::new();
+        let input_snapshot = input_snapshot_for(&loaded, &db);
+        go_semantic_output_digest(
+            go_semantic_manifest(),
+            &input_snapshot,
+            &Digest::absent(DigestKind::ProviderOutput, "polint.go.syntax"),
+            &DigestInputs {
+                sidecar_digest: "sidecar".to_string(),
+                go_version: "go1.25.0".to_string(),
+                x_tools_version: "v0.45.0".to_string(),
+            },
+            &default_lifecycle(),
+            output,
+        )
+    }
+
+    /// FIX 4 part 1: the three RTA-signal harvest families
+    /// (`instantiated_types` / `address_taken` / `dynamic_dispatch`) must each be FOLDED into
+    /// `go_semantic_output_digest`. A Go edit that changes ONLY one of them changes the
+    /// RTA-resolved edges, so the go.semantic output digest MUST change too (otherwise a
+    /// persistent cache could serve stale RTA edges, WR-06). Before the fix only `method_sets`
+    /// was folded, so each of these mutations left the digest unchanged.
+    #[test]
+    fn rta_harvest_families_participate_in_go_semantic_output_digest() {
+        use crate::go::semantic::facts::{
+            GoSemanticAddressTakenFact, GoSemanticAddressTakenId, GoSemanticDynamicDispatchFact,
+            GoSemanticDynamicDispatchId, GoSemanticInstantiatedTypeFact,
+            GoSemanticInstantiatedTypeId,
+        };
+
+        // A non-empty base so the emptiness sentinel is not what carries the signal.
+        let base = GoSemanticFactsOutput {
+            instantiated_types: vec![GoSemanticInstantiatedTypeFact {
+                id: GoSemanticInstantiatedTypeId(0),
+                stable_key: "inst|pkg.Dog".to_string(),
+                package_id: "pkg".to_string(),
+                package_path: "pkg".to_string(),
+                type_name: "pkg.Dog".to_string(),
+            }],
+            address_taken: vec![GoSemanticAddressTakenFact {
+                id: GoSemanticAddressTakenId(0),
+                stable_key: "at|pkg.handler".to_string(),
+                package_id: "pkg".to_string(),
+                package_path: "pkg".to_string(),
+                function: "pkg.handler".to_string(),
+            }],
+            dynamic_dispatch: vec![GoSemanticDynamicDispatchFact {
+                id: GoSemanticDynamicDispatchId(0),
+                stable_key: "dd|pkg.main".to_string(),
+                package_id: "pkg".to_string(),
+                package_path: "pkg".to_string(),
+                caller: "pkg.main".to_string(),
+                callsite_stable_key: "cs|pkg.main".to_string(),
+                interface_type: Some("pkg.Speaker".to_string()),
+                method: Some("Speak".to_string()),
+                signature: None,
+            }],
+            ..GoSemanticFactsOutput::default()
+        }
+        .normalized();
+        let base_digest = output_digest_for(&base);
+
+        // (a) Adding an instantiated type (the RTA rapid-type filter) changes the digest.
+        let mut changed_instantiated = base.clone();
+        changed_instantiated
+            .instantiated_types
+            .push(GoSemanticInstantiatedTypeFact {
+                id: GoSemanticInstantiatedTypeId(0),
+                stable_key: "inst|pkg.Cat".to_string(),
+                package_id: "pkg".to_string(),
+                package_path: "pkg".to_string(),
+                type_name: "pkg.Cat".to_string(),
+            });
+        assert_ne!(
+            base_digest,
+            output_digest_for(&changed_instantiated.normalized()),
+            "an instantiated_type change must invalidate the go.semantic output digest"
+        );
+
+        // (b) Adding an address-taken function (func-value candidate set) changes the digest.
+        let mut changed_address_taken = base.clone();
+        changed_address_taken
+            .address_taken
+            .push(GoSemanticAddressTakenFact {
+                id: GoSemanticAddressTakenId(0),
+                stable_key: "at|pkg.other".to_string(),
+                package_id: "pkg".to_string(),
+                package_path: "pkg".to_string(),
+                function: "pkg.other".to_string(),
+            });
+        assert_ne!(
+            base_digest,
+            output_digest_for(&changed_address_taken.normalized()),
+            "an address_taken change must invalidate the go.semantic output digest"
+        );
+
+        // (c) Changing the dynamic-dispatch discriminant (the invoked method) changes it.
+        // `base` is no longer needed (only `base_digest` is compared against), so move it.
+        let mut changed_dispatch = base;
+        changed_dispatch.dynamic_dispatch[0].method = Some("Bark".to_string());
+        assert_ne!(
+            base_digest,
+            output_digest_for(&changed_dispatch.normalized()),
+            "a dynamic_dispatch discriminant change must invalidate the go.semantic output digest"
+        );
     }
 }
