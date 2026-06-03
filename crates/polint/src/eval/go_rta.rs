@@ -7,10 +7,12 @@
 //! ([`SolverEngine::run_to_solver_output`]), and asserts on the resulting
 //! [`SolverOutput`]:
 //!
-//! - **iteration-cap** (D-14): a deliberately-tight `[solver.go] max_rta_rounds = 1`
-//!   in the fixture's own `.polint.toml` forces the multi-round dispatch graph to
-//!   latch [`BudgetStatus::BudgetExceeded`] — the GO-05 criterion-2 proof that runaway
-//!   dispatch is SIGNALLED, not silently dropped.
+//! - **iteration-cap** (D-14): a deliberately-tight `[solver.go]
+//!   max_candidates_per_callsite = 1` in the fixture's own `.polint.toml` cannot admit
+//!   the three candidate callees (`Circle`/`Square`/`Triangle.Area`) of the single
+//!   `s.Area()` interface invoke, so resolving that callsite latches
+//!   [`BudgetStatus::BudgetExceeded`] — the GO-05 criterion-2 proof that runaway
+//!   dispatch fan-out is SIGNALLED, not silently dropped.
 //! - **interface-dispatch** (D-15): the instantiated-type FILTER (RTA, not CHA) — the
 //!   instantiated receiver's method resolves; a declared-but-not-instantiated type's
 //!   method does not.
@@ -66,7 +68,7 @@ fn run_fixture_kernel(fixture_dir: &Path) -> KernelOutput {
 
 /// Reads the fixture's own `[solver.go]` config so the gate drives the solver under
 /// the SAME budget the kernel would — this is what makes the iteration-cap fixture's
-/// tight `max_rta_rounds = 1` actually bite (D-14).
+/// tight `max_candidates_per_callsite = 1` actually bite (D-14).
 fn solver_budget_for_fixture(fixture_dir: &Path) -> SolverBudget {
     let fixture = load_native_fixture(fixture_dir).expect("fixture loads");
     let loaded = load_config(&fixture.repo_dir).expect("config loads");
