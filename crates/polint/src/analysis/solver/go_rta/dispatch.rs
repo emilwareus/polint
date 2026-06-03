@@ -36,8 +36,10 @@ pub(crate) struct CallsiteResolution {
 /// instantiated-type / address-taken sets (D-06).
 ///
 /// - Interface invoke (`interface_method` set): candidate callees are the concrete
-///   methods whose receiver type is in `instantiated` AND whose method-set contains
-///   the invoked method. The instantiated-type filter is the RTA discriminant.
+///   methods whose receiver type is instantiated AND whose method-set contains the
+///   invoked method. The instantiated-type filter is the RTA discriminant — it is baked
+///   into [`GoRtaInputs::interface_candidate_index`] at build time (FIX 2), so this hot
+///   path is a single index lookup rather than a per-callsite instantiated-set scan.
 /// - Func-value call (`signature` set): candidate callees are address-taken functions
 ///   whose signature matches.
 ///
@@ -56,7 +58,6 @@ pub(crate) struct CallsiteResolution {
 pub(crate) fn resolve_callsite(
     callsite: &GoRtaCallsite,
     inputs: &GoRtaInputs,
-    instantiated: &BTreeSet<String>,
     address_taken: &BTreeSet<String>,
     max_candidates_per_callsite: usize,
     resolve_func_values: bool,
@@ -78,7 +79,6 @@ pub(crate) fn resolve_callsite(
         collect_interface_candidates(
             method,
             inputs,
-            instantiated,
             max_candidates_per_callsite,
             &mut candidates,
             &mut candidate_cap_exceeded,
@@ -169,47 +169,37 @@ struct DispatchCandidate {
 /// Interface-invoke candidates: concrete methods named `method` whose receiver type
 /// is instantiated AND whose method-set contains `method` (D-06). The instantiated
 /// filter is what makes it RTA. Deterministic by `(type_name, callee qualified)`.
+///
+/// FIX 2 (scale): resolved via the pre-built inverted index
+/// [`GoRtaInputs::interface_candidate_index`] — a single `BTreeMap` lookup — instead of
+/// re-scanning the WHOLE instantiated set per callsite. The index was built by iterating
+/// `instantiated` (sorted) then `methods_by_receiver[type]` (in order), so `index[method]`
+/// is byte-IDENTICAL to what the old whole-set scan produced for this `method`: same
+/// candidate set, same order, same per-candidate `contributing_keys`. The per-callsite
+/// cap is applied to the SAME prefix, so the cap-exceeded signal and the emitted edges
+/// (and their stable keys) are unchanged. The whole reachable program's total interface
+/// resolution drops from O(C_iface · T) to O(C_iface · resolved-candidates).
 fn collect_interface_candidates(
     method: &str,
     inputs: &GoRtaInputs,
-    instantiated: &BTreeSet<String>,
     max_candidates_per_callsite: usize,
     candidates: &mut Vec<DispatchCandidate>,
     candidate_cap_exceeded: &mut bool,
 ) {
-    // BTreeSet iteration is sorted, so candidate discovery is deterministic.
-    for type_name in instantiated {
-        // The instantiated type must declare `method` in its method-set; otherwise it
-        // is not a dispatch target for this invoke (honest — no fabricated edge).
-        let Some(methods) = inputs.method_sets.get(type_name) else {
-            continue;
-        };
-        if !methods.contains(method) {
-            continue;
+    let Some(indexed) = inputs.interface_candidate_index.get(method) else {
+        return;
+    };
+    // The index Vec is already in the scan's `(instantiated-sorted, then within-type)`
+    // order, so applying the cap to this prefix matches the old behavior exactly.
+    for candidate in indexed {
+        if candidates.len() >= max_candidates_per_callsite {
+            *candidate_cap_exceeded = true;
+            return;
         }
-        let Some(concrete_methods) = inputs.methods_by_receiver.get(type_name) else {
-            continue;
-        };
-        for concrete in concrete_methods {
-            if concrete.method_name != method {
-                continue;
-            }
-            if candidates.len() >= max_candidates_per_callsite {
-                *candidate_cap_exceeded = true;
-                return;
-            }
-            let mut contributing_keys = Vec::new();
-            if let Some(key) = inputs.method_set_keys.get(type_name) {
-                contributing_keys.push(key.clone());
-            }
-            if let Some(key) = inputs.instantiated_keys.get(type_name) {
-                contributing_keys.push(key.clone());
-            }
-            candidates.push(DispatchCandidate {
-                node: concrete.node,
-                contributing_keys,
-            });
-        }
+        candidates.push(DispatchCandidate {
+            node: candidate.node,
+            contributing_keys: candidate.contributing_keys.clone(),
+        });
     }
 }
 
@@ -293,7 +283,6 @@ mod tests {
             }],
         );
 
-        let instantiated = BTreeSet::from(["pkg.A".to_string(), "pkg.B".to_string()]);
         let mut instantiated_keys = BTreeMap::new();
         instantiated_keys.insert("pkg.A".to_string(), "inst|A".to_string());
         instantiated_keys.insert("pkg.B".to_string(), "inst|B".to_string());
@@ -301,12 +290,13 @@ mod tests {
         let inputs = GoRtaInputs {
             method_sets,
             method_set_keys,
-            instantiated: instantiated.clone(),
+            instantiated: BTreeSet::from(["pkg.A".to_string(), "pkg.B".to_string()]),
             instantiated_keys,
             methods_by_receiver,
             function_node,
             ..GoRtaInputs::default()
-        };
+        }
+        .finalize_indexes();
         let callsite = GoRtaCallsite {
             caller: "main.main".to_string(),
             callsite_node: SemanticNodeId(2),
@@ -316,15 +306,7 @@ mod tests {
             dispatch_stable_key: "dd|main".to_string(),
         };
 
-        let resolution = resolve_callsite(
-            &callsite,
-            &inputs,
-            &instantiated,
-            &BTreeSet::new(),
-            1,
-            true,
-            7,
-        );
+        let resolution = resolve_callsite(&callsite, &inputs, &BTreeSet::new(), 1, true, 7);
         assert!(resolution.candidate_cap_exceeded, "cap of 1 must latch");
         assert_eq!(
             resolution.edges.len(),
@@ -346,15 +328,7 @@ mod tests {
             signature: None,
             dispatch_stable_key: "dd|main".to_string(),
         };
-        let resolution = resolve_callsite(
-            &callsite,
-            &inputs,
-            &BTreeSet::new(),
-            &BTreeSet::new(),
-            128,
-            true,
-            1,
-        );
+        let resolution = resolve_callsite(&callsite, &inputs, &BTreeSet::new(), 128, true, 1);
         assert!(resolution.edges.is_empty());
         assert!(!resolution.candidate_cap_exceeded);
     }
@@ -379,7 +353,8 @@ mod tests {
             address_taken: address_taken.clone(),
             address_taken_keys,
             ..GoRtaInputs::default()
-        };
+        }
+        .finalize_indexes();
         let callsite = GoRtaCallsite {
             caller: "main.main".to_string(),
             callsite_node: SemanticNodeId(2),
@@ -390,33 +365,181 @@ mod tests {
         };
 
         // Disabled: no edge (the signature-matching handler is NOT resolved).
-        let disabled = resolve_callsite(
-            &callsite,
-            &inputs,
-            &BTreeSet::new(),
-            &address_taken,
-            128,
-            false,
-            1,
-        );
+        let disabled = resolve_callsite(&callsite, &inputs, &address_taken, 128, false, 1);
         assert!(
             disabled.edges.is_empty(),
             "func-value resolution must yield nothing when disabled: {:#?}",
             disabled.edges
         );
         // Enabled: the same callsite resolves to the address-taken handler (control).
-        let enabled = resolve_callsite(
-            &callsite,
-            &inputs,
-            &BTreeSet::new(),
-            &address_taken,
-            128,
-            true,
-            1,
-        );
+        let enabled = resolve_callsite(&callsite, &inputs, &address_taken, 128, true, 1);
         assert!(
             enabled.edges.iter().any(|e| e.target == SemanticNodeId(3)),
             "func-value resolution must work when enabled (control)"
         );
+    }
+
+    /// Reference oracle: the PRE-FIX-2 whole-instantiated-set scan, reproduced verbatim so
+    /// the test can prove the indexed path is byte-identical to it. Iterates `instantiated`
+    /// (sorted BTreeSet) then `methods_by_receiver[type]` (in order), pushing every concrete
+    /// method named `method` whose type's method-set contains `method`, capping the same way.
+    fn collect_interface_candidates_via_whole_scan(
+        method: &str,
+        inputs: &GoRtaInputs,
+        max_candidates_per_callsite: usize,
+    ) -> (Vec<(SemanticNodeId, Vec<String>)>, bool) {
+        let mut candidates = Vec::new();
+        let mut capped = false;
+        for type_name in &inputs.instantiated {
+            let Some(methods) = inputs.method_sets.get(type_name) else {
+                continue;
+            };
+            if !methods.contains(method) {
+                continue;
+            }
+            let Some(concrete_methods) = inputs.methods_by_receiver.get(type_name) else {
+                continue;
+            };
+            for concrete in concrete_methods {
+                if concrete.method_name != method {
+                    continue;
+                }
+                if candidates.len() >= max_candidates_per_callsite {
+                    capped = true;
+                    return (candidates, capped);
+                }
+                let mut contributing_keys = Vec::new();
+                if let Some(key) = inputs.method_set_keys.get(type_name) {
+                    contributing_keys.push(key.clone());
+                }
+                if let Some(key) = inputs.instantiated_keys.get(type_name) {
+                    contributing_keys.push(key.clone());
+                }
+                candidates.push((concrete.node, contributing_keys));
+            }
+        }
+        (candidates, capped)
+    }
+
+    /// FIX 2: the indexed `collect_interface_candidates` produces the SAME candidate set,
+    /// ORDER, and per-candidate contributing keys as the whole-instantiated-set scan it
+    /// replaces — and the per-callsite cap selects the same prefix. Three instantiated types
+    /// share the method `Speak`; a fourth type declares `Speak` in its method-set but is NOT
+    /// instantiated (it must be excluded); a fifth instantiated type lacks `Speak` from its
+    /// set (also excluded). Byte-identity is proven by comparing against the reference oracle.
+    #[test]
+    fn indexed_interface_candidates_match_whole_set_scan_and_cap_prefix() {
+        let node = |id: u64| SemanticNodeId(id);
+
+        // Three instantiated implementers of `Speak`, one declared-but-not-instantiated
+        // implementer (Zebra), and one instantiated type whose method-set lacks `Speak`
+        // (Mute, which only has `Hush`). Method-set / instantiated keys are distinct per
+        // type so the contributing-key comparison is meaningful.
+        let method_sets = BTreeMap::from([
+            ("pkg.Cat".to_string(), BTreeSet::from(["Speak".to_string()])),
+            ("pkg.Dog".to_string(), BTreeSet::from(["Speak".to_string()])),
+            ("pkg.Fox".to_string(), BTreeSet::from(["Speak".to_string()])),
+            (
+                "pkg.Zebra".to_string(),
+                BTreeSet::from(["Speak".to_string()]),
+            ),
+            ("pkg.Mute".to_string(), BTreeSet::from(["Hush".to_string()])),
+        ]);
+        let method_set_keys = BTreeMap::from([
+            ("pkg.Cat".to_string(), "ms|Cat".to_string()),
+            ("pkg.Dog".to_string(), "ms|Dog".to_string()),
+            ("pkg.Fox".to_string(), "ms|Fox".to_string()),
+            ("pkg.Zebra".to_string(), "ms|Zebra".to_string()),
+            ("pkg.Mute".to_string(), "ms|Mute".to_string()),
+        ]);
+        let method = |receiver: &str, n: &str, id: u64| GoRtaMethod {
+            method_name: n.to_string(),
+            qualified: format!("({receiver}).{n}"),
+            node: node(id),
+        };
+        let methods_by_receiver = BTreeMap::from([
+            ("pkg.Cat".to_string(), vec![method("pkg.Cat", "Speak", 11)]),
+            ("pkg.Dog".to_string(), vec![method("pkg.Dog", "Speak", 12)]),
+            ("pkg.Fox".to_string(), vec![method("pkg.Fox", "Speak", 13)]),
+            (
+                "pkg.Zebra".to_string(),
+                vec![method("pkg.Zebra", "Speak", 14)],
+            ),
+            ("pkg.Mute".to_string(), vec![method("pkg.Mute", "Hush", 15)]),
+        ]);
+        // Zebra is NOT instantiated; Mute IS but lacks `Speak`.
+        let instantiated = BTreeSet::from([
+            "pkg.Cat".to_string(),
+            "pkg.Dog".to_string(),
+            "pkg.Fox".to_string(),
+            "pkg.Mute".to_string(),
+        ]);
+        let instantiated_keys = BTreeMap::from([
+            ("pkg.Cat".to_string(), "inst|Cat".to_string()),
+            ("pkg.Dog".to_string(), "inst|Dog".to_string()),
+            ("pkg.Fox".to_string(), "inst|Fox".to_string()),
+            ("pkg.Mute".to_string(), "inst|Mute".to_string()),
+        ]);
+
+        let inputs = GoRtaInputs {
+            method_sets,
+            method_set_keys,
+            instantiated,
+            instantiated_keys,
+            methods_by_receiver,
+            ..GoRtaInputs::default()
+        }
+        .finalize_indexes();
+
+        // For every relevant cap (uncapped, and each prefix length), the indexed path equals
+        // the whole-set scan element-for-element (nodes, contributing keys, cap flag).
+        for cap in [usize::MAX, 0, 1, 2, 3, 4] {
+            let (expected, expected_capped) =
+                collect_interface_candidates_via_whole_scan("Speak", &inputs, cap);
+
+            let mut indexed = Vec::new();
+            let mut indexed_capped = false;
+            collect_interface_candidates("Speak", &inputs, cap, &mut indexed, &mut indexed_capped);
+            let indexed_pairs: Vec<(SemanticNodeId, Vec<String>)> = indexed
+                .into_iter()
+                .map(|candidate| (candidate.node, candidate.contributing_keys))
+                .collect();
+
+            assert_eq!(
+                indexed_pairs, expected,
+                "indexed candidates must equal the whole-set scan (cap {cap})"
+            );
+            assert_eq!(
+                indexed_capped, expected_capped,
+                "cap-exceeded flag must match the whole-set scan (cap {cap})"
+            );
+        }
+
+        // Concretely: uncapped resolves exactly Cat(11), Dog(12), Fox(13) in sorted-type
+        // order — Zebra (not instantiated) and Mute's Hush (wrong method) are excluded.
+        let mut all = Vec::new();
+        let mut capped = false;
+        collect_interface_candidates("Speak", &inputs, usize::MAX, &mut all, &mut capped);
+        assert_eq!(
+            all.iter().map(|c| c.node).collect::<Vec<_>>(),
+            vec![node(11), node(12), node(13)],
+            "exactly the three instantiated `Speak` implementers, in sorted-type order"
+        );
+        assert!(!capped);
+        // The not-instantiated Zebra method node (14) is never a candidate (RTA filter).
+        assert!(
+            all.iter().all(|c| c.node != node(14)),
+            "a declared-but-not-instantiated implementer must be excluded"
+        );
+        // A cap of 2 selects the SAME first-two prefix (Cat, Dog) and latches.
+        let mut prefix = Vec::new();
+        let mut prefix_capped = false;
+        collect_interface_candidates("Speak", &inputs, 2, &mut prefix, &mut prefix_capped);
+        assert_eq!(
+            prefix.iter().map(|c| c.node).collect::<Vec<_>>(),
+            vec![node(11), node(12)],
+            "the cap must select the same prefix the scan would"
+        );
+        assert!(prefix_capped, "a cap below the candidate count must latch");
     }
 }

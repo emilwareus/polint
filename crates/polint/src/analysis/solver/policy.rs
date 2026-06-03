@@ -242,7 +242,8 @@ mod tests {
             methods_by_receiver,
             function_node,
             ..GoRtaInputs::default()
-        };
+        }
+        .finalize_indexes();
 
         let policy = GoRtaPolicy::new(inputs);
         assert_eq!(policy.id(), "go_rta");

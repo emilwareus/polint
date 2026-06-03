@@ -97,9 +97,10 @@ pub(crate) fn solve_go_rta(inputs: &GoRtaInputs, budget: &SolverBudget) -> Solve
     // Seed the reachable set from roots (D-07). The instantiated + address-taken sets
     // are the whole reachable program's rapid-type / address-taken sets (see module
     // docs); they do not grow during the fixpoint, so the loop is bounded by reachable
-    // growth alone (plus the explicit caps).
+    // growth alone (plus the explicit caps). The instantiated-type FILTER is baked into
+    // `inputs.interface_candidate_index` at build time (FIX 2), so the fixpoint no longer
+    // threads the instantiated set into `resolve_callsite` — it consults the index.
     let mut reachable: BTreeSet<String> = inputs.roots.clone();
-    let instantiated = &inputs.instantiated;
     let address_taken = &inputs.address_taken;
 
     // The FRONTIER: callers whose callsites still need resolving THIS round. Round 1's
@@ -226,7 +227,6 @@ pub(crate) fn solve_go_rta(inputs: &GoRtaInputs, budget: &SolverBudget) -> Solve
                 let resolution = resolve_callsite(
                     callsite,
                     inputs,
-                    instantiated,
                     address_taken,
                     budget.go.max_candidates_per_callsite,
                     resolve_func_values,
@@ -354,6 +354,9 @@ mod tests {
             methods_by_receiver,
             ..GoRtaInputs::default()
         }
+        // FIX 2: derive the interface-dispatch index from the hand-built primary fields so
+        // dispatch resolution (which now reads the index) behaves as the scan would have.
+        .finalize_indexes()
     }
 
     #[test]
@@ -449,7 +452,8 @@ mod tests {
             methods_by_receiver,
             static_call_targets,
             ..GoRtaInputs::default()
-        };
+        }
+        .finalize_indexes();
 
         let output = solve_go_rta(&inputs, &SolverBudget::default());
         assert_eq!(output.budget_status, BudgetStatus::WithinBudget);
@@ -549,7 +553,8 @@ mod tests {
             function_node,
             static_call_targets,
             ..GoRtaInputs::default()
-        };
+        }
+        .finalize_indexes();
 
         // THE DEFAULT BUDGET — no inflated `max_rta_rounds`. The default `max_rta_rounds`
         // (32) is far below the chain depth (200); the fix is what lets this converge.
@@ -608,7 +613,8 @@ mod tests {
             function_node,
             static_call_targets,
             ..GoRtaInputs::default()
-        };
+        }
+        .finalize_indexes();
 
         let output = solve_go_rta(&inputs, &SolverBudget::default());
         assert_eq!(
@@ -666,7 +672,8 @@ mod tests {
             function_node,
             function_signature,
             ..GoRtaInputs::default()
-        };
+        }
+        .finalize_indexes();
 
         let output = solve_go_rta(&inputs, &SolverBudget::default());
         assert!(
@@ -720,13 +727,15 @@ mod tests {
         );
 
         // Removing the method-set match (the type no longer declares the method) also
-        // invalidates the edge.
+        // invalidates the edge. Mutating a primary field requires rebuilding the derived
+        // dispatch index (FIX 2) — exactly what re-running `from_db` would do.
         let mut no_method_set = interface_scenario(&["pkg.File"]);
         no_method_set
             .method_sets
             .get_mut("pkg.File")
             .unwrap()
             .remove("Read");
+        let no_method_set = no_method_set.finalize_indexes();
         let rerun = solve_go_rta(&no_method_set, &SolverBudget::default());
         assert!(
             !rerun
@@ -827,7 +836,8 @@ mod tests {
             methods_by_receiver,
             function_node,
             ..GoRtaInputs::default()
-        };
+        }
+        .finalize_indexes();
 
         let mut budget = SolverBudget::default();
         budget.go.max_rta_rounds = 1;
@@ -914,7 +924,8 @@ mod tests {
             function_signature,
             methods_by_receiver,
             ..GoRtaInputs::default()
-        };
+        }
+        .finalize_indexes();
 
         let mut budget = SolverBudget::default();
         budget.go.address_taken_threshold = 1;
@@ -1042,7 +1053,8 @@ mod tests {
             methods_by_receiver,
             function_node,
             ..GoRtaInputs::default()
-        };
+        }
+        .finalize_indexes();
 
         let mut budget = SolverBudget::default();
         budget.go.max_rta_rounds = 1;
@@ -1142,7 +1154,8 @@ mod tests {
             methods_by_receiver,
             function_node,
             ..GoRtaInputs::default()
-        };
+        }
+        .finalize_indexes();
 
         // Default worklist-step cap (10_000) easily admits the 80 visits; the round cap
         // must be raised above the chain depth so the round cap itself is not what trips
@@ -1253,7 +1266,8 @@ mod tests {
             methods_by_receiver,
             function_node,
             ..GoRtaInputs::default()
-        };
+        }
+        .finalize_indexes();
 
         // A worklist-step cap of 1 admits only the first callsite resolution, so the
         // chain truncates and the run latches BudgetExceeded honestly.

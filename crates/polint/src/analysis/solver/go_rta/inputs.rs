@@ -29,6 +29,18 @@ pub(crate) struct GoRtaMethod {
     pub(crate) node: SemanticNodeId,
 }
 
+/// One pre-resolved interface-invoke candidate callee in the inverted dispatch index
+/// (FIX 2): the target `node` plus the contributing-fact keys that justify the edge
+/// (`[method_set_keys[type], instantiated_keys[type]]`, each present only if recorded).
+/// Built ONCE in [`GoRtaInputs::from_db`] so per-callsite resolution is a single
+/// `BTreeMap` lookup instead of an O(whole-instantiated-set) scan — see
+/// [`GoRtaInputs::interface_candidate_index`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GoRtaInterfaceCandidate {
+    pub(crate) node: SemanticNodeId,
+    pub(crate) contributing_keys: Vec<String>,
+}
+
 /// The closed dispatch obligation for one `UnresolvedDynamic` Go callsite that maps
 /// to a `CallConstraint` node in the semantic graph, joined with its dispatch detail.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,6 +90,19 @@ pub(crate) struct GoRtaInputs {
     pub(crate) function_signature: BTreeMap<String, String>,
     /// `receiver type_name -> its concrete methods` (interface-invoke resolution).
     pub(crate) methods_by_receiver: BTreeMap<String, Vec<GoRtaMethod>>,
+    /// Inverted interface-dispatch index `invoked method name -> candidate callees`
+    /// (FIX 2, scale). Built ONCE from `instantiated` ⋈ `method_sets` ⋈
+    /// `methods_by_receiver` so resolving one interface-invoke callsite is a single
+    /// `BTreeMap` lookup, NOT an O(whole-instantiated-set) scan per callsite — the old
+    /// `collect_interface_candidates` made total interface resolution O(C_iface · T)
+    /// (callsites × instantiated types), uncapped by the worklist-step budget. Each
+    /// per-method `Vec` is built by iterating `instantiated` in its `BTreeSet` (sorted)
+    /// order and, within a type, `methods_by_receiver[type]` in its existing order, so
+    /// the candidate order — and therefore the resolved edge set, the per-callsite cap
+    /// prefix, and the stable keys — is byte-IDENTICAL to the whole-set scan it replaces.
+    /// A type whose method-set lacks the method, or that is not instantiated, contributes
+    /// no entry (the same exclusions the scan applied).
+    pub(crate) interface_candidate_index: BTreeMap<String, Vec<GoRtaInterfaceCandidate>>,
     /// `caller qualified -> statically-called callee qualified`s — the resolved STATIC
     /// call graph restricted to Go functions in [`Self::function_node`] (FINDING 1).
     /// Standard RTA reachability is the fixpoint closure over BOTH static-call edges and
@@ -299,9 +324,93 @@ impl GoRtaInputs {
             function_node,
             function_signature,
             methods_by_receiver,
+            // Built ONCE by `finalize_indexes` below from the now-populated primary fields
+            // (FIX 2), so per-callsite resolution is a map lookup, not an
+            // O(whole-instantiated-set) scan.
+            interface_candidate_index: BTreeMap::new(),
             static_call_targets,
         }
+        .finalize_indexes()
     }
+
+    /// (Re)build the derived dispatch indexes from the primary RTA fields and return self
+    /// (FIX 2). This is the SINGLE chokepoint that populates
+    /// [`Self::interface_candidate_index`] — `from_db` calls it after building the primary
+    /// fields, and any hand-constructed `GoRtaInputs` (tests) calls it so the index stays
+    /// consistent with `instantiated` / `method_sets` / `methods_by_receiver`. Idempotent:
+    /// the index is rebuilt from scratch, so calling it twice yields the same result.
+    pub(crate) fn finalize_indexes(mut self) -> Self {
+        self.interface_candidate_index = build_interface_candidate_index(
+            &self.instantiated,
+            &self.method_sets,
+            &self.method_set_keys,
+            &self.instantiated_keys,
+            &self.methods_by_receiver,
+        );
+        self
+    }
+}
+
+/// Build the inverted interface-dispatch index (FIX 2): `invoked method name ->
+/// candidate callees`, replacing the old per-callsite whole-instantiated-set scan with
+/// a single `BTreeMap` lookup while preserving byte-identical candidate order.
+///
+/// **Byte-identity contract.** The replaced scan, for a query method `M`, iterated
+/// `instantiated` in `BTreeSet` (sorted) order and, for each instantiated type whose
+/// `method_sets[type]` CONTAINS `M`, iterated `methods_by_receiver[type]` in order,
+/// pushing every concrete method named `M` with `contributing_keys =
+/// [method_set_keys[type]?, instantiated_keys[type]?]`. This builder visits the SAME
+/// (type, concrete-method) pairs in the SAME order and files each concrete method under
+/// the key of its OWN bare name — but only when `method_sets[type]` contains that name —
+/// so for any `M`, `index[M]` equals the scan's output for `M` element-for-element
+/// (set, order, contributing keys, and therefore the per-callsite cap prefix). A type
+/// not in `instantiated`, or whose method-set lacks the method, is simply never visited
+/// / never filed (the scan's exact exclusions).
+fn build_interface_candidate_index(
+    instantiated: &BTreeSet<String>,
+    method_sets: &BTreeMap<String, BTreeSet<String>>,
+    method_set_keys: &BTreeMap<String, String>,
+    instantiated_keys: &BTreeMap<String, String>,
+    methods_by_receiver: &BTreeMap<String, Vec<GoRtaMethod>>,
+) -> BTreeMap<String, Vec<GoRtaInterfaceCandidate>> {
+    let mut index: BTreeMap<String, Vec<GoRtaInterfaceCandidate>> = BTreeMap::new();
+    // Iterate the instantiated set in BTreeSet (sorted) order — the scan's outer loop.
+    for type_name in instantiated {
+        // The type must declare a method-set; otherwise it dispatches nothing (the scan
+        // `continue`d on a missing method-set).
+        let Some(methods) = method_sets.get(type_name) else {
+            continue;
+        };
+        let Some(concrete_methods) = methods_by_receiver.get(type_name) else {
+            continue;
+        };
+        // The contributing-fact keys are per-TYPE, identical for every candidate of this
+        // type — compute them once (the scan rebuilt the same Vec per candidate).
+        let mut contributing_keys = Vec::new();
+        if let Some(key) = method_set_keys.get(type_name) {
+            contributing_keys.push(key.clone());
+        }
+        if let Some(key) = instantiated_keys.get(type_name) {
+            contributing_keys.push(key.clone());
+        }
+        // Within a type, iterate `methods_by_receiver[type]` in its existing order — the
+        // scan's inner loop — filing each concrete method under its own bare name, but
+        // only when the method-set contains that name (the scan's `methods.contains`
+        // guard, here applied per concrete method so the `index[M]` lookup is exact).
+        for concrete in concrete_methods {
+            if !methods.contains(&concrete.method_name) {
+                continue;
+            }
+            index
+                .entry(concrete.method_name.clone())
+                .or_default()
+                .push(GoRtaInterfaceCandidate {
+                    node: concrete.node,
+                    contributing_keys: contributing_keys.clone(),
+                });
+        }
+    }
+    index
 }
 
 /// Indexes built ONCE per [`GoRtaInputs::from_db`] so the core-function and call-site

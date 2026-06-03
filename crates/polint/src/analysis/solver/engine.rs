@@ -1152,7 +1152,8 @@ mod tests {
             methods_by_receiver,
             function_node,
             ..GoRtaInputs::default()
-        };
+        }
+        .finalize_indexes();
 
         let mut budget = SolverBudget::default();
         budget.go.max_rta_rounds = 1;
