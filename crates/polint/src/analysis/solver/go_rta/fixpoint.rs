@@ -38,10 +38,13 @@
 //! the same budget; sized like points-to `max_steps` = 10_000, NOT the policy-count
 //! `max_outer_iterations` = 64 — review CR-01), and
 //! `budget.go.max_candidates_per_callsite` (per-callsite fan-out). The address-taken
-//! set exceeding `budget.go.address_taken_threshold` also latches exhaustion. Any
-//! cap latches the run-level [`BudgetStatus::BudgetExceeded`] — edges resolved before
-//! the cap keep their honest status (review finding #R1); the loop never runs
-//! unbounded.
+//! set exceeding `budget.go.address_taken_threshold` also latches exhaustion. A cap
+//! latches the run-level [`BudgetStatus::BudgetExceeded`] only when it actually prevents
+//! pending work — the round cap latches BudgetExceeded only if the cap-time frontier
+//! still has a static-call target or a dynamic callsite to resolve; a non-empty frontier
+//! whose members have neither is already converged, so hitting the cap there is honest
+//! convergence, not truncation (FINDING 6). Edges resolved before a cap keep their honest
+//! status (review finding #R1); the loop never runs unbounded.
 //!
 //! The frontier-only scan is what keeps the worklist-step count proportional to real
 //! work (≈ Σ reachable_callers × their_callsites) instead of growing super-linearly
@@ -117,10 +120,26 @@ pub(crate) fn solve_go_rta(inputs: &GoRtaInputs, budget: &SolverBudget) -> Solve
         return finish(edges_by_key, true);
     }
 
+    // A frontier member carries PENDING WORK only if it has a static-call target or a
+    // dynamic callsite to resolve. A non-empty frontier whose members have neither is
+    // already CONVERGED — processing it would resolve nothing (FINDING 6).
+    let frontier_has_pending_work = |frontier: &BTreeSet<String>| -> bool {
+        frontier.iter().any(|caller| {
+            inputs.static_call_targets.contains_key(caller.as_str())
+                || callsites_by_caller.contains_key(caller.as_str())
+        })
+    };
+
     while !frontier.is_empty() {
-        // Round cap (D-13): bound the reachability ⊗ dispatch iteration.
+        // Round cap (D-13): bound the reachability ⊗ dispatch iteration. Latch
+        // BudgetExceeded ONLY when the cap actually prevents genuinely pending work
+        // (FINDING 6): a non-empty frontier whose members have no static target and no
+        // dynamic callsite is converged, so hitting the cap there is honest convergence,
+        // not truncation — break WithinBudget rather than a false BudgetExceeded.
         if round >= budget.go.max_rta_rounds {
-            budget_exceeded = true;
+            if frontier_has_pending_work(&frontier) {
+                budget_exceeded = true;
+            }
             break;
         }
         round += 1;
@@ -668,6 +687,78 @@ mod tests {
         // The cap is hit before the second round resolves A.Step's callsite, so the
         // run latches BudgetExceeded honestly rather than looping.
         assert_eq!(output.budget_status, BudgetStatus::BudgetExceeded);
+    }
+
+    #[test]
+    fn convergence_at_round_boundary_with_no_pending_work_stays_within_budget() {
+        // FINDING 6: at the `max_rta_rounds` boundary the cap must latch BudgetExceeded
+        // ONLY when there is genuinely pending dispatch work. Here `main` (root) invokes
+        // `Step`, resolving to (pkg.A).Step in round 1; (pkg.A).Step has NO callsites, so
+        // the round-2 frontier {A.Step} has nothing left to resolve — the analysis has
+        // CONVERGED. With max_rta_rounds = 1 the old code latched BudgetExceeded purely
+        // because the frontier was non-empty, a false positive. (Contrast the runaway test
+        // where A.Step DOES invoke B.Step — genuine pending work that still latches.)
+        let mut function_node = BTreeMap::new();
+        function_node.insert("main.main".to_string(), SemanticNodeId(1));
+        function_node.insert("(pkg.A).Step".to_string(), SemanticNodeId(3));
+
+        let mut method_sets = BTreeMap::new();
+        method_sets.insert("pkg.A".to_string(), BTreeSet::from(["Step".to_string()]));
+        let mut method_set_keys = BTreeMap::new();
+        method_set_keys.insert("pkg.A".to_string(), "ms|A".to_string());
+
+        let mut methods_by_receiver = BTreeMap::new();
+        methods_by_receiver.insert(
+            "pkg.A".to_string(),
+            vec![GoRtaMethod {
+                method_name: "Step".to_string(),
+                qualified: "(pkg.A).Step".to_string(),
+                node: SemanticNodeId(3),
+            }],
+        );
+
+        let instantiated = BTreeSet::from(["pkg.A".to_string()]);
+        let mut instantiated_keys = BTreeMap::new();
+        instantiated_keys.insert("pkg.A".to_string(), "inst|A".to_string());
+
+        let inputs = GoRtaInputs {
+            roots: BTreeSet::from(["main.main".to_string()]),
+            // Only main has a callsite; (pkg.A).Step has none → the round-2 frontier is
+            // converged with no pending work.
+            callsites: vec![GoRtaCallsite {
+                caller: "main.main".to_string(),
+                callsite_node: SemanticNodeId(2),
+                callsite_stable_key: "cs|main".to_string(),
+                interface_method: Some("Step".to_string()),
+                signature: None,
+                dispatch_stable_key: "dd|main".to_string(),
+            }],
+            method_sets,
+            method_set_keys,
+            instantiated,
+            instantiated_keys,
+            methods_by_receiver,
+            function_node,
+            ..GoRtaInputs::default()
+        };
+
+        let mut budget = SolverBudget::default();
+        budget.go.max_rta_rounds = 1;
+        let output = solve_go_rta(&inputs, &budget);
+        // The single resolvable edge is derived AND the run is WithinBudget (converged at
+        // the boundary, no pending work the cap prevented).
+        assert!(
+            output
+                .derived_edges
+                .iter()
+                .any(|e| e.source == SemanticNodeId(1) && e.target == SemanticNodeId(3)),
+            "the resolvable edge must be derived"
+        );
+        assert_eq!(
+            output.budget_status,
+            BudgetStatus::WithinBudget,
+            "convergence at the round boundary with no pending work must NOT latch BudgetExceeded"
+        );
     }
 
     /// Regression for CR-01: a multi-round RTA convergence whose total dynamic
