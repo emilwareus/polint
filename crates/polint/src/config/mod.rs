@@ -5,6 +5,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
+use crate::analysis::solver::budget::GoRtaSubBudget;
+
 const CONFIG_MAX_BYTES: u64 = 1_048_576;
 
 #[derive(Debug, Error)]
@@ -34,6 +36,8 @@ pub(crate) struct PolintConfig {
     pub(crate) ignores: IgnoreConfig,
     #[serde(default)]
     pub(crate) reachability: ReachabilityConfig,
+    #[serde(default)]
+    pub(crate) solver: SolverConfig,
 }
 
 /// Configured whole-program reachability roots (D-13).
@@ -46,6 +50,71 @@ pub(crate) struct PolintConfig {
 pub(crate) struct ReachabilityConfig {
     #[serde(default)]
     pub(crate) roots: Vec<String>,
+}
+
+/// `[solver]` config table (D-10). `.polint.toml` config surface for the unified
+/// solver — NOT an SDK promotion. Sits beside [`ReachabilityConfig`].
+///
+/// Today it threads the per-language Go RTA caps (`solver.go.*`) into
+/// [`GoRtaSubBudget`]; later phases extend it with cross-language knobs.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct SolverConfig {
+    #[serde(default)]
+    pub(crate) go: SolverGoConfig,
+}
+
+/// `[solver.go]` config sub-table (D-10). Each knob is an `Option<usize>` so an
+/// absent key falls back to [`GoRtaSubBudget::default()`] (D-11). The roadmap-named
+/// `address_taken_threshold` is the headline knob.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct SolverGoConfig {
+    #[serde(default)]
+    pub(crate) address_taken_threshold: Option<usize>,
+    #[serde(default)]
+    pub(crate) max_candidates_per_callsite: Option<usize>,
+    #[serde(default)]
+    pub(crate) max_rta_rounds: Option<usize>,
+    #[serde(default)]
+    pub(crate) max_worklist_steps: Option<usize>,
+}
+
+impl SolverConfig {
+    /// Overlay present `[solver.go]` config values onto [`GoRtaSubBudget::default()`]
+    /// (D-11). Absent knobs keep their default; this is the single mapper the kernel
+    /// uses to build `SolverBudget.go` from `.polint.toml`.
+    ///
+    /// FINDING D: a non-positive cap (`0`) is NOT overlaid verbatim. Every Go RTA cap is a
+    /// strictly-positive ceiling — `max_worklist_steps = 0` / `max_rta_rounds = 0` /
+    /// `address_taken_threshold = 0` would make the fixpoint latch
+    /// [`crate::analysis::solver::budget::BudgetStatus::BudgetExceeded`] immediately (zero
+    /// edges, EVERY run), so a config typo would silently disable all Go RTA. A `Some(0)` is
+    /// therefore treated as the documented default rather than "unbounded/disabled".
+    pub(crate) fn to_go_sub_budget(&self) -> GoRtaSubBudget {
+        let mut budget = GoRtaSubBudget::default();
+        overlay_positive_cap(
+            &mut budget.address_taken_threshold,
+            self.go.address_taken_threshold,
+        );
+        overlay_positive_cap(
+            &mut budget.max_candidates_per_callsite,
+            self.go.max_candidates_per_callsite,
+        );
+        overlay_positive_cap(&mut budget.max_rta_rounds, self.go.max_rta_rounds);
+        overlay_positive_cap(&mut budget.max_worklist_steps, self.go.max_worklist_steps);
+        budget
+    }
+}
+
+/// Overlay a configured cap onto its default, treating a non-positive (`Some(0)`) value as
+/// "keep the default" (FINDING D). An absent knob (`None`) also keeps the default. Every Go
+/// RTA cap is a strictly-positive ceiling, so `0` is never a meaningful "disable" — it is a
+/// typo that must not silently zero RTA.
+fn overlay_positive_cap(slot: &mut usize, configured: Option<usize>) {
+    if let Some(value) = configured
+        && value > 0
+    {
+        *slot = value;
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -466,6 +535,96 @@ roots = ["pkg/path.Func", "src/x.ts#handler"]
         assert_eq!(
             config.reachability.roots,
             vec!["pkg/path.Func".to_string(), "src/x.ts#handler".to_string()]
+        );
+    }
+
+    #[test]
+    fn solver_config_defaults_to_go_sub_budget_defaults() {
+        // Absent [solver] table falls back to GoRtaSubBudget::default() (D-11).
+        let config: PolintConfig = toml::from_str("").unwrap();
+        assert_eq!(config.solver.to_go_sub_budget(), GoRtaSubBudget::default());
+    }
+
+    #[test]
+    fn solver_go_override_maps_into_go_sub_budget() {
+        // A [solver.go] override changes ONLY the present knobs; absent knobs keep
+        // their default (D-10/D-11).
+        let config: PolintConfig = toml::from_str(
+            r#"
+[solver.go]
+address_taken_threshold = 999
+max_rta_rounds = 7
+max_worklist_steps = 50000
+"#,
+        )
+        .unwrap();
+        let budget = config.solver.to_go_sub_budget();
+        assert_eq!(budget.address_taken_threshold, 999);
+        assert_eq!(budget.max_rta_rounds, 7);
+        assert_eq!(budget.max_worklist_steps, 50_000);
+        // The unspecified knob stays at its default.
+        assert_eq!(
+            budget.max_candidates_per_callsite,
+            GoRtaSubBudget::default().max_candidates_per_callsite
+        );
+    }
+
+    #[test]
+    fn solver_go_zero_knob_falls_back_to_default_not_self_disable() {
+        // FINDING D: a `[solver.go]` cap of 0 must NOT be overlaid verbatim. A
+        // `max_worklist_steps = 0` / `max_rta_rounds = 0` / `address_taken_threshold = 0`
+        // would make the RTA fixpoint latch BudgetExceeded immediately (zero edges, every
+        // run) — a config typo silently disabling all Go RTA. A non-positive cap is treated
+        // as the documented default instead.
+        let config: PolintConfig = toml::from_str(
+            r#"
+[solver.go]
+address_taken_threshold = 0
+max_candidates_per_callsite = 0
+max_rta_rounds = 0
+max_worklist_steps = 0
+"#,
+        )
+        .unwrap();
+        let budget = config.solver.to_go_sub_budget();
+        // Every zeroed knob falls back to its honest default rather than self-disabling.
+        assert_eq!(budget, GoRtaSubBudget::default());
+        assert_eq!(
+            budget.max_worklist_steps,
+            GoRtaSubBudget::default().max_worklist_steps
+        );
+        assert_eq!(
+            budget.max_rta_rounds,
+            GoRtaSubBudget::default().max_rta_rounds
+        );
+        assert_eq!(
+            budget.address_taken_threshold,
+            GoRtaSubBudget::default().address_taken_threshold
+        );
+        assert_eq!(
+            budget.max_candidates_per_callsite,
+            GoRtaSubBudget::default().max_candidates_per_callsite
+        );
+    }
+
+    #[test]
+    fn solver_go_positive_knob_still_overrides_after_zero_clamp() {
+        // The zero-clamp must not block a legitimate positive override: a present positive
+        // value still maps through, while a zeroed sibling falls back to its default.
+        let config: PolintConfig = toml::from_str(
+            r#"
+[solver.go]
+max_rta_rounds = 0
+max_worklist_steps = 5
+"#,
+        )
+        .unwrap();
+        let budget = config.solver.to_go_sub_budget();
+        assert_eq!(budget.max_worklist_steps, 5, "positive override applies");
+        assert_eq!(
+            budget.max_rta_rounds,
+            GoRtaSubBudget::default().max_rta_rounds,
+            "a zeroed sibling falls back to default, not 0"
         );
     }
 

@@ -1,0 +1,42 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "polyglot-canary-go-ts"
+area = "polyglot-canary"
+
+# Phase 48 Plan 03 — the polyglot Go+TS canary (D-16, GO-05 success criterion 3).
+#
+# This fixture is CREATED here for the first time; Phase 54 (BENCH-01) later promotes
+# it to a HARD gate. It exercises cross-language non-regression through the shared
+# solver core: with the Go RTA driver ACTIVE and the TS token policy still a STUB, a
+# mixed Go+TS repo must show
+#   (a) Go edges resolved — the `s.Speak()` interface invoke resolves to the
+#       instantiated (Dog).Speak via the Go RTA driver, AND
+#   (b) NO CROSS-LANGUAGE INTERFERENCE — the TS sources are analyzed AND genuinely feed
+#       the shared solver core a solver-relevant constraint (tokens.ts aliases a local
+#       function, `const aliasMake = makeToken`, and calls through the alias — a CopyEdge
+#       with a TS function-node endpoint that COULD propagate). NO derived edge crosses
+#       the Go<->TS language boundary, and the TS-specific token policy (TsTokensPolicy,
+#       still a stub) contributes no `call_constraint` edge.
+#
+# What this canary DOES prove: a live TS CopyEdge constraint flows into the SAME solver
+# core that resolves the Go RTA edge, yet no derived edge connects a Go node to a TS node
+# and the Go resolution is unperturbed — the two halves never reach across the language
+# boundary through the shared core. What it does NOT prove: TS token PROPAGATION itself.
+# The language-agnostic points-to CopyEdge closure DOES propagate the TS CopyEdge
+# INTRA-TS (the shared core working uniformly), but the TS-specific TsTokensPolicy is
+# intentionally empty until Phase 49 (JS-04), so it resolves no TS dynamic dispatch — the
+# canary's TS-policy emptiness is about that stub, NOT about an absence of TS constraints.
+#
+# The executable proof lives in `eval::go_rta::polyglot_go_ts_canary_*` (it reads the
+# kernel-built db's solver-derived edges + the Go/TS function-node identities, asserts
+# the TS half emits >= 1 CopyEdge with a TS endpoint, asserts no Go<->TS edge, and that
+# every TS-endpoint edge is a shared-closure `copy_edge` not a TsTokensPolicy
+# `call_constraint`); this manifest documents the acceptance contract. No `[[expected]]`
+# row is captured because the solver-derived edges are crate-private and not observable
+# manifest facts (Phase 54 promotes this canary to a hard gate over the observable
+# projection).
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 120000

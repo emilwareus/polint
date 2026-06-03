@@ -85,10 +85,11 @@ use crate::diagnostics::{
     Diagnostic, Severity, TextRange as DiagnosticRange, dedupe_diagnostics, fingerprint,
 };
 use crate::go::semantic::facts::{
-    GoSemanticCallsiteFact, GoSemanticFunctionFact, GoSemanticMethodSetFact,
+    GoSemanticAddressTakenFact, GoSemanticCallsiteFact, GoSemanticDynamicDispatchFact,
+    GoSemanticFunctionFact, GoSemanticInstantiatedTypeFact, GoSemanticMethodSetFact,
     GoSemanticPackageErrorFact, GoSemanticPackageFact,
 };
-use crate::go::semantic::store::{GoSemanticFactsOutput, GoSemanticStore};
+use crate::go::semantic::store::{GoSemanticFactsOutput, GoSemanticStore, GoSemanticStoreReport};
 use crate::module_graph::topology::{
     DependencyRequirementFact, ImportToPackageFact, RepoTopologyOverlayFact,
     ResolvedDependencyEdgeFact, SourceSetFact, TopologyOutput, TopologyPackageFact,
@@ -748,6 +749,9 @@ pub struct AnalysisDb {
     go_semantic_functions: Vec<GoSemanticFunctionFact>,
     go_semantic_callsites: Vec<GoSemanticCallsiteFact>,
     go_semantic_method_sets: Vec<GoSemanticMethodSetFact>,
+    go_semantic_address_taken: Vec<GoSemanticAddressTakenFact>,
+    go_semantic_instantiated_types: Vec<GoSemanticInstantiatedTypeFact>,
+    go_semantic_dynamic_dispatch: Vec<GoSemanticDynamicDispatchFact>,
     go_semantic_package_errors: Vec<GoSemanticPackageErrorFact>,
     type_facts: Vec<TypeFact>,
     narrowed_type_facts: Vec<NarrowedTypeFact>,
@@ -1471,17 +1475,42 @@ impl AnalysisDb {
         &self.solver_derived_edges
     }
 
+    /// Store the Go semantic facts, returning the resilience report (malformed RTA-signal
+    /// harvest rows dropped, FIX 3; plus duplicate structural rows collapsed keep-first,
+    /// FIX-08) so the provider can surface observable diagnostics. All counts are zero on a
+    /// clean frontend run.
     pub(crate) fn replace_go_semantic_facts(
         &mut self,
         output: GoSemanticFactsOutput,
-    ) -> Result<(), AnalysisError> {
+    ) -> Result<GoSemanticStoreReport, AnalysisError> {
         let store = GoSemanticStore::from_output(output)?;
         self.go_semantic_packages = store.output().packages.clone();
         self.go_semantic_functions = store.output().functions.clone();
         self.go_semantic_callsites = store.output().callsites.clone();
         self.go_semantic_method_sets = store.output().method_sets.clone();
+        self.go_semantic_address_taken = store.output().address_taken.clone();
+        self.go_semantic_instantiated_types = store.output().instantiated_types.clone();
+        self.go_semantic_dynamic_dispatch = store.output().dynamic_dispatch.clone();
         self.go_semantic_package_errors = store.output().package_errors.clone();
-        Ok(())
+        Ok(store.report())
+    }
+
+    /// The normalized Go semantic output currently stored in the database.
+    ///
+    /// Used by the provider after `replace_go_semantic_facts` so its output digest certifies
+    /// the rows that survived store-time resilience passes (invalid harvest-row drops and
+    /// duplicate structural-key collapse), not the raw sidecar/lowering rows.
+    pub(crate) fn go_semantic_facts_output(&self) -> GoSemanticFactsOutput {
+        GoSemanticFactsOutput {
+            packages: self.go_semantic_packages.clone(),
+            functions: self.go_semantic_functions.clone(),
+            callsites: self.go_semantic_callsites.clone(),
+            method_sets: self.go_semantic_method_sets.clone(),
+            address_taken: self.go_semantic_address_taken.clone(),
+            instantiated_types: self.go_semantic_instantiated_types.clone(),
+            dynamic_dispatch: self.go_semantic_dynamic_dispatch.clone(),
+            package_errors: self.go_semantic_package_errors.clone(),
+        }
     }
 
     pub(crate) fn go_semantic_packages(&self) -> &[GoSemanticPackageFact] {
@@ -1502,6 +1531,30 @@ impl AnalysisDb {
     )]
     pub(crate) fn go_semantic_method_sets(&self) -> &[GoSemanticMethodSetFact] {
         &self.go_semantic_method_sets
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Address-taken facts are stored privately for the Plan 2 go_rta dispatch-candidate set (GO-05)."
+    )]
+    pub(crate) fn go_semantic_address_taken(&self) -> &[GoSemanticAddressTakenFact] {
+        &self.go_semantic_address_taken
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Instantiated-type facts are stored privately for the Plan 2 go_rta rapid-type filter (GO-05)."
+    )]
+    pub(crate) fn go_semantic_instantiated_types(&self) -> &[GoSemanticInstantiatedTypeFact] {
+        &self.go_semantic_instantiated_types
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Dynamic-dispatch detail is stored privately for the Plan 2 go_rta method-set matching (GO-05)."
+    )]
+    pub(crate) fn go_semantic_dynamic_dispatch(&self) -> &[GoSemanticDynamicDispatchFact] {
+        &self.go_semantic_dynamic_dispatch
     }
 
     #[allow(

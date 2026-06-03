@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Graph Engine Precision
 status: ready_to_plan
-last_updated: 2026-06-02T10:13:51.233Z
-last_activity: 2026-06-02
+last_updated: 2026-06-02T21:02:16.920Z
+last_activity: "2026-06-02 -- Completed 48-03-PLAN.md (verification: go-rta + polyglot + determinism fixtures; GO-05 complete)"
 progress:
   total_phases: 13
-  completed_phases: 6
-  total_plans: 23
-  completed_plans: 23
-  percent: 46
-stopped_at: Phase 47 complete (3/3) — ready to discuss Phase 48
+  completed_phases: 7
+  total_plans: 26
+  completed_plans: 26
+  percent: 54
+stopped_at: Phase 48 complete (3/3) — ready to discuss Phase 49
 ---
 
 # State: polint
@@ -22,7 +22,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 48 — go rta driver
+**Current focus:** Phase 49 — js/ts function token propagation driver
 
 ## Current Status
 
@@ -41,7 +41,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 ## Current Position
 
-Phase: 48
+Phase: 49
 Plan: Not started
 Status: Ready to plan
 Last activity: 2026-06-02
@@ -168,6 +168,7 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 | 40 | Complete | 8/8 plans complete; Go and TS/JS benchmark adapters, comparison rows, adaptation prompt/deltas, baselines, promotion gates, and public-boundary proof done; unsupported-language benchmark scope removed; requirement SAE-PROM-01 |
 | 41 | Complete | 5/5 plans complete; public SDK query helpers, agent JSON commands, generated fixture ergonomics, public docs/skills, review fixes, and final verification done; requirement SAE-PROM-02 |
 | 42 | Complete | 5/5 plans complete; identity substrate + dedup, Go RelString/Jelly span renderers + CRLF fixture + jelly_oracle_coverage, closed IdentityCategory taxonomy + categorized_failures counter map, public-surface-leak CI gate, and Plan 05 gap closure (Go package-NAME qualification via PackageFact + go_relstring_v2 cache bump + dedup literal total order) done; requirements IDENT-01/02/03 |
+| 48 | Complete | 3/3 plans complete; Plan 01 Go-frontend RTA-signal emission + Plan 02 go_rta RTA driver (analysis::solver::go_rta fixpoint via SolverEngine::run_to_solver_output, points-to byte-identical; GoRtaSubBudget + [solver].go config + go_rta_fixpoint_v1 cache key; BudgetExceeded latching) + Plan 03 verification (iteration-cap BudgetExceeded + interface-dispatch instantiated-type filter + address-taken func-value + polyglot Go+TS canary + go_rta determinism fixtures, all green; determinism + leak + provider-order snapshots unchanged). Plan 03 surfaced + auto-fixed 3 Rule-1 Go-frontend bugs (set-fact dedup, bare method-set names, method node-mapping by span-containment) without which RTA resolved zero real interface edges. Requirement GO-05 COMPLETE |
 
 ## Accumulated Context
 
@@ -186,6 +187,10 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 
 ## Decisions
 
+- [Phase 48-03]: The `eval::go_rta` acceptance gate sources RTA edges from the kernel-built db by rebuilding `GoRtaInputs::from_db` + driving `SolverEngine::run_to_solver_output`, NOT through `graph_edges_from_kernel_output` (which reads `refined_call_edges`/`call_targets`, not `solver_derived_edges`; Phase 52/GRAPH-05 wires solver edges into the observable refined-call projection). Self-contained fixtures are the always-runnable, x/tools-clone-free proof. Iteration-cap BudgetExceeded is driven by `max_candidates_per_callsite = 1` (one interface invoke, three instantiated implementers), not `max_rta_rounds`, because all exported Go functions are reachability roots so a multi-round chain cannot be built.
+- [Phase 48-03]: Verification surfaced 3 Rule-1 Go-frontend bugs masked by Plan 02's synthetic unit tests (which used already-bare method names + exact spans): whole-program SET facts (callsite/address_taken/instantiated_type/dynamic_dispatch) must dedup by stable key in `normalized()`; the method-set must carry bare method names (`Obj().Name()`), not signatures; and `GoRtaInputs` must map Go methods to nodes by span-CONTAINMENT (the SSA point-span lies within the tree-sitter declaration span) + index the bare method name. Without all three, RTA derived ZERO real Go interface edges. The go-rta/polyglot manifests carry no `[[expected]]` rows (the solver signal is crate-private, not an observable manifest fact); the gate is the proof.
+- [Phase 48-01]: Go sidecar harvests the RTA rapid-type set from `*ssa.MakeInterface` ONLY — the `*ssa.Alloc`/`MakeMap`/`MakeSlice`/`MakeChan` families are deliberately excluded because allocation alone does not make a type dynamically dispatchable under x/tools RTA (only interface conversion does), so adding them would over-approximate and flood precision. `address_taken` from `*ssa.MakeClosure`/func-value operands; `dynamic_dispatch` detail joins its callsite via `callsite_stable_key`.
+- [Phase 48-01]: Schema-pin lockstep — `decode_ndjson_str` strictly pins `GO_SEMANTIC_SCHEMA`, so the Go `SchemaVersion` bump to `polint-go-semantic-2` forced bumping the Rust constant, adding the three new `allowed_kinds`, and updating every NDJSON test fixture (protocol/lower/tests/provider/client) to `-2`. `GO_SEMANTIC_SCHEMA_LABEL` → `go-semantic-facts-2`; the provider parameter digest folds `address_taken_v1`/`instantiated_type_v1`/`dynamic_dispatch_v1` (D-12). New `GoSemantic*Id` newtypes stay in `go/semantic/facts.rs` (not `analysis/ids.rs`); `assert_small_id_contract` unperturbed; public-surface-leak + determinism gates green; `polint.solver` provider-order slot unchanged.
 - [Phase 47-03]: `polint.solver` registered in the reserved slot (after `polint.semantic_graph`, before `polint.refined_calls`, D-13); cache key digests upstream output digests (semantic_graph + type_value_alias points-to families) + the `SolverBudget` (D-15); validation enforces the precision ceiling + a bounded D-12 solver↔summary cycle-detection check; determinism gate (10-shuffle byte-identical) and leak gate (`ALLOWED_PRELUDE` unchanged) stay green. Adding the provider touched 11 provider-order snapshot sites (memory floor of ~7 confirmed conservative).
 - Keep `AnalysisKernel`, `KernelInput`, and `KernelOutput` crate-private with no new SDK, crate-root public, or CLI surface.
 - Preserve the existing eager provider order inside the kernel until provider manifests and order inspection land in Plan 20-02.
@@ -450,6 +455,9 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase 47-02]: SolverOutput/SolverStore mirror semantic_graph store — normalized() sorts by (stable_key, id) then assigns dense IDs (shuffle-stable), from_output validates duplicate stable keys + the precision ceiling, SOLVER_PROVIDER_ID = "polint.solver" (provider registration deferred to Plan 03).
 - [Phase 47-02]: engine::derive_edges computes the transitive CopyEdge closure over a deterministic BTree worklist, accumulating the contributing-constraint set per derived edge so provenance is genuinely load-bearing.
 - [Phase 47-02]: D-09 deletion property test proves deleting ANY single contributing fact does not reproduce the transitive derived edge; D-10 wires polint explain via a pub(crate) cfg(test)-facing seam (explain_derived_edge_provenance) with NO new public ExplainReport/ExplainRuleRow field and ALLOWED_PRELUDE unchanged.
+- [Phase ?]: [Phase 48-02]: GoRtaPolicy stub replaced with a real RTA driver (analysis::solver::go_rta). RTA = CHA filtered by the instantiated runtime-type set seeded from Phase 43 roots; interface-invoke resolved by intersecting the invoked method with the method-sets of instantiated types, func-value by address-taken signature. Resolved edges are DerivedEdgeFacts (caller-node -> callee-node) with DerivedEdgeProvenance (callsite+dispatch+method-set+instantiated-type facts); never exact (Heuristic ceiling), worst-trust status, honest-unresolved preserved (D-04/D-06/D-08/D-09).
+- [Phase ?]: [Phase 48-02]: Production routes through SolverEngine::run_to_solver_output (D-02) — the UNCHANGED derive_edges points-to closure + the Go RTA policy edges merge into one normalized SolverOutput under one SolverBudget; points-to output stays byte-identical (points_to_via_engine_equals_solve_points_to + derive_edges_is_shuffle_stable green). Provider drives PointsToPolicy+GoRtaPolicy+TsTokensPolicy; the polint.solver slot snapshot is unchanged.
+- [Phase ?]: [Phase 48-02]: GoRtaSubBudget { address_taken_threshold:256, max_candidates_per_callsite:128, max_rta_rounds:32 } mirrors PointsToSubBudget; [solver].go config keys overlay via SolverConfig::to_go_sub_budget; SolverBudget::default existing fields stay 10_000/64. Go knobs + go_rta_fixpoint_v1 algo-version join the polint.solver cache key (all 3 locked trip-wire tests updated). Runaway dispatch latches the existing BudgetStatus::BudgetExceeded (D-10/D-12/D-13). Instantiated/address-taken sets seeded whole-reachable (Plan 1 facts carry no per-function attribution); RTA discriminant preserved at dispatch resolution.
 
 ## Execution Metrics
 

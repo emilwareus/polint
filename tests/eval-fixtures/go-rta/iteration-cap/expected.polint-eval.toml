@@ -1,0 +1,29 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "go-rta-iteration-cap"
+area = "go-rta"
+
+# Phase 48 Plan 03 — the GO-05 success-criterion-2 acceptance artifact (D-14).
+#
+# repo/main.go declares a Shape interface with THREE instantiated implementers
+# (Circle, Square, Triangle), all converted to the Shape interface in the reachable
+# program. A SINGLE interface dispatch `s.Area()` therefore has three candidate
+# callees under RTA. repo/.polint.toml sets a deliberately tight
+# `[solver.go] max_candidates_per_callsite = 1`, which cannot admit the three
+# candidates of that one callsite — so resolving it latches
+# BudgetStatus::BudgetExceeded, proving runaway/over-cap dispatch FAN-OUT is
+# SIGNALLED, not silently dropped, and that the config -> GoRtaSubBudget threading
+# bites end to end.
+#
+# The `eval::go_rta` gate (crates/polint/src/eval/go_rta.rs) drives this fixture
+# through the SAME engine the provider uses (SolverEngine::run_to_solver_output)
+# and asserts the observed SolverOutput.budget_status is BudgetExceeded — the
+# `solver.go_rta.budget_exceeded` invariant. No `[[expected]]` row is captured
+# here because the budget signal is crate-private and consumed during storage, so
+# it is not an observable manifest fact; the gate is the executable proof and this
+# manifest documents the acceptance contract.
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 120000

@@ -14,7 +14,7 @@ use crate::go::semantic::diagnostics::{
 };
 use crate::go::semantic::lower::lower_go_semantic;
 use crate::go::semantic::process::GoSemanticProcessError;
-use crate::go::semantic::store::GoSemanticFactsOutput;
+use crate::go::semantic::store::{GoSemanticFactsOutput, StructuralDuplicateReport};
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct GoSemanticProviderRunOutput {
@@ -237,20 +237,41 @@ fn store_output(
     parts: StoreOutputParts,
 ) -> GoSemanticProviderRunOutput {
     let output = parts.output.normalized();
-    let output_digest = go_semantic_output_digest(
-        manifest,
-        input_snapshot,
-        &parts.go_syntax_output_digest,
-        &parts.digest_inputs,
-        &parts.lifecycle,
-        &output,
-    );
     match db.replace_go_semantic_facts(output) {
-        Ok(()) => GoSemanticProviderRunOutput {
-            diagnostics: parts.diagnostics,
-            cache_stats: parts.cache_stats,
-            output_digest: Some(output_digest),
-        },
+        // `replace_go_semantic_facts` returns the resilience report: the count of malformed
+        // RTA-signal harvest rows it dropped (FIX 3) and the duplicate STRUCTURAL rows it
+        // collapsed keep-first (FIX-08). Surface a counted diagnostic for each so a systematic
+        // frontend regression (e.g. every method_set losing its stable_key, or an emitter
+        // double-emitting one structural key) is OBSERVABLE rather than silently
+        // under-resolving — or, in the structural case, no longer catastrophically zeroing all
+        // Go RTA repo-wide.
+        Ok(report) => {
+            // Compute the digest after store-time resilience has run, over the rows that were
+            // actually persisted. This keeps the output digest aligned with the certified DB
+            // state even when invalid harvest rows are dropped or duplicate structural rows are
+            // collapsed keep-first.
+            let stored_output = db.go_semantic_facts_output();
+            let output_digest = go_semantic_output_digest(
+                manifest,
+                input_snapshot,
+                &parts.go_syntax_output_digest,
+                &parts.digest_inputs,
+                &parts.lifecycle,
+                &stored_output,
+            );
+            let mut diagnostics = parts.diagnostics;
+            if report.dropped_harvest_rows > 0 {
+                diagnostics.push(dropped_harvest_rows_diagnostic(report.dropped_harvest_rows));
+            }
+            diagnostics.extend(structural_duplicate_diagnostics(
+                &report.structural_duplicates,
+            ));
+            GoSemanticProviderRunOutput {
+                diagnostics,
+                cache_stats: parts.cache_stats,
+                output_digest: Some(output_digest),
+            }
+        }
         Err(error) => GoSemanticProviderRunOutput {
             diagnostics: vec![provider_error_diagnostic(error.to_string())],
             cache_stats: parts.cache_stats,
@@ -327,6 +348,40 @@ fn go_semantic_output_digest(
             method_set.methods.join(",")
         )
     }));
+    // FIX 4: the three RTA-signal harvest families (`instantiated_types`, `address_taken`,
+    // `dynamic_dispatch`) change the RTA-resolved derived edges but were NOT folded here, so
+    // a Go edit touching ONLY them changed neither this digest nor the downstream solver
+    // digest — a stale-edge false-cache-hit risk once a persistent cache lands. Fold each
+    // row's content (mirroring `method_sets`); the output is `parts.sort()`-ed below, so
+    // insertion order does not matter. The instantiated_type FILTER is the RTA discriminant,
+    // so its membership must invalidate; the address-taken set drives func-value resolution;
+    // the dynamic-dispatch discriminant decides which callees a callsite resolves to.
+    parts.extend(output.instantiated_types.iter().map(|instantiated_type| {
+        format!(
+            "instantiated_type={} package={} type={}",
+            instantiated_type.stable_key,
+            instantiated_type.package_path,
+            instantiated_type.type_name
+        )
+    }));
+    parts.extend(output.address_taken.iter().map(|address_taken| {
+        format!(
+            "address_taken={} package={} function={}",
+            address_taken.stable_key, address_taken.package_path, address_taken.function
+        )
+    }));
+    parts.extend(output.dynamic_dispatch.iter().map(|dynamic_dispatch| {
+        format!(
+            "dynamic_dispatch={} package={} caller={} callsite={} interface={} method={} signature={}",
+            dynamic_dispatch.stable_key,
+            dynamic_dispatch.package_path,
+            dynamic_dispatch.caller,
+            dynamic_dispatch.callsite_stable_key,
+            dynamic_dispatch.interface_type.as_deref().unwrap_or(""),
+            dynamic_dispatch.method.as_deref().unwrap_or(""),
+            dynamic_dispatch.signature.as_deref().unwrap_or("")
+        )
+    }));
     parts.extend(output.package_errors.iter().map(|package_error| {
         format!(
             "package_error={} package={} message={}",
@@ -337,6 +392,9 @@ fn go_semantic_output_digest(
         && output.functions.is_empty()
         && output.callsites.is_empty()
         && output.method_sets.is_empty()
+        && output.instantiated_types.is_empty()
+        && output.address_taken.is_empty()
+        && output.dynamic_dispatch.is_empty()
         && output.package_errors.is_empty()
     {
         parts.push("go_semantic_output=empty".to_string());
@@ -385,6 +443,57 @@ fn package_error_diagnostics(output: &GoSemanticFactsOutput) -> Vec<Diagnostic> 
 
 fn setup_missing_diagnostic(reason: &str) -> Diagnostic {
     category_diagnostic(category_for_package_error(), reason.to_string())
+}
+
+/// Observable signal that malformed RTA-signal harvest rows were dropped (FIX 3). Routed
+/// through the same diagnostic channel the provider uses for setup/diagnostic messages so
+/// a systematic frontend regression surfaces loudly instead of being swallowed into
+/// repo-wide under-resolution. NOT fatal (the row-resilience contract, FINDING B) — just
+/// visible.
+fn dropped_harvest_rows_diagnostic(dropped: usize) -> Diagnostic {
+    category_diagnostic(
+        category_for_package_error(),
+        format!(
+            "{dropped} Go RTA-signal rows dropped (invalid identity/stable_key); \
+             interface/func-value dispatch may under-resolve."
+        ),
+    )
+}
+
+/// Observable signal that duplicate STRUCTURAL rows (packages/functions/method_sets) were
+/// collapsed keep-first (FIX-08). A SINGLE duplicate structural stable key used to make
+/// `validate_unique` reject the whole output, leaving the DB with ZERO Go facts and driving
+/// RTA to zero edges repo-wide (recurring 3×); the store now collapses the duplicate and
+/// surfaces this counted diagnostic so the emitter regression is loud instead of catastrophic.
+/// A "conflicting" duplicate (same stable_key, DIFFERING rows) can only come from a
+/// stable-key-recipe bug, so its message is ESCALATED. Empty (no diagnostics) on a clean run.
+fn structural_duplicate_diagnostics(report: &StructuralDuplicateReport) -> Vec<Diagnostic> {
+    if report.total() == 0 {
+        return Vec::new();
+    }
+    let families = [
+        ("package", report.packages),
+        ("function", report.functions),
+        ("method_set", report.method_sets),
+    ];
+    families
+        .into_iter()
+        .filter(|(_, dropped)| *dropped > 0)
+        .map(|(family, dropped)| {
+            let message = if report.conflicting {
+                format!(
+                    "conflicting duplicate Go {family} stable key — {dropped} row(s) collapsed \
+                     keep-first; possible identity-recipe bug (rows differ for one stable key)."
+                )
+            } else {
+                format!(
+                    "{dropped} duplicate Go {family} stable key row(s) collapsed keep-first \
+                     (byte-identical double-emit); facts preserved."
+                )
+            };
+            category_diagnostic(category_for_package_error(), message)
+        })
+        .collect()
 }
 
 fn client_error_diagnostic(error: GoSemanticClientError) -> Diagnostic {
@@ -484,9 +593,9 @@ mod tests {
             Digest::absent(DigestKind::ProviderOutput, "polint.go.syntax"),
             |_config| {
                 let output = decode_ndjson_str(
-                    r#"{"schema":"polint-go-semantic-1","kind":"session_begin","go_version":"go1.25.0","x_tools_version":"v0.45.0"}
-{"schema":"polint-go-semantic-1","kind":"package","package_id":"example.test/app","package_path":"example.test/app","files":["main.go"],"stable_key":"pkg"}
-{"schema":"polint-go-semantic-1","kind":"session_end"}
+                    r#"{"schema":"polint-go-semantic-2","kind":"session_begin","go_version":"go1.25.0","x_tools_version":"v0.45.0"}
+{"schema":"polint-go-semantic-2","kind":"package","package_id":"example.test/app","package_path":"example.test/app","files":["main.go"],"stable_key":"pkg"}
+{"schema":"polint-go-semantic-2","kind":"session_end"}
 "#,
                 )
                 .expect("protocol decodes");
@@ -499,6 +608,194 @@ mod tests {
 
         assert!(output.output_digest.is_some());
         assert_eq!(db.go_semantic_packages().len(), 1);
+    }
+
+    #[test]
+    fn provider_surfaces_a_diagnostic_when_invalid_harvest_rows_are_dropped() {
+        // FIX 3 (LOW): dropping invalid RTA-signal harvest rows must be OBSERVABLE. The
+        // sidecar emits one discriminant-less dynamic_dispatch row (no interface_type, no
+        // method, no signature); the store drops it (row-resilience, FINDING B) but the
+        // provider must surface a counted diagnostic so a systematic frontend regression is
+        // visible rather than silently under-resolving repo-wide.
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join("go.mod"),
+            "module example.test/app\n\ngo 1.25\n",
+        )
+        .expect("write go.mod");
+        std::fs::write(
+            temp.path().join("main.go"),
+            "package main\nfunc main() {}\n",
+        )
+        .expect("write main.go");
+        let loaded = load_config(temp.path()).expect("config loads");
+        let mut db = AnalysisDb::new();
+        db.add_source_file(
+            PathBuf::from("main.go"),
+            "main.go".to_string(),
+            Language::Go,
+            "package main\nfunc main() {}\n".into(),
+            "hash".to_string(),
+        );
+        let input_snapshot = input_snapshot_for(&loaded, &db);
+        let manifest = go_semantic_manifest();
+
+        let output = derive_go_semantic_with_runner(
+            &mut db,
+            &loaded,
+            &input_snapshot,
+            manifest,
+            Digest::absent(DigestKind::ProviderOutput, "polint.go.syntax"),
+            |_config| {
+                let output = decode_ndjson_str(
+                    r#"{"schema":"polint-go-semantic-2","kind":"session_begin","go_version":"go1.25.0","x_tools_version":"v0.45.0"}
+{"schema":"polint-go-semantic-2","kind":"package","package_id":"example.test/app","package_path":"example.test/app","files":["main.go"],"stable_key":"pkg"}
+{"schema":"polint-go-semantic-2","kind":"dynamic_dispatch","package_id":"example.test/app","package_path":"example.test/app","caller":"example.test/app.main","callsite_stable_key":"cs","stable_key":"dd|bad"}
+{"schema":"polint-go-semantic-2","kind":"session_end"}
+"#,
+                )
+                .expect("protocol decodes");
+                Ok(GoSemanticClientRun {
+                    output,
+                    frontend_digest: "sidecar".to_string(),
+                })
+            },
+        );
+
+        assert!(output.output_digest.is_some());
+        // The discriminant-less row was dropped, so the DB holds zero dynamic-dispatch rows.
+        assert!(db.go_semantic_dynamic_dispatch().is_empty());
+        // The drop is surfaced as a diagnostic mentioning the count of dropped RTA-signal
+        // rows (observable, not silent).
+        assert!(
+            output.diagnostics.iter().any(|diagnostic| {
+                diagnostic.message.contains("RTA-signal")
+                    && diagnostic.message.contains("dropped")
+                    && diagnostic.message.contains('1')
+            }),
+            "a dropped harvest row must surface a counted diagnostic: {:#?}",
+            output.diagnostics
+        );
+
+        let expected_digest = go_semantic_output_digest(
+            manifest,
+            &input_snapshot,
+            &Digest::absent(DigestKind::ProviderOutput, "polint.go.syntax"),
+            &DigestInputs {
+                sidecar_digest: "sidecar".to_string(),
+                go_version: "go1.25.0".to_string(),
+                x_tools_version: "v0.45.0".to_string(),
+            },
+            &default_lifecycle(),
+            &db.go_semantic_facts_output(),
+        );
+        assert_eq!(
+            output.output_digest,
+            Some(expected_digest),
+            "the go.semantic digest must certify the stored output after dropped-row cleanup"
+        );
+    }
+
+    #[test]
+    fn provider_surfaces_a_diagnostic_when_duplicate_structural_rows_are_collapsed() {
+        // FIX-08 (CATASTROPHIC, recurring 3×): a SINGLE duplicate stable key in a structural
+        // family (here two byte-identical `function` rows) used to make `validate_unique` →
+        // Err → the provider stored ZERO Go facts → RTA derived zero edges repo-wide. The
+        // store now collapses the duplicate keep-first BEFORE validation, so the valid facts
+        // SURVIVE; the provider surfaces a counted diagnostic so the emitter regression is
+        // OBSERVABLE rather than silently swallowed.
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join("go.mod"),
+            "module example.test/app\n\ngo 1.25\n",
+        )
+        .expect("write go.mod");
+        std::fs::write(
+            temp.path().join("main.go"),
+            "package main\nfunc main() {}\n",
+        )
+        .expect("write main.go");
+        let loaded = load_config(temp.path()).expect("config loads");
+        let mut db = AnalysisDb::new();
+        db.add_source_file(
+            PathBuf::from("main.go"),
+            "main.go".to_string(),
+            Language::Go,
+            "package main\nfunc main() {}\n".into(),
+            "hash".to_string(),
+        );
+        let input_snapshot = input_snapshot_for(&loaded, &db);
+        let manifest = go_semantic_manifest();
+
+        let output = derive_go_semantic_with_runner(
+            &mut db,
+            &loaded,
+            &input_snapshot,
+            manifest,
+            Digest::absent(DigestKind::ProviderOutput, "polint.go.syntax"),
+            |_config| {
+                // TWO byte-identical `function` rows with the SAME stable_key `fn|main`.
+                let output = decode_ndjson_str(
+                    r#"{"schema":"polint-go-semantic-2","kind":"session_begin","go_version":"go1.25.0","x_tools_version":"v0.45.0"}
+{"schema":"polint-go-semantic-2","kind":"package","package_id":"example.test/app","package_path":"example.test/app","files":["main.go"],"stable_key":"pkg"}
+{"schema":"polint-go-semantic-2","kind":"function","package_id":"example.test/app","package_path":"example.test/app","name":"main","qualified":"example.test/app.main","stable_key":"fn|main"}
+{"schema":"polint-go-semantic-2","kind":"function","package_id":"example.test/app","package_path":"example.test/app","name":"main","qualified":"example.test/app.main","stable_key":"fn|main"}
+{"schema":"polint-go-semantic-2","kind":"session_end"}
+"#,
+                )
+                .expect("protocol decodes");
+                Ok(GoSemanticClientRun {
+                    output,
+                    frontend_digest: "sidecar".to_string(),
+                })
+            },
+        );
+
+        // The duplicate did NOT zero the fact set: a digest was assigned and the function
+        // survives EXACTLY ONCE (keep-first).
+        assert!(output.output_digest.is_some());
+        assert_eq!(db.go_semantic_functions().len(), 1);
+        assert_eq!(
+            db.go_semantic_functions()[0].qualified,
+            "example.test/app.main"
+        );
+        // The collapse is surfaced as a diagnostic (observable, not silent). It is a benign
+        // byte-identical double-emit, so it must NOT be flagged as "conflicting".
+        assert!(
+            output.diagnostics.iter().any(|diagnostic| {
+                diagnostic.message.contains("duplicate")
+                    && diagnostic.message.contains("function")
+                    && diagnostic.message.contains("collapsed")
+            }),
+            "a collapsed structural duplicate must surface a diagnostic: {:#?}",
+            output.diagnostics
+        );
+        assert!(
+            !output
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("conflicting")),
+            "a byte-identical double-emit must NOT be flagged conflicting: {:#?}",
+            output.diagnostics
+        );
+
+        let expected_digest = go_semantic_output_digest(
+            manifest,
+            &input_snapshot,
+            &Digest::absent(DigestKind::ProviderOutput, "polint.go.syntax"),
+            &DigestInputs {
+                sidecar_digest: "sidecar".to_string(),
+                go_version: "go1.25.0".to_string(),
+                x_tools_version: "v0.45.0".to_string(),
+            },
+            &default_lifecycle(),
+            &db.go_semantic_facts_output(),
+        );
+        assert_eq!(
+            output.output_digest,
+            Some(expected_digest),
+            "the go.semantic digest must certify the stored output after duplicate collapse"
+        );
     }
 
     #[test]
@@ -594,5 +891,118 @@ mod tests {
             .iter()
             .find(|manifest| manifest.id == "polint.go.semantic")
             .expect("manifest exists")
+    }
+
+    /// Compute `go_semantic_output_digest` for `output` with fixed (irrelevant-to-this-test)
+    /// provider/lifecycle inputs, so a test can isolate the effect of the OUTPUT row content.
+    fn output_digest_for(output: &GoSemanticFactsOutput) -> Digest {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(temp.path().join(".polint.toml"), "").expect("config");
+        let loaded = load_config(temp.path()).expect("config loads");
+        let db = AnalysisDb::new();
+        let input_snapshot = input_snapshot_for(&loaded, &db);
+        go_semantic_output_digest(
+            go_semantic_manifest(),
+            &input_snapshot,
+            &Digest::absent(DigestKind::ProviderOutput, "polint.go.syntax"),
+            &DigestInputs {
+                sidecar_digest: "sidecar".to_string(),
+                go_version: "go1.25.0".to_string(),
+                x_tools_version: "v0.45.0".to_string(),
+            },
+            &default_lifecycle(),
+            output,
+        )
+    }
+
+    /// FIX 4 part 1: the three RTA-signal harvest families
+    /// (`instantiated_types` / `address_taken` / `dynamic_dispatch`) must each be FOLDED into
+    /// `go_semantic_output_digest`. A Go edit that changes ONLY one of them changes the
+    /// RTA-resolved edges, so the go.semantic output digest MUST change too (otherwise a
+    /// persistent cache could serve stale RTA edges, WR-06). Before the fix only `method_sets`
+    /// was folded, so each of these mutations left the digest unchanged.
+    #[test]
+    fn rta_harvest_families_participate_in_go_semantic_output_digest() {
+        use crate::go::semantic::facts::{
+            GoSemanticAddressTakenFact, GoSemanticAddressTakenId, GoSemanticDynamicDispatchFact,
+            GoSemanticDynamicDispatchId, GoSemanticInstantiatedTypeFact,
+            GoSemanticInstantiatedTypeId,
+        };
+
+        // A non-empty base so the emptiness sentinel is not what carries the signal.
+        let base = GoSemanticFactsOutput {
+            instantiated_types: vec![GoSemanticInstantiatedTypeFact {
+                id: GoSemanticInstantiatedTypeId(0),
+                stable_key: "inst|pkg.Dog".to_string(),
+                package_id: "pkg".to_string(),
+                package_path: "pkg".to_string(),
+                type_name: "pkg.Dog".to_string(),
+            }],
+            address_taken: vec![GoSemanticAddressTakenFact {
+                id: GoSemanticAddressTakenId(0),
+                stable_key: "at|pkg.handler".to_string(),
+                package_id: "pkg".to_string(),
+                package_path: "pkg".to_string(),
+                function: "pkg.handler".to_string(),
+            }],
+            dynamic_dispatch: vec![GoSemanticDynamicDispatchFact {
+                id: GoSemanticDynamicDispatchId(0),
+                stable_key: "dd|pkg.main".to_string(),
+                package_id: "pkg".to_string(),
+                package_path: "pkg".to_string(),
+                caller: "pkg.main".to_string(),
+                callsite_stable_key: "cs|pkg.main".to_string(),
+                interface_type: Some("pkg.Speaker".to_string()),
+                method: Some("Speak".to_string()),
+                signature: None,
+            }],
+            ..GoSemanticFactsOutput::default()
+        }
+        .normalized();
+        let base_digest = output_digest_for(&base);
+
+        // (a) Adding an instantiated type (the RTA rapid-type filter) changes the digest.
+        let mut changed_instantiated = base.clone();
+        changed_instantiated
+            .instantiated_types
+            .push(GoSemanticInstantiatedTypeFact {
+                id: GoSemanticInstantiatedTypeId(0),
+                stable_key: "inst|pkg.Cat".to_string(),
+                package_id: "pkg".to_string(),
+                package_path: "pkg".to_string(),
+                type_name: "pkg.Cat".to_string(),
+            });
+        assert_ne!(
+            base_digest,
+            output_digest_for(&changed_instantiated.normalized()),
+            "an instantiated_type change must invalidate the go.semantic output digest"
+        );
+
+        // (b) Adding an address-taken function (func-value candidate set) changes the digest.
+        let mut changed_address_taken = base.clone();
+        changed_address_taken
+            .address_taken
+            .push(GoSemanticAddressTakenFact {
+                id: GoSemanticAddressTakenId(0),
+                stable_key: "at|pkg.other".to_string(),
+                package_id: "pkg".to_string(),
+                package_path: "pkg".to_string(),
+                function: "pkg.other".to_string(),
+            });
+        assert_ne!(
+            base_digest,
+            output_digest_for(&changed_address_taken.normalized()),
+            "an address_taken change must invalidate the go.semantic output digest"
+        );
+
+        // (c) Changing the dynamic-dispatch discriminant (the invoked method) changes it.
+        // `base` is no longer needed (only `base_digest` is compared against), so move it.
+        let mut changed_dispatch = base;
+        changed_dispatch.dynamic_dispatch[0].method = Some("Bark".to_string());
+        assert_ne!(
+            base_digest,
+            output_digest_for(&changed_dispatch.normalized()),
+            "a dynamic_dispatch discriminant change must invalidate the go.semantic output digest"
+        );
     }
 }

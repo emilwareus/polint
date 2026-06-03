@@ -19,7 +19,7 @@ import (
 	"golang.org/x/tools/go/ssa/ssautil"
 )
 
-const SchemaVersion = "polint-go-semantic-1"
+const SchemaVersion = "polint-go-semantic-2"
 const XToolsVersion = "v0.45.0"
 const topologyManifestMaxBytes int64 = 1_048_576
 
@@ -46,6 +46,33 @@ type emitter struct {
 	root string
 	fset *token.FileSet
 	rows []Row
+	// emittedMethodSetKeys coordinates the TWO method_set emitters (emitMethodSets and
+	// emitInstantiatedMethodSets) so AT MOST ONE method_set row is emitted per canonical
+	// stable_key across BOTH. A SAME-PACKAGE alias to a generic instantiation
+	// (`type IntBox = Box[int]`) is canonicalized by emitMethodSets through types.Unalias to
+	// `...Box[int]`, while emitInstantiatedMethodSets independently harvests the reachable
+	// RuntimeTypes() instantiation `Box[int]` — two rows with the IDENTICAL stable_key. The
+	// store does NOT dedup method_sets (they are keyed by unique declaration identity), so a
+	// duplicate non-empty key is a hard `validate_unique` conflict that zeroes the ENTIRE Go
+	// fact set (review #4). This emitter-scoped set suppresses the SECOND row (keep-first):
+	// for the alias↔instantiation collision both rows' method lists are identical, so
+	// keep-first is lossless. A package with no such collision never triggers a skip, so its
+	// emitted rows are byte-identical to before this set existed.
+	emittedMethodSetKeys map[string]bool
+	// emittedFunctionKeys makes emitFunction idempotent per (package_id, fn.String()) stable
+	// key. A concrete method VALUE of a reachable generic instantiation can be harvested via
+	// TWO entry points — the per-function `ssaFunctions` walk in emitSSAPackage AND
+	// emitInstantiatedMethodSets' `emitFunction` on the instantiated method-set — yielding
+	// two function/method rows with the IDENTICAL stable_key. When the SAME instantiation is
+	// reachable via BOTH a same-package alias (`type IntBox = Box[int]`) AND its direct
+	// spelling, x/tools surfaces `(*Box[int]).Speak` through both paths, so without this guard
+	// the row duplicates → `validate_unique("function", ...)` rejects the ENTIRE Go fact set
+	// (a STRUCTURAL family is, correctly, NOT row-resilient) → RTA derives zero edges
+	// repo-wide (review #4). Keep-first at the SOURCE keeps the validator strict while
+	// suppressing the spurious duplicate. `fn.String()` is the official SSA identity, so two
+	// genuinely-distinct functions never share a key; a package without the cross-path
+	// collision never repeats one, so its rows stay byte-identical.
+	emittedFunctionKeys map[string]bool
 }
 
 func Emit(config Config) ([]Row, error) {
@@ -102,7 +129,12 @@ func Emit(config Config) ([]Row, error) {
 		return packageID(ssaPkgs[i]) < packageID(ssaPkgs[j])
 	})
 
-	e := &emitter{root: root, fset: fset}
+	e := &emitter{
+		root:                 root,
+		fset:                 fset,
+		emittedMethodSetKeys: make(map[string]bool),
+		emittedFunctionKeys:  make(map[string]bool),
+	}
 	e.add(Row{
 		"kind":            "session_begin",
 		"schema":          SchemaVersion,
@@ -174,8 +206,11 @@ func (e *emitter) emitSSAPackage(pkg *ssa.Package) {
 	for _, fn := range functions {
 		e.emitFunction(pkg, fn)
 		e.emitCallsites(pkg, fn)
+		e.emitInstantiatedTypes(pkg, fn)
+		e.emitAddressTaken(pkg, fn)
 	}
 	e.emitMethodSets(pkg)
+	e.emitInstantiatedMethodSets(pkg)
 }
 
 func (e *emitter) emitFunction(pkg *ssa.Package, fn *ssa.Function) {
@@ -194,6 +229,19 @@ func (e *emitter) emitFunction(pkg *ssa.Package, fn *ssa.Function) {
 		})
 		return
 	}
+	// Keep-first per (package_id, fn.String()) so a method VALUE reachable via two harvest
+	// paths (the ssaFunctions walk AND emitInstantiatedMethodSets) emits exactly ONE
+	// function/method row — never a duplicate stable_key that fails validate_unique and
+	// zeroes the whole Go fact set (review #4). Gating here also suppresses the duplicate's
+	// sibling receiver_type row (its key would likewise collide). A package without the
+	// cross-path collision never repeats a key, so this is a no-op and rows stay
+	// byte-identical. The `unsupported`-synthetic early return above is intentionally
+	// ungated (no stable_key, distinct kind, not a validate_unique family).
+	functionKey := stableKey(packageID(pkg), fn.String())
+	if e.emittedFunctionKeys[functionKey] {
+		return
+	}
+	e.emittedFunctionKeys[functionKey] = true
 	kind := "function"
 	if isInit {
 		kind = "init_function"
@@ -204,8 +252,16 @@ func (e *emitter) emitFunction(pkg *ssa.Package, fn *ssa.Function) {
 	if isInit {
 		name = "init"
 	} else if isMethod && fn.Signature != nil && fn.Signature.Recv() != nil {
+		// For a method on an INSTANTIATED generic type, the SSA method value's `Name()`
+		// can carry a type-argument suffix (a pointer-receiver instantiation wrapper is
+		// named `Inc[int]`, while a value-receiver promotion is named `Inc`). The core
+		// (tree-sitter) facts name the method by its bare identifier with the generics
+		// stripped from the receiver (`Box.Inc`), so strip the type-arg suffix here too
+		// or the SSA↔core join (`matching_core_function`, file+name+span) would miss the
+		// instantiated method's node and the generic-dispatch edge would be lost
+		// (FINDING A). A non-generic method name has no `[...]` suffix and is unchanged.
 		if receiver := receiverTypeName(fn.Signature.Recv().Type().String()); receiver != "" {
-			name = receiver + "." + fn.Name()
+			name = receiver + "." + stripMethodTypeArgs(fn.Name())
 		}
 	}
 	row := Row{
@@ -215,7 +271,7 @@ func (e *emitter) emitFunction(pkg *ssa.Package, fn *ssa.Function) {
 		"name":         name,
 		"qualified":    fn.String(),
 		"signature":    signatureString(fn.Signature),
-		"stable_key":   stableKey(packageID(pkg), fn.String()),
+		"stable_key":   functionKey,
 	}
 	if syntax := fn.Syntax(); syntax != nil {
 		if pos := e.positionSpan(syntax.Pos(), syntax.End()); pos != nil {
@@ -257,12 +313,24 @@ func (e *emitter) emitCallsites(pkg *ssa.Package, fn *ssa.Function) {
 				"package_path": packagePath(pkg),
 				"caller":       fn.String(),
 			}
-			if common != nil && common.StaticCallee() != nil {
+			dynamic := false
+			switch {
+			case common != nil && common.StaticCallee() != nil:
 				row["static_callee"] = common.StaticCallee().String()
 				row["status"] = "resolved_static"
-			} else {
+			case common != nil && isBuiltinCall(common):
+				// FINDING 4: a builtin call (`len`, `append`, `recover`, ...) has a nil
+				// StaticCallee() because its callee is a *ssa.Builtin, not an
+				// *ssa.Function. It is NOT a func-value dynamic dispatch — treat it as
+				// unsupported (no ssa.Function identity to resolve to) and emit NO
+				// dynamic_dispatch row, so the RTA driver never sees a bogus func-value
+				// obligation for a builtin.
+				row["status"] = "unsupported"
+				row["reason"] = "builtin call (no ssa.Function callee)"
+			default:
 				row["status"] = "unresolved_dynamic"
-				row["reason"] = "dynamic or interface dispatch deferred to Phase 48"
+				row["reason"] = "interface or func-value dynamic dispatch"
+				dynamic = true
 			}
 			stableParts := []string{packageID(pkg), fn.String(), fmt.Sprint(call.Pos())}
 			if syntax := callSyntax(fn, call); syntax != nil {
@@ -282,10 +350,187 @@ func (e *emitter) emitCallsites(pkg *ssa.Package, fn *ssa.Function) {
 				row["file"] = posFile(e.fset, call.Pos(), e.root)
 				row["span"] = pos
 			}
-			row["stable_key"] = stableKey(stableParts...)
+			callsiteKey := stableKey(stableParts...)
+			row["stable_key"] = callsiteKey
 			e.add(row)
+			if dynamic {
+				e.emitDynamicDispatch(pkg, fn, common, callsiteKey)
+			}
 		}
 	}
+}
+
+// emitDynamicDispatch emits the dispatch discriminant Plan 2's RTA driver needs to
+// resolve an UnresolvedDynamic callsite by method-set matching (D-05). For an interface
+// invoke it carries the interface type + invoked method name; for a func-value call it
+// carries the called value's signature. The row joins back to its sibling callsite row
+// via callsite_stable_key. Honest representation (Phase 46 D-15): if no discriminant can
+// be derived, no dispatch-detail row is emitted rather than a fabricated identity.
+func (e *emitter) emitDynamicDispatch(pkg *ssa.Package, fn *ssa.Function, common *ssa.CallCommon, callsiteKey string) {
+	if common == nil {
+		return
+	}
+	row := Row{
+		"kind":                "dynamic_dispatch",
+		"package_id":          packageID(pkg),
+		"package_path":        packagePath(pkg),
+		"caller":              fn.String(),
+		"callsite_stable_key": callsiteKey,
+	}
+	var discriminant string
+	if common.IsInvoke() && common.Method != nil {
+		interfaceType := ""
+		if common.Value != nil && common.Value.Type() != nil {
+			interfaceType = common.Value.Type().String()
+		}
+		method := common.Method.Name()
+		row["interface_type"] = interfaceType
+		row["method"] = method
+		discriminant = "invoke:" + interfaceType + ":" + method
+	} else {
+		signature := ""
+		if sig := common.Signature(); sig != nil {
+			signature = sig.String()
+		}
+		if signature == "" {
+			return
+		}
+		row["signature"] = signature
+		discriminant = "func_value:" + signature
+	}
+	row["stable_key"] = stableKey(packageID(pkg), "dynamic_dispatch", callsiteKey, discriminant)
+	e.add(row)
+}
+
+// emitInstantiatedTypes harvests the RTA "rapid type" set: each concrete type converted
+// to an interface via *ssa.MakeInterface in the reachable SSA program (D-05). x/tools RTA
+// adds a type to the rapid-type set precisely when it is converted to an interface, so
+// MakeInterface is the faithful and sufficient source. We deliberately do NOT harvest the
+// *ssa.Alloc / *ssa.MakeMap / *ssa.MakeSlice / *ssa.MakeChan families: allocating a value
+// does not by itself make its type dynamically dispatchable under RTA — only an
+// interface conversion does — so adding them would over-approximate the rapid-type set and
+// flood precision without lifting recall. Types lacking a stable .String() identity emit an
+// "unsupported" row rather than a fabricated identity (Phase 46 D-15). De-duplicated within
+// a function by the concrete type identity.
+func (e *emitter) emitInstantiatedTypes(pkg *ssa.Package, fn *ssa.Function) {
+	if fn == nil {
+		return
+	}
+	seen := make(map[string]bool)
+	for _, block := range fn.Blocks {
+		for _, instr := range block.Instrs {
+			mi, ok := instr.(*ssa.MakeInterface)
+			if !ok {
+				continue
+			}
+			if mi.X == nil || mi.X.Type() == nil {
+				e.add(Row{
+					"kind":         "unsupported",
+					"package_id":   packageID(pkg),
+					"package_path": packagePath(pkg),
+					"name":         fn.String(),
+					"reason":       "MakeInterface operand without stable type identity",
+				})
+				continue
+			}
+			// Canonicalize through any type alias to the underlying type (FIX 3) so a
+			// value of `type AliasDog = Dog` is harvested as `...Dog` — matching the
+			// concrete method's receiver — not the alias spelling `...AliasDog`.
+			concrete := canonicalTypeString(mi.X.Type())
+			if concrete == "" || seen[concrete] {
+				continue
+			}
+			seen[concrete] = true
+			e.add(Row{
+				"kind":         "instantiated_type",
+				"package_id":   packageID(pkg),
+				"package_path": packagePath(pkg),
+				"type":         concrete,
+				"stable_key":   stableKey(packageID(pkg), "instantiated_type", concrete),
+			})
+		}
+	}
+}
+
+// emitAddressTaken harvests the set of functions whose address is taken in the reachable
+// SSA program (D-05) — an RTA dispatch input for func-value callsites. Sources: *ssa.MakeClosure
+// over an *ssa.Function (closures and bound method values), and any *ssa.Function used as a
+// GENUINE value operand of an instruction (function references passed as args, stored to
+// globals, returned, or assigned). De-duplicated within a function by the function identity;
+// builtins/synthetic functions without stable identity are skipped rather than fabricated
+// (Phase 46 D-15).
+//
+// FINDING 2: a STATICALLY-called function is NOT address-taken. For a *ssa.Call / Go / Defer
+// the callee is the call's `common.Value` operand, and when that is the static callee it
+// appears in `instr.Operands(...)` — naively harvesting it would mark every statically-called
+// function (every `helper()`, `defer cleanup()`, `go worker()`) address-taken and flood the
+// func-value RTA candidate set. So for a call instruction we EXCLUDE the operand that equals
+// the static-callee value; a func VALUE used in a `go`/`defer`/call (no static callee) is a
+// genuine value use and is still captured by the generic operand scan.
+func (e *emitter) emitAddressTaken(pkg *ssa.Package, fn *ssa.Function) {
+	if fn == nil {
+		return
+	}
+	seen := make(map[string]bool)
+	emit := func(target *ssa.Function) {
+		if target == nil {
+			return
+		}
+		identity := target.String()
+		if identity == "" || seen[identity] {
+			return
+		}
+		seen[identity] = true
+		e.add(Row{
+			"kind":         "address_taken",
+			"package_id":   packageID(pkg),
+			"package_path": packagePath(pkg),
+			"function":     identity,
+			"stable_key":   stableKey(packageID(pkg), "address_taken", identity),
+		})
+	}
+	for _, block := range fn.Blocks {
+		for _, instr := range block.Instrs {
+			if closure, ok := instr.(*ssa.MakeClosure); ok {
+				if target, ok := closure.Fn.(*ssa.Function); ok {
+					emit(target)
+				}
+			}
+			// The static-callee value of a call/go/defer is NOT a value use: skip it so a
+			// statically-called function is not marked address-taken (FINDING 2). A
+			// dynamic dispatch has no static callee, so this excludes nothing there.
+			var staticCallee ssa.Value
+			if call, ok := instr.(ssa.CallInstruction); ok {
+				if common := call.Common(); common != nil && common.StaticCallee() != nil {
+					staticCallee = common.Value
+				}
+			}
+			operands := instr.Operands(nil)
+			for _, operand := range operands {
+				if operand == nil || *operand == nil {
+					continue
+				}
+				if staticCallee != nil && *operand == staticCallee {
+					continue
+				}
+				if target, ok := (*operand).(*ssa.Function); ok {
+					emit(target)
+				}
+			}
+		}
+	}
+}
+
+// isBuiltinCall reports whether a call's callee is a Go builtin (`len`, `append`,
+// `recover`, `make`, ...). In go/ssa a builtin call has a non-interface CallCommon whose
+// Value is a *ssa.Builtin and whose StaticCallee() is nil (a builtin has no
+// *ssa.Function). It is NOT a func-value dynamic dispatch (FINDING 4).
+func isBuiltinCall(common *ssa.CallCommon) bool {
+	if common == nil || common.IsInvoke() {
+		return false
+	}
+	_, ok := common.Value.(*ssa.Builtin)
+	return ok
 }
 
 func callSyntax(fn *ssa.Function, call ssa.CallInstruction) ast.Node {
@@ -316,8 +561,49 @@ func callSyntax(fn *ssa.Function, call ssa.CallInstruction) ast.Node {
 	return best
 }
 
+// addMethodSet emits a single `method_set` row for `identity` (already the canonical,
+// alias-resolved type string) carrying `methods`, coordinating the TWO method_set emitters
+// so AT MOST ONE row survives per canonical stable_key across BOTH (review #4). The two
+// emitters compute the IDENTICAL stable_key for the same canonical identity, so a
+// SAME-PACKAGE alias to a generic instantiation (`type IntBox = Box[int]`) would otherwise
+// emit two rows with the same key — a hard `validate_unique` conflict that zeroes the whole
+// Go fact set. Keep-first: if the key was already emitted (by either emitter) the row is
+// SKIPPED. This gates ONLY the method_set row; emitInstantiatedMethodSets still emits its
+// concrete method VALUE rows regardless. A package without such a collision never repeats a
+// key, so this is a no-op there and the emitted rows are byte-identical to before.
+func (e *emitter) addMethodSet(pkg *ssa.Package, identity string, methods []string) {
+	if identity == "" {
+		return
+	}
+	key := stableKey(packageID(pkg), "method_set", identity)
+	if e.emittedMethodSetKeys[key] {
+		return
+	}
+	e.emittedMethodSetKeys[key] = true
+	e.add(Row{
+		"kind":         "method_set",
+		"package_id":   packageID(pkg),
+		"package_path": packagePath(pkg),
+		"type":         identity,
+		"methods":      methods,
+		"stable_key":   key,
+	})
+}
+
 func (e *emitter) emitMethodSets(pkg *ssa.Package) {
 	scope := pkg.Pkg.Scope()
+	// De-duplicate by the CANONICAL (alias-resolved) identity (FIX 3). Package scope can
+	// hold both a defined type `Dog` and a type alias `type AliasDog = Dog`; both resolve
+	// through `types.Unalias` to the same underlying `...Dog`, and a method_set is keyed by
+	// unique declaration identity (the store does NOT treat method_sets as set facts — it
+	// REJECTS a duplicate stable key). Emitting the same canonical identity twice would be a
+	// hard validation conflict that zeroes the whole Go fact set, so keep the FIRST
+	// occurrence (its method-set is identical — go/types resolves both through the alias). A
+	// package with no aliases has a unique canonical identity per type, so this is a no-op
+	// and byte-identity is preserved. The keep-first guard now lives in `addMethodSet`'s
+	// emitter-scoped set, which ALSO coordinates with emitInstantiatedMethodSets so an alias
+	// to a generic INSTANTIATION (`type IntBox = Box[int]`) cannot collide with the
+	// instantiated harvest (review #4).
 	for _, name := range scope.Names() {
 		obj := scope.Lookup(name)
 		typeName, ok := obj.(*types.TypeName)
@@ -328,39 +614,168 @@ func (e *emitter) emitMethodSets(pkg *ssa.Package) {
 		if methodSet.Len() == 0 {
 			continue
 		}
+		// Key by the underlying identity so an alias and its target collapse to one row.
+		identity := canonicalTypeString(typeName.Type())
+		if identity == "" {
+			continue
+		}
 		var methods []string
 		for i := 0; i < methodSet.Len(); i++ {
-			methods = append(methods, methodSet.At(i).Obj().String())
+			// The method-set carries the bare method NAME (the identifier, e.g.
+			// "Speak"), not the full signature string. RTA interface-invoke
+			// resolution intersects the INVOKED method name (the dynamic-dispatch
+			// discriminant) with this set, so a signature string would never match
+			// the invoked name and interface dispatch would resolve nothing (Phase 48
+			// verification surfaced this). `Obj().Name()` is the method identifier.
+			methods = append(methods, methodSet.At(i).Obj().Name())
 		}
 		sort.Strings(methods)
-		e.add(Row{
-			"kind":         "method_set",
-			"package_id":   packageID(pkg),
-			"package_path": packagePath(pkg),
-			"type":         typeName.Type().String(),
-			"methods":      methods,
-			"stable_key":   stableKey(packageID(pkg), "method_set", typeName.Type().String()),
-		})
+		// `identity` is the canonical (alias-resolved) type string computed above, so the
+		// method_set, the canonicalized instantiated_type, and the concrete method's
+		// receiver all share one identity and the RTA join succeeds. addMethodSet keeps the
+		// FIRST row per canonical stable_key across BOTH method_set emitters.
+		e.addMethodSet(pkg, identity, methods)
 	}
+}
+
+// emitInstantiatedMethodSets harvests method-sets AND concrete method values keyed by the
+// INSTANTIATED `*types.Named` identity of each generic type instantiation reachable in the
+// program (FINDING A). x/tools RTA records the instantiated named type (e.g. `Box[int]`) in
+// the program's runtime-type set — `*ssa.MakeInterface` of a `Box[int]` value adds exactly
+// `Box[int]` to the rapid-type set, and `emitInstantiatedTypes` emits that identity — but
+// `emitMethodSets` walks package-scope `*types.TypeName`s, which for a generic type is the
+// GENERIC declaration (`Box[T any]`), whose `*ssa.Type` member has a nil method VALUE. So
+// the method-set the Rust dispatch resolver looks up by the instantiated identity
+// (`method_sets.get("Box[int]")`) was absent and the interface invoke lost its edge.
+//
+// For each instantiated named type declared in THIS package, this emits (a) a `method_set`
+// row keyed by the instantiated type's `.String()` (`Box[int]`) carrying its method names,
+// and (b) the concrete method VALUES as `method` rows (via `emitFunction`) so the resolved
+// edge has a target node. Both use the POINTER method set (mirroring `emitMethodSets`), so
+// each method appears exactly once (no value/pointer-wrapper duplication). Methods without a
+// stable source identity are skipped rather than fabricated (Phase 46 D-15). De-duplicated
+// by the instantiated type identity so a type instantiated in two functions is harvested
+// once.
+func (e *emitter) emitInstantiatedMethodSets(pkg *ssa.Package) {
+	prog := pkg.Prog
+	if prog == nil {
+		return
+	}
+	seen := make(map[string]bool)
+	// RuntimeTypes() order is not specified; sort the harvested identities so the emitted
+	// rows are deterministic regardless of x/tools' internal iteration order.
+	type instantiation struct {
+		key   string
+		named *types.Named
+	}
+	var instantiations []instantiation
+	for _, runtimeType := range prog.RuntimeTypes() {
+		named, ok := runtimeType.(*types.Named)
+		if !ok {
+			continue
+		}
+		// Only generic INSTANTIATIONS (type args present), declared in THIS package, are
+		// harvested here. A non-generic named type is already covered by emitMethodSets.
+		if named.TypeArgs() == nil || named.TypeArgs().Len() == 0 {
+			continue
+		}
+		if named.Obj() == nil || named.Obj().Pkg() == nil || named.Obj().Pkg().Path() != pkg.Pkg.Path() {
+			continue
+		}
+		key := named.String()
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		instantiations = append(instantiations, instantiation{key: key, named: named})
+	}
+	sort.Slice(instantiations, func(i, j int) bool { return instantiations[i].key < instantiations[j].key })
+
+	for _, inst := range instantiations {
+		methodSet := prog.MethodSets.MethodSet(types.NewPointer(inst.named))
+		if methodSet.Len() == 0 {
+			continue
+		}
+		var methods []string
+		for i := 0; i < methodSet.Len(); i++ {
+			// The bare method identifier (`sel.Obj().Name()` is always the clean name,
+			// e.g. "Speak", never an instantiation-suffixed "Speak[int]"). RTA
+			// interface-invoke resolution intersects the invoked method name with this
+			// set (see emitMethodSets), so the bare name is required.
+			methods = append(methods, methodSet.At(i).Obj().Name())
+			// Emit the concrete method VALUE so the resolved edge has a target node. A
+			// promotion/instantiation wrapper has a valid source position pointing back
+			// at the generic declaration, so emitFunction can join it to the core node.
+			// This is emitted UNCONDITIONALLY (before the method_set gate below) so a
+			// skipped duplicate method_set row never suppresses the method value — the gate
+			// covers ONLY the method_set row (review #4).
+			if fn := prog.MethodValue(methodSet.At(i)); fn != nil {
+				e.emitFunction(pkg, fn)
+			}
+		}
+		sort.Strings(methods)
+		// addMethodSet keeps the FIRST method_set row per canonical stable_key across BOTH
+		// emitters. For a SAME-PACKAGE alias to this instantiation (`type IntBox = Box[int]`),
+		// emitMethodSets already emitted the IDENTICAL canonical `...Box[int]` key (its method
+		// list is identical), so this row is skipped keep-first — never a duplicate that
+		// zeroes the whole Go fact set. `inst.named.String()` is the canonical instantiated
+		// identity (no alias to resolve).
+		e.addMethodSet(pkg, inst.named.String(), methods)
+	}
+}
+
+// stripMethodTypeArgs removes a trailing type-argument suffix (`[...]`) from an SSA method
+// identifier so an instantiated generic method's bare name matches the core (tree-sitter)
+// identity (FINDING A). The SSA value `Name()` of a pointer-receiver instantiation wrapper
+// is `Inc[int]`; the bare identifier is `Inc`. A Go method identifier cannot otherwise
+// contain `[`, so a name with no trailing `[...]` is returned unchanged.
+func stripMethodTypeArgs(name string) string {
+	if !strings.HasSuffix(name, "]") {
+		return name
+	}
+	if index := strings.IndexByte(name, '['); index >= 0 {
+		return name[:index]
+	}
+	return name
 }
 
 func ssaFunctions(pkg *ssa.Package) []*ssa.Function {
 	var functions []*ssa.Function
+	// Dedup by *ssa.Function identity so a function reachable via two roots (e.g. a
+	// method value that is also harvested as a top-level member) is walked once.
+	seen := make(map[*ssa.Function]bool)
 	for _, member := range pkg.Members {
 		switch value := member.(type) {
 		case *ssa.Function:
-			functions = append(functions, value)
+			collectWithAnon(value, seen, &functions)
 		case *ssa.Type:
 			methodSet := pkg.Prog.MethodSets.MethodSet(types.NewPointer(value.Type()))
 			for i := 0; i < methodSet.Len(); i++ {
 				if fn := pkg.Prog.MethodValue(methodSet.At(i)); fn != nil {
-					functions = append(functions, fn)
+					collectWithAnon(fn, seen, &functions)
 				}
 			}
 		}
 	}
 	sort.Slice(functions, func(i, j int) bool { return functions[i].String() < functions[j].String() })
 	return functions
+}
+
+// collectWithAnon appends fn and, transitively, its anonymous-function bodies
+// (closures, func(){...} literals, bound method-value thunks) to out. In go/ssa
+// these live in parent.AnonFuncs and are NOT among pkg.Members, so without this walk
+// a *ssa.MakeInterface, a dynamic callsite, or a function-value operand that appears
+// inside a closure body would be invisible to the RTA harvest (review WR-01). Closures
+// nest, so the walk is transitive; `seen` guards against double-visiting.
+func collectWithAnon(fn *ssa.Function, seen map[*ssa.Function]bool, out *[]*ssa.Function) {
+	if fn == nil || seen[fn] {
+		return
+	}
+	seen[fn] = true
+	*out = append(*out, fn)
+	for _, anon := range fn.AnonFuncs {
+		collectWithAnon(anon, seen, out)
+	}
 }
 
 func packageID(pkg *ssa.Package) string {
@@ -379,6 +794,23 @@ func signatureString(sig *types.Signature) string {
 		return ""
 	}
 	return sig.String()
+}
+
+// canonicalTypeString returns the type's `.String()` resolved THROUGH any type alias to
+// its underlying type (FIX 3). go/types reports a value of a type alias (`type AliasDog =
+// Dog`) under the alias spelling (`...AliasDog`) for both the MakeInterface operand type
+// and the alias's package-scope TypeName, but the concrete method's receiver is the
+// UNDERLYING `...Dog`. Keying the instantiated_type and method_set under the alias spelling
+// makes the Rust resolver's `methods_by_receiver["...AliasDog"]` lookup miss and the
+// interface-dispatch edge is silently dropped. `types.Unalias` collapses the alias chain to
+// the underlying type so instantiated_type, method_set key, and the method receiver all
+// share one canonical identity and the join succeeds. It is a NO-OP on a non-alias type, so
+// every non-alias identity's `.String()` is unchanged (byte-identity preserved).
+func canonicalTypeString(t types.Type) string {
+	if t == nil {
+		return ""
+	}
+	return types.Unalias(t).String()
 }
 
 func receiverTypeName(receiver string) string {

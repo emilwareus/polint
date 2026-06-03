@@ -1,0 +1,17 @@
+[workspace]
+include = ["**/*.go"]
+
+[languages.go]
+module_roots = ["."]
+package_patterns = ["./..."]
+include_tests = false
+
+# Deliberately tight Go RTA per-callsite candidate cap (D-14, GO-05 criterion 2).
+# repo/main.go performs ONE interface dispatch (`s.Area()`) whose receiver may be any
+# of three instantiated implementers (Circle, Square, Triangle), so RTA's candidate
+# set for that single callsite has three callees. A cap of 1 cannot admit them, so
+# resolving the callsite latches BudgetStatus::BudgetExceeded — proving runaway
+# dispatch fan-out is SIGNALLED, not silently dropped, and that the config ->
+# GoRtaSubBudget threading bites end to end.
+[solver.go]
+max_candidates_per_callsite = 1

@@ -22,16 +22,25 @@ use crate::analysis::points_to::facts::PointsToConstraintFact;
 use crate::analysis::points_to::solver::{PointsToSolveResult, solve_points_to};
 
 use super::budget::{BudgetStatus, SolverBudget};
+use super::facts::DerivedEdgeFact;
+use super::go_rta::{GoRtaInputs, solve_go_rta};
 
 /// Outcome produced by a [`SolverPolicy`] when driven by the engine.
 ///
 /// `points_to` carries the folded points-to sub-domain result (D-03) when the
-/// policy is the points-to domain; honest stubs leave it `None` and report
-/// [`BudgetStatus::WithinBudget`] over zero derivation.
+/// policy is the points-to domain; `derived_edges` carries a policy's derived edges
+/// (D-03, Phase 48) — the Go RTA policy produces `CallConstraint`-derived call edges
+/// here. Honest stubs leave both empty and report [`BudgetStatus::WithinBudget`] over
+/// zero derivation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PolicyOutcome {
     /// Folded points-to sub-domain result, if this policy is the points-to domain.
     pub(crate) points_to: Option<PointsToSolveResult>,
+    /// The policy's derived edges (D-03). The Go RTA policy fills this with its
+    /// resolved `DerivedEdgeFact`s; the points-to policy leaves it empty because its
+    /// CopyEdge closure flows through the free `engine::derive_edges` (the composition
+    /// that keeps points-to output byte-identical), not this channel.
+    pub(crate) derived_edges: Vec<DerivedEdgeFact>,
     /// The policy's budget outcome, projected to the unified [`BudgetStatus`].
     pub(crate) budget_status: BudgetStatus,
     /// Number of worklist steps the policy reported consuming (sourced into the
@@ -41,10 +50,12 @@ pub(crate) struct PolicyOutcome {
 
 impl PolicyOutcome {
     /// An honest-empty outcome: zero derivation, within budget, zero steps. Used
-    /// by the reserved Go/TS stubs (D-07).
+    /// by the reserved TS stub (D-07). Stays semantically empty: no points-to result,
+    /// no derived edges.
     pub(crate) fn empty() -> Self {
         Self {
             points_to: None,
+            derived_edges: Vec::new(),
             budget_status: BudgetStatus::WithinBudget,
             steps: 0,
         }
@@ -97,26 +108,45 @@ impl SolverPolicy for PointsToPolicy {
         let budget_status = BudgetStatus::from_points_to(result.budget_status);
         PolicyOutcome {
             points_to: Some(result),
+            // Points-to derived edges flow through `engine::derive_edges` (the
+            // byte-identical CopyEdge closure), not this channel.
+            derived_edges: Vec::new(),
             budget_status,
             steps: 0,
         }
     }
 }
 
-/// Reserved Go RTA policy. No driver exists until **Phase 48 (GO-05)**;
-/// [`SolverPolicy::solve`] derives ZERO results (honest emptiness, D-07),
-/// mirroring the `ConstraintKind::ModelEdge` reserved-but-stubbed precedent. This
-/// is NOT a fake driver — the emptiness is intentional until Phase 48 lands the
-/// reachability fixpoint, address-taken tracking, and dynamic dispatch.
-pub(crate) struct GoRtaPolicy;
+/// The real Go RTA policy (Phase 48, GO-05). Owns a CLOSED snapshot of the Go RTA
+/// inputs (reachability roots + the Go-frontend address-taken / instantiated-type /
+/// dispatch facts + method-sets + callsites), mirroring how [`PointsToPolicy`] owns
+/// its constraints. [`SolverPolicy::solve`] runs the RTA fixpoint
+/// ([`solve_go_rta`]) and returns the resolved call edges + budget status.
+pub(crate) struct GoRtaPolicy {
+    inputs: GoRtaInputs,
+}
+
+impl GoRtaPolicy {
+    pub(crate) fn new(inputs: GoRtaInputs) -> Self {
+        Self { inputs }
+    }
+}
 
 impl SolverPolicy for GoRtaPolicy {
     fn id(&self) -> &'static str {
         "go_rta"
     }
 
-    fn solve(&self, _budget: &SolverBudget) -> PolicyOutcome {
-        PolicyOutcome::empty()
+    fn solve(&self, budget: &SolverBudget) -> PolicyOutcome {
+        // Run the RTA fixpoint over the closed snapshot (composition over the engine
+        // worklist, mirroring PointsToPolicy's fold). The output is already normalized.
+        let output = solve_go_rta(&self.inputs, budget);
+        PolicyOutcome {
+            points_to: None,
+            derived_edges: output.derived_edges,
+            budget_status: output.budget_status,
+            steps: 0,
+        }
     }
 }
 
@@ -140,22 +170,90 @@ impl SolverPolicy for TsTokensPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use crate::analysis::ids::SemanticNodeId;
+    use crate::analysis::solver::go_rta::inputs::{GoRtaCallsite, GoRtaMethod};
 
     #[test]
-    fn go_and_ts_stubs_derive_nothing() {
+    fn ts_stub_derives_nothing() {
+        // The TS token policy stays an honest stub until Phase 49 (JS-04): it derives
+        // nothing and returns the semantically-empty outcome.
         let budget = SolverBudget::default();
-
-        let go = GoRtaPolicy;
-        let go_outcome = go.solve(&budget);
-        assert_eq!(go.id(), "go_rta");
-        assert_eq!(go_outcome, PolicyOutcome::empty());
-        assert!(go_outcome.points_to.is_none());
-
         let ts = TsTokensPolicy;
         let ts_outcome = ts.solve(&budget);
         assert_eq!(ts.id(), "ts_tokens");
         assert_eq!(ts_outcome, PolicyOutcome::empty());
         assert!(ts_outcome.points_to.is_none());
+        assert!(ts_outcome.derived_edges.is_empty());
+    }
+
+    #[test]
+    fn empty_outcome_stays_semantically_empty() {
+        // empty() must carry no points-to result AND no derived edges, so the TS stub
+        // (and any future reserved stub) returning it derives nothing.
+        let outcome = PolicyOutcome::empty();
+        assert!(outcome.points_to.is_none());
+        assert!(outcome.derived_edges.is_empty());
+        assert_eq!(outcome.budget_status, BudgetStatus::WithinBudget);
+        assert_eq!(outcome.steps, 0);
+    }
+
+    #[test]
+    fn go_rta_policy_derives_edges_from_a_resolvable_dispatch() {
+        // The real Go RTA policy now derives ≥1 edge from a resolvable interface
+        // dispatch (an instantiated receiver whose method-set declares the method).
+        let mut function_node = BTreeMap::new();
+        function_node.insert("main.main".to_string(), SemanticNodeId(1));
+        function_node.insert("(pkg.File).Read".to_string(), SemanticNodeId(3));
+
+        let mut method_sets = BTreeMap::new();
+        method_sets.insert("pkg.File".to_string(), BTreeSet::from(["Read".to_string()]));
+        let mut method_set_keys = BTreeMap::new();
+        method_set_keys.insert("pkg.File".to_string(), "ms|pkg.File".to_string());
+
+        let mut methods_by_receiver = BTreeMap::new();
+        methods_by_receiver.insert(
+            "pkg.File".to_string(),
+            vec![GoRtaMethod {
+                method_name: "Read".to_string(),
+                qualified: "(pkg.File).Read".to_string(),
+                node: SemanticNodeId(3),
+            }],
+        );
+
+        let mut instantiated_keys = BTreeMap::new();
+        instantiated_keys.insert("pkg.File".to_string(), "inst|pkg.File".to_string());
+
+        let inputs = GoRtaInputs {
+            roots: BTreeSet::from(["main.main".to_string()]),
+            callsites: vec![GoRtaCallsite {
+                caller: "main.main".to_string(),
+                callsite_node: SemanticNodeId(2),
+                callsite_stable_key: "cs|main:read".to_string(),
+                interface_method: Some("Read".to_string()),
+                signature: None,
+                dispatch_stable_key: "dd|main:read".to_string(),
+            }],
+            method_sets,
+            method_set_keys,
+            instantiated: BTreeSet::from(["pkg.File".to_string()]),
+            instantiated_keys,
+            methods_by_receiver,
+            function_node,
+            ..GoRtaInputs::default()
+        }
+        .finalize_indexes();
+
+        let policy = GoRtaPolicy::new(inputs);
+        assert_eq!(policy.id(), "go_rta");
+        let outcome = policy.solve(&SolverBudget::default());
+        assert!(outcome.points_to.is_none());
+        assert!(
+            !outcome.derived_edges.is_empty(),
+            "the Go RTA policy must derive ≥1 edge from a resolvable dispatch"
+        );
+        assert_eq!(outcome.budget_status, BudgetStatus::WithinBudget);
     }
 
     #[test]

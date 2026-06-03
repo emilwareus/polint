@@ -10,18 +10,22 @@
 //!
 //! The output digest (D-15) folds (a) provider/version/schema/parameter digests
 //! (the parameter digest already embeds the [`SolverBudget`]), (b) every consumed
-//! upstream provider output digest — `polint.semantic_graph` plus the points-to
-//! source families produced by `polint.type_value_alias` (`points_to_constraints` /
-//! `points_to_sets`), (c) the [`SolverBudget`] explicitly, and (d) per-row stable
-//! keys, then `parts.sort()` + `Digest::from_parts`. Any upstream change, algorithm
-//! bump, or budget change deterministically invalidates the solver cache.
+//! upstream provider output digest — `polint.semantic_graph`, the points-to source
+//! families produced by `polint.type_value_alias` (`points_to_constraints` /
+//! `points_to_sets`), and `polint.go.semantic` (whose RTA-signal harvest families the
+//! Go RTA policy reads to resolve dynamic dispatch — FIX 4), (c) the [`SolverBudget`]
+//! explicitly, and (d) per-row stable keys, then `parts.sort()` + `Digest::from_parts`.
+//! Any upstream change, algorithm bump, or budget change deterministically invalidates
+//! the solver cache.
 
 use std::collections::BTreeSet;
 
 use crate::analysis::ids::SemanticNodeId;
 use crate::analysis::solver::budget::{BudgetStatus, SolverBudget};
 use crate::analysis::solver::cache_key::solver_provider_parameter_digest;
-use crate::analysis::solver::engine::derive_edges;
+use crate::analysis::solver::engine::SolverEngine;
+use crate::analysis::solver::go_rta::GoRtaInputs;
+use crate::analysis::solver::policy::{GoRtaPolicy, TsTokensPolicy};
 use crate::analysis::solver::store::{SOLVER_PROVIDER_ID, SolverOutput};
 use crate::analysis::solver::validate::{detect_solver_summary_cycle, validate_derived_edges};
 use crate::analysis_kernel::ProviderManifest;
@@ -57,13 +61,37 @@ pub(crate) fn derive_solver_with_cache_stats(
     budget: SolverBudget,
     semantic_graph_output_digest: Digest,
     type_value_alias_output_digest: Digest,
+    go_semantic_output_digest: Digest,
 ) -> SolverProviderRunOutput {
     debug_assert_eq!(manifest.id, SOLVER_PROVIDER_ID);
 
-    // Phase 1-2: drive the solver over the closed input snapshot (the stored
-    // semantic-graph constraints). The build is read-only; derive_edges normalizes.
+    // Phase 1-2: drive the unified solver ENGINE over the closed input snapshot (D-02,
+    // the reserved seam). The points-to CopyEdge closure (`derive_edges`, byte-
+    // identical) AND the Go RTA policy's resolved call edges converge into one
+    // SolverOutput under one SolverBudget. The build is read-only; the engine
+    // normalizes the merged output.
+    //
+    // FINDING 3: the production engine does NOT register `PointsToPolicy`. The points-to
+    // edges that enter this output are the step-1 `derive_edges` CopyEdge closure inside
+    // `run_to_solver_output` (over the semantic-graph `CopyEdge` constraints); the
+    // Andersen points-to solve runs in the `type_value_alias` provider and is consumed
+    // here only via its output digest. Registering `PointsToPolicy` here re-ran a full
+    // Andersen solve whose edges were discarded, yet its object/dynamic-var budget
+    // exhaustion polluted the run-level budget_status (a misleading diagnostic + a
+    // spurious solver_output_digest bust, WR-06) — a redundant double-solve with a
+    // harmful side effect. Register only the edge-contributing policies.
     let constraints = db.semantic_constraints().to_vec();
-    let output = derive_edges(&constraints, &budget);
+    let go_rta_inputs = GoRtaInputs::from_db(db);
+    let engine = SolverEngine::new(
+        vec![
+            // The real Go RTA policy (GO-05): contributes resolved call edges.
+            Box::new(GoRtaPolicy::new(go_rta_inputs)),
+            // The TS token policy stays an honest stub until Phase 49 (JS-04).
+            Box::new(TsTokensPolicy),
+        ],
+        budget,
+    );
+    let output = engine.run_to_solver_output(&constraints);
 
     // Phase 3: digest over the stored stable KEYS + upstream digests + the budget.
     let output_digest = solver_output_digest(
@@ -72,6 +100,7 @@ pub(crate) fn derive_solver_with_cache_stats(
         &budget,
         &semantic_graph_output_digest,
         &type_value_alias_output_digest,
+        &go_semantic_output_digest,
         &output,
     );
 
@@ -117,17 +146,20 @@ pub(crate) fn derive_solver_with_cache_stats(
 ///
 /// Folds (a) provider/version/schema/parameter digests (the parameter digest already
 /// embeds the budget via `solver_provider_parameter_digest`), (b) the consumed
-/// upstream provider output digests — `polint.semantic_graph` plus the points-to
-/// source families carried by `polint.type_value_alias`'s output digest, (c) the
-/// `SolverBudget` explicitly (belt-and-suspenders with the parameter digest so a
-/// budget change is unmissable, D-15), and (d) per-row stable keys + status/precision
-/// + provenance fragment, then `parts.sort()` + `Digest::from_parts`.
+/// upstream provider output digests — `polint.semantic_graph`, the points-to source
+/// families carried by `polint.type_value_alias`'s output digest, and
+/// `polint.go.semantic`'s output digest (the RTA-signal families the Go RTA policy
+/// reads — FIX 4), (c) the `SolverBudget` explicitly (belt-and-suspenders with the
+/// parameter digest so a budget change is unmissable, D-15), and (d) per-row stable
+/// keys + status/precision + provenance fragment, then `parts.sort()` +
+/// `Digest::from_parts`.
 fn solver_output_digest(
     manifest: &ProviderManifest,
     input_snapshot: &InputSnapshot,
     budget: &SolverBudget,
     semantic_graph_output_digest: &Digest,
     type_value_alias_output_digest: &Digest,
+    go_semantic_output_digest: &Digest,
     output: &SolverOutput,
 ) -> Digest {
     let mut parts = vec![
@@ -138,6 +170,12 @@ fn solver_output_digest(
         format!("config={}", input_snapshot.config.digest),
         format!("semantic_graph_output={semantic_graph_output_digest}"),
         format!("type_value_alias_output={type_value_alias_output_digest}"),
+        // The Go RTA policy reads the stored `polint.go.semantic` RTA-signal families
+        // (instantiated_types / address_taken / dynamic_dispatch / method_sets) to resolve
+        // dynamic dispatch, so a Go edit touching ONLY those families changes the resolved
+        // edges and MUST invalidate the solver cache (FIX 4). Fold the go.semantic output
+        // digest like the other consumed upstream digests.
+        format!("go_semantic_output={go_semantic_output_digest}"),
         // The budget participates explicitly (D-15), in addition to being folded
         // through the parameter digest, so a budget change unmissably invalidates.
         format!("budget.max_steps={}", budget.max_steps),
@@ -153,6 +191,28 @@ fn solver_output_digest(
             "budget.points_to.max_dynamic_vars={}",
             budget.points_to.max_dynamic_vars
         ),
+        // Go RTA sub-budget knobs (Phase 48, D-12): folded explicitly here in addition
+        // to riding the parameter digest, so a Go-knob change unmissably invalidates.
+        format!(
+            "budget.go.address_taken_threshold={}",
+            budget.go.address_taken_threshold
+        ),
+        format!(
+            "budget.go.max_candidates_per_callsite={}",
+            budget.go.max_candidates_per_callsite
+        ),
+        format!("budget.go.max_rta_rounds={}", budget.go.max_rta_rounds),
+        format!(
+            "budget.go.max_worklist_steps={}",
+            budget.go.max_worklist_steps
+        ),
+        // Run-level budget status (WR-06): two runs over the same inputs that produce
+        // the same SURVIVING edge set but differ in whether the budget was exhausted
+        // (WithinBudget vs BudgetExceeded) must NOT share an output digest. A fixpoint
+        // that aborted BEFORE reaching an edge leaves no per-edge trace, so the
+        // run-level status is the only carrier of the truncation signal — fold it in so
+        // a cache hit can never serve a truncated result under a complete run's digest.
+        format!("budget_status={}", output.budget_status.as_str()),
     ];
 
     parts.extend(output.derived_edges.iter().map(|edge| {
@@ -292,6 +352,7 @@ mod tests {
             SolverBudget::default(),
             absent("polint.semantic_graph"),
             absent("polint.type_value_alias"),
+            absent("polint.go.semantic"),
         )
     }
 
@@ -328,6 +389,7 @@ mod tests {
             SolverBudget::default(),
             absent("polint.semantic_graph"),
             absent("polint.type_value_alias"),
+            absent("polint.go.semantic"),
         )
         .output_digest;
 
@@ -343,6 +405,7 @@ mod tests {
                 &["changed"],
             ),
             absent("polint.type_value_alias"),
+            absent("polint.go.semantic"),
         )
         .output_digest;
 
@@ -362,6 +425,7 @@ mod tests {
             SolverBudget::default(),
             absent("polint.semantic_graph"),
             absent("polint.type_value_alias"),
+            absent("polint.go.semantic"),
         )
         .output_digest;
 
@@ -377,10 +441,53 @@ mod tests {
                 "polint.type_value_alias",
                 &["changed"],
             ),
+            absent("polint.go.semantic"),
         )
         .output_digest;
 
         assert_ne!(base, changed);
+    }
+
+    #[test]
+    fn go_semantic_upstream_digest_change_invalidates_output_digest() {
+        // FIX 4: the Go RTA policy reads the stored polint.go.semantic RTA-signal families
+        // (instantiated_types / address_taken / dynamic_dispatch / method_sets) to resolve
+        // dynamic dispatch, so a Go edit touching ONLY those families changes the resolved
+        // edges and MUST invalidate the solver cache. A change to the consumed
+        // polint.go.semantic output digest therefore changes the solver output digest.
+        let mut db_a = db_with_copy_chain();
+        let snapshot = snapshot(&db_a);
+        let base = derive_solver_with_cache_stats(
+            &mut db_a,
+            &snapshot,
+            manifest(),
+            SolverBudget::default(),
+            absent("polint.semantic_graph"),
+            absent("polint.type_value_alias"),
+            absent("polint.go.semantic"),
+        )
+        .output_digest;
+
+        let mut db_b = db_with_copy_chain();
+        let changed = derive_solver_with_cache_stats(
+            &mut db_b,
+            &snapshot,
+            manifest(),
+            SolverBudget::default(),
+            absent("polint.semantic_graph"),
+            absent("polint.type_value_alias"),
+            Digest::from_parts(
+                DigestKind::ProviderOutput,
+                "polint.go.semantic",
+                &["changed"],
+            ),
+        )
+        .output_digest;
+
+        assert_ne!(
+            base, changed,
+            "a polint.go.semantic output-digest change must invalidate the solver output digest"
+        );
     }
 
     #[test]
@@ -395,6 +502,7 @@ mod tests {
             SolverBudget::default(),
             absent("polint.semantic_graph"),
             absent("polint.type_value_alias"),
+            absent("polint.go.semantic"),
         )
         .output_digest;
 
@@ -408,10 +516,56 @@ mod tests {
             bumped,
             absent("polint.semantic_graph"),
             absent("polint.type_value_alias"),
+            absent("polint.go.semantic"),
         )
         .output_digest;
 
         assert_ne!(base, changed);
+    }
+
+    #[test]
+    fn run_level_budget_status_invalidates_output_digest() {
+        // WR-06: two outputs with the SAME surviving edge set but different run-level
+        // budget_status (WithinBudget vs BudgetExceeded) must produce DIFFERENT output
+        // digests, so a cache layer keyed on the digest cannot serve a truncated
+        // (BudgetExceeded) result under a complete (WithinBudget) run's digest.
+        let db = db_with_copy_chain();
+        let snapshot = snapshot(&db);
+        let budget = SolverBudget::default();
+
+        // Identical (empty) edge sets; only the run-level status differs.
+        let within = SolverOutput {
+            derived_edges: Vec::new(),
+            budget_status: BudgetStatus::WithinBudget,
+        };
+        let exceeded = SolverOutput {
+            derived_edges: Vec::new(),
+            budget_status: BudgetStatus::BudgetExceeded,
+        };
+
+        let within_digest = solver_output_digest(
+            manifest(),
+            &snapshot,
+            &budget,
+            &absent("polint.semantic_graph"),
+            &absent("polint.type_value_alias"),
+            &absent("polint.go.semantic"),
+            &within,
+        );
+        let exceeded_digest = solver_output_digest(
+            manifest(),
+            &snapshot,
+            &budget,
+            &absent("polint.semantic_graph"),
+            &absent("polint.type_value_alias"),
+            &absent("polint.go.semantic"),
+            &exceeded,
+        );
+
+        assert_ne!(
+            within_digest, exceeded_digest,
+            "a budget-truncated run must not share an output digest with a complete run"
+        );
     }
 
     #[test]

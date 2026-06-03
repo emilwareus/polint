@@ -1,0 +1,23 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "go-rta-interface-dispatch"
+area = "go-rta"
+
+# Phase 48 Plan 03 — native interface-dispatch RTA fixture (D-15, GO-05 criterion 4).
+#
+# repo/main.go declares a Speaker interface with two implementers:
+#   - Dog  — INSTANTIATED (Dog{} -> Speaker in main) → RTA resolves main -> (Dog).Speak
+#   - Cat  — declared + in method-set, but NEVER instantiated → RTA EXCLUDES it
+# This proves the instantiated-type FILTER (RTA, not coarse CHA): the gate asserts
+# >= 1 RTA-resolved derived edge to (Dog).Speak AND that NO edge targets (Cat).Speak.
+#
+# The executable proof lives in `eval::go_rta` (it reads db.solver_derived_edges()
+# and the instantiated-type node identities, asserting the instantiated_filter
+# invariant); this manifest documents the contract. No `[[expected]]` row is
+# captured because the solver-derived edges are crate-private and not observable
+# manifest facts (Phase 52 wires them into the observable refined-call projection).
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 120000

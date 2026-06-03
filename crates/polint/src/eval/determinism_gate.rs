@@ -285,3 +285,117 @@ fn go_reachable_fixture_exercises_reachable_graph_marking() {
 fn ts_reachable_fixture_exercises_reachable_graph_marking() {
     assert_reachability_marking_exercised(&fixture_dir("ts_reachable"), "ts_reachable");
 }
+
+#[test]
+fn go_rta_fixture_is_byte_identical_under_ten_seeded_permutations() {
+    // FINDING F4 (docstring correction): this gate covers the Phase-43
+    // reachability/normalization order-stability of the OBSERVED projection only. The Go
+    // RTA driver's derived SOLVER edges are NOT in the observed projection yet (Phase 52 /
+    // GRAPH-05 wires solver edges into the observable `refined_calls`), and
+    // `assert_n10_byte_identical` re-normalizes already-observed rows rather than re-running
+    // the kernel under permuted input order — so this assertion does NOT itself exercise RTA
+    // determinism. The RTA path's input-order determinism is covered explicitly by
+    // `go_rta_solver_output_is_byte_identical_under_permuted_fact_insertion_order` below
+    // (and by the two-run `assert_solver_output_byte_stable` checks in `eval::go_rta`).
+    assert_n10_byte_identical(&fixture_dir("go_rta"));
+}
+
+/// FINDING F4: a REAL input-order determinism proof for the Go RTA solver path. Builds the
+/// kernel db over the go_rta fixture, then re-stores the Go-frontend facts under 10 seeded
+/// permutations of their INSERTION order and asserts the resulting `run_to_solver_output`
+/// (the derived RTA edges + budget status) is byte-identical every time. This exercises the
+/// `BTree`-keyed determinism contract end to end — the RTA edge set must not depend on the
+/// order the Go-frontend rows were inserted — which the observed-projection gate above does
+/// NOT cover (solver edges are not yet observable, and that gate re-normalizes pre-observed
+/// rows rather than re-running the kernel under permuted input order).
+#[test]
+fn go_rta_solver_output_is_byte_identical_under_permuted_fact_insertion_order() {
+    use crate::analysis::solver::budget::SolverBudget;
+    use crate::analysis::solver::engine::SolverEngine;
+    use crate::analysis::solver::go_rta::GoRtaInputs;
+    use crate::analysis::solver::policy::{GoRtaPolicy, TsTokensPolicy};
+    use crate::config::load_config;
+    use crate::go::semantic::store::GoSemanticFactsOutput;
+
+    let fixture = load_native_fixture(&fixture_dir("go_rta")).expect("fixture loads");
+    let temp = copy_fixture_repo_for_test(&fixture).expect("copy fixture repo");
+    let mut output = run_kernel_for_repo_for_test(temp.path()).expect("kernel runs");
+    let budget = SolverBudget {
+        go: load_config(&fixture.repo_dir)
+            .expect("config loads")
+            .config
+            .solver
+            .to_go_sub_budget(),
+        ..SolverBudget::default()
+    };
+
+    // Reconstruct the stored Go-frontend facts as an owned output we can permute. These are
+    // the exact rows the Go provider stored; re-storing them in a different order MUST yield
+    // the same solver output because the store normalizes (BTree/stable-key sort).
+    let base = GoSemanticFactsOutput {
+        packages: output.db.go_semantic_packages().to_vec(),
+        functions: output.db.go_semantic_functions().to_vec(),
+        callsites: output.db.go_semantic_callsites().to_vec(),
+        method_sets: output.db.go_semantic_method_sets().to_vec(),
+        address_taken: output.db.go_semantic_address_taken().to_vec(),
+        instantiated_types: output.db.go_semantic_instantiated_types().to_vec(),
+        dynamic_dispatch: output.db.go_semantic_dynamic_dispatch().to_vec(),
+        package_errors: output.db.go_semantic_package_errors().to_vec(),
+    };
+    // The fixture must genuinely exercise the RTA path (a resolved interface edge), or this
+    // proof would be vacuous over an empty edge set.
+    assert!(
+        !base.functions.is_empty() && !base.dynamic_dispatch.is_empty(),
+        "the go_rta fixture must produce Go functions + a dynamic-dispatch detail to make \
+         the input-order determinism proof non-vacuous"
+    );
+
+    let solver_json = |db: &crate::core::AnalysisDb| -> String {
+        let constraints = db.semantic_constraints().to_vec();
+        let engine = SolverEngine::new(
+            vec![
+                Box::new(GoRtaPolicy::new(GoRtaInputs::from_db(db))),
+                Box::new(TsTokensPolicy),
+            ],
+            budget,
+        );
+        let solver_output = engine.run_to_solver_output(&constraints);
+        serde_json::to_string(&(&solver_output.derived_edges, solver_output.budget_status))
+            .expect("serialize solver output")
+    };
+
+    let canonical = solver_json(&output.db);
+    assert!(
+        canonical.contains("call_constraint"),
+        "the canonical run must derive at least one RTA call_constraint edge (non-vacuous): {canonical}"
+    );
+
+    for (run_index, &seed) in permutation_seeds().iter().enumerate() {
+        // Permute the INSERTION order of every Go-frontend fact family independently.
+        let mut permuted = base.clone();
+        seeded_shuffle(&mut permuted.packages, seed);
+        seeded_shuffle(&mut permuted.functions, seed ^ 0x1111_1111);
+        seeded_shuffle(&mut permuted.callsites, seed ^ 0x2222_2222);
+        seeded_shuffle(&mut permuted.method_sets, seed ^ 0x3333_3333);
+        seeded_shuffle(&mut permuted.address_taken, seed ^ 0x4444_4444);
+        seeded_shuffle(&mut permuted.instantiated_types, seed ^ 0x5555_5555);
+        seeded_shuffle(&mut permuted.dynamic_dispatch, seed ^ 0x6666_6666);
+        seeded_shuffle(&mut permuted.package_errors, seed ^ 0x7777_7777);
+
+        output
+            .db
+            .replace_go_semantic_facts(permuted)
+            .expect("re-store permuted Go facts");
+        let permuted_json = solver_json(&output.db);
+        assert_eq!(
+            permuted_json, canonical,
+            "run {run_index} (seed {seed:#018x}): the Go RTA solver output diverged under a \
+             permuted Go-frontend fact INSERTION order — RTA derivation is order-sensitive"
+        );
+    }
+}
+
+#[test]
+fn go_rta_fixture_exercises_reachable_graph_marking() {
+    assert_reachability_marking_exercised(&fixture_dir("go_rta"), "go_rta");
+}

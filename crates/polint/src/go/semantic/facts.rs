@@ -16,6 +16,15 @@ pub(crate) struct GoSemanticMethodSetId(pub(crate) u64);
 pub(crate) struct GoSemanticPackageErrorId(pub(crate) u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct GoSemanticAddressTakenId(pub(crate) u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct GoSemanticInstantiatedTypeId(pub(crate) u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct GoSemanticDynamicDispatchId(pub(crate) u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum GoSemanticFunctionKind {
     Function,
     Method,
@@ -88,4 +97,48 @@ pub(crate) struct GoSemanticPackageErrorFact {
     pub(crate) package_id: String,
     pub(crate) package_path: String,
     pub(crate) message: String,
+}
+
+/// An address-taken Go function — the RTA dispatch-candidate set for func-value
+/// callsites (D-05). Harvested from `*ssa.MakeClosure` and `*ssa.Function` value
+/// operands in the sidecar. `function` is the official `ssa.Function` `.String()`
+/// identity; `stable_key` is length-prefixed from that identity (Phase 46 D-12/D-13).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GoSemanticAddressTakenFact {
+    pub(crate) id: GoSemanticAddressTakenId,
+    pub(crate) stable_key: String,
+    pub(crate) package_id: String,
+    pub(crate) package_path: String,
+    pub(crate) function: String,
+}
+
+/// An instantiated runtime type — the RTA "rapid type" set: a concrete type converted
+/// to an interface via `*ssa.MakeInterface` in the reachable SSA program (D-05). The
+/// instantiated-type filter is what distinguishes RTA from coarse CHA. `type_name` is the
+/// official `go/types` `.String()` identity; `stable_key` is length-prefixed from it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GoSemanticInstantiatedTypeFact {
+    pub(crate) id: GoSemanticInstantiatedTypeId,
+    pub(crate) stable_key: String,
+    pub(crate) package_id: String,
+    pub(crate) package_path: String,
+    pub(crate) type_name: String,
+}
+
+/// Dynamic-callsite dispatch detail — the discriminant Plan 2's RTA driver needs to
+/// resolve an `UnresolvedDynamic` callsite by method-set matching (D-05). For an interface
+/// invoke, `interface_type` + `method` are set; for a func-value call, `signature` is set;
+/// honest `None` otherwise (D-08/D-15 — no fabricated discriminant). `callsite_stable_key`
+/// joins this detail back to the originating [`GoSemanticCallsiteFact`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GoSemanticDynamicDispatchFact {
+    pub(crate) id: GoSemanticDynamicDispatchId,
+    pub(crate) stable_key: String,
+    pub(crate) package_id: String,
+    pub(crate) package_path: String,
+    pub(crate) caller: String,
+    pub(crate) callsite_stable_key: String,
+    pub(crate) interface_type: Option<String>,
+    pub(crate) method: Option<String>,
+    pub(crate) signature: Option<String>,
 }

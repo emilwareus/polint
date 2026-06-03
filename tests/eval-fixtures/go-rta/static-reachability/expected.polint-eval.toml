@@ -1,0 +1,26 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "go-rta-static-reachability"
+area = "go-rta"
+
+# Phase 48 FINDING 1 — native static-reachability RTA fixture (GO-05, standard RTA).
+#
+# repo/main.go makes a DIRECT (static) call from the root `main` to an UNEXPORTED
+# helper `runDispatch` (NOT itself a reachability root). The interface dispatch
+# `var s Speaker = Dog{}; s.Speak()` lives INSIDE runDispatch. RTA reachability must be
+# the fixpoint closure over BOTH static-call edges AND resolved-dynamic-dispatch edges
+# from roots: the static main -> runDispatch edge must bring runDispatch into the
+# worklist so its interface invoke resolves to (Dog).Speak.
+#
+# If reachability only grew along dynamic edges (the FINDING 1 bug), runDispatch would
+# never be scanned and the real edge `runDispatch -> (Dog).Speak` would be silently
+# dropped while the run still reported WithinBudget. The executable proof lives in
+# `eval::go_rta` (it reads db.solver_derived_edges() and asserts the (Dog).Speak edge
+# IS present and budget_status == WithinBudget). No `[[expected]]` row is captured
+# because solver-derived edges are crate-private (Phase 52 wires them into the
+# observable refined-call projection).
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 120000
