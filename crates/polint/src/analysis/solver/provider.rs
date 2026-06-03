@@ -206,6 +206,25 @@ fn solver_output_digest(
             "budget.go.max_worklist_steps={}",
             budget.go.max_worklist_steps
         ),
+        // JS/TS token sub-budget knobs (Phase 49, JS-04): folded explicitly here in
+        // addition to riding the parameter digest, so a token-knob change unmissably
+        // invalidates once the token policy starts contributing edges.
+        format!(
+            "budget.js.max_tokens_per_var={}",
+            budget.js.max_tokens_per_var
+        ),
+        format!(
+            "budget.js.max_candidates_per_callsite={}",
+            budget.js.max_candidates_per_callsite
+        ),
+        format!(
+            "budget.js.max_token_worklist_steps={}",
+            budget.js.max_token_worklist_steps
+        ),
+        format!(
+            "budget.js.max_closure_depth={}",
+            budget.js.max_closure_depth
+        ),
         // Run-level budget status (WR-06): two runs over the same inputs that produce
         // the same SURVIVING edge set but differ in whether the budget was exhausted
         // (WithinBudget vs BudgetExceeded) must NOT share an output digest. A fixpoint
@@ -446,6 +465,25 @@ mod tests {
         .output_digest;
 
         assert_ne!(base, changed);
+
+        let mut bumped_js = SolverBudget::default();
+        bumped_js.js.max_tokens_per_var += 1;
+        let mut db_c = db_with_copy_chain();
+        let js_changed = derive_solver_with_cache_stats(
+            &mut db_c,
+            &snapshot,
+            manifest(),
+            bumped_js,
+            absent("polint.semantic_graph"),
+            absent("polint.type_value_alias"),
+            absent("polint.go.semantic"),
+        )
+        .output_digest;
+
+        assert_ne!(
+            base, js_changed,
+            "changing a JS token budget knob must invalidate the solver output digest"
+        );
     }
 
     #[test]

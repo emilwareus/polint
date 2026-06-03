@@ -43,6 +43,10 @@ pub(crate) fn solver_provider_parameter_digest(budget: &SolverBudget) -> Digest 
         // reachability ⊗ instantiated-types ⊗ dispatch derivation bumps this and
         // deterministically invalidates the solver cache.
         "go_rta_fixpoint_v1",
+        // TS function-token fixpoint algorithm version (Phase 49, JS-04): a change
+        // to token propagation, callable-token admission, or token-to-call derivation
+        // bumps this and deterministically invalidates the solver cache.
+        "ts_tokens_fixpoint_v1",
     ];
     parts.extend(budget_parts.iter().map(String::as_str));
     Digest::from_parts(
@@ -87,6 +91,24 @@ fn budget_parts(budget: &SolverBudget) -> Vec<String> {
             "budget.go.max_worklist_steps={}",
             budget.go.max_worklist_steps
         ),
+        // JS/TS function-token sub-budget knobs (JS-04): a token-knob change
+        // invalidates downstream. Appended after Go so existing parts keep order.
+        format!(
+            "budget.js.max_tokens_per_var={}",
+            budget.js.max_tokens_per_var
+        ),
+        format!(
+            "budget.js.max_candidates_per_callsite={}",
+            budget.js.max_candidates_per_callsite
+        ),
+        format!(
+            "budget.js.max_token_worklist_steps={}",
+            budget.js.max_token_worklist_steps
+        ),
+        format!(
+            "budget.js.max_closure_depth={}",
+            budget.js.max_closure_depth
+        ),
     ]
 }
 
@@ -120,6 +142,7 @@ mod tests {
                     "provenance_projection_v1",
                     "precision_ceiling_v1",
                     "go_rta_fixpoint_v1",
+                    "ts_tokens_fixpoint_v1",
                     "budget.max_steps=10000",
                     "budget.max_outer_iterations=64",
                     "budget.points_to.max_objects_per_var=64",
@@ -128,6 +151,10 @@ mod tests {
                     "budget.go.max_candidates_per_callsite=128",
                     "budget.go.max_rta_rounds=32",
                     "budget.go.max_worklist_steps=10000",
+                    "budget.js.max_tokens_per_var=128",
+                    "budget.js.max_candidates_per_callsite=256",
+                    "budget.js.max_token_worklist_steps=10000",
+                    "budget.js.max_closure_depth=8",
                 ],
             )
         );
@@ -152,6 +179,7 @@ mod tests {
                 "provenance_projection_v1",
                 "precision_ceiling_v1",
                 "go_rta_fixpoint_v1",
+                "ts_tokens_fixpoint_v1",
                 "budget.max_steps=10000",
                 "budget.max_outer_iterations=64",
                 "budget.points_to.max_objects_per_var=64",
@@ -160,6 +188,10 @@ mod tests {
                 "budget.go.max_candidates_per_callsite=128",
                 "budget.go.max_rta_rounds=32",
                 "budget.go.max_worklist_steps=10000",
+                "budget.js.max_tokens_per_var=128",
+                "budget.js.max_candidates_per_callsite=256",
+                "budget.js.max_token_worklist_steps=10000",
+                "budget.js.max_closure_depth=8",
             ],
         );
         assert_ne!(solver_provider_parameter_digest(&budget), pre_bump);
@@ -215,6 +247,24 @@ mod tests {
             solver_provider_parameter_digest(&bumped_steps),
             base,
             "changing the Go RTA worklist-step cap must change the parameter digest"
+        );
+
+        // JS-04: a JS token sub-budget knob participates in the digest, so a token-knob
+        // change invalidates downstream.
+        let mut bumped_js = SolverBudget::default();
+        bumped_js.js.max_tokens_per_var += 1;
+        assert_ne!(
+            solver_provider_parameter_digest(&bumped_js),
+            base,
+            "changing a JS token sub-budget knob must change the parameter digest"
+        );
+
+        let mut bumped_js_steps = SolverBudget::default();
+        bumped_js_steps.js.max_token_worklist_steps += 1;
+        assert_ne!(
+            solver_provider_parameter_digest(&bumped_js_steps),
+            base,
+            "changing the JS token worklist-step cap must change the parameter digest"
         );
     }
 }
