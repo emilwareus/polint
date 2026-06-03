@@ -37,7 +37,7 @@ use crate::analysis::semantic_graph::facts::NodeKind;
 use crate::analysis::solver::budget::{BudgetStatus, SolverBudget};
 use crate::analysis::solver::engine::SolverEngine;
 use crate::analysis::solver::go_rta::GoRtaInputs;
-use crate::analysis::solver::policy::{GoRtaPolicy, PointsToPolicy, TsTokensPolicy};
+use crate::analysis::solver::policy::{GoRtaPolicy, TsTokensPolicy};
 use crate::analysis::solver::store::SolverOutput;
 use crate::analysis_kernel::KernelOutput;
 use crate::config::load_config;
@@ -77,15 +77,17 @@ fn solver_budget_for_fixture(fixture_dir: &Path) -> SolverBudget {
 }
 
 /// Drives the unified solver engine over the fixture-built db exactly as
-/// `derive_solver_with_cache_stats` does (points-to CopyEdge closure + Go RTA + the
-/// TS stub), returning the merged, normalized [`SolverOutput`] so the gate can read
-/// the run-level `budget_status` and the derived edges.
+/// `derive_solver_with_cache_stats` does (the points-to CopyEdge closure via step-1
+/// `derive_edges` + the Go RTA policy + the TS stub), returning the merged, normalized
+/// [`SolverOutput`] so the gate can read the run-level `budget_status` and the derived
+/// edges. Like production, it does NOT register `PointsToPolicy` (FINDING 3): the
+/// points-to edges come from the step-1 CopyEdge closure, and registering the Andersen
+/// fold here would re-run a discarded solve whose budget status would pollute the run.
 fn solver_output_for_db(db: &AnalysisDb, budget: SolverBudget) -> SolverOutput {
     let constraints = db.semantic_constraints().to_vec();
     let go_rta_inputs = GoRtaInputs::from_db(db);
     let engine = SolverEngine::new(
         vec![
-            Box::new(PointsToPolicy::new(db.points_to_constraints().to_vec())),
             Box::new(GoRtaPolicy::new(go_rta_inputs)),
             Box::new(TsTokensPolicy),
         ],

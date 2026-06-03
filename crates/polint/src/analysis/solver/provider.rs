@@ -23,7 +23,7 @@ use crate::analysis::solver::budget::{BudgetStatus, SolverBudget};
 use crate::analysis::solver::cache_key::solver_provider_parameter_digest;
 use crate::analysis::solver::engine::SolverEngine;
 use crate::analysis::solver::go_rta::GoRtaInputs;
-use crate::analysis::solver::policy::{GoRtaPolicy, PointsToPolicy, TsTokensPolicy};
+use crate::analysis::solver::policy::{GoRtaPolicy, TsTokensPolicy};
 use crate::analysis::solver::store::{SOLVER_PROVIDER_ID, SolverOutput};
 use crate::analysis::solver::validate::{detect_solver_summary_cycle, validate_derived_edges};
 use crate::analysis_kernel::ProviderManifest;
@@ -67,14 +67,20 @@ pub(crate) fn derive_solver_with_cache_stats(
     // identical) AND the Go RTA policy's resolved call edges converge into one
     // SolverOutput under one SolverBudget. The build is read-only; the engine
     // normalizes the merged output.
+    //
+    // FINDING 3: the production engine does NOT register `PointsToPolicy`. The points-to
+    // edges that enter this output are the step-1 `derive_edges` CopyEdge closure inside
+    // `run_to_solver_output` (over the semantic-graph `CopyEdge` constraints); the
+    // Andersen points-to solve runs in the `type_value_alias` provider and is consumed
+    // here only via its output digest. Registering `PointsToPolicy` here re-ran a full
+    // Andersen solve whose edges were discarded, yet its object/dynamic-var budget
+    // exhaustion polluted the run-level budget_status (a misleading diagnostic + a
+    // spurious solver_output_digest bust, WR-06) — a redundant double-solve with a
+    // harmful side effect. Register only the edge-contributing policies.
     let constraints = db.semantic_constraints().to_vec();
     let go_rta_inputs = GoRtaInputs::from_db(db);
     let engine = SolverEngine::new(
         vec![
-            // Points-to fold (D-03): its CopyEdge closure is the byte-identical
-            // `derive_edges` output inside `run_to_solver_output`; this drives the
-            // sub-domain under the shared budget.
-            Box::new(PointsToPolicy::new(db.points_to_constraints().to_vec())),
             // The real Go RTA policy (GO-05): contributes resolved call edges.
             Box::new(GoRtaPolicy::new(go_rta_inputs)),
             // The TS token policy stays an honest stub until Phase 49 (JS-04).

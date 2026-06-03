@@ -142,9 +142,13 @@ impl SolverEngine {
     ///    edges are the closure in step 1; the Go RTA policy contributes its resolved
     ///    call edges);
     /// 3. the two edge sets are concatenated, the run-level `budget_status` is the
-    ///    worst-case across the closure and the policy run, and the result is
-    ///    `normalized()` (dense IDs only after the stable-key sort, D-02), which is
-    ///    what keeps the merged output byte-stable under input shuffle.
+    ///    worst-case across the closure and the EDGE-CONTRIBUTING policies, and the result
+    ///    is `normalized()` (dense IDs only after the stable-key sort, D-02), which is
+    ///    what keeps the merged output byte-stable under input shuffle. The points-to
+    ///    POLICY fold contributes no edge here (its closure is the step-1 `derive_edges`
+    ///    output), so its own Andersen object/var-budget exhaustion is EXCLUDED from the
+    ///    run-level status — a discarded fold must not pollute the diagnostic or bust the
+    ///    output digest (FINDING 3 / WR-06).
     ///
     /// The engine still owns the single-fixpoint-per-run / bounded-outer-iteration
     /// contract (each policy runs one fixpoint; `run`'s `max_outer_iterations` bounds
@@ -164,9 +168,24 @@ impl SolverEngine {
             derived_edges.extend(record.outcome.derived_edges.iter().cloned());
         }
 
-        // Step 3: worst-case budget combine + normalize (stable-key sort, dense IDs).
+        // Step 3: worst-case budget combine + normalize (stable-key sort, dense IDs). The
+        // run-level status must reflect ONLY sub-domains whose edges actually enter THIS
+        // output: the step-1 CopyEdge closure (`points_to_output`) and the policies whose
+        // derived edges were collected above. The points-to POLICY fold (identified by
+        // `outcome.points_to.is_some()`) emits NO edge here — its points-to closure is the
+        // step-1 `derive_edges` output — so its own Andersen object/var-budget exhaustion
+        // must NOT pollute the run-level status (FINDING 3): a discarded fold reporting
+        // BudgetExceeded would be a misleading diagnostic AND spuriously bust the
+        // solver_output_digest (WR-06 folds budget_status). Exclude it from the combine;
+        // every edge-contributing policy (e.g. Go RTA) still surfaces its exhaustion.
+        let policy_budget_status = run
+            .policy_outcomes
+            .iter()
+            .filter(|record| record.outcome.points_to.is_none())
+            .map(|record| record.outcome.budget_status)
+            .fold(BudgetStatus::NotRun, combine_budget_status);
         let budget_status =
-            combine_budget_status(points_to_output.budget_status, run.budget_status);
+            combine_budget_status(points_to_output.budget_status, policy_budget_status);
         SolverOutput {
             derived_edges,
             budget_status,
@@ -997,6 +1016,158 @@ mod tests {
             "later source's solver_step ({}) must exceed the earlier source's ({})",
             later.provenance.solver_step,
             first.provenance.solver_step
+        );
+    }
+
+    #[test]
+    fn discarded_points_to_fold_does_not_pollute_run_level_budget_status() {
+        // FINDING 3: `run_to_solver_output` emits the points-to edges from the step-1
+        // `derive_edges` CopyEdge closure; the registered `PointsToPolicy`'s OWN Andersen
+        // solve contributes ZERO edges to the output (its result rides `outcome.points_to`,
+        // not `outcome.derived_edges`). So if that discarded Andersen solve exhausts its
+        // object budget while the CopyEdge closure + Go RTA complete, the merged run-level
+        // budget_status must still be WithinBudget — the discarded fold's exhaustion is a
+        // misleading signal (no edge it produced is in the output) and would also spuriously
+        // bust the solver_output_digest (WR-06 folds budget_status).
+        let exhausting_points_to = vec![
+            constraint(
+                "addr-a",
+                PointsToConstraintKind::AddressOf {
+                    dst: PtVarId(1),
+                    object: ObjectTokenId(10),
+                },
+            ),
+            constraint(
+                "addr-b",
+                PointsToConstraintKind::AddressOf {
+                    dst: PtVarId(1),
+                    object: ObjectTokenId(11),
+                },
+            ),
+        ];
+        // A CopyEdge closure that COMPLETES (a -> b -> c), so the points-to edges that
+        // actually enter the output are within budget.
+        let copy_constraints = vec![
+            copy_constraint("copy|a-b", 1, 2),
+            copy_constraint("copy|b-c", 2, 3),
+        ];
+
+        // The PRODUCTION engine shape (PointsToPolicy + GoRtaPolicy + TS stub) under a
+        // tight object budget that the Andersen fold exhausts.
+        let mut budget = SolverBudget::default();
+        budget.points_to.max_objects_per_var = 1;
+        let engine = SolverEngine::new(
+            vec![
+                Box::new(PointsToPolicy::new(exhausting_points_to)),
+                Box::new(GoRtaPolicy::new(GoRtaInputs::default())),
+                Box::new(TsTokensPolicy),
+            ],
+            budget,
+        );
+
+        let output = engine.run_to_solver_output(&copy_constraints);
+
+        // The transitive CopyEdge closure is present (the points-to edges that DO enter
+        // the output completed within budget).
+        assert!(
+            output
+                .derived_edges
+                .iter()
+                .any(|e| e.source == crate::analysis::ids::SemanticNodeId(1)
+                    && e.target == crate::analysis::ids::SemanticNodeId(3)),
+            "the CopyEdge closure a -> c must be present"
+        );
+        // The discarded Andersen fold's exhaustion must NOT surface at run level.
+        assert_eq!(
+            output.budget_status,
+            BudgetStatus::WithinBudget,
+            "a discarded points-to fold's budget exhaustion must not pollute run-level status"
+        );
+    }
+
+    #[test]
+    fn run_to_solver_output_still_surfaces_go_rta_budget_exhaustion() {
+        // FINDING 3 honesty floor: excluding the DISCARDED points-to fold must not mask a
+        // policy whose edges DO enter the output. A Go RTA policy that latches
+        // BudgetExceeded (tight round cap on a multi-round chain) must still surface at run
+        // level even when the points-to fold is within budget.
+        use crate::analysis::ids::SemanticNodeId;
+        use crate::analysis::solver::go_rta::inputs::{GoRtaCallsite, GoRtaMethod};
+
+        let mut function_node = BTreeMap::new();
+        function_node.insert("main.main".to_string(), SemanticNodeId(1));
+        function_node.insert("(pkg.A).Step".to_string(), SemanticNodeId(3));
+        function_node.insert("(pkg.B).Step".to_string(), SemanticNodeId(5));
+        let mut method_sets = BTreeMap::new();
+        method_sets.insert("pkg.A".to_string(), BTreeSet::from(["Step".to_string()]));
+        method_sets.insert("pkg.B".to_string(), BTreeSet::from(["Step".to_string()]));
+        let mut method_set_keys = BTreeMap::new();
+        method_set_keys.insert("pkg.A".to_string(), "ms|A".to_string());
+        method_set_keys.insert("pkg.B".to_string(), "ms|B".to_string());
+        let mut methods_by_receiver = BTreeMap::new();
+        methods_by_receiver.insert(
+            "pkg.A".to_string(),
+            vec![GoRtaMethod {
+                method_name: "Step".to_string(),
+                qualified: "(pkg.A).Step".to_string(),
+                node: SemanticNodeId(3),
+            }],
+        );
+        methods_by_receiver.insert(
+            "pkg.B".to_string(),
+            vec![GoRtaMethod {
+                method_name: "Step".to_string(),
+                qualified: "(pkg.B).Step".to_string(),
+                node: SemanticNodeId(5),
+            }],
+        );
+        let instantiated = BTreeSet::from(["pkg.A".to_string(), "pkg.B".to_string()]);
+        let mut instantiated_keys = BTreeMap::new();
+        instantiated_keys.insert("pkg.A".to_string(), "inst|A".to_string());
+        instantiated_keys.insert("pkg.B".to_string(), "inst|B".to_string());
+        let go_inputs = GoRtaInputs {
+            roots: BTreeSet::from(["main.main".to_string()]),
+            callsites: vec![
+                GoRtaCallsite {
+                    caller: "main.main".to_string(),
+                    callsite_node: SemanticNodeId(2),
+                    callsite_stable_key: "cs|main".to_string(),
+                    interface_method: Some("Step".to_string()),
+                    signature: None,
+                    dispatch_stable_key: "dd|main".to_string(),
+                },
+                GoRtaCallsite {
+                    caller: "(pkg.A).Step".to_string(),
+                    callsite_node: SemanticNodeId(4),
+                    callsite_stable_key: "cs|a".to_string(),
+                    interface_method: Some("Step".to_string()),
+                    signature: None,
+                    dispatch_stable_key: "dd|a".to_string(),
+                },
+            ],
+            method_sets,
+            method_set_keys,
+            instantiated,
+            instantiated_keys,
+            methods_by_receiver,
+            function_node,
+            ..GoRtaInputs::default()
+        };
+
+        let mut budget = SolverBudget::default();
+        budget.go.max_rta_rounds = 1;
+        let engine = SolverEngine::new(
+            vec![
+                Box::new(PointsToPolicy::new(Vec::new())),
+                Box::new(GoRtaPolicy::new(go_inputs)),
+            ],
+            budget,
+        );
+        let output = engine.run_to_solver_output(&[]);
+        assert_eq!(
+            output.budget_status,
+            BudgetStatus::BudgetExceeded,
+            "a Go RTA policy whose edges enter the output must still surface exhaustion"
         );
     }
 
