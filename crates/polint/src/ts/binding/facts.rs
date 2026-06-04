@@ -60,6 +60,13 @@ impl TsDirectBindingReason {
             Self::ThisModelRequired => "this_model_required",
         }
     }
+
+    /// Whether this unresolved direct-binding reason is eligible for the Phase 49
+    /// function-token solver handoff. Property/prototype/receiver modeling stays
+    /// honestly unresolved until its own analysis family exists.
+    pub(crate) fn is_function_token_handoff(self) -> bool {
+        matches!(self, Self::TokenFlowRequired)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -113,6 +120,38 @@ mod tests {
 
         assert_eq!(reasons.len(), 11);
         assert!(reasons.iter().all(|reason| !reason.as_str().is_empty()));
+    }
+
+    #[test]
+    fn only_token_flow_reason_enters_function_token_handoff() {
+        assert!(TsDirectBindingReason::TokenFlowRequired.is_function_token_handoff());
+
+        let non_token_model_reasons = [
+            TsDirectBindingReason::PropertyFlowRequired,
+            TsDirectBindingReason::PrototypeModelRequired,
+            TsDirectBindingReason::ThisModelRequired,
+        ];
+        assert!(
+            non_token_model_reasons
+                .iter()
+                .all(|reason| !reason.is_function_token_handoff())
+        );
+        assert_eq!(
+            TsDirectBindingReason::TokenFlowRequired.as_str(),
+            "token_flow_required"
+        );
+        assert_eq!(
+            TsDirectBindingReason::PropertyFlowRequired.as_str(),
+            "property_flow_required"
+        );
+        assert_eq!(
+            TsDirectBindingReason::PrototypeModelRequired.as_str(),
+            "prototype_model_required"
+        );
+        assert_eq!(
+            TsDirectBindingReason::ThisModelRequired.as_str(),
+            "this_model_required"
+        );
     }
 
     #[test]

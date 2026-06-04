@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
-use crate::analysis::solver::budget::GoRtaSubBudget;
+use crate::analysis::solver::budget::{GoRtaSubBudget, JsTokensSubBudget};
 
 const CONFIG_MAX_BYTES: u64 = 1_048_576;
 
@@ -55,12 +55,15 @@ pub(crate) struct ReachabilityConfig {
 /// `[solver]` config table (D-10). `.polint.toml` config surface for the unified
 /// solver — NOT an SDK promotion. Sits beside [`ReachabilityConfig`].
 ///
-/// Today it threads the per-language Go RTA caps (`solver.go.*`) into
-/// [`GoRtaSubBudget`]; later phases extend it with cross-language knobs.
+/// Today it threads the per-language Go RTA caps (`solver.go.*`) and JS/TS token
+/// caps (`solver.js.*`) into their solver sub-budgets; later phases extend it with
+/// cross-language knobs.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct SolverConfig {
     #[serde(default)]
     pub(crate) go: SolverGoConfig,
+    #[serde(default)]
+    pub(crate) js: SolverJsConfig,
 }
 
 /// `[solver.go]` config sub-table (D-10). Each knob is an `Option<usize>` so an
@@ -76,6 +79,19 @@ pub(crate) struct SolverGoConfig {
     pub(crate) max_rta_rounds: Option<usize>,
     #[serde(default)]
     pub(crate) max_worklist_steps: Option<usize>,
+}
+
+/// `[solver.js]` config sub-table (JS-04). Each knob is an `Option<usize>` so an
+/// absent key falls back to [`JsTokensSubBudget::default()`]. A zero value is
+/// treated as a typo and also falls back to the default.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct SolverJsConfig {
+    #[serde(default)]
+    pub(crate) max_tokens_per_var: Option<usize>,
+    #[serde(default)]
+    pub(crate) max_candidates_per_callsite: Option<usize>,
+    #[serde(default)]
+    pub(crate) max_token_worklist_steps: Option<usize>,
 }
 
 impl SolverConfig {
@@ -103,12 +119,30 @@ impl SolverConfig {
         overlay_positive_cap(&mut budget.max_worklist_steps, self.go.max_worklist_steps);
         budget
     }
+
+    /// Overlay present `[solver.js]` config values onto
+    /// [`JsTokensSubBudget::default()`]. Like Go RTA caps, every JS token cap is a
+    /// strictly-positive ceiling: `0` falls back to the documented default rather
+    /// than disabling the token driver.
+    pub(crate) fn to_js_sub_budget(&self) -> JsTokensSubBudget {
+        let mut budget = JsTokensSubBudget::default();
+        overlay_positive_cap(&mut budget.max_tokens_per_var, self.js.max_tokens_per_var);
+        overlay_positive_cap(
+            &mut budget.max_candidates_per_callsite,
+            self.js.max_candidates_per_callsite,
+        );
+        overlay_positive_cap(
+            &mut budget.max_token_worklist_steps,
+            self.js.max_token_worklist_steps,
+        );
+        budget
+    }
 }
 
 /// Overlay a configured cap onto its default, treating a non-positive (`Some(0)`) value as
-/// "keep the default" (FINDING D). An absent knob (`None`) also keeps the default. Every Go
-/// RTA cap is a strictly-positive ceiling, so `0` is never a meaningful "disable" — it is a
-/// typo that must not silently zero RTA.
+/// "keep the default" (FINDING D). An absent knob (`None`) also keeps the default. Every
+/// solver cap is a strictly-positive ceiling, so `0` is never a meaningful "disable" — it
+/// is a typo that must not silently zero an analysis driver.
 fn overlay_positive_cap(slot: &mut usize, configured: Option<usize>) {
     if let Some(value) = configured
         && value > 0
@@ -625,6 +659,79 @@ max_worklist_steps = 5
             budget.max_rta_rounds,
             GoRtaSubBudget::default().max_rta_rounds,
             "a zeroed sibling falls back to default, not 0"
+        );
+    }
+
+    #[test]
+    fn solver_config_defaults_to_js_sub_budget_defaults() {
+        // Absent [solver] table falls back to JsTokensSubBudget::default() (JS-04).
+        let config: PolintConfig = toml::from_str("").unwrap();
+        assert_eq!(
+            config.solver.to_js_sub_budget(),
+            JsTokensSubBudget::default()
+        );
+    }
+
+    #[test]
+    fn solver_js_override_maps_into_js_sub_budget() {
+        // A [solver.js] override changes ONLY the present knobs; absent knobs keep
+        // their default.
+        let config: PolintConfig = toml::from_str(
+            r#"
+[solver.js]
+max_tokens_per_var = 12
+max_token_worklist_steps = 50000
+"#,
+        )
+        .unwrap();
+        let budget = config.solver.to_js_sub_budget();
+        assert_eq!(budget.max_tokens_per_var, 12);
+        assert_eq!(budget.max_token_worklist_steps, 50_000);
+        assert_eq!(
+            budget.max_candidates_per_callsite,
+            JsTokensSubBudget::default().max_candidates_per_callsite
+        );
+    }
+
+    #[test]
+    fn solver_js_zero_knob_falls_back_to_default_not_self_disable() {
+        // A `[solver.js]` cap of 0 must not be overlaid verbatim: every token cap is
+        // strictly positive, and a zero typo would otherwise force immediate budget
+        // exhaustion or suppress useful propagation.
+        let config: PolintConfig = toml::from_str(
+            r#"
+[solver.js]
+max_tokens_per_var = 0
+max_candidates_per_callsite = 0
+max_token_worklist_steps = 0
+"#,
+        )
+        .unwrap();
+        let budget = config.solver.to_js_sub_budget();
+        assert_eq!(budget, JsTokensSubBudget::default());
+    }
+
+    #[test]
+    fn solver_js_positive_knob_still_overrides_after_zero_clamp() {
+        // The zero-clamp must not block a legitimate positive override: a present
+        // positive value still maps through, while a zeroed sibling falls back.
+        let config: PolintConfig = toml::from_str(
+            r#"
+[solver.js]
+max_tokens_per_var = 0
+max_candidates_per_callsite = 17
+"#,
+        )
+        .unwrap();
+        let budget = config.solver.to_js_sub_budget();
+        assert_eq!(
+            budget.max_tokens_per_var,
+            JsTokensSubBudget::default().max_tokens_per_var,
+            "a zeroed sibling falls back to default, not 0"
+        );
+        assert_eq!(
+            budget.max_candidates_per_callsite, 17,
+            "positive override applies"
         );
     }
 

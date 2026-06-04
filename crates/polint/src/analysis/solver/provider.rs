@@ -27,6 +27,7 @@ use crate::analysis::solver::engine::SolverEngine;
 use crate::analysis::solver::go_rta::GoRtaInputs;
 use crate::analysis::solver::policy::{GoRtaPolicy, TsTokensPolicy};
 use crate::analysis::solver::store::{SOLVER_PROVIDER_ID, SolverOutput};
+use crate::analysis::solver::ts_tokens::TsTokenInputs;
 use crate::analysis::solver::validate::{detect_solver_summary_cycle, validate_derived_edges};
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{CacheStats, Digest, DigestKind, InputSnapshot};
@@ -82,12 +83,13 @@ pub(crate) fn derive_solver_with_cache_stats(
     // harmful side effect. Register only the edge-contributing policies.
     let constraints = db.semantic_constraints().to_vec();
     let go_rta_inputs = GoRtaInputs::from_db(db);
+    let ts_token_inputs = TsTokenInputs::from_db(db);
     let engine = SolverEngine::new(
         vec![
             // The real Go RTA policy (GO-05): contributes resolved call edges.
             Box::new(GoRtaPolicy::new(go_rta_inputs)),
-            // The TS token policy stays an honest stub until Phase 49 (JS-04).
-            Box::new(TsTokensPolicy),
+            // The TS token policy owns a closed JS/TS snapshot (JS-04).
+            Box::new(TsTokensPolicy::new(ts_token_inputs)),
         ],
         budget,
     );
@@ -205,6 +207,21 @@ fn solver_output_digest(
         format!(
             "budget.go.max_worklist_steps={}",
             budget.go.max_worklist_steps
+        ),
+        // JS/TS token sub-budget knobs (Phase 49, JS-04): folded explicitly here in
+        // addition to riding the parameter digest, so a token-knob change unmissably
+        // invalidates once the token policy starts contributing edges.
+        format!(
+            "budget.js.max_tokens_per_var={}",
+            budget.js.max_tokens_per_var
+        ),
+        format!(
+            "budget.js.max_candidates_per_callsite={}",
+            budget.js.max_candidates_per_callsite
+        ),
+        format!(
+            "budget.js.max_token_worklist_steps={}",
+            budget.js.max_token_worklist_steps
         ),
         // Run-level budget status (WR-06): two runs over the same inputs that produce
         // the same SURVIVING edge set but differ in whether the budget was exhausted
@@ -446,6 +463,25 @@ mod tests {
         .output_digest;
 
         assert_ne!(base, changed);
+
+        let mut bumped_js = SolverBudget::default();
+        bumped_js.js.max_tokens_per_var += 1;
+        let mut db_c = db_with_copy_chain();
+        let js_changed = derive_solver_with_cache_stats(
+            &mut db_c,
+            &snapshot,
+            manifest(),
+            bumped_js,
+            absent("polint.semantic_graph"),
+            absent("polint.type_value_alias"),
+            absent("polint.go.semantic"),
+        )
+        .output_digest;
+
+        assert_ne!(
+            base, js_changed,
+            "changing a JS token budget knob must invalidate the solver output digest"
+        );
     }
 
     #[test]

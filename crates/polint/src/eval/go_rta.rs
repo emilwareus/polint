@@ -21,9 +21,8 @@
 //! - **polyglot Go+TS canary** (D-16): Go RTA edges resolve AND there is no
 //!   cross-language interference. The TS half genuinely feeds the shared solver core a
 //!   CopyEdge constraint (an aliased local call); the language-agnostic points-to closure
-//!   propagates it INTRA-TS, but NO derived edge crosses the Go<->TS boundary and the
-//!   TS-specific `TsTokensPolicy` (still a stub) contributes no `call_constraint` edge —
-//!   so the two halves never reach across the language boundary through the shared core.
+//!   propagates it INTRA-TS, but NO derived edge crosses the Go<->TS boundary, so the
+//!   two halves never reach across the language boundary through the shared core.
 //!
 //! The RTA edges are sourced from the kernel-built `AnalysisDb` (`solver_derived_edges`
 //! /`GoRtaInputs`), NOT through the call-graph projection — Phase 52 (GRAPH-05) wires
@@ -44,6 +43,7 @@ use crate::analysis::solver::engine::SolverEngine;
 use crate::analysis::solver::go_rta::GoRtaInputs;
 use crate::analysis::solver::policy::{GoRtaPolicy, TsTokensPolicy};
 use crate::analysis::solver::store::SolverOutput;
+use crate::analysis::solver::ts_tokens::TsTokenInputs;
 use crate::analysis_kernel::KernelOutput;
 use crate::config::load_config;
 use crate::core::AnalysisDb;
@@ -77,24 +77,26 @@ fn solver_budget_for_fixture(fixture_dir: &Path) -> SolverBudget {
     let loaded = load_config(&fixture.repo_dir).expect("config loads");
     SolverBudget {
         go: loaded.config.solver.to_go_sub_budget(),
+        js: loaded.config.solver.to_js_sub_budget(),
         ..SolverBudget::default()
     }
 }
 
 /// Drives the unified solver engine over the fixture-built db exactly as
 /// `derive_solver_with_cache_stats` does (the points-to CopyEdge closure via step-1
-/// `derive_edges` + the Go RTA policy + the TS stub), returning the merged, normalized
-/// [`SolverOutput`] so the gate can read the run-level `budget_status` and the derived
-/// edges. Like production, it does NOT register `PointsToPolicy` (FINDING 3): the
+/// `derive_edges` + the Go RTA policy + the TS token policy), returning the merged,
+/// normalized [`SolverOutput`] so the gate can read the run-level `budget_status` and
+/// the derived edges. Like production, it does NOT register `PointsToPolicy` (FINDING 3): the
 /// points-to edges come from the step-1 CopyEdge closure, and registering the Andersen
 /// fold here would re-run a discarded solve whose budget status would pollute the run.
 fn solver_output_for_db(db: &AnalysisDb, budget: SolverBudget) -> SolverOutput {
     let constraints = db.semantic_constraints().to_vec();
     let go_rta_inputs = GoRtaInputs::from_db(db);
+    let ts_token_inputs = TsTokenInputs::from_db(db);
     let engine = SolverEngine::new(
         vec![
             Box::new(GoRtaPolicy::new(go_rta_inputs)),
-            Box::new(TsTokensPolicy),
+            Box::new(TsTokensPolicy::new(ts_token_inputs)),
         ],
         budget,
     );
@@ -555,9 +557,9 @@ fn address_taken_fixture_resolves_func_value_by_signature() {
 
 #[test]
 fn polyglot_go_ts_canary_resolves_go_edges_without_ts_interference() {
-    // D-16 / GO-05 criterion 3: with the Go RTA driver active and the TS token policy
-    // still a stub, the mixed Go+TS fixture shows Go edges resolved AND TS behavior
-    // unchanged (no cross-language interference through the shared solver core).
+    // D-16 / GO-05 criterion 3: the mixed Go+TS fixture shows Go edges resolved and
+    // any TS solver activity remains intra-TS (no cross-language interference through
+    // the shared solver core).
     let dir = polyglot_fixture_dir("go-ts");
     let output = run_fixture_kernel(&dir);
     let budget = solver_budget_for_fixture(&dir);
@@ -582,10 +584,8 @@ fn polyglot_go_ts_canary_resolves_go_edges_without_ts_interference() {
     // (b) The TS sources are analyzed AND genuinely feed the shared solver core a
     // solver-relevant constraint that COULD propagate. The cross-language NON-INTERFERENCE
     // proof is then non-vacuous (FINDING F2): no derived edge crosses the Go<->TS language
-    // boundary, and the TS-specific token policy (TsTokensPolicy, still a Phase-48 stub)
-    // contributes nothing. (The language-agnostic points-to CopyEdge closure DOES propagate
-    // the TS CopyEdge INTRA-TS — that is the shared core working uniformly, not cross-
-    // language interference; we assert specifically that no Go<->TS edge appears.)
+    // boundary. The language-agnostic CopyEdge closure and the TS token policy may both
+    // produce intra-TS edges; neither may reach into Go.
     let ts_function_ids: std::collections::BTreeSet<crate::core::FunctionId> = output
         .db
         .functions()
@@ -663,19 +663,18 @@ fn polyglot_go_ts_canary_resolves_go_edges_without_ts_interference() {
         }
     }
 
-    // The TS-specific token policy adds nothing: every TS-endpoint derived edge is a
-    // language-agnostic `copy_edge` from the shared points-to closure, NEVER a
-    // `call_constraint` (the TsTokensPolicy stub resolves no dynamic TS dispatch).
+    // TS-endpoint token call edges are allowed now, but they must be fully intra-TS.
     for edge in solver_output
         .derived_edges
         .iter()
         .filter(|edge| ts_nodes.contains(&edge.source) || ts_nodes.contains(&edge.target))
     {
-        assert_eq!(
-            edge.provenance.constraint_kind, "copy_edge",
-            "a TS-endpoint derived edge must come only from the shared points-to CopyEdge \
-             closure, never the TsTokensPolicy stub (which is empty in Phase 48): {edge:#?}"
-        );
+        if edge.provenance.constraint_kind == "call_constraint" {
+            assert!(
+                ts_nodes.contains(&edge.source) && ts_nodes.contains(&edge.target),
+                "a TS token call edge must remain intra-TS: {edge:#?}"
+            );
+        }
     }
 
     assert_solver_output_byte_stable(&output.db, budget);

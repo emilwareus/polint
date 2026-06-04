@@ -25,7 +25,7 @@ Phase numbering continues from v1.2's last phase 41. Phases 45/46 may run in par
 - [ ] **Phase 46: Go Semantic Frontend & Sidecar** - `polint-go-frontend` Go binary (`go/packages` + `go/ssa`), NDJSON protocol, sidecar client, lowering to semantic graph; typed process boundary, version pinning, failure taxonomy. May run in parallel with Phase 45.
 - [ ] **Phase 47: Unified Solver Core & Derived-Edge Provenance** - Private `analysis::solver` (deterministic `VecDeque` worklist, `SolverBudget`, `BudgetStatus`, per-language `SolverPolicy` scaffolding); folds in `points_to` as a sub-domain; `DerivedEdgeProvenance` contract.
 - [x] **Phase 48: Go RTA Driver** - Private `analysis::solver::go_rta` (reachable functions from roots, address-taken tracking, dynamic dispatch by signature, interface invoke by method-set, fixed-point iteration). May run in parallel with Phase 49.
-- [ ] **Phase 49: JS/TS Function-Token Propagation Driver** - Private `analysis::solver::ts_tokens` with per-variable token caps, `"too-many-tokens"` sentinel, `BudgetExceeded` reporting. May run in parallel with Phase 48.
+- [x] **Phase 49: JS/TS Function-Token Propagation Driver** - Private `analysis::solver::ts_tokens` with per-variable token caps, `"too-many-tokens"` sentinel, `BudgetExceeded` reporting. May run in parallel with Phase 48.
 - [ ] **Phase 50: JS/TS Object/Property/Prototype/`this` Model & Driver** - Private `src/ts/object_model/` + `analysis::solver::ts_object_model` (allocation-site abstraction, bounded property buckets with computed-property handling, prototype-walk termination, `this` binding rules).
 - [ ] **Phase 51: Adaptation Model Layer** - Private `analysis::adaptation` (TOML schema, loader, validator confirming target symbols exist, `ModelEdge` emission); `benchmark adapted` mode with prompt hash, accepted/rejected facts, deltas, held-out subset reporting, sandboxed agent.
 - [ ] **Phase 52: Refined-Calls Rework & Unknown Taxonomy Consolidation** - `refined_calls::provider` projects over solver output preserving v1.2 `RefinedCallEdgeFact` contract; consolidated taxonomy via `polint inspect unknowns --format json`.
@@ -146,7 +146,10 @@ May run in parallel with Phase 49 (drivers share the solver but their iteration 
   2. When the cap is exceeded, the solver collapses to a `"too-many-tokens"` sentinel and emits `BudgetExceeded` consumed by the unknown taxonomy rather than silently dropping precision.
   3. Memory-ceiling fixture proves RSS stays bounded on token-explosion inputs (uses `BitSet`/`roaring::RoaringBitmap` indexed by stable function ID).
   4. Per-language `solver_config.js.*` knobs (e.g., function-expression inclusion) exist; aggregate metrics on Jelly fixtures show recall improvement without precision regression beyond the Phase 54 floor.
-**Plans**: TBD
+**Plans**:
+- [x] 49-01-PLAN.md — JS token budget/config/cache substrate and `TokenFlowRequired` handoff classifier.
+- [x] 49-02-PLAN.md — private `analysis::solver::ts_tokens` closed inputs, deterministic token fixpoint, `"too-many-tokens"` sentinel, token-derived `DerivedEdgeFact` dispatch, and real `TsTokensPolicy`.
+- [x] 49-03-PLAN.md — native TS token fixtures, token-explosion budget proof, polyglot/determinism/Jelly evidence, leak gate, and full-suite sweep.
 
 May run in parallel with Phase 48 (drivers share the solver core but their iteration logic is independent).
 
@@ -217,7 +220,7 @@ May run in parallel with Phase 48 (drivers share the solver core but their itera
 | 46 | Go Semantic Frontend & Sidecar | 4/4 | Complete    | 2026-06-01 |
 | 47 | Unified Solver Core & Derived-Edge Provenance | 3/3 | Complete    | 2026-06-02 |
 | 48 | Go RTA Driver | 3/3 | Complete    | 2026-06-02 |
-| 49 | JS/TS Function-Token Propagation Driver | 0/0 | Not started | - |
+| 49 | JS/TS Function-Token Propagation Driver | 3/3 | Complete | 2026-06-03 |
 | 50 | JS/TS Object/Property/Prototype/`this` Model & Driver | 0/0 | Not started | - |
 | 51 | Adaptation Model Layer | 0/0 | Not started | - |
 | 52 | Refined-Calls Rework & Unknown Taxonomy Consolidation | 0/0 | Not started | - |

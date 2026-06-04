@@ -2,18 +2,15 @@
 //!
 //! A [`SolverPolicy`] is the abstraction the unified [`super::engine`] core drives:
 //! a policy contributes propagation/derivation over a **closed constraint
-//! snapshot** (D-11) and reports its budget outcome. Phase 47 ships EXACTLY ONE
-//! real implementation — [`PointsToPolicy`], which folds v1.2's
+//! snapshot** (D-11) and reports its budget outcome. Phase 47 introduced
+//! [`PointsToPolicy`], which folds v1.2's
 //! `points_to::solver` fixpoint in **by composition** (D-03): it invokes the
 //! existing `solve_points_to` engine in place, so the points-to snapshot and
 //! determinism fixtures stay byte-identical. It does NOT rewrite the points-to
 //! fixpoint.
 //!
-//! The Go ([`GoRtaPolicy`]) and TS ([`TsTokensPolicy`]) policies are HONEST STUBS
-//! reserved for Phases 48/49: they derive NOTHING (honest emptiness, D-07),
-//! mirroring the `ConstraintKind::ModelEdge` reserved-but-stubbed precedent. They
-//! are not fake drivers — they intentionally produce zero output until their
-//! reserving phase lands.
+//! The Go ([`GoRtaPolicy`]) and TS ([`TsTokensPolicy`]) policies are the private
+//! language-specific edge-producing policies driven by the unified engine.
 //!
 //! See [`super`] for the D-04 naming-collision guard (unified core vs. the
 //! points-to sub-domain's internal `PointsToConstraintKind`/`PtVarId` language).
@@ -24,14 +21,15 @@ use crate::analysis::points_to::solver::{PointsToSolveResult, solve_points_to};
 use super::budget::{BudgetStatus, SolverBudget};
 use super::facts::DerivedEdgeFact;
 use super::go_rta::{GoRtaInputs, solve_go_rta};
+use super::ts_tokens::{TsTokenInputs, solve_ts_tokens};
 
 /// Outcome produced by a [`SolverPolicy`] when driven by the engine.
 ///
 /// `points_to` carries the folded points-to sub-domain result (D-03) when the
 /// policy is the points-to domain; `derived_edges` carries a policy's derived edges
-/// (D-03, Phase 48) — the Go RTA policy produces `CallConstraint`-derived call edges
-/// here. Honest stubs leave both empty and report [`BudgetStatus::WithinBudget`] over
-/// zero derivation.
+/// (D-03, Phases 48/49) — the Go RTA and TS token policies produce
+/// `CallConstraint`-derived call edges here. Empty input snapshots leave both empty
+/// and report [`BudgetStatus::WithinBudget`] over zero derivation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PolicyOutcome {
     /// Folded points-to sub-domain result, if this policy is the points-to domain.
@@ -49,9 +47,8 @@ pub(crate) struct PolicyOutcome {
 }
 
 impl PolicyOutcome {
-    /// An honest-empty outcome: zero derivation, within budget, zero steps. Used
-    /// by the reserved TS stub (D-07). Stays semantically empty: no points-to result,
-    /// no derived edges.
+    /// An honest-empty outcome: zero derivation, within budget, zero steps. Stays
+    /// semantically empty: no points-to result, no derived edges.
     pub(crate) fn empty() -> Self {
         Self {
             points_to: None,
@@ -65,14 +62,12 @@ impl PolicyOutcome {
 /// The abstraction the unified solver core drives (D-07).
 ///
 /// An implementation contributes derivation over a closed snapshot and reports a
-/// budget outcome. Phase 47 ships one real impl ([`PointsToPolicy`], the D-03
-/// points-to fold) and two honest stubs ([`GoRtaPolicy`], [`TsTokensPolicy`]).
+/// budget outcome. The points-to policy folds the existing sub-domain; Go RTA and
+/// TS tokens are language-specific edge-producing policies.
 ///
-/// Reserved seam: production edge derivation runs through the free
-/// [`super::engine::derive_edges`] function today; this trait + [`super::engine::SolverEngine`]
-/// are the reserved multi-policy orchestration Phases 48/49 extend (see the engine
-/// module docs). The impls here are exercised by tests until their producing phase
-/// routes production through the engine — deliberate scaffolding, not dead code.
+/// Production routes edge derivation through [`super::engine::SolverEngine`], which
+/// merges the free [`super::engine::derive_edges`] CopyEdge closure with policy
+/// outputs.
 pub(crate) trait SolverPolicy {
     /// Stable lowercase policy identifier (used in stable keys / diagnostics).
     fn id(&self) -> &'static str;
@@ -150,20 +145,31 @@ impl SolverPolicy for GoRtaPolicy {
     }
 }
 
-/// Reserved JS/TS token-propagation policy. No driver exists until **Phase 49
-/// (JS-04)**; [`SolverPolicy::solve`] derives ZERO results (honest emptiness,
-/// D-07), mirroring the `ConstraintKind::ModelEdge` reserved-but-stubbed
-/// precedent. This is NOT a fake driver — the emptiness is intentional until
-/// Phase 49 lands token propagation through copy/call/return constraints.
-pub(crate) struct TsTokensPolicy;
+/// JS/TS function-token policy (Phase 49, JS-04). It owns a closed token snapshot
+/// and emits conservative token-derived call edges.
+pub(crate) struct TsTokensPolicy {
+    inputs: TsTokenInputs,
+}
+
+impl TsTokensPolicy {
+    pub(crate) fn new(inputs: TsTokenInputs) -> Self {
+        Self { inputs }
+    }
+}
 
 impl SolverPolicy for TsTokensPolicy {
     fn id(&self) -> &'static str {
         "ts_tokens"
     }
 
-    fn solve(&self, _budget: &SolverBudget) -> PolicyOutcome {
-        PolicyOutcome::empty()
+    fn solve(&self, budget: &SolverBudget) -> PolicyOutcome {
+        let output = solve_ts_tokens(&self.inputs, budget);
+        PolicyOutcome {
+            points_to: None,
+            derived_edges: output.derived_edges,
+            budget_status: output.budget_status,
+            steps: output.steps,
+        }
     }
 }
 
@@ -174,24 +180,59 @@ mod tests {
 
     use crate::analysis::ids::SemanticNodeId;
     use crate::analysis::solver::go_rta::inputs::{GoRtaCallsite, GoRtaMethod};
+    use crate::analysis::solver::ts_tokens::inputs::{
+        TsFunctionToken, TsTokenCallsite, TsTokenCopyEdge,
+    };
 
     #[test]
-    fn ts_stub_derives_nothing() {
-        // The TS token policy stays an honest stub until Phase 49 (JS-04): it derives
-        // nothing and returns the semantically-empty outcome.
+    fn ts_policy_id_is_stable() {
         let budget = SolverBudget::default();
-        let ts = TsTokensPolicy;
+        let ts = TsTokensPolicy::new(TsTokenInputs::default());
         let ts_outcome = ts.solve(&budget);
         assert_eq!(ts.id(), "ts_tokens");
-        assert_eq!(ts_outcome, PolicyOutcome::empty());
         assert!(ts_outcome.points_to.is_none());
         assert!(ts_outcome.derived_edges.is_empty());
+        assert_eq!(ts_outcome.budget_status, BudgetStatus::WithinBudget);
+    }
+
+    #[test]
+    fn ts_policy_derives_edges_from_resolvable_token_flow() {
+        let inputs = TsTokenInputs {
+            function_tokens: BTreeMap::from([(
+                SemanticNodeId(1),
+                TsFunctionToken {
+                    function_node: SemanticNodeId(1),
+                    function_stable_key: "function:target".to_string(),
+                    source_stable_key: "semantic:function:target".to_string(),
+                },
+            )]),
+            copy_edges: vec![TsTokenCopyEdge {
+                dst: SemanticNodeId(9),
+                src: SemanticNodeId(1),
+                stable_key: "copy:target-to-callsite".to_string(),
+            }],
+            callsites: vec![TsTokenCallsite {
+                caller_node: SemanticNodeId(100),
+                callsite_node: SemanticNodeId(9),
+                callsite_stable_key: "callsite:alias".to_string(),
+                constraint_stable_key: "constraint:call".to_string(),
+            }],
+            ..TsTokenInputs::default()
+        };
+        let ts = TsTokensPolicy::new(inputs);
+
+        let outcome = ts.solve(&SolverBudget::default());
+
+        assert_eq!(outcome.derived_edges.len(), 1);
+        assert_eq!(outcome.derived_edges[0].source, SemanticNodeId(100));
+        assert_eq!(outcome.derived_edges[0].target, SemanticNodeId(1));
+        assert_eq!(outcome.budget_status, BudgetStatus::WithinBudget);
+        assert!(outcome.steps > 0);
     }
 
     #[test]
     fn empty_outcome_stays_semantically_empty() {
-        // empty() must carry no points-to result AND no derived edges, so the TS stub
-        // (and any future reserved stub) returning it derives nothing.
+        // empty() must carry no points-to result AND no derived edges.
         let outcome = PolicyOutcome::empty();
         assert!(outcome.points_to.is_none());
         assert!(outcome.derived_edges.is_empty());

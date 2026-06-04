@@ -277,6 +277,11 @@ fn ts_reachable_fixture_is_byte_identical_under_ten_seeded_permutations() {
 }
 
 #[test]
+fn ts_tokens_fixture_is_byte_identical_under_ten_seeded_permutations() {
+    assert_n10_byte_identical(&fixture_dir("ts_tokens"));
+}
+
+#[test]
 fn go_reachable_fixture_exercises_reachable_graph_marking() {
     assert_reachability_marking_exercised(&fixture_dir("go_reachable"), "go_reachable");
 }
@@ -314,18 +319,17 @@ fn go_rta_solver_output_is_byte_identical_under_permuted_fact_insertion_order() 
     use crate::analysis::solver::engine::SolverEngine;
     use crate::analysis::solver::go_rta::GoRtaInputs;
     use crate::analysis::solver::policy::{GoRtaPolicy, TsTokensPolicy};
+    use crate::analysis::solver::ts_tokens::TsTokenInputs;
     use crate::config::load_config;
     use crate::go::semantic::store::GoSemanticFactsOutput;
 
     let fixture = load_native_fixture(&fixture_dir("go_rta")).expect("fixture loads");
     let temp = copy_fixture_repo_for_test(&fixture).expect("copy fixture repo");
     let mut output = run_kernel_for_repo_for_test(temp.path()).expect("kernel runs");
+    let loaded = load_config(&fixture.repo_dir).expect("config loads");
     let budget = SolverBudget {
-        go: load_config(&fixture.repo_dir)
-            .expect("config loads")
-            .config
-            .solver
-            .to_go_sub_budget(),
+        go: loaded.config.solver.to_go_sub_budget(),
+        js: loaded.config.solver.to_js_sub_budget(),
         ..SolverBudget::default()
     };
 
@@ -355,7 +359,7 @@ fn go_rta_solver_output_is_byte_identical_under_permuted_fact_insertion_order() 
         let engine = SolverEngine::new(
             vec![
                 Box::new(GoRtaPolicy::new(GoRtaInputs::from_db(db))),
-                Box::new(TsTokensPolicy),
+                Box::new(TsTokensPolicy::new(TsTokenInputs::from_db(db))),
             ],
             budget,
         );
@@ -391,6 +395,49 @@ fn go_rta_solver_output_is_byte_identical_under_permuted_fact_insertion_order() 
             permuted_json, canonical,
             "run {run_index} (seed {seed:#018x}): the Go RTA solver output diverged under a \
              permuted Go-frontend fact INSERTION order — RTA derivation is order-sensitive"
+        );
+    }
+}
+
+#[test]
+fn ts_tokens_solver_output_is_byte_identical_under_permuted_inputs() {
+    use crate::analysis::solver::ts_tokens::TsTokenInputs;
+    use crate::analysis::solver::ts_tokens::fixpoint::solve_ts_tokens;
+    use crate::config::load_config;
+
+    let fixture = load_native_fixture(&fixture_dir("ts_tokens")).expect("fixture loads");
+    let temp = copy_fixture_repo_for_test(&fixture).expect("copy fixture repo");
+    let output = run_kernel_for_repo_for_test(temp.path()).expect("kernel runs");
+    let loaded = load_config(&fixture.repo_dir).expect("config loads");
+    let budget = crate::analysis::solver::budget::SolverBudget {
+        js: loaded.config.solver.to_js_sub_budget(),
+        ..Default::default()
+    };
+
+    let base = TsTokenInputs::from_db(&output.db);
+    let solver_json = |inputs: &TsTokenInputs| -> String {
+        let result = solve_ts_tokens(inputs, &budget);
+        serde_json::to_string(&(&result.derived_edges, result.budget_status))
+            .expect("serialize TS token solver output")
+    };
+    let canonical = solver_json(&base);
+    assert!(
+        canonical.contains("call_constraint"),
+        "the canonical TS token run must derive at least one call edge (non-vacuous): {canonical}"
+    );
+
+    for (run_index, &seed) in permutation_seeds().iter().enumerate() {
+        let mut permuted = base.clone();
+        seeded_shuffle(&mut permuted.copy_edges, seed);
+        seeded_shuffle(&mut permuted.callsites, seed ^ 0x1111_1111);
+        seeded_shuffle(&mut permuted.handoffs, seed ^ 0x2222_2222);
+        permuted = permuted.normalized();
+
+        let permuted_json = solver_json(&permuted);
+        assert_eq!(
+            permuted_json, canonical,
+            "run {run_index} (seed {seed:#018x}): TS token solver output diverged under \
+             permuted closed-input row order"
         );
     }
 }

@@ -88,6 +88,31 @@ impl Default for GoRtaSubBudget {
     }
 }
 
+/// Per-sub-domain budget knobs for the JS/TS function-token driver (JS-04).
+///
+/// These caps bound the private `analysis::solver::ts_tokens` fixpoint planned for
+/// Phase 49. They are intentionally crate-private: rule authors consume the final
+/// derived facts through SDK views, not these internal propagation controls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct JsTokensSubBudget {
+    pub(crate) max_tokens_per_var: usize,
+    pub(crate) max_candidates_per_callsite: usize,
+    pub(crate) max_token_worklist_steps: usize,
+}
+
+impl Default for JsTokensSubBudget {
+    fn default() -> Self {
+        // Finite, strictly-positive defaults: large enough for ordinary first-party
+        // higher-order flows, bounded enough that pathological token fan-out reports
+        // BudgetExceeded instead of running unbounded.
+        Self {
+            max_tokens_per_var: 128,
+            max_candidates_per_callsite: 256,
+            max_token_worklist_steps: 10_000,
+        }
+    }
+}
+
 /// Unified solver budget generalizing `PointsToBudget` (D-05).
 ///
 /// Cross-domain knobs: `max_steps` (per-step worklist cap, mirrors the points-to
@@ -100,6 +125,7 @@ pub(crate) struct SolverBudget {
     pub(crate) max_outer_iterations: usize,
     pub(crate) points_to: PointsToSubBudget,
     pub(crate) go: GoRtaSubBudget,
+    pub(crate) js: JsTokensSubBudget,
 }
 
 impl Default for SolverBudget {
@@ -117,6 +143,9 @@ impl Default for SolverBudget {
             // existing fields' values — `solver_budget_default_matches_points_to_defaults`
             // pins 10_000 / 64 / points-to defaults byte-identically.
             go: GoRtaSubBudget::default(),
+            // JS token sub-budget (Phase 49/JS-04). Adding this field MUST NOT perturb
+            // any existing cross-domain, points-to, or Go default.
+            js: JsTokensSubBudget::default(),
         }
     }
 }
@@ -209,6 +238,21 @@ mod tests {
         assert_eq!(budget.max_steps, 10_000);
         assert_eq!(budget.max_outer_iterations, 64);
         assert_eq!(budget.points_to, PointsToSubBudget::default());
+    }
+
+    #[test]
+    fn solver_budget_default_js_sub_budget_matches_js_defaults() {
+        // The `js` sub-budget defaults are strictly-positive bounded caps for the
+        // private TS token driver. Adding the field must not perturb existing defaults.
+        let budget = SolverBudget::default();
+        assert_eq!(budget.js, JsTokensSubBudget::default());
+        assert_eq!(budget.js.max_tokens_per_var, 128);
+        assert_eq!(budget.js.max_candidates_per_callsite, 256);
+        assert_eq!(budget.js.max_token_worklist_steps, 10_000);
+        assert_eq!(budget.max_steps, 10_000);
+        assert_eq!(budget.max_outer_iterations, 64);
+        assert_eq!(budget.points_to, PointsToSubBudget::default());
+        assert_eq!(budget.go, GoRtaSubBudget::default());
     }
 
     #[test]
