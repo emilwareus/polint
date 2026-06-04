@@ -162,7 +162,12 @@ May run in parallel with Phase 48 (drivers share the solver core but their itera
   2. Per-family budgets cap property buckets and receiver-set fanout; budget exhaustion appears as facts in the unknown taxonomy, not as silent precision drops.
   3. Native fixtures cover prototype-walk termination, arrow-vs-method `this`, and computed-property collapse; determinism gate continues to pass with the object model enabled.
   4. The model ships behind a capability flag and Jelly benchmark deltas are recorded against both `oracle-jelly` and `whole-repo` scoring modes.
-**Plans**: TBD
+**Plans**:
+- [ ] 50-01-PLAN.md — private TS object-model facts, deterministic storage, and semantic graph lowering for object/property/receiver/class facts.
+- [ ] 50-02-PLAN.md — object-model opt-in flag, per-family object budgets, config mapping, and solver digest participation.
+- [ ] 50-03-PLAN.md — private `analysis::solver::ts_object_model` property-bucket fixpoint and property-backed derived edge dispatch.
+- [ ] 50-04-PLAN.md — bounded prototype/class/accessor lookup plus `this`/receiver binding for methods, arrows, constructors, bound, `call`, and `apply`.
+- [ ] 50-05-PLAN.md — native object-model fixtures, budget/determinism/polyglot/Jelly evidence, leak gate, full regression, and roadmap closeout.
 
 ### Phase 51: Adaptation Model Layer
 **Goal**: polint accepts repo-local validated framework/native model facts as solver constraints, with sandboxed agent runs, accept/reject reporting, and held-out validation that prevents oracle-label leakage and recall flooding.
