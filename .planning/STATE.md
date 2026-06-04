@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Graph Engine Precision
 status: executing
-last_updated: "2026-06-04T14:58:24.260Z"
-last_activity: 2026-06-04 -- Phase 51 Plan 03 complete
+last_updated: "2026-06-04T15:07:25.899Z"
+last_activity: 2026-06-04 -- Phase 51 complete
 progress:
   total_phases: 13
-  completed_phases: 9
+  completed_phases: 10
   total_plans: 38
-  completed_plans: 37
-  percent: 69
+  completed_plans: 38
+  percent: 77
 ---
 
 # State: polint
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 51 — Adaptation Model Layer (next)
+**Current focus:** Phase 52 — Refined-Calls Rework & Unknown Taxonomy Consolidation (next)
 
 ## Current Status
 
@@ -40,10 +40,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 ## Current Position
 
-Phase: 51 (Adaptation Model Layer)
-Plan: 3 of 4
-Status: Plan 03 complete; ready to execute Plan 04
-Last activity: 2026-06-04 -- Phase 51 Plan 03 complete
+Phase: 52 (Refined-Calls Rework & Unknown Taxonomy Consolidation)
+Plan: 0 of 0
+Status: Phase 51 complete; ready to discuss/plan Phase 52
+Last activity: 2026-06-04 -- Phase 51 complete
 
 ### Open repo-admin action (T-42-04-10)
 
@@ -169,6 +169,8 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 | 42 | Complete | 5/5 plans complete; identity substrate + dedup, Go RelString/Jelly span renderers + CRLF fixture + jelly_oracle_coverage, closed IdentityCategory taxonomy + categorized_failures counter map, public-surface-leak CI gate, and Plan 05 gap closure (Go package-NAME qualification via PackageFact + go_relstring_v2 cache bump + dedup literal total order) done; requirements IDENT-01/02/03 |
 | 48 | Complete | 3/3 plans complete; Plan 01 Go-frontend RTA-signal emission + Plan 02 go_rta RTA driver (analysis::solver::go_rta fixpoint via SolverEngine::run_to_solver_output, points-to byte-identical; GoRtaSubBudget + [solver].go config + go_rta_fixpoint_v1 cache key; BudgetExceeded latching) + Plan 03 verification (iteration-cap BudgetExceeded + interface-dispatch instantiated-type filter + address-taken func-value + polyglot Go+TS canary + go_rta determinism fixtures, all green; determinism + leak + provider-order snapshots unchanged). Plan 03 surfaced + auto-fixed 3 Rule-1 Go-frontend bugs (set-fact dedup, bare method-set names, method node-mapping by span-containment) without which RTA resolved zero real interface edges. Requirement GO-05 COMPLETE |
 | 49 | Complete | 3/3 plans complete; Plan 01 JS token budgets/config/cache handoff complete; Plan 02 private ts_tokens closed inputs + deterministic token fixpoint + too-many-tokens sentinel + token DerivedEdgeFact dispatch + real TsTokensPolicy complete; Plan 03 native TS token fixtures + token-explosion BudgetExceeded proof + polyglot/determinism/Jelly evidence + full suite/leak/clippy green. Requirement JS-04 COMPLETE. Caveat: current frontend producers cover direct aliases; parameter/return/closure coverage is solver-level over CopyEdge inputs and awaits frontend producer expansion. |
+| 50 | Complete | 5/5 plans complete; private TS object-model facts/storage/graph lowering, opt-in flag, object budgets, property-bucket fixpoint, prototype/class/accessor lookup, receiver binding, native fixtures, determinism/polyglot evidence, public leak gate, full regression, and final verification done. Requirement JS-05 COMPLETE. Caveat: external Jelly corpus floors remain Phase 54-owned. |
+| 51 | Complete | 4/4 plans complete; private adaptation model schema/loader/store/validator, accepted-only ModelEdge lowering, solver provenance/cache participation, adapted reporting with sandbox/model/held-out evidence, public leak gate, full regression, and final verification done. Requirements ADAPT-01/ADAPT-02 COMPLETE. Caveats: corpus floors remain Phase 54-owned; final refined-call projection and unknown taxonomy remain Phase 52-owned. |
 
 ## Accumulated Context
 
