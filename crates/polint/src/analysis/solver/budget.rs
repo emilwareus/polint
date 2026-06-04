@@ -113,6 +113,41 @@ impl Default for JsTokensSubBudget {
     }
 }
 
+/// Per-sub-domain budget knobs for the JS/TS object/property/prototype/`this`
+/// driver (JS-05).
+///
+/// This is intentionally separate from [`JsTokensSubBudget`]: object modeling has
+/// property buckets, prototype traversal, receiver fan-out, and its own worklist
+/// ceiling. The model remains disabled by default through
+/// [`SolverBudget::object_model_enabled`] until benchmark promotion gates approve it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct JsObjectModelSubBudget {
+    pub(crate) max_objects_per_place: usize,
+    pub(crate) max_properties_per_object: usize,
+    pub(crate) max_tokens_per_property: usize,
+    pub(crate) max_computed_buckets_per_object: usize,
+    pub(crate) max_prototype_depth: usize,
+    pub(crate) max_receiver_candidates_per_callsite: usize,
+    pub(crate) max_object_worklist_steps: usize,
+}
+
+impl Default for JsObjectModelSubBudget {
+    fn default() -> Self {
+        // Finite, strictly-positive defaults. They are sized to admit ordinary local
+        // object/property flows while bounding fan-out until Phase 54 benchmark gates
+        // decide whether this model should be on by default.
+        Self {
+            max_objects_per_place: 128,
+            max_properties_per_object: 128,
+            max_tokens_per_property: 128,
+            max_computed_buckets_per_object: 8,
+            max_prototype_depth: 8,
+            max_receiver_candidates_per_callsite: 64,
+            max_object_worklist_steps: 10_000,
+        }
+    }
+}
+
 /// Unified solver budget generalizing `PointsToBudget` (D-05).
 ///
 /// Cross-domain knobs: `max_steps` (per-step worklist cap, mirrors the points-to
@@ -126,6 +161,8 @@ pub(crate) struct SolverBudget {
     pub(crate) points_to: PointsToSubBudget,
     pub(crate) go: GoRtaSubBudget,
     pub(crate) js: JsTokensSubBudget,
+    pub(crate) object_model_enabled: bool,
+    pub(crate) object: JsObjectModelSubBudget,
 }
 
 impl Default for SolverBudget {
@@ -146,6 +183,10 @@ impl Default for SolverBudget {
             // JS token sub-budget (Phase 49/JS-04). Adding this field MUST NOT perturb
             // any existing cross-domain, points-to, or Go default.
             js: JsTokensSubBudget::default(),
+            // JS object/property/prototype/receiver model (Phase 50/JS-05). It is
+            // explicitly opt-in until benchmark gates approve default enablement.
+            object_model_enabled: false,
+            object: JsObjectModelSubBudget::default(),
         }
     }
 }
@@ -253,6 +294,30 @@ mod tests {
         assert_eq!(budget.max_outer_iterations, 64);
         assert_eq!(budget.points_to, PointsToSubBudget::default());
         assert_eq!(budget.go, GoRtaSubBudget::default());
+    }
+
+    #[test]
+    fn solver_budget_default_object_model_is_disabled() {
+        let budget = SolverBudget::default();
+        assert!(!budget.object_model_enabled);
+        assert_eq!(budget.object, JsObjectModelSubBudget::default());
+        assert_eq!(budget.max_steps, 10_000);
+        assert_eq!(budget.max_outer_iterations, 64);
+        assert_eq!(budget.points_to, PointsToSubBudget::default());
+        assert_eq!(budget.go, GoRtaSubBudget::default());
+        assert_eq!(budget.js, JsTokensSubBudget::default());
+    }
+
+    #[test]
+    fn solver_budget_default_object_sub_budget_matches_object_defaults() {
+        let budget = SolverBudget::default();
+        assert_eq!(budget.object.max_objects_per_place, 128);
+        assert_eq!(budget.object.max_properties_per_object, 128);
+        assert_eq!(budget.object.max_tokens_per_property, 128);
+        assert_eq!(budget.object.max_computed_buckets_per_object, 8);
+        assert_eq!(budget.object.max_prototype_depth, 8);
+        assert_eq!(budget.object.max_receiver_candidates_per_callsite, 64);
+        assert_eq!(budget.object.max_object_worklist_steps, 10_000);
     }
 
     #[test]

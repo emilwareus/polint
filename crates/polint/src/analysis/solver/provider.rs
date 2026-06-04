@@ -25,7 +25,7 @@ use crate::analysis::solver::budget::{BudgetStatus, SolverBudget};
 use crate::analysis::solver::cache_key::solver_provider_parameter_digest;
 use crate::analysis::solver::engine::SolverEngine;
 use crate::analysis::solver::go_rta::GoRtaInputs;
-use crate::analysis::solver::policy::{GoRtaPolicy, TsTokensPolicy};
+use crate::analysis::solver::policy::{GoRtaPolicy, SolverPolicy, TsTokensPolicy};
 use crate::analysis::solver::store::{SOLVER_PROVIDER_ID, SolverOutput};
 use crate::analysis::solver::ts_tokens::TsTokenInputs;
 use crate::analysis::solver::validate::{detect_solver_summary_cycle, validate_derived_edges};
@@ -82,17 +82,7 @@ pub(crate) fn derive_solver_with_cache_stats(
     // spurious solver_output_digest bust, WR-06) — a redundant double-solve with a
     // harmful side effect. Register only the edge-contributing policies.
     let constraints = db.semantic_constraints().to_vec();
-    let go_rta_inputs = GoRtaInputs::from_db(db);
-    let ts_token_inputs = TsTokenInputs::from_db(db);
-    let engine = SolverEngine::new(
-        vec![
-            // The real Go RTA policy (GO-05): contributes resolved call edges.
-            Box::new(GoRtaPolicy::new(go_rta_inputs)),
-            // The TS token policy owns a closed JS/TS snapshot (JS-04).
-            Box::new(TsTokensPolicy::new(ts_token_inputs)),
-        ],
-        budget,
-    );
+    let engine = SolverEngine::new(solver_policies_for_db(db, &budget), budget);
     let output = engine.run_to_solver_output(&constraints);
 
     // Phase 3: digest over the stored stable KEYS + upstream digests + the budget.
@@ -141,6 +131,32 @@ pub(crate) fn derive_solver_with_cache_stats(
             }
         }
     }
+}
+
+fn solver_policies_for_db(db: &AnalysisDb, budget: &SolverBudget) -> Vec<Box<dyn SolverPolicy>> {
+    let mut policies: Vec<Box<dyn SolverPolicy>> = vec![
+        // The real Go RTA policy (GO-05): contributes resolved call edges.
+        Box::new(GoRtaPolicy::new(GoRtaInputs::from_db(db))),
+        // The TS token policy owns a closed JS/TS snapshot (JS-04).
+        Box::new(TsTokensPolicy::new(TsTokenInputs::from_db(db))),
+    ];
+    register_ts_object_model_policy_if_enabled(&mut policies, db, budget);
+    policies
+}
+
+fn register_ts_object_model_policy_if_enabled(
+    _policies: &mut Vec<Box<dyn SolverPolicy>>,
+    _db: &AnalysisDb,
+    budget: &SolverBudget,
+) -> bool {
+    if !budget.object_model_enabled {
+        return false;
+    }
+
+    // Phase 50-03 adds `TsObjectModelPolicy` here. Keeping this seam behind the
+    // opt-in flag now prevents accidental default execution while making the future
+    // registration point explicit.
+    true
 }
 
 /// Output digest over stable KEYS + upstream digests + budget (D-15), never dense
@@ -222,6 +238,41 @@ fn solver_output_digest(
         format!(
             "budget.js.max_token_worklist_steps={}",
             budget.js.max_token_worklist_steps
+        ),
+        // JS/TS object-model flag and sub-budget knobs (Phase 50, JS-05): folded
+        // explicitly here in addition to riding the parameter digest, so flag/cap
+        // changes cannot reuse solver output.
+        format!(
+            "budget.object_model_enabled={}",
+            budget.object_model_enabled
+        ),
+        format!(
+            "budget.object.max_objects_per_place={}",
+            budget.object.max_objects_per_place
+        ),
+        format!(
+            "budget.object.max_properties_per_object={}",
+            budget.object.max_properties_per_object
+        ),
+        format!(
+            "budget.object.max_tokens_per_property={}",
+            budget.object.max_tokens_per_property
+        ),
+        format!(
+            "budget.object.max_computed_buckets_per_object={}",
+            budget.object.max_computed_buckets_per_object
+        ),
+        format!(
+            "budget.object.max_prototype_depth={}",
+            budget.object.max_prototype_depth
+        ),
+        format!(
+            "budget.object.max_receiver_candidates_per_callsite={}",
+            budget.object.max_receiver_candidates_per_callsite
+        ),
+        format!(
+            "budget.object.max_object_worklist_steps={}",
+            budget.object.max_object_worklist_steps
         ),
         // Run-level budget status (WR-06): two runs over the same inputs that produce
         // the same SURVIVING edge set but differ in whether the budget was exhausted
@@ -557,6 +608,139 @@ mod tests {
         .output_digest;
 
         assert_ne!(base, changed);
+    }
+
+    #[test]
+    fn default_budget_does_not_register_ts_object_model_policy() {
+        let db = AnalysisDb::new();
+        let mut policies = solver_policies_for_db(&db, &SolverBudget::default());
+
+        assert_eq!(policies.len(), 2);
+        assert!(!register_ts_object_model_policy_if_enabled(
+            &mut policies,
+            &db,
+            &SolverBudget::default()
+        ));
+        assert_eq!(
+            policies
+                .iter()
+                .map(|policy| policy.id())
+                .collect::<Vec<_>>(),
+            vec!["go_rta", "ts_tokens"]
+        );
+    }
+
+    #[test]
+    fn enabled_budget_reaches_ts_object_model_registration_seam() {
+        let db = AnalysisDb::new();
+        let mut policies = solver_policies_for_db(
+            &db,
+            &SolverBudget {
+                object_model_enabled: true,
+                ..SolverBudget::default()
+            },
+        );
+
+        assert_eq!(
+            policies
+                .iter()
+                .map(|policy| policy.id())
+                .collect::<Vec<_>>(),
+            vec!["go_rta", "ts_tokens"]
+        );
+        assert!(register_ts_object_model_policy_if_enabled(
+            &mut policies,
+            &db,
+            &SolverBudget {
+                object_model_enabled: true,
+                ..SolverBudget::default()
+            }
+        ));
+    }
+
+    #[test]
+    fn object_model_flag_invalidates_output_digest_without_placeholder_edges() {
+        let mut db_a = db_with_copy_chain();
+        let snapshot = snapshot(&db_a);
+        let base = derive_solver_with_cache_stats(
+            &mut db_a,
+            &snapshot,
+            manifest(),
+            SolverBudget::default(),
+            absent("polint.semantic_graph"),
+            absent("polint.type_value_alias"),
+            absent("polint.go.semantic"),
+        )
+        .output_digest;
+
+        let mut db_b = db_with_copy_chain();
+        let changed = derive_solver_with_cache_stats(
+            &mut db_b,
+            &snapshot,
+            manifest(),
+            SolverBudget {
+                object_model_enabled: true,
+                ..SolverBudget::default()
+            },
+            absent("polint.semantic_graph"),
+            absent("polint.type_value_alias"),
+            absent("polint.go.semantic"),
+        )
+        .output_digest;
+
+        assert_ne!(
+            base, changed,
+            "toggling object-model enablement must invalidate solver output"
+        );
+        let base_edges = db_a
+            .solver_derived_edges()
+            .iter()
+            .map(|edge| edge.stable_key.as_str())
+            .collect::<Vec<_>>();
+        let changed_edges = db_b
+            .solver_derived_edges()
+            .iter()
+            .map(|edge| edge.stable_key.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            changed_edges, base_edges,
+            "the Plan 50-02 placeholder seam must not emit object-derived edges"
+        );
+    }
+
+    #[test]
+    fn object_model_budget_change_invalidates_output_digest() {
+        let mut db_a = db_with_copy_chain();
+        let snapshot = snapshot(&db_a);
+        let base = derive_solver_with_cache_stats(
+            &mut db_a,
+            &snapshot,
+            manifest(),
+            SolverBudget::default(),
+            absent("polint.semantic_graph"),
+            absent("polint.type_value_alias"),
+            absent("polint.go.semantic"),
+        )
+        .output_digest;
+
+        let mut bumped = SolverBudget::default();
+        bumped.object.max_receiver_candidates_per_callsite += 1;
+        let mut db_b = db_with_copy_chain();
+        let changed = derive_solver_with_cache_stats(
+            &mut db_b,
+            &snapshot,
+            manifest(),
+            bumped,
+            absent("polint.semantic_graph"),
+            absent("polint.type_value_alias"),
+            absent("polint.go.semantic"),
+        )
+        .output_digest;
+
+        assert_ne!(
+            base, changed,
+            "changing an object-model budget knob must invalidate solver output"
+        );
     }
 
     #[test]

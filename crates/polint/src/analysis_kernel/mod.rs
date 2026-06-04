@@ -597,6 +597,8 @@ impl AnalysisKernel {
         let solver_budget = crate::analysis::solver::budget::SolverBudget {
             go: input.loaded.config.solver.to_go_sub_budget(),
             js: input.loaded.config.solver.to_js_sub_budget(),
+            object_model_enabled: input.loaded.config.solver.js_object_model_enabled(),
+            object: input.loaded.config.solver.to_js_object_sub_budget(),
             ..crate::analysis::solver::budget::SolverBudget::default()
         };
         let solver = crate::analysis::solver::provider::derive_solver_with_cache_stats(
