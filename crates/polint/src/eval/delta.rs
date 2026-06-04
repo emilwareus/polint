@@ -19,12 +19,18 @@ pub(crate) struct AdaptationDeltaReport {
     pub(crate) resolved_unknowns: u64,
     pub(crate) accepted_extension_facts: u64,
     pub(crate) rejected_extension_facts: u64,
+    #[serde(default)]
+    pub(crate) accepted_model_facts: u64,
+    #[serde(default)]
+    pub(crate) rejected_model_facts: u64,
     pub(crate) changed_graph_edges: u64,
     pub(crate) changed_paths: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) runtime_overhead_ratio: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) cache_invalidation_scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) held_out: Option<HeldOutDeltaReport>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) cases: Vec<CaseDelta>,
 }
@@ -63,6 +69,24 @@ pub(crate) struct CaseDelta {
     pub(crate) accepted_extension_fact_keys: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) rejected_extension_fact_keys: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) accepted_model_fact_keys: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) rejected_model_fact_keys: Vec<String>,
+    #[serde(default)]
+    pub(crate) held_out: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) struct HeldOutDeltaReport {
+    pub(crate) selection_cases: u64,
+    pub(crate) held_out_cases: u64,
+    pub(crate) held_out_unknown_delta: i64,
+    pub(crate) held_out_precision_delta: Option<f64>,
+    pub(crate) held_out_recall_delta: Option<f64>,
+    pub(crate) held_out_runtime_overhead_ratio: Option<f64>,
+    pub(crate) held_out_cache_invalidation_scope: Option<String>,
 }
 
 impl CaseDelta {
@@ -77,6 +101,8 @@ impl CaseDelta {
         self.changed_path_keys.sort();
         self.accepted_extension_fact_keys.sort();
         self.rejected_extension_fact_keys.sort();
+        self.accepted_model_fact_keys.sort();
+        self.rejected_model_fact_keys.sort();
     }
 
     fn is_empty(&self) -> bool {
@@ -90,6 +116,8 @@ impl CaseDelta {
             && self.changed_path_keys.is_empty()
             && self.accepted_extension_fact_keys.is_empty()
             && self.rejected_extension_fact_keys.is_empty()
+            && self.accepted_model_fact_keys.is_empty()
+            && self.rejected_model_fact_keys.is_empty()
     }
 }
 
@@ -122,6 +150,7 @@ pub(crate) fn compute_adaptation_delta(
         let adapted_case = adapted_cases.get(case_id).copied();
         collect_match_deltas(baseline_case, adapted_case, &mut case_delta);
         collect_extension_fact_deltas(baseline_case, adapted_case, &mut case_delta);
+        collect_model_fact_deltas(baseline_case, adapted_case, &mut case_delta);
         if !case_delta.is_empty() {
             accumulate_case(&mut report, &case_delta);
             case_delta.normalize();
@@ -151,6 +180,8 @@ fn accumulate_case(report: &mut AdaptationDeltaReport, case_delta: &CaseDelta) {
     report.changed_paths += case_delta.changed_path_keys.len() as u64;
     report.accepted_extension_facts += case_delta.accepted_extension_fact_keys.len() as u64;
     report.rejected_extension_facts += case_delta.rejected_extension_fact_keys.len() as u64;
+    report.accepted_model_facts += case_delta.accepted_model_fact_keys.len() as u64;
+    report.rejected_model_facts += case_delta.rejected_model_fact_keys.len() as u64;
 }
 
 fn collect_match_deltas(
@@ -281,6 +312,42 @@ fn extension_fact_keys(case: Option<&CaseResult>) -> BTreeMap<String, Option<Obs
         .collect()
 }
 
+fn collect_model_fact_deltas(
+    baseline_case: Option<&CaseResult>,
+    adapted_case: Option<&CaseResult>,
+    case_delta: &mut CaseDelta,
+) {
+    let baseline_facts = model_fact_keys(baseline_case);
+    for (key, status) in model_fact_keys(adapted_case) {
+        if baseline_facts.contains_key(&key) {
+            continue;
+        }
+        match status {
+            Some(ObservedStatus::Accepted) => case_delta.accepted_model_fact_keys.push(key),
+            Some(ObservedStatus::Rejected) => case_delta.rejected_model_fact_keys.push(key),
+            _ => {}
+        }
+    }
+}
+
+fn model_fact_keys(case: Option<&CaseResult>) -> BTreeMap<String, Option<ObservedStatus>> {
+    case.into_iter()
+        .flat_map(|case| case.observed.iter())
+        .filter_map(|item| match item {
+            ObservedItem::Fact(fact)
+                if fact
+                    .producer_id
+                    .as_deref()
+                    .is_some_and(|producer| producer.contains("adaptation"))
+                    || fact.family.contains("adaptation_model") =>
+            {
+                Some((format!("{}:{}", fact.family, fact.stable_key), fact.status))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 fn is_false_positive_outcome(outcome: MatchOutcome) -> bool {
     matches!(
         outcome,
@@ -376,6 +443,7 @@ mod tests {
         assert_eq!(delta.changed_graph_edges, 1);
         assert_eq!(delta.changed_paths, 1);
         assert_eq!(delta.accepted_extension_facts, 1);
+        assert_eq!(delta.accepted_model_facts, 0);
         assert_eq!(delta.runtime_overhead_ratio, Some(1.5));
         assert_eq!(delta.cases[0].case_id, "case-a");
         assert!(
@@ -383,6 +451,57 @@ mod tests {
                 .removed_false_negative_keys
                 .contains(&"diagnostic:missing".to_string())
         );
+    }
+
+    #[test]
+    fn model_fact_deltas_are_reported_separately_from_extension_facts() {
+        let baseline = run(vec![case("case-a", Vec::new(), Vec::new(), Some(10))]);
+        let adapted = run(vec![case(
+            "case-a",
+            vec![summary(
+                "diagnostic:new-fp",
+                MatchOutcome::FalsePositive,
+                MatchItemKind::Diagnostic,
+            )],
+            vec![
+                model_fact(
+                    "adaptation_model.edge",
+                    "edge:/ok",
+                    ObservedStatus::Accepted,
+                ),
+                model_fact(
+                    "adaptation_model.edge",
+                    "edge:/rejected",
+                    ObservedStatus::Rejected,
+                ),
+            ],
+            Some(15),
+        )]);
+
+        let delta = compute_adaptation_delta(&baseline, &adapted);
+
+        assert_eq!(delta.new_false_positives, 1);
+        assert_eq!(delta.accepted_model_facts, 1);
+        assert_eq!(delta.rejected_model_facts, 1);
+        assert_eq!(delta.accepted_extension_facts, 0);
+        assert_eq!(delta.runtime_overhead_ratio, Some(1.5));
+    }
+
+    #[test]
+    fn held_out_delta_report_labels_selection_and_held_out_cases() {
+        let report = HeldOutDeltaReport {
+            selection_cases: 2,
+            held_out_cases: 3,
+            held_out_unknown_delta: -1,
+            held_out_precision_delta: Some(0.05),
+            held_out_recall_delta: Some(0.10),
+            held_out_runtime_overhead_ratio: Some(1.2),
+            held_out_cache_invalidation_scope: Some("model-files".to_string()),
+        };
+
+        assert_eq!(report.selection_cases, 2);
+        assert_eq!(report.held_out_cases, 3);
+        assert_eq!(report.held_out_unknown_delta, -1);
     }
 
     #[test]
@@ -548,6 +667,19 @@ mod tests {
             mode: AssertionMode::Exact,
             producer_id: Some("polint.extension.test".to_string()),
             provenance: Some("extension".to_string()),
+            precision: Some("heuristic".to_string()),
+            status: Some(status),
+            payload: None,
+        })
+    }
+
+    fn model_fact(family: &str, stable_key: &str, status: ObservedStatus) -> ObservedItem {
+        ObservedItem::Fact(ObservedFact {
+            family: family.to_string(),
+            stable_key: stable_key.to_string(),
+            mode: AssertionMode::Exact,
+            producer_id: Some("polint.adaptation.model".to_string()),
+            provenance: Some("adaptation_model".to_string()),
             precision: Some("heuristic".to_string()),
             status: Some(status),
             payload: None,

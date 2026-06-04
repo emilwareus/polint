@@ -14,6 +14,8 @@ pub(crate) struct AdaptationRecord {
     pub(crate) agent: AdaptationAgent,
     pub(crate) inputs_allowed: Vec<String>,
     pub(crate) inputs_forbidden: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) sandbox_root: Option<String>,
     pub(crate) outputs: AdaptationOutputs,
 }
 
@@ -37,6 +39,15 @@ impl AdaptationRecord {
             !self.inputs_forbidden.is_empty(),
             "adapted runs must record forbidden inputs"
         );
+        if let Some(sandbox_root) = &self.sandbox_root {
+            normalize_repo_relative_path("adaptation.sandbox_root", sandbox_root)?;
+        }
+        for forbidden in &self.inputs_forbidden {
+            anyhow::ensure!(
+                !forbidden.trim().is_empty(),
+                "forbidden adaptation inputs must not be empty"
+            );
+        }
         self.outputs.validate()
     }
 }
@@ -105,6 +116,8 @@ pub(crate) struct AdaptationOutputs {
     pub(crate) rule_digests: Vec<String>,
     #[serde(default)]
     pub(crate) extension_digests: Vec<String>,
+    #[serde(default)]
+    pub(crate) model_digests: Vec<String>,
     pub(crate) notes_path: String,
     pub(crate) final_adapted_report_path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -138,6 +151,10 @@ impl AdaptationOutputs {
             .rules_or_extensions_changed
             .iter()
             .any(|artifact| artifact.kind == ChangedArtifactKind::Extension);
+        let changed_models = self
+            .rules_or_extensions_changed
+            .iter()
+            .any(|artifact| artifact.kind == ChangedArtifactKind::Model);
         if changed_rules {
             anyhow::ensure!(
                 !self.rule_digests.is_empty(),
@@ -150,10 +167,17 @@ impl AdaptationOutputs {
                 "changed extension artifacts require extension_digests"
             );
         }
+        if changed_models {
+            anyhow::ensure!(
+                !self.model_digests.is_empty(),
+                "changed model artifacts require model_digests"
+            );
+        }
         for digest in self
             .rule_digests
             .iter()
             .chain(self.extension_digests.iter())
+            .chain(self.model_digests.iter())
         {
             anyhow::ensure!(
                 !digest.trim().is_empty(),
@@ -188,6 +212,7 @@ impl ChangedArtifact {
 pub(crate) enum ChangedArtifactKind {
     Rule,
     Extension,
+    Model,
     Fixture,
     Config,
     Notes,
@@ -195,6 +220,34 @@ pub(crate) enum ChangedArtifactKind {
 
 pub(crate) fn prompt_hash(prompt_text: &str) -> String {
     stable_hash(&[prompt_text])
+}
+
+pub(crate) fn is_forbidden_oracle_path(path: &str) -> bool {
+    let normalized = path.replace('\\', "/").to_ascii_lowercase();
+    normalized.contains("research/evaluation-harness/repos/") && normalized.contains("/expected")
+        || normalized.contains("research/evaluation-harness/suites/")
+        || normalized.contains("jelly")
+            && (normalized.contains("oracle") || normalized.contains("expected"))
+        || normalized.contains("want:")
+        || normalized.contains("expected-label")
+        || normalized.contains("answer-key")
+}
+
+pub(crate) fn sanitize_agent_input_paths(paths: &[String]) -> (Vec<String>, Vec<String>) {
+    let mut allowed = Vec::new();
+    let mut forbidden = Vec::new();
+    for path in paths {
+        if is_forbidden_oracle_path(path) {
+            forbidden.push(path.clone());
+        } else {
+            allowed.push(path.clone());
+        }
+    }
+    allowed.sort();
+    allowed.dedup();
+    forbidden.sort();
+    forbidden.dedup();
+    (allowed, forbidden)
 }
 
 #[cfg(test)]
@@ -257,6 +310,41 @@ mod tests {
     }
 
     #[test]
+    fn adaptation_record_supports_changed_model_artifacts() {
+        let mut record = valid_record();
+        record
+            .outputs
+            .rules_or_extensions_changed
+            .push(ChangedArtifact {
+                path: ".polint/models/framework.toml".to_string(),
+                digest: "model123".to_string(),
+                kind: ChangedArtifactKind::Model,
+            });
+        record.outputs.model_digests.clear();
+        assert!(record.validate().is_err());
+
+        record.outputs.model_digests = vec!["model:model123".to_string()];
+        record.validate().unwrap();
+    }
+
+    #[test]
+    fn sandbox_forbidden_paths_are_filtered_from_agent_inputs() {
+        let inputs = vec![
+            "src/app.ts".to_string(),
+            "package.json".to_string(),
+            "research/evaluation-harness/repos/case-a/expected.polint-eval.toml".to_string(),
+            "research/evaluation-harness/suites/jelly.toml".to_string(),
+            "target/generated-expected-labels.json".to_string(),
+        ];
+        let (allowed, forbidden) = sanitize_agent_input_paths(&inputs);
+
+        assert!(allowed.contains(&"src/app.ts".to_string()));
+        assert!(allowed.contains(&"package.json".to_string()));
+        assert!(!allowed.iter().any(|path| path.contains("expected")));
+        assert_eq!(forbidden.len(), 3);
+    }
+
+    #[test]
     fn adaptation_record_requires_positive_budget() {
         let mut record = valid_record();
         record.agent.budget.max_iterations = 0;
@@ -308,6 +396,7 @@ mod tests {
                 "expected labels before adaptation".to_string(),
                 "hardcoded benchmark case ids".to_string(),
             ],
+            sandbox_root: Some("target/polint-eval/adaptation-sandbox".to_string()),
             outputs: AdaptationOutputs {
                 rules_or_extensions_changed: vec![ChangedArtifact {
                     path: ".polint/rules/src/framework_sources.rs".to_string(),
@@ -316,6 +405,7 @@ mod tests {
                 }],
                 rule_digests: vec!["rule:abc123".to_string()],
                 extension_digests: vec!["extension:def456".to_string()],
+                model_digests: Vec::new(),
                 notes_path: "target/polint-eval/adaptation-notes.md".to_string(),
                 final_adapted_report_path: "target/polint-eval/adapted.json".to_string(),
                 no_change_reason: None,
