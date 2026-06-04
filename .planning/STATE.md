@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Graph Engine Precision
 status: executing
-last_updated: "2026-06-04T06:28:18.519Z"
+last_updated: "2026-06-04T06:38:43.796Z"
 last_activity: 2026-06-04
 progress:
   total_phases: 13
   completed_phases: 8
   total_plans: 34
-  completed_plans: 30
+  completed_plans: 31
   percent: 62
 ---
 
@@ -41,7 +41,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 ## Current Position
 
 Phase: 50 (JS/TS Object/Property/Prototype/`this` Model & Driver) — EXECUTING
-Plan: 2 of 5
+Plan: 3 of 5
 Status: Ready to execute
 Last activity: 2026-06-04
 
@@ -459,6 +459,7 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase ?]: [Phase 48-02]: Production routes through SolverEngine::run_to_solver_output (D-02) — the UNCHANGED derive_edges points-to closure + the Go RTA policy edges merge into one normalized SolverOutput under one SolverBudget; points-to output stays byte-identical (points_to_via_engine_equals_solve_points_to + derive_edges_is_shuffle_stable green). Provider drives PointsToPolicy+GoRtaPolicy+TsTokensPolicy; the polint.solver slot snapshot is unchanged.
 - [Phase ?]: [Phase 48-02]: GoRtaSubBudget { address_taken_threshold:256, max_candidates_per_callsite:128, max_rta_rounds:32 } mirrors PointsToSubBudget; [solver].go config keys overlay via SolverConfig::to_go_sub_budget; SolverBudget::default existing fields stay 10_000/64. Go knobs + go_rta_fixpoint_v1 algo-version join the polint.solver cache key (all 3 locked trip-wire tests updated). Runaway dispatch latches the existing BudgetStatus::BudgetExceeded (D-10/D-12/D-13). Instantiated/address-taken sets seeded whole-reachable (Plan 1 facts carry no per-function attribution); RTA discriminant preserved at dispatch resolution.
 - [Phase 50]: Keep TS object-model facts private and lower them through the existing semantic graph constraint vocabulary. — This preserves the v1.3 private-engine boundary, avoids a parallel object graph surface, and gives later solver plans stable Alloc, FieldStore, FieldLoad, CopyEdge, and CallConstraint inputs.
+- [Phase 50]: Phase 50-02 keeps the JS/TS object model disabled by default behind `[solver.js] object_model = true` and distinct object-model budget caps. — The object model can add expensive property/prototype/receiver exploration. Keeping it opt-in while folding the flag and every cap into solver parameter/output digests prevents stale cache reuse and preserves existing Go RTA and TS token behavior until benchmark gates approve promotion.
 
 ## Execution Metrics
 
