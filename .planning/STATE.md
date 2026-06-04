@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Graph Engine Precision
 status: executing
-last_updated: "2026-06-04T07:41:26.352Z"
+last_updated: "2026-06-04T07:47:06.824Z"
 last_activity: 2026-06-04
 progress:
   total_phases: 13
   completed_phases: 8
   total_plans: 34
-  completed_plans: 32
+  completed_plans: 33
   percent: 62
 ---
 
@@ -41,7 +41,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 ## Current Position
 
 Phase: 50 (JS/TS Object/Property/Prototype/`this` Model & Driver) — EXECUTING
-Plan: 4 of 5
+Plan: 5 of 5
 Status: Ready to execute
 Last activity: 2026-06-04
 
@@ -461,6 +461,7 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase 50]: Keep TS object-model facts private and lower them through the existing semantic graph constraint vocabulary. — This preserves the v1.3 private-engine boundary, avoids a parallel object graph surface, and gives later solver plans stable Alloc, FieldStore, FieldLoad, CopyEdge, and CallConstraint inputs.
 - [Phase 50]: Phase 50-02 keeps the JS/TS object model disabled by default behind `[solver.js] object_model = true` and distinct object-model budget caps. — The object model can add expensive property/prototype/receiver exploration. Keeping it opt-in while folding the flag and every cap into solver parameter/output digests prevents stale cache reuse and preserves existing Go RTA and TS token behavior until benchmark gates approve promotion.
 - [Phase 50]: Phase 50-03 derives JS/TS object-model call edges only from callable tokens stored in property buckets, not from property names alone. — This keeps the object model precision-first while still improving recall for justified property-flow cases. Exact and computed buckets stay separate, budget exhaustion is explicit, and prototype/receiver semantics remain deferred to the next plan.
+- [Phase 50]: Phase 50-04 resolves prototype and receiver-sensitive object-model edges only through stable prototype/receiver facts, with dynamic mutation left unsupported. — Prototype chains and `this` binding are high-risk precision surfaces. Stable fact-gated lookup with visited-set/depth termination improves justified recall while preventing name/type guesses, unbounded traversal, and broad native/framework modeling from entering JS-05.
 
 ## Execution Metrics
 

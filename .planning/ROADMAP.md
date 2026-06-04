@@ -166,7 +166,7 @@ May run in parallel with Phase 48 (drivers share the solver core but their itera
 - [x] 50-01-PLAN.md — private TS object-model facts, deterministic storage, and semantic graph lowering for object/property/receiver/class facts.
 - [x] 50-02-PLAN.md — object-model opt-in flag, per-family object budgets, config mapping, and solver digest participation.
 - [x] 50-03-PLAN.md — private `analysis::solver::ts_object_model` property-bucket fixpoint and property-backed derived edge dispatch.
-- [ ] 50-04-PLAN.md — bounded prototype/class/accessor lookup plus `this`/receiver binding for methods, arrows, constructors, bound, `call`, and `apply`.
+- [x] 50-04-PLAN.md — bounded prototype/class/accessor lookup plus `this`/receiver binding for methods, arrows, constructors, bound, `call`, and `apply`.
 - [ ] 50-05-PLAN.md — native object-model fixtures, budget/determinism/polyglot/Jelly evidence, leak gate, full regression, and roadmap closeout.
 
 ### Phase 51: Adaptation Model Layer
@@ -226,7 +226,7 @@ May run in parallel with Phase 48 (drivers share the solver core but their itera
 | 47 | Unified Solver Core & Derived-Edge Provenance | 3/3 | Complete    | 2026-06-02 |
 | 48 | Go RTA Driver | 3/3 | Complete    | 2026-06-02 |
 | 49 | JS/TS Function-Token Propagation Driver | 3/3 | Complete | 2026-06-03 |
-| 50 | JS/TS Object/Property/Prototype/`this` Model & Driver | 3/5 | In Progress|  |
+| 50 | JS/TS Object/Property/Prototype/`this` Model & Driver | 4/5 | In Progress|  |
 | 51 | Adaptation Model Layer | 0/0 | Not started | - |
 | 52 | Refined-Calls Rework & Unknown Taxonomy Consolidation | 0/0 | Not started | - |
 | 53 | Cache & Solver Budgets Consolidation | 0/0 | Not started | - |
