@@ -47,6 +47,10 @@ pub(crate) fn solver_provider_parameter_digest(budget: &SolverBudget) -> Digest 
         // to token propagation, callable-token admission, or token-to-call derivation
         // bumps this and deterministically invalidates the solver cache.
         "ts_tokens_fixpoint_v1",
+        // TS object/property/prototype/receiver model algorithm version (Phase 50,
+        // JS-05): the control plane is present before the real policy lands, so the
+        // future driver cannot reuse a pre-object-model solver cache.
+        "ts_object_model_fixpoint_v3",
     ];
     parts.extend(budget_parts.iter().map(String::as_str));
     Digest::from_parts(
@@ -105,6 +109,40 @@ fn budget_parts(budget: &SolverBudget) -> Vec<String> {
             "budget.js.max_token_worklist_steps={}",
             budget.js.max_token_worklist_steps
         ),
+        // JS/TS object-model flag and sub-budget knobs (JS-05): appended after the
+        // token fields so the existing digest recipe keeps its established order.
+        format!(
+            "budget.object_model_enabled={}",
+            budget.object_model_enabled
+        ),
+        format!(
+            "budget.object.max_objects_per_place={}",
+            budget.object.max_objects_per_place
+        ),
+        format!(
+            "budget.object.max_properties_per_object={}",
+            budget.object.max_properties_per_object
+        ),
+        format!(
+            "budget.object.max_tokens_per_property={}",
+            budget.object.max_tokens_per_property
+        ),
+        format!(
+            "budget.object.max_computed_buckets_per_object={}",
+            budget.object.max_computed_buckets_per_object
+        ),
+        format!(
+            "budget.object.max_prototype_depth={}",
+            budget.object.max_prototype_depth
+        ),
+        format!(
+            "budget.object.max_receiver_candidates_per_callsite={}",
+            budget.object.max_receiver_candidates_per_callsite
+        ),
+        format!(
+            "budget.object.max_object_worklist_steps={}",
+            budget.object.max_object_worklist_steps
+        ),
     ]
 }
 
@@ -139,6 +177,7 @@ mod tests {
                     "precision_ceiling_v1",
                     "go_rta_fixpoint_v1",
                     "ts_tokens_fixpoint_v1",
+                    "ts_object_model_fixpoint_v3",
                     "budget.max_steps=10000",
                     "budget.max_outer_iterations=64",
                     "budget.points_to.max_objects_per_var=64",
@@ -150,6 +189,14 @@ mod tests {
                     "budget.js.max_tokens_per_var=128",
                     "budget.js.max_candidates_per_callsite=256",
                     "budget.js.max_token_worklist_steps=10000",
+                    "budget.object_model_enabled=false",
+                    "budget.object.max_objects_per_place=128",
+                    "budget.object.max_properties_per_object=128",
+                    "budget.object.max_tokens_per_property=128",
+                    "budget.object.max_computed_buckets_per_object=8",
+                    "budget.object.max_prototype_depth=8",
+                    "budget.object.max_receiver_candidates_per_callsite=64",
+                    "budget.object.max_object_worklist_steps=10000",
                 ],
             )
         );
@@ -175,6 +222,7 @@ mod tests {
                 "precision_ceiling_v1",
                 "go_rta_fixpoint_v1",
                 "ts_tokens_fixpoint_v1",
+                "ts_object_model_fixpoint_v3",
                 "budget.max_steps=10000",
                 "budget.max_outer_iterations=64",
                 "budget.points_to.max_objects_per_var=64",
@@ -186,6 +234,14 @@ mod tests {
                 "budget.js.max_tokens_per_var=128",
                 "budget.js.max_candidates_per_callsite=256",
                 "budget.js.max_token_worklist_steps=10000",
+                "budget.object_model_enabled=false",
+                "budget.object.max_objects_per_place=128",
+                "budget.object.max_properties_per_object=128",
+                "budget.object.max_tokens_per_property=128",
+                "budget.object.max_computed_buckets_per_object=8",
+                "budget.object.max_prototype_depth=8",
+                "budget.object.max_receiver_candidates_per_callsite=64",
+                "budget.object.max_object_worklist_steps=10000",
             ],
         );
         assert_ne!(solver_provider_parameter_digest(&budget), pre_bump);
@@ -259,6 +315,76 @@ mod tests {
             solver_provider_parameter_digest(&bumped_js_steps),
             base,
             "changing the JS token worklist-step cap must change the parameter digest"
+        );
+
+        let mut toggled_object_model = SolverBudget {
+            object_model_enabled: true,
+            ..SolverBudget::default()
+        };
+        assert_ne!(
+            solver_provider_parameter_digest(&toggled_object_model),
+            base,
+            "toggling object-model enablement must change the parameter digest"
+        );
+
+        toggled_object_model = SolverBudget::default();
+        toggled_object_model.object.max_objects_per_place += 1;
+        assert_ne!(
+            solver_provider_parameter_digest(&toggled_object_model),
+            base,
+            "changing max_objects_per_place must change the parameter digest"
+        );
+
+        let mut bumped_object_properties = SolverBudget::default();
+        bumped_object_properties.object.max_properties_per_object += 1;
+        assert_ne!(
+            solver_provider_parameter_digest(&bumped_object_properties),
+            base,
+            "changing max_properties_per_object must change the parameter digest"
+        );
+
+        let mut bumped_object_tokens = SolverBudget::default();
+        bumped_object_tokens.object.max_tokens_per_property += 1;
+        assert_ne!(
+            solver_provider_parameter_digest(&bumped_object_tokens),
+            base,
+            "changing max_tokens_per_property must change the parameter digest"
+        );
+
+        let mut bumped_object_computed = SolverBudget::default();
+        bumped_object_computed
+            .object
+            .max_computed_buckets_per_object += 1;
+        assert_ne!(
+            solver_provider_parameter_digest(&bumped_object_computed),
+            base,
+            "changing max_computed_buckets_per_object must change the parameter digest"
+        );
+
+        let mut bumped_object_depth = SolverBudget::default();
+        bumped_object_depth.object.max_prototype_depth += 1;
+        assert_ne!(
+            solver_provider_parameter_digest(&bumped_object_depth),
+            base,
+            "changing max_prototype_depth must change the parameter digest"
+        );
+
+        let mut bumped_object_receivers = SolverBudget::default();
+        bumped_object_receivers
+            .object
+            .max_receiver_candidates_per_callsite += 1;
+        assert_ne!(
+            solver_provider_parameter_digest(&bumped_object_receivers),
+            base,
+            "changing max_receiver_candidates_per_callsite must change the parameter digest"
+        );
+
+        let mut bumped_object_steps = SolverBudget::default();
+        bumped_object_steps.object.max_object_worklist_steps += 1;
+        assert_ne!(
+            solver_provider_parameter_digest(&bumped_object_steps),
+            base,
+            "changing max_object_worklist_steps must change the parameter digest"
         );
     }
 }

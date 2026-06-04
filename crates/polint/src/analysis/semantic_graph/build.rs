@@ -3,26 +3,20 @@
 //! [`build_semantic_graph`] projects a real-but-minimal semantic graph from the
 //! already-available v1.2 fact families — functions, packages, scopes, call sites,
 //! and values — emitting nodes, `Call`/`MemberOf` edges, and
-//! `CopyEdge`/`CallConstraint` constraints. It is a **read-only projection**: it
-//! reads `db` and returns a fresh [`SemanticGraphOutput`], mutating no upstream fact
-//! family (D-13). All node/edge/constraint stable keys are composed from the
+//! `CopyEdge`/`CallConstraint` constraints, plus Phase 50's private TS object-model
+//! rows as `Alloc`/`FieldStore`/`FieldLoad`/receiver constraints. It is a
+//! **read-only projection**: it reads `db` and returns a fresh
+//! [`SemanticGraphOutput`], mutating no upstream fact family (D-13). All
+//! node/edge/constraint stable keys are composed from the
 //! referenced existing stable identity via the length-prefixed recipe, never
 //! run-local dense IDs (D-06); the dense IDs are assigned later by `normalized()`.
 //!
 //! Honesty boundaries (D-07/D-11) — these kinds emit **ZERO** rows in this minimal
 //! pass, documented rather than fabricated:
 //! - `ModelEdge`: there is no producer until Phase 49 (ADAPT-01). Reserved emptiness.
-//! - `Alloc`: the abstract-object endpoint is a `NodeKind::AbstractObject(ObjectTokenId)`,
-//!   but `ValueFact` allocations carry an `AllocationTokenId` (a distinct identity
-//!   family). There is no honest 1:1 bridge at this layer, so `Alloc` emission is
-//!   deferred to a later plan that wires the object-token bridge instead of
-//!   fabricating an endpoint to inflate recall.
-//! - `FieldLoad`/`FieldStore`: an `AccessPathFact` expresses a `base.field`
-//!   projection but carries no distinct *destination* place identity, so emitting a
-//!   field constraint would require fabricating a destination node. Deferred.
 //! - `TypeConstraint`: not emitted in this minimal pass.
 
-use std::collections::{BTreeMap, btree_map::Entry};
+use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 
 use oxc_allocator::Allocator;
 use oxc_ast::AstKind;
@@ -31,7 +25,7 @@ use oxc_parser::Parser;
 use oxc_semantic::{AstNodes, NodeId, SemanticBuilder};
 use oxc_span::{GetSpan, SourceType};
 
-use crate::analysis::ids::{PlaceId, SemanticNodeId};
+use crate::analysis::ids::{ObjectTokenId, PlaceId, SemanticNodeId};
 use crate::analysis::points_to::facts::{PointsToPrecision, PointsToStatus};
 use crate::analysis::semantic_graph::constraints::{ConstraintFact, ConstraintKind};
 use crate::analysis::semantic_graph::facts::{
@@ -50,6 +44,10 @@ use crate::ts::binding::facts::{TsDirectBindingFact, TsDirectBindingKind, TsDire
 use crate::ts::binding::store::TsDirectBindingOutput;
 use crate::ts::inventory::extract::extract_ts_inventory;
 use crate::ts::inventory::store::TsInventoryOutput;
+use crate::ts::object_model::facts::{
+    TsObjectModelStatus, TsPropertyKey, TsPropertyReadFact, TsPropertyWriteFact,
+    TsReceiverBindingFact,
+};
 use crate::ts::scope::extract::extract_ts_scope;
 use crate::ts::scope::store::TsScopeOutput;
 
@@ -76,11 +74,12 @@ pub(crate) fn build_semantic_graph_with_ts_direct_bindings(
     builder.project_go_semantic(db);
     builder.project_ts_direct_bindings(db, ts_direct_bindings);
     builder.project_ts_token_source_flows(db);
+    builder.project_ts_object_model(db);
     builder.project_member_of_edges(db);
     builder.project_value_constraints(db);
-    // FieldLoad/FieldStore, TypeConstraint, and ModelEdge intentionally emit zero
-    // rows in this minimal pass (see module docs / D-07 / D-11). The base places for
-    // access-path projections are already projected as nodes above.
+    // TypeConstraint and ModelEdge intentionally emit zero rows in this pass (see
+    // module docs / D-07 / D-11). The base places for access-path projections are
+    // already projected as nodes above.
 
     builder.into_output()
 }
@@ -375,6 +374,119 @@ impl GraphBuilder {
                     &flow.stable_key,
                 );
             }
+        }
+    }
+
+    // -- TS object-model constraints ---------------------------------------
+
+    fn project_ts_object_model(&mut self, db: &AnalysisDb) {
+        let context = TsObjectModelNodeContext::new(db);
+
+        for allocation in db.ts_object_allocations() {
+            if !is_lowerable_object_model_status(&allocation.status) {
+                continue;
+            }
+            let Some(dst) = context.allocation_place_node(self, &allocation.stable_key) else {
+                continue;
+            };
+            let Some(object) = context.object_node(self, &allocation.stable_key) else {
+                continue;
+            };
+            self.push_constraint(
+                ConstraintKind::Alloc { dst, object },
+                &allocation.stable_key,
+            );
+        }
+
+        for write in db.ts_property_writes() {
+            if !is_lowerable_object_model_status(&write.status) {
+                continue;
+            }
+            let Some(base) = context.object_node(self, &write.base_object_stable_key) else {
+                continue;
+            };
+            let Some(src) = context.property_write_source_node(self, write) else {
+                continue;
+            };
+            self.push_constraint(
+                ConstraintKind::FieldStore {
+                    base,
+                    field: property_field_label(&write.property_key),
+                    src,
+                },
+                &write.stable_key,
+            );
+        }
+
+        for read in db.ts_property_reads() {
+            if !is_lowerable_object_model_status(&read.status) {
+                continue;
+            }
+            let Some(base) = context.object_node(self, &read.base_object_stable_key) else {
+                continue;
+            };
+            let Some(dst) = context.property_read_destination_node(self, read) else {
+                continue;
+            };
+            self.push_constraint(
+                ConstraintKind::FieldLoad {
+                    dst,
+                    base,
+                    field: property_field_label(&read.property_key),
+                },
+                &read.stable_key,
+            );
+            if let Some(callsite) = context.callsite_node(self, read.callsite_stable_key.as_deref())
+            {
+                self.push_constraint(
+                    ConstraintKind::CallConstraint { callsite },
+                    &read.stable_key,
+                );
+            }
+        }
+
+        for binding in db.ts_receiver_bindings() {
+            if !is_lowerable_object_model_status(&binding.status) {
+                continue;
+            }
+            if let (Some(dst), Some(src)) = (
+                context.receiver_destination_node(self, binding),
+                context.receiver_source_node(self, binding),
+            ) {
+                self.push_constraint(ConstraintKind::CopyEdge { dst, src }, &binding.stable_key);
+            }
+            if let Some(callsite) =
+                context.callsite_node(self, binding.callsite_stable_key.as_deref())
+            {
+                self.push_constraint(
+                    ConstraintKind::CallConstraint { callsite },
+                    &binding.stable_key,
+                );
+            }
+        }
+
+        for link in db.ts_prototype_links() {
+            if !is_lowerable_object_model_status(&link.status) {
+                continue;
+            }
+            let Some(base) = context.object_node(self, &link.object_stable_key) else {
+                continue;
+            };
+            let Some(src) = context.object_node(self, &link.prototype_stable_key) else {
+                continue;
+            };
+            self.push_constraint(
+                ConstraintKind::FieldStore {
+                    base,
+                    field: link
+                        .property_key
+                        .as_ref()
+                        .map(property_field_label)
+                        .unwrap_or_else(|| "$prototype".to_string()),
+                    src,
+                },
+                &link.stable_key,
+            );
         }
     }
 
@@ -1168,15 +1280,215 @@ impl<'a> TsDirectBindingNodeContext<'a> {
                 function.file == *file
                     && function.span.start_byte == identity.start
                     && function.span.end_byte == identity.end
-                    && identity
-                        .display
-                        .as_deref()
-                        .is_none_or(|display| display == function.name)
+                    && ts_inventory_display_matches_function_name(
+                        identity.display.as_deref(),
+                        &function.name,
+                    )
             })
             .and_then(|function| {
                 let key = function_node_key(self.db, function);
                 builder.node_by_key.get(&key).copied()
             })
+    }
+}
+
+fn ts_inventory_display_matches_function_name(display: Option<&str>, function_name: &str) -> bool {
+    let Some(display) = display else {
+        return true;
+    };
+    function_name == display
+        || function_name
+            .strip_suffix(display)
+            .is_some_and(|prefix| prefix.ends_with('.'))
+}
+
+struct TsObjectModelNodeContext<'a> {
+    direct: TsDirectBindingNodeContext<'a>,
+    object_token_by_key: BTreeMap<&'a str, ObjectTokenId>,
+    place_by_stable_key: BTreeMap<&'a str, PlaceId>,
+    synthetic_place_by_key: BTreeMap<String, PlaceId>,
+}
+
+impl<'a> TsObjectModelNodeContext<'a> {
+    fn new(db: &'a AnalysisDb) -> Self {
+        let direct = TsDirectBindingNodeContext::new(db);
+        let object_token_by_key = db
+            .ts_object_allocations()
+            .iter()
+            .map(|allocation| allocation.stable_key.as_str())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .enumerate()
+            .map(|(index, stable_key)| (stable_key, ObjectTokenId(index as u64)))
+            .collect();
+        let place_by_stable_key = db
+            .mir_places()
+            .iter()
+            .map(|place| (place.stable_key.as_str(), place.id))
+            .collect::<BTreeMap<_, _>>();
+
+        let mut synthetic_place_keys = BTreeSet::new();
+        for allocation in db.ts_object_allocations() {
+            insert_synthetic_place_key(
+                &place_by_stable_key,
+                &mut synthetic_place_keys,
+                allocation_result_place_identity(&allocation.stable_key),
+            );
+        }
+        for write in db.ts_property_writes() {
+            insert_synthetic_place_key(
+                &place_by_stable_key,
+                &mut synthetic_place_keys,
+                property_write_source_place_identity(write),
+            );
+        }
+        for read in db.ts_property_reads() {
+            let key = read
+                .destination_stable_key
+                .clone()
+                .unwrap_or_else(|| property_read_destination_place_identity(&read.stable_key));
+            insert_synthetic_place_key(&place_by_stable_key, &mut synthetic_place_keys, key);
+        }
+        for binding in db.ts_receiver_bindings() {
+            let key = binding
+                .receiver_place_stable_key
+                .clone()
+                .unwrap_or_else(|| receiver_destination_place_identity(&binding.stable_key));
+            insert_synthetic_place_key(&place_by_stable_key, &mut synthetic_place_keys, key);
+        }
+
+        let next_place_id = db
+            .mir_places()
+            .iter()
+            .map(|place| place.id.0)
+            .max()
+            .map_or(0, |max_id| max_id + 1);
+        let synthetic_place_by_key = synthetic_place_keys
+            .into_iter()
+            .enumerate()
+            .map(|(index, key)| (key, PlaceId(next_place_id + index as u64)))
+            .collect();
+
+        Self {
+            direct,
+            object_token_by_key,
+            place_by_stable_key,
+            synthetic_place_by_key,
+        }
+    }
+
+    fn object_node(
+        &self,
+        builder: &mut GraphBuilder,
+        object_stable_key: &str,
+    ) -> Option<SemanticNodeId> {
+        let token = *self.object_token_by_key.get(object_stable_key)?;
+        Some(builder.intern_node(
+            NodeKind::AbstractObject(token),
+            object_node_key(object_stable_key),
+        ))
+    }
+
+    fn allocation_place_node(
+        &self,
+        builder: &mut GraphBuilder,
+        allocation_stable_key: &str,
+    ) -> Option<SemanticNodeId> {
+        self.place_node(
+            builder,
+            &allocation_result_place_identity(allocation_stable_key),
+        )
+    }
+
+    fn property_write_source_node(
+        &self,
+        builder: &mut GraphBuilder,
+        write: &TsPropertyWriteFact,
+    ) -> Option<SemanticNodeId> {
+        if let Some(value_object) = write.value_object_stable_key.as_deref()
+            && let Some(node) = self.object_node(builder, value_object)
+        {
+            return Some(node);
+        }
+        if let Some(value_function) = write.value_function_stable_key.as_deref()
+            && let Some(node) = self
+                .direct
+                .function_node_for_binding(builder, value_function)
+        {
+            return Some(node);
+        }
+        self.place_node(builder, &property_write_source_place_identity(write))
+    }
+
+    fn property_read_destination_node(
+        &self,
+        builder: &mut GraphBuilder,
+        read: &TsPropertyReadFact,
+    ) -> Option<SemanticNodeId> {
+        let destination = read
+            .destination_stable_key
+            .clone()
+            .unwrap_or_else(|| property_read_destination_place_identity(&read.stable_key));
+        self.place_node(builder, &destination)
+    }
+
+    fn receiver_destination_node(
+        &self,
+        builder: &mut GraphBuilder,
+        binding: &TsReceiverBindingFact,
+    ) -> Option<SemanticNodeId> {
+        let destination = binding
+            .receiver_place_stable_key
+            .clone()
+            .unwrap_or_else(|| receiver_destination_place_identity(&binding.stable_key));
+        self.place_node(builder, &destination)
+    }
+
+    fn receiver_source_node(
+        &self,
+        builder: &mut GraphBuilder,
+        binding: &TsReceiverBindingFact,
+    ) -> Option<SemanticNodeId> {
+        if let Some(receiver_object) = binding.receiver_object_stable_key.as_deref() {
+            return self.object_node(builder, receiver_object);
+        }
+        binding
+            .receiver_place_stable_key
+            .as_deref()
+            .and_then(|place| self.place_node(builder, place))
+    }
+
+    fn callsite_node(
+        &self,
+        builder: &GraphBuilder,
+        callsite_stable_key: Option<&str>,
+    ) -> Option<SemanticNodeId> {
+        self.direct
+            .callsite_node_for_binding(builder, callsite_stable_key?)
+    }
+
+    fn place_node(
+        &self,
+        builder: &mut GraphBuilder,
+        place_stable_key: &str,
+    ) -> Option<SemanticNodeId> {
+        if let Some(place) = self.place_by_stable_key.get(place_stable_key) {
+            return Some(
+                builder.intern_node(NodeKind::Place(*place), place_node_key(place_stable_key)),
+            );
+        }
+        let place = *self.synthetic_place_by_key.get(place_stable_key)?;
+        Some(builder.intern_node(NodeKind::Place(place), place_node_key(place_stable_key)))
+    }
+}
+
+fn insert_synthetic_place_key(
+    place_by_stable_key: &BTreeMap<&str, PlaceId>,
+    synthetic_place_keys: &mut BTreeSet<String>,
+    key: String,
+) {
+    if !place_by_stable_key.contains_key(key.as_str()) {
+        synthetic_place_keys.insert(key);
     }
 }
 
@@ -1294,6 +1606,57 @@ fn place_node_key(place_stable_key: &str) -> String {
         ],
     )
     .into_string()
+}
+
+fn object_node_key(object_stable_key: &str) -> String {
+    semantic_stable_key(
+        FactFamily::AllocationToken,
+        &[
+            ("node_kind", "abstract_object".to_string()),
+            ("identity", object_stable_key.to_string()),
+        ],
+    )
+    .into_string()
+}
+
+fn allocation_result_place_identity(allocation_stable_key: &str) -> String {
+    object_model_place_identity("allocation_result", allocation_stable_key)
+}
+
+fn property_write_source_place_identity(write: &TsPropertyWriteFact) -> String {
+    let source_identity = write
+        .value_function_stable_key
+        .as_deref()
+        .or(write.value_object_stable_key.as_deref())
+        .unwrap_or(write.stable_key.as_str());
+    object_model_place_identity("property_write_source", source_identity)
+}
+
+fn property_read_destination_place_identity(read_stable_key: &str) -> String {
+    object_model_place_identity("property_read_destination", read_stable_key)
+}
+
+fn receiver_destination_place_identity(receiver_stable_key: &str) -> String {
+    object_model_place_identity("receiver_destination", receiver_stable_key)
+}
+
+fn object_model_place_identity(kind: &str, identity: &str) -> String {
+    semantic_stable_key(
+        FactFamily::Place,
+        &[
+            ("place_kind", kind.to_string()),
+            ("identity", identity.to_string()),
+        ],
+    )
+    .into_string()
+}
+
+fn property_field_label(property_key: &TsPropertyKey) -> String {
+    property_key.field_label()
+}
+
+fn is_lowerable_object_model_status(status: &TsObjectModelStatus) -> bool {
+    matches!(status, TsObjectModelStatus::Resolved)
 }
 
 fn span_identity(span: &Span) -> String {
@@ -1779,6 +2142,231 @@ function run() {
                 status: TsDirectBindingStatus::Unresolved,
                 reason: Some(reason),
                 stable_key: format!("ts_direct_binding:{}", reason.as_str()),
+            }
+        }
+    }
+
+    mod ts_object_model {
+        use super::*;
+        use crate::ts::object_model::facts::{
+            TsObjectAllocationFact, TsObjectAllocationId, TsObjectAllocationKind,
+            TsObjectModelStatus, TsPropertyKey, TsPropertyKeyKind, TsPropertyReadFact,
+            TsPropertyReadId, TsPropertyWriteFact, TsPropertyWriteId, TsPrototypeLinkFact,
+            TsPrototypeLinkId, TsPrototypeLinkKind, TsReceiverBindingFact, TsReceiverBindingId,
+            TsReceiverBindingKind,
+        };
+        use crate::ts::object_model::store::TsObjectModelOutput;
+
+        #[test]
+        fn lowers_object_model_rows_to_closed_constraint_vocabulary() {
+            let (mut db, file) = ts_db_with_file("src/app.ts", "const holder = { target: fn };\n");
+            let holder = "object:holder";
+            let target_object = "object:target";
+            let class_object = "object:class";
+            let prototype_object = "object:class:prototype";
+
+            db.replace_ts_object_model_facts(TsObjectModelOutput {
+                allocations: vec![
+                    allocation(file, holder, TsObjectAllocationKind::ObjectLiteral, 10),
+                    allocation(
+                        file,
+                        target_object,
+                        TsObjectAllocationKind::FunctionObject,
+                        11,
+                    ),
+                    allocation(file, class_object, TsObjectAllocationKind::ClassObject, 12),
+                    allocation(
+                        file,
+                        prototype_object,
+                        TsObjectAllocationKind::PrototypeObject,
+                        13,
+                    ),
+                ],
+                property_writes: vec![property_write(file, holder, target_object)],
+                property_reads: vec![computed_property_read(file, holder)],
+                receiver_bindings: vec![receiver_binding(file, holder)],
+                prototype_links: vec![prototype_link(file, class_object, prototype_object)],
+            })
+            .expect("object model replace");
+
+            let output = build_semantic_graph(&db);
+
+            assert!(
+                output
+                    .constraints
+                    .iter()
+                    .any(|constraint| matches!(constraint.kind, ConstraintKind::Alloc { .. })),
+                "expected allocation constraint"
+            );
+            assert!(output.constraints.iter().any(|constraint| {
+                matches!(
+                    &constraint.kind,
+                    ConstraintKind::FieldStore { field, .. } if field == "exact:target"
+                )
+            }));
+            assert!(output.constraints.iter().any(|constraint| {
+                matches!(
+                    &constraint.kind,
+                    ConstraintKind::FieldLoad { field, .. } if field == "computed_bucket"
+                )
+            }));
+            assert!(output.constraints.iter().any(|constraint| {
+                matches!(
+                    &constraint.kind,
+                    ConstraintKind::FieldStore { field, .. } if field == "$prototype"
+                )
+            }));
+            assert!(output.constraints.iter().any(|constraint| {
+                matches!(constraint.kind, ConstraintKind::CopyEdge { .. })
+                    && constraint.stable_key.contains("receiver")
+            }));
+            SemanticGraphStore::from_output(output).expect("object model graph validates");
+        }
+
+        #[test]
+        fn object_backed_read_with_real_callsite_emits_call_constraint() {
+            let (mut db, file) = ts_db_with_file(
+                "src/app.ts",
+                r#"
+function run() {
+  holder.target();
+}
+"#,
+            );
+            let inventory = extract_ts_inventory(db.file(file).expect("file"));
+            let caller = ts_function(&inventory, "run").clone();
+            let caller = push_ts_function(&mut db, &caller);
+            let callsite = ts_callsite(&inventory, "holder.target").clone();
+            replace_single_ts_callsite(&mut db, caller, &callsite);
+
+            db.replace_ts_object_model_facts(TsObjectModelOutput {
+                allocations: vec![allocation(
+                    file,
+                    "object:holder",
+                    TsObjectAllocationKind::ObjectLiteral,
+                    10,
+                )],
+                property_writes: Vec::new(),
+                property_reads: vec![TsPropertyReadFact {
+                    id: TsPropertyReadId(0),
+                    file,
+                    span: span(file),
+                    stable_key: "read:holder.target".to_string(),
+                    base_object_stable_key: "object:holder".to_string(),
+                    property_key: static_property("target"),
+                    destination_stable_key: None,
+                    callsite: None,
+                    callsite_stable_key: Some(callsite.stable_key.clone()),
+                    status: TsObjectModelStatus::resolved(),
+                }],
+                receiver_bindings: Vec::new(),
+                prototype_links: Vec::new(),
+            })
+            .expect("object model replace");
+
+            let output = build_semantic_graph(&db);
+
+            assert!(output.constraints.iter().any(|constraint| {
+                matches!(constraint.kind, ConstraintKind::CallConstraint { .. })
+                    && constraint.stable_key.contains("read:holder.target")
+            }));
+            SemanticGraphStore::from_output(output).expect("object callsite graph validates");
+        }
+
+        fn allocation(
+            file: FileId,
+            stable_key: &str,
+            kind: TsObjectAllocationKind,
+            id: u64,
+        ) -> TsObjectAllocationFact {
+            TsObjectAllocationFact {
+                id: TsObjectAllocationId(id),
+                file,
+                span: span(file),
+                stable_key: stable_key.to_string(),
+                lexical_parent_key: Some("scope:module".to_string()),
+                inventory_function: None,
+                inventory_function_stable_key: None,
+                inventory_callsite: None,
+                inventory_callsite_stable_key: None,
+                kind,
+                status: TsObjectModelStatus::resolved(),
+            }
+        }
+
+        fn property_write(
+            file: FileId,
+            base_object: &str,
+            value_object: &str,
+        ) -> TsPropertyWriteFact {
+            TsPropertyWriteFact {
+                id: TsPropertyWriteId(0),
+                file,
+                span: span(file),
+                stable_key: "write:holder.target".to_string(),
+                base_object_stable_key: base_object.to_string(),
+                property_key: static_property("target"),
+                value_function: None,
+                value_function_stable_key: None,
+                value_object_stable_key: Some(value_object.to_string()),
+                status: TsObjectModelStatus::resolved(),
+            }
+        }
+
+        fn computed_property_read(file: FileId, base_object: &str) -> TsPropertyReadFact {
+            TsPropertyReadFact {
+                id: TsPropertyReadId(0),
+                file,
+                span: span(file),
+                stable_key: "read:holder[computed]".to_string(),
+                base_object_stable_key: base_object.to_string(),
+                property_key: TsPropertyKey {
+                    kind: TsPropertyKeyKind::ComputedBucket,
+                    value: None,
+                },
+                destination_stable_key: None,
+                callsite: None,
+                callsite_stable_key: None,
+                status: TsObjectModelStatus::resolved(),
+            }
+        }
+
+        fn receiver_binding(file: FileId, receiver_object: &str) -> TsReceiverBindingFact {
+            TsReceiverBindingFact {
+                id: TsReceiverBindingId(0),
+                file,
+                span: span(file),
+                stable_key: "receiver:holder.target".to_string(),
+                kind: TsReceiverBindingKind::MethodCall,
+                callsite: None,
+                callsite_stable_key: None,
+                callee_function: None,
+                callee_function_stable_key: None,
+                receiver_object_stable_key: Some(receiver_object.to_string()),
+                receiver_place_stable_key: None,
+                lexical_parent_key: Some("scope:module".to_string()),
+                status: TsObjectModelStatus::resolved(),
+            }
+        }
+
+        fn prototype_link(file: FileId, object: &str, prototype: &str) -> TsPrototypeLinkFact {
+            TsPrototypeLinkFact {
+                id: TsPrototypeLinkId(0),
+                file,
+                span: span(file),
+                stable_key: "prototype:class".to_string(),
+                kind: TsPrototypeLinkKind::ClassPrototype,
+                object_stable_key: object.to_string(),
+                prototype_stable_key: prototype.to_string(),
+                property_key: None,
+                status: TsObjectModelStatus::resolved(),
+            }
+        }
+
+        fn static_property(name: &str) -> TsPropertyKey {
+            TsPropertyKey {
+                kind: TsPropertyKeyKind::Static,
+                value: Some(name.to_string()),
             }
         }
     }

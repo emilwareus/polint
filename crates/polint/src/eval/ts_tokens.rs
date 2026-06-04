@@ -45,6 +45,8 @@ fn solver_budget_for_fixture(fixture_dir: &Path) -> SolverBudget {
     SolverBudget {
         js: loaded.config.solver.to_js_sub_budget(),
         go: loaded.config.solver.to_go_sub_budget(),
+        object_model_enabled: loaded.config.solver.js_object_model_enabled(),
+        object: loaded.config.solver.to_js_object_sub_budget(),
         ..SolverBudget::default()
     }
 }

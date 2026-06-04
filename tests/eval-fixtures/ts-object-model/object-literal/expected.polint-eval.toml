@@ -1,0 +1,18 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "ts-object-model-object-literal"
+area = "facts"
+
+# Phase 50 Plan 05 TS object-model fixture.
+#
+# The executable gate in `eval::ts_object_model` reads private solver rows. This
+# fixture proves exact dot, exact string-literal, cross-form exact property, and
+# inline allocation property calls resolve through object-model facts, object
+# method syntax seeds callable property rows, while a computed-bucket read stays
+# bounded to computed-bucket writes rather than reading every exact property on
+# the object.
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 120000

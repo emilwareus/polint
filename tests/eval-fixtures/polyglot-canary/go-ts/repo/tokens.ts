@@ -8,6 +8,10 @@ function makeToken(): string {
   return "token";
 }
 
+function objectModelTarget(): string {
+  return "object-model";
+}
+
 // `aliasMake` aliases makeToken (a CopyEdge in the semantic graph); calling through the
 // alias is a CallConstraint that the shared solver core sees.
 const aliasMake = makeToken;
@@ -18,7 +22,9 @@ function useToken(token: string): string {
 
 function run(): string {
   const value = aliasMake();
-  return useToken(value);
+  const holder = { objectModelTarget };
+  const objectValue = holder.objectModelTarget();
+  return useToken(value) + objectValue;
 }
 
 run();

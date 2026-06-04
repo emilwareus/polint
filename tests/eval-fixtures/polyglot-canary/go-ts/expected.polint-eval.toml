@@ -4,14 +4,16 @@ area = "polyglot-canary"
 
 # Phase 49 Plan 03 — polyglot Go+TS canary.
 #
-# The mixed repo proves the shared solver core can run Go RTA and TS token dispatch
-# together without cross-language interference:
+# The mixed repo proves the shared solver core can run Go RTA, TS token dispatch,
+# and opt-in TS object-model dispatch together without cross-language interference:
 #
 #   (a) Go edges resolve — `s.Speak()` resolves to the instantiated (Dog).Speak via
 #       the Go RTA driver.
 #   (b) TS token edges resolve — `const aliasMake = makeToken; aliasMake()` produces
 #       an intra-TS token-policy call edge.
-#   (c) No solver-derived edge crosses the Go<->TS language boundary.
+#   (c) TS object-model edges resolve — `holder.objectModelTarget()` produces an
+#       intra-TS property-backed call edge.
+#   (d) No solver-derived edge crosses the Go<->TS language boundary.
 #
 # The executable proof lives in `eval::go_rta::polyglot_go_ts_canary_*` and
 # `eval::ts_tokens::polyglot_canary_*`. No `[[expected]]` row is captured here

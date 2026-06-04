@@ -381,6 +381,60 @@ mod tests {
     }
 
     #[test]
+    fn validation_rejects_dangling_object_model_constraint_endpoint() {
+        let nodes = vec![node(
+            NodeKind::Callsite(CallSiteId(1)),
+            SemanticPrecision::Conservative,
+            "node|callsite|target",
+        )];
+        let constraints = vec![
+            ConstraintFact {
+                id: Default::default(),
+                kind: ConstraintKind::Alloc {
+                    dst: SemanticNodeId(0),
+                    object: SemanticNodeId(99),
+                },
+                status: PointsToStatus::Present,
+                precision: PointsToPrecision::FlowInsensitive,
+                stable_key: "constraint|object_model|dangling_alloc".to_string(),
+            },
+            ConstraintFact {
+                id: Default::default(),
+                kind: ConstraintKind::FieldLoad {
+                    dst: SemanticNodeId(98),
+                    base: SemanticNodeId(0),
+                    field: "computed_bucket".to_string(),
+                },
+                status: PointsToStatus::Present,
+                precision: PointsToPrecision::FlowInsensitive,
+                stable_key: "constraint|object_model|dangling_load".to_string(),
+            },
+            ConstraintFact {
+                id: Default::default(),
+                kind: ConstraintKind::FieldStore {
+                    base: SemanticNodeId(0),
+                    field: "static:target".to_string(),
+                    src: SemanticNodeId(97),
+                },
+                status: PointsToStatus::Present,
+                precision: PointsToPrecision::FlowInsensitive,
+                stable_key: "constraint|object_model|dangling_store".to_string(),
+            },
+        ];
+        let mut diagnostics = Vec::new();
+
+        validate_semantic_graph_rows(&nodes, &[], &constraints, &mut diagnostics);
+
+        let dangling_count = diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                format!("{diagnostic:?}").contains("dangling semantic constraint node reference")
+            })
+            .count();
+        assert_eq!(dangling_count, 3, "{diagnostics:?}");
+    }
+
+    #[test]
     fn conservative_precision_node_is_within_ceiling() {
         assert!(
             reject_exact_node_edge_precision("SemanticNode", SemanticPrecision::Conservative, "k")

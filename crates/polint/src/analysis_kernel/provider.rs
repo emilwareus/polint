@@ -665,9 +665,11 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
         // Fact families `build_semantic_graph` ACTUALLY reads today (kept in lockstep
         // with the projection so the declared read-set never overstates consumption):
         // functions/packages (syntax), scopes (symbol graph), call sites (calls),
-        // value facts (type/value/alias), and MIR places (semantic MIR). The producer
-        // output digest of each is folded into the provider output digest in
-        // `semantic_graph::provider::semantic_graph_output_digest` (D-17).
+        // value facts (type/value/alias), MIR places (semantic MIR), Go semantic rows,
+        // and the private TS object-model rows refreshed inside the semantic-graph
+        // provider. The producer/current-row digest of each is folded into the
+        // provider output digest in `semantic_graph::provider::semantic_graph_output_digest`
+        // (D-17).
         //
         // SC3 inputs with NO producer yet are intentionally ABSENT until their
         // producer lands (not silently dropped): CFG / summaries (Phase 47), accepted
@@ -683,8 +685,22 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "places",
             "go_semantic_functions",
             "go_semantic_callsites",
+            "ts_object_allocations",
+            "ts_property_writes",
+            "ts_property_reads",
+            "ts_receiver_bindings",
+            "ts_prototype_links",
         ],
-        outputs: &["semantic_nodes", "semantic_edges", "semantic_constraints"],
+        outputs: &[
+            "ts_object_allocations",
+            "ts_property_writes",
+            "ts_property_reads",
+            "ts_receiver_bindings",
+            "ts_prototype_links",
+            "semantic_nodes",
+            "semantic_edges",
+            "semantic_constraints",
+        ],
         language_scope: LanguageScope::MultiLanguage,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: SEMANTIC_GRAPH_SCHEMA,
@@ -1389,8 +1405,22 @@ mod tests {
                         "places",
                         "go_semantic_functions",
                         "go_semantic_callsites",
+                        "ts_object_allocations",
+                        "ts_property_writes",
+                        "ts_property_reads",
+                        "ts_receiver_bindings",
+                        "ts_prototype_links",
                     ],
-                    outputs: vec!["semantic_nodes", "semantic_edges", "semantic_constraints"],
+                    outputs: vec![
+                        "ts_object_allocations",
+                        "ts_property_writes",
+                        "ts_property_reads",
+                        "ts_receiver_bindings",
+                        "ts_prototype_links",
+                        "semantic_nodes",
+                        "semantic_edges",
+                        "semantic_constraints",
+                    ],
                 },
                 ProviderOrderRow {
                     id: "polint.solver",

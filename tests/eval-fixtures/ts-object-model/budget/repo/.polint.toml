@@ -1,0 +1,13 @@
+[workspace]
+include = ["src/**"]
+exclude = ["**/node_modules/**"]
+
+[languages.ts]
+module_kind = "esnext"
+target = "es2022"
+
+[solver.js]
+object_model = true
+max_object_tokens_per_property = 1
+max_object_receiver_candidates_per_callsite = 1
+max_object_prototype_depth = 1

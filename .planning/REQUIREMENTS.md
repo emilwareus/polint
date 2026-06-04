@@ -42,7 +42,7 @@ Requirements for the v1.3 milestone. Each maps to exactly one roadmap phase.
 - [x] **JS-02**: polint builds proper lexical scopes (`var`, `let`, `const`, functions, classes, imports, destructuring, parameters, catch, re-exports) and a module graph covering ESM, CommonJS, and TypeScript path aliases.
 - [x] **JS-03**: polint emits JS/TS direct call bindings (`f()`, `ns.f()`, imported aliases, local aliases) as `CopyEdge` + `CallConstraint` constraints into the semantic graph.
 - [ ] **JS-04**: polint has a private JS/TS function-token propagation driver in `analysis::solver::ts_tokens` with per-variable token caps, a `"too-many-tokens"` sentinel, and `BudgetExceeded` reporting consumed by the unknown taxonomy.
-- [ ] **JS-05**: polint has a private JS/TS object/property/prototype/class/`this` model in `src/ts/object_model/` + `analysis::solver::ts_object_model` (allocation-site abstraction, bounded property buckets with computed-property handling, prototype-walk termination, `this` for arrow/method/constructor/bound/`call`/`apply`).
+- [x] **JS-05**: polint has a private JS/TS object/property/prototype/class/`this` model in `src/ts/object_model/` + `analysis::solver::ts_object_model` (allocation-site abstraction, bounded property buckets with computed-property handling, prototype-walk termination, `this` for arrow/method/constructor/bound/`call`/`apply`).
 
 ### Adaptation, Cache, Budgets, Taxonomy
 
@@ -126,7 +126,7 @@ Which phases cover which requirements. Filled by the roadmapper after roadmap cr
 | JS-02 | Phase 45 | Complete |
 | JS-03 | Phase 45 | Complete |
 | JS-04 | Phase 49 | Pending |
-| JS-05 | Phase 50 | Pending |
+| JS-05 | Phase 50 | Complete |
 | ADAPT-01 | Phase 51 | Pending |
 | ADAPT-02 | Phase 51 | Pending |
 | CACHE-01 | Phase 53 | Pending |

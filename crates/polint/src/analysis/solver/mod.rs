@@ -58,5 +58,6 @@ pub(crate) mod policy;
 pub(crate) mod provenance;
 pub(crate) mod provider;
 pub(crate) mod store;
+pub(crate) mod ts_object_model;
 pub(crate) mod ts_tokens;
 pub(crate) mod validate;
