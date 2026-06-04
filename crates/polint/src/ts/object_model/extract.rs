@@ -1,0 +1,1067 @@
+#![allow(
+    dead_code,
+    reason = "Phase 50 introduces TS object-model extraction before all provider consumers land"
+)]
+
+use std::collections::BTreeMap;
+use std::path::Path;
+
+use oxc_allocator::Allocator;
+use oxc_ast::AstKind;
+use oxc_ast::ast::{
+    Argument, AssignmentTarget, BindingPattern, Class, Expression, FunctionType, MethodDefinition,
+    MethodDefinitionKind, ObjectPropertyKind, Program, PropertyKey, VariableDeclarator,
+};
+use oxc_parser::Parser;
+use oxc_semantic::{AstNodes, NodeId, SemanticBuilder};
+use oxc_span::{GetSpan, SourceType};
+
+use crate::core::{SourceFile, Span, span_from_byte_range};
+use crate::ts::object_model::facts::{
+    TsObjectAllocationFact, TsObjectAllocationId, TsObjectAllocationKind, TsObjectModelStatus,
+    TsPropertyKey, TsPropertyKeyKind, TsPropertyReadFact, TsPropertyReadId, TsPropertyWriteFact,
+    TsPropertyWriteId, TsPrototypeLinkFact, TsPrototypeLinkId, TsPrototypeLinkKind,
+    TsReceiverBindingFact, TsReceiverBindingId, TsReceiverBindingKind,
+};
+use crate::ts::object_model::store::TsObjectModelOutput;
+
+pub(crate) fn extract_ts_object_model(file: &SourceFile) -> TsObjectModelOutput {
+    let source = file.source.as_ref();
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source, parse_source_type(&file.path)).parse();
+
+    if parsed.panicked && parsed.program.body.is_empty() {
+        return TsObjectModelOutput::default();
+    }
+
+    let semantic = SemanticBuilder::new().build(&parsed.program).semantic;
+    extract_ts_object_model_from_program(file, source, &parsed.program, semantic.nodes())
+        .normalized()
+}
+
+fn extract_ts_object_model_from_program(
+    file: &SourceFile,
+    source: &str,
+    _program: &Program<'_>,
+    nodes: &AstNodes<'_>,
+) -> TsObjectModelOutput {
+    let mut extractor = ObjectModelExtractor::new(file, source, nodes);
+    extractor.build()
+}
+
+struct ObjectModelExtractor<'a> {
+    file: &'a SourceFile,
+    source: &'a str,
+    nodes: &'a AstNodes<'a>,
+    variables_to_objects: BTreeMap<String, String>,
+    class_prototypes: BTreeMap<String, String>,
+}
+
+impl<'a> ObjectModelExtractor<'a> {
+    fn new(file: &'a SourceFile, source: &'a str, nodes: &'a AstNodes<'a>) -> Self {
+        Self {
+            file,
+            source,
+            nodes,
+            variables_to_objects: BTreeMap::new(),
+            class_prototypes: BTreeMap::new(),
+        }
+    }
+
+    fn build(&mut self) -> TsObjectModelOutput {
+        self.index_variable_allocations();
+
+        let mut output = TsObjectModelOutput::default();
+        let mut entries = self
+            .nodes
+            .iter_enumerated()
+            .map(|(node_id, node)| {
+                let span = node.kind().span();
+                (span.start, span.end, node_id, node.kind())
+            })
+            .collect::<Vec<_>>();
+        entries.sort_by_key(|(start, end, node_id, _)| (*start, *end, node_id.index()));
+
+        for (_, _, node_id, kind) in entries {
+            match kind {
+                AstKind::ObjectExpression(object) => {
+                    self.record_object_expression(node_id, object, &mut output);
+                }
+                AstKind::ArrayExpression(array) => {
+                    output.allocations.push(self.allocation_row(
+                        node_id,
+                        array.span,
+                        TsObjectAllocationKind::ArrayLiteral,
+                        None,
+                    ));
+                }
+                AstKind::Class(class) => self.record_class(node_id, class, &mut output),
+                AstKind::NewExpression(expression) => {
+                    self.record_new_expression(node_id, expression, &mut output);
+                }
+                AstKind::Function(function)
+                    if !matches!(function.r#type, FunctionType::FunctionDeclaration)
+                        && !matches!(
+                            self.nodes.parent_kind(node_id),
+                            AstKind::MethodDefinition(_)
+                        ) =>
+                {
+                    output.allocations.push(
+                        self.allocation_row(
+                            node_id,
+                            function.span,
+                            TsObjectAllocationKind::FunctionObject,
+                            function
+                                .id
+                                .as_ref()
+                                .map(|identifier| identifier.name.to_string())
+                                .or_else(|| variable_declarator_name(self.nodes, node_id)),
+                        ),
+                    );
+                }
+                AstKind::ArrowFunctionExpression(function) => {
+                    output.allocations.push(self.allocation_row(
+                        node_id,
+                        function.span,
+                        TsObjectAllocationKind::FunctionObject,
+                        variable_declarator_name(self.nodes, node_id),
+                    ));
+                    output.receiver_bindings.push(self.receiver_row(
+                        function.span,
+                        TsReceiverBindingKind::LexicalThis,
+                        None,
+                        None,
+                        Some("lexical-this".to_string()),
+                    ));
+                }
+                AstKind::StaticMemberExpression(member) => {
+                    output.property_reads.push(self.static_member_read(member));
+                }
+                AstKind::ComputedMemberExpression(member) => {
+                    output
+                        .property_reads
+                        .push(self.computed_member_read(member));
+                }
+                AstKind::PrivateFieldExpression(member) => {
+                    output.property_reads.push(self.private_member_read(member));
+                }
+                AstKind::AssignmentExpression(assignment) => {
+                    if let Some(write) =
+                        self.assignment_member_write(&assignment.left, &assignment.right)
+                    {
+                        output.property_writes.push(write);
+                    }
+                }
+                AstKind::CallExpression(call) => {
+                    if let Some(receiver) = self.receiver_binding_for_call(call) {
+                        output.receiver_bindings.push(receiver);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        output
+    }
+
+    fn index_variable_allocations(&mut self) {
+        for (node_id, node) in self.nodes.iter_enumerated() {
+            let AstKind::VariableDeclarator(declarator) = node.kind() else {
+                continue;
+            };
+            let Some(name) = binding_identifier_name(declarator) else {
+                continue;
+            };
+            let Some(init) = &declarator.init else {
+                continue;
+            };
+            let Some(kind) = allocation_kind_for_expression(init) else {
+                continue;
+            };
+            let stable_key = self.allocation_stable_key(
+                init.span(),
+                kind,
+                self.lexical_parent_key(node_id).as_deref(),
+                Some(name.as_str()),
+            );
+            self.variables_to_objects.insert(name, stable_key);
+        }
+    }
+
+    fn record_object_expression(
+        &self,
+        node_id: NodeId,
+        object: &oxc_ast::ast::ObjectExpression<'_>,
+        output: &mut TsObjectModelOutput,
+    ) {
+        let base_stable_key = self.allocation_stable_key(
+            object.span,
+            TsObjectAllocationKind::ObjectLiteral,
+            self.lexical_parent_key(node_id).as_deref(),
+            variable_declarator_name(self.nodes, node_id).as_deref(),
+        );
+        output.allocations.push(self.allocation_row(
+            node_id,
+            object.span,
+            TsObjectAllocationKind::ObjectLiteral,
+            variable_declarator_name(self.nodes, node_id),
+        ));
+
+        for property in &object.properties {
+            match property {
+                ObjectPropertyKind::ObjectProperty(property) => {
+                    let property_key = property_key(&property.key, property.computed);
+                    output.property_writes.push(TsPropertyWriteFact {
+                        id: TsPropertyWriteId(0),
+                        file: self.file.id,
+                        span: span_from_oxc(self.file.id, self.source, property.span),
+                        stable_key: self.operation_stable_key(
+                            "ts_object_property_write",
+                            property.span,
+                            &base_stable_key,
+                            &property_key.stable_label(),
+                        ),
+                        base_object_stable_key: base_stable_key.clone(),
+                        property_key,
+                        value_function: None,
+                        value_function_stable_key: expression_text(&property.value)
+                            .map(|name| format!("ts_value:{name}")),
+                        value_object_stable_key: self.object_key_for_expression(&property.value),
+                        status: TsObjectModelStatus::resolved(),
+                    });
+                }
+                ObjectPropertyKind::SpreadProperty(spread) => {
+                    let property_key = TsPropertyKey {
+                        kind: TsPropertyKeyKind::ComputedBucket,
+                        value: None,
+                    };
+                    output.property_writes.push(TsPropertyWriteFact {
+                        id: TsPropertyWriteId(0),
+                        file: self.file.id,
+                        span: span_from_oxc(self.file.id, self.source, spread.span),
+                        stable_key: self.operation_stable_key(
+                            "ts_object_property_write",
+                            spread.span,
+                            &base_stable_key,
+                            "computed_bucket",
+                        ),
+                        base_object_stable_key: base_stable_key.clone(),
+                        property_key,
+                        value_function: None,
+                        value_function_stable_key: None,
+                        value_object_stable_key: self.object_key_for_expression(&spread.argument),
+                        status: TsObjectModelStatus::unknown("spread property"),
+                    });
+                }
+            }
+        }
+    }
+
+    fn record_class(
+        &mut self,
+        node_id: NodeId,
+        class: &Class<'_>,
+        output: &mut TsObjectModelOutput,
+    ) {
+        let class_name = class_name(self.nodes, node_id, class);
+        let class_key = self.allocation_stable_key(
+            class.span,
+            TsObjectAllocationKind::ClassObject,
+            self.lexical_parent_key(node_id).as_deref(),
+            class_name.as_deref(),
+        );
+        let prototype_key = format!("{class_key}|prototype");
+        if let Some(name) = class_name.as_deref() {
+            self.variables_to_objects
+                .entry(name.to_string())
+                .or_insert_with(|| class_key.clone());
+            self.class_prototypes
+                .insert(name.to_string(), prototype_key.clone());
+        }
+
+        output.allocations.push(self.allocation_row(
+            node_id,
+            class.span,
+            TsObjectAllocationKind::ClassObject,
+            class_name,
+        ));
+        output.allocations.push(TsObjectAllocationFact {
+            id: TsObjectAllocationId(0),
+            file: self.file.id,
+            span: span_from_oxc(self.file.id, self.source, class.body.span),
+            stable_key: prototype_key.clone(),
+            lexical_parent_key: self.lexical_parent_key(node_id),
+            inventory_function: None,
+            inventory_function_stable_key: None,
+            inventory_callsite: None,
+            inventory_callsite_stable_key: None,
+            kind: TsObjectAllocationKind::PrototypeObject,
+            status: TsObjectModelStatus::resolved(),
+        });
+        output.prototype_links.push(TsPrototypeLinkFact {
+            id: TsPrototypeLinkId(0),
+            file: self.file.id,
+            span: span_from_oxc(self.file.id, self.source, class.span),
+            stable_key: self.operation_stable_key(
+                "ts_object_prototype_link",
+                class.span,
+                &class_key,
+                &prototype_key,
+            ),
+            kind: TsPrototypeLinkKind::ClassPrototype,
+            object_stable_key: class_key.clone(),
+            prototype_stable_key: prototype_key.clone(),
+            property_key: None,
+            status: TsObjectModelStatus::resolved(),
+        });
+
+        if let Some(super_class) = &class.super_class
+            && let Some(super_name) = expression_text(super_class)
+        {
+            let super_prototype = self
+                .class_prototypes
+                .get(&super_name)
+                .cloned()
+                .unwrap_or_else(|| format!("ts_class_prototype:{super_name}"));
+            output.prototype_links.push(TsPrototypeLinkFact {
+                id: TsPrototypeLinkId(0),
+                file: self.file.id,
+                span: span_from_oxc(self.file.id, self.source, super_class.span()),
+                stable_key: self.operation_stable_key(
+                    "ts_object_prototype_link",
+                    super_class.span(),
+                    &prototype_key,
+                    &super_prototype,
+                ),
+                kind: TsPrototypeLinkKind::ClassExtends,
+                object_stable_key: prototype_key.clone(),
+                prototype_stable_key: super_prototype,
+                property_key: None,
+                status: TsObjectModelStatus::resolved(),
+            });
+        }
+
+        for element in &class.body.body {
+            let oxc_ast::ast::ClassElement::MethodDefinition(method) = element else {
+                continue;
+            };
+            self.record_method_property_write(method, &class_key, &prototype_key, output);
+        }
+    }
+
+    fn record_method_property_write(
+        &self,
+        method: &MethodDefinition<'_>,
+        class_key: &str,
+        prototype_key: &str,
+        output: &mut TsObjectModelOutput,
+    ) {
+        let property_key = property_key(&method.key, method.computed);
+        let base_object_stable_key = if method.r#static {
+            class_key.to_string()
+        } else {
+            prototype_key.to_string()
+        };
+        output.property_writes.push(TsPropertyWriteFact {
+            id: TsPropertyWriteId(0),
+            file: self.file.id,
+            span: span_from_oxc(self.file.id, self.source, method.span),
+            stable_key: self.operation_stable_key(
+                "ts_object_property_write",
+                method.span,
+                &base_object_stable_key,
+                &property_key.stable_label(),
+            ),
+            base_object_stable_key,
+            property_key,
+            value_function: None,
+            value_function_stable_key: Some(self.method_stable_key(method)),
+            value_object_stable_key: None,
+            status: TsObjectModelStatus::resolved(),
+        });
+    }
+
+    fn record_new_expression(
+        &self,
+        node_id: NodeId,
+        expression: &oxc_ast::ast::NewExpression<'_>,
+        output: &mut TsObjectModelOutput,
+    ) {
+        output.allocations.push(self.allocation_row(
+            node_id,
+            expression.span,
+            TsObjectAllocationKind::ClassInstance,
+            expression_text(&expression.callee),
+        ));
+    }
+
+    fn static_member_read(
+        &self,
+        member: &oxc_ast::ast::StaticMemberExpression<'_>,
+    ) -> TsPropertyReadFact {
+        let property_key = TsPropertyKey {
+            kind: TsPropertyKeyKind::Static,
+            value: Some(member.property.name.to_string()),
+        };
+        self.member_read(member.span, &member.object, property_key)
+    }
+
+    fn computed_member_read(
+        &self,
+        member: &oxc_ast::ast::ComputedMemberExpression<'_>,
+    ) -> TsPropertyReadFact {
+        let property_key = property_key_from_expression(&member.expression);
+        self.member_read(member.span, &member.object, property_key)
+    }
+
+    fn private_member_read(
+        &self,
+        member: &oxc_ast::ast::PrivateFieldExpression<'_>,
+    ) -> TsPropertyReadFact {
+        let property_key = TsPropertyKey {
+            kind: TsPropertyKeyKind::Private,
+            value: Some(member.field.name.to_string()),
+        };
+        self.member_read(member.span, &member.object, property_key)
+    }
+
+    fn member_read(
+        &self,
+        span: oxc_span::Span,
+        object: &Expression<'_>,
+        property_key: TsPropertyKey,
+    ) -> TsPropertyReadFact {
+        let base_object_stable_key = self
+            .object_key_for_expression(object)
+            .unwrap_or_else(|| expression_object_key(object));
+        TsPropertyReadFact {
+            id: TsPropertyReadId(0),
+            file: self.file.id,
+            span: span_from_oxc(self.file.id, self.source, span),
+            stable_key: self.operation_stable_key(
+                "ts_object_property_read",
+                span,
+                &base_object_stable_key,
+                &property_key.stable_label(),
+            ),
+            base_object_stable_key,
+            property_key,
+            destination_stable_key: None,
+            callsite: None,
+            callsite_stable_key: None,
+            status: TsObjectModelStatus::resolved(),
+        }
+    }
+
+    fn assignment_member_write(
+        &self,
+        left: &AssignmentTarget<'_>,
+        right: &Expression<'_>,
+    ) -> Option<TsPropertyWriteFact> {
+        let (span, object, property_key) = match left {
+            AssignmentTarget::StaticMemberExpression(member) => (
+                member.span,
+                &member.object,
+                TsPropertyKey {
+                    kind: TsPropertyKeyKind::Static,
+                    value: Some(member.property.name.to_string()),
+                },
+            ),
+            AssignmentTarget::ComputedMemberExpression(member) => (
+                member.span,
+                &member.object,
+                property_key_from_expression(&member.expression),
+            ),
+            AssignmentTarget::PrivateFieldExpression(member) => (
+                member.span,
+                &member.object,
+                TsPropertyKey {
+                    kind: TsPropertyKeyKind::Private,
+                    value: Some(member.field.name.to_string()),
+                },
+            ),
+            _ => return None,
+        };
+        let base_object_stable_key = self
+            .object_key_for_expression(object)
+            .unwrap_or_else(|| expression_object_key(object));
+        Some(TsPropertyWriteFact {
+            id: TsPropertyWriteId(0),
+            file: self.file.id,
+            span: span_from_oxc(self.file.id, self.source, span),
+            stable_key: self.operation_stable_key(
+                "ts_object_property_write",
+                span,
+                &base_object_stable_key,
+                &property_key.stable_label(),
+            ),
+            base_object_stable_key,
+            property_key,
+            value_function: None,
+            value_function_stable_key: expression_text(right)
+                .map(|name| format!("ts_value:{name}")),
+            value_object_stable_key: self.object_key_for_expression(right),
+            status: TsObjectModelStatus::resolved(),
+        })
+    }
+
+    fn receiver_binding_for_call(
+        &self,
+        call: &oxc_ast::ast::CallExpression<'_>,
+    ) -> Option<TsReceiverBindingFact> {
+        let Expression::StaticMemberExpression(member) = &call.callee else {
+            return None;
+        };
+        let name = member.property.name.as_str();
+        let kind = match name {
+            "bind" => TsReceiverBindingKind::BoundFunction,
+            "call" => TsReceiverBindingKind::CallReceiver,
+            "apply" => TsReceiverBindingKind::ApplyReceiver,
+            _ => TsReceiverBindingKind::MethodCall,
+        };
+        let receiver = if matches!(
+            kind,
+            TsReceiverBindingKind::BoundFunction
+                | TsReceiverBindingKind::CallReceiver
+                | TsReceiverBindingKind::ApplyReceiver
+        ) {
+            call.arguments.first().and_then(argument_expression)
+        } else {
+            Some(&member.object)
+        };
+        Some(self.receiver_row(
+            call.span,
+            kind,
+            Some(expression_object_key(&member.object)),
+            receiver.and_then(|expression| self.object_key_for_expression(expression)),
+            None,
+        ))
+    }
+
+    fn receiver_row(
+        &self,
+        span: oxc_span::Span,
+        kind: TsReceiverBindingKind,
+        callee_function_stable_key: Option<String>,
+        receiver_object_stable_key: Option<String>,
+        lexical_parent_key: Option<String>,
+    ) -> TsReceiverBindingFact {
+        TsReceiverBindingFact {
+            id: TsReceiverBindingId(0),
+            file: self.file.id,
+            span: span_from_oxc(self.file.id, self.source, span),
+            stable_key: self.operation_stable_key(
+                "ts_object_receiver_binding",
+                span,
+                kind.as_str(),
+                receiver_object_stable_key
+                    .as_deref()
+                    .unwrap_or("unknown_receiver"),
+            ),
+            kind,
+            callsite: None,
+            callsite_stable_key: None,
+            callee_function: None,
+            callee_function_stable_key,
+            receiver_object_stable_key,
+            receiver_place_stable_key: None,
+            lexical_parent_key,
+            status: TsObjectModelStatus::resolved(),
+        }
+    }
+
+    fn allocation_row(
+        &self,
+        node_id: NodeId,
+        span: oxc_span::Span,
+        kind: TsObjectAllocationKind,
+        display_name: Option<String>,
+    ) -> TsObjectAllocationFact {
+        TsObjectAllocationFact {
+            id: TsObjectAllocationId(0),
+            file: self.file.id,
+            span: span_from_oxc(self.file.id, self.source, span),
+            stable_key: self.allocation_stable_key(
+                span,
+                kind,
+                self.lexical_parent_key(node_id).as_deref(),
+                display_name.as_deref(),
+            ),
+            lexical_parent_key: self.lexical_parent_key(node_id),
+            inventory_function: None,
+            inventory_function_stable_key: None,
+            inventory_callsite: None,
+            inventory_callsite_stable_key: None,
+            kind,
+            status: TsObjectModelStatus::resolved(),
+        }
+    }
+
+    fn object_key_for_expression(&self, expression: &Expression<'_>) -> Option<String> {
+        match expression {
+            Expression::Identifier(identifier) => self
+                .variables_to_objects
+                .get(identifier.name.as_str())
+                .cloned(),
+            Expression::ObjectExpression(object) => Some(self.allocation_stable_key(
+                object.span,
+                TsObjectAllocationKind::ObjectLiteral,
+                None,
+                None,
+            )),
+            Expression::ArrayExpression(array) => Some(self.allocation_stable_key(
+                array.span,
+                TsObjectAllocationKind::ArrayLiteral,
+                None,
+                None,
+            )),
+            Expression::NewExpression(expression) => Some(self.allocation_stable_key(
+                expression.span,
+                TsObjectAllocationKind::ClassInstance,
+                None,
+                expression_text(&expression.callee).as_deref(),
+            )),
+            Expression::ParenthesizedExpression(expression) => {
+                self.object_key_for_expression(&expression.expression)
+            }
+            Expression::TSAsExpression(expression) => {
+                self.object_key_for_expression(&expression.expression)
+            }
+            Expression::TSSatisfiesExpression(expression) => {
+                self.object_key_for_expression(&expression.expression)
+            }
+            Expression::TSNonNullExpression(expression) => {
+                self.object_key_for_expression(&expression.expression)
+            }
+            Expression::TSTypeAssertion(expression) => {
+                self.object_key_for_expression(&expression.expression)
+            }
+            _ => None,
+        }
+    }
+
+    fn method_stable_key(&self, method: &MethodDefinition<'_>) -> String {
+        stable_object_key(
+            "ts_object_method",
+            &[
+                ("file", self.file.relative_path.clone()),
+                ("kind", method_kind_label(method.kind).to_string()),
+                (
+                    "key",
+                    property_key(&method.key, method.computed).stable_label(),
+                ),
+                ("start", method.span.start.to_string()),
+                ("end", method.span.end.to_string()),
+            ],
+        )
+    }
+
+    fn lexical_parent_key(&self, node_id: NodeId) -> Option<String> {
+        self.nodes
+            .ancestors_enumerated(node_id)
+            .find_map(|(_, node)| match node.kind() {
+                AstKind::Function(function) => Some(parent_key(
+                    self.file,
+                    function.span,
+                    "function",
+                    function
+                        .id
+                        .as_ref()
+                        .map(|identifier| identifier.name.to_string()),
+                )),
+                AstKind::ArrowFunctionExpression(function) => Some(parent_key(
+                    self.file,
+                    function.span,
+                    "arrow",
+                    variable_declarator_name(self.nodes, node_id),
+                )),
+                AstKind::MethodDefinition(method) => Some(parent_key(
+                    self.file,
+                    method.span,
+                    method_kind_label(method.kind),
+                    method_name(method),
+                )),
+                AstKind::Class(class) => Some(parent_key(
+                    self.file,
+                    class.span,
+                    "class",
+                    class_name(self.nodes, node_id, class),
+                )),
+                _ => None,
+            })
+            .or_else(|| {
+                Some(format!(
+                    "ts_object_parent:{}:module",
+                    self.file.relative_path
+                ))
+            })
+    }
+
+    fn allocation_stable_key(
+        &self,
+        span: oxc_span::Span,
+        kind: TsObjectAllocationKind,
+        lexical_parent_key: Option<&str>,
+        display_name: Option<&str>,
+    ) -> String {
+        stable_object_key(
+            "ts_object_allocation",
+            &[
+                ("file", self.file.relative_path.clone()),
+                ("kind", kind.as_str().to_string()),
+                ("start", span.start.to_string()),
+                ("end", span.end.to_string()),
+                (
+                    "parent",
+                    lexical_parent_key.unwrap_or("<module>").to_string(),
+                ),
+                ("display", display_name.unwrap_or("<anonymous>").to_string()),
+            ],
+        )
+    }
+
+    fn operation_stable_key(
+        &self,
+        prefix: &str,
+        span: oxc_span::Span,
+        base: &str,
+        label: &str,
+    ) -> String {
+        stable_object_key(
+            prefix,
+            &[
+                ("file", self.file.relative_path.clone()),
+                ("start", span.start.to_string()),
+                ("end", span.end.to_string()),
+                ("base", base.to_string()),
+                ("label", label.to_string()),
+            ],
+        )
+    }
+}
+
+fn allocation_kind_for_expression(expression: &Expression<'_>) -> Option<TsObjectAllocationKind> {
+    match expression {
+        Expression::ObjectExpression(_) => Some(TsObjectAllocationKind::ObjectLiteral),
+        Expression::ArrayExpression(_) => Some(TsObjectAllocationKind::ArrayLiteral),
+        Expression::FunctionExpression(_) | Expression::ArrowFunctionExpression(_) => {
+            Some(TsObjectAllocationKind::FunctionObject)
+        }
+        Expression::ClassExpression(_) => Some(TsObjectAllocationKind::ClassObject),
+        Expression::NewExpression(_) => Some(TsObjectAllocationKind::ClassInstance),
+        _ => None,
+    }
+}
+
+fn binding_identifier_name(declarator: &VariableDeclarator<'_>) -> Option<String> {
+    match &declarator.id {
+        BindingPattern::BindingIdentifier(identifier) => Some(identifier.name.to_string()),
+        _ => None,
+    }
+}
+
+fn variable_declarator_name(nodes: &AstNodes<'_>, node_id: NodeId) -> Option<String> {
+    match nodes.parent_kind(node_id) {
+        AstKind::VariableDeclarator(declarator) => binding_identifier_name(declarator),
+        _ => None,
+    }
+}
+
+fn class_name(nodes: &AstNodes<'_>, node_id: NodeId, class: &Class<'_>) -> Option<String> {
+    class
+        .id
+        .as_ref()
+        .map(|identifier| identifier.name.to_string())
+        .or_else(|| variable_declarator_name(nodes, node_id))
+}
+
+fn method_name(method: &MethodDefinition<'_>) -> Option<String> {
+    match &method.key {
+        PropertyKey::StaticIdentifier(identifier) => Some(identifier.name.to_string()),
+        PropertyKey::PrivateIdentifier(identifier) => Some(format!("#{}", identifier.name)),
+        PropertyKey::StringLiteral(literal) => Some(literal.value.to_string()),
+        _ => None,
+    }
+}
+
+fn method_kind_label(kind: MethodDefinitionKind) -> &'static str {
+    match kind {
+        MethodDefinitionKind::Constructor => "constructor",
+        MethodDefinitionKind::Method => "method",
+        MethodDefinitionKind::Get => "get",
+        MethodDefinitionKind::Set => "set",
+    }
+}
+
+fn property_key(key: &PropertyKey<'_>, computed: bool) -> TsPropertyKey {
+    if computed {
+        return property_key_from_property_expression(key);
+    }
+    match key {
+        PropertyKey::StaticIdentifier(identifier) => TsPropertyKey {
+            kind: TsPropertyKeyKind::Static,
+            value: Some(identifier.name.to_string()),
+        },
+        PropertyKey::PrivateIdentifier(identifier) => TsPropertyKey {
+            kind: TsPropertyKeyKind::Private,
+            value: Some(identifier.name.to_string()),
+        },
+        PropertyKey::StringLiteral(literal) => TsPropertyKey {
+            kind: TsPropertyKeyKind::StringLiteral,
+            value: Some(literal.value.to_string()),
+        },
+        PropertyKey::NumericLiteral(literal) => TsPropertyKey {
+            kind: TsPropertyKeyKind::NumericLiteral,
+            value: Some(literal.value.to_string()),
+        },
+        _ => TsPropertyKey {
+            kind: TsPropertyKeyKind::UnknownBucket,
+            value: None,
+        },
+    }
+}
+
+fn property_key_from_property_expression(key: &PropertyKey<'_>) -> TsPropertyKey {
+    match key {
+        PropertyKey::StringLiteral(literal) => TsPropertyKey {
+            kind: TsPropertyKeyKind::StringLiteral,
+            value: Some(literal.value.to_string()),
+        },
+        PropertyKey::NumericLiteral(literal) => TsPropertyKey {
+            kind: TsPropertyKeyKind::NumericLiteral,
+            value: Some(literal.value.to_string()),
+        },
+        _ => TsPropertyKey {
+            kind: TsPropertyKeyKind::ComputedBucket,
+            value: None,
+        },
+    }
+}
+
+fn property_key_from_expression(expression: &Expression<'_>) -> TsPropertyKey {
+    match expression {
+        Expression::StringLiteral(literal) => TsPropertyKey {
+            kind: TsPropertyKeyKind::StringLiteral,
+            value: Some(literal.value.to_string()),
+        },
+        Expression::NumericLiteral(literal) => TsPropertyKey {
+            kind: TsPropertyKeyKind::NumericLiteral,
+            value: Some(literal.value.to_string()),
+        },
+        _ => TsPropertyKey {
+            kind: TsPropertyKeyKind::ComputedBucket,
+            value: None,
+        },
+    }
+}
+
+fn argument_expression<'a>(argument: &'a Argument<'a>) -> Option<&'a Expression<'a>> {
+    match argument {
+        Argument::SpreadElement(_) => None,
+        _ => argument.as_expression(),
+    }
+}
+
+fn expression_text(expression: &Expression<'_>) -> Option<String> {
+    match expression {
+        Expression::Identifier(identifier) => Some(identifier.name.to_string()),
+        Expression::ThisExpression(_) => Some("this".to_string()),
+        Expression::StaticMemberExpression(member) => expression_text(&member.object)
+            .map(|object| format!("{object}.{}", member.property.name)),
+        Expression::ComputedMemberExpression(member) => {
+            let object = expression_text(&member.object)?;
+            let property =
+                expression_text(&member.expression).unwrap_or_else(|| "<computed>".to_string());
+            Some(format!("{object}[{property}]"))
+        }
+        Expression::PrivateFieldExpression(member) => {
+            expression_text(&member.object).map(|object| format!("{object}.#{}", member.field.name))
+        }
+        Expression::StringLiteral(literal) => Some(literal.value.to_string()),
+        Expression::NumericLiteral(literal) => Some(literal.value.to_string()),
+        Expression::ParenthesizedExpression(expression) => expression_text(&expression.expression),
+        Expression::TSAsExpression(expression) => expression_text(&expression.expression),
+        Expression::TSSatisfiesExpression(expression) => expression_text(&expression.expression),
+        Expression::TSNonNullExpression(expression) => expression_text(&expression.expression),
+        Expression::TSTypeAssertion(expression) => expression_text(&expression.expression),
+        _ => None,
+    }
+}
+
+fn expression_object_key(expression: &Expression<'_>) -> String {
+    stable_object_key(
+        "ts_object_expression",
+        &[(
+            "display",
+            expression_text(expression).unwrap_or_else(|| "<unknown>".to_string()),
+        )],
+    )
+}
+
+fn parent_key(
+    file: &SourceFile,
+    span: oxc_span::Span,
+    kind: &str,
+    display_name: Option<String>,
+) -> String {
+    stable_object_key(
+        "ts_object_parent",
+        &[
+            ("file", file.relative_path.clone()),
+            ("kind", kind.to_string()),
+            ("start", span.start.to_string()),
+            ("end", span.end.to_string()),
+            (
+                "display",
+                display_name.as_deref().unwrap_or("<anonymous>").to_string(),
+            ),
+        ],
+    )
+}
+
+fn stable_object_key(prefix: &str, parts: &[(&str, String)]) -> String {
+    let mut normalized = parts
+        .iter()
+        .map(|(label, value)| (*label, value.replace('\\', "/")))
+        .collect::<Vec<_>>();
+    normalized.sort_by(|left, right| left.0.cmp(right.0));
+
+    let mut key = length_prefixed(prefix);
+    for (label, value) in normalized {
+        key.push('|');
+        key.push_str(&length_prefixed(label));
+        key.push('=');
+        key.push_str(&length_prefixed(&value));
+    }
+    key
+}
+
+fn length_prefixed(value: &str) -> String {
+    format!("{}:{}", value.len(), value)
+}
+
+fn parse_source_type(path: &Path) -> SourceType {
+    SourceType::from_path(path).unwrap_or_default()
+}
+
+fn span_from_oxc(file: crate::core::FileId, source: &str, span: oxc_span::Span) -> Span {
+    span_from_byte_range(file, source, span.start as usize, span.end as usize)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use crate::core::AnalysisDb;
+    use crate::ts::object_model::facts::{
+        TsObjectAllocationKind, TsPropertyKeyKind, TsReceiverBindingKind,
+    };
+
+    use super::*;
+
+    #[test]
+    fn object_literal_shorthand_yields_allocation_and_static_property_write() {
+        let output = extract(
+            r#"
+function target() {}
+const holder = { target };
+"#,
+        );
+
+        assert!(
+            output
+                .allocations
+                .iter()
+                .any(|allocation| allocation.kind == TsObjectAllocationKind::ObjectLiteral)
+        );
+        assert!(output.property_writes.iter().any(|write| {
+            write.property_key.kind == TsPropertyKeyKind::Static
+                && write.property_key.value.as_deref() == Some("target")
+        }));
+    }
+
+    #[test]
+    fn exact_string_element_access_yields_string_literal_property_read() {
+        let output = extract(
+            r#"
+function target() {}
+const holder = { target };
+holder["target"]();
+"#,
+        );
+
+        assert!(output.property_reads.iter().any(|read| {
+            read.property_key.kind == TsPropertyKeyKind::StringLiteral
+                && read.property_key.value.as_deref() == Some("target")
+        }));
+    }
+
+    #[test]
+    fn dynamic_element_access_yields_computed_bucket_property_read() {
+        let output = extract(
+            r#"
+const key = "target";
+const holder = {};
+holder[key]();
+"#,
+        );
+
+        assert!(
+            output
+                .property_reads
+                .iter()
+                .any(|read| read.property_key.kind == TsPropertyKeyKind::ComputedBucket)
+        );
+    }
+
+    #[test]
+    fn class_method_yields_class_prototype_and_method_property_facts() {
+        let output = extract(
+            r#"
+class C {
+  m() {}
+}
+"#,
+        );
+
+        assert!(
+            output
+                .allocations
+                .iter()
+                .any(|allocation| allocation.kind == TsObjectAllocationKind::ClassObject)
+        );
+        assert!(
+            output
+                .allocations
+                .iter()
+                .any(|allocation| allocation.kind == TsObjectAllocationKind::PrototypeObject)
+        );
+        assert!(output.property_writes.iter().any(|write| {
+            write.property_key.kind == TsPropertyKeyKind::Static
+                && write.property_key.value.as_deref() == Some("m")
+                && write.value_function_stable_key.is_some()
+        }));
+        assert!(!output.prototype_links.is_empty());
+    }
+
+    #[test]
+    fn arrow_function_yields_lexical_receiver_marker() {
+        let output = extract("const f = () => this.target;\n");
+
+        assert!(output.receiver_bindings.iter().any(|binding| {
+            binding.kind == TsReceiverBindingKind::LexicalThis
+                && binding.lexical_parent_key.as_deref() == Some("lexical-this")
+        }));
+    }
+
+    fn extract(source: &str) -> TsObjectModelOutput {
+        let mut db = AnalysisDb::new();
+        let file_id = db.add_file(
+            PathBuf::from("fixture.ts"),
+            "fixture.ts".to_string(),
+            source.to_string(),
+        );
+        let file = db.file(file_id).expect("source file exists");
+        extract_ts_object_model(file)
+    }
+}
