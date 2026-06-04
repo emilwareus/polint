@@ -436,7 +436,14 @@ mod tests {
         // A kind with no rows resolves to an empty slice.
         assert!(
             store
-                .constraints_for_kind(&ConstraintKind::ModelEdge)
+                .constraints_for_kind(&ConstraintKind::ModelEdge {
+                    source: SemanticNodeId(0),
+                    target: SemanticNodeId(1),
+                    language: "typescript".to_string(),
+                    scope: "src/app.ts".to_string(),
+                    confidence: "heuristic".to_string(),
+                    evidence: Vec::new(),
+                })
                 .is_empty()
         );
         // The stored constraint's callsite was remapped to the post-sort node id of

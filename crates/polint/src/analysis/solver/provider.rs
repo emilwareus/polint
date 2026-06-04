@@ -277,6 +277,26 @@ fn solver_output_digest(
             "budget.object.max_object_worklist_steps={}",
             budget.object.max_object_worklist_steps
         ),
+        format!(
+            "budget.adaptation.max_model_files={}",
+            budget.adaptation.max_model_files
+        ),
+        format!(
+            "budget.adaptation.max_model_facts={}",
+            budget.adaptation.max_model_facts
+        ),
+        format!(
+            "budget.adaptation.max_expansions_per_model={}",
+            budget.adaptation.max_expansions_per_model
+        ),
+        format!(
+            "budget.adaptation.max_targets_per_source={}",
+            budget.adaptation.max_targets_per_source
+        ),
+        format!(
+            "budget.adaptation.max_model_derived_edges={}",
+            budget.adaptation.max_model_derived_edges
+        ),
         // Run-level budget status (WR-06): two runs over the same inputs that produce
         // the same SURVIVING edge set but differ in whether the budget was exhausted
         // (WithinBudget vs BudgetExceeded) must NOT share an output digest. A fixpoint
@@ -756,6 +776,41 @@ mod tests {
         assert_ne!(
             base, changed,
             "changing an object-model budget knob must invalidate solver output"
+        );
+    }
+
+    #[test]
+    fn adaptation_model_budget_change_invalidates_output_digest() {
+        let mut db_a = db_with_copy_chain();
+        let snapshot = snapshot(&db_a);
+        let base = derive_solver_with_cache_stats(
+            &mut db_a,
+            &snapshot,
+            manifest(),
+            SolverBudget::default(),
+            absent("polint.semantic_graph"),
+            absent("polint.type_value_alias"),
+            absent("polint.go.semantic"),
+        )
+        .output_digest;
+
+        let mut bumped = SolverBudget::default();
+        bumped.adaptation.max_model_derived_edges += 1;
+        let mut db_b = db_with_copy_chain();
+        let changed = derive_solver_with_cache_stats(
+            &mut db_b,
+            &snapshot,
+            manifest(),
+            bumped,
+            absent("polint.semantic_graph"),
+            absent("polint.type_value_alias"),
+            absent("polint.go.semantic"),
+        )
+        .output_digest;
+
+        assert_ne!(
+            base, changed,
+            "changing an adaptation-model budget knob must invalidate solver output"
         );
     }
 
