@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use crate::eval::matcher::{MatchItemKind, MatchOutcome};
-use crate::eval::model::{ObservedItem, ObservedStatus};
+use crate::eval::model::{ObservedFact, ObservedItem, ObservedStatus};
 use crate::eval::report::{CaseResult, EvaluationRun, normalize_run};
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -334,18 +334,26 @@ fn model_fact_keys(case: Option<&CaseResult>) -> BTreeMap<String, Option<Observe
     case.into_iter()
         .flat_map(|case| case.observed.iter())
         .filter_map(|item| match item {
-            ObservedItem::Fact(fact)
-                if fact
-                    .producer_id
-                    .as_deref()
-                    .is_some_and(|producer| producer.contains("adaptation"))
-                    || fact.family.contains("adaptation_model") =>
-            {
+            ObservedItem::Fact(fact) if is_adaptation_model_fact(fact) => {
                 Some((format!("{}:{}", fact.family, fact.stable_key), fact.status))
             }
             _ => None,
         })
         .collect()
+}
+
+fn is_adaptation_model_fact(fact: &ObservedFact) -> bool {
+    fact.family.contains("adaptation_model")
+        || fact.producer_id.as_deref().is_some_and(|producer| {
+            matches!(
+                producer,
+                "polint.adaptation.model" | "polint.adaptation_model" | "polint.adaptation-model"
+            )
+        })
+        || fact
+            .provenance
+            .as_deref()
+            .is_some_and(|provenance| provenance.contains("adaptation_model"))
 }
 
 fn is_false_positive_outcome(outcome: MatchOutcome) -> bool {
@@ -485,6 +493,27 @@ mod tests {
         assert_eq!(delta.rejected_model_facts, 1);
         assert_eq!(delta.accepted_extension_facts, 0);
         assert_eq!(delta.runtime_overhead_ratio, Some(1.5));
+    }
+
+    #[test]
+    fn extension_adaptation_facts_do_not_count_as_model_facts() {
+        let baseline = run(vec![case("case-a", Vec::new(), Vec::new(), Some(10))]);
+        let adapted = run(vec![case(
+            "case-a",
+            Vec::new(),
+            vec![extension_adaptation_fact(
+                "extension.adaptation",
+                "extension.adaptation.accepted_source",
+                ObservedStatus::Accepted,
+            )],
+            Some(10),
+        )]);
+
+        let delta = compute_adaptation_delta(&baseline, &adapted);
+
+        assert_eq!(delta.accepted_extension_facts, 1);
+        assert_eq!(delta.accepted_model_facts, 0);
+        assert_eq!(delta.rejected_model_facts, 0);
     }
 
     #[test]
@@ -666,6 +695,23 @@ mod tests {
             stable_key: stable_key.to_string(),
             mode: AssertionMode::Exact,
             producer_id: Some("polint.extension.test".to_string()),
+            provenance: Some("extension".to_string()),
+            precision: Some("heuristic".to_string()),
+            status: Some(status),
+            payload: None,
+        })
+    }
+
+    fn extension_adaptation_fact(
+        family: &str,
+        stable_key: &str,
+        status: ObservedStatus,
+    ) -> ObservedItem {
+        ObservedItem::Fact(ObservedFact {
+            family: family.to_string(),
+            stable_key: stable_key.to_string(),
+            mode: AssertionMode::Exact,
+            producer_id: Some("polint.extension.adaptation".to_string()),
             provenance: Some("extension".to_string()),
             precision: Some("heuristic".to_string()),
             status: Some(status),

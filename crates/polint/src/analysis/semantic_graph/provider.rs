@@ -1,5 +1,14 @@
+use std::fs;
+use std::path::Path;
+
+use crate::analysis::adaptation::budget::AdaptationModelBudget;
+use crate::analysis::adaptation::cache_key::adaptation_model_digest;
+use crate::analysis::adaptation::loader::load_model_file;
+use crate::analysis::adaptation::store::AdaptationModelStore;
+use crate::analysis::adaptation::validate::ValidationUniverse;
 use crate::analysis::semantic_graph::build::{
-    build_semantic_graph_with_ts_direct_bindings, collect_ts_direct_bindings,
+    build_semantic_graph_with_ts_direct_bindings,
+    build_semantic_graph_with_ts_direct_bindings_and_adaptation_models, collect_ts_direct_bindings,
 };
 use crate::analysis::semantic_graph::cache_key::semantic_graph_provider_parameter_digest;
 use crate::analysis::semantic_graph::store::{SEMANTIC_GRAPH_PROVIDER_ID, SemanticGraphOutput};
@@ -7,13 +16,18 @@ use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
     CacheStats, Digest, DigestKind, InputComponent, InputSnapshot,
 };
+use crate::config::LoadedConfig;
 use crate::core::AnalysisDb;
 use crate::diagnostics::{Diagnostic, TextRange};
+use crate::repo_fs::read_repo_file_to_string_with_limit;
 use crate::ts::binding::store::{
     ts_direct_binding_output_digest, ts_direct_binding_provider_parameter_digest,
 };
 use crate::ts::object_model::extract::extract_ts_object_model;
 use crate::ts::object_model::store::TsObjectModelOutput;
+
+const ADAPTATION_MODEL_DIR: &str = ".polint/models";
+const ADAPTATION_MODEL_MAX_BYTES: u64 = 1_048_576;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SemanticGraphProviderRunOutput {
@@ -44,6 +58,8 @@ pub(crate) struct SemanticGraphProviderRunOutput {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn derive_semantic_graph_with_cache_stats(
     db: &mut AnalysisDb,
+    loaded: &LoadedConfig,
+    adaptation_budget: AdaptationModelBudget,
     input_snapshot: &InputSnapshot,
     manifest: &ProviderManifest,
     calls_output_digest: Digest,
@@ -80,8 +96,15 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
     // stable-key order the digest is computed over.
     let ts_direct_bindings = collect_ts_direct_bindings(db);
     let ts_direct_binding_output_digest = ts_direct_binding_output_digest(&ts_direct_bindings);
-    let output =
+    let base_output =
         build_semantic_graph_with_ts_direct_bindings(db, &ts_direct_bindings.bindings).normalized();
+    let adaptation_models = collect_adaptation_model_input(loaded, &base_output, adaptation_budget);
+    let output = build_semantic_graph_with_ts_direct_bindings_and_adaptation_models(
+        db,
+        &ts_direct_bindings.bindings,
+        &adaptation_models.store,
+    )
+    .normalized();
 
     // Phase 4: digest over the stored stable KEYS (never dense IDs — see
     // `semantic_graph_output_digest`), with the empty-output sentinel.
@@ -101,6 +124,7 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
         &ts_syntax_output_digest,
         &semantic_mir_output_digest,
         &ts_direct_binding_output_digest,
+        &adaptation_models.digest,
         &go_semantic_output_digest,
         &output,
     );
@@ -110,16 +134,228 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
     // digest certifies were not persisted, so return output_digest: None.
     match db.replace_semantic_graph_facts(output) {
         Ok(()) => SemanticGraphProviderRunOutput {
-            diagnostics: Vec::new(),
+            diagnostics: adaptation_models.diagnostics,
             cache_stats,
             output_digest: Some(output_digest),
         },
         Err(error) => SemanticGraphProviderRunOutput {
-            diagnostics: vec![provider_error_diagnostic(error.to_string())],
+            diagnostics: {
+                let mut diagnostics = adaptation_models.diagnostics;
+                diagnostics.push(provider_error_diagnostic(error.to_string()));
+                diagnostics
+            },
             cache_stats,
             output_digest: None,
         },
     }
+}
+
+#[derive(Debug)]
+struct AdaptationModelProviderInput {
+    store: AdaptationModelStore,
+    diagnostics: Vec<Diagnostic>,
+    digest: Digest,
+}
+
+fn collect_adaptation_model_input(
+    loaded: &LoadedConfig,
+    base_output: &SemanticGraphOutput,
+    budget: AdaptationModelBudget,
+) -> AdaptationModelProviderInput {
+    let mut diagnostics = Vec::new();
+    let mut digest_parts = budget.digest_parts();
+    let model_paths =
+        discover_adaptation_model_paths(&loaded.root, &mut diagnostics, &mut digest_parts);
+    digest_parts.push(format!("model_file_count={}", model_paths.len()));
+
+    let mut facts = Vec::new();
+    for relative_path in model_paths.iter().take(budget.max_model_files) {
+        match read_repo_file_to_string_with_limit(
+            &loaded.root,
+            relative_path,
+            ADAPTATION_MODEL_MAX_BYTES,
+        ) {
+            Ok(contents) => {
+                digest_parts.push(format!(
+                    "model_file={relative_path}:content={}",
+                    crate::cache::stable_hash(&[contents.as_str()])
+                ));
+                match load_model_file(relative_path, &contents) {
+                    Ok(mut loaded_facts) => facts.append(&mut loaded_facts),
+                    Err(error) => {
+                        diagnostics.push(adaptation_model_diagnostic(
+                            relative_path,
+                            format!("Adaptation model file was ignored: {error}"),
+                            "load_error",
+                            error.to_string(),
+                        ));
+                        digest_parts.push(format!("model_file={relative_path}:load_error={error}"));
+                    }
+                }
+            }
+            Err(error) => {
+                diagnostics.push(adaptation_model_diagnostic(
+                    relative_path,
+                    format!("Adaptation model file was ignored: {error}"),
+                    "read_error",
+                    error.stable_reason().to_string(),
+                ));
+                digest_parts.push(format!(
+                    "model_file={relative_path}:read_error={}",
+                    error.stable_reason()
+                ));
+            }
+        }
+    }
+
+    for relative_path in model_paths.iter().skip(budget.max_model_files) {
+        diagnostics.push(adaptation_model_diagnostic(
+            relative_path,
+            "Adaptation model file was ignored because the model-file budget was exceeded.",
+            "budget",
+            format!("max_model_files={}", budget.max_model_files),
+        ));
+        digest_parts.push(format!("model_file={relative_path}:budget_exceeded"));
+    }
+
+    let node_keys = base_output
+        .nodes
+        .iter()
+        .map(|node| node.stable_key.clone())
+        .collect::<Vec<_>>();
+    let universe = ValidationUniverse::new(node_keys.clone(), node_keys);
+    let store = AdaptationModelStore::build(facts, &universe, budget);
+    let model_digest = adaptation_model_digest(&store, budget);
+    digest_parts.push(format!("validated_models={model_digest}"));
+
+    digest_parts.sort();
+    let refs = digest_parts.iter().map(String::as_str).collect::<Vec<_>>();
+    let digest = Digest::from_parts(
+        DigestKind::ProviderParameters,
+        "adaptation_model_input",
+        &refs,
+    );
+
+    AdaptationModelProviderInput {
+        store,
+        diagnostics,
+        digest,
+    }
+}
+
+fn discover_adaptation_model_paths(
+    root: &Path,
+    diagnostics: &mut Vec<Diagnostic>,
+    digest_parts: &mut Vec<String>,
+) -> Vec<String> {
+    let model_root = root.join(ADAPTATION_MODEL_DIR);
+    let metadata = match fs::symlink_metadata(&model_root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(_) => {
+            diagnostics.push(adaptation_model_diagnostic(
+                ADAPTATION_MODEL_DIR,
+                "Adaptation model directory could not be read.",
+                "read_error",
+                "metadata unavailable",
+            ));
+            digest_parts.push(format!(
+                "model_path={ADAPTATION_MODEL_DIR}:read_error=metadata unavailable"
+            ));
+            return Vec::new();
+        }
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        diagnostics.push(adaptation_model_diagnostic(
+            ADAPTATION_MODEL_DIR,
+            "Adaptation model directory was ignored because it is not a regular directory.",
+            "read_error",
+            "not a directory",
+        ));
+        digest_parts.push(format!(
+            "model_path={ADAPTATION_MODEL_DIR}:read_error=not a directory"
+        ));
+        return Vec::new();
+    }
+
+    let mut paths = Vec::new();
+    let mut stack = vec![(ADAPTATION_MODEL_DIR.to_string(), model_root)];
+    while let Some((relative_dir, absolute_dir)) = stack.pop() {
+        let entries = match fs::read_dir(&absolute_dir) {
+            Ok(entries) => entries,
+            Err(_) => {
+                diagnostics.push(adaptation_model_diagnostic(
+                    &relative_dir,
+                    "Adaptation model directory entry could not be read.",
+                    "read_error",
+                    "read_dir failed",
+                ));
+                digest_parts.push(format!(
+                    "model_path={relative_dir}:read_error=read_dir failed"
+                ));
+                continue;
+            }
+        };
+        let mut entries = entries.filter_map(Result::ok).collect::<Vec<_>>();
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let file_name = entry.file_name().to_string_lossy().to_string();
+            let relative_path = format!("{relative_dir}/{file_name}");
+            let path = entry.path();
+            let metadata = match fs::symlink_metadata(&path) {
+                Ok(metadata) => metadata,
+                Err(_) => {
+                    diagnostics.push(adaptation_model_diagnostic(
+                        &relative_path,
+                        "Adaptation model path could not be read.",
+                        "read_error",
+                        "metadata unavailable",
+                    ));
+                    digest_parts.push(format!(
+                        "model_path={relative_path}:read_error=metadata unavailable"
+                    ));
+                    continue;
+                }
+            };
+            if metadata.file_type().is_symlink() {
+                diagnostics.push(adaptation_model_diagnostic(
+                    &relative_path,
+                    "Adaptation model path was ignored because symlinks are not allowed.",
+                    "read_error",
+                    "symlink",
+                ));
+                digest_parts.push(format!("model_path={relative_path}:read_error=symlink"));
+                continue;
+            }
+            if metadata.is_dir() {
+                stack.push((relative_path, path));
+            } else if metadata.is_file()
+                && path
+                    .extension()
+                    .is_some_and(|extension| extension == "toml")
+            {
+                paths.push(relative_path);
+            }
+        }
+    }
+    paths.sort();
+    paths
+}
+
+fn adaptation_model_diagnostic(
+    path: impl AsRef<str>,
+    message: impl Into<String>,
+    evidence_key: &'static str,
+    evidence_value: impl Into<String>,
+) -> Diagnostic {
+    Diagnostic::warning(
+        "polint/adaptation-model",
+        path.as_ref(),
+        TextRange::point(1, 1),
+        message.into(),
+    )
+    .with_evidence("provider", SEMANTIC_GRAPH_PROVIDER_ID)
+    .with_evidence(evidence_key, evidence_value.into())
 }
 
 fn collect_ts_object_model(db: &AnalysisDb) -> TsObjectModelOutput {
@@ -175,6 +411,7 @@ fn semantic_graph_output_digest(
     ts_syntax_output_digest: &Digest,
     semantic_mir_output_digest: &Digest,
     ts_direct_binding_output_digest: &Digest,
+    adaptation_model_input_digest: &Digest,
     go_semantic_output_digest: &Digest,
     output: &SemanticGraphOutput,
 ) -> Digest {
@@ -196,6 +433,7 @@ fn semantic_graph_output_digest(
         format!("ts_syntax={ts_syntax_output_digest}"),
         format!("semantic_mir={semantic_mir_output_digest}"),
         format!("ts_direct_binding_output={ts_direct_binding_output_digest}"),
+        format!("adaptation_model_input={adaptation_model_input_digest}"),
         format!(
             "ts_direct_binding_parameters={}",
             ts_direct_binding_provider_parameter_digest()
@@ -386,7 +624,7 @@ mod tests {
         AnalysisDb, FunctionFact, FunctionId, Language, PackageFact, PackageId, Span,
     };
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use tempfile::tempdir;
 
     fn manifest() -> &'static ProviderManifest {
@@ -396,18 +634,26 @@ mod tests {
             .expect("semantic_graph manifest")
     }
 
-    fn snapshot(db: &AnalysisDb) -> InputSnapshot {
-        let temp = tempdir().expect("tempdir");
-        fs::write(temp.path().join(".polint.toml"), "").expect("config");
-        let loaded = load_config(temp.path()).expect("config loads");
+    fn loaded_config(root: &Path) -> LoadedConfig {
+        fs::write(root.join(".polint.toml"), "").expect("config");
+        load_config(root).expect("config loads")
+    }
+
+    fn snapshot_from_loaded(db: &AnalysisDb, loaded: &LoadedConfig) -> InputSnapshot {
         InputSnapshot::from_run_inputs(
-            &loaded,
+            loaded,
             db,
             "config-a",
             "rules-a",
             AnalysisPlan::empty().digest(),
             AnalysisKernel::provider_manifests(),
         )
+    }
+
+    fn snapshot(db: &AnalysisDb) -> InputSnapshot {
+        let temp = tempdir().expect("tempdir");
+        let loaded = loaded_config(temp.path());
+        snapshot_from_loaded(db, &loaded)
     }
 
     fn absent(kind: &str) -> Digest {
@@ -455,9 +701,20 @@ mod tests {
     }
 
     fn run(db: &mut AnalysisDb) -> SemanticGraphProviderRunOutput {
-        let snapshot = snapshot(db);
+        let temp = tempdir().expect("tempdir");
+        let loaded = loaded_config(temp.path());
+        run_with_loaded(db, &loaded)
+    }
+
+    fn run_with_loaded(
+        db: &mut AnalysisDb,
+        loaded: &LoadedConfig,
+    ) -> SemanticGraphProviderRunOutput {
+        let snapshot = snapshot_from_loaded(db, loaded);
         derive_semantic_graph_with_cache_stats(
             db,
+            loaded,
+            AdaptationModelBudget::default(),
             &snapshot,
             manifest(),
             absent("polint.calls"),
@@ -524,6 +781,45 @@ mod tests {
     }
 
     #[test]
+    fn provider_loads_repo_local_adaptation_models_into_model_constraints() {
+        let temp = tempdir().expect("tempdir");
+        let loaded = loaded_config(temp.path());
+        let mut db = db_with_go_main();
+        let base = build_semantic_graph_with_ts_direct_bindings(&db, &[]).normalized();
+        let source = &base.nodes[0].stable_key;
+        let target = &base.nodes[1].stable_key;
+        let model_dir = temp.path().join(".polint/models");
+        fs::create_dir_all(&model_dir).expect("model dir");
+        fs::write(
+            model_dir.join("framework.toml"),
+            format!(
+                r#"
+[[facts]]
+source_pattern = "{source}"
+target_pattern = "{target}"
+confidence = "heuristic"
+language = "go"
+scope = "cmd/app/main.go"
+evidence = ["cmd/app/main.go:1"]
+"#
+            ),
+        )
+        .expect("model file");
+
+        let output = run_with_loaded(&mut db, &loaded);
+
+        assert!(output.output_digest.is_some());
+        assert!(output.diagnostics.is_empty());
+        assert!(
+            db.semantic_constraints().iter().any(|constraint| matches!(
+                constraint.kind,
+                crate::analysis::semantic_graph::constraints::ConstraintKind::ModelEdge { .. }
+            )),
+            "expected loaded adaptation model to lower into a ModelEdge constraint"
+        );
+    }
+
+    #[test]
     fn permuted_fact_insertion_order_produces_identical_output_digest() {
         let mut first = db_with_go_main();
         let mut second = {
@@ -563,10 +859,14 @@ mod tests {
         // Two runs over the SAME db facts but with a different upstream calls digest
         // must produce different output digests (D-17: every consumed provider output
         // digest is folded in).
-        let snapshot = snapshot(&AnalysisDb::new());
+        let temp = tempdir().expect("tempdir");
+        let loaded = loaded_config(temp.path());
+        let snapshot = snapshot_from_loaded(&AnalysisDb::new(), &loaded);
         let mut db_a = db_with_go_main();
         let with_absent = derive_semantic_graph_with_cache_stats(
             &mut db_a,
+            &loaded,
+            AdaptationModelBudget::default(),
             &snapshot,
             manifest(),
             absent("polint.calls"),
@@ -586,6 +886,8 @@ mod tests {
         let mut db_b = db_with_go_main();
         let with_present = derive_semantic_graph_with_cache_stats(
             &mut db_b,
+            &loaded,
+            AdaptationModelBudget::default(),
             &snapshot,
             manifest(),
             Digest::from_parts(DigestKind::ProviderOutput, "polint.calls", &["changed"]),
@@ -638,6 +940,7 @@ mod tests {
             &absent("polint.ts.syntax"),
             &absent("polint.semantic_mir"),
             &base_ts_direct,
+            &absent("adaptation_model_input"),
             &absent("polint.go.semantic"),
             &output,
         );
@@ -657,6 +960,7 @@ mod tests {
             &absent("polint.ts.syntax"),
             &absent("polint.semantic_mir"),
             &changed_ts_direct,
+            &absent("adaptation_model_input"),
             &absent("polint.go.semantic"),
             &output,
         );
@@ -676,6 +980,7 @@ mod tests {
             &absent("polint.ts.syntax"),
             &absent("polint.semantic_mir"),
             &base_ts_direct,
+            &absent("adaptation_model_input"),
             &absent("polint.go.semantic"),
             &output,
         );

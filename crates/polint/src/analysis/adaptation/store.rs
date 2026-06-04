@@ -3,6 +3,7 @@ use crate::analysis::adaptation::facts::{
     AcceptedModelFact, LoadedModelFact, RejectedModelFact, RejectionReason,
 };
 use crate::analysis::adaptation::validate::{ValidationUniverse, validate_model_fact};
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct AdaptationModelStore {
@@ -21,14 +22,27 @@ impl AdaptationModelStore {
 
         let mut accepted = Vec::new();
         let mut rejected = Vec::new();
+        let mut targets_by_source: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
 
         let budget_exceeded = loaded.len() > budget.max_model_facts;
         for (index, fact) in loaded.iter().cloned().enumerate() {
-            let reason = if budget_exceeded && index >= budget.max_model_facts {
+            let mut reason = if budget_exceeded && index >= budget.max_model_facts {
                 Err(RejectionReason::BudgetExceeded)
             } else {
                 validate_model_fact(&fact, universe)
             };
+            if reason.is_ok() {
+                let targets = targets_by_source
+                    .entry(fact.source_pattern.clone())
+                    .or_default();
+                if !targets.contains(&fact.target_pattern)
+                    && targets.len() >= budget.max_targets_per_source
+                {
+                    reason = Err(RejectionReason::BudgetExceeded);
+                } else {
+                    targets.insert(fact.target_pattern.clone());
+                }
+            }
             match reason {
                 Ok(()) => accepted.push(AcceptedModelFact { fact }),
                 Err(reason) => rejected.push(RejectedModelFact { fact, reason }),
@@ -112,6 +126,23 @@ mod tests {
             },
         );
         assert_eq!(store.accepted().len(), 1);
+        assert_eq!(store.rejected()[0].reason, RejectionReason::BudgetExceeded);
+    }
+
+    #[test]
+    fn per_source_target_fanout_overflow_is_explicit_rejection_evidence() {
+        let loaded = vec![fact("call:a", "function:a"), fact("call:a", "function:b")];
+        let universe = ValidationUniverse::new(["call:a"], ["function:a", "function:b"]);
+        let store = AdaptationModelStore::build(
+            loaded,
+            &universe,
+            AdaptationModelBudget {
+                max_targets_per_source: 1,
+                ..AdaptationModelBudget::default()
+            },
+        );
+        assert_eq!(store.accepted().len(), 1);
+        assert_eq!(store.rejected().len(), 1);
         assert_eq!(store.rejected()[0].reason, RejectionReason::BudgetExceeded);
     }
 

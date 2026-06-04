@@ -270,8 +270,9 @@ pub(crate) fn derive_edges(constraints: &[ConstraintFact], budget: &SolverBudget
     }
 
     let mut edges: Vec<DerivedEdgeFact> = Vec::new();
-    edges.extend(model_edges(constraints));
-    let mut run_budget_exceeded = false;
+    let (model_edges, model_budget_exceeded) = model_edges(constraints, budget);
+    edges.extend(model_edges);
+    let mut run_budget_exceeded = model_budget_exceeded;
     // GLOBAL monotonic derivation step (R3): increments once per worklist pop across
     // the WHOLE run and is never reset, so every derived edge's `solver_step` is
     // globally monotonic and the run's progress is totally ordered. The PER-SOURCE
@@ -412,37 +413,80 @@ pub(crate) fn derive_edges(constraints: &[ConstraintFact], budget: &SolverBudget
     .normalized()
 }
 
-fn model_edges(constraints: &[ConstraintFact]) -> Vec<DerivedEdgeFact> {
+fn model_edges(
+    constraints: &[ConstraintFact],
+    budget: &SolverBudget,
+) -> (Vec<DerivedEdgeFact>, bool) {
     let mut edges = Vec::new();
-    for constraint in constraints {
-        if let ConstraintKind::ModelEdge { source, target, .. } = &constraint.kind {
-            let provenance = DerivedEdgeProvenance::new(
-                [ContributingFact {
-                    stable_key: constraint.stable_key.clone(),
-                }],
-                &constraint.kind,
-                0,
-            );
-            let stable_key = stable_key_from_parts(
-                FactFamily::SolverDerivedEdge,
-                &[
-                    ("source", source.0.to_string()),
-                    ("target", target.0.to_string()),
-                    ("provenance", provenance.stable_key_fragment()),
-                ],
-            );
-            edges.push(DerivedEdgeFact {
-                id: DerivedEdgeId(0),
-                source: *source,
-                target: *target,
-                status: constraint.status,
-                precision: constraint.precision,
-                stable_key,
-                provenance,
-            });
+    let mut budget_exceeded = false;
+    let mut targets_by_source: BTreeMap<SemanticNodeRef, BTreeSet<SemanticNodeRef>> =
+        BTreeMap::new();
+    let mut expansions_by_model: BTreeMap<String, usize> = BTreeMap::new();
+    let mut model_constraints = constraints
+        .iter()
+        .filter_map(|constraint| match &constraint.kind {
+            ConstraintKind::ModelEdge { source, target, .. } => Some((constraint, source, target)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    model_constraints.sort_by(|left, right| {
+        (left.0.stable_key.as_str(), left.1.0, left.2.0).cmp(&(
+            right.0.stable_key.as_str(),
+            right.1.0,
+            right.2.0,
+        ))
+    });
+
+    for (constraint, source, target) in model_constraints {
+        if edges.len() >= budget.adaptation.max_model_derived_edges {
+            budget_exceeded = true;
+            continue;
         }
+
+        let expansions = expansions_by_model
+            .entry(constraint.stable_key.clone())
+            .or_default();
+        if *expansions >= budget.adaptation.max_expansions_per_model {
+            budget_exceeded = true;
+            continue;
+        }
+
+        let source_targets = targets_by_source.entry(source.0).or_default();
+        if !source_targets.contains(&target.0)
+            && source_targets.len() >= budget.adaptation.max_targets_per_source
+        {
+            budget_exceeded = true;
+            continue;
+        }
+
+        *expansions += 1;
+        source_targets.insert(target.0);
+        let provenance = DerivedEdgeProvenance::new(
+            [ContributingFact {
+                stable_key: constraint.stable_key.clone(),
+            }],
+            &constraint.kind,
+            0,
+        );
+        let stable_key = stable_key_from_parts(
+            FactFamily::SolverDerivedEdge,
+            &[
+                ("source", source.0.to_string()),
+                ("target", target.0.to_string()),
+                ("provenance", provenance.stable_key_fragment()),
+            ],
+        );
+        edges.push(DerivedEdgeFact {
+            id: DerivedEdgeId(0),
+            source: *source,
+            target: *target,
+            status: constraint.status,
+            precision: constraint.precision,
+            stable_key,
+            provenance,
+        });
     }
-    edges
+    (edges, budget_exceeded)
 }
 
 /// Run-local node handle (the `SemanticNodeId.0` value) used as a deterministic
@@ -783,6 +827,39 @@ mod tests {
             first_key, second_key,
             "model constraint stable keys must affect derived edge identity"
         );
+    }
+
+    #[test]
+    fn solver_model_edges_respect_derived_edge_budget() {
+        let mut budget = SolverBudget::default();
+        budget.adaptation.max_model_derived_edges = 1;
+        let output = derive_edges(
+            &[
+                model_constraint("model|register-a", 10, 20),
+                model_constraint("model|register-b", 11, 21),
+            ],
+            &budget,
+        );
+
+        assert_eq!(output.derived_edges.len(), 1);
+        assert_eq!(output.budget_status, BudgetStatus::BudgetExceeded);
+    }
+
+    #[test]
+    fn solver_model_edges_respect_per_source_target_fanout_budget() {
+        let mut budget = SolverBudget::default();
+        budget.adaptation.max_targets_per_source = 1;
+        let output = derive_edges(
+            &[
+                model_constraint("model|register-a", 10, 20),
+                model_constraint("model|register-b", 10, 21),
+            ],
+            &budget,
+        );
+
+        assert_eq!(output.derived_edges.len(), 1);
+        assert_eq!(output.derived_edges[0].source, SemanticNodeId(10));
+        assert_eq!(output.budget_status, BudgetStatus::BudgetExceeded);
     }
 
     #[test]

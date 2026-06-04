@@ -539,13 +539,30 @@ impl AnalysisKernel {
                 )
             });
 
+        // Thread the per-language solver config into SolverBudget (D-10/D-11),
+        // mirroring how the reachability provider reaches `reachability.roots`.
+        // Cross-domain fields stay at their defaults; absent config falls back to each
+        // sub-budget default. The adaptation sub-budget is passed to semantic_graph as
+        // well because model files lower into semantic constraints before the solver
+        // expands them.
+        let solver_budget = crate::analysis::solver::budget::SolverBudget {
+            go: input.loaded.config.solver.to_go_sub_budget(),
+            js: input.loaded.config.solver.to_js_sub_budget(),
+            object_model_enabled: input.loaded.config.solver.js_object_model_enabled(),
+            object: input.loaded.config.solver.to_js_object_sub_budget(),
+            ..crate::analysis::solver::budget::SolverBudget::default()
+        };
+
         // polint.semantic_graph runs between polint.type_value_alias and
         // polint.refined_calls (D-16). It projects the unified node/edge/constraint
-        // graph from already-stored facts and folds every consumed upstream provider
-        // output digest into its own output digest (D-17).
+        // graph from already-stored facts plus repo-local adaptation models, and folds
+        // every consumed upstream provider output digest into its own output digest
+        // (D-17).
         let semantic_graph =
             crate::analysis::semantic_graph::provider::derive_semantic_graph_with_cache_stats(
                 &mut db,
+                input.loaded,
+                solver_budget.adaptation,
                 &input_snapshot,
                 Self::provider_manifest("polint.semantic_graph"),
                 entrypoints_calls_digest.clone(),
@@ -591,16 +608,7 @@ impl AnalysisKernel {
         // invalidate the solver cache (FIX 4 — without this the provider docstring's "any
         // upstream change invalidates the solver cache" was false). Auto-enrolls in the
         // Phase 43 determinism gate (D-14). Thread the per-language solver config into
-        // SolverBudget (D-10/D-11), mirroring how the reachability provider reaches
-        // `reachability.roots`. Cross-domain fields stay at their defaults; absent config
-        // falls back to each sub-budget default.
-        let solver_budget = crate::analysis::solver::budget::SolverBudget {
-            go: input.loaded.config.solver.to_go_sub_budget(),
-            js: input.loaded.config.solver.to_js_sub_budget(),
-            object_model_enabled: input.loaded.config.solver.js_object_model_enabled(),
-            object: input.loaded.config.solver.to_js_object_sub_budget(),
-            ..crate::analysis::solver::budget::SolverBudget::default()
-        };
+        // SolverBudget (D-10/D-11).
         let solver = crate::analysis::solver::provider::derive_solver_with_cache_stats(
             &mut db,
             &input_snapshot,
