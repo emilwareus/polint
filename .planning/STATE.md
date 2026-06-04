@@ -556,6 +556,7 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260604-l8k | Finish Phase 50 closeout by adding verification artifact and reconciling roadmap status | 2026-06-04 | artifact-only | [260604-l8k-finish-phase-50-closeout-by-adding-verif](./quick/260604-l8k-finish-phase-50-closeout-by-adding-verif/) |
 | 260604-ik2 | Fix final TS object-model review findings | 2026-06-04 | 3f777d47 | [260604-ik2-fix-pr-review-findings-for-ts-object-mod](./quick/260604-ik2-fix-pr-review-findings-for-ts-object-mod/) |
 | 260604-g7q | Fix PR review findings for TS object-model eval gates | 2026-06-04 | f6a8a956 | [260604-g7q-fix-pr-review-findings-for-ts-object-mod](./quick/260604-g7q-fix-pr-review-findings-for-ts-object-mod/) |
 | 260601-e11 | Fix deep PR review findings | 2026-06-01 | implemented | [260601-e11-fix-deep-pr-review-findings](./quick/260601-e11-fix-deep-pr-review-findings/) |
