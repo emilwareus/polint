@@ -1,0 +1,7 @@
+[[facts]]
+source_pattern = "call:src/app.ts:10:register"
+target_pattern = "function:src/app.ts:1:onRegister"
+confidence = "heuristic"
+language = "typescript"
+scope = "src/app.ts"
+evidence = ["src/app.ts:10"]

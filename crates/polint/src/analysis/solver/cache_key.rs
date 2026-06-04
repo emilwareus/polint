@@ -51,6 +51,9 @@ pub(crate) fn solver_provider_parameter_digest(budget: &SolverBudget) -> Digest 
         // JS-05): the control plane is present before the real policy lands, so the
         // future driver cannot reuse a pre-object-model solver cache.
         "ts_object_model_fixpoint_v3",
+        // Repo-local adaptation model facts (Phase 51, ADAPT-01): accepted facts and
+        // budget knobs affect future model-derived solver edges.
+        "adaptation_model_v1",
     ];
     parts.extend(budget_parts.iter().map(String::as_str));
     Digest::from_parts(
@@ -143,6 +146,26 @@ fn budget_parts(budget: &SolverBudget) -> Vec<String> {
             "budget.object.max_object_worklist_steps={}",
             budget.object.max_object_worklist_steps
         ),
+        format!(
+            "budget.adaptation.max_model_files={}",
+            budget.adaptation.max_model_files
+        ),
+        format!(
+            "budget.adaptation.max_model_facts={}",
+            budget.adaptation.max_model_facts
+        ),
+        format!(
+            "budget.adaptation.max_expansions_per_model={}",
+            budget.adaptation.max_expansions_per_model
+        ),
+        format!(
+            "budget.adaptation.max_targets_per_source={}",
+            budget.adaptation.max_targets_per_source
+        ),
+        format!(
+            "budget.adaptation.max_model_derived_edges={}",
+            budget.adaptation.max_model_derived_edges
+        ),
     ]
 }
 
@@ -178,6 +201,7 @@ mod tests {
                     "go_rta_fixpoint_v1",
                     "ts_tokens_fixpoint_v1",
                     "ts_object_model_fixpoint_v3",
+                    "adaptation_model_v1",
                     "budget.max_steps=10000",
                     "budget.max_outer_iterations=64",
                     "budget.points_to.max_objects_per_var=64",
@@ -197,6 +221,11 @@ mod tests {
                     "budget.object.max_prototype_depth=8",
                     "budget.object.max_receiver_candidates_per_callsite=64",
                     "budget.object.max_object_worklist_steps=10000",
+                    "budget.adaptation.max_model_files=32",
+                    "budget.adaptation.max_model_facts=512",
+                    "budget.adaptation.max_expansions_per_model=64",
+                    "budget.adaptation.max_targets_per_source=16",
+                    "budget.adaptation.max_model_derived_edges=2048",
                 ],
             )
         );
@@ -223,6 +252,7 @@ mod tests {
                 "go_rta_fixpoint_v1",
                 "ts_tokens_fixpoint_v1",
                 "ts_object_model_fixpoint_v3",
+                "adaptation_model_v1",
                 "budget.max_steps=10000",
                 "budget.max_outer_iterations=64",
                 "budget.points_to.max_objects_per_var=64",
@@ -242,6 +272,11 @@ mod tests {
                 "budget.object.max_prototype_depth=8",
                 "budget.object.max_receiver_candidates_per_callsite=64",
                 "budget.object.max_object_worklist_steps=10000",
+                "budget.adaptation.max_model_files=32",
+                "budget.adaptation.max_model_facts=512",
+                "budget.adaptation.max_expansions_per_model=64",
+                "budget.adaptation.max_targets_per_source=16",
+                "budget.adaptation.max_model_derived_edges=2048",
             ],
         );
         assert_ne!(solver_provider_parameter_digest(&budget), pre_bump);
@@ -385,6 +420,14 @@ mod tests {
             solver_provider_parameter_digest(&bumped_object_steps),
             base,
             "changing max_object_worklist_steps must change the parameter digest"
+        );
+
+        let mut bumped_adaptation = SolverBudget::default();
+        bumped_adaptation.adaptation.max_model_facts += 1;
+        assert_ne!(
+            solver_provider_parameter_digest(&bumped_adaptation),
+            base,
+            "changing an adaptation model budget knob must change the parameter digest"
         );
     }
 }

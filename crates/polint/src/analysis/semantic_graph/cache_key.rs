@@ -39,10 +39,11 @@ pub(crate) const SEMANTIC_GRAPH_SCHEMA_LABEL: &str = "semantic-graph-facts-1";
 /// phase lands a producer — NOT a silent omission):
 /// - CFG — reserved for Phase 47's budgeted solver consumption.
 /// - summaries — reserved for Phase 47/50 (interprocedural summary folding).
-/// - accepted adaptation models — reserved for Phase 49 (ADAPT-01); no model producer
-///   exists, mirroring `ConstraintKind::ModelEdge`'s honest emptiness.
-/// - solver budgets — reserved for Phase 51/53 (cache and solver budgets threaded
-///   through the solver core).
+/// - accepted adaptation models — Phase 51 adds the private model producer and
+///   digest recipe; semantic-graph lowering starts once accepted facts feed
+///   `ConstraintKind::ModelEdge`.
+/// - solver budgets — Phase 51 starts adaptation-model budget threading; Phase 53
+///   owns the milestone-wide cache/budget sweep.
 ///
 /// This is a comment/doc addition only: ZERO deferred inputs are digested here, and
 /// the runtime behavior is unchanged.
@@ -64,6 +65,7 @@ pub(crate) fn semantic_graph_provider_parameter_digest() -> Digest {
             "go_semantic_output_digest",
             "go_semantic_projection_v1",
             "ts_object_model_projection_v3",
+            "adaptation_model_v1",
         ],
     )
 }
@@ -93,6 +95,7 @@ mod tests {
                     "go_semantic_output_digest",
                     "go_semantic_projection_v1",
                     "ts_object_model_projection_v3",
+                    "adaptation_model_v1",
                 ],
             )
         );
