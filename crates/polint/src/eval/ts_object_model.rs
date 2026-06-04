@@ -63,6 +63,7 @@ fn object_literal_fixture_resolves_exact_and_computed_property_calls() {
 
     assert_object_edge_with_provenance(edges, &nodes, "objectEntry", "propertyTarget");
     assert_property_edge_count(edges, &nodes, "objectEntry", "propertyTarget", 2);
+    assert_object_edge_with_provenance(edges, &nodes, "objectEntry", "crossFormTarget");
     assert_object_edge_with_provenance(edges, &nodes, "objectEntry", "computedTarget");
     assert_object_edge_with_provenance(edges, &nodes, "objectEntry", "inlineTarget");
     assert_no_computed_bucket_edge_to(edges, &nodes, "unrelatedExactTarget");

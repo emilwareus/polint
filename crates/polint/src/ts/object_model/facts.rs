@@ -88,6 +88,18 @@ impl TsPropertyKey {
             None => self.kind.as_str().to_string(),
         }
     }
+
+    pub(crate) fn field_label(&self) -> String {
+        match (self.kind, self.value.as_deref()) {
+            (
+                TsPropertyKeyKind::Static
+                | TsPropertyKeyKind::StringLiteral
+                | TsPropertyKeyKind::NumericLiteral,
+                Some(value),
+            ) => format!("exact:{value}"),
+            _ => self.stable_label(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

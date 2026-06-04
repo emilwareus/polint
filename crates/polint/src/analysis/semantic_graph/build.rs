@@ -1652,7 +1652,7 @@ fn object_model_place_identity(kind: &str, identity: &str) -> String {
 }
 
 fn property_field_label(property_key: &TsPropertyKey) -> String {
-    property_key.stable_label()
+    property_key.field_label()
 }
 
 fn is_lowerable_object_model_status(status: &TsObjectModelStatus) -> bool {
@@ -2201,7 +2201,7 @@ function run() {
             assert!(output.constraints.iter().any(|constraint| {
                 matches!(
                     &constraint.kind,
-                    ConstraintKind::FieldStore { field, .. } if field == "static:target"
+                    ConstraintKind::FieldStore { field, .. } if field == "exact:target"
                 )
             }));
             assert!(output.constraints.iter().any(|constraint| {

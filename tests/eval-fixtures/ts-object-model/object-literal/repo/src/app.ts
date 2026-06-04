@@ -14,6 +14,10 @@ function inlineTarget(): string {
   return "inline";
 }
 
+function crossFormTarget(): string {
+  return "cross-form";
+}
+
 function keyName(): string {
   return "dynamic";
 }
@@ -24,6 +28,9 @@ export function objectEntry(): string {
 
   const stringHolder = { "propertyTarget": propertyTarget };
   const fromString = stringHolder["propertyTarget"]();
+
+  const crossFormHolder = { crossFormTarget };
+  const fromCrossForm = crossFormHolder["crossFormTarget"]();
 
   const dynamic = keyName();
   const computedHolder = {
@@ -41,7 +48,7 @@ export function objectEntry(): string {
   };
   const fromMethod = methodHolder.methodTarget();
 
-  return fromDot + fromString + fromComputed + fromInline + fromMethod;
+  return fromDot + fromString + fromCrossForm + fromComputed + fromInline + fromMethod;
 }
 
 objectEntry();

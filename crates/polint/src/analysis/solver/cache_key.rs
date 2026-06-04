@@ -50,7 +50,7 @@ pub(crate) fn solver_provider_parameter_digest(budget: &SolverBudget) -> Digest 
         // TS object/property/prototype/receiver model algorithm version (Phase 50,
         // JS-05): the control plane is present before the real policy lands, so the
         // future driver cannot reuse a pre-object-model solver cache.
-        "ts_object_model_fixpoint_v2",
+        "ts_object_model_fixpoint_v3",
     ];
     parts.extend(budget_parts.iter().map(String::as_str));
     Digest::from_parts(
@@ -177,7 +177,7 @@ mod tests {
                     "precision_ceiling_v1",
                     "go_rta_fixpoint_v1",
                     "ts_tokens_fixpoint_v1",
-                    "ts_object_model_fixpoint_v2",
+                    "ts_object_model_fixpoint_v3",
                     "budget.max_steps=10000",
                     "budget.max_outer_iterations=64",
                     "budget.points_to.max_objects_per_var=64",
@@ -222,7 +222,7 @@ mod tests {
                 "precision_ceiling_v1",
                 "go_rta_fixpoint_v1",
                 "ts_tokens_fixpoint_v1",
-                "ts_object_model_fixpoint_v2",
+                "ts_object_model_fixpoint_v3",
                 "budget.max_steps=10000",
                 "budget.max_outer_iterations=64",
                 "budget.points_to.max_objects_per_var=64",

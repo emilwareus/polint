@@ -13,7 +13,7 @@ use oxc_ast::ast::{
     MethodDefinitionKind, ObjectPropertyKind, Program, PropertyKey, VariableDeclarator,
 };
 use oxc_parser::Parser;
-use oxc_semantic::{AstNodes, NodeId, SemanticBuilder};
+use oxc_semantic::{AstNodes, NodeId, Scoping, SemanticBuilder, SymbolId as OxcSymbolId};
 use oxc_span::{GetSpan, SourceType};
 
 use crate::core::{SourceFile, Span, span_from_byte_range};
@@ -37,44 +37,67 @@ pub(crate) fn extract_ts_object_model(file: &SourceFile) -> TsObjectModelOutput 
     }
 
     let semantic = SemanticBuilder::new().build(&parsed.program).semantic;
-    extract_ts_object_model_from_program(file, source, &parsed.program, semantic.nodes())
+    extract_ts_object_model_from_program(
+        file,
+        source,
+        &parsed.program,
+        semantic.scoping(),
+        semantic.nodes(),
+    )
 }
 
 fn extract_ts_object_model_from_program(
     file: &SourceFile,
     source: &str,
     _program: &Program<'_>,
+    scoping: &Scoping,
     nodes: &AstNodes<'_>,
 ) -> TsObjectModelOutput {
-    let mut extractor = ObjectModelExtractor::new(file, source, nodes);
+    let mut extractor = ObjectModelExtractor::new(file, source, scoping, nodes);
     extractor.build()
 }
 
 struct ObjectModelExtractor<'a> {
     file: &'a SourceFile,
     source: &'a str,
+    scoping: &'a Scoping,
     nodes: &'a AstNodes<'a>,
     inventory: ObjectModelInventoryIndex,
-    variables_to_objects: BTreeMap<String, String>,
+    objects_by_symbol: BTreeMap<OxcSymbolId, String>,
+    objects_by_name: BTreeMap<String, Option<String>>,
     allocation_keys_by_span: BTreeMap<(u32, u32, TsObjectAllocationKind), String>,
-    class_prototypes: BTreeMap<String, String>,
+    class_prototypes_by_symbol: BTreeMap<OxcSymbolId, String>,
+    class_prototypes_by_name: BTreeMap<String, Option<String>>,
+    symbols_by_declaration: BTreeMap<(NodeId, String), OxcSymbolId>,
+    reference_symbols_by_span: BTreeMap<(u32, u32), OxcSymbolId>,
 }
 
 impl<'a> ObjectModelExtractor<'a> {
-    fn new(file: &'a SourceFile, source: &'a str, nodes: &'a AstNodes<'a>) -> Self {
+    fn new(
+        file: &'a SourceFile,
+        source: &'a str,
+        scoping: &'a Scoping,
+        nodes: &'a AstNodes<'a>,
+    ) -> Self {
         Self {
             file,
             source,
+            scoping,
             nodes,
             inventory: ObjectModelInventoryIndex::from_output(extract_ts_inventory(file)),
-            variables_to_objects: BTreeMap::new(),
+            objects_by_symbol: BTreeMap::new(),
+            objects_by_name: BTreeMap::new(),
             allocation_keys_by_span: BTreeMap::new(),
-            class_prototypes: BTreeMap::new(),
+            class_prototypes_by_symbol: BTreeMap::new(),
+            class_prototypes_by_name: BTreeMap::new(),
+            symbols_by_declaration: symbols_by_declaration(scoping),
+            reference_symbols_by_span: reference_symbols_by_span(scoping, nodes),
         }
     }
 
     fn build(&mut self) -> TsObjectModelOutput {
         self.index_allocations();
+        self.index_class_prototypes();
 
         let mut output = TsObjectModelOutput::default();
         let mut entries = self
@@ -190,17 +213,60 @@ impl<'a> ObjectModelExtractor<'a> {
                     lexical_parent_key.as_deref(),
                     display_name.as_deref(),
                 );
-                let variable_name = variable_declarator_name(self.nodes, node_id);
-                Some((span.start, span.end, kind, stable_key, variable_name))
+                let binding_name = allocation_binding_name(self.nodes, node_id, ast_kind);
+                let binding_symbol = binding_name
+                    .as_deref()
+                    .and_then(|name| self.declaration_symbol_for_node_name(node_id, name));
+                Some((
+                    span.start,
+                    span.end,
+                    kind,
+                    stable_key,
+                    binding_name,
+                    binding_symbol,
+                ))
             })
             .collect::<Vec<_>>();
 
-        for (start, end, kind, stable_key, variable_name) in entries {
+        for (start, end, kind, stable_key, binding_name, binding_symbol) in entries {
             self.allocation_keys_by_span
                 .insert((start, end, kind), stable_key.clone());
-            if let Some(name) = variable_name {
-                self.variables_to_objects.insert(name, stable_key);
+            if let Some(symbol) = binding_symbol {
+                self.objects_by_symbol.insert(symbol, stable_key.clone());
             }
+            if let Some(name) = binding_name {
+                insert_unique(&mut self.objects_by_name, name, stable_key);
+            }
+        }
+    }
+
+    fn index_class_prototypes(&mut self) {
+        let entries = self
+            .nodes
+            .iter_enumerated()
+            .filter_map(|(node_id, node)| {
+                let AstKind::Class(class) = node.kind() else {
+                    return None;
+                };
+                let name = class_name(self.nodes, node_id, class)?;
+                let class_key = self.allocation_stable_key(
+                    class.span,
+                    TsObjectAllocationKind::ClassObject,
+                    self.lexical_parent_key(node_id).as_deref(),
+                    Some(&name),
+                );
+                let prototype_key = format!("{class_key}|prototype");
+                let symbol = self.declaration_symbol_for_node_name(node_id, &name);
+                Some((name, prototype_key, symbol))
+            })
+            .collect::<Vec<_>>();
+
+        for (name, prototype_key, symbol) in entries {
+            if let Some(symbol) = symbol {
+                self.class_prototypes_by_symbol
+                    .insert(symbol, prototype_key.clone());
+            }
+            insert_unique(&mut self.class_prototypes_by_name, name, prototype_key);
         }
     }
 
@@ -286,13 +352,6 @@ impl<'a> ObjectModelExtractor<'a> {
             class_name.as_deref(),
         );
         let prototype_key = format!("{class_key}|prototype");
-        if let Some(name) = class_name.as_deref() {
-            self.variables_to_objects
-                .entry(name.to_string())
-                .or_insert_with(|| class_key.clone());
-            self.class_prototypes
-                .insert(name.to_string(), prototype_key.clone());
-        }
 
         output.allocations.push(self.allocation_row(
             node_id,
@@ -334,9 +393,7 @@ impl<'a> ObjectModelExtractor<'a> {
             && let Some(super_name) = expression_text(super_class)
         {
             let super_prototype = self
-                .class_prototypes
-                .get(&super_name)
-                .cloned()
+                .class_prototype_key_for_expression(super_class)
                 .unwrap_or_else(|| format!("ts_class_prototype:{super_name}"));
             output.prototype_links.push(TsPrototypeLinkFact {
                 id: TsPrototypeLinkId(0),
@@ -418,8 +475,8 @@ impl<'a> ObjectModelExtractor<'a> {
             display_name,
         ));
         if let Some(prototype_key) = class_name
-            .as_deref()
-            .and_then(|name| self.class_prototypes.get(name))
+            .as_ref()
+            .and_then(|_| self.class_prototype_key_for_expression(&expression.callee))
         {
             output.prototype_links.push(TsPrototypeLinkFact {
                 id: TsPrototypeLinkId(0),
@@ -429,7 +486,7 @@ impl<'a> ObjectModelExtractor<'a> {
                     "ts_object_prototype_link",
                     expression.span,
                     &instance_key,
-                    prototype_key,
+                    &prototype_key,
                 ),
                 kind: TsPrototypeLinkKind::ConstructorPrototypeProperty,
                 object_stable_key: instance_key,
@@ -651,10 +708,9 @@ impl<'a> ObjectModelExtractor<'a> {
 
     fn object_key_for_expression(&self, expression: &Expression<'_>) -> Option<String> {
         match expression {
-            Expression::Identifier(identifier) => self
-                .variables_to_objects
-                .get(identifier.name.as_str())
-                .cloned(),
+            Expression::Identifier(identifier) => {
+                self.object_key_for_identifier(expression.span(), identifier.name.as_str())
+            }
             Expression::ObjectExpression(object) => {
                 self.allocation_key_for_span(object.span, TsObjectAllocationKind::ObjectLiteral)
             }
@@ -681,6 +737,65 @@ impl<'a> ObjectModelExtractor<'a> {
             }
             _ => None,
         }
+    }
+
+    fn object_key_for_identifier(&self, span: oxc_span::Span, name: &str) -> Option<String> {
+        self.reference_symbols_by_span
+            .get(&(span.start, span.end))
+            .and_then(|symbol| self.objects_by_symbol.get(symbol))
+            .cloned()
+            .or_else(|| {
+                self.objects_by_name
+                    .get(name)
+                    .and_then(Option::as_ref)
+                    .cloned()
+            })
+    }
+
+    fn class_prototype_key_for_expression(&self, expression: &Expression<'_>) -> Option<String> {
+        match expression {
+            Expression::Identifier(identifier) => {
+                self.class_prototype_key_for_identifier(expression.span(), identifier.name.as_str())
+            }
+            Expression::ParenthesizedExpression(expression) => {
+                self.class_prototype_key_for_expression(&expression.expression)
+            }
+            Expression::TSAsExpression(expression) => {
+                self.class_prototype_key_for_expression(&expression.expression)
+            }
+            Expression::TSSatisfiesExpression(expression) => {
+                self.class_prototype_key_for_expression(&expression.expression)
+            }
+            Expression::TSNonNullExpression(expression) => {
+                self.class_prototype_key_for_expression(&expression.expression)
+            }
+            Expression::TSTypeAssertion(expression) => {
+                self.class_prototype_key_for_expression(&expression.expression)
+            }
+            _ => expression_text(expression).and_then(|name| {
+                self.class_prototypes_by_name
+                    .get(&name)
+                    .and_then(Option::as_ref)
+                    .cloned()
+            }),
+        }
+    }
+
+    fn class_prototype_key_for_identifier(
+        &self,
+        span: oxc_span::Span,
+        name: &str,
+    ) -> Option<String> {
+        self.reference_symbols_by_span
+            .get(&(span.start, span.end))
+            .and_then(|symbol| self.class_prototypes_by_symbol.get(symbol))
+            .cloned()
+            .or_else(|| {
+                self.class_prototypes_by_name
+                    .get(name)
+                    .and_then(Option::as_ref)
+                    .cloned()
+            })
     }
 
     fn value_function_key(&self, expression: &Expression<'_>) -> Option<String> {
@@ -770,6 +885,17 @@ impl<'a> ObjectModelExtractor<'a> {
                 .or_else(|| expression_text(&expression.callee)),
             _ => variable_declarator_name(self.nodes, node_id),
         }
+    }
+
+    fn declaration_symbol_for_node_name(&self, node_id: NodeId, name: &str) -> Option<OxcSymbolId> {
+        self.symbols_by_declaration
+            .get(&(node_id, name.to_string()))
+            .copied()
+            .or_else(|| {
+                self.symbols_by_declaration
+                    .get(&(self.nodes.parent_id(node_id), name.to_string()))
+                    .copied()
+            })
     }
 
     fn lexical_parent_key(&self, node_id: NodeId) -> Option<String> {
@@ -942,12 +1068,52 @@ fn variable_declarator_name(nodes: &AstNodes<'_>, node_id: NodeId) -> Option<Str
     }
 }
 
+fn allocation_binding_name(
+    nodes: &AstNodes<'_>,
+    node_id: NodeId,
+    kind: AstKind<'_>,
+) -> Option<String> {
+    match kind {
+        AstKind::Class(class) => class_name(nodes, node_id, class),
+        _ => variable_declarator_name(nodes, node_id),
+    }
+}
+
 fn class_name(nodes: &AstNodes<'_>, node_id: NodeId, class: &Class<'_>) -> Option<String> {
     class
         .id
         .as_ref()
         .map(|identifier| identifier.name.to_string())
         .or_else(|| variable_declarator_name(nodes, node_id))
+}
+
+fn symbols_by_declaration(scoping: &Scoping) -> BTreeMap<(NodeId, String), OxcSymbolId> {
+    scoping
+        .symbol_ids()
+        .map(|symbol| {
+            (
+                (
+                    scoping.symbol_declaration(symbol),
+                    scoping.symbol_name(symbol).to_string(),
+                ),
+                symbol,
+            )
+        })
+        .collect()
+}
+
+fn reference_symbols_by_span(
+    scoping: &Scoping,
+    nodes: &AstNodes<'_>,
+) -> BTreeMap<(u32, u32), OxcSymbolId> {
+    let mut symbols_by_span = BTreeMap::new();
+    for symbol in scoping.symbol_ids() {
+        for reference in scoping.get_resolved_references(symbol) {
+            let span = nodes.kind(reference.node_id()).span();
+            symbols_by_span.insert((span.start, span.end), symbol);
+        }
+    }
+    symbols_by_span
 }
 
 fn method_name(method: &MethodDefinition<'_>) -> Option<String> {
@@ -1268,6 +1434,90 @@ export function run() {
                 .iter()
                 .any(|allocation| allocation.stable_key == read.base_object_stable_key),
             "inline new read base should match a recorded allocation"
+        );
+    }
+
+    #[test]
+    fn same_name_object_bindings_resolve_to_their_own_scope() {
+        let output = extract(
+            r#"
+function firstTarget() {}
+function secondTarget() {}
+
+export function first() {
+  const holder = { firstTarget };
+  return holder.firstTarget();
+}
+
+export function second() {
+  const holder = { secondTarget };
+  return holder.secondTarget();
+}
+"#,
+        );
+        let first_write = output
+            .property_writes
+            .iter()
+            .find(|write| write.property_key.value.as_deref() == Some("firstTarget"))
+            .expect("first holder write should be extracted");
+        let first_read = output
+            .property_reads
+            .iter()
+            .find(|read| read.property_key.value.as_deref() == Some("firstTarget"))
+            .expect("first holder read should be extracted");
+        let second_write = output
+            .property_writes
+            .iter()
+            .find(|write| write.property_key.value.as_deref() == Some("secondTarget"))
+            .expect("second holder write should be extracted");
+        let second_read = output
+            .property_reads
+            .iter()
+            .find(|read| read.property_key.value.as_deref() == Some("secondTarget"))
+            .expect("second holder read should be extracted");
+
+        assert_eq!(
+            first_read.base_object_stable_key, first_write.base_object_stable_key,
+            "first scoped holder read must use the first scoped allocation"
+        );
+        assert_eq!(
+            second_read.base_object_stable_key, second_write.base_object_stable_key,
+            "second scoped holder read must use the second scoped allocation"
+        );
+        assert_ne!(
+            first_read.base_object_stable_key, second_read.base_object_stable_key,
+            "same-name scoped holders must not collapse to one allocation"
+        );
+    }
+
+    #[test]
+    fn inline_new_before_class_declaration_links_to_later_prototype() {
+        let output = extract(
+            r#"
+export function run() {
+  return new C().m();
+}
+
+class C {
+  m() {}
+}
+"#,
+        );
+        let read = output
+            .property_reads
+            .iter()
+            .find(|read| read.property_key.value.as_deref() == Some("m"))
+            .expect("inline new property read should be extracted");
+
+        assert!(
+            output.prototype_links.iter().any(|link| {
+                link.object_stable_key == read.base_object_stable_key
+                    && output.allocations.iter().any(|allocation| {
+                        allocation.stable_key == link.prototype_stable_key
+                            && allocation.kind == TsObjectAllocationKind::PrototypeObject
+                    })
+            }),
+            "inline new before class declaration should link its instance to the class prototype"
         );
     }
 
