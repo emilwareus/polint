@@ -8,6 +8,8 @@
 pub(crate) mod dispatch;
 pub(crate) mod fixpoint;
 pub(crate) mod inputs;
+pub(crate) mod prototype;
+pub(crate) mod receiver;
 
 pub(crate) use fixpoint::solve_ts_object_model;
 pub(crate) use inputs::TsObjectModelInputs;

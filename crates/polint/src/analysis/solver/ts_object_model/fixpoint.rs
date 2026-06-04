@@ -12,6 +12,8 @@ use crate::analysis::solver::ts_tokens::fixpoint::{TsTokenVarState, solve_ts_tok
 
 use super::dispatch::resolve_object_callsite;
 use super::inputs::{TsObjectModelInputs, TsObjectPropertyWrite};
+use super::prototype::lookup_property_with_prototypes;
+use super::receiver::resolve_receiver_bindings;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) enum TsObjectValueToken {
@@ -49,7 +51,9 @@ pub(crate) fn solve_ts_object_model(
 ) -> TsObjectModelSolveResult {
     let token_result = solve_ts_tokens(&inputs.token_inputs, budget);
     let allocation_key_by_object = allocation_key_by_object(inputs);
-    let handoffs_by_callsite = handoffs_by_callsite(inputs);
+    let receiver_bindings = resolve_receiver_bindings(&inputs.receiver_bindings);
+    let evidence_by_callsite =
+        evidence_by_callsite(inputs, &receiver_bindings.evidence_by_callsite);
     let token_states = token_result.tokens_by_var;
 
     let mut budget_reasons = BTreeSet::new();
@@ -82,21 +86,25 @@ pub(crate) fn solve_ts_object_model(
             budget_reasons.insert("max_object_worklist_steps".to_string());
             break;
         }
-        let key = TsObjectPropertyBucketKey {
-            object: read.base_object,
-            field: read.field.clone(),
-        };
-        let Some(bucket) = accumulator.buckets.get(&key) else {
+        let lookup = lookup_property_with_prototypes(
+            &accumulator.buckets,
+            &inputs.prototype_links,
+            read.base_object,
+            &read.field,
+            budget,
+        );
+        budget_reasons.extend(lookup.budget_reasons);
+        if lookup.tokens.is_empty() {
             continue;
-        };
+        }
         let handoff_keys = read
             .callsite_node
-            .and_then(|callsite| handoffs_by_callsite.get(&callsite))
+            .and_then(|callsite| evidence_by_callsite.get(&callsite))
             .map(Vec::as_slice)
             .unwrap_or(&[]);
         let resolution = resolve_object_callsite(
             read,
-            &bucket.tokens,
+            &lookup.tokens,
             handoff_keys,
             budget.object.max_receiver_candidates_per_callsite,
             steps,
@@ -258,13 +266,22 @@ fn enforce_objects_per_place(
     }
 }
 
-fn handoffs_by_callsite(inputs: &TsObjectModelInputs) -> BTreeMap<SemanticNodeId, Vec<String>> {
+fn evidence_by_callsite(
+    inputs: &TsObjectModelInputs,
+    receiver_evidence: &BTreeMap<SemanticNodeId, Vec<String>>,
+) -> BTreeMap<SemanticNodeId, Vec<String>> {
     let mut by_callsite: BTreeMap<_, Vec<_>> = BTreeMap::new();
     for handoff in &inputs.handoffs {
         by_callsite
             .entry(handoff.callsite_node)
             .or_default()
             .push(handoff.binding_stable_key.clone());
+    }
+    for (callsite, evidence) in receiver_evidence {
+        by_callsite
+            .entry(*callsite)
+            .or_default()
+            .extend(evidence.iter().cloned());
     }
     by_callsite
 }
@@ -311,6 +328,53 @@ mod tests {
             solve_ts_object_model(&basic_inputs("computed_bucket"), &SolverBudget::default());
 
         assert_eq!(result.derived_edges.len(), 1);
+    }
+
+    #[test]
+    fn prototype_bucket_lookup_emits_edge_with_prototype_evidence() {
+        let mut inputs = basic_inputs("static:m");
+        inputs.property_writes[0].base_object = SemanticNodeId(11);
+        inputs
+            .prototype_links
+            .push(super::super::inputs::TsObjectPrototypeLink {
+                object: SemanticNodeId(10),
+                prototype: SemanticNodeId(11),
+                stable_key: "prototype:C".to_string(),
+            });
+
+        let result = solve_ts_object_model(&inputs.normalized(), &SolverBudget::default());
+
+        assert_eq!(result.derived_edges.len(), 1);
+        let contributing = result.derived_edges[0]
+            .provenance
+            .contributing_facts
+            .iter()
+            .map(|fact| fact.stable_key.as_str())
+            .collect::<BTreeSet<_>>();
+        assert!(contributing.contains("prototype:C"));
+    }
+
+    #[test]
+    fn receiver_binding_evidence_is_included_in_edge_provenance() {
+        let mut inputs = basic_inputs("static:target");
+        inputs
+            .receiver_bindings
+            .push(super::super::inputs::TsObjectReceiverBinding {
+                kind: crate::ts::object_model::facts::TsReceiverBindingKind::MethodCall,
+                callsite_node: Some(SemanticNodeId(9)),
+                receiver_object: Some(SemanticNodeId(10)),
+                stable_key: "receiver:method".to_string(),
+            });
+
+        let result = solve_ts_object_model(&inputs.normalized(), &SolverBudget::default());
+
+        let contributing = result.derived_edges[0]
+            .provenance
+            .contributing_facts
+            .iter()
+            .map(|fact| fact.stable_key.as_str())
+            .collect::<BTreeSet<_>>();
+        assert!(contributing.contains("receiver:method"));
     }
 
     #[test]

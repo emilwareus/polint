@@ -13,7 +13,7 @@ use crate::ts::binding::facts::{
     TsDirectBindingFact, TsDirectBindingReason, TsDirectBindingStatus,
 };
 use crate::ts::object_model::facts::{
-    TsObjectModelStatus, TsPropertyReadFact, TsPropertyWriteFact,
+    TsObjectModelStatus, TsPropertyReadFact, TsPropertyWriteFact, TsReceiverBindingKind,
 };
 
 use super::super::ts_tokens::TsTokenInputs;
@@ -56,6 +56,23 @@ pub(crate) struct TsObjectModelHandoff {
     pub(crate) reason: TsDirectBindingReason,
 }
 
+/// One stable prototype edge `object -> prototype`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct TsObjectPrototypeLink {
+    pub(crate) object: SemanticNodeId,
+    pub(crate) prototype: SemanticNodeId,
+    pub(crate) stable_key: String,
+}
+
+/// One stable receiver/`this` binding fact attached to a callsite or callee.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct TsObjectReceiverBinding {
+    pub(crate) kind: TsReceiverBindingKind,
+    pub(crate) callsite_node: Option<SemanticNodeId>,
+    pub(crate) receiver_object: Option<SemanticNodeId>,
+    pub(crate) stable_key: String,
+}
+
 /// Closed input snapshot for the TS object-model policy.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct TsObjectModelInputs {
@@ -63,6 +80,8 @@ pub(crate) struct TsObjectModelInputs {
     pub(crate) property_writes: Vec<TsObjectPropertyWrite>,
     pub(crate) property_reads: Vec<TsObjectPropertyRead>,
     pub(crate) handoffs: Vec<TsObjectModelHandoff>,
+    pub(crate) prototype_links: Vec<TsObjectPrototypeLink>,
+    pub(crate) receiver_bindings: Vec<TsObjectReceiverBinding>,
     pub(crate) token_inputs: TsTokenInputs,
     pub(crate) node_kinds: BTreeMap<SemanticNodeId, NodeKind>,
 }
@@ -79,6 +98,8 @@ impl TsObjectModelInputs {
         let property_writes = property_write_inputs(db, &constraints);
         let property_reads = property_read_inputs(db, &graph, &constraints);
         let handoffs = property_handoffs_from_direct_bindings(&graph, &direct_bindings.bindings);
+        let prototype_links = prototype_link_inputs(db, &constraints);
+        let receiver_bindings = receiver_binding_inputs(db, &graph, &constraints);
         let node_kinds = db
             .semantic_nodes()
             .iter()
@@ -90,6 +111,8 @@ impl TsObjectModelInputs {
             property_writes,
             property_reads,
             handoffs,
+            prototype_links,
+            receiver_bindings,
             token_inputs: TsTokenInputs::from_db(db),
             node_kinds,
         }
@@ -105,10 +128,67 @@ impl TsObjectModelInputs {
         self.property_reads.dedup();
         self.handoffs.sort();
         self.handoffs.dedup();
+        self.prototype_links.sort();
+        self.prototype_links.dedup();
+        self.receiver_bindings.sort();
+        self.receiver_bindings.dedup();
         self.token_inputs = self.token_inputs.normalized();
         self.node_kinds = self.node_kinds.into_iter().collect();
         self
     }
+}
+
+fn prototype_link_inputs(
+    db: &AnalysisDb,
+    constraints: &ConstraintIndex<'_>,
+) -> Vec<TsObjectPrototypeLink> {
+    let mut inputs = Vec::new();
+    for link in db.ts_prototype_links() {
+        if !is_resolved(&link.status) {
+            continue;
+        }
+        let Some((object, _, prototype)) = constraints.field_store_by_stable_key(&link.stable_key)
+        else {
+            continue;
+        };
+        inputs.push(TsObjectPrototypeLink {
+            object,
+            prototype,
+            stable_key: link.stable_key.clone(),
+        });
+    }
+    inputs.sort();
+    inputs.dedup();
+    inputs
+}
+
+fn receiver_binding_inputs(
+    db: &AnalysisDb,
+    graph: &GraphIndex,
+    constraints: &ConstraintIndex<'_>,
+) -> Vec<TsObjectReceiverBinding> {
+    let mut inputs = Vec::new();
+    for binding in db.ts_receiver_bindings() {
+        if !is_resolved(&binding.status) {
+            continue;
+        }
+        let receiver_object = constraints
+            .copy_edge(&binding.stable_key)
+            .map(|(_, src)| src);
+        let callsite_node = binding
+            .callsite_stable_key
+            .as_deref()
+            .and_then(|key| graph.callsite_node(key));
+        inputs.push(TsObjectReceiverBinding {
+            kind: binding.kind,
+            callsite_node,
+            receiver_object,
+            stable_key: binding.stable_key.clone(),
+        });
+    }
+    inputs.sort();
+    inputs.dedup();
+    inputs
 }
 
 fn allocation_inputs(
@@ -315,14 +395,33 @@ impl<'a> ConstraintIndex<'a> {
         &self,
         write: &TsPropertyWriteFact,
     ) -> Option<(SemanticNodeId, String, SemanticNodeId)> {
+        self.field_store_by_stable_key(&write.stable_key)
+    }
+
+    fn field_store_by_stable_key(
+        &self,
+        stable_key: &str,
+    ) -> Option<(SemanticNodeId, String, SemanticNodeId)> {
         self.by_stable_key
-            .get(write.stable_key.as_str())?
+            .get(stable_key)?
             .iter()
             .find_map(|constraint| {
                 let ConstraintKind::FieldStore { base, field, src } = &constraint.kind else {
                     return None;
                 };
                 Some((*base, field.clone(), *src))
+            })
+    }
+
+    fn copy_edge(&self, stable_key: &str) -> Option<(SemanticNodeId, SemanticNodeId)> {
+        self.by_stable_key
+            .get(stable_key)?
+            .iter()
+            .find_map(|constraint| {
+                let ConstraintKind::CopyEdge { dst, src } = &constraint.kind else {
+                    return None;
+                };
+                Some((*dst, *src))
             })
     }
 
@@ -383,6 +482,11 @@ mod tests {
                 write("write:a", 1),
             ],
             property_reads: vec![read("read:b", 2), read("read:a", 1), read("read:a", 1)],
+            prototype_links: vec![
+                prototype_link("proto:b", 2, 3),
+                prototype_link("proto:a", 1, 2),
+                prototype_link("proto:a", 1, 2),
+            ],
             ..TsObjectModelInputs::default()
         }
         .normalized();
@@ -410,6 +514,14 @@ mod tests {
                 .map(|read| read.stable_key.as_str())
                 .collect::<Vec<_>>(),
             vec!["read:a", "read:b"]
+        );
+        assert_eq!(
+            inputs
+                .prototype_links
+                .iter()
+                .map(|link| link.stable_key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["proto:a", "proto:b"]
         );
     }
 
@@ -465,6 +577,14 @@ mod tests {
             caller_node: Some(SemanticNodeId(1)),
             callsite_stable_key: Some("callsite:target".to_string()),
             constraint_stable_key: stable_key.to_string(),
+            stable_key: stable_key.to_string(),
+        }
+    }
+
+    fn prototype_link(stable_key: &str, object: u64, prototype: u64) -> TsObjectPrototypeLink {
+        TsObjectPrototypeLink {
+            object: SemanticNodeId(object),
+            prototype: SemanticNodeId(prototype),
             stable_key: stable_key.to_string(),
         }
     }
