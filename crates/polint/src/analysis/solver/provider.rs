@@ -25,8 +25,11 @@ use crate::analysis::solver::budget::{BudgetStatus, SolverBudget};
 use crate::analysis::solver::cache_key::solver_provider_parameter_digest;
 use crate::analysis::solver::engine::SolverEngine;
 use crate::analysis::solver::go_rta::GoRtaInputs;
-use crate::analysis::solver::policy::{GoRtaPolicy, SolverPolicy, TsTokensPolicy};
+use crate::analysis::solver::policy::{
+    GoRtaPolicy, SolverPolicy, TsObjectModelPolicy, TsTokensPolicy,
+};
 use crate::analysis::solver::store::{SOLVER_PROVIDER_ID, SolverOutput};
+use crate::analysis::solver::ts_object_model::TsObjectModelInputs;
 use crate::analysis::solver::ts_tokens::TsTokenInputs;
 use crate::analysis::solver::validate::{detect_solver_summary_cycle, validate_derived_edges};
 use crate::analysis_kernel::ProviderManifest;
@@ -145,17 +148,17 @@ fn solver_policies_for_db(db: &AnalysisDb, budget: &SolverBudget) -> Vec<Box<dyn
 }
 
 fn register_ts_object_model_policy_if_enabled(
-    _policies: &mut Vec<Box<dyn SolverPolicy>>,
-    _db: &AnalysisDb,
+    policies: &mut Vec<Box<dyn SolverPolicy>>,
+    db: &AnalysisDb,
     budget: &SolverBudget,
 ) -> bool {
     if !budget.object_model_enabled {
         return false;
     }
 
-    // Phase 50-03 adds `TsObjectModelPolicy` here. Keeping this seam behind the
-    // opt-in flag now prevents accidental default execution while making the future
-    // registration point explicit.
+    policies.push(Box::new(TsObjectModelPolicy::new(
+        TsObjectModelInputs::from_db(db),
+    )));
     true
 }
 
@@ -631,9 +634,9 @@ mod tests {
     }
 
     #[test]
-    fn enabled_budget_reaches_ts_object_model_registration_seam() {
+    fn enabled_budget_registers_ts_object_model_policy() {
         let db = AnalysisDb::new();
-        let mut policies = solver_policies_for_db(
+        let policies = solver_policies_for_db(
             &db,
             &SolverBudget {
                 object_model_enabled: true,
@@ -646,8 +649,14 @@ mod tests {
                 .iter()
                 .map(|policy| policy.id())
                 .collect::<Vec<_>>(),
-            vec!["go_rta", "ts_tokens"]
+            vec!["go_rta", "ts_tokens", "ts_object_model"]
         );
+    }
+
+    #[test]
+    fn enabled_registration_helper_pushes_ts_object_model_policy() {
+        let db = AnalysisDb::new();
+        let mut policies = solver_policies_for_db(&db, &SolverBudget::default());
         assert!(register_ts_object_model_policy_if_enabled(
             &mut policies,
             &db,
@@ -656,6 +665,13 @@ mod tests {
                 ..SolverBudget::default()
             }
         ));
+        assert_eq!(
+            policies
+                .iter()
+                .map(|policy| policy.id())
+                .collect::<Vec<_>>(),
+            vec!["go_rta", "ts_tokens", "ts_object_model"]
+        );
     }
 
     #[test]
@@ -704,7 +720,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             changed_edges, base_edges,
-            "the Plan 50-02 placeholder seam must not emit object-derived edges"
+            "enabling object model over an input without object facts must not add edges"
         );
     }
 

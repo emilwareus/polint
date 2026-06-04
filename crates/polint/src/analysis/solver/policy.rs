@@ -21,6 +21,7 @@ use crate::analysis::points_to::solver::{PointsToSolveResult, solve_points_to};
 use super::budget::{BudgetStatus, SolverBudget};
 use super::facts::DerivedEdgeFact;
 use super::go_rta::{GoRtaInputs, solve_go_rta};
+use super::ts_object_model::{TsObjectModelInputs, solve_ts_object_model};
 use super::ts_tokens::{TsTokenInputs, solve_ts_tokens};
 
 /// Outcome produced by a [`SolverPolicy`] when driven by the engine.
@@ -173,6 +174,34 @@ impl SolverPolicy for TsTokensPolicy {
     }
 }
 
+/// JS/TS object/property policy (Phase 50, JS-05). It owns a closed object-model
+/// snapshot and emits conservative property-backed call edges.
+pub(crate) struct TsObjectModelPolicy {
+    inputs: TsObjectModelInputs,
+}
+
+impl TsObjectModelPolicy {
+    pub(crate) fn new(inputs: TsObjectModelInputs) -> Self {
+        Self { inputs }
+    }
+}
+
+impl SolverPolicy for TsObjectModelPolicy {
+    fn id(&self) -> &'static str {
+        "ts_object_model"
+    }
+
+    fn solve(&self, budget: &SolverBudget) -> PolicyOutcome {
+        let output = solve_ts_object_model(&self.inputs, budget);
+        PolicyOutcome {
+            points_to: None,
+            derived_edges: output.derived_edges,
+            budget_status: output.budget_status,
+            steps: output.steps,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -228,6 +257,84 @@ mod tests {
         assert_eq!(outcome.derived_edges[0].target, SemanticNodeId(1));
         assert_eq!(outcome.budget_status, BudgetStatus::WithinBudget);
         assert!(outcome.steps > 0);
+    }
+
+    #[test]
+    fn ts_object_model_policy_derives_edges_from_resolvable_property_flow() {
+        let inputs = crate::analysis::solver::ts_object_model::inputs::TsObjectModelInputs {
+            allocations: vec![
+                crate::analysis::solver::ts_object_model::inputs::TsObjectAllocationInput {
+                    place_node: SemanticNodeId(30),
+                    object_node: SemanticNodeId(10),
+                    stable_key: "allocation:holder".to_string(),
+                },
+            ],
+            property_writes: vec![
+                crate::analysis::solver::ts_object_model::inputs::TsObjectPropertyWrite {
+                    base_object: SemanticNodeId(10),
+                    field: "static:target".to_string(),
+                    source_node: SemanticNodeId(2),
+                    stable_key: "write:target".to_string(),
+                },
+            ],
+            property_reads: vec![
+                crate::analysis::solver::ts_object_model::inputs::TsObjectPropertyRead {
+                    base_object: SemanticNodeId(10),
+                    field: "static:target".to_string(),
+                    destination_node: SemanticNodeId(20),
+                    callsite_node: Some(SemanticNodeId(9)),
+                    caller_node: Some(SemanticNodeId(1)),
+                    callsite_stable_key: Some("callsite:target".to_string()),
+                    constraint_stable_key: "read:target".to_string(),
+                    stable_key: "read:target".to_string(),
+                },
+            ],
+            token_inputs: TsTokenInputs {
+                function_tokens: BTreeMap::from([(
+                    SemanticNodeId(2),
+                    TsFunctionToken {
+                        function_node: SemanticNodeId(2),
+                        function_stable_key: "function:target".to_string(),
+                        source_stable_key: "node:function:target".to_string(),
+                    },
+                )]),
+                ..Default::default()
+            },
+            node_kinds: BTreeMap::from([
+                (
+                    SemanticNodeId(1),
+                    crate::analysis::semantic_graph::facts::NodeKind::Function(
+                        crate::core::FunctionId(1),
+                    ),
+                ),
+                (
+                    SemanticNodeId(2),
+                    crate::analysis::semantic_graph::facts::NodeKind::Function(
+                        crate::core::FunctionId(2),
+                    ),
+                ),
+                (
+                    SemanticNodeId(10),
+                    crate::analysis::semantic_graph::facts::NodeKind::AbstractObject(
+                        crate::analysis::ids::ObjectTokenId(10),
+                    ),
+                ),
+            ]),
+            ..Default::default()
+        }
+        .normalized();
+        let policy = TsObjectModelPolicy::new(inputs);
+
+        let outcome = policy.solve(&SolverBudget {
+            object_model_enabled: true,
+            ..SolverBudget::default()
+        });
+
+        assert_eq!(policy.id(), "ts_object_model");
+        assert_eq!(outcome.derived_edges.len(), 1);
+        assert_eq!(outcome.derived_edges[0].source, SemanticNodeId(1));
+        assert_eq!(outcome.derived_edges[0].target, SemanticNodeId(2));
+        assert_eq!(outcome.budget_status, BudgetStatus::WithinBudget);
     }
 
     #[test]
