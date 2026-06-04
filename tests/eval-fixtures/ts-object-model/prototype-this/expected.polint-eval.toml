@@ -6,8 +6,8 @@ area = "facts"
 #
 # The executable gate in `eval::ts_object_model` reads private object-model and
 # solver rows. It proves bounded prototype lookup for direct and inherited class
-# methods, plus receiver/`this` evidence rows for method, lexical-arrow, bind,
-# call, and apply syntax currently emitted by the private extractor.
+# methods, plus receiver/`this` evidence rows for method, lexical-arrow, bind, call,
+# and apply syntax currently emitted by the private extractor.
 
 [repo]
 path = "repo"

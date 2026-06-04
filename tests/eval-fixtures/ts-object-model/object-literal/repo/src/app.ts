@@ -10,6 +10,10 @@ function unrelatedExactTarget(): string {
   return "unrelated";
 }
 
+function inlineTarget(): string {
+  return "inline";
+}
+
 function keyName(): string {
   return "dynamic";
 }
@@ -28,7 +32,16 @@ export function objectEntry(): string {
   };
   const fromComputed = computedHolder[dynamic]();
 
-  return fromDot + fromString + fromComputed;
+  const fromInline = ({ inlineTarget }).inlineTarget();
+
+  const methodHolder = {
+    methodTarget(): string {
+      return "method";
+    },
+  };
+  const fromMethod = methodHolder.methodTarget();
+
+  return fromDot + fromString + fromComputed + fromInline + fromMethod;
 }
 
 objectEntry();

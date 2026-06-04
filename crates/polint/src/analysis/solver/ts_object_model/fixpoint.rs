@@ -11,7 +11,7 @@ use crate::analysis::solver::facts::DerivedEdgeFact;
 use crate::analysis::solver::ts_tokens::fixpoint::{TsTokenVarState, solve_ts_tokens};
 
 use super::dispatch::resolve_object_callsite;
-use super::inputs::{TsObjectModelInputs, TsObjectPropertyWrite};
+use super::inputs::{TsObjectModelInputs, TsObjectPropertyRead, TsObjectPropertyWrite};
 use super::prototype::lookup_property_with_prototypes;
 use super::receiver::resolve_receiver_bindings;
 
@@ -79,6 +79,16 @@ pub(crate) fn solve_ts_object_model(
         }
     }
 
+    let receiver_contexts = receiver_contexts_by_function(
+        inputs,
+        &accumulator.buckets,
+        &receiver_bindings.receiver_by_callsite,
+        &evidence_by_callsite,
+        budget,
+        &mut budget_reasons,
+        &mut steps,
+    );
+
     let mut edges_by_key = BTreeMap::new();
     for read in &inputs.property_reads {
         steps += 1;
@@ -86,34 +96,40 @@ pub(crate) fn solve_ts_object_model(
             budget_reasons.insert("max_object_worklist_steps".to_string());
             break;
         }
-        let lookup = lookup_property_with_prototypes(
-            &accumulator.buckets,
-            &inputs.prototype_links,
-            read.base_object,
-            &read.field,
-            budget,
-        );
-        budget_reasons.extend(lookup.budget_reasons);
-        if lookup.tokens.is_empty() {
-            continue;
-        }
-        let handoff_keys = read
-            .callsite_node
-            .and_then(|callsite| evidence_by_callsite.get(&callsite))
-            .map(Vec::as_slice)
-            .unwrap_or(&[]);
-        let resolution = resolve_object_callsite(
-            read,
-            &lookup.tokens,
-            handoff_keys,
-            budget.object.max_receiver_candidates_per_callsite,
-            steps,
-        );
-        if resolution.candidate_cap_exceeded {
-            budget_reasons.insert("max_receiver_candidates_per_callsite".to_string());
-        }
-        for edge in resolution.edges {
-            edges_by_key.entry(edge.stable_key.clone()).or_insert(edge);
+        let base_objects = read_base_objects(read, &receiver_contexts);
+        for (base_object, receiver_evidence) in base_objects {
+            let lookup = lookup_property_with_prototypes(
+                &accumulator.buckets,
+                &inputs.prototype_links,
+                base_object,
+                &read.field,
+                budget,
+            );
+            budget_reasons.extend(lookup.budget_reasons);
+            if lookup.tokens.is_empty() {
+                continue;
+            }
+            let mut handoff_keys = read
+                .callsite_node
+                .and_then(|callsite| evidence_by_callsite.get(&callsite))
+                .cloned()
+                .unwrap_or_default();
+            handoff_keys.extend(receiver_evidence);
+            handoff_keys.sort();
+            handoff_keys.dedup();
+            let resolution = resolve_object_callsite(
+                read,
+                &lookup.tokens,
+                &handoff_keys,
+                budget.object.max_receiver_candidates_per_callsite,
+                steps,
+            );
+            if resolution.candidate_cap_exceeded {
+                budget_reasons.insert("max_receiver_candidates_per_callsite".to_string());
+            }
+            for edge in resolution.edges {
+                edges_by_key.entry(edge.stable_key.clone()).or_insert(edge);
+            }
         }
     }
 
@@ -132,6 +148,91 @@ pub(crate) fn solve_ts_object_model(
         budget_reasons,
         steps,
     }
+}
+
+type ReceiverContextsByFunction = BTreeMap<SemanticNodeId, BTreeMap<SemanticNodeId, Vec<String>>>;
+
+fn receiver_contexts_by_function(
+    inputs: &TsObjectModelInputs,
+    buckets: &BTreeMap<TsObjectPropertyBucketKey, TsObjectPropertyBucketState>,
+    receiver_by_callsite: &BTreeMap<SemanticNodeId, SemanticNodeId>,
+    evidence_by_callsite: &BTreeMap<SemanticNodeId, Vec<String>>,
+    budget: &SolverBudget,
+    budget_reasons: &mut BTreeSet<String>,
+    steps: &mut u64,
+) -> ReceiverContextsByFunction {
+    let mut contexts: ReceiverContextsByFunction = BTreeMap::new();
+
+    for read in &inputs.property_reads {
+        if read.base_is_this {
+            continue;
+        }
+        *steps += 1;
+        if *steps > budget.object.max_object_worklist_steps as u64 {
+            budget_reasons.insert("max_object_worklist_steps".to_string());
+            break;
+        }
+        let Some(receiver_object) = read
+            .callsite_node
+            .and_then(|callsite| receiver_by_callsite.get(&callsite))
+            .copied()
+        else {
+            continue;
+        };
+        let lookup = lookup_property_with_prototypes(
+            buckets,
+            &inputs.prototype_links,
+            read.base_object,
+            &read.field,
+            budget,
+        );
+        budget_reasons.extend(lookup.budget_reasons);
+        if lookup.tokens.is_empty() {
+            continue;
+        }
+        let receiver_evidence = read
+            .callsite_node
+            .and_then(|callsite| evidence_by_callsite.get(&callsite))
+            .cloned()
+            .unwrap_or_default();
+        for token in lookup.tokens.keys() {
+            let TsObjectValueToken::Function(function_node) = *token else {
+                continue;
+            };
+            contexts
+                .entry(function_node)
+                .or_default()
+                .entry(receiver_object)
+                .or_default()
+                .extend(receiver_evidence.iter().cloned());
+        }
+    }
+
+    for receivers in contexts.values_mut() {
+        for evidence in receivers.values_mut() {
+            evidence.sort();
+            evidence.dedup();
+        }
+    }
+
+    contexts
+}
+
+fn read_base_objects(
+    read: &TsObjectPropertyRead,
+    receiver_contexts: &ReceiverContextsByFunction,
+) -> Vec<(SemanticNodeId, Vec<String>)> {
+    if read.base_is_this
+        && let Some(caller_node) = read.caller_node
+        && let Some(receivers) = receiver_contexts.get(&caller_node)
+    {
+        return receivers
+            .iter()
+            .map(|(&receiver, evidence)| (receiver, evidence.clone()))
+            .collect();
+    }
+
+    vec![(read.base_object, Vec::new())]
 }
 
 fn source_tokens_for_write(
@@ -378,6 +479,77 @@ mod tests {
     }
 
     #[test]
+    fn receiver_context_resolves_this_property_read_inside_called_function() {
+        let mut inputs = basic_inputs("static:method");
+        inputs.property_writes.push(TsObjectPropertyWrite {
+            base_object: SemanticNodeId(10),
+            field: "static:thisTarget".to_string(),
+            source_node: SemanticNodeId(3),
+            stable_key: "write:thisTarget".to_string(),
+        });
+        inputs.property_reads.push(TsObjectPropertyRead {
+            base_object: SemanticNodeId(12),
+            base_is_this: true,
+            field: "static:thisTarget".to_string(),
+            destination_node: SemanticNodeId(21),
+            callsite_node: Some(SemanticNodeId(13)),
+            caller_node: Some(SemanticNodeId(2)),
+            callsite_stable_key: Some("callsite:thisTarget".to_string()),
+            constraint_stable_key: "read:thisTarget".to_string(),
+            stable_key: "read:thisTarget".to_string(),
+        });
+        inputs
+            .receiver_bindings
+            .push(super::super::inputs::TsObjectReceiverBinding {
+                kind: crate::ts::object_model::facts::TsReceiverBindingKind::MethodCall,
+                callsite_node: Some(SemanticNodeId(9)),
+                receiver_object: Some(SemanticNodeId(10)),
+                stable_key: "receiver:method".to_string(),
+            });
+        inputs.node_kinds.insert(
+            SemanticNodeId(3),
+            NodeKind::Function(crate::core::FunctionId(3)),
+        );
+        inputs.node_kinds.insert(
+            SemanticNodeId(12),
+            NodeKind::AbstractObject(crate::analysis::ids::ObjectTokenId(12)),
+        );
+        inputs.node_kinds.insert(
+            SemanticNodeId(13),
+            NodeKind::Callsite(crate::analysis::ids::CallSiteId(13)),
+        );
+        inputs.node_kinds.insert(
+            SemanticNodeId(21),
+            NodeKind::Place(crate::analysis::ids::PlaceId(21)),
+        );
+        inputs.token_inputs.function_tokens.insert(
+            SemanticNodeId(3),
+            TsFunctionToken {
+                function_node: SemanticNodeId(3),
+                function_stable_key: "function:thisTarget".to_string(),
+                source_stable_key: "node:function:thisTarget".to_string(),
+            },
+        );
+
+        let result = solve_ts_object_model(&inputs.normalized(), &SolverBudget::default());
+
+        let this_edge = result
+            .derived_edges
+            .iter()
+            .find(|edge| edge.source == SemanticNodeId(2) && edge.target == SemanticNodeId(3))
+            .expect("this property read should resolve through the caller receiver");
+        let contributing = this_edge
+            .provenance
+            .contributing_facts
+            .iter()
+            .map(|fact| fact.stable_key.as_str())
+            .collect::<BTreeSet<_>>();
+        assert!(contributing.contains("receiver:method"));
+        assert!(contributing.contains("write:thisTarget"));
+        assert!(contributing.contains("read:thisTarget"));
+    }
+
+    #[test]
     fn max_properties_per_object_latches_budget_exceeded() {
         let mut inputs = basic_inputs("static:a");
         inputs.property_writes.push(TsObjectPropertyWrite {
@@ -501,6 +673,7 @@ mod tests {
             }],
             property_reads: vec![TsObjectPropertyRead {
                 base_object: SemanticNodeId(10),
+                base_is_this: false,
                 field: field.to_string(),
                 destination_node: SemanticNodeId(20),
                 callsite_node: Some(SemanticNodeId(9)),

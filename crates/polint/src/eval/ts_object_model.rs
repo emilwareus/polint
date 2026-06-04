@@ -64,6 +64,7 @@ fn object_literal_fixture_resolves_exact_and_computed_property_calls() {
     assert_object_edge_with_provenance(edges, &nodes, "objectEntry", "propertyTarget");
     assert_property_edge_count(edges, &nodes, "objectEntry", "propertyTarget", 2);
     assert_object_edge_with_provenance(edges, &nodes, "objectEntry", "computedTarget");
+    assert_object_edge_with_provenance(edges, &nodes, "objectEntry", "inlineTarget");
     assert_no_computed_bucket_edge_to(edges, &nodes, "unrelatedExactTarget");
 
     assert!(
@@ -72,6 +73,14 @@ fn object_literal_fixture_resolves_exact_and_computed_property_calls() {
                 && read.callsite_stable_key.is_some()
         }),
         "fixture must retain a computed property call that only object-model bucket facts can justify"
+    );
+    assert!(
+        output.db.ts_property_writes().iter().any(|write| {
+            write.property_key.kind == TsPropertyKeyKind::Static
+                && write.property_key.value.as_deref() == Some("methodTarget")
+                && write.value_function_stable_key.is_some()
+        }),
+        "object literal method syntax must seed a callable property value"
     );
 }
 
@@ -83,6 +92,7 @@ fn prototype_this_fixture_resolves_class_prototype_edges_and_receiver_evidence()
 
     assert_property_label_edge(edges, &nodes, "prototypeEntry", "static:childMethod");
     assert_property_label_edge(edges, &nodes, "prototypeEntry", "static:baseMethod");
+    assert_property_label_edge(edges, &nodes, "prototypeEntry", "static:callThisTarget");
     assert_property_label_edge_has_prefix(
         edges,
         &nodes,
@@ -253,6 +263,7 @@ fn basic_inputs(field: &str) -> TsObjectModelInputs {
         }],
         property_reads: vec![TsObjectPropertyRead {
             base_object: SemanticNodeId(10),
+            base_is_this: false,
             field: field.to_string(),
             destination_node: SemanticNodeId(20),
             callsite_node: Some(SemanticNodeId(9)),

@@ -9,6 +9,14 @@ class ChildModel extends BaseModel {
     return "child";
   }
 
+  thisTarget(): string {
+    return "this";
+  }
+
+  callThisTarget(): string {
+    return this.thisTarget();
+  }
+
   get accessorMethod(): () => string {
     return accessorTarget;
   }
@@ -32,6 +40,7 @@ export function prototypeEntry(): string {
   const child = new ChildModel();
   const fromChild = child.childMethod();
   const fromBase = child.baseMethod();
+  const fromThis = child.callThisTarget();
   const method = child.accessorMethod;
 
   lexicalArrow();
@@ -39,7 +48,7 @@ export function prototypeEntry(): string {
   boundTarget.call(child);
   boundTarget.apply(child);
 
-  return fromChild + fromBase + method();
+  return fromChild + fromBase + fromThis + method();
 }
 
 prototypeEntry();

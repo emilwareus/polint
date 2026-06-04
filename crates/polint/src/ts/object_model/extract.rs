@@ -38,7 +38,6 @@ pub(crate) fn extract_ts_object_model(file: &SourceFile) -> TsObjectModelOutput 
 
     let semantic = SemanticBuilder::new().build(&parsed.program).semantic;
     extract_ts_object_model_from_program(file, source, &parsed.program, semantic.nodes())
-        .normalized()
 }
 
 fn extract_ts_object_model_from_program(
@@ -57,6 +56,7 @@ struct ObjectModelExtractor<'a> {
     nodes: &'a AstNodes<'a>,
     inventory: ObjectModelInventoryIndex,
     variables_to_objects: BTreeMap<String, String>,
+    allocation_keys_by_span: BTreeMap<(u32, u32, TsObjectAllocationKind), String>,
     class_prototypes: BTreeMap<String, String>,
 }
 
@@ -68,12 +68,13 @@ impl<'a> ObjectModelExtractor<'a> {
             nodes,
             inventory: ObjectModelInventoryIndex::from_output(extract_ts_inventory(file)),
             variables_to_objects: BTreeMap::new(),
+            allocation_keys_by_span: BTreeMap::new(),
             class_prototypes: BTreeMap::new(),
         }
     }
 
     fn build(&mut self) -> TsObjectModelOutput {
-        self.index_variable_allocations();
+        self.index_allocations();
 
         let mut output = TsObjectModelOutput::default();
         let mut entries = self
@@ -96,7 +97,7 @@ impl<'a> ObjectModelExtractor<'a> {
                         node_id,
                         array.span,
                         TsObjectAllocationKind::ArrayLiteral,
-                        None,
+                        self.allocation_display_name(node_id, kind),
                     ));
                 }
                 AstKind::Class(class) => self.record_class(node_id, class, &mut output),
@@ -173,27 +174,33 @@ impl<'a> ObjectModelExtractor<'a> {
         output
     }
 
-    fn index_variable_allocations(&mut self) {
-        for (node_id, node) in self.nodes.iter_enumerated() {
-            let AstKind::VariableDeclarator(declarator) = node.kind() else {
-                continue;
-            };
-            let Some(name) = binding_identifier_name(declarator) else {
-                continue;
-            };
-            let Some(init) = &declarator.init else {
-                continue;
-            };
-            let Some(kind) = allocation_kind_for_expression(init) else {
-                continue;
-            };
-            let stable_key = self.allocation_stable_key(
-                init.span(),
-                kind,
-                self.lexical_parent_key(node_id).as_deref(),
-                Some(name.as_str()),
-            );
-            self.variables_to_objects.insert(name, stable_key);
+    fn index_allocations(&mut self) {
+        let entries = self
+            .nodes
+            .iter_enumerated()
+            .filter_map(|(node_id, node)| {
+                let ast_kind = node.kind();
+                let kind = allocation_kind_for_node(self.nodes, node_id, ast_kind)?;
+                let span = ast_kind.span();
+                let lexical_parent_key = self.lexical_parent_key(node_id);
+                let display_name = self.allocation_display_name(node_id, ast_kind);
+                let stable_key = self.allocation_stable_key(
+                    span,
+                    kind,
+                    lexical_parent_key.as_deref(),
+                    display_name.as_deref(),
+                );
+                let variable_name = variable_declarator_name(self.nodes, node_id);
+                Some((span.start, span.end, kind, stable_key, variable_name))
+            })
+            .collect::<Vec<_>>();
+
+        for (start, end, kind, stable_key, variable_name) in entries {
+            self.allocation_keys_by_span
+                .insert((start, end, kind), stable_key.clone());
+            if let Some(name) = variable_name {
+                self.variables_to_objects.insert(name, stable_key);
+            }
         }
     }
 
@@ -233,7 +240,7 @@ impl<'a> ObjectModelExtractor<'a> {
                         base_object_stable_key: base_stable_key.clone(),
                         property_key,
                         value_function: None,
-                        value_function_stable_key: self.value_function_key(&property.value),
+                        value_function_stable_key: self.object_property_function_key(property),
                         value_object_stable_key: self.object_key_for_expression(&property.value),
                         status: TsObjectModelStatus::resolved(),
                     });
@@ -648,24 +655,15 @@ impl<'a> ObjectModelExtractor<'a> {
                 .variables_to_objects
                 .get(identifier.name.as_str())
                 .cloned(),
-            Expression::ObjectExpression(object) => Some(self.allocation_stable_key(
-                object.span,
-                TsObjectAllocationKind::ObjectLiteral,
-                None,
-                None,
-            )),
-            Expression::ArrayExpression(array) => Some(self.allocation_stable_key(
-                array.span,
-                TsObjectAllocationKind::ArrayLiteral,
-                None,
-                None,
-            )),
-            Expression::NewExpression(expression) => Some(self.allocation_stable_key(
-                expression.span,
-                TsObjectAllocationKind::ClassInstance,
-                None,
-                expression_text(&expression.callee).as_deref(),
-            )),
+            Expression::ObjectExpression(object) => {
+                self.allocation_key_for_span(object.span, TsObjectAllocationKind::ObjectLiteral)
+            }
+            Expression::ArrayExpression(array) => {
+                self.allocation_key_for_span(array.span, TsObjectAllocationKind::ArrayLiteral)
+            }
+            Expression::NewExpression(expression) => {
+                self.allocation_key_for_span(expression.span, TsObjectAllocationKind::ClassInstance)
+            }
             Expression::ParenthesizedExpression(expression) => {
                 self.object_key_for_expression(&expression.expression)
             }
@@ -686,8 +684,36 @@ impl<'a> ObjectModelExtractor<'a> {
     }
 
     fn value_function_key(&self, expression: &Expression<'_>) -> Option<String> {
-        expression_text(expression)
-            .and_then(|name| self.inventory.unique_function_key(&name).cloned())
+        match expression {
+            Expression::FunctionExpression(_) | Expression::ArrowFunctionExpression(_) => {
+                self.function_key_for_span(expression.span())
+            }
+            Expression::ParenthesizedExpression(expression) => {
+                self.value_function_key(&expression.expression)
+            }
+            Expression::TSAsExpression(expression) => {
+                self.value_function_key(&expression.expression)
+            }
+            Expression::TSSatisfiesExpression(expression) => {
+                self.value_function_key(&expression.expression)
+            }
+            Expression::TSNonNullExpression(expression) => {
+                self.value_function_key(&expression.expression)
+            }
+            Expression::TSTypeAssertion(expression) => {
+                self.value_function_key(&expression.expression)
+            }
+            _ => expression_text(expression)
+                .and_then(|name| self.inventory.unique_function_key(&name).cloned()),
+        }
+    }
+
+    fn object_property_function_key(
+        &self,
+        property: &oxc_ast::ast::ObjectProperty<'_>,
+    ) -> Option<String> {
+        self.value_function_key(&property.value)
+            .or_else(|| self.function_key_for_span(property.span))
     }
 
     fn parent_callsite_key(&self, node_id: NodeId) -> Option<String> {
@@ -712,10 +738,38 @@ impl<'a> ObjectModelExtractor<'a> {
     }
 
     fn method_function_key(&self, method: &MethodDefinition<'_>) -> Option<String> {
+        self.function_key_for_span(method.span)
+    }
+
+    fn function_key_for_span(&self, span: oxc_span::Span) -> Option<String> {
         self.inventory
             .function_key_by_span
-            .get(&(method.span.start, method.span.end))
+            .get(&(span.start, span.end))
             .cloned()
+    }
+
+    fn allocation_key_for_span(
+        &self,
+        span: oxc_span::Span,
+        kind: TsObjectAllocationKind,
+    ) -> Option<String> {
+        self.allocation_keys_by_span
+            .get(&(span.start, span.end, kind))
+            .cloned()
+    }
+
+    fn allocation_display_name(&self, node_id: NodeId, kind: AstKind<'_>) -> Option<String> {
+        match kind {
+            AstKind::Function(function) => function
+                .id
+                .as_ref()
+                .map(|identifier| identifier.name.to_string())
+                .or_else(|| variable_declarator_name(self.nodes, node_id)),
+            AstKind::Class(class) => class_name(self.nodes, node_id, class),
+            AstKind::NewExpression(expression) => variable_declarator_name(self.nodes, node_id)
+                .or_else(|| expression_text(&expression.callee)),
+            _ => variable_declarator_name(self.nodes, node_id),
+        }
     }
 
     fn lexical_parent_key(&self, node_id: NodeId) -> Option<String> {
@@ -853,15 +907,23 @@ fn insert_unique<K: Ord, V: PartialEq>(map: &mut BTreeMap<K, Option<V>>, key: K,
     }
 }
 
-fn allocation_kind_for_expression(expression: &Expression<'_>) -> Option<TsObjectAllocationKind> {
-    match expression {
-        Expression::ObjectExpression(_) => Some(TsObjectAllocationKind::ObjectLiteral),
-        Expression::ArrayExpression(_) => Some(TsObjectAllocationKind::ArrayLiteral),
-        Expression::FunctionExpression(_) | Expression::ArrowFunctionExpression(_) => {
+fn allocation_kind_for_node(
+    nodes: &AstNodes<'_>,
+    node_id: NodeId,
+    kind: AstKind<'_>,
+) -> Option<TsObjectAllocationKind> {
+    match kind {
+        AstKind::ObjectExpression(_) => Some(TsObjectAllocationKind::ObjectLiteral),
+        AstKind::ArrayExpression(_) => Some(TsObjectAllocationKind::ArrayLiteral),
+        AstKind::Function(function)
+            if !matches!(function.r#type, FunctionType::FunctionDeclaration)
+                && !matches!(nodes.parent_kind(node_id), AstKind::MethodDefinition(_)) =>
+        {
             Some(TsObjectAllocationKind::FunctionObject)
         }
-        Expression::ClassExpression(_) => Some(TsObjectAllocationKind::ClassObject),
-        Expression::NewExpression(_) => Some(TsObjectAllocationKind::ClassInstance),
+        AstKind::ArrowFunctionExpression(_) => Some(TsObjectAllocationKind::FunctionObject),
+        AstKind::Class(_) => Some(TsObjectAllocationKind::ClassObject),
+        AstKind::NewExpression(_) => Some(TsObjectAllocationKind::ClassInstance),
         _ => None,
     }
 }
@@ -1155,6 +1217,78 @@ class C {
                 && write.value_function_stable_key.is_some()
         }));
         assert!(!output.prototype_links.is_empty());
+    }
+
+    #[test]
+    fn inline_object_member_read_uses_recorded_allocation_key() {
+        let output = extract(
+            r#"
+function target() {}
+export function run() {
+  return ({ target }).target();
+}
+"#,
+        );
+        let read = output
+            .property_reads
+            .iter()
+            .find(|read| read.property_key.value.as_deref() == Some("target"))
+            .expect("inline object property read should be extracted");
+
+        assert!(
+            output
+                .allocations
+                .iter()
+                .any(|allocation| allocation.stable_key == read.base_object_stable_key),
+            "inline object read base should match a recorded allocation"
+        );
+    }
+
+    #[test]
+    fn inline_new_member_read_uses_recorded_allocation_key() {
+        let output = extract(
+            r#"
+class C {
+  m() {}
+}
+export function run() {
+  return new C().m();
+}
+"#,
+        );
+        let read = output
+            .property_reads
+            .iter()
+            .find(|read| read.property_key.value.as_deref() == Some("m"))
+            .expect("inline new property read should be extracted");
+
+        assert!(
+            output
+                .allocations
+                .iter()
+                .any(|allocation| allocation.stable_key == read.base_object_stable_key),
+            "inline new read base should match a recorded allocation"
+        );
+    }
+
+    #[test]
+    fn object_literal_method_yields_callable_property_write() {
+        let output = extract(
+            r#"
+const holder = {
+  methodTarget() {
+    return "method";
+  },
+};
+holder.methodTarget();
+"#,
+        );
+
+        assert!(output.property_writes.iter().any(|write| {
+            write.property_key.kind == TsPropertyKeyKind::Static
+                && write.property_key.value.as_deref() == Some("methodTarget")
+                && write.value_function_stable_key.is_some()
+        }));
     }
 
     #[test]

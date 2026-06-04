@@ -5,8 +5,9 @@ area = "facts"
 # Phase 50 Plan 05 TS object-model fixture.
 #
 # The executable gate in `eval::ts_object_model` reads private solver rows. This
-# fixture proves exact dot and exact string-literal property calls resolve through
-# object-model facts, while a computed-bucket read stays bounded to computed-bucket
+# fixture proves exact dot, exact string-literal, and inline allocation property
+# calls resolve through object-model facts, object method syntax seeds callable
+# property rows, while a computed-bucket read stays bounded to computed-bucket
 # writes rather than reading every exact property on the object.
 
 [repo]

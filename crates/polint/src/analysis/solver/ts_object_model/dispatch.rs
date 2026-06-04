@@ -205,6 +205,7 @@ mod tests {
     fn read() -> TsObjectPropertyRead {
         TsObjectPropertyRead {
             base_object: SemanticNodeId(10),
+            base_is_this: false,
             field: "static:target".to_string(),
             destination_node: SemanticNodeId(20),
             callsite_node: Some(SemanticNodeId(9)),

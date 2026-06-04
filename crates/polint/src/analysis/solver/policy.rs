@@ -280,6 +280,7 @@ mod tests {
             property_reads: vec![
                 crate::analysis::solver::ts_object_model::inputs::TsObjectPropertyRead {
                     base_object: SemanticNodeId(10),
+                    base_is_this: false,
                     field: "static:target".to_string(),
                     destination_node: SemanticNodeId(20),
                     callsite_node: Some(SemanticNodeId(9)),

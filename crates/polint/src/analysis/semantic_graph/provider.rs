@@ -138,7 +138,7 @@ fn collect_ts_object_model(db: &AnalysisDb) -> TsObjectModelOutput {
             .extend(file_output.receiver_bindings);
         output.prototype_links.extend(file_output.prototype_links);
     }
-    output.normalized()
+    output
 }
 
 /// Output digest over stable KEYS, never dense IDs (D-17).

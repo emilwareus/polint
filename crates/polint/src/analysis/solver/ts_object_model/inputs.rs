@@ -39,6 +39,7 @@ pub(crate) struct TsObjectPropertyWrite {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct TsObjectPropertyRead {
     pub(crate) base_object: SemanticNodeId,
+    pub(crate) base_is_this: bool,
     pub(crate) field: String,
     pub(crate) destination_node: SemanticNodeId,
     pub(crate) callsite_node: Option<SemanticNodeId>,
@@ -269,6 +270,7 @@ fn property_read_inputs(
             });
         inputs.push(TsObjectPropertyRead {
             base_object,
+            base_is_this: is_this_expression_object_key(&read.base_object_stable_key),
             field,
             destination_node,
             callsite_node,
@@ -480,9 +482,23 @@ fn constraint_identity(stable_key: &str) -> Option<String> {
     parse_length_prefixed_parts(stable_key).and_then(|parts| parts.get("identity").cloned())
 }
 
+fn is_this_expression_object_key(stable_key: &str) -> bool {
+    let Some((prefix, parts)) = parse_length_prefixed_key(stable_key) else {
+        return false;
+    };
+    prefix == "ts_object_expression"
+        && parts
+            .get("display")
+            .is_some_and(|display| display == "this")
+}
+
 fn parse_length_prefixed_parts(stable_key: &str) -> Option<BTreeMap<String, String>> {
+    parse_length_prefixed_key(stable_key).map(|(_, parts)| parts)
+}
+
+fn parse_length_prefixed_key(stable_key: &str) -> Option<(String, BTreeMap<String, String>)> {
     let mut cursor = 0;
-    let (_prefix, next) = parse_length_prefixed_token(stable_key, cursor)?;
+    let (prefix, next) = parse_length_prefixed_token(stable_key, cursor)?;
     cursor = next;
     let mut parts = BTreeMap::new();
 
@@ -502,7 +518,7 @@ fn parse_length_prefixed_parts(stable_key: &str) -> Option<BTreeMap<String, Stri
         parts.insert(label, value);
     }
 
-    Some(parts)
+    Some((prefix, parts))
 }
 
 fn parse_length_prefixed_token(input: &str, start: usize) -> Option<(String, usize)> {
@@ -640,6 +656,7 @@ mod tests {
     fn read(stable_key: &str, base: u64) -> TsObjectPropertyRead {
         TsObjectPropertyRead {
             base_object: SemanticNodeId(base),
+            base_is_this: false,
             field: "static:target".to_string(),
             destination_node: SemanticNodeId(99),
             callsite_node: Some(SemanticNodeId(7)),
