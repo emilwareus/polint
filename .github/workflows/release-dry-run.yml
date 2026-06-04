@@ -101,11 +101,3 @@ jobs:
           fi
           tar -C package -czf "dist/${archive}" "${bin}"
           python3 scripts/sha256_file.py "dist/${archive}" > "dist/${archive}.sha256"
-
-      - name: Upload packaged CLI
-        if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v7
-        with:
-          name: polint-${{ matrix.asset_os }}-${{ matrix.asset_arch }}
-          path: dist/*
-          if-no-files-found: error

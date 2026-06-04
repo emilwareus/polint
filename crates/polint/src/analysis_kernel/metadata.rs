@@ -86,6 +86,7 @@ pub(crate) enum FactFamily {
     PointsToConstraint,
     PointsToSet,
     AliasAnswer,
+    AdaptationModel,
     /// Unified-solver derived-edge facts (GRAPH-04, Phase 47). Each row tags a
     /// solver-derived edge whose `DerivedEdgeProvenance` records its contributing
     /// fact IDs (total-ordered by stable ID), producing `ConstraintKind`, and the
@@ -195,6 +196,7 @@ impl FactFamily {
             Self::PointsToConstraint => "PointsToConstraint",
             Self::PointsToSet => "PointsToSet",
             Self::AliasAnswer => "AliasAnswer",
+            Self::AdaptationModel => "AdaptationModel",
             Self::SolverDerivedEdge => "SolverDerivedEdge",
             Self::TypeValueAliasEvent => "TypeValueAliasEvent",
             Self::MirStatement => "MirStatement",

@@ -4,6 +4,7 @@ use serde::Deserialize;
 use thiserror::Error;
 
 use crate::analysis::adaptation::facts::{LoadedModelFact, ModelConfidence, ModelLanguage};
+use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub(crate) enum ModelLoadError {
@@ -134,12 +135,18 @@ fn model_stable_key(
     scope: &str,
     evidence: &[String],
 ) -> String {
-    let evidence = evidence.join(",");
-    format!(
-        "adaptation_model:{model_path}:{language}:{scope}:{confidence}:{source_pattern}->{target_pattern}:evidence={evidence}",
-        language = language.as_str(),
-        confidence = confidence.as_str()
-    )
+    let language = language.as_str().to_string();
+    let confidence = confidence.as_str().to_string();
+    let mut parts = vec![
+        ("model_path", model_path.to_string()),
+        ("source_pattern", source_pattern.to_string()),
+        ("target_pattern", target_pattern.to_string()),
+        ("confidence", confidence),
+        ("language", language),
+        ("scope", scope.to_string()),
+    ];
+    parts.extend(evidence.iter().map(|item| ("evidence", item.clone())));
+    stable_key_from_parts(FactFamily::AdaptationModel, &parts)
 }
 
 #[cfg(test)]
@@ -164,7 +171,31 @@ evidence = ["src/app.ts:10", " src/app.ts:10 "]
         assert_eq!(facts[0].confidence, ModelConfidence::Heuristic);
         assert_eq!(facts[0].language, ModelLanguage::TypeScript);
         assert_eq!(facts[0].evidence, vec!["src/app.ts:10"]);
-        assert!(facts[0].stable_key.contains("adaptation_model:"));
+        assert!(facts[0].stable_key.contains("15:AdaptationModel"));
+    }
+
+    #[test]
+    fn loader_stable_keys_keep_evidence_boundaries() {
+        let first = model_stable_key(
+            ".polint/models/framework.toml",
+            "call:src/app.ts:10:register",
+            "function:src/app.ts:1:onRegister",
+            ModelConfidence::Heuristic,
+            ModelLanguage::TypeScript,
+            "src/app.ts",
+            &["a,b".to_string(), "c".to_string()],
+        );
+        let second = model_stable_key(
+            ".polint/models/framework.toml",
+            "call:src/app.ts:10:register",
+            "function:src/app.ts:1:onRegister",
+            ModelConfidence::Heuristic,
+            ModelLanguage::TypeScript,
+            "src/app.ts",
+            &["a".to_string(), "b,c".to_string()],
+        );
+
+        assert_ne!(first, second);
     }
 
     #[test]

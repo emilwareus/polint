@@ -1,5 +1,6 @@
+use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::analysis::adaptation::budget::AdaptationModelBudget;
 use crate::analysis::adaptation::cache_key::adaptation_model_digest;
@@ -157,6 +158,18 @@ struct AdaptationModelProviderInput {
     digest: Digest,
 }
 
+#[derive(Debug, Default)]
+struct AdaptationModelDiscovery {
+    paths: Vec<String>,
+    budget_exceeded_at: Option<String>,
+}
+
+#[derive(Debug)]
+enum AdaptationModelDiscoveryEntry {
+    Directory(PathBuf),
+    File,
+}
+
 fn collect_adaptation_model_input(
     loaded: &LoadedConfig,
     base_output: &SemanticGraphOutput,
@@ -164,12 +177,28 @@ fn collect_adaptation_model_input(
 ) -> AdaptationModelProviderInput {
     let mut diagnostics = Vec::new();
     let mut digest_parts = budget.digest_parts();
-    let model_paths =
-        discover_adaptation_model_paths(&loaded.root, &mut diagnostics, &mut digest_parts);
+    let discovery = discover_adaptation_model_paths(
+        &loaded.root,
+        budget.max_model_files,
+        &mut diagnostics,
+        &mut digest_parts,
+    );
+    let model_paths = discovery.paths;
     digest_parts.push(format!("model_file_count={}", model_paths.len()));
+    if let Some(relative_path) = discovery.budget_exceeded_at {
+        diagnostics.push(adaptation_model_diagnostic(
+            &relative_path,
+            "Adaptation model discovery stopped because the model-file budget was exceeded.",
+            "budget",
+            format!("max_model_files={}", budget.max_model_files),
+        ));
+        digest_parts.push(format!(
+            "model_discovery_budget_exceeded_at={relative_path}"
+        ));
+    }
 
     let mut facts = Vec::new();
-    for relative_path in model_paths.iter().take(budget.max_model_files) {
+    for relative_path in &model_paths {
         match read_repo_file_to_string_with_limit(
             &loaded.root,
             relative_path,
@@ -208,16 +237,6 @@ fn collect_adaptation_model_input(
         }
     }
 
-    for relative_path in model_paths.iter().skip(budget.max_model_files) {
-        diagnostics.push(adaptation_model_diagnostic(
-            relative_path,
-            "Adaptation model file was ignored because the model-file budget was exceeded.",
-            "budget",
-            format!("max_model_files={}", budget.max_model_files),
-        ));
-        digest_parts.push(format!("model_file={relative_path}:budget_exceeded"));
-    }
-
     let node_keys = base_output
         .nodes
         .iter()
@@ -245,13 +264,16 @@ fn collect_adaptation_model_input(
 
 fn discover_adaptation_model_paths(
     root: &Path,
+    max_model_files: usize,
     diagnostics: &mut Vec<Diagnostic>,
     digest_parts: &mut Vec<String>,
-) -> Vec<String> {
+) -> AdaptationModelDiscovery {
     let model_root = root.join(ADAPTATION_MODEL_DIR);
     let metadata = match fs::symlink_metadata(&model_root) {
         Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return AdaptationModelDiscovery::default();
+        }
         Err(_) => {
             diagnostics.push(adaptation_model_diagnostic(
                 ADAPTATION_MODEL_DIR,
@@ -262,7 +284,7 @@ fn discover_adaptation_model_paths(
             digest_parts.push(format!(
                 "model_path={ADAPTATION_MODEL_DIR}:read_error=metadata unavailable"
             ));
-            return Vec::new();
+            return AdaptationModelDiscovery::default();
         }
     };
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
@@ -275,13 +297,26 @@ fn discover_adaptation_model_paths(
         digest_parts.push(format!(
             "model_path={ADAPTATION_MODEL_DIR}:read_error=not a directory"
         ));
-        return Vec::new();
+        return AdaptationModelDiscovery::default();
     }
 
+    let mut budget_exceeded_at = None;
     let mut paths = Vec::new();
-    let mut stack = vec![(ADAPTATION_MODEL_DIR.to_string(), model_root)];
-    while let Some((relative_dir, absolute_dir)) = stack.pop() {
-        let entries = match fs::read_dir(&absolute_dir) {
+    let mut pending = BTreeMap::from([(
+        ADAPTATION_MODEL_DIR.to_string(),
+        AdaptationModelDiscoveryEntry::Directory(model_root),
+    )]);
+    while let Some((relative_dir, entry)) = pending.pop_first() {
+        let AdaptationModelDiscoveryEntry::Directory(absolute_dir) = entry else {
+            if paths.len() >= max_model_files {
+                budget_exceeded_at = Some(relative_dir);
+                break;
+            }
+            paths.push(relative_dir);
+            continue;
+        };
+
+        let raw_entries = match fs::read_dir(&absolute_dir) {
             Ok(entries) => entries,
             Err(_) => {
                 diagnostics.push(adaptation_model_diagnostic(
@@ -296,7 +331,23 @@ fn discover_adaptation_model_paths(
                 continue;
             }
         };
-        let mut entries = entries.filter_map(Result::ok).collect::<Vec<_>>();
+        let mut entries = Vec::new();
+        for entry in raw_entries {
+            match entry {
+                Ok(entry) => entries.push(entry),
+                Err(_) => {
+                    diagnostics.push(adaptation_model_diagnostic(
+                        &relative_dir,
+                        "Adaptation model directory entry could not be read.",
+                        "read_error",
+                        "directory entry unavailable",
+                    ));
+                    digest_parts.push(format!(
+                        "model_path={relative_dir}:read_error=directory entry unavailable"
+                    ));
+                }
+            }
+        }
         entries.sort_by_key(|entry| entry.file_name());
         for entry in entries {
             let file_name = entry.file_name().to_string_lossy().to_string();
@@ -328,18 +379,23 @@ fn discover_adaptation_model_paths(
                 continue;
             }
             if metadata.is_dir() {
-                stack.push((relative_path, path));
+                pending.insert(
+                    relative_path,
+                    AdaptationModelDiscoveryEntry::Directory(path),
+                );
             } else if metadata.is_file()
                 && path
                     .extension()
                     .is_some_and(|extension| extension == "toml")
             {
-                paths.push(relative_path);
+                pending.insert(relative_path, AdaptationModelDiscoveryEntry::File);
             }
         }
     }
-    paths.sort();
-    paths
+    AdaptationModelDiscovery {
+        paths,
+        budget_exceeded_at,
+    }
 }
 
 fn adaptation_model_diagnostic(
@@ -817,6 +873,27 @@ evidence = ["cmd/app/main.go:1"]
             )),
             "expected loaded adaptation model to lower into a ModelEdge constraint"
         );
+    }
+
+    #[test]
+    fn adaptation_model_discovery_stops_at_model_file_budget() {
+        let temp = tempdir().expect("tempdir");
+        let model_dir = temp.path().join(".polint/models");
+        fs::create_dir_all(&model_dir).expect("model dir");
+        fs::write(model_dir.join("a.toml"), "").expect("first model");
+        fs::write(model_dir.join("b.toml"), "").expect("second model");
+
+        let mut diagnostics = Vec::new();
+        let mut digest_parts = Vec::new();
+        let discovery =
+            discover_adaptation_model_paths(temp.path(), 1, &mut diagnostics, &mut digest_parts);
+
+        assert_eq!(discovery.paths, vec![".polint/models/a.toml"]);
+        assert_eq!(
+            discovery.budget_exceeded_at.as_deref(),
+            Some(".polint/models/b.toml")
+        );
+        assert!(diagnostics.is_empty());
     }
 
     #[test]
