@@ -1280,16 +1280,26 @@ impl<'a> TsDirectBindingNodeContext<'a> {
                 function.file == *file
                     && function.span.start_byte == identity.start
                     && function.span.end_byte == identity.end
-                    && identity
-                        .display
-                        .as_deref()
-                        .is_none_or(|display| display == function.name)
+                    && ts_inventory_display_matches_function_name(
+                        identity.display.as_deref(),
+                        &function.name,
+                    )
             })
             .and_then(|function| {
                 let key = function_node_key(self.db, function);
                 builder.node_by_key.get(&key).copied()
             })
     }
+}
+
+fn ts_inventory_display_matches_function_name(display: Option<&str>, function_name: &str) -> bool {
+    let Some(display) = display else {
+        return true;
+    };
+    function_name == display
+        || function_name
+            .strip_suffix(display)
+            .is_some_and(|prefix| prefix.ends_with('.'))
 }
 
 struct TsObjectModelNodeContext<'a> {

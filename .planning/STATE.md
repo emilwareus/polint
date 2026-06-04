@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Graph Engine Precision
 status: executing
-last_updated: "2026-06-04T07:47:06.824Z"
+last_updated: "2026-06-04T09:12:53Z"
 last_activity: 2026-06-04
 progress:
   total_phases: 13
-  completed_phases: 8
+  completed_phases: 9
   total_plans: 34
-  completed_plans: 33
-  percent: 62
+  completed_plans: 34
+  percent: 69
 ---
 
 # State: polint
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 50 — JS/TS Object/Property/Prototype/`this` Model & Driver
+**Current focus:** Phase 51 — Adaptation Model Layer (next)
 
 ## Current Status
 
@@ -40,9 +40,9 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 ## Current Position
 
-Phase: 50 (JS/TS Object/Property/Prototype/`this` Model & Driver) — EXECUTING
+Phase: 50 (JS/TS Object/Property/Prototype/`this` Model & Driver) — COMPLETED
 Plan: 5 of 5
-Status: Ready to execute
+Status: Complete; next GSD step is Phase 51 discussion/planning
 Last activity: 2026-06-04
 
 ### Open repo-admin action (T-42-04-10)
@@ -462,6 +462,7 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase 50]: Phase 50-02 keeps the JS/TS object model disabled by default behind `[solver.js] object_model = true` and distinct object-model budget caps. — The object model can add expensive property/prototype/receiver exploration. Keeping it opt-in while folding the flag and every cap into solver parameter/output digests prevents stale cache reuse and preserves existing Go RTA and TS token behavior until benchmark gates approve promotion.
 - [Phase 50]: Phase 50-03 derives JS/TS object-model call edges only from callable tokens stored in property buckets, not from property names alone. — This keeps the object model precision-first while still improving recall for justified property-flow cases. Exact and computed buckets stay separate, budget exhaustion is explicit, and prototype/receiver semantics remain deferred to the next plan.
 - [Phase 50]: Phase 50-04 resolves prototype and receiver-sensitive object-model edges only through stable prototype/receiver facts, with dynamic mutation left unsupported. — Prototype chains and `this` binding are high-risk precision surfaces. Stable fact-gated lookup with visited-set/depth termination improves justified recall while preventing name/type guesses, unbounded traversal, and broad native/framework modeling from entering JS-05.
+- [Phase 50]: Phase 50-05 closes JS-05 with crate-private native object-model gates, closed-input determinism, budget evidence, and polyglot non-interference. — Local Jelly-oriented evidence is self-contained and explicitly scoped to `oracle-jelly` and `whole-repo` fixture modes; no external Jelly corpus floor is claimed before the Phase 54 benchmark promotion gate.
 
 ## Execution Metrics
 

@@ -1,0 +1,16 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "ts-object-model-budget"
+area = "facts"
+
+# Phase 50 Plan 05 TS object-model budget fixture.
+#
+# The executable gate in `eval::ts_object_model` loads this fixture's tight object
+# caps, then applies them to closed synthetic inputs that isolate property-token,
+# receiver-fanout, and prototype-depth exhaustion without depending on incidental
+# source-shape parser behavior.
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 120000

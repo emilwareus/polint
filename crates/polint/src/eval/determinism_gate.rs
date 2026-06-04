@@ -282,6 +282,11 @@ fn ts_tokens_fixture_is_byte_identical_under_ten_seeded_permutations() {
 }
 
 #[test]
+fn ts_object_model_fixture_is_byte_identical_under_ten_seeded_permutations() {
+    assert_n10_byte_identical(&fixture_dir("ts_object_model"));
+}
+
+#[test]
 fn go_reachable_fixture_exercises_reachable_graph_marking() {
     assert_reachability_marking_exercised(&fixture_dir("go_reachable"), "go_reachable");
 }
@@ -438,6 +443,94 @@ fn ts_tokens_solver_output_is_byte_identical_under_permuted_inputs() {
             permuted_json, canonical,
             "run {run_index} (seed {seed:#018x}): TS token solver output diverged under \
              permuted closed-input row order"
+        );
+    }
+}
+
+#[test]
+fn ts_object_model_solver_output_is_byte_identical_under_permuted_inputs() {
+    use crate::analysis::solver::budget::SolverBudget;
+    use crate::analysis::solver::ts_object_model::fixpoint::solve_ts_object_model;
+    use crate::analysis::solver::ts_object_model::inputs::TsObjectModelInputs;
+    use crate::config::load_config;
+
+    let fixture = load_native_fixture(&fixture_dir("ts_object_model")).expect("fixture loads");
+    let temp = copy_fixture_repo_for_test(&fixture).expect("copy fixture repo");
+    let output = run_kernel_for_repo_for_test(temp.path()).expect("kernel runs");
+    let loaded = load_config(&fixture.repo_dir).expect("config loads");
+    let budget = SolverBudget {
+        js: loaded.config.solver.to_js_sub_budget(),
+        object_model_enabled: loaded.config.solver.js_object_model_enabled(),
+        object: loaded.config.solver.to_js_object_sub_budget(),
+        ..Default::default()
+    };
+
+    let base = TsObjectModelInputs::from_db(&output.db);
+    let solver_json = |inputs: &TsObjectModelInputs| -> String {
+        let result = solve_ts_object_model(inputs, &budget);
+        let property_buckets = result
+            .property_buckets
+            .iter()
+            .map(|(key, state)| {
+                let tokens = state
+                    .tokens
+                    .iter()
+                    .map(|(token, evidence)| {
+                        (
+                            format!("{token:?}"),
+                            evidence.iter().cloned().collect::<Vec<_>>(),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                (key.object.0, key.field.clone(), tokens)
+            })
+            .collect::<Vec<_>>();
+        serde_json::to_string(&(
+            property_buckets,
+            &result.derived_edges,
+            result.budget_status,
+            &result.budget_reasons,
+            result.steps,
+        ))
+        .expect("serialize TS object-model solver output")
+    };
+    let canonical = solver_json(&base);
+    assert!(
+        canonical.contains("call_constraint"),
+        "the canonical TS object-model run must derive at least one call edge \
+         (non-vacuous): {canonical}"
+    );
+
+    for (run_index, &seed) in permutation_seeds().iter().enumerate() {
+        let mut permuted = base.clone();
+        seeded_shuffle(&mut permuted.allocations, seed);
+        seeded_shuffle(&mut permuted.property_writes, seed ^ 0x1111_1111);
+        seeded_shuffle(&mut permuted.property_reads, seed ^ 0x2222_2222);
+        seeded_shuffle(&mut permuted.handoffs, seed ^ 0x3333_3333);
+        seeded_shuffle(&mut permuted.prototype_links, seed ^ 0x4444_4444);
+        seeded_shuffle(&mut permuted.receiver_bindings, seed ^ 0x5555_5555);
+        seeded_shuffle(&mut permuted.token_inputs.copy_edges, seed ^ 0x6666_6666);
+        seeded_shuffle(&mut permuted.token_inputs.callsites, seed ^ 0x7777_7777);
+        seeded_shuffle(&mut permuted.token_inputs.handoffs, seed ^ 0x8888_8888);
+
+        let mut function_tokens = permuted
+            .token_inputs
+            .function_tokens
+            .into_iter()
+            .collect::<Vec<_>>();
+        seeded_shuffle(&mut function_tokens, seed ^ 0x9999_9999);
+        permuted.token_inputs.function_tokens = function_tokens.into_iter().collect();
+
+        let mut node_kinds = permuted.node_kinds.into_iter().collect::<Vec<_>>();
+        seeded_shuffle(&mut node_kinds, seed ^ 0xAAAA_AAAA);
+        permuted.node_kinds = node_kinds.into_iter().collect();
+        permuted = permuted.normalized();
+
+        let permuted_json = solver_json(&permuted);
+        assert_eq!(
+            permuted_json, canonical,
+            "run {run_index} (seed {seed:#018x}): TS object-model solver output diverged \
+             under permuted closed-input row order"
         );
     }
 }

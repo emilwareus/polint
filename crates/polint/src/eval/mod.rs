@@ -30,6 +30,8 @@ pub(crate) mod semantic_graph_snapshot;
 pub(crate) mod suite;
 pub(crate) mod tiers;
 #[cfg(test)]
+pub(crate) mod ts_object_model;
+#[cfg(test)]
 pub(crate) mod ts_tokens;
 
 #[cfg(test)]

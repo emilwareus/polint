@@ -17,6 +17,8 @@ use oxc_semantic::{AstNodes, NodeId, SemanticBuilder};
 use oxc_span::{GetSpan, SourceType};
 
 use crate::core::{SourceFile, Span, span_from_byte_range};
+use crate::ts::inventory::extract::extract_ts_inventory;
+use crate::ts::inventory::store::TsInventoryOutput;
 use crate::ts::object_model::facts::{
     TsObjectAllocationFact, TsObjectAllocationId, TsObjectAllocationKind, TsObjectModelStatus,
     TsPropertyKey, TsPropertyKeyKind, TsPropertyReadFact, TsPropertyReadId, TsPropertyWriteFact,
@@ -53,6 +55,7 @@ struct ObjectModelExtractor<'a> {
     file: &'a SourceFile,
     source: &'a str,
     nodes: &'a AstNodes<'a>,
+    inventory: ObjectModelInventoryIndex,
     variables_to_objects: BTreeMap<String, String>,
     class_prototypes: BTreeMap<String, String>,
 }
@@ -63,6 +66,7 @@ impl<'a> ObjectModelExtractor<'a> {
             file,
             source,
             nodes,
+            inventory: ObjectModelInventoryIndex::from_output(extract_ts_inventory(file)),
             variables_to_objects: BTreeMap::new(),
             class_prototypes: BTreeMap::new(),
         }
@@ -131,19 +135,24 @@ impl<'a> ObjectModelExtractor<'a> {
                         TsReceiverBindingKind::LexicalThis,
                         None,
                         None,
+                        None,
                         Some("lexical-this".to_string()),
                     ));
                 }
                 AstKind::StaticMemberExpression(member) => {
-                    output.property_reads.push(self.static_member_read(member));
+                    output
+                        .property_reads
+                        .push(self.static_member_read(node_id, member));
                 }
                 AstKind::ComputedMemberExpression(member) => {
                     output
                         .property_reads
-                        .push(self.computed_member_read(member));
+                        .push(self.computed_member_read(node_id, member));
                 }
                 AstKind::PrivateFieldExpression(member) => {
-                    output.property_reads.push(self.private_member_read(member));
+                    output
+                        .property_reads
+                        .push(self.private_member_read(node_id, member));
                 }
                 AstKind::AssignmentExpression(assignment) => {
                     if let Some(write) =
@@ -153,7 +162,7 @@ impl<'a> ObjectModelExtractor<'a> {
                     }
                 }
                 AstKind::CallExpression(call) => {
-                    if let Some(receiver) = self.receiver_binding_for_call(call) {
+                    if let Some(receiver) = self.receiver_binding_for_call(node_id, call) {
                         output.receiver_bindings.push(receiver);
                     }
                 }
@@ -224,8 +233,7 @@ impl<'a> ObjectModelExtractor<'a> {
                         base_object_stable_key: base_stable_key.clone(),
                         property_key,
                         value_function: None,
-                        value_function_stable_key: expression_text(&property.value)
-                            .map(|name| format!("ts_value:{name}")),
+                        value_function_stable_key: self.value_function_key(&property.value),
                         value_object_stable_key: self.object_key_for_expression(&property.value),
                         status: TsObjectModelStatus::resolved(),
                     });
@@ -375,7 +383,7 @@ impl<'a> ObjectModelExtractor<'a> {
             base_object_stable_key,
             property_key,
             value_function: None,
-            value_function_stable_key: Some(self.method_stable_key(method)),
+            value_function_stable_key: self.method_function_key(method),
             value_object_stable_key: None,
             status: TsObjectModelStatus::resolved(),
         });
@@ -387,46 +395,80 @@ impl<'a> ObjectModelExtractor<'a> {
         expression: &oxc_ast::ast::NewExpression<'_>,
         output: &mut TsObjectModelOutput,
     ) {
+        let class_name = expression_text(&expression.callee);
+        let display_name =
+            variable_declarator_name(self.nodes, node_id).or_else(|| class_name.clone());
+        let instance_key = self.allocation_stable_key(
+            expression.span,
+            TsObjectAllocationKind::ClassInstance,
+            self.lexical_parent_key(node_id).as_deref(),
+            display_name.as_deref(),
+        );
         output.allocations.push(self.allocation_row(
             node_id,
             expression.span,
             TsObjectAllocationKind::ClassInstance,
-            expression_text(&expression.callee),
+            display_name,
         ));
+        if let Some(prototype_key) = class_name
+            .as_deref()
+            .and_then(|name| self.class_prototypes.get(name))
+        {
+            output.prototype_links.push(TsPrototypeLinkFact {
+                id: TsPrototypeLinkId(0),
+                file: self.file.id,
+                span: span_from_oxc(self.file.id, self.source, expression.span),
+                stable_key: self.operation_stable_key(
+                    "ts_object_prototype_link",
+                    expression.span,
+                    &instance_key,
+                    prototype_key,
+                ),
+                kind: TsPrototypeLinkKind::ConstructorPrototypeProperty,
+                object_stable_key: instance_key,
+                prototype_stable_key: prototype_key.clone(),
+                property_key: None,
+                status: TsObjectModelStatus::resolved(),
+            });
+        }
     }
 
     fn static_member_read(
         &self,
+        node_id: NodeId,
         member: &oxc_ast::ast::StaticMemberExpression<'_>,
     ) -> TsPropertyReadFact {
         let property_key = TsPropertyKey {
             kind: TsPropertyKeyKind::Static,
             value: Some(member.property.name.to_string()),
         };
-        self.member_read(member.span, &member.object, property_key)
+        self.member_read(node_id, member.span, &member.object, property_key)
     }
 
     fn computed_member_read(
         &self,
+        node_id: NodeId,
         member: &oxc_ast::ast::ComputedMemberExpression<'_>,
     ) -> TsPropertyReadFact {
         let property_key = property_key_from_expression(&member.expression);
-        self.member_read(member.span, &member.object, property_key)
+        self.member_read(node_id, member.span, &member.object, property_key)
     }
 
     fn private_member_read(
         &self,
+        node_id: NodeId,
         member: &oxc_ast::ast::PrivateFieldExpression<'_>,
     ) -> TsPropertyReadFact {
         let property_key = TsPropertyKey {
             kind: TsPropertyKeyKind::Private,
             value: Some(member.field.name.to_string()),
         };
-        self.member_read(member.span, &member.object, property_key)
+        self.member_read(node_id, member.span, &member.object, property_key)
     }
 
     fn member_read(
         &self,
+        node_id: NodeId,
         span: oxc_span::Span,
         object: &Expression<'_>,
         property_key: TsPropertyKey,
@@ -434,6 +476,7 @@ impl<'a> ObjectModelExtractor<'a> {
         let base_object_stable_key = self
             .object_key_for_expression(object)
             .unwrap_or_else(|| expression_object_key(object));
+        let callsite_stable_key = self.parent_callsite_key(node_id);
         TsPropertyReadFact {
             id: TsPropertyReadId(0),
             file: self.file.id,
@@ -448,7 +491,7 @@ impl<'a> ObjectModelExtractor<'a> {
             property_key,
             destination_stable_key: None,
             callsite: None,
-            callsite_stable_key: None,
+            callsite_stable_key,
             status: TsObjectModelStatus::resolved(),
         }
     }
@@ -498,8 +541,7 @@ impl<'a> ObjectModelExtractor<'a> {
             base_object_stable_key,
             property_key,
             value_function: None,
-            value_function_stable_key: expression_text(right)
-                .map(|name| format!("ts_value:{name}")),
+            value_function_stable_key: self.value_function_key(right),
             value_object_stable_key: self.object_key_for_expression(right),
             status: TsObjectModelStatus::resolved(),
         })
@@ -507,6 +549,7 @@ impl<'a> ObjectModelExtractor<'a> {
 
     fn receiver_binding_for_call(
         &self,
+        node_id: NodeId,
         call: &oxc_ast::ast::CallExpression<'_>,
     ) -> Option<TsReceiverBindingFact> {
         let Expression::StaticMemberExpression(member) = &call.callee else {
@@ -534,6 +577,7 @@ impl<'a> ObjectModelExtractor<'a> {
             kind,
             Some(expression_object_key(&member.object)),
             receiver.and_then(|expression| self.object_key_for_expression(expression)),
+            self.callsite_key_for_call(node_id),
             None,
         ))
     }
@@ -544,6 +588,7 @@ impl<'a> ObjectModelExtractor<'a> {
         kind: TsReceiverBindingKind,
         callee_function_stable_key: Option<String>,
         receiver_object_stable_key: Option<String>,
+        callsite_stable_key: Option<String>,
         lexical_parent_key: Option<String>,
     ) -> TsReceiverBindingFact {
         TsReceiverBindingFact {
@@ -560,7 +605,7 @@ impl<'a> ObjectModelExtractor<'a> {
             ),
             kind,
             callsite: None,
-            callsite_stable_key: None,
+            callsite_stable_key,
             callee_function: None,
             callee_function_stable_key,
             receiver_object_stable_key,
@@ -640,20 +685,37 @@ impl<'a> ObjectModelExtractor<'a> {
         }
     }
 
-    fn method_stable_key(&self, method: &MethodDefinition<'_>) -> String {
-        stable_object_key(
-            "ts_object_method",
-            &[
-                ("file", self.file.relative_path.clone()),
-                ("kind", method_kind_label(method.kind).to_string()),
-                (
-                    "key",
-                    property_key(&method.key, method.computed).stable_label(),
-                ),
-                ("start", method.span.start.to_string()),
-                ("end", method.span.end.to_string()),
-            ],
-        )
+    fn value_function_key(&self, expression: &Expression<'_>) -> Option<String> {
+        expression_text(expression)
+            .and_then(|name| self.inventory.unique_function_key(&name).cloned())
+    }
+
+    fn parent_callsite_key(&self, node_id: NodeId) -> Option<String> {
+        match self.nodes.parent_kind(node_id) {
+            AstKind::CallExpression(call) => self.callsite_key_for_span(call.span),
+            _ => None,
+        }
+    }
+
+    fn callsite_key_for_call(&self, node_id: NodeId) -> Option<String> {
+        match self.nodes.get_node(node_id).kind() {
+            AstKind::CallExpression(call) => self.callsite_key_for_span(call.span),
+            _ => None,
+        }
+    }
+
+    fn callsite_key_for_span(&self, span: oxc_span::Span) -> Option<String> {
+        self.inventory
+            .callsite_key_by_span
+            .get(&(span.start, span.end))
+            .cloned()
+    }
+
+    fn method_function_key(&self, method: &MethodDefinition<'_>) -> Option<String> {
+        self.inventory
+            .function_key_by_span
+            .get(&(method.span.start, method.span.end))
+            .cloned()
     }
 
     fn lexical_parent_key(&self, node_id: NodeId) -> Option<String> {
@@ -737,6 +799,57 @@ impl<'a> ObjectModelExtractor<'a> {
                 ("label", label.to_string()),
             ],
         )
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct ObjectModelInventoryIndex {
+    unique_function_key_by_name: BTreeMap<String, Option<String>>,
+    function_key_by_span: BTreeMap<(u32, u32), String>,
+    callsite_key_by_span: BTreeMap<(u32, u32), String>,
+}
+
+impl ObjectModelInventoryIndex {
+    fn from_output(output: TsInventoryOutput) -> Self {
+        let mut index = Self::default();
+        for function in output.functions {
+            index.function_key_by_span.insert(
+                (function.span.start_byte, function.span.end_byte),
+                function.stable_key.clone(),
+            );
+            if let Some(name) = function.display_name {
+                insert_unique(
+                    &mut index.unique_function_key_by_name,
+                    name,
+                    function.stable_key,
+                );
+            }
+        }
+        for callsite in output.callsites {
+            index.callsite_key_by_span.insert(
+                (callsite.span.start_byte, callsite.span.end_byte),
+                callsite.stable_key,
+            );
+        }
+        index
+    }
+
+    fn unique_function_key(&self, name: &str) -> Option<&String> {
+        self.unique_function_key_by_name
+            .get(name)
+            .and_then(Option::as_ref)
+    }
+}
+
+fn insert_unique<K: Ord, V: PartialEq>(map: &mut BTreeMap<K, Option<V>>, key: K, value: V) {
+    match map.get_mut(&key) {
+        Some(existing) if existing.as_ref() == Some(&value) => {}
+        Some(existing) => {
+            *existing = None;
+        }
+        None => {
+            map.insert(key, Some(value));
+        }
     }
 }
 

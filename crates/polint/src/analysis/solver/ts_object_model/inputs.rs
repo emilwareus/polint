@@ -175,10 +175,14 @@ fn receiver_binding_inputs(
         let receiver_object = constraints
             .copy_edge(&binding.stable_key)
             .map(|(_, src)| src);
-        let callsite_node = binding
-            .callsite_stable_key
-            .as_deref()
-            .and_then(|key| graph.callsite_node(key));
+        let callsite_node = constraints
+            .call_constraint(&binding.stable_key)
+            .or_else(|| {
+                binding
+                    .callsite_stable_key
+                    .as_deref()
+                    .and_then(|key| graph.callsite_node(key))
+            });
         inputs.push(TsObjectReceiverBinding {
             kind: binding.kind,
             callsite_node,
@@ -256,10 +260,13 @@ fn property_read_inputs(
                 .as_deref()
                 .and_then(|key| graph.callsite_node(key))
         });
-        let caller_node = read
-            .callsite_stable_key
-            .as_deref()
-            .and_then(|key| graph.caller_node(key));
+        let caller_node = callsite_node
+            .and_then(|callsite| graph.caller_node_for_callsite_node(callsite))
+            .or_else(|| {
+                read.callsite_stable_key
+                    .as_deref()
+                    .and_then(|key| graph.caller_node(key))
+            });
         inputs.push(TsObjectPropertyRead {
             base_object,
             field,
@@ -309,6 +316,7 @@ fn is_resolved(status: &TsObjectModelStatus) -> bool {
 struct GraphIndex {
     callsite_node_by_key: BTreeMap<String, SemanticNodeId>,
     caller_node_by_callsite_key: BTreeMap<String, SemanticNodeId>,
+    caller_node_by_callsite_node: BTreeMap<SemanticNodeId, SemanticNodeId>,
 }
 
 impl GraphIndex {
@@ -331,6 +339,7 @@ impl GraphIndex {
 
         let mut callsite_node_by_key = BTreeMap::new();
         let mut caller_node_by_callsite_key = BTreeMap::new();
+        let mut caller_node_by_callsite_node = BTreeMap::new();
         for site in db.call_sites() {
             if !site.language.is_ts_family() {
                 continue;
@@ -342,12 +351,14 @@ impl GraphIndex {
             callsite_node_by_key.insert(site.stable_key.clone(), node);
             if let Some(&caller_node) = function_node_by_id.get(&site.caller) {
                 caller_node_by_callsite_key.insert(site.stable_key.clone(), caller_node);
+                caller_node_by_callsite_node.insert(node, caller_node);
             }
         }
 
         Self {
             callsite_node_by_key,
             caller_node_by_callsite_key,
+            caller_node_by_callsite_node,
         }
     }
 
@@ -360,21 +371,33 @@ impl GraphIndex {
             .get(callsite_stable_key)
             .copied()
     }
+
+    fn caller_node_for_callsite_node(
+        &self,
+        callsite_node: SemanticNodeId,
+    ) -> Option<SemanticNodeId> {
+        self.caller_node_by_callsite_node
+            .get(&callsite_node)
+            .copied()
+    }
 }
 
 #[derive(Debug)]
 struct ConstraintIndex<'a> {
-    by_stable_key: BTreeMap<&'a str, Vec<&'a ConstraintFact>>,
+    by_stable_key: BTreeMap<String, Vec<&'a ConstraintFact>>,
 }
 
 impl<'a> ConstraintIndex<'a> {
     fn build(constraints: &'a [ConstraintFact]) -> Self {
-        let mut by_stable_key: BTreeMap<&str, Vec<&ConstraintFact>> = BTreeMap::new();
+        let mut by_stable_key: BTreeMap<String, Vec<&ConstraintFact>> = BTreeMap::new();
         for constraint in constraints {
             by_stable_key
-                .entry(constraint.stable_key.as_str())
+                .entry(constraint.stable_key.clone())
                 .or_default()
                 .push(constraint);
+            if let Some(identity) = constraint_identity(&constraint.stable_key) {
+                by_stable_key.entry(identity).or_default().push(constraint);
+            }
         }
         Self { by_stable_key }
     }
@@ -451,6 +474,51 @@ impl<'a> ConstraintIndex<'a> {
                 Some(callsite)
             })
     }
+}
+
+fn constraint_identity(stable_key: &str) -> Option<String> {
+    parse_length_prefixed_parts(stable_key).and_then(|parts| parts.get("identity").cloned())
+}
+
+fn parse_length_prefixed_parts(stable_key: &str) -> Option<BTreeMap<String, String>> {
+    let mut cursor = 0;
+    let (_prefix, next) = parse_length_prefixed_token(stable_key, cursor)?;
+    cursor = next;
+    let mut parts = BTreeMap::new();
+
+    while cursor < stable_key.len() {
+        if stable_key.as_bytes().get(cursor) != Some(&b'|') {
+            return None;
+        }
+        cursor += 1;
+        let (label, next) = parse_length_prefixed_token(stable_key, cursor)?;
+        cursor = next;
+        if stable_key.as_bytes().get(cursor) != Some(&b'=') {
+            return None;
+        }
+        cursor += 1;
+        let (value, next) = parse_length_prefixed_token(stable_key, cursor)?;
+        cursor = next;
+        parts.insert(label, value);
+    }
+
+    Some(parts)
+}
+
+fn parse_length_prefixed_token(input: &str, start: usize) -> Option<(String, usize)> {
+    let bytes = input.as_bytes();
+    let mut colon = start;
+    while colon < bytes.len() && bytes[colon].is_ascii_digit() {
+        colon += 1;
+    }
+    if colon == start || bytes.get(colon) != Some(&b':') {
+        return None;
+    }
+    let len: usize = input[start..colon].parse().ok()?;
+    let value_start = colon + 1;
+    let value_end = value_start.checked_add(len)?;
+    let value = input.get(value_start..value_end)?;
+    Some((value.to_string(), value_end))
 }
 
 fn node_key_from_identity(node_kind: &str, identity: &str) -> String {
@@ -539,6 +607,7 @@ mod tests {
                 SemanticNodeId(1),
             )]),
             caller_node_by_callsite_key: BTreeMap::new(),
+            caller_node_by_callsite_node: BTreeMap::new(),
         };
 
         let handoffs = property_handoffs_from_direct_bindings(&graph, &bindings);

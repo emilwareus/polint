@@ -1,0 +1,11 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "determinism-ts-object-model"
+area = "facts"
+
+# Phase 50 Plan 05 determinism fixture for the TS object-model policy.
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 120000

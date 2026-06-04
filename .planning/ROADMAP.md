@@ -26,7 +26,7 @@ Phase numbering continues from v1.2's last phase 41. Phases 45/46 may run in par
 - [ ] **Phase 47: Unified Solver Core & Derived-Edge Provenance** - Private `analysis::solver` (deterministic `VecDeque` worklist, `SolverBudget`, `BudgetStatus`, per-language `SolverPolicy` scaffolding); folds in `points_to` as a sub-domain; `DerivedEdgeProvenance` contract.
 - [x] **Phase 48: Go RTA Driver** - Private `analysis::solver::go_rta` (reachable functions from roots, address-taken tracking, dynamic dispatch by signature, interface invoke by method-set, fixed-point iteration). May run in parallel with Phase 49.
 - [x] **Phase 49: JS/TS Function-Token Propagation Driver** - Private `analysis::solver::ts_tokens` with per-variable token caps, `"too-many-tokens"` sentinel, `BudgetExceeded` reporting. May run in parallel with Phase 48.
-- [ ] **Phase 50: JS/TS Object/Property/Prototype/`this` Model & Driver** - Private `src/ts/object_model/` + `analysis::solver::ts_object_model` (allocation-site abstraction, bounded property buckets with computed-property handling, prototype-walk termination, `this` binding rules).
+- [x] **Phase 50: JS/TS Object/Property/Prototype/`this` Model & Driver** - Private `src/ts/object_model/` + `analysis::solver::ts_object_model` (allocation-site abstraction, bounded property buckets with computed-property handling, prototype-walk termination, `this` binding rules). ✅ Verified 5/5 (external Jelly corpus floors deferred to Phase 54).
 - [ ] **Phase 51: Adaptation Model Layer** - Private `analysis::adaptation` (TOML schema, loader, validator confirming target symbols exist, `ModelEdge` emission); `benchmark adapted` mode with prompt hash, accepted/rejected facts, deltas, held-out subset reporting, sandboxed agent.
 - [ ] **Phase 52: Refined-Calls Rework & Unknown Taxonomy Consolidation** - `refined_calls::provider` projects over solver output preserving v1.2 `RefinedCallEdgeFact` contract; consolidated taxonomy via `polint inspect unknowns --format json`.
 - [ ] **Phase 53: Cache & Solver Budgets Consolidation** - Cache keys digest sidecar binary, Go toolchain, adaptation model files, and solver budgets across every new family; solver budgets enforce token-set/property/fanout/model/package-depth caps with `BudgetExceeded` as facts.
@@ -167,7 +167,7 @@ May run in parallel with Phase 48 (drivers share the solver core but their itera
 - [x] 50-02-PLAN.md — object-model opt-in flag, per-family object budgets, config mapping, and solver digest participation.
 - [x] 50-03-PLAN.md — private `analysis::solver::ts_object_model` property-bucket fixpoint and property-backed derived edge dispatch.
 - [x] 50-04-PLAN.md — bounded prototype/class/accessor lookup plus `this`/receiver binding for methods, arrows, constructors, bound, `call`, and `apply`.
-- [ ] 50-05-PLAN.md — native object-model fixtures, budget/determinism/polyglot/Jelly evidence, leak gate, full regression, and roadmap closeout.
+- [x] 50-05-PLAN.md — native object-model fixtures, budget/determinism/polyglot/Jelly evidence, leak gate, full regression, and roadmap closeout.
 
 ### Phase 51: Adaptation Model Layer
 **Goal**: polint accepts repo-local validated framework/native model facts as solver constraints, with sandboxed agent runs, accept/reject reporting, and held-out validation that prevents oracle-label leakage and recall flooding.

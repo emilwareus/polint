@@ -1,0 +1,16 @@
+schema_version = "polint-eval-fixture-1"
+case_id = "ts-object-model-prototype-this"
+area = "facts"
+
+# Phase 50 Plan 05 TS object-model fixture.
+#
+# The executable gate in `eval::ts_object_model` reads private object-model and
+# solver rows. It proves bounded prototype lookup for direct and inherited class
+# methods, plus receiver/`this` evidence rows for method, lexical-arrow, bind,
+# call, and apply syntax currently emitted by the private extractor.
+
+[repo]
+path = "repo"
+
+[budget]
+max_runtime_ms = 120000
