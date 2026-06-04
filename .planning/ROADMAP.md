@@ -180,7 +180,7 @@ May run in parallel with Phase 48 (drivers share the solver core but their itera
   4. Validator rejects model facts whose RHS exactly matches oracle expectations and wildcard/broad-pattern models; `ModelEdge` constraints are emitted only for accepted facts.
 **Plans**:
 - [x] 51-01-PLAN.md — private adaptation TOML schema, loader, deterministic store, validator, budgets, and cache digest fragments.
-- [ ] 51-02-PLAN.md — accepted model lowering to `ModelEdge` constraints plus solver cache/provenance, language isolation, and public-surface proof.
+- [x] 51-02-PLAN.md — accepted model lowering to `ModelEdge` constraints plus solver cache/provenance, language isolation, and public-surface proof.
 - [ ] 51-03-PLAN.md — `benchmark adapted` reporting, sandbox/prompt sanitizer, changed model artifacts, deltas, and held-out subset evidence.
 - [ ] 51-04-PLAN.md — accepted/rejected fixtures, adapted-report gates, public leak/full regression, verification, and roadmap closeout.
 
@@ -231,7 +231,7 @@ May run in parallel with Phase 48 (drivers share the solver core but their itera
 | 48 | Go RTA Driver | 3/3 | Complete    | 2026-06-02 |
 | 49 | JS/TS Function-Token Propagation Driver | 3/3 | Complete | 2026-06-03 |
 | 50 | JS/TS Object/Property/Prototype/`this` Model & Driver | 5/5 | Complete | 2026-06-04 |
-| 51 | Adaptation Model Layer | 1/4 | In Progress | - |
+| 51 | Adaptation Model Layer | 2/4 | In Progress | - |
 | 52 | Refined-Calls Rework & Unknown Taxonomy Consolidation | 0/0 | Not started | - |
 | 53 | Cache & Solver Budgets Consolidation | 0/0 | Not started | - |
 | 54 | Benchmark Promotion Gate Extension | 0/0 | Not started | - |
