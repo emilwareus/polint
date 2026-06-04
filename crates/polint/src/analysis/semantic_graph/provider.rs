@@ -12,6 +12,8 @@ use crate::diagnostics::{Diagnostic, TextRange};
 use crate::ts::binding::store::{
     ts_direct_binding_output_digest, ts_direct_binding_provider_parameter_digest,
 };
+use crate::ts::object_model::extract::extract_ts_object_model;
+use crate::ts::object_model::store::TsObjectModelOutput;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SemanticGraphProviderRunOutput {
@@ -22,18 +24,19 @@ pub(crate) struct SemanticGraphProviderRunOutput {
 
 /// `polint.semantic_graph` provider entry point (D-16/D-17).
 ///
-/// 7-phase pipeline mirroring `polint.reachability` (S5):
-/// 1. project a real-but-minimal graph from existing facts via `build_semantic_graph`
-///    (read-only, mutates no upstream family),
-/// 2. `normalized()` — stable-key sort,
-/// 3. compute the output digest over the stored stable KEYS (an edge key encodes its
+/// 8-phase pipeline mirroring `polint.reachability` (S5):
+/// 1. refresh the private TS object-model store from TS/JS source files,
+/// 2. project a real-but-minimal graph from existing facts via `build_semantic_graph`
+///    (the build itself is read-only, mutating no upstream family),
+/// 3. `normalized()` — stable-key sort,
+/// 4. compute the output digest over the stored stable KEYS (an edge key encodes its
 ///    endpoints; a constraint contributes its referenced nodes' stable keys), never
 ///    the run-local dense IDs; an empty-output sentinel distinguishes the empty graph,
-/// 4. dense IDs are a post-digest read concern assigned inside `from_output`,
-/// 5. `db.replace_semantic_graph_facts(...)` stores + referentially validates,
-/// 6. on store error return `output_digest: None` so a cache layer never records a
+/// 5. dense IDs are a post-digest read concern assigned inside `from_output`,
+/// 6. `db.replace_semantic_graph_facts(...)` stores + referentially validates,
+/// 7. on store error return `output_digest: None` so a cache layer never records a
 ///    hit for un-persisted state,
-/// 7. surface the store error as an evidence-bearing diagnostic.
+/// 8. surface the store error as an evidence-bearing diagnostic.
 ///
 /// The digest folds in every consumed upstream provider output digest plus the
 /// provider/schema/parameter digests (D-17), so any upstream change or algorithm bump
@@ -58,14 +61,29 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
 ) -> SemanticGraphProviderRunOutput {
     debug_assert_eq!(manifest.id, SEMANTIC_GRAPH_PROVIDER_ID);
 
-    // Phase 1-2: project + normalize. The build is read-only; normalized() fixes the
+    let mut cache_stats = CacheStats::default();
+    cache_stats.record_recompute();
+
+    // Phase 1: refresh private TS object-model rows. This keeps the projection's
+    // consumed object/property facts deterministic and digest-visible without
+    // promoting a public object-model provider surface.
+    let object_model = collect_ts_object_model(db);
+    if let Err(error) = db.replace_ts_object_model_facts(object_model) {
+        return SemanticGraphProviderRunOutput {
+            diagnostics: vec![provider_error_diagnostic(error.to_string())],
+            cache_stats,
+            output_digest: None,
+        };
+    }
+
+    // Phase 2-3: project + normalize. The build is read-only; normalized() fixes the
     // stable-key order the digest is computed over.
     let ts_direct_bindings = collect_ts_direct_bindings(db);
     let ts_direct_binding_output_digest = ts_direct_binding_output_digest(&ts_direct_bindings);
     let output =
         build_semantic_graph_with_ts_direct_bindings(db, &ts_direct_bindings.bindings).normalized();
 
-    // Phase 3: digest over the stored stable KEYS (never dense IDs — see
+    // Phase 4: digest over the stored stable KEYS (never dense IDs — see
     // `semantic_graph_output_digest`), with the empty-output sentinel.
     let output_digest = semantic_graph_output_digest(
         db,
@@ -87,10 +105,7 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
         &output,
     );
 
-    let mut cache_stats = CacheStats::default();
-    cache_stats.record_recompute();
-
-    // Phase 4-7: store (assigns dense IDs + referentially validates inside
+    // Phase 5-8: store (assigns dense IDs + referentially validates inside
     // from_output). On store error the db keeps its prior state and the facts the
     // digest certifies were not persisted, so return output_digest: None.
     match db.replace_semantic_graph_facts(output) {
@@ -105,6 +120,25 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
             output_digest: None,
         },
     }
+}
+
+fn collect_ts_object_model(db: &AnalysisDb) -> TsObjectModelOutput {
+    let mut output = TsObjectModelOutput::default();
+    for file in db
+        .files()
+        .iter()
+        .filter(|file| file.language.is_ts_family())
+    {
+        let file_output = extract_ts_object_model(file);
+        output.allocations.extend(file_output.allocations);
+        output.property_writes.extend(file_output.property_writes);
+        output.property_reads.extend(file_output.property_reads);
+        output
+            .receiver_bindings
+            .extend(file_output.receiver_bindings);
+        output.prototype_links.extend(file_output.prototype_links);
+    }
+    output.normalized()
 }
 
 /// Output digest over stable KEYS, never dense IDs (D-17).
@@ -171,6 +205,10 @@ fn semantic_graph_output_digest(
             go_semantic_output_digest_from_db(db)
         ),
         format!("go_semantic_provider_output={go_semantic_output_digest}"),
+        format!(
+            "ts_object_model_output={}",
+            ts_object_model_output_digest_from_db(db)
+        ),
     ];
     extend_component_parts(
         &mut parts,
@@ -253,6 +291,65 @@ fn go_semantic_output_digest_from_db(db: &AnalysisDb) -> String {
     parts.sort();
     if parts.is_empty() {
         return crate::cache::stable_hash(&["go_semantic_output=empty"]);
+    }
+    let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
+    crate::cache::stable_hash(&refs)
+}
+
+fn ts_object_model_output_digest_from_db(db: &AnalysisDb) -> String {
+    let mut parts = Vec::new();
+    parts.extend(db.ts_object_allocations().iter().map(|fact| {
+        format!(
+            "allocation={}|kind={}|status={}|reason={}",
+            fact.stable_key,
+            fact.kind.as_str(),
+            fact.status.as_str(),
+            fact.status.reason().unwrap_or("")
+        )
+    }));
+    parts.extend(db.ts_property_writes().iter().map(|fact| {
+        format!(
+            "write={}|base={}|field={}|status={}|reason={}",
+            fact.stable_key,
+            fact.base_object_stable_key,
+            fact.property_key.stable_label(),
+            fact.status.as_str(),
+            fact.status.reason().unwrap_or("")
+        )
+    }));
+    parts.extend(db.ts_property_reads().iter().map(|fact| {
+        format!(
+            "read={}|base={}|field={}|status={}|reason={}",
+            fact.stable_key,
+            fact.base_object_stable_key,
+            fact.property_key.stable_label(),
+            fact.status.as_str(),
+            fact.status.reason().unwrap_or("")
+        )
+    }));
+    parts.extend(db.ts_receiver_bindings().iter().map(|fact| {
+        format!(
+            "receiver={}|kind={}|status={}|reason={}",
+            fact.stable_key,
+            fact.kind.as_str(),
+            fact.status.as_str(),
+            fact.status.reason().unwrap_or("")
+        )
+    }));
+    parts.extend(db.ts_prototype_links().iter().map(|fact| {
+        format!(
+            "prototype={}|kind={}|object={}|prototype={}|status={}|reason={}",
+            fact.stable_key,
+            fact.kind.as_str(),
+            fact.object_stable_key,
+            fact.prototype_stable_key,
+            fact.status.as_str(),
+            fact.status.reason().unwrap_or("")
+        )
+    }));
+    parts.sort();
+    if parts.is_empty() {
+        return crate::cache::stable_hash(&["ts_object_model_output=empty"]);
     }
     let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
     crate::cache::stable_hash(&refs)
@@ -397,6 +494,32 @@ mod tests {
         assert!(
             !db.semantic_nodes().is_empty(),
             "expected projected nodes stored"
+        );
+    }
+
+    #[test]
+    fn provider_refreshes_ts_object_model_rows_before_projection() {
+        let mut db = AnalysisDb::new();
+        db.add_file(
+            PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            "const holder = { target() {} }; holder.target();\n".to_string(),
+        );
+
+        let output = run(&mut db);
+
+        assert!(output.output_digest.is_some());
+        assert!(!db.ts_object_allocations().is_empty());
+        assert!(
+            db.semantic_constraints().iter().any(|constraint| {
+                matches!(
+                    constraint.kind,
+                    crate::analysis::semantic_graph::constraints::ConstraintKind::Alloc { .. }
+                        | crate::analysis::semantic_graph::constraints::ConstraintKind::FieldStore { .. }
+                        | crate::analysis::semantic_graph::constraints::ConstraintKind::FieldLoad { .. }
+                )
+            }),
+            "expected object-model constraints"
         );
     }
 
