@@ -102,6 +102,11 @@ use crate::symbol_graph::semantic::{
     ResolutionFact, ResolutionId, ScopeFact, ScopeId, SemanticImportFact, SemanticImportId,
     SemanticStatus, StableExportId, StableExportIdentity,
 };
+use crate::ts::object_model::facts::{
+    TsObjectAllocationFact, TsPropertyReadFact, TsPropertyWriteFact, TsPrototypeLinkFact,
+    TsReceiverBindingFact,
+};
+use crate::ts::object_model::store::{TsObjectModelOutput, TsObjectModelStore};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -744,6 +749,36 @@ pub struct AnalysisDb {
     semantic_nodes: Vec<SemanticNodeFact>,
     semantic_edges: Vec<SemanticEdgeFact>,
     semantic_constraints: Vec<ConstraintFact>,
+    #[allow(
+        dead_code,
+        reason = "Phase 50 task 3 stores TS object-model rows before semantic-graph lowering consumes them in task 4."
+    )]
+    ts_object_allocations: Vec<TsObjectAllocationFact>,
+    #[allow(
+        dead_code,
+        reason = "Phase 50 task 3 stores TS object-model rows before semantic-graph lowering consumes them in task 4."
+    )]
+    ts_property_writes: Vec<TsPropertyWriteFact>,
+    #[allow(
+        dead_code,
+        reason = "Phase 50 task 3 stores TS object-model rows before semantic-graph lowering consumes them in task 4."
+    )]
+    ts_property_reads: Vec<TsPropertyReadFact>,
+    #[allow(
+        dead_code,
+        reason = "Phase 50 task 3 stores TS object-model rows before semantic-graph lowering consumes them in task 4."
+    )]
+    ts_receiver_bindings: Vec<TsReceiverBindingFact>,
+    #[allow(
+        dead_code,
+        reason = "Phase 50 task 3 stores TS object-model rows before semantic-graph lowering consumes them in task 4."
+    )]
+    ts_prototype_links: Vec<TsPrototypeLinkFact>,
+    #[allow(
+        dead_code,
+        reason = "Phase 50 task 3 stores TS object-model rows before semantic-graph lowering consumes them in task 4."
+    )]
+    ts_object_model_store: Option<TsObjectModelStore>,
     solver_derived_edges: Vec<DerivedEdgeFact>,
     go_semantic_packages: Vec<GoSemanticPackageFact>,
     go_semantic_functions: Vec<GoSemanticFunctionFact>,
@@ -1448,6 +1483,76 @@ impl AnalysisDb {
 
     pub(crate) fn semantic_constraints(&self) -> &[ConstraintFact] {
         &self.semantic_constraints
+    }
+
+    /// Stores the private TS object/property/prototype/receiver rows used by the
+    /// Phase 50 semantic-graph lowering. Construction runs through
+    /// [`TsObjectModelStore::try_from_output`], which preserves deterministic
+    /// normalization and rejects duplicate stable keys before stale rows are replaced.
+    #[allow(
+        dead_code,
+        reason = "Phase 50 task 3 stores TS object-model rows before semantic-graph lowering consumes them in task 4."
+    )]
+    pub(crate) fn replace_ts_object_model_facts(
+        &mut self,
+        output: TsObjectModelOutput,
+    ) -> Result<(), AnalysisError> {
+        let store = TsObjectModelStore::try_from_output(output)?;
+        self.ts_object_allocations = store.allocations().to_vec();
+        self.ts_property_writes = store.property_writes().to_vec();
+        self.ts_property_reads = store.property_reads().to_vec();
+        self.ts_receiver_bindings = store.receiver_bindings().to_vec();
+        self.ts_prototype_links = store.prototype_links().to_vec();
+        self.ts_object_model_store = Some(store);
+        Ok(())
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Phase 50 task 3 stores TS object-model rows before semantic-graph lowering consumes them in task 4."
+    )]
+    pub(crate) fn ts_object_allocations(&self) -> &[TsObjectAllocationFact] {
+        &self.ts_object_allocations
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Phase 50 task 3 stores TS object-model rows before semantic-graph lowering consumes them in task 4."
+    )]
+    pub(crate) fn ts_property_writes(&self) -> &[TsPropertyWriteFact] {
+        &self.ts_property_writes
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Phase 50 task 3 stores TS object-model rows before semantic-graph lowering consumes them in task 4."
+    )]
+    pub(crate) fn ts_property_reads(&self) -> &[TsPropertyReadFact] {
+        &self.ts_property_reads
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Phase 50 task 3 stores TS object-model rows before semantic-graph lowering consumes them in task 4."
+    )]
+    pub(crate) fn ts_receiver_bindings(&self) -> &[TsReceiverBindingFact] {
+        &self.ts_receiver_bindings
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Phase 50 task 3 stores TS object-model rows before semantic-graph lowering consumes them in task 4."
+    )]
+    pub(crate) fn ts_prototype_links(&self) -> &[TsPrototypeLinkFact] {
+        &self.ts_prototype_links
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Phase 50 task 3 stores TS object-model rows before semantic-graph lowering consumes them in task 4."
+    )]
+    pub(crate) fn ts_object_model_store(&self) -> Option<&TsObjectModelStore> {
+        self.ts_object_model_store.as_ref()
     }
 
     /// Stores the normalized solver-derived edges (GRAPH-03/GRAPH-04), mirroring
@@ -7477,6 +7582,189 @@ mod tests {
             assert_eq!(db.call_sites()[0].stable_key, "call-site:second");
             assert!(db.call_targets().is_empty());
             assert!(db.unresolved_calls().is_empty());
+        }
+    }
+
+    mod ts_object_model_storage {
+        use super::*;
+        use crate::ts::object_model::facts::{
+            TsObjectAllocationFact, TsObjectAllocationId, TsObjectAllocationKind,
+            TsObjectModelStatus, TsPropertyKey, TsPropertyKeyKind, TsPropertyReadFact,
+            TsPropertyReadId, TsPropertyWriteFact, TsPropertyWriteId, TsPrototypeLinkFact,
+            TsPrototypeLinkId, TsPrototypeLinkKind, TsReceiverBindingFact, TsReceiverBindingId,
+            TsReceiverBindingKind,
+        };
+        use crate::ts::object_model::store::TsObjectModelOutput;
+
+        #[test]
+        fn replace_ts_object_model_facts_removes_stale_rows_from_previous_run() {
+            let mut db = AnalysisDb::new();
+            let file = db.add_file(
+                PathBuf::from("src/app.ts"),
+                "src/app.ts".to_string(),
+                "const holder = { target() {} }; holder.target();\n".to_string(),
+            );
+
+            db.replace_ts_object_model_facts(full_output(file, "first"))
+                .expect("first object-model replace");
+            assert_eq!(db.ts_object_allocations().len(), 1);
+            assert_eq!(db.ts_property_writes().len(), 1);
+            assert_eq!(db.ts_property_reads().len(), 1);
+            assert_eq!(db.ts_receiver_bindings().len(), 1);
+            assert_eq!(db.ts_prototype_links().len(), 1);
+            assert!(
+                db.ts_object_model_store()
+                    .expect("object-model store")
+                    .allocation_by_stable_key("object:first")
+                    .is_some()
+            );
+
+            db.replace_ts_object_model_facts(allocation_only_output(file, "second"))
+                .expect("second object-model replace");
+
+            assert_eq!(db.ts_object_allocations().len(), 1);
+            assert_eq!(db.ts_object_allocations()[0].id, TsObjectAllocationId(0));
+            assert_eq!(db.ts_object_allocations()[0].stable_key, "object:second");
+            assert!(db.ts_property_writes().is_empty());
+            assert!(db.ts_property_reads().is_empty());
+            assert!(db.ts_receiver_bindings().is_empty());
+            assert!(db.ts_prototype_links().is_empty());
+            let store = db.ts_object_model_store().expect("object-model store");
+            assert!(store.allocation_by_stable_key("object:first").is_none());
+            assert!(store.allocation_by_stable_key("object:second").is_some());
+        }
+
+        #[test]
+        fn replace_ts_object_model_facts_rejects_duplicate_stable_keys() {
+            let mut db = AnalysisDb::new();
+            let file = db.add_file(
+                PathBuf::from("src/app.ts"),
+                "src/app.ts".to_string(),
+                "const holder = {};\n".to_string(),
+            );
+
+            let error = db
+                .replace_ts_object_model_facts(TsObjectModelOutput {
+                    allocations: vec![
+                        allocation(file, "object:dup", 1),
+                        allocation(file, "object:dup", 2),
+                    ],
+                    property_writes: Vec::new(),
+                    property_reads: Vec::new(),
+                    receiver_bindings: Vec::new(),
+                    prototype_links: Vec::new(),
+                })
+                .expect_err("duplicate stable key should be rejected");
+
+            assert_eq!(
+                error.to_string(),
+                "invalid semantic fact from `polint.ts.object_model`: duplicate object allocation stable key `object:dup`"
+            );
+        }
+
+        fn full_output(file: FileId, suffix: &str) -> TsObjectModelOutput {
+            TsObjectModelOutput {
+                allocations: vec![allocation(file, &format!("object:{suffix}"), 10)],
+                property_writes: vec![property_write(file, &format!("write:{suffix}"), suffix)],
+                property_reads: vec![property_read(file, &format!("read:{suffix}"), suffix)],
+                receiver_bindings: vec![receiver_binding(file, &format!("receiver:{suffix}"))],
+                prototype_links: vec![prototype_link(file, &format!("prototype:{suffix}"), suffix)],
+            }
+        }
+
+        fn allocation_only_output(file: FileId, suffix: &str) -> TsObjectModelOutput {
+            TsObjectModelOutput {
+                allocations: vec![allocation(file, &format!("object:{suffix}"), 20)],
+                property_writes: Vec::new(),
+                property_reads: Vec::new(),
+                receiver_bindings: Vec::new(),
+                prototype_links: Vec::new(),
+            }
+        }
+
+        fn allocation(file: FileId, stable_key: &str, id: u64) -> TsObjectAllocationFact {
+            TsObjectAllocationFact {
+                id: TsObjectAllocationId(id),
+                file,
+                span: test_span(file, 1),
+                stable_key: stable_key.to_string(),
+                lexical_parent_key: Some("scope:module".to_string()),
+                inventory_function: None,
+                inventory_function_stable_key: None,
+                inventory_callsite: None,
+                inventory_callsite_stable_key: None,
+                kind: TsObjectAllocationKind::ObjectLiteral,
+                status: TsObjectModelStatus::resolved(),
+            }
+        }
+
+        fn property_write(file: FileId, stable_key: &str, suffix: &str) -> TsPropertyWriteFact {
+            TsPropertyWriteFact {
+                id: TsPropertyWriteId(99),
+                file,
+                span: test_span(file, 2),
+                stable_key: stable_key.to_string(),
+                base_object_stable_key: format!("object:{suffix}"),
+                property_key: property_key(),
+                value_function: None,
+                value_function_stable_key: Some(format!("function:{suffix}")),
+                value_object_stable_key: None,
+                status: TsObjectModelStatus::resolved(),
+            }
+        }
+
+        fn property_read(file: FileId, stable_key: &str, suffix: &str) -> TsPropertyReadFact {
+            TsPropertyReadFact {
+                id: TsPropertyReadId(99),
+                file,
+                span: test_span(file, 3),
+                stable_key: stable_key.to_string(),
+                base_object_stable_key: format!("object:{suffix}"),
+                property_key: property_key(),
+                destination_stable_key: Some(format!("place:{suffix}")),
+                callsite: None,
+                callsite_stable_key: Some(format!("callsite:{suffix}")),
+                status: TsObjectModelStatus::resolved(),
+            }
+        }
+
+        fn receiver_binding(file: FileId, stable_key: &str) -> TsReceiverBindingFact {
+            TsReceiverBindingFact {
+                id: TsReceiverBindingId(99),
+                file,
+                span: test_span(file, 4),
+                stable_key: stable_key.to_string(),
+                kind: TsReceiverBindingKind::MethodCall,
+                callsite: None,
+                callsite_stable_key: Some("callsite:first".to_string()),
+                callee_function: None,
+                callee_function_stable_key: Some("function:first".to_string()),
+                receiver_object_stable_key: Some("object:first".to_string()),
+                receiver_place_stable_key: Some("place:holder".to_string()),
+                lexical_parent_key: Some("scope:module".to_string()),
+                status: TsObjectModelStatus::resolved(),
+            }
+        }
+
+        fn prototype_link(file: FileId, stable_key: &str, suffix: &str) -> TsPrototypeLinkFact {
+            TsPrototypeLinkFact {
+                id: TsPrototypeLinkId(99),
+                file,
+                span: test_span(file, 5),
+                stable_key: stable_key.to_string(),
+                kind: TsPrototypeLinkKind::ClassPrototype,
+                object_stable_key: format!("object:{suffix}"),
+                prototype_stable_key: format!("object:{suffix}:prototype"),
+                property_key: None,
+                status: TsObjectModelStatus::resolved(),
+            }
+        }
+
+        fn property_key() -> TsPropertyKey {
+            TsPropertyKey {
+                kind: TsPropertyKeyKind::Static,
+                value: Some("target".to_string()),
+            }
         }
     }
 

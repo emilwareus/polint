@@ -3,14 +3,17 @@
     reason = "Phase 50 introduces the private TS object-model store before all solver consumers land"
 )]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
+use crate::analysis::error::AnalysisError;
 use crate::core::FileId;
 use crate::ts::object_model::facts::{
     TsObjectAllocationFact, TsObjectAllocationId, TsPropertyReadFact, TsPropertyReadId,
     TsPropertyWriteFact, TsPropertyWriteId, TsPrototypeLinkFact, TsPrototypeLinkId,
     TsReceiverBindingFact, TsReceiverBindingId,
 };
+
+pub(crate) const TS_OBJECT_MODEL_PROVIDER_ID: &str = "polint.ts.object_model";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct TsObjectModelOutput {
@@ -160,6 +163,46 @@ impl TsObjectModelStore {
         store
     }
 
+    pub(crate) fn try_from_output(output: TsObjectModelOutput) -> Result<Self, AnalysisError> {
+        validate_unique_stable_keys(
+            "object allocation",
+            output
+                .allocations
+                .iter()
+                .map(|allocation| allocation.stable_key.as_str()),
+        )?;
+        validate_unique_stable_keys(
+            "property write",
+            output
+                .property_writes
+                .iter()
+                .map(|write| write.stable_key.as_str()),
+        )?;
+        validate_unique_stable_keys(
+            "property read",
+            output
+                .property_reads
+                .iter()
+                .map(|read| read.stable_key.as_str()),
+        )?;
+        validate_unique_stable_keys(
+            "receiver binding",
+            output
+                .receiver_bindings
+                .iter()
+                .map(|binding| binding.stable_key.as_str()),
+        )?;
+        validate_unique_stable_keys(
+            "prototype link",
+            output
+                .prototype_links
+                .iter()
+                .map(|link| link.stable_key.as_str()),
+        )?;
+
+        Ok(Self::from_output(output))
+    }
+
     pub(crate) fn allocations(&self) -> &[TsObjectAllocationFact] {
         &self.output.allocations
     }
@@ -274,6 +317,22 @@ impl TsObjectModelStore {
     }
 }
 
+fn validate_unique_stable_keys<'a>(
+    row_kind: &'static str,
+    stable_keys: impl IntoIterator<Item = &'a str>,
+) -> Result<(), AnalysisError> {
+    let mut seen = BTreeSet::new();
+    for stable_key in stable_keys {
+        if !seen.insert(stable_key) {
+            return Err(AnalysisError::InvalidFact {
+                provider: TS_OBJECT_MODEL_PROVIDER_ID,
+                reason: format!("duplicate {row_kind} stable key `{stable_key}`"),
+            });
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::core::{FileId, Span};
@@ -356,6 +415,26 @@ mod tests {
         );
         assert_eq!(store.property_writes_for_base("object:a").len(), 1);
         assert_eq!(store.property_reads_for_base("object:a").len(), 1);
+    }
+
+    #[test]
+    fn try_from_output_rejects_duplicate_stable_keys() {
+        let error = TsObjectModelStore::try_from_output(TsObjectModelOutput {
+            allocations: vec![
+                allocation("object:a", 1, FileId(1)),
+                allocation("object:a", 2, FileId(1)),
+            ],
+            property_writes: Vec::new(),
+            property_reads: Vec::new(),
+            receiver_bindings: Vec::new(),
+            prototype_links: Vec::new(),
+        })
+        .expect_err("duplicate allocation stable key should be invalid");
+
+        assert_eq!(
+            error.to_string(),
+            "invalid semantic fact from `polint.ts.object_model`: duplicate object allocation stable key `object:a`"
+        );
     }
 
     fn allocation(stable_key: &str, original_id: u64, file: FileId) -> TsObjectAllocationFact {
