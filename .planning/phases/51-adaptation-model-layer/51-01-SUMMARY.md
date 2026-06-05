@@ -1,8 +1,8 @@
 # Phase 51 Plan 01 Summary
 
-**Plan:** 51-01-PLAN.md  
-**Status:** Complete  
-**Production commit:** `3a12a22e feat(51-01): add private adaptation model substrate`  
+**Plan:** 51-01-PLAN.md
+**Status:** Complete
+**Production commit:** `3a12a22e feat(51-01): add private adaptation model substrate`
 **Completed:** 2026-06-04
 
 ## What Changed
@@ -35,7 +35,7 @@
 
 None - plan executed exactly as written.
 
-**Total deviations:** 0 auto-fixed.  
+**Total deviations:** 0 auto-fixed.
 **Impact:** Plan 51-01 is ready for Plan 51-02 graph/solver lowering.
 
 ## Self-Check: PASSED

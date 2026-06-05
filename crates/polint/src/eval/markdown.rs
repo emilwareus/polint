@@ -125,6 +125,21 @@ pub(crate) fn render_markdown(run: &EvaluationRun) -> String {
                 metric_cell(held_out.held_out_runtime_overhead_ratio),
                 escape_cell(held_out.held_out_cache_invalidation_scope.as_deref().unwrap_or("-")),
             ));
+            if !held_out.missing_selection_case_ids.is_empty()
+                || !held_out.missing_held_out_case_ids.is_empty()
+            {
+                out.push_str(&format!(
+                    "- Held-out partition missing cases: selection `{}`, held-out `{}`\n\n",
+                    escape_cell(&held_out.missing_selection_case_ids.join(", ")),
+                    escape_cell(&held_out.missing_held_out_case_ids.join(", ")),
+                ));
+            }
+            if !held_out.overlapping_case_ids.is_empty() {
+                out.push_str(&format!(
+                    "- Held-out partition overlaps: `{}`\n\n",
+                    escape_cell(&held_out.overlapping_case_ids.join(", ")),
+                ));
+            }
         }
     }
 

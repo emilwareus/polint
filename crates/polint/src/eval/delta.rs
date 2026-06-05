@@ -83,6 +83,12 @@ pub(crate) struct CaseDelta {
 pub(crate) struct HeldOutDeltaReport {
     pub(crate) selection_cases: u64,
     pub(crate) held_out_cases: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) missing_selection_case_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) missing_held_out_case_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) overlapping_case_ids: Vec<String>,
     pub(crate) held_out_unknown_delta: i64,
     pub(crate) held_out_precision_delta: Option<f64>,
     pub(crate) held_out_recall_delta: Option<f64>,
@@ -108,6 +114,39 @@ impl HeldOutCasePartition {
         self.held_out_cases
             .iter()
             .any(|held_out| held_out == case_id)
+    }
+
+    fn is_selection(&self, case_id: &str) -> bool {
+        self.selection_cases
+            .iter()
+            .any(|selection| selection == case_id)
+            && !self.is_held_out(case_id)
+    }
+
+    fn exclusive_selection_case_ids(&self) -> BTreeSet<&str> {
+        let held_out = self.held_out_case_ids();
+        self.selection_cases
+            .iter()
+            .map(String::as_str)
+            .filter(|case_id| !held_out.contains(case_id))
+            .collect()
+    }
+
+    fn partition_case_ids(&self) -> BTreeSet<&str> {
+        self.selection_cases
+            .iter()
+            .chain(self.held_out_cases.iter())
+            .map(String::as_str)
+            .collect()
+    }
+
+    fn overlapping_case_ids(&self) -> Vec<String> {
+        let held_out = self.held_out_case_ids();
+        self.selection_cases
+            .iter()
+            .filter(|case_id| held_out.contains(case_id.as_str()))
+            .cloned()
+            .collect()
     }
 }
 
@@ -169,14 +208,17 @@ pub(crate) fn compute_adaptation_delta_with_options(
         .chain(adapted_cases.keys())
         .copied()
         .collect::<BTreeSet<_>>();
-    let held_out_ids = options
+    let common_case_ids = common_case_ids(&baseline.cases, &adapted.cases);
+    let partition_case_ids = options
         .held_out_partition
         .as_ref()
-        .map(HeldOutCasePartition::held_out_case_ids);
-    let runtime_overhead_ratio = if let Some(held_out_ids) = &held_out_ids {
-        let baseline_non_held_out = cases_without_ids(&baseline.cases, held_out_ids);
-        let adapted_non_held_out = cases_without_ids(&adapted.cases, held_out_ids);
-        runtime_overhead_ratio_for_refs(&baseline_non_held_out, &adapted_non_held_out)
+        .map(HeldOutCasePartition::partition_case_ids);
+    let runtime_overhead_ratio = if let Some(partition) = &options.held_out_partition {
+        let measured_selection_ids =
+            measured_partition_ids(&partition.exclusive_selection_case_ids(), &common_case_ids);
+        let baseline_selection = cases_with_ids(&baseline.cases, &measured_selection_ids);
+        let adapted_selection = cases_with_ids(&adapted.cases, &measured_selection_ids);
+        runtime_overhead_ratio_for_refs(&baseline_selection, &adapted_selection)
     } else {
         runtime_overhead_ratio(&baseline.cases, &adapted.cases)
     };
@@ -188,6 +230,11 @@ pub(crate) fn compute_adaptation_delta_with_options(
     };
 
     for case_id in case_ids {
+        if let Some(partition_case_ids) = &partition_case_ids
+            && (!partition_case_ids.contains(case_id) || !common_case_ids.contains(case_id))
+        {
+            continue;
+        }
         let mut case_delta = CaseDelta {
             case_id: case_id.to_string(),
             ..CaseDelta::default()
@@ -197,11 +244,15 @@ pub(crate) fn compute_adaptation_delta_with_options(
         collect_match_deltas(baseline_case, adapted_case, &mut case_delta);
         collect_extension_fact_deltas(baseline_case, adapted_case, &mut case_delta);
         collect_model_fact_deltas(baseline_case, adapted_case, &mut case_delta);
+        let is_selection = options
+            .held_out_partition
+            .as_ref()
+            .is_some_and(|partition| partition.is_selection(case_id));
         if let Some(partition) = &options.held_out_partition {
             case_delta.held_out = partition.is_held_out(case_id);
         }
         if !case_delta.is_empty() || case_delta.held_out {
-            if !case_delta.held_out {
+            if options.held_out_partition.is_none() || is_selection {
                 accumulate_case(&mut report, &case_delta);
             }
             case_delta.normalize();
@@ -457,17 +508,30 @@ fn compute_held_out_delta(
     adapted: &EvaluationRun,
     partition: &HeldOutCasePartition,
 ) -> HeldOutDeltaReport {
+    let common_case_ids = common_case_ids(&baseline.cases, &adapted.cases);
+    let selection_ids = partition.exclusive_selection_case_ids();
     let held_out_ids = partition.held_out_case_ids();
-    let baseline_cases = cases_with_ids(&baseline.cases, &held_out_ids);
-    let adapted_cases = cases_with_ids(&adapted.cases, &held_out_ids);
+    let measured_selection_ids = measured_partition_ids(&selection_ids, &common_case_ids);
+    let measured_held_out_ids = measured_partition_ids(&held_out_ids, &common_case_ids);
+    let baseline_cases = cases_with_ids(&baseline.cases, &measured_held_out_ids);
+    let adapted_cases = cases_with_ids(&adapted.cases, &measured_held_out_ids);
     let baseline_matches = matches_for_cases(&baseline_cases);
     let adapted_matches = matches_for_cases(&adapted_cases);
     let baseline_metrics = compute_metrics(&baseline_matches);
     let adapted_metrics = compute_metrics(&adapted_matches);
 
     HeldOutDeltaReport {
-        selection_cases: partition.selection_cases.len() as u64,
-        held_out_cases: partition.held_out_cases.len() as u64,
+        selection_cases: measured_selection_ids.len() as u64,
+        held_out_cases: measured_held_out_ids.len() as u64,
+        missing_selection_case_ids: missing_partition_ids(
+            &partition.selection_cases,
+            &common_case_ids,
+        ),
+        missing_held_out_case_ids: missing_partition_ids(
+            &partition.held_out_cases,
+            &common_case_ids,
+        ),
+        overlapping_case_ids: partition.overlapping_case_ids(),
         held_out_unknown_delta: adapted_metrics.unknown_count as i64
             - baseline_metrics.unknown_count as i64,
         held_out_precision_delta: metric_delta(
@@ -483,17 +547,45 @@ fn compute_held_out_delta(
     }
 }
 
+fn common_case_ids<'a>(baseline: &'a [CaseResult], adapted: &'a [CaseResult]) -> BTreeSet<&'a str> {
+    let baseline_ids = baseline
+        .iter()
+        .map(|case| case.case_id.as_str())
+        .collect::<BTreeSet<_>>();
+    adapted
+        .iter()
+        .filter_map(|case| {
+            let case_id = case.case_id.as_str();
+            baseline_ids.contains(case_id).then_some(case_id)
+        })
+        .collect()
+}
+
+fn measured_partition_ids<'a>(
+    partition_ids: &BTreeSet<&'a str>,
+    common_case_ids: &BTreeSet<&'a str>,
+) -> BTreeSet<&'a str> {
+    partition_ids
+        .iter()
+        .filter_map(|case_id| common_case_ids.contains(case_id).then_some(*case_id))
+        .collect()
+}
+
+fn missing_partition_ids(
+    partition_ids: &[String],
+    common_case_ids: &BTreeSet<&str>,
+) -> Vec<String> {
+    partition_ids
+        .iter()
+        .filter(|case_id| !common_case_ids.contains(case_id.as_str()))
+        .cloned()
+        .collect()
+}
+
 fn cases_with_ids<'a>(cases: &'a [CaseResult], ids: &BTreeSet<&str>) -> Vec<&'a CaseResult> {
     cases
         .iter()
         .filter(|case| ids.contains(case.case_id.as_str()))
-        .collect()
-}
-
-fn cases_without_ids<'a>(cases: &'a [CaseResult], ids: &BTreeSet<&str>) -> Vec<&'a CaseResult> {
-    cases
-        .iter()
-        .filter(|case| !ids.contains(case.case_id.as_str()))
         .collect()
 }
 
@@ -859,6 +951,8 @@ mod tests {
 
         assert_eq!(report.selection_cases, fixture.selection_cases.len() as u64);
         assert_eq!(report.held_out_cases, fixture.held_out_cases.len() as u64);
+        assert!(report.missing_selection_case_ids.is_empty());
+        assert!(report.missing_held_out_case_ids.is_empty());
         assert_eq!(
             report.held_out_unknown_delta,
             fixture.held_out_unknown_delta
@@ -885,6 +979,160 @@ mod tests {
                 .cases
                 .iter()
                 .any(|case| { case.case_id == "case-held-out-b" && case.held_out })
+        );
+    }
+
+    #[test]
+    fn held_out_partition_excludes_unlisted_and_missing_cases_from_deltas() {
+        let partition = HeldOutCasePartition {
+            selection_cases: vec![
+                "case-selection".to_string(),
+                "case-missing-selection".to_string(),
+                "case-overlap".to_string(),
+            ],
+            held_out_cases: vec![
+                "case-held-out".to_string(),
+                "case-missing-held-out".to_string(),
+                "case-overlap".to_string(),
+            ],
+            held_out_cache_invalidation_scope: None,
+        };
+        let baseline = run(vec![
+            case(
+                "case-selection",
+                vec![summary(
+                    "diagnostic:selection",
+                    MatchOutcome::FalseNegative,
+                    MatchItemKind::Diagnostic,
+                )],
+                Vec::new(),
+                Some(10),
+            ),
+            case(
+                "case-held-out",
+                vec![summary(
+                    "diagnostic:held-out",
+                    MatchOutcome::Unknown,
+                    MatchItemKind::Diagnostic,
+                )],
+                Vec::new(),
+                Some(10),
+            ),
+            case(
+                "case-overlap",
+                vec![summary(
+                    "diagnostic:overlap",
+                    MatchOutcome::FalseNegative,
+                    MatchItemKind::Diagnostic,
+                )],
+                Vec::new(),
+                Some(5),
+            ),
+            case(
+                "case-missing-selection",
+                vec![summary(
+                    "diagnostic:missing-selection",
+                    MatchOutcome::FalseNegative,
+                    MatchItemKind::Diagnostic,
+                )],
+                Vec::new(),
+                Some(10),
+            ),
+            case(
+                "case-extra",
+                vec![summary(
+                    "diagnostic:extra",
+                    MatchOutcome::FalseNegative,
+                    MatchItemKind::Diagnostic,
+                )],
+                Vec::new(),
+                Some(100),
+            ),
+        ]);
+        let adapted = run(vec![
+            case(
+                "case-selection",
+                vec![summary(
+                    "diagnostic:selection",
+                    MatchOutcome::TruePositive,
+                    MatchItemKind::Diagnostic,
+                )],
+                Vec::new(),
+                Some(20),
+            ),
+            case(
+                "case-held-out",
+                vec![summary(
+                    "diagnostic:held-out",
+                    MatchOutcome::TruePositive,
+                    MatchItemKind::Diagnostic,
+                )],
+                Vec::new(),
+                Some(20),
+            ),
+            case(
+                "case-overlap",
+                vec![summary(
+                    "diagnostic:overlap",
+                    MatchOutcome::TruePositive,
+                    MatchItemKind::Diagnostic,
+                )],
+                Vec::new(),
+                Some(10),
+            ),
+            case(
+                "case-missing-held-out",
+                vec![summary(
+                    "diagnostic:missing-held-out",
+                    MatchOutcome::TruePositive,
+                    MatchItemKind::Diagnostic,
+                )],
+                Vec::new(),
+                Some(20),
+            ),
+            case(
+                "case-extra",
+                vec![summary(
+                    "diagnostic:extra",
+                    MatchOutcome::TruePositive,
+                    MatchItemKind::Diagnostic,
+                )],
+                Vec::new(),
+                Some(100),
+            ),
+        ]);
+
+        let delta = compute_adaptation_delta_with_options(
+            &baseline,
+            &adapted,
+            AdaptationDeltaOptions {
+                held_out_partition: Some(partition),
+            },
+        );
+        let report = delta.held_out.as_ref().unwrap();
+
+        assert_eq!(delta.new_true_positives, 1);
+        assert_eq!(delta.removed_false_negatives, 1);
+        assert_eq!(delta.resolved_unknowns, 0);
+        assert_eq!(delta.runtime_overhead_ratio, Some(2.0));
+        assert_eq!(report.selection_cases, 1);
+        assert_eq!(report.held_out_cases, 2);
+        assert_eq!(
+            report.missing_selection_case_ids,
+            vec!["case-missing-selection"]
+        );
+        assert_eq!(
+            report.missing_held_out_case_ids,
+            vec!["case-missing-held-out"]
+        );
+        assert_eq!(report.overlapping_case_ids, vec!["case-overlap"]);
+        assert_eq!(report.held_out_unknown_delta, -1);
+        assert!(!delta.cases.iter().any(|case| case.case_id == "case-extra"));
+        assert!(
+            !delta
+                .cases
+                .iter()
+                .any(|case| case.case_id == "case-missing-selection")
         );
     }
 

@@ -41,4 +41,3 @@
 **Impact:** Phase 51 is complete and ready for Phase 52 discussion/planning.
 
 ## Self-Check: PASSED
-
