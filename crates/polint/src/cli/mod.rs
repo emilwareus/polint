@@ -1087,12 +1087,13 @@ fn facts_sample(root: &Path, args: &FactsSampleArgs) -> Result<u8> {
             support.docs_path
         );
     }
-    let db = analyze_for_agent_json(
+    let analysis = analyze_for_agent_json(
         root,
         &args.paths,
         args.no_cache,
         &[args.capability.as_str()],
     )?;
+    let db = &analysis.db;
     let mut rows = match args.capability.as_str() {
         "resolved_imports" => db
             .resolved_imports()
@@ -1249,14 +1250,14 @@ fn unknowns(root: PathBuf, args: &UnknownsArgs) -> Result<u8> {
         return Ok(2);
     }
 
-    let db = analyze_for_agent_json(
+    let analysis = analyze_for_agent_json(
         &root,
         &args.paths,
         args.no_cache,
         &[args.capability.as_str()],
     )?;
     let rows = crate::analysis::unknown_taxonomy::collect::public_capability_unknowns(
-        &db,
+        &analysis.db,
         &args.capability,
     )
     .into_iter()
@@ -1304,11 +1305,17 @@ fn inspect_unknowns(root: PathBuf, args: &InspectUnknownsArgs) -> Result<u8> {
         .as_deref()
         .map(|capability| vec![capability])
         .unwrap_or_else(|| vec!["resolved_imports", "symbols", "references"]);
-    let db = analyze_for_agent_json(&root, &args.paths, args.no_cache, &requested_caps)?;
+    let analysis = analyze_for_agent_json(&root, &args.paths, args.no_cache, &requested_caps)?;
     let rows = if let Some(capability) = &args.capability {
-        crate::analysis::unknown_taxonomy::collect::public_capability_unknowns(&db, capability)
+        crate::analysis::unknown_taxonomy::collect::public_capability_unknowns(
+            &analysis.db,
+            capability,
+        )
     } else {
-        crate::analysis::unknown_taxonomy::collect::all_unknowns(&db)
+        crate::analysis::unknown_taxonomy::collect::all_unknowns_with_diagnostics(
+            &analysis.db,
+            &analysis.diagnostics,
+        )
     }
     .into_iter()
     .map(UnknownsRow::from_taxonomy_full)
@@ -1857,12 +1864,17 @@ fn polint_tool_info() -> crate::diagnostics::PolintToolInfo {
     }
 }
 
+struct AgentJsonAnalysis {
+    db: AnalysisDb,
+    diagnostics: Vec<Diagnostic>,
+}
+
 fn analyze_for_agent_json(
     root: &Path,
     paths: &[PathBuf],
     no_cache: bool,
     capabilities: &[&str],
-) -> Result<AnalysisDb> {
+) -> Result<AgentJsonAnalysis> {
     let args = CheckArgs {
         paths: paths.to_vec(),
         profile: None,
@@ -1894,7 +1906,10 @@ fn analyze_for_agent_json(
         plan: &plan,
         parallel: true,
     })?;
-    Ok(output.db)
+    Ok(AgentJsonAnalysis {
+        db: output.db,
+        diagnostics: output.diagnostics,
+    })
 }
 
 fn span_start(span: &crate::core::Span) -> PublicSpan {

@@ -558,6 +558,7 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260605-gwr | Fix PR review findings: include provider diagnostics in inspect unknowns taxonomy and enforce extension-model invariant value | 2026-06-05 | implemented | [260605-gwr-fix-pr-review-findings-include-provider-](./quick/260605-gwr-fix-pr-review-findings-include-provider-/) |
 | 260605-ajl | Fix adaptation delta duplicate model counts and held-out separation | 2026-06-05 | implemented | [260605-ajl-fix-adaptation-delta-duplicate-model-cou](./quick/260605-ajl-fix-adaptation-delta-duplicate-model-cou/) |
 | 260605-9zj | Fix adaptation delta model fact and held-out reporting review findings | 2026-06-05 | implemented | [260605-9zj-fix-adaptation-delta-model-fact-and-held](./quick/260605-9zj-fix-adaptation-delta-model-fact-and-held/) |
 | 260604-l8k | Finish Phase 50 closeout by adding verification artifact and reconciling roadmap status | 2026-06-04 | artifact-only | [260604-l8k-finish-phase-50-closeout-by-adding-verif](./quick/260604-l8k-finish-phase-50-closeout-by-adding-verif/) |

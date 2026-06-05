@@ -322,6 +322,48 @@ exclude = []
 }
 
 #[test]
+fn inspect_unknowns_json_reports_go_provider_diagnostics() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+"#,
+    );
+    write_file(
+        &temp.path().join("go.mod"),
+        "module example.com/app\n\ngo 1.24\n",
+    );
+    write_file(
+        &temp.path().join("src/main.go"),
+        "package main\n\nfunc main() {}\n",
+    );
+    let missing_frontend = temp.path().join("missing-polint-go-frontend");
+
+    let value = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .env("POLINT_GO_FRONTEND", &missing_frontend)
+            .args(["inspect", "unknowns", "--format", "json"])
+            .assert()
+            .success(),
+    );
+    let rows = value["rows"].as_array().expect("unknown rows");
+
+    assert!(rows.iter().any(|row| {
+        row["provider"] == "polint.go.semantic"
+            && row["family"] == "GoSemanticDiagnostic"
+            && row["category"] == "go_packages_load_failed"
+            && row["suggested_artifact"] == "go_setup"
+            && row["source_stable_key"]
+                .as_str()
+                .is_some_and(|key| !key.is_empty())
+    }));
+}
+
+#[test]
 fn explain_json_reports_rule_capability_plan() {
     let temp = tempfile::tempdir().unwrap();
     polint_cmd()

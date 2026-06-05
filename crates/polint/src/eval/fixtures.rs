@@ -2285,8 +2285,13 @@ mod eval_native_fixture_runner_tests {
             "extension refined-call fixture must assert rejected malformed model fact"
         );
         assert!(
-            extension_expected.iter().any(|identity| {
-                identity.contains("Invariant:refined_calls.deltas.extension_model_edges")
+            extension.manifest.expected.iter().any(|item| {
+                matches!(
+                    item,
+                    ExpectedItem::Invariant(invariant)
+                        if invariant.name == "refined_calls.deltas.extension_model_edges"
+                            && invariant.value == "0"
+                )
             }),
             "extension refined-call fixture must assert extension models do not project to refined calls"
         );

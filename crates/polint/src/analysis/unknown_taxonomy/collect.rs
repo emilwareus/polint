@@ -10,6 +10,10 @@ use crate::core::{
     AnalysisDb, ResolutionPrecision, ResolutionStatus, SymbolPrecision, SymbolResolutionStatus,
     UnresolvedReason,
 };
+use crate::diagnostics::Diagnostic;
+use crate::go::semantic::diagnostics::{
+    GO_PACKAGES_LOAD_FAILED, GO_SIDECAR_TIMEOUT, GO_VERSION_UNSUPPORTED,
+};
 
 pub(crate) fn unsupported_capability_row(capability: &str, docs_path: Option<&str>) -> UnknownRow {
     UnknownRow::new(UnknownRowInput {
@@ -41,8 +45,16 @@ pub(crate) fn public_capability_unknowns(db: &AnalysisDb, capability: &str) -> V
 }
 
 pub(crate) fn graph_engine_unknowns(db: &AnalysisDb) -> Vec<UnknownRow> {
+    graph_engine_unknowns_with_diagnostics(db, &[])
+}
+
+pub(crate) fn graph_engine_unknowns_with_diagnostics(
+    db: &AnalysisDb,
+    diagnostics: &[Diagnostic],
+) -> Vec<UnknownRow> {
     let mut rows = Vec::new();
     rows.extend(go_semantic_unknowns(db));
+    rows.extend(go_semantic_diagnostic_unknowns(diagnostics));
     rows.extend(solver_unknowns(db));
     rows.extend(refined_call_unknowns(db));
     rows.extend(adaptation_unknowns(db));
@@ -54,11 +66,18 @@ pub(crate) fn graph_engine_unknowns(db: &AnalysisDb) -> Vec<UnknownRow> {
     reason = "Plan 52-04 wires the consolidated inspect unknowns command to this collector."
 )]
 pub(crate) fn all_unknowns(db: &AnalysisDb) -> Vec<UnknownRow> {
+    all_unknowns_with_diagnostics(db, &[])
+}
+
+pub(crate) fn all_unknowns_with_diagnostics(
+    db: &AnalysisDb,
+    diagnostics: &[Diagnostic],
+) -> Vec<UnknownRow> {
     let mut rows = Vec::new();
     for capability in ["resolved_imports", "symbols", "references"] {
         rows.extend(public_capability_unknowns(db, capability));
     }
-    rows.extend(graph_engine_unknowns(db));
+    rows.extend(graph_engine_unknowns_with_diagnostics(db, diagnostics));
     normalize_rows(rows)
 }
 
@@ -166,6 +185,38 @@ fn go_semantic_unknowns(db: &AnalysisDb) -> Vec<UnknownRow> {
                 suggested_artifact: Some("go_setup".to_string()),
                 source_stable_key: Some(error.stable_key.clone()),
             })
+        })
+        .collect()
+}
+
+fn go_semantic_diagnostic_unknowns(diagnostics: &[Diagnostic]) -> Vec<UnknownRow> {
+    diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.rule_id == "polint/go-semantic")
+        .filter_map(|diagnostic| {
+            let (category, reason) = go_diagnostic_category_and_reason(&diagnostic.message)?;
+            let span = if diagnostic.file == "<workspace>" {
+                None
+            } else {
+                Some(UnknownSpan {
+                    line: diagnostic.range.start_line,
+                    column: diagnostic.range.start_col,
+                })
+            };
+            Some(UnknownRow::new(UnknownRowInput {
+                category,
+                capability: Some("go_semantic".to_string()),
+                family: Some("GoSemanticDiagnostic".to_string()),
+                provider: "polint.go.semantic".to_string(),
+                file: diagnostic.file.clone(),
+                span,
+                status: category.as_str().to_string(),
+                reason: Some(reason),
+                precision: Some("unsupported".to_string()),
+                docs_path: Some("docs/facts/capability-plans.md".to_string()),
+                suggested_artifact: Some("go_setup".to_string()),
+                source_stable_key: Some(diagnostic.stable_fingerprint.clone()),
+            }))
         })
         .collect()
 }
@@ -318,6 +369,31 @@ fn go_package_error_category(message: &str) -> UnknownCategory {
     } else {
         UnknownCategory::GoPackagesLoadFailed
     }
+}
+
+fn go_diagnostic_category_and_reason(message: &str) -> Option<(UnknownCategory, String)> {
+    [
+        (
+            GO_PACKAGES_LOAD_FAILED,
+            UnknownCategory::GoPackagesLoadFailed,
+        ),
+        (
+            GO_VERSION_UNSUPPORTED,
+            UnknownCategory::GoVersionUnsupported,
+        ),
+        (GO_SIDECAR_TIMEOUT, UnknownCategory::GoSidecarTimeout),
+    ]
+    .into_iter()
+    .find_map(|(prefix, category)| {
+        message.strip_prefix(prefix).map(|reason| {
+            let reason = reason
+                .strip_prefix(':')
+                .unwrap_or(reason)
+                .trim_start()
+                .to_string();
+            (category, reason)
+        })
+    })
 }
 
 fn resolution_status_label(status: ResolutionStatus) -> &'static str {
@@ -479,6 +555,7 @@ mod tests {
         FunctionId, ImportFact, ImportId, Language, ModuleEdge, ModuleNode, ResolutionStatus,
         ResolvedImportFact, ResolvedImportId, Span, UnresolvedReason,
     };
+    use crate::diagnostics::{Diagnostic, TextRange};
     use crate::go::semantic::facts::{GoSemanticPackageErrorFact, GoSemanticPackageErrorId};
     use crate::go::semantic::store::GoSemanticFactsOutput;
 
@@ -610,6 +687,25 @@ mod tests {
         assert!(categories.contains(&UnknownCategory::ModelMissing));
     }
 
+    #[test]
+    fn graph_engine_unknowns_include_go_provider_diagnostics_without_facts() {
+        let db = AnalysisDb::new();
+        let diagnostics = vec![
+            go_diagnostic("GoSidecarTimeout: request timeout"),
+            go_diagnostic("GoVersionUnsupported: detected go version go1.24.5"),
+        ];
+
+        let rows = graph_engine_unknowns_with_diagnostics(&db, &diagnostics);
+        let categories = rows.iter().map(|row| row.category).collect::<Vec<_>>();
+
+        assert!(categories.contains(&UnknownCategory::GoSidecarTimeout));
+        assert!(categories.contains(&UnknownCategory::GoVersionUnsupported));
+        assert!(
+            rows.iter()
+                .all(|row| row.family.as_deref() == Some("GoSemanticDiagnostic"))
+        );
+    }
+
     fn go_error(stable_key: &str, message: &str) -> GoSemanticPackageErrorFact {
         GoSemanticPackageErrorFact {
             id: GoSemanticPackageErrorId(0),
@@ -618,6 +714,15 @@ mod tests {
             package_path: "pkg".to_string(),
             message: message.to_string(),
         }
+    }
+
+    fn go_diagnostic(message: &str) -> Diagnostic {
+        Diagnostic::warning(
+            "polint/go-semantic",
+            "<workspace>",
+            TextRange::point(1, 1),
+            message,
+        )
     }
 
     fn refined_budget_edge() -> RefinedCallEdgeFact {
