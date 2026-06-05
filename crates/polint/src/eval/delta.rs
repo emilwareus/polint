@@ -169,10 +169,21 @@ pub(crate) fn compute_adaptation_delta_with_options(
         .chain(adapted_cases.keys())
         .copied()
         .collect::<BTreeSet<_>>();
+    let held_out_ids = options
+        .held_out_partition
+        .as_ref()
+        .map(HeldOutCasePartition::held_out_case_ids);
+    let runtime_overhead_ratio = if let Some(held_out_ids) = &held_out_ids {
+        let baseline_non_held_out = cases_without_ids(&baseline.cases, held_out_ids);
+        let adapted_non_held_out = cases_without_ids(&adapted.cases, held_out_ids);
+        runtime_overhead_ratio_for_refs(&baseline_non_held_out, &adapted_non_held_out)
+    } else {
+        runtime_overhead_ratio(&baseline.cases, &adapted.cases)
+    };
     let mut report = AdaptationDeltaReport {
         baseline_suite_id: baseline.suite_id.clone(),
         adapted_suite_id: adapted.suite_id.clone(),
-        runtime_overhead_ratio: runtime_overhead_ratio(&baseline.cases, &adapted.cases),
+        runtime_overhead_ratio,
         ..AdaptationDeltaReport::default()
     };
 
@@ -190,7 +201,9 @@ pub(crate) fn compute_adaptation_delta_with_options(
             case_delta.held_out = partition.is_held_out(case_id);
         }
         if !case_delta.is_empty() || case_delta.held_out {
-            accumulate_case(&mut report, &case_delta);
+            if !case_delta.held_out {
+                accumulate_case(&mut report, &case_delta);
+            }
             case_delta.normalize();
             report.cases.push(case_delta);
         }
@@ -200,6 +213,7 @@ pub(crate) fn compute_adaptation_delta_with_options(
         report.held_out = Some(compute_held_out_delta(&baseline, &adapted, partition));
     }
 
+    set_unique_model_fact_counts(&mut report);
     report.normalize();
     report
 }
@@ -222,8 +236,17 @@ fn accumulate_case(report: &mut AdaptationDeltaReport, case_delta: &CaseDelta) {
     report.changed_paths += case_delta.changed_path_keys.len() as u64;
     report.accepted_extension_facts += case_delta.accepted_extension_fact_keys.len() as u64;
     report.rejected_extension_facts += case_delta.rejected_extension_fact_keys.len() as u64;
-    report.accepted_model_facts += case_delta.accepted_model_fact_keys.len() as u64;
-    report.rejected_model_facts += case_delta.rejected_model_fact_keys.len() as u64;
+}
+
+fn set_unique_model_fact_counts(report: &mut AdaptationDeltaReport) {
+    let mut accepted = BTreeSet::new();
+    let mut rejected = BTreeSet::new();
+    for case in report.cases.iter().filter(|case| !case.held_out) {
+        accepted.extend(case.accepted_model_fact_keys.iter().cloned());
+        rejected.extend(case.rejected_model_fact_keys.iter().cloned());
+    }
+    report.accepted_model_facts = accepted.len() as u64;
+    report.rejected_model_facts = rejected.len() as u64;
 }
 
 fn collect_match_deltas(
@@ -467,6 +490,13 @@ fn cases_with_ids<'a>(cases: &'a [CaseResult], ids: &BTreeSet<&str>) -> Vec<&'a 
         .collect()
 }
 
+fn cases_without_ids<'a>(cases: &'a [CaseResult], ids: &BTreeSet<&str>) -> Vec<&'a CaseResult> {
+    cases
+        .iter()
+        .filter(|case| !ids.contains(case.case_id.as_str()))
+        .collect()
+}
+
 fn matches_for_cases(cases: &[&CaseResult]) -> Vec<crate::eval::report::MatchSummary> {
     cases
         .iter()
@@ -639,6 +669,55 @@ mod tests {
     }
 
     #[test]
+    fn model_fact_counts_are_deduplicated_across_cases() {
+        let baseline = run(vec![
+            case("case-a", Vec::new(), Vec::new(), Some(10)),
+            case("case-b", Vec::new(), Vec::new(), Some(10)),
+        ]);
+        let adapted = run(vec![
+            case(
+                "case-a",
+                Vec::new(),
+                vec![
+                    model_fact(
+                        "AdaptationModel",
+                        "edge:/accepted",
+                        ObservedStatus::Accepted,
+                    ),
+                    model_fact(
+                        "AdaptationModel",
+                        "edge:/rejected",
+                        ObservedStatus::Rejected,
+                    ),
+                ],
+                Some(10),
+            ),
+            case(
+                "case-b",
+                Vec::new(),
+                vec![
+                    model_fact(
+                        "AdaptationModel",
+                        "edge:/accepted",
+                        ObservedStatus::Accepted,
+                    ),
+                    model_fact(
+                        "AdaptationModel",
+                        "edge:/rejected",
+                        ObservedStatus::Rejected,
+                    ),
+                ],
+                Some(10),
+            ),
+        ]);
+
+        let delta = compute_adaptation_delta(&baseline, &adapted);
+
+        assert_eq!(delta.accepted_model_facts, 1);
+        assert_eq!(delta.rejected_model_facts, 1);
+    }
+
+    #[test]
     fn extension_adaptation_facts_do_not_count_as_model_facts() {
         let baseline = run(vec![case("case-a", Vec::new(), Vec::new(), Some(10))]);
         let adapted = run(vec![case(
@@ -797,6 +876,10 @@ mod tests {
             report.held_out_cache_invalidation_scope.as_deref(),
             Some(fixture.held_out_cache_invalidation_scope.as_str())
         );
+        assert_eq!(delta.new_true_positives, 0);
+        assert_eq!(delta.new_false_positives, 0);
+        assert_eq!(delta.resolved_unknowns, 0);
+        assert_eq!(delta.runtime_overhead_ratio, Some(1.0));
         assert!(
             delta
                 .cases
