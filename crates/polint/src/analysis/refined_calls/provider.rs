@@ -14,6 +14,7 @@ use crate::analysis::calls::facts::{
     CallTargetFact, CallTargetStatus, UnresolvedCallReason,
 };
 use crate::analysis::points_to::facts::{PointsToPrecision, PointsToStatus};
+use crate::analysis::semantic_graph::constraints::ConstraintKind;
 use crate::analysis::semantic_graph::facts::NodeKind;
 use crate::analysis::solver::facts::DerivedEdgeFact;
 use crate::analysis_kernel::incremental::{
@@ -54,6 +55,21 @@ pub(crate) fn derive_refined_calls_with_cache_stats(
             RefinedCallTier::DirectOnly,
         ));
     }
+    output
+        .edges
+        .extend(super::framework::derive_framework_refinements(db).edges);
+    output
+        .edges
+        .extend(super::go::derive_go_refinements(db).edges);
+    output
+        .edges
+        .extend(super::ts_js::derive_ts_js_refinements(db).edges);
+    output
+        .edges
+        .extend(super::summaries::derive_summary_assisted_refinements(db).edges);
+    output
+        .edges
+        .extend(super::extensions::derive_extension_refinements(db).edges);
     output.edges.extend(derive_solver_refinements(db).edges);
     output = finalized_output(output);
 
@@ -198,11 +214,26 @@ impl<'a> SolverProjectionIndex<'a> {
                 Some((node.id, function))
             })
             .collect();
-        let callsite_by_stable_key = db
+        let mut callsite_by_stable_key = db
             .call_sites()
             .iter()
             .map(|site| (site.stable_key.as_str(), site))
-            .collect();
+            .collect::<BTreeMap<_, _>>();
+        for constraint in db.semantic_constraints() {
+            let ConstraintKind::CallConstraint { callsite } = &constraint.kind else {
+                continue;
+            };
+            let Some(site) = core_callsite_for_semantic_node(db, *callsite) else {
+                continue;
+            };
+            callsite_by_stable_key.insert(constraint.stable_key.as_str(), site);
+        }
+        for callsite in db.go_semantic_callsites() {
+            let Some(site) = core_callsite_for_go_semantic_callsite(db, callsite) else {
+                continue;
+            };
+            callsite_by_stable_key.insert(callsite.stable_key.as_str(), site);
+        }
         Self {
             function_by_node,
             callsite_by_stable_key,
@@ -216,6 +247,124 @@ impl<'a> SolverProjectionIndex<'a> {
                 .copied()
         })
     }
+}
+
+fn core_callsite_for_semantic_node(
+    db: &AnalysisDb,
+    node: crate::analysis::ids::SemanticNodeId,
+) -> Option<&CallSiteFact> {
+    let callsite = db.semantic_nodes().iter().find_map(|fact| {
+        if fact.id != node {
+            return None;
+        }
+        let NodeKind::Callsite(callsite) = fact.kind else {
+            return None;
+        };
+        Some(callsite)
+    })?;
+    db.call_sites().iter().find(|site| site.id == callsite)
+}
+
+fn core_callsite_for_go_semantic_callsite<'a>(
+    db: &'a AnalysisDb,
+    callsite: &crate::go::semantic::facts::GoSemanticCallsiteFact,
+) -> Option<&'a CallSiteFact> {
+    let file = callsite.file?;
+    let span = callsite.span.as_ref()?;
+    let mut candidates = db
+        .call_sites()
+        .iter()
+        .filter(|site| {
+            site.language == crate::core::Language::Go
+                && site.file == file
+                && same_byte_span(&site.span, span)
+        })
+        .collect::<Vec<_>>();
+    let caller = core_function_for_go_semantic_function(db, &callsite.caller);
+    if let Some(caller) = caller {
+        let caller_matches = candidates
+            .iter()
+            .copied()
+            .filter(|site| site.caller == caller)
+            .collect::<Vec<_>>();
+        if !caller_matches.is_empty() {
+            candidates = caller_matches;
+        }
+    }
+    let dynamic_matches = candidates
+        .iter()
+        .copied()
+        .filter(|site| {
+            matches!(
+                site.status,
+                CallTargetStatus::Unresolved | CallTargetStatus::Ambiguous
+            )
+        })
+        .collect::<Vec<_>>();
+    if !dynamic_matches.is_empty() {
+        candidates = dynamic_matches;
+    }
+    candidates
+        .into_iter()
+        .min_by_key(|site| site.stable_key.as_str())
+}
+
+fn core_function_for_go_semantic_function(
+    db: &AnalysisDb,
+    qualified: &str,
+) -> Option<crate::core::FunctionId> {
+    db.go_semantic_functions()
+        .iter()
+        .filter(|function| function.qualified == qualified)
+        .filter_map(|function| core_function_for_go_semantic_fact(db, function))
+        .next()
+}
+
+fn core_function_for_go_semantic_fact(
+    db: &AnalysisDb,
+    function: &crate::go::semantic::facts::GoSemanticFunctionFact,
+) -> Option<crate::core::FunctionId> {
+    let file = function.file?;
+    let span = function.span.as_ref()?;
+    matching_core_function_for_go_semantic_span(db, file, &function.name, span).map(|core| core.id)
+}
+
+fn matching_core_function_for_go_semantic_span<'a>(
+    db: &'a AnalysisDb,
+    file: crate::core::FileId,
+    name: &str,
+    span: &crate::core::Span,
+) -> Option<&'a crate::core::FunctionFact> {
+    let bucket = db
+        .functions()
+        .iter()
+        .filter(|core| {
+            core.language == crate::core::Language::Go && core.file == file && core.name == name
+        })
+        .collect::<Vec<_>>();
+    if let Some(exact) = bucket
+        .iter()
+        .copied()
+        .find(|core| same_byte_span(&core.span, span))
+    {
+        return Some(exact);
+    }
+    if span.start_byte != span.end_byte {
+        return None;
+    }
+    bucket
+        .iter()
+        .copied()
+        .filter(|core| {
+            core.span.start_byte <= span.start_byte && span.start_byte <= core.span.end_byte
+        })
+        .min_by_key(|core| core.span.end_byte.saturating_sub(core.span.start_byte))
+}
+
+fn same_byte_span(left: &crate::core::Span, right: &crate::core::Span) -> bool {
+    left.file == right.file
+        && left.start_byte == right.start_byte
+        && left.end_byte == right.end_byte
 }
 
 fn solver_edge_kind_for_site(site: &CallSiteFact) -> CallEdgeKind {
@@ -438,8 +587,10 @@ mod solver_projection_tests {
     use super::*;
     use crate::analysis::calls::facts::CallCallee;
     use crate::analysis::calls::store::CallOutput;
-    use crate::analysis::ids::{CallSiteId, DerivedEdgeId, MirBodyId, MirOpId, SemanticNodeId};
-    use crate::analysis::semantic_graph::constraints::ConstraintKind;
+    use crate::analysis::ids::{
+        CallSiteId, DerivedEdgeId, MirBodyId, MirOpId, SemanticConstraintId, SemanticNodeId,
+    };
+    use crate::analysis::semantic_graph::constraints::{ConstraintFact, ConstraintKind};
     use crate::analysis::semantic_graph::facts::{SemanticNodeFact, SemanticPrecision};
     use crate::analysis::semantic_graph::store::SemanticGraphOutput;
     use crate::analysis::solver::budget::BudgetStatus;
@@ -450,6 +601,11 @@ mod solver_projection_tests {
     use crate::analysis_plan::AnalysisPlan;
     use crate::config::load_config;
     use crate::core::{FileId, FunctionFact, FunctionId, Language, Span};
+    use crate::go::semantic::facts::{
+        GoSemanticCallStatus, GoSemanticCallsiteFact, GoSemanticFunctionFact, GoSemanticFunctionId,
+        GoSemanticFunctionKind,
+    };
+    use crate::go::semantic::store::GoSemanticFactsOutput;
     use std::fs;
     use tempfile::tempdir;
 
@@ -477,6 +633,63 @@ mod solver_projection_tests {
             edge.input_stable_keys
                 .iter()
                 .any(|key| key == "call-site:callee")
+        );
+    }
+
+    #[test]
+    fn solver_projection_resolves_semantic_call_constraint_keys_to_core_callsites() {
+        let db = db_with_solver_edge_referenced_by_semantic_constraint_key();
+
+        let output = derive_solver_refinements(&db);
+
+        assert_eq!(output.edges.len(), 1);
+        let edge = &output.edges[0];
+        assert_eq!(edge.site, CallSiteId(0));
+        assert_eq!(edge.caller, FunctionId(0));
+        assert_eq!(edge.target_function, Some(FunctionId(1)));
+        assert_eq!(edge.tier, RefinedCallTier::PointsToAssisted);
+        assert!(
+            edge.input_stable_keys
+                .iter()
+                .any(|key| key == "constraint:go-semantic-callsite")
+        );
+    }
+
+    #[test]
+    fn solver_projection_resolves_go_semantic_callsite_keys_to_core_callsites() {
+        let db = db_with_solver_edge_referenced_by_go_semantic_callsite_key();
+
+        let output = derive_solver_refinements(&db);
+
+        assert_eq!(output.edges.len(), 1);
+        let edge = &output.edges[0];
+        assert_eq!(edge.site, CallSiteId(0));
+        assert_eq!(edge.caller, FunctionId(0));
+        assert_eq!(edge.target_function, Some(FunctionId(1)));
+        assert_eq!(edge.tier, RefinedCallTier::PointsToAssisted);
+        assert!(
+            edge.input_stable_keys
+                .iter()
+                .any(|key| key == "go-semantic-callsite:caller-callee")
+        );
+    }
+
+    #[test]
+    fn solver_projection_resolves_zero_width_go_semantic_method_callers() {
+        let db = db_with_zero_width_go_method_caller_solver_edge();
+
+        let output = derive_solver_refinements(&db);
+
+        assert_eq!(output.edges.len(), 1);
+        let edge = &output.edges[0];
+        assert_eq!(edge.site, CallSiteId(0));
+        assert_eq!(edge.caller, FunctionId(0));
+        assert_eq!(edge.target_function, Some(FunctionId(1)));
+        assert_eq!(edge.tier, RefinedCallTier::PointsToAssisted);
+        assert!(
+            edge.input_stable_keys
+                .iter()
+                .any(|key| key == "go-semantic-callsite:method-dispatch")
         );
     }
 
@@ -522,13 +735,13 @@ mod solver_projection_tests {
             "app.ts".to_string(),
             "callee();\n".to_string(),
         );
-        db.push_function(function(
+        db.push_function(ts_function(
             FunctionId(0),
             file,
             "caller",
             vec!["callee".to_string()],
         ));
-        db.push_function(function(FunctionId(1), file, "callee", Vec::new()));
+        db.push_function(ts_function(FunctionId(1), file, "callee", Vec::new()));
         db.replace_call_facts(CallOutput {
             sites: vec![CallSiteFact {
                 id: CallSiteId(0),
@@ -605,17 +818,425 @@ mod solver_projection_tests {
         db
     }
 
-    fn function(id: FunctionId, file: FileId, name: &str, calls: Vec<String>) -> FunctionFact {
+    fn db_with_solver_edge_referenced_by_semantic_constraint_key() -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            "main.go".into(),
+            "main.go".to_string(),
+            "package main\nfunc caller(){ callee() }\nfunc callee() {}\n".to_string(),
+        );
+        db.push_function(go_function(
+            FunctionId(0),
+            file,
+            "caller",
+            vec!["callee".to_string()],
+        ));
+        db.push_function(go_function(FunctionId(1), file, "callee", Vec::new()));
+        db.replace_call_facts(CallOutput {
+            sites: vec![CallSiteFact {
+                id: CallSiteId(0),
+                language: Language::Go,
+                file,
+                caller: FunctionId(0),
+                owner_symbol: None,
+                body: MirBodyId(0),
+                operation: MirOpId(0),
+                span: span(),
+                kind: CallSyntaxKind::Function,
+                callee: CallCallee::Identifier {
+                    reference: None,
+                    name: "callee".to_string(),
+                },
+                receiver: None,
+                arguments: Vec::new(),
+                result: None,
+                status: CallTargetStatus::Resolved,
+                precision: CallPrecision::SetupAware,
+                stable_key: "core-call-site:callee".to_string(),
+            }],
+            targets: Vec::new(),
+            unresolved: Vec::new(),
+        })
+        .expect("valid calls");
+        db.replace_semantic_graph_facts(SemanticGraphOutput {
+            nodes: vec![
+                semantic_node(
+                    SemanticNodeId(0),
+                    NodeKind::Function(FunctionId(0)),
+                    "node:function:caller",
+                ),
+                semantic_node(
+                    SemanticNodeId(1),
+                    NodeKind::Function(FunctionId(1)),
+                    "node:function:callee",
+                ),
+                semantic_node(
+                    SemanticNodeId(2),
+                    NodeKind::Callsite(CallSiteId(0)),
+                    "node:callsite:callee",
+                ),
+            ],
+            edges: Vec::new(),
+            constraints: vec![ConstraintFact {
+                id: SemanticConstraintId(0),
+                kind: ConstraintKind::CallConstraint {
+                    callsite: SemanticNodeId(2),
+                },
+                status: PointsToStatus::Present,
+                precision: PointsToPrecision::FlowInsensitive,
+                stable_key: "constraint:go-semantic-callsite".to_string(),
+            }],
+        })
+        .expect("valid semantic graph");
+
+        let caller_node = function_node(&db, FunctionId(0));
+        let callee_node = function_node(&db, FunctionId(1));
+        let callsite_node = callsite_node(&db, CallSiteId(0));
+        let provenance = DerivedEdgeProvenance::new(
+            vec![ContributingFact {
+                stable_key: "constraint:go-semantic-callsite".to_string(),
+            }],
+            &ConstraintKind::CallConstraint {
+                callsite: callsite_node,
+            },
+            1,
+        );
+        db.replace_solver_facts(SolverOutput {
+            derived_edges: vec![DerivedEdgeFact {
+                id: DerivedEdgeId(0),
+                source: caller_node,
+                target: callee_node,
+                status: PointsToStatus::Present,
+                precision: PointsToPrecision::FlowInsensitive,
+                stable_key: "solver-edge:go-caller-callee".to_string(),
+                provenance,
+            }],
+            budget_status: BudgetStatus::WithinBudget,
+        })
+        .expect("valid solver facts");
+        db
+    }
+
+    fn db_with_solver_edge_referenced_by_go_semantic_callsite_key() -> AnalysisDb {
+        let mut db = db_with_solver_edge_referenced_by_semantic_constraint_key();
+        let file = db
+            .files()
+            .iter()
+            .find(|file| file.relative_path == "main.go")
+            .map(|file| file.id)
+            .expect("main.go file");
+        db.replace_go_semantic_facts(GoSemanticFactsOutput {
+            functions: vec![
+                go_semantic_function("go-function:caller", "pkg.caller", file, FunctionId(0)),
+                go_semantic_function("go-function:callee", "pkg.callee", file, FunctionId(1)),
+            ],
+            callsites: vec![GoSemanticCallsiteFact {
+                id: crate::go::semantic::facts::GoSemanticCallsiteId(0),
+                stable_key: "go-semantic-callsite:caller-callee".to_string(),
+                package_id: "pkg".to_string(),
+                package_path: "pkg".to_string(),
+                caller: "pkg.caller".to_string(),
+                static_callee: None,
+                status: GoSemanticCallStatus::UnresolvedDynamic,
+                reason: None,
+                relative_file: Some("main.go".to_string()),
+                file: Some(file),
+                span: Some(span()),
+            }],
+            ..GoSemanticFactsOutput::default()
+        })
+        .expect("valid go semantic facts");
+
+        let caller_node = function_node(&db, FunctionId(0));
+        let callee_node = function_node(&db, FunctionId(1));
+        let callsite_node = callsite_node(&db, CallSiteId(0));
+        let provenance = DerivedEdgeProvenance::new(
+            vec![ContributingFact {
+                stable_key: "go-semantic-callsite:caller-callee".to_string(),
+            }],
+            &ConstraintKind::CallConstraint {
+                callsite: callsite_node,
+            },
+            1,
+        );
+        db.replace_solver_facts(SolverOutput {
+            derived_edges: vec![DerivedEdgeFact {
+                id: DerivedEdgeId(0),
+                source: caller_node,
+                target: callee_node,
+                status: PointsToStatus::Present,
+                precision: PointsToPrecision::FlowInsensitive,
+                stable_key: "solver-edge:go-semantic-caller-callee".to_string(),
+                provenance,
+            }],
+            budget_status: BudgetStatus::WithinBudget,
+        })
+        .expect("valid solver facts");
+        db
+    }
+
+    fn db_with_zero_width_go_method_caller_solver_edge() -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            "main.go".into(),
+            "main.go".to_string(),
+            "package main\ntype Handler struct{}\nfunc (Handler) Handle(){ speaker.Speak() }\nfunc other(){ speaker.Speak() }\nfunc Speak() {}\n".to_string(),
+        );
+        let caller_span = span_for_file(file, 20, 80);
+        let decoy_span = span_for_file(file, 90, 120);
+        let callee_span = span_for_file(file, 130, 145);
+        let call_span = span_for_file(file, 60, 75);
+        db.push_function(go_function_with_span(
+            FunctionId(0),
+            file,
+            "Handler.Handle",
+            caller_span,
+            vec!["Speak".to_string()],
+        ));
+        db.push_function(go_function_with_span(
+            FunctionId(1),
+            file,
+            "Speak",
+            callee_span.clone(),
+            Vec::new(),
+        ));
+        db.push_function(go_function_with_span(
+            FunctionId(2),
+            file,
+            "other",
+            decoy_span,
+            vec!["Speak".to_string()],
+        ));
+        db.replace_call_facts(CallOutput {
+            sites: vec![
+                CallSiteFact {
+                    id: CallSiteId(0),
+                    language: Language::Go,
+                    file,
+                    caller: FunctionId(0),
+                    owner_symbol: None,
+                    body: MirBodyId(0),
+                    operation: MirOpId(0),
+                    span: call_span.clone(),
+                    kind: CallSyntaxKind::Method,
+                    callee: CallCallee::Identifier {
+                        reference: None,
+                        name: "Speak".to_string(),
+                    },
+                    receiver: None,
+                    arguments: Vec::new(),
+                    result: None,
+                    status: CallTargetStatus::Unresolved,
+                    precision: CallPrecision::Conservative,
+                    stable_key: "z-correct-callsite".to_string(),
+                },
+                CallSiteFact {
+                    id: CallSiteId(1),
+                    language: Language::Go,
+                    file,
+                    caller: FunctionId(2),
+                    owner_symbol: None,
+                    body: MirBodyId(1),
+                    operation: MirOpId(0),
+                    span: call_span.clone(),
+                    kind: CallSyntaxKind::Method,
+                    callee: CallCallee::Identifier {
+                        reference: None,
+                        name: "Speak".to_string(),
+                    },
+                    receiver: None,
+                    arguments: Vec::new(),
+                    result: None,
+                    status: CallTargetStatus::Unresolved,
+                    precision: CallPrecision::Conservative,
+                    stable_key: "a-decoy-callsite".to_string(),
+                },
+            ],
+            targets: Vec::new(),
+            unresolved: Vec::new(),
+        })
+        .expect("valid calls");
+        db.replace_semantic_graph_facts(SemanticGraphOutput {
+            nodes: vec![
+                semantic_node(
+                    SemanticNodeId(0),
+                    NodeKind::Function(FunctionId(0)),
+                    "node:function:handler-handle",
+                ),
+                semantic_node(
+                    SemanticNodeId(1),
+                    NodeKind::Function(FunctionId(1)),
+                    "node:function:speak",
+                ),
+            ],
+            edges: Vec::new(),
+            constraints: Vec::new(),
+        })
+        .expect("valid semantic graph");
+        db.replace_go_semantic_facts(GoSemanticFactsOutput {
+            functions: vec![
+                go_semantic_method_function_with_span(
+                    "go-function:handler-handle",
+                    "Handler.Handle",
+                    "pkg.Handler.Handle",
+                    file,
+                    FunctionId(0),
+                    span_for_file(file, 25, 25),
+                ),
+                go_semantic_function_with_span(
+                    "go-function:speak",
+                    "Speak",
+                    "pkg.Speak",
+                    file,
+                    FunctionId(1),
+                    callee_span,
+                ),
+            ],
+            callsites: vec![GoSemanticCallsiteFact {
+                id: crate::go::semantic::facts::GoSemanticCallsiteId(0),
+                stable_key: "go-semantic-callsite:method-dispatch".to_string(),
+                package_id: "pkg".to_string(),
+                package_path: "pkg".to_string(),
+                caller: "pkg.Handler.Handle".to_string(),
+                static_callee: None,
+                status: GoSemanticCallStatus::UnresolvedDynamic,
+                reason: None,
+                relative_file: Some("main.go".to_string()),
+                file: Some(file),
+                span: Some(call_span),
+            }],
+            ..GoSemanticFactsOutput::default()
+        })
+        .expect("valid go semantic facts");
+
+        let caller_node = function_node(&db, FunctionId(0));
+        let callee_node = function_node(&db, FunctionId(1));
+        let provenance = DerivedEdgeProvenance::new(
+            vec![ContributingFact {
+                stable_key: "go-semantic-callsite:method-dispatch".to_string(),
+            }],
+            &ConstraintKind::CallConstraint {
+                callsite: SemanticNodeId(99),
+            },
+            1,
+        );
+        db.replace_solver_facts(SolverOutput {
+            derived_edges: vec![DerivedEdgeFact {
+                id: DerivedEdgeId(0),
+                source: caller_node,
+                target: callee_node,
+                status: PointsToStatus::Present,
+                precision: PointsToPrecision::FlowInsensitive,
+                stable_key: "solver-edge:method-dispatch".to_string(),
+                provenance,
+            }],
+            budget_status: BudgetStatus::WithinBudget,
+        })
+        .expect("valid solver facts");
+        db
+    }
+
+    fn ts_function(id: FunctionId, file: FileId, name: &str, calls: Vec<String>) -> FunctionFact {
+        function(id, file, name, Language::TypeScript, calls)
+    }
+
+    fn go_function(id: FunctionId, file: FileId, name: &str, calls: Vec<String>) -> FunctionFact {
+        function(id, file, name, Language::Go, calls)
+    }
+
+    fn go_function_with_span(
+        id: FunctionId,
+        file: FileId,
+        name: &str,
+        span: Span,
+        calls: Vec<String>,
+    ) -> FunctionFact {
+        function_with_span(id, file, name, Language::Go, span, calls)
+    }
+
+    fn function(
+        id: FunctionId,
+        file: FileId,
+        name: &str,
+        language: Language,
+        calls: Vec<String>,
+    ) -> FunctionFact {
+        function_with_span(id, file, name, language, span(), calls)
+    }
+
+    fn function_with_span(
+        id: FunctionId,
+        file: FileId,
+        name: &str,
+        language: Language,
+        span: Span,
+        calls: Vec<String>,
+    ) -> FunctionFact {
         FunctionFact {
             id,
             file,
             name: name.to_string(),
-            span: span(),
-            language: Language::TypeScript,
+            span,
+            language,
             is_test: false,
             is_exported: true,
             cyclomatic_complexity: 1,
             calls,
+        }
+    }
+
+    fn go_semantic_function(
+        stable_key: &str,
+        qualified: &str,
+        file: FileId,
+        function: FunctionId,
+    ) -> GoSemanticFunctionFact {
+        go_semantic_function_with_span(
+            stable_key,
+            qualified.rsplit('.').next().unwrap_or(qualified),
+            qualified,
+            file,
+            function,
+            span(),
+        )
+    }
+
+    fn go_semantic_function_with_span(
+        stable_key: &str,
+        name: &str,
+        qualified: &str,
+        file: FileId,
+        function: FunctionId,
+        span: Span,
+    ) -> GoSemanticFunctionFact {
+        GoSemanticFunctionFact {
+            id: GoSemanticFunctionId(function.0),
+            stable_key: stable_key.to_string(),
+            package_id: "pkg".to_string(),
+            package_path: "pkg".to_string(),
+            name: name.to_string(),
+            qualified: qualified.to_string(),
+            signature: "func()".to_string(),
+            kind: GoSemanticFunctionKind::Function,
+            receiver: None,
+            relative_file: Some("main.go".to_string()),
+            file: Some(file),
+            span: Some(span),
+        }
+    }
+
+    fn go_semantic_method_function_with_span(
+        stable_key: &str,
+        name: &str,
+        qualified: &str,
+        file: FileId,
+        function: FunctionId,
+        span: Span,
+    ) -> GoSemanticFunctionFact {
+        GoSemanticFunctionFact {
+            kind: GoSemanticFunctionKind::Method,
+            receiver: Some("pkg.Handler".to_string()),
+            ..go_semantic_function_with_span(stable_key, name, qualified, file, function, span)
         }
     }
 
@@ -638,6 +1259,18 @@ mod solver_projection_tests {
                 (candidate == function).then_some(node.id)
             })
             .expect("function node")
+    }
+
+    fn callsite_node(db: &AnalysisDb, callsite: CallSiteId) -> SemanticNodeId {
+        db.semantic_nodes()
+            .iter()
+            .find_map(|node| {
+                let NodeKind::Callsite(candidate) = node.kind else {
+                    return None;
+                };
+                (candidate == callsite).then_some(node.id)
+            })
+            .expect("callsite node")
     }
 
     fn manifest() -> &'static ProviderManifest {
@@ -667,6 +1300,18 @@ mod solver_projection_tests {
 
     fn span() -> Span {
         Span::point(FileId(0), 1, 1)
+    }
+
+    fn span_for_file(file: FileId, start_byte: u32, end_byte: u32) -> Span {
+        Span {
+            file,
+            start_byte,
+            end_byte,
+            start_line: 1,
+            start_col: 1,
+            end_line: 1,
+            end_col: 1,
+        }
     }
 }
 

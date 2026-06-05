@@ -1,13 +1,20 @@
-package refinedcalls
+package main
 
-type worker interface {
-	Work(int) int
+type Speaker interface {
+	Speak() string
 }
 
-func Process(worker worker, value int) int {
-	return helper(worker.Work(value))
+type Dog struct{}
+
+func (Dog) Speak() string {
+	return "woof"
 }
 
-func helper(value int) int {
-	return value + 1
+func runDispatch() {
+	var speaker Speaker = Dog{}
+	speaker.Speak()
+}
+
+func main() {
+	runDispatch()
 }

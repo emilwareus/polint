@@ -84,7 +84,12 @@ pub(crate) fn all_unknowns_with_diagnostics(
 fn resolved_import_unknowns(db: &AnalysisDb) -> Vec<UnknownRow> {
     db.resolved_imports()
         .iter()
-        .filter(|fact| fact.status != ResolutionStatus::Resolved)
+        .filter(|fact| {
+            !matches!(
+                fact.status,
+                ResolutionStatus::Resolved | ResolutionStatus::External
+            )
+        })
         .map(|fact| {
             let reason = fact.reason.map(unresolved_reason_label).map(str::to_string);
             UnknownRow::new(UnknownRowInput {
@@ -394,6 +399,20 @@ fn go_diagnostic_category_and_reason(message: &str) -> Option<(UnknownCategory, 
             (category, reason)
         })
     })
+    .filter(|(category, reason)| go_diagnostic_represents_setup_unknown(*category, reason))
+}
+
+fn go_diagnostic_represents_setup_unknown(category: UnknownCategory, reason: &str) -> bool {
+    match category {
+        UnknownCategory::GoSidecarTimeout | UnknownCategory::GoVersionUnsupported => true,
+        UnknownCategory::GoPackagesLoadFailed => {
+            !reason.starts_with("package ")
+                && !reason.contains(" failed to load:")
+                && !reason.contains("Go RTA-signal rows dropped")
+                && !reason.contains("duplicate Go ")
+        }
+        _ => false,
+    }
 }
 
 fn resolution_status_label(status: ResolutionStatus) -> &'static str {
@@ -691,6 +710,9 @@ mod tests {
     fn graph_engine_unknowns_include_go_provider_diagnostics_without_facts() {
         let db = AnalysisDb::new();
         let diagnostics = vec![
+            go_diagnostic(
+                "GoPackagesLoadFailed: POLINT_GO_FRONTEND must point to a polint-go-frontend binary or source directory.",
+            ),
             go_diagnostic("GoSidecarTimeout: request timeout"),
             go_diagnostic("GoVersionUnsupported: detected go version go1.24.5"),
         ];
@@ -698,12 +720,40 @@ mod tests {
         let rows = graph_engine_unknowns_with_diagnostics(&db, &diagnostics);
         let categories = rows.iter().map(|row| row.category).collect::<Vec<_>>();
 
+        assert!(categories.contains(&UnknownCategory::GoPackagesLoadFailed));
         assert!(categories.contains(&UnknownCategory::GoSidecarTimeout));
         assert!(categories.contains(&UnknownCategory::GoVersionUnsupported));
         assert!(
             rows.iter()
                 .all(|row| row.family.as_deref() == Some("GoSemanticDiagnostic"))
         );
+    }
+
+    #[test]
+    fn graph_engine_unknowns_do_not_duplicate_package_error_or_quality_diagnostics() {
+        let mut db = AnalysisDb::new();
+        db.replace_go_semantic_facts(GoSemanticFactsOutput {
+            package_errors: vec![go_error("go:load", "load failed")],
+            ..GoSemanticFactsOutput::default()
+        })
+        .expect("go semantic facts");
+        let diagnostics = vec![
+            go_diagnostic(
+                "GoPackagesLoadFailed: package example.com/p failed to load: load failed",
+            ),
+            go_diagnostic(
+                "GoPackagesLoadFailed: 2 Go RTA-signal rows dropped (invalid identity/stable_key); interface/func-value dispatch may under-resolve.",
+            ),
+            go_diagnostic(
+                "GoPackagesLoadFailed: 1 duplicate Go function stable key row(s) collapsed keep-first (byte-identical double-emit); facts preserved.",
+            ),
+        ];
+
+        let rows = graph_engine_unknowns_with_diagnostics(&db, &diagnostics);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].family.as_deref(), Some("GoSemanticPackageError"));
+        assert_eq!(rows[0].reason.as_deref(), Some("load failed"));
     }
 
     fn go_error(stable_key: &str, message: &str) -> GoSemanticPackageErrorFact {

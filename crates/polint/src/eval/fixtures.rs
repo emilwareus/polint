@@ -2268,6 +2268,16 @@ mod eval_native_fixture_runner_tests {
         );
         assert!(
             direct_expected.iter().any(|identity| identity
+                .contains("Invariant:refined_calls.counts.by_tier.points_to_assisted.nonzero")),
+            "direct refined-call fixture must assert solver-assisted tier counts"
+        );
+        assert!(
+            direct_expected.iter().any(|identity| identity
+                .contains("Invariant:refined_calls.deltas.changed_edges.nonzero")),
+            "direct refined-call fixture must assert solver projection changes refined calls"
+        );
+        assert!(
+            direct_expected.iter().any(|identity| identity
                 .contains("Invariant:refined_calls.counts.by_language.Go.nonzero")),
             "direct refined-call fixture must assert Go refined-call coverage"
         );
@@ -2289,11 +2299,11 @@ mod eval_native_fixture_runner_tests {
                 matches!(
                     item,
                     ExpectedItem::Invariant(invariant)
-                        if invariant.name == "refined_calls.deltas.extension_model_edges"
-                            && invariant.value == "0"
+                        if invariant.name == "refined_calls.deltas.extension_model_edges.nonzero"
+                            && invariant.value == "true"
                 )
             }),
-            "extension refined-call fixture must assert extension models do not project to refined calls"
+            "extension refined-call fixture must assert extension models project to refined calls"
         );
     }
 

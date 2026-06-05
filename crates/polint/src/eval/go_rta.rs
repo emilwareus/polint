@@ -62,6 +62,12 @@ fn polyglot_fixture_dir(name: &str) -> PathBuf {
         .join(name)
 }
 
+fn refined_calls_fixture_dir(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/eval-fixtures/refined-calls")
+        .join(name)
+}
+
 /// Runs the kernel over a fixture repo and returns the raw [`KernelOutput`].
 fn run_fixture_kernel(fixture_dir: &Path) -> KernelOutput {
     let fixture = load_native_fixture(fixture_dir).expect("fixture loads");
@@ -462,6 +468,53 @@ fn static_reachability_fixture_resolves_dispatch_in_statically_reached_function(
     );
 
     assert_solver_output_byte_stable(&output.db, budget);
+}
+
+#[test]
+fn refined_calls_direct_vs_refined_fixture_projects_persisted_rta_edge() {
+    let dir = refined_calls_fixture_dir("direct-vs-refined");
+    let output = run_fixture_kernel(&dir);
+    let budget = solver_budget_for_fixture(&dir);
+    let inputs = GoRtaInputs::from_db(&output.db);
+    let solver_output = solver_output_for_db(&output.db, budget);
+
+    assert!(
+        !inputs.callsites.is_empty(),
+        "refined-calls fixture must expose at least one Go RTA callsite: {inputs:#?}"
+    );
+    assert!(
+        !solver_output.derived_edges.is_empty(),
+        "refined-calls fixture must produce at least one Go RTA solver edge: {inputs:#?}"
+    );
+    assert!(
+        !output.db.solver_derived_edges().is_empty(),
+        "kernel must persist the Go RTA solver edge for refined-call projection"
+    );
+    let run_dispatch = output
+        .db
+        .functions()
+        .iter()
+        .find(|function| function.name == "runDispatch")
+        .map(|function| function.id)
+        .expect("runDispatch core function");
+    let dog_speak = output
+        .db
+        .functions()
+        .iter()
+        .find(|function| function.name == "Dog.Speak")
+        .map(|function| function.id)
+        .expect("Dog.Speak core function");
+    let projected = output.db.refined_call_edges().iter().any(|edge| {
+        edge.tier == crate::analysis::refined_calls::facts::RefinedCallTier::PointsToAssisted
+            && edge.caller == run_dispatch
+            && edge.target_function == Some(dog_speak)
+    });
+    assert!(
+        projected,
+        "refined-call projection must expose the persisted Go RTA edge runDispatch -> Dog.Speak; solver_edges={}, refined_edges={:#?}",
+        output.db.solver_derived_edges().len(),
+        output.db.refined_call_edges()
+    );
 }
 
 #[test]

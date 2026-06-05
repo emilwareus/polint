@@ -15,6 +15,9 @@ fact = { family = "RefinedCallEdge", stable_key = "RefinedCallEdge", mode = "par
 invariant = { name = "refined_calls.counts.by_tier.direct_only.nonzero", value = "true", mode = "exact" }
 
 [[expected]]
+invariant = { name = "refined_calls.counts.by_tier.points_to_assisted.nonzero", value = "true", mode = "exact" }
+
+[[expected]]
 invariant = { name = "refined_calls.counts.by_language.Go.nonzero", value = "true", mode = "exact" }
 
 [[expected]]
@@ -27,7 +30,7 @@ invariant = { name = "refined_calls.deltas.refined_edges.nonzero", value = "true
 invariant = { name = "refined_calls.deltas.direct_edges.nonzero", value = "true", mode = "exact" }
 
 [[expected]]
-invariant = { name = "refined_calls.deltas.changed_edges", value = "0", mode = "exact" }
+invariant = { name = "refined_calls.deltas.changed_edges.nonzero", value = "true", mode = "exact" }
 
 [[expected]]
 invariant = { name = "provider_output.polint.refined_calls.present", value = "true", mode = "exact" }

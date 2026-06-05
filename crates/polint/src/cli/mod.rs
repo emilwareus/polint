@@ -1656,8 +1656,8 @@ impl UnknownsRow {
     fn from_taxonomy_full(row: crate::analysis::unknown_taxonomy::facts::UnknownRow) -> Self {
         Self {
             category: Some(row.category.as_str().to_string()),
-            provider: Some(row.provider),
-            family: row.family,
+            provider: None,
+            family: None,
             file: row.file,
             span: row.span.map(|span| PublicSpan {
                 line: span.line,
@@ -1668,7 +1668,7 @@ impl UnknownsRow {
             precision: row.precision,
             docs_path: row.docs_path,
             suggested_artifact: row.suggested_artifact,
-            source_stable_key: row.source_stable_key,
+            source_stable_key: None,
         }
     }
 }
