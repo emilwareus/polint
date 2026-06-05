@@ -29,7 +29,7 @@ Phase numbering continues from v1.2's last phase 41. Phases 45/46 may run in par
 - [x] **Phase 50: JS/TS Object/Property/Prototype/`this` Model & Driver** - Private `src/ts/object_model/` + `analysis::solver::ts_object_model` (allocation-site abstraction, bounded property buckets with computed-property handling, prototype-walk termination, `this` binding rules). ✅ Verified 5/5 (external Jelly corpus floors deferred to Phase 54).
 - [x] **Phase 51: Adaptation Model Layer** - Private `analysis::adaptation` (TOML schema, loader, validator confirming target symbols exist, `ModelEdge` emission); `benchmark adapted` mode with prompt hash, accepted/rejected facts, deltas, held-out subset reporting, sandboxed agent.
 - [x] **Phase 52: Refined-Calls Rework & Unknown Taxonomy Consolidation** - `refined_calls::provider` projects over solver output preserving v1.2 `RefinedCallEdgeFact` contract; consolidated taxonomy via `polint inspect unknowns --format json`.
-- [ ] **Phase 53: Cache & Solver Budgets Consolidation** - Cache keys digest sidecar binary, Go toolchain, adaptation model files, and solver budgets across every new family; solver budgets enforce token-set/property/fanout/model/package-depth caps with `BudgetExceeded` as facts.
+- [x] **Phase 53: Cache & Solver Budgets Consolidation** - Cache keys digest sidecar binary, Go toolchain, adaptation model files, and solver budgets across every new family; solver budgets enforce token-set/property/fanout/model/package-depth caps with `BudgetExceeded` as facts.
 - [ ] **Phase 54: Benchmark Promotion Gate Extension** - Per-suite precision floors (Go ≥60%, Jelly configurable), F-score β=0.5 alongside F1, per-language deltas, polyglot Go+TS canary, public-API leak CI gate (no v1.3 solver types in `polint::sdk::prelude::*`).
 
 ## Phase Details
@@ -233,7 +233,7 @@ May run in parallel with Phase 48 (drivers share the solver core but their itera
 | 50 | JS/TS Object/Property/Prototype/`this` Model & Driver | 5/5 | Complete | 2026-06-04 |
 | 51 | Adaptation Model Layer | 4/4 | Complete | 2026-06-04 |
 | 52 | Refined-Calls Rework & Unknown Taxonomy Consolidation | 4/4 | Complete | 2026-06-05 |
-| 53 | Cache & Solver Budgets Consolidation | 0/0 | Not started | - |
+| 53 | Cache & Solver Budgets Consolidation | 4/4 | Complete    | 2026-06-05 |
 | 54 | Benchmark Promotion Gate Extension | 0/0 | Not started | - |
 
 ## Parallel-Eligible Phases
