@@ -12,7 +12,7 @@
 //! the list) and an "algorithm-version bump invalidates" assertion. A third proves
 //! that a SolverBudget change changes the parameter digest (D-15).
 
-use crate::analysis::solver::budget::SolverBudget;
+use crate::analysis::solver::budget::{BudgetReason, SolverBudget};
 use crate::analysis_kernel::incremental::{Digest, DigestKind};
 
 /// Schema label for the `polint.solver` provider manifest.
@@ -32,6 +32,7 @@ pub(crate) const SOLVER_SCHEMA_LABEL: &str = "solver-derived-edges-1";
 /// CACHE-01/02, Phase 53).
 pub(crate) fn solver_provider_parameter_digest(budget: &SolverBudget) -> Digest {
     let budget_parts = budget_parts(budget);
+    let budget_reason_parts = budget_reason_parts();
     let mut parts: Vec<&str> = vec![
         SOLVER_SCHEMA_LABEL,
         "derived_edges",
@@ -56,6 +57,7 @@ pub(crate) fn solver_provider_parameter_digest(budget: &SolverBudget) -> Digest 
         "adaptation_model_v1",
     ];
     parts.extend(budget_parts.iter().map(String::as_str));
+    parts.extend(budget_reason_parts.iter().map(String::as_str));
     Digest::from_parts(
         DigestKind::ProviderParameters,
         "solver_provider_parameters",
@@ -169,6 +171,13 @@ fn budget_parts(budget: &SolverBudget) -> Vec<String> {
     ]
 }
 
+fn budget_reason_parts() -> Vec<String> {
+    BudgetReason::all()
+        .iter()
+        .map(|reason| format!("budget.reason={}", reason.as_str()))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,6 +235,20 @@ mod tests {
                     "budget.adaptation.max_expansions_per_model=64",
                     "budget.adaptation.max_targets_per_source=16",
                     "budget.adaptation.max_model_derived_edges=2048",
+                    "budget.reason=solver.max_steps",
+                    "budget.reason=solver.max_outer_iterations",
+                    "budget.reason=go.address_taken_threshold",
+                    "budget.reason=go.max_candidates_per_callsite",
+                    "budget.reason=go.max_rta_rounds",
+                    "budget.reason=go.max_worklist_steps",
+                    "budget.reason=js.max_tokens_per_var",
+                    "budget.reason=js.max_candidates_per_callsite",
+                    "budget.reason=js.max_token_worklist_steps",
+                    "budget.reason=object.max_properties_per_object",
+                    "budget.reason=object.max_prototype_depth",
+                    "budget.reason=object.max_receiver_candidates_per_callsite",
+                    "budget.reason=object.max_object_worklist_steps",
+                    "budget.reason=adaptation.max_model_derived_edges",
                 ],
             )
         );
@@ -277,6 +300,20 @@ mod tests {
                 "budget.adaptation.max_expansions_per_model=64",
                 "budget.adaptation.max_targets_per_source=16",
                 "budget.adaptation.max_model_derived_edges=2048",
+                "budget.reason=solver.max_steps",
+                "budget.reason=solver.max_outer_iterations",
+                "budget.reason=go.address_taken_threshold",
+                "budget.reason=go.max_candidates_per_callsite",
+                "budget.reason=go.max_rta_rounds",
+                "budget.reason=go.max_worklist_steps",
+                "budget.reason=js.max_tokens_per_var",
+                "budget.reason=js.max_candidates_per_callsite",
+                "budget.reason=js.max_token_worklist_steps",
+                "budget.reason=object.max_properties_per_object",
+                "budget.reason=object.max_prototype_depth",
+                "budget.reason=object.max_receiver_candidates_per_callsite",
+                "budget.reason=object.max_object_worklist_steps",
+                "budget.reason=adaptation.max_model_derived_edges",
             ],
         );
         assert_ne!(solver_provider_parameter_digest(&budget), pre_bump);

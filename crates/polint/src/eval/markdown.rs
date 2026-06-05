@@ -88,6 +88,23 @@ pub(crate) fn render_markdown(run: &EvaluationRun) -> String {
     }
     out.push('\n');
 
+    out.push_str("## RSS Thresholds\n\n");
+    out.push_str(
+        "| Cold Threshold MiB | Cold Observed MiB | Warm Threshold MiB | Warm Observed MiB |\n",
+    );
+    out.push_str("|---:|---:|---:|---:|\n");
+    if let Some(performance) = &run.performance {
+        out.push_str(&format!(
+            "| {} | {} | {} | {} |\n\n",
+            optional_u64_cell(performance.rss.cold_rss_threshold_mb),
+            optional_u64_cell(performance.rss.cold_rss_observed_mb),
+            optional_u64_cell(performance.rss.warm_rss_threshold_mb),
+            optional_u64_cell(performance.rss.warm_rss_observed_mb),
+        ));
+    } else {
+        out.push_str("| - | - | - | - |\n\n");
+    }
+
     out.push_str("## Adaptation\n\n");
     if let Some(adaptation) = &run.adaptation {
         out.push_str(&format!(
@@ -194,6 +211,10 @@ fn metric_cell(value: Option<f64>) -> String {
     value.map_or_else(|| "-".to_string(), |value| format!("{value:.4}"))
 }
 
+fn optional_u64_cell(value: Option<u64>) -> String {
+    value.map_or_else(|| "-".to_string(), |value| value.to_string())
+}
+
 fn escape_cell(value: &str) -> String {
     value.replace('|', "\\|")
 }
@@ -203,7 +224,9 @@ mod tests {
     use super::*;
     use crate::eval::competitors::{BenchmarkComparisonRow, ProductIdentity, ResultSource};
     use crate::eval::model::EvaluationMode;
-    use crate::eval::performance::{CacheStatsSummary, EvalPerformanceReport, ProviderStatsRow};
+    use crate::eval::performance::{
+        CacheStatsSummary, EvalPerformanceReport, ProviderStatsRow, RssStatsSummary,
+    };
     use crate::eval::report::{MetricSections, MetricSummary};
     use crate::eval::suite::{
         CaseSelector, ExpectedSource, ExpectedSourceFormat, SuiteCheckout, SuiteCheckoutStrategy,
@@ -230,6 +253,8 @@ mod tests {
         assert!(markdown.contains("imported: published table"));
         assert!(markdown.contains("adapter-only: adapter dry run"));
         assert!(markdown.contains("known limitation"));
+        assert!(markdown.contains("Cold Threshold MiB"));
+        assert!(markdown.contains("| 512 | 256 | 384 | 128 |"));
     }
 
     #[test]
@@ -281,6 +306,12 @@ mod tests {
                 cache: CacheStatsSummary::default(),
                 demand_queries: Vec::new(),
                 runtime: Default::default(),
+                rss: RssStatsSummary {
+                    cold_rss_threshold_mb: Some(512),
+                    cold_rss_observed_mb: Some(256),
+                    warm_rss_threshold_mb: Some(384),
+                    warm_rss_observed_mb: Some(128),
+                },
             }),
             comparison_rows: vec![
                 comparison("Semgrep", EvaluationMode::ImportedScanner),

@@ -1158,6 +1158,7 @@ mod tests {
                 observed_runtime_ms: Some(runtime),
                 peak_rss_bytes: Some(runtime * 1024),
             },
+            rss: Default::default(),
         }
     }
 

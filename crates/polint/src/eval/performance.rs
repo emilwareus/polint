@@ -9,6 +9,8 @@ pub(crate) struct EvalPerformanceReport {
     pub(crate) cache: CacheStatsSummary,
     pub(crate) demand_queries: Vec<DemandQueryStatsRow>,
     pub(crate) runtime: RuntimeStatsSummary,
+    #[serde(default)]
+    pub(crate) rss: RssStatsSummary,
 }
 
 impl EvalPerformanceReport {
@@ -41,6 +43,7 @@ impl EvalPerformanceReport {
             cache: CacheStatsSummary::from_cache_stats(&report.cache_stats),
             demand_queries,
             runtime: RuntimeStatsSummary::default(),
+            rss: RssStatsSummary::default(),
         }
     }
 
@@ -145,9 +148,20 @@ pub(crate) struct RuntimeStatsSummary {
     pub(crate) peak_rss_bytes: Option<u64>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) struct RssStatsSummary {
+    pub(crate) cold_rss_threshold_mb: Option<u64>,
+    pub(crate) cold_rss_observed_mb: Option<u64>,
+    pub(crate) warm_rss_threshold_mb: Option<u64>,
+    pub(crate) warm_rss_observed_mb: Option<u64>,
+}
+
 pub(crate) fn strip_volatile_runtime(report: &mut EvalPerformanceReport) {
     report.runtime.observed_runtime_ms = None;
     report.runtime.peak_rss_bytes = None;
+    report.rss.cold_rss_observed_mb = None;
+    report.rss.warm_rss_observed_mb = None;
     for provider in &mut report.providers {
         provider.observed_runtime_ms = None;
     }
@@ -207,9 +221,17 @@ mod tests {
         let mut first = EvalPerformanceReport::from_kernel_report(&report);
         let mut second = first.clone();
         first.runtime.observed_runtime_ms = Some(10);
+        first.rss.cold_rss_threshold_mb = Some(512);
+        first.rss.cold_rss_observed_mb = Some(300);
+        first.rss.warm_rss_threshold_mb = Some(384);
+        first.rss.warm_rss_observed_mb = Some(200);
         first.providers[0].observed_runtime_ms = Some(20);
         first.demand_queries[0].compute_duration_micros = Some(30);
         second.runtime.observed_runtime_ms = Some(999);
+        second.rss.cold_rss_threshold_mb = Some(512);
+        second.rss.cold_rss_observed_mb = Some(999);
+        second.rss.warm_rss_threshold_mb = Some(384);
+        second.rss.warm_rss_observed_mb = Some(888);
         second.providers[0].observed_runtime_ms = Some(888);
         second.demand_queries[0].compute_duration_micros = Some(777);
 
@@ -217,6 +239,10 @@ mod tests {
         strip_volatile_runtime(&mut second);
 
         assert_eq!(first, second);
+        assert_eq!(first.rss.cold_rss_threshold_mb, Some(512));
+        assert_eq!(first.rss.cold_rss_observed_mb, None);
+        assert_eq!(first.rss.warm_rss_threshold_mb, Some(384));
+        assert_eq!(first.rss.warm_rss_observed_mb, None);
     }
 
     fn kernel_report_with_stats(stats: CacheStats) -> KernelRunReport {
