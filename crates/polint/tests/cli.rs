@@ -257,6 +257,71 @@ exclude = []
 }
 
 #[test]
+fn inspect_unknowns_json_reports_consolidated_and_cap_filtered_rows() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+"#,
+    );
+    write_file(
+        &temp.path().join("src/app.ts"),
+        "import missing from './missing';\nexport const answer = missing;\n",
+    );
+
+    let consolidated = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["inspect", "unknowns", "--format", "json"])
+            .assert()
+            .success(),
+    );
+    assert_eq!(consolidated["version"], 1);
+    assert_eq!(consolidated["capability"], "all");
+    assert_eq!(consolidated["rows"][0]["category"], "missing_fact");
+    assert_eq!(consolidated["rows"][0]["provider"], "polint.module_graph");
+    assert_eq!(consolidated["rows"][0]["family"], "ResolvedImport");
+    assert_eq!(consolidated["rows"][0]["reason"], "not_found");
+    assert!(
+        consolidated["rows"][0]["source_stable_key"]
+            .as_str()
+            .is_some_and(|key| !key.is_empty())
+    );
+
+    let filtered = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args([
+                "inspect",
+                "unknowns",
+                "--cap",
+                "resolved_imports",
+                "--format",
+                "json",
+            ])
+            .assert()
+            .success(),
+    );
+    assert_eq!(filtered["capability"], "resolved_imports");
+    assert_eq!(filtered["rows"][0]["category"], "missing_fact");
+
+    let unsupported = output_string(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args([
+                "inspect", "unknowns", "--cap", "dataflow", "--format", "json",
+            ])
+            .assert()
+            .code(2),
+    );
+    assert!(unsupported.contains("\"category\": \"unsupported_semantic\""));
+    assert!(unsupported.contains("docs/facts/data-flow.md"));
+}
+
+#[test]
 fn explain_json_reports_rule_capability_plan() {
     let temp = tempfile::tempdir().unwrap();
     polint_cmd()

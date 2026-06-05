@@ -16,6 +16,32 @@
       }
     },
     "capability": { "type": "string" },
-    "rows": { "type": "array" }
+    "rows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["file", "status"],
+        "properties": {
+          "file": { "type": "string" },
+          "span": {
+            "type": "object",
+            "required": ["line", "column"],
+            "properties": {
+              "line": { "type": "integer", "minimum": 1 },
+              "column": { "type": "integer", "minimum": 1 }
+            }
+          },
+          "category": { "type": "string" },
+          "provider": { "type": "string" },
+          "family": { "type": "string" },
+          "status": { "type": "string" },
+          "reason": { "type": "string" },
+          "precision": { "type": "string" },
+          "docs_path": { "type": "string" },
+          "suggested_artifact": { "type": "string" },
+          "source_stable_key": { "type": "string" }
+        }
+      }
+    }
   }
 }

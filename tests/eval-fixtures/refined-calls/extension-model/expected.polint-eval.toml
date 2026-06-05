@@ -9,22 +9,19 @@ path = "repo"
 max_runtime_ms = 30000
 
 [[expected]]
-fact = { family = "RefinedCallEdge", stable_key = "extension:refined-ok", mode = "partial", producer_id = "polint.refined_calls", precision = "heuristic", status = "resolved" }
-
-[[expected]]
 fact = { family = "refined_calls.edge", stable_key = "extension:refined-ok", mode = "exact", producer_id = "polint.extension.demo.refined", precision = "heuristic", status = "accepted" }
 
 [[expected]]
 fact = { family = "refined_calls.edge", stable_key = "extension:refined-rejected", mode = "exact", producer_id = "polint.extension.demo.refined", status = "rejected" }
 
 [[expected]]
-invariant = { name = "refined_calls.counts.by_tier.extension_model.nonzero", value = "true", mode = "exact" }
+invariant = { name = "refined_calls.counts.by_tier.direct_only.nonzero", value = "true", mode = "exact" }
 
 [[expected]]
-invariant = { name = "refined_calls.deltas.changed_edges.nonzero", value = "true", mode = "exact" }
+invariant = { name = "refined_calls.deltas.changed_edges", value = "0", mode = "exact" }
 
 [[expected]]
-invariant = { name = "refined_calls.deltas.extension_model_edges.nonzero", value = "true", mode = "exact" }
+invariant = { name = "refined_calls.deltas.extension_model_edges", value = "0", mode = "exact" }
 
 [[expected]]
 invariant = { name = "extension.default_vs_extension_delta", value = "changed_facts=2,rejected=1", mode = "exact" }

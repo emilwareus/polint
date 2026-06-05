@@ -1781,6 +1781,24 @@ fn data_flow_taxonomy_facts(data_flow: &serde_json::Map<String, Value>) -> Vec<O
     }
     if has_data_flow_edge(
         data_flow,
+        Some("DirectCall"),
+        Some("CallArgumentToParameter"),
+        Some("Present"),
+    ) && has_data_flow_edge(
+        data_flow,
+        Some("DirectCall"),
+        Some("CallReturnToUse"),
+        Some("Present"),
+    ) {
+        facts.push(data_flow_taxonomy_fact(
+            "DataFlowEdge",
+            "data-flow:direct-call:resolved-projection",
+            "heuristic",
+            ObservedStatus::Present,
+        ));
+    }
+    if has_data_flow_edge(
+        data_flow,
         Some("SummaryProjection"),
         Some("SummaryTito"),
         None,

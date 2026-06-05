@@ -295,15 +295,17 @@ polint inspect rule --format json
 polint test --format json
 polint facts list --format json
 polint facts sample --cap resolved_imports --limit 20 --format json
+polint inspect unknowns --format json
 polint unknowns --cap references --format json
 polint explain --rule local/no-raw-colors --format json
 ```
 
 `facts list` reports stable and reserved fact-view dispositions. `facts sample`
-requires a bounded limit and emits only public fact fields. `unknowns` reports
-public setup/resolution gaps for supported facts and unsupported rows for
-reserved capabilities such as dataflow. `explain` reports macro-derived fact
-views and capability support; it does not expose provider execution graphs,
+requires a bounded limit and emits only public fact fields. `inspect unknowns`
+reports the consolidated setup, unsupported, budget, model, and resolution
+queue. `unknowns --cap ...` remains supported for cap-filtered compatibility and
+unsupported rows for reserved capabilities such as dataflow. `explain` reports
+macro-derived fact views and capability support; it does not expose provider execution graphs,
 layer-cache internals, or eval/debug schemas.
 
 ## Writing A Rule

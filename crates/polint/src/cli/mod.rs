@@ -283,6 +283,8 @@ struct ExplainArgs {
 enum InspectCommand {
     /// Show registered repo-local rule manifests.
     Rule(InspectRuleArgs),
+    /// Show consolidated setup, unsupported, budget, model, and resolution unknowns.
+    Unknowns(InspectUnknownsArgs),
 }
 
 #[derive(Debug, Args, Clone)]
@@ -293,6 +295,22 @@ struct InspectRuleArgs {
     /// Only include rules whose id matches this pattern.
     #[arg(long, value_name = "RULE_ID")]
     rule: Option<String>,
+}
+
+#[derive(Debug, Args, Clone)]
+struct InspectUnknownsArgs {
+    /// Optional capability filter, such as resolved_imports, symbols, or references.
+    #[arg(long = "cap", value_name = "CAPABILITY")]
+    capability: Option<String>,
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = AgentJsonFormatArg::Json)]
+    format: AgentJsonFormatArg,
+    /// Files or directories to analyze. Defaults to workspace config.
+    #[arg(value_name = "PATH")]
+    paths: Vec<PathBuf>,
+    /// Disable analysis/fact cache reads and writes.
+    #[arg(long)]
+    no_cache: bool,
 }
 
 #[derive(Debug, Args, Clone)]
@@ -1042,6 +1060,7 @@ fn cache_command(root: PathBuf, args: &CacheArgs) -> Result<u8> {
 fn inspect(root: PathBuf, args: &InspectArgs) -> Result<u8> {
     match &args.command {
         InspectCommand::Rule(rule_args) => inspect_rule(&root, rule_args),
+        InspectCommand::Unknowns(unknowns_args) => inspect_unknowns(root, unknowns_args),
     }
 }
 
@@ -1224,7 +1243,7 @@ fn unknowns(root: PathBuf, args: &UnknownsArgs) -> Result<u8> {
             schema: POLINT_UNKNOWNS_JSON_SCHEMA_V1_URL.to_string(),
             tool: polint_tool_info(),
             capability: args.capability.clone(),
-            rows: vec![UnknownsRow::from_taxonomy(row)],
+            rows: vec![UnknownsRow::from_taxonomy_compat(row)],
         };
         println!("{}", serde_json::to_string_pretty(&report)?);
         return Ok(2);
@@ -1241,13 +1260,64 @@ fn unknowns(root: PathBuf, args: &UnknownsArgs) -> Result<u8> {
         &args.capability,
     )
     .into_iter()
-    .map(UnknownsRow::from_taxonomy)
+    .map(UnknownsRow::from_taxonomy_compat)
     .collect();
     let report = UnknownsReport {
         version: 1,
         schema: POLINT_UNKNOWNS_JSON_SCHEMA_V1_URL.to_string(),
         tool: polint_tool_info(),
         capability: args.capability.clone(),
+        rows,
+    };
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(0)
+}
+
+fn inspect_unknowns(root: PathBuf, args: &InspectUnknownsArgs) -> Result<u8> {
+    match args.format {
+        AgentJsonFormatArg::Json => {}
+    }
+    if let Some(capability) = &args.capability {
+        let support = public_fact_view(capability);
+        if support
+            .as_ref()
+            .is_none_or(|view| view.stability != "stable" || !view.unknowns)
+        {
+            let row = crate::analysis::unknown_taxonomy::collect::unsupported_capability_row(
+                capability,
+                support.map(|view| view.docs_path),
+            );
+            let report = UnknownsReport {
+                version: 1,
+                schema: POLINT_UNKNOWNS_JSON_SCHEMA_V1_URL.to_string(),
+                tool: polint_tool_info(),
+                capability: capability.clone(),
+                rows: vec![UnknownsRow::from_taxonomy_full(row)],
+            };
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            return Ok(2);
+        }
+    }
+
+    let requested_caps = args
+        .capability
+        .as_deref()
+        .map(|capability| vec![capability])
+        .unwrap_or_else(|| vec!["resolved_imports", "symbols", "references"]);
+    let db = analyze_for_agent_json(&root, &args.paths, args.no_cache, &requested_caps)?;
+    let rows = if let Some(capability) = &args.capability {
+        crate::analysis::unknown_taxonomy::collect::public_capability_unknowns(&db, capability)
+    } else {
+        crate::analysis::unknown_taxonomy::collect::all_unknowns(&db)
+    }
+    .into_iter()
+    .map(UnknownsRow::from_taxonomy_full)
+    .collect();
+    let report = UnknownsReport {
+        version: 1,
+        schema: POLINT_UNKNOWNS_JSON_SCHEMA_V1_URL.to_string(),
+        tool: polint_tool_info(),
+        capability: args.capability.clone().unwrap_or_else(|| "all".to_string()),
         rows,
     };
     println!("{}", serde_json::to_string_pretty(&report)?);
@@ -1547,6 +1617,12 @@ struct UnknownsRow {
     file: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     span: Option<PublicSpan>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    category: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    family: Option<String>,
     status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<String>,
@@ -1556,11 +1632,25 @@ struct UnknownsRow {
     docs_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     suggested_artifact: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_stable_key: Option<String>,
 }
 
 impl UnknownsRow {
-    fn from_taxonomy(row: crate::analysis::unknown_taxonomy::facts::UnknownRow) -> Self {
+    fn from_taxonomy_compat(row: crate::analysis::unknown_taxonomy::facts::UnknownRow) -> Self {
+        let mut rendered = Self::from_taxonomy_full(row);
+        rendered.category = None;
+        rendered.provider = None;
+        rendered.family = None;
+        rendered.source_stable_key = None;
+        rendered
+    }
+
+    fn from_taxonomy_full(row: crate::analysis::unknown_taxonomy::facts::UnknownRow) -> Self {
         Self {
+            category: Some(row.category.as_str().to_string()),
+            provider: Some(row.provider),
+            family: row.family,
             file: row.file,
             span: row.span.map(|span| PublicSpan {
                 line: span.line,
@@ -1571,6 +1661,7 @@ impl UnknownsRow {
             precision: row.precision,
             docs_path: row.docs_path,
             suggested_artifact: row.suggested_artifact,
+            source_stable_key: row.source_stable_key,
         }
     }
 }

@@ -93,14 +93,16 @@ Agents can also use bounded public inspection JSON:
 ```bash
 polint facts list --format json
 polint facts sample --cap resolved_imports --limit 20 --format json
+polint inspect unknowns --format json
 polint unknowns --cap references --format json
 polint explain --rule custom/no-raw-colors --format json
 ```
 
 `polint facts` lists stable and reserved public fact-view dispositions and
-samples only bounded public fields. `polint unknowns` reports setup and
-resolution gaps for supported public facts and returns an unsupported row for
-reserved capabilities. `polint explain` reports macro-derived fact views and
+samples only bounded public fields. `polint inspect unknowns` reports the
+consolidated setup, unsupported, budget, model, and resolution queue.
+`polint unknowns --cap ...` remains supported for cap-filtered compatibility and
+returns an unsupported row for reserved capabilities. `polint explain` reports macro-derived fact views and
 capability support without exposing provider execution graphs, layer-cache
 internals, or eval/debug schemas.
 

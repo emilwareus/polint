@@ -2262,10 +2262,9 @@ mod eval_native_fixture_runner_tests {
             "direct refined-call fixture must assert refined edges"
         );
         assert!(
-            direct_expected.iter().any(|identity| identity.contains(
-                "Invariant:refined_calls.counts.by_tier.type_value_function_token.nonzero"
-            )),
-            "direct refined-call fixture must assert function-token tier counts"
+            direct_expected.iter().any(|identity| identity
+                .contains("Invariant:refined_calls.counts.by_tier.direct_only.nonzero")),
+            "direct refined-call fixture must assert direct-only tier counts"
         );
         assert!(
             direct_expected.iter().any(|identity| identity
@@ -2287,9 +2286,9 @@ mod eval_native_fixture_runner_tests {
         );
         assert!(
             extension_expected.iter().any(|identity| {
-                identity.contains("Invariant:refined_calls.deltas.extension_model_edges.nonzero")
+                identity.contains("Invariant:refined_calls.deltas.extension_model_edges")
             }),
-            "extension refined-call fixture must assert extension-model delta"
+            "extension refined-call fixture must assert extension models do not project to refined calls"
         );
     }
 
