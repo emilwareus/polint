@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.3
-milestone_name: Graph Engine Precision
-status: "Phase 51 shipped -- PR #64; review follow-ups fixed"
-last_updated: "2026-06-05T05:40:00.000Z"
-last_activity: "2026-06-05 -- Fixed adaptation delta duplicate model counts and held-out separation"
+milestone_name: milestone
+status: completed
+last_updated: "2026-06-05T11:45:00.000Z"
+last_activity: 2026-06-05 -- Phase 52 PR review findings fixed with two clean review rounds
 progress:
   total_phases: 13
-  completed_phases: 10
-  total_plans: 38
-  completed_plans: 38
-  percent: 77
+  completed_phases: 11
+  total_plans: 42
+  completed_plans: 42
+  percent: 85
 ---
 
 # State: polint
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 52 — Refined-Calls Rework & Unknown Taxonomy Consolidation (next)
+**Current focus:** Phase 52 — Refined-Calls Rework & Unknown Taxonomy Consolidation
 
 ## Current Status
 
@@ -40,10 +40,10 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 ## Current Position
 
-Phase: 52 (Refined-Calls Rework & Unknown Taxonomy Consolidation)
-Plan: 0 of 0
-Status: Phase 51 shipped -- PR #64; review follow-ups fixed
-Last activity: 2026-06-05 -- Fixed adaptation delta duplicate model counts and held-out separation
+Phase: 52 — COMPLETE
+Plan: 4 of 4
+Status: Phase 52 complete; PR review findings fixed
+Last activity: 2026-06-05 -- Phase 52 PR review findings fixed with two clean review rounds
 
 ### Open repo-admin action (T-42-04-10)
 
@@ -558,6 +558,8 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260605-h96 | Review and fix Phase 52 PR findings until two consecutive clean review rounds | 2026-06-05 | implemented | [260605-h96-review-and-fix-phase-52-pr-findings-unti](./quick/260605-h96-review-and-fix-phase-52-pr-findings-unti/) |
+| 260605-gwr | Fix PR review findings: include provider diagnostics in inspect unknowns taxonomy and enforce extension-model invariant value | 2026-06-05 | implemented | [260605-gwr-fix-pr-review-findings-include-provider-](./quick/260605-gwr-fix-pr-review-findings-include-provider-/) |
 | 260605-ajl | Fix adaptation delta duplicate model counts and held-out separation | 2026-06-05 | implemented | [260605-ajl-fix-adaptation-delta-duplicate-model-cou](./quick/260605-ajl-fix-adaptation-delta-duplicate-model-cou/) |
 | 260605-9zj | Fix adaptation delta model fact and held-out reporting review findings | 2026-06-05 | implemented | [260605-9zj-fix-adaptation-delta-model-fact-and-held](./quick/260605-9zj-fix-adaptation-delta-model-fact-and-held/) |
 | 260604-l8k | Finish Phase 50 closeout by adding verification artifact and reconciling roadmap status | 2026-06-04 | artifact-only | [260604-l8k-finish-phase-50-closeout-by-adding-verif](./quick/260604-l8k-finish-phase-50-closeout-by-adding-verif/) |

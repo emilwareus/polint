@@ -34,5 +34,6 @@ pub(crate) mod stable_key;
 pub(crate) mod store;
 pub(crate) mod summaries;
 pub(crate) mod types;
+pub(crate) mod unknown_taxonomy;
 pub(crate) mod validate;
 pub(crate) mod values;

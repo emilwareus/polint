@@ -283,6 +283,8 @@ struct ExplainArgs {
 enum InspectCommand {
     /// Show registered repo-local rule manifests.
     Rule(InspectRuleArgs),
+    /// Show consolidated setup, unsupported, budget, model, and resolution unknowns.
+    Unknowns(InspectUnknownsArgs),
 }
 
 #[derive(Debug, Args, Clone)]
@@ -293,6 +295,22 @@ struct InspectRuleArgs {
     /// Only include rules whose id matches this pattern.
     #[arg(long, value_name = "RULE_ID")]
     rule: Option<String>,
+}
+
+#[derive(Debug, Args, Clone)]
+struct InspectUnknownsArgs {
+    /// Optional capability filter, such as resolved_imports, symbols, or references.
+    #[arg(long = "cap", value_name = "CAPABILITY")]
+    capability: Option<String>,
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = AgentJsonFormatArg::Json)]
+    format: AgentJsonFormatArg,
+    /// Files or directories to analyze. Defaults to workspace config.
+    #[arg(value_name = "PATH")]
+    paths: Vec<PathBuf>,
+    /// Disable analysis/fact cache reads and writes.
+    #[arg(long)]
+    no_cache: bool,
 }
 
 #[derive(Debug, Args, Clone)]
@@ -1042,6 +1060,7 @@ fn cache_command(root: PathBuf, args: &CacheArgs) -> Result<u8> {
 fn inspect(root: PathBuf, args: &InspectArgs) -> Result<u8> {
     match &args.command {
         InspectCommand::Rule(rule_args) => inspect_rule(&root, rule_args),
+        InspectCommand::Unknowns(unknowns_args) => inspect_unknowns(root, unknowns_args),
     }
 }
 
@@ -1068,12 +1087,13 @@ fn facts_sample(root: &Path, args: &FactsSampleArgs) -> Result<u8> {
             support.docs_path
         );
     }
-    let db = analyze_for_agent_json(
+    let analysis = analyze_for_agent_json(
         root,
         &args.paths,
         args.no_cache,
         &[args.capability.as_str()],
     )?;
+    let db = &analysis.db;
     let mut rows = match args.capability.as_str() {
         "resolved_imports" => db
             .resolved_imports()
@@ -1215,113 +1235,96 @@ fn unknowns(root: PathBuf, args: &UnknownsArgs) -> Result<u8> {
         .as_ref()
         .is_none_or(|view| view.stability != "stable" || !view.unknowns)
     {
+        let row = crate::analysis::unknown_taxonomy::collect::unsupported_capability_row(
+            &args.capability,
+            support.map(|view| view.docs_path),
+        );
         let report = UnknownsReport {
             version: 1,
             schema: POLINT_UNKNOWNS_JSON_SCHEMA_V1_URL.to_string(),
             tool: polint_tool_info(),
             capability: args.capability.clone(),
-            rows: vec![UnknownsRow {
-                file: "<workspace>".to_string(),
-                span: None,
-                status: "unsupported".to_string(),
-                reason: Some("Capability does not support public unknown inspection.".to_string()),
-                precision: None,
-                docs_path: support
-                    .map(|view| view.docs_path.to_string())
-                    .or_else(|| Some("docs/facts/capability-plans.md".to_string())),
-                suggested_artifact: Some("provider".to_string()),
-            }],
+            rows: vec![UnknownsRow::from_taxonomy_compat(row)],
         };
         println!("{}", serde_json::to_string_pretty(&report)?);
         return Ok(2);
     }
 
-    let db = analyze_for_agent_json(
+    let analysis = analyze_for_agent_json(
         &root,
         &args.paths,
         args.no_cache,
         &[args.capability.as_str()],
     )?;
-    let mut rows = match args.capability.as_str() {
-        "resolved_imports" => db
-            .resolved_imports()
-            .iter()
-            .filter(|fact| fact.status != ResolutionStatus::Resolved)
-            .map(|fact| UnknownsRow {
-                file: db.path_for(fact.from_file),
-                span: None,
-                status: status_label(fact.status).to_string(),
-                reason: fact
-                    .reason
-                    .map(|reason| unresolved_reason_label(reason).to_string()),
-                precision: Some(resolution_precision_label(fact.precision).to_string()),
-                docs_path: Some("docs/facts/resolved-imports.md".to_string()),
-                suggested_artifact: Some(artifact_for_resolution_status(fact.status).to_string()),
-            })
-            .collect(),
-        "symbols" => db
-            .symbols()
-            .iter()
-            .filter(|symbol| {
-                matches!(
-                    symbol.precision,
-                    SymbolPrecision::Unresolved
-                        | SymbolPrecision::Ambiguous
-                        | SymbolPrecision::SetupMissing
-                        | SymbolPrecision::Unsupported
-                )
-            })
-            .map(|symbol| UnknownsRow {
-                file: symbol
-                    .file
-                    .map(|file| db.path_for(file))
-                    .unwrap_or_else(|| "<workspace>".to_string()),
-                span: symbol.primary_span.as_ref().map(span_start),
-                status: symbol_precision_label(symbol.precision).to_string(),
-                reason: Some("symbol precision is not exact".to_string()),
-                precision: Some(symbol_precision_label(symbol.precision).to_string()),
-                docs_path: Some("docs/facts/symbols-and-references.md".to_string()),
-                suggested_artifact: Some("model".to_string()),
-            })
-            .collect(),
-        "references" => db
-            .references()
-            .iter()
-            .filter(|reference| reference.status != SymbolResolutionStatus::Resolved)
-            .map(|reference| UnknownsRow {
-                file: reference
-                    .file
-                    .map(|file| db.path_for(file))
-                    .unwrap_or_else(|| "<workspace>".to_string()),
-                span: reference.primary_span.as_ref().map(span_start),
-                status: symbol_status_label(reference.status).to_string(),
-                reason: Some("reference did not resolve to exactly one public symbol".to_string()),
-                precision: Some(symbol_precision_label(reference.precision).to_string()),
-                docs_path: Some("docs/facts/symbols-and-references.md".to_string()),
-                suggested_artifact: Some("model".to_string()),
-            })
-            .collect(),
-        _ => Vec::new(),
-    };
-    rows.sort_by(|left, right| {
-        (
-            left.file.as_str(),
-            left.span.as_ref().map(|span| (span.line, span.column)),
-            left.status.as_str(),
-            left.reason.as_deref().unwrap_or_default(),
-        )
-            .cmp(&(
-                right.file.as_str(),
-                right.span.as_ref().map(|span| (span.line, span.column)),
-                right.status.as_str(),
-                right.reason.as_deref().unwrap_or_default(),
-            ))
-    });
+    let rows = crate::analysis::unknown_taxonomy::collect::public_capability_unknowns(
+        &analysis.db,
+        &args.capability,
+    )
+    .into_iter()
+    .map(UnknownsRow::from_taxonomy_compat)
+    .collect();
     let report = UnknownsReport {
         version: 1,
         schema: POLINT_UNKNOWNS_JSON_SCHEMA_V1_URL.to_string(),
         tool: polint_tool_info(),
         capability: args.capability.clone(),
+        rows,
+    };
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(0)
+}
+
+fn inspect_unknowns(root: PathBuf, args: &InspectUnknownsArgs) -> Result<u8> {
+    match args.format {
+        AgentJsonFormatArg::Json => {}
+    }
+    if let Some(capability) = &args.capability {
+        let support = public_fact_view(capability);
+        if support
+            .as_ref()
+            .is_none_or(|view| view.stability != "stable" || !view.unknowns)
+        {
+            let row = crate::analysis::unknown_taxonomy::collect::unsupported_capability_row(
+                capability,
+                support.map(|view| view.docs_path),
+            );
+            let report = UnknownsReport {
+                version: 1,
+                schema: POLINT_UNKNOWNS_JSON_SCHEMA_V1_URL.to_string(),
+                tool: polint_tool_info(),
+                capability: capability.clone(),
+                rows: vec![UnknownsRow::from_taxonomy_full(row)],
+            };
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            return Ok(2);
+        }
+    }
+
+    let requested_caps = args
+        .capability
+        .as_deref()
+        .map(|capability| vec![capability])
+        .unwrap_or_else(|| vec!["resolved_imports", "symbols", "references"]);
+    let analysis = analyze_for_agent_json(&root, &args.paths, args.no_cache, &requested_caps)?;
+    let rows = if let Some(capability) = &args.capability {
+        crate::analysis::unknown_taxonomy::collect::public_capability_unknowns(
+            &analysis.db,
+            capability,
+        )
+    } else {
+        crate::analysis::unknown_taxonomy::collect::all_unknowns_with_diagnostics(
+            &analysis.db,
+            &analysis.diagnostics,
+        )
+    }
+    .into_iter()
+    .map(UnknownsRow::from_taxonomy_full)
+    .collect();
+    let report = UnknownsReport {
+        version: 1,
+        schema: POLINT_UNKNOWNS_JSON_SCHEMA_V1_URL.to_string(),
+        tool: polint_tool_info(),
+        capability: args.capability.clone().unwrap_or_else(|| "all".to_string()),
         rows,
     };
     println!("{}", serde_json::to_string_pretty(&report)?);
@@ -1621,6 +1624,12 @@ struct UnknownsRow {
     file: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     span: Option<PublicSpan>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    category: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    family: Option<String>,
     status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<String>,
@@ -1630,6 +1639,38 @@ struct UnknownsRow {
     docs_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     suggested_artifact: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_stable_key: Option<String>,
+}
+
+impl UnknownsRow {
+    fn from_taxonomy_compat(row: crate::analysis::unknown_taxonomy::facts::UnknownRow) -> Self {
+        let mut rendered = Self::from_taxonomy_full(row);
+        rendered.category = None;
+        rendered.provider = None;
+        rendered.family = None;
+        rendered.source_stable_key = None;
+        rendered
+    }
+
+    fn from_taxonomy_full(row: crate::analysis::unknown_taxonomy::facts::UnknownRow) -> Self {
+        Self {
+            category: Some(row.category.as_str().to_string()),
+            provider: None,
+            family: None,
+            file: row.file,
+            span: row.span.map(|span| PublicSpan {
+                line: span.line,
+                column: span.column,
+            }),
+            status: row.status,
+            reason: row.reason,
+            precision: row.precision,
+            docs_path: row.docs_path,
+            suggested_artifact: row.suggested_artifact,
+            source_stable_key: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1823,12 +1864,17 @@ fn polint_tool_info() -> crate::diagnostics::PolintToolInfo {
     }
 }
 
+struct AgentJsonAnalysis {
+    db: AnalysisDb,
+    diagnostics: Vec<Diagnostic>,
+}
+
 fn analyze_for_agent_json(
     root: &Path,
     paths: &[PathBuf],
     no_cache: bool,
     capabilities: &[&str],
-) -> Result<AnalysisDb> {
+) -> Result<AgentJsonAnalysis> {
     let args = CheckArgs {
         paths: paths.to_vec(),
         profile: None,
@@ -1860,7 +1906,10 @@ fn analyze_for_agent_json(
         plan: &plan,
         parallel: true,
     })?;
-    Ok(output.db)
+    Ok(AgentJsonAnalysis {
+        db: output.db,
+        diagnostics: output.diagnostics,
+    })
 }
 
 fn span_start(span: &crate::core::Span) -> PublicSpan {
@@ -1892,18 +1941,6 @@ fn resolution_precision_label(precision: crate::core::ResolutionPrecision) -> &'
     }
 }
 
-fn unresolved_reason_label(reason: crate::core::UnresolvedReason) -> &'static str {
-    match reason {
-        crate::core::UnresolvedReason::NotFound => "not_found",
-        crate::core::UnresolvedReason::SetupMissing => "setup_missing",
-        crate::core::UnresolvedReason::DynamicExpression => "dynamic_expression",
-        crate::core::UnresolvedReason::UnsupportedLanguage => "unsupported_language",
-        crate::core::UnresolvedReason::UnsupportedImport => "unsupported_import",
-        crate::core::UnresolvedReason::ResolverError => "resolver_error",
-        crate::core::UnresolvedReason::OutsideWorkspace => "outside_workspace",
-    }
-}
-
 fn symbol_status_label(status: SymbolResolutionStatus) -> &'static str {
     match status {
         SymbolResolutionStatus::Resolved => "resolved",
@@ -1924,15 +1961,6 @@ fn symbol_precision_label(precision: SymbolPrecision) -> &'static str {
         SymbolPrecision::Ambiguous => "ambiguous",
         SymbolPrecision::SetupMissing => "setup_missing",
         SymbolPrecision::Unsupported => "unsupported",
-    }
-}
-
-fn artifact_for_resolution_status(status: ResolutionStatus) -> &'static str {
-    match status {
-        ResolutionStatus::SetupMissing => "fixture",
-        ResolutionStatus::Dynamic | ResolutionStatus::Unsupported => "provider",
-        ResolutionStatus::Unresolved => "model",
-        ResolutionStatus::External | ResolutionStatus::Resolved => "rule",
     }
 }
 

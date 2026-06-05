@@ -625,8 +625,11 @@ impl AnalysisKernel {
             "polint.solver",
             &db,
             polint_solver_cache_stats,
-            solver_output_digest,
+            solver_output_digest.clone(),
         ));
+        let solver_dependency_output_digest = solver_output_digest.unwrap_or_else(|| {
+            incremental::Digest::absent(incremental::DigestKind::ProviderOutput, "polint.solver")
+        });
 
         let refined_calls =
             crate::analysis::refined_calls::provider::derive_refined_calls_with_cache_stats(
@@ -638,6 +641,7 @@ impl AnalysisKernel {
                 direct_summaries_dependency_output_digest.clone(),
                 type_value_alias_dependency_output_digest.clone(),
                 extensions_dependency_output_digest.clone(),
+                solver_dependency_output_digest,
             );
         let polint_refined_calls_cache_stats = refined_calls.cache_stats.clone();
         let refined_calls_output_digest = refined_calls.output_digest.clone();

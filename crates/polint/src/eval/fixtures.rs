@@ -2262,10 +2262,19 @@ mod eval_native_fixture_runner_tests {
             "direct refined-call fixture must assert refined edges"
         );
         assert!(
-            direct_expected.iter().any(|identity| identity.contains(
-                "Invariant:refined_calls.counts.by_tier.type_value_function_token.nonzero"
-            )),
-            "direct refined-call fixture must assert function-token tier counts"
+            direct_expected.iter().any(|identity| identity
+                .contains("Invariant:refined_calls.counts.by_tier.direct_only.nonzero")),
+            "direct refined-call fixture must assert direct-only tier counts"
+        );
+        assert!(
+            direct_expected.iter().any(|identity| identity
+                .contains("Invariant:refined_calls.counts.by_tier.points_to_assisted.nonzero")),
+            "direct refined-call fixture must assert solver-assisted tier counts"
+        );
+        assert!(
+            direct_expected.iter().any(|identity| identity
+                .contains("Invariant:refined_calls.deltas.changed_edges.nonzero")),
+            "direct refined-call fixture must assert solver projection changes refined calls"
         );
         assert!(
             direct_expected.iter().any(|identity| identity
@@ -2286,10 +2295,15 @@ mod eval_native_fixture_runner_tests {
             "extension refined-call fixture must assert rejected malformed model fact"
         );
         assert!(
-            extension_expected.iter().any(|identity| {
-                identity.contains("Invariant:refined_calls.deltas.extension_model_edges.nonzero")
+            extension.manifest.expected.iter().any(|item| {
+                matches!(
+                    item,
+                    ExpectedItem::Invariant(invariant)
+                        if invariant.name == "refined_calls.deltas.extension_model_edges.nonzero"
+                            && invariant.value == "true"
+                )
             }),
-            "extension refined-call fixture must assert extension-model delta"
+            "extension refined-call fixture must assert extension models project to refined calls"
         );
     }
 

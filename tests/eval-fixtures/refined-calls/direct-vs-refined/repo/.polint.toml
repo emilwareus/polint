@@ -1,3 +1,8 @@
 [workspace]
 include = ["src/**"]
 exclude = []
+
+[languages.go]
+module_roots = ["."]
+package_patterns = ["./..."]
+include_tests = false

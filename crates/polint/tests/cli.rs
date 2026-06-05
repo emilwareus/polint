@@ -56,6 +56,14 @@ fn path_str_ends_with(path: &str, suffix: &str) -> bool {
     path.replace('\\', "/").ends_with(suffix)
 }
 
+fn assert_schema_object_is_closed(value: &serde_json::Value, label: &str) {
+    assert_eq!(
+        value.get("additionalProperties"),
+        Some(&serde_json::Value::Bool(false)),
+        "{label} schema object must reject unknown properties"
+    );
+}
+
 #[test]
 fn top_level_help_only_lists_supported_public_commands() {
     let help = stdout_string(polint_cmd().arg("--help").assert().success());
@@ -254,6 +262,176 @@ exclude = []
         unsupported.contains("docs/facts/data-flow.md"),
         "{unsupported}"
     );
+}
+
+#[test]
+fn inspect_unknowns_json_reports_consolidated_and_cap_filtered_rows() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+"#,
+    );
+    write_file(
+        &temp.path().join("src/app.ts"),
+        "import missing from './missing';\nexport const answer = missing;\n",
+    );
+
+    let consolidated = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["inspect", "unknowns", "--format", "json"])
+            .assert()
+            .success(),
+    );
+    assert_eq!(consolidated["version"], 1);
+    assert_eq!(consolidated["capability"], "all");
+    assert_eq!(consolidated["rows"][0]["category"], "missing_fact");
+    assert!(consolidated["rows"][0].get("provider").is_none());
+    assert!(consolidated["rows"][0].get("family").is_none());
+    assert_eq!(consolidated["rows"][0]["reason"], "not_found");
+    assert!(consolidated["rows"][0].get("source_stable_key").is_none());
+
+    let filtered = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args([
+                "inspect",
+                "unknowns",
+                "--cap",
+                "resolved_imports",
+                "--format",
+                "json",
+            ])
+            .assert()
+            .success(),
+    );
+    assert_eq!(filtered["capability"], "resolved_imports");
+    assert_eq!(filtered["rows"][0]["category"], "missing_fact");
+
+    let unsupported = output_string(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args([
+                "inspect", "unknowns", "--cap", "dataflow", "--format", "json",
+            ])
+            .assert()
+            .code(2),
+    );
+    assert!(unsupported.contains("\"category\": \"unsupported_semantic\""));
+    assert!(unsupported.contains("docs/facts/data-flow.md"));
+    assert!(!unsupported.contains("polint.solver"));
+    assert!(!unsupported.contains("RefinedCallEdge"));
+    assert!(!unsupported.contains("source_stable_key"));
+}
+
+#[test]
+fn unknowns_json_does_not_report_external_imports_as_unknowns() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+"#,
+    );
+    write_file(
+        &temp.path().join("src/app.ts"),
+        "import React from 'react';\nexport const element = React.createElement('div');\n",
+    );
+
+    let value = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["unknowns", "--cap", "resolved_imports", "--format", "json"])
+            .assert()
+            .success(),
+    );
+
+    assert_eq!(value["capability"], "resolved_imports");
+    assert!(value["rows"].as_array().expect("rows").is_empty());
+}
+
+#[test]
+fn unknowns_json_schema_rejects_internal_extra_fields() {
+    let schema: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../docs/schemas/polint-unknowns-v1.json"
+    ))
+    .expect("unknowns schema parses");
+    assert_schema_object_is_closed(&schema, "root");
+
+    let tool = schema
+        .pointer("/properties/tool")
+        .expect("schema has tool object");
+    assert_schema_object_is_closed(tool, "tool");
+
+    let row = schema
+        .pointer("/properties/rows/items")
+        .expect("schema has row object");
+    assert_schema_object_is_closed(row, "row");
+    let row_properties = row
+        .get("properties")
+        .and_then(serde_json::Value::as_object)
+        .expect("row has properties");
+    for internal in ["provider", "family", "source_stable_key"] {
+        assert!(
+            !row_properties.contains_key(internal),
+            "unknowns row schema must not expose internal field `{internal}`"
+        );
+    }
+
+    let span = schema
+        .pointer("/properties/rows/items/properties/span")
+        .expect("schema has span object");
+    assert_schema_object_is_closed(span, "span");
+}
+
+#[test]
+fn inspect_unknowns_json_reports_go_provider_diagnostics() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+"#,
+    );
+    write_file(
+        &temp.path().join("go.mod"),
+        "module example.com/app\n\ngo 1.24\n",
+    );
+    write_file(
+        &temp.path().join("src/main.go"),
+        "package main\n\nfunc main() {}\n",
+    );
+    let missing_frontend = temp.path().join("missing-polint-go-frontend");
+
+    let value = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .env("POLINT_GO_FRONTEND", &missing_frontend)
+            .args(["inspect", "unknowns", "--format", "json"])
+            .assert()
+            .success(),
+    );
+    let rows = value["rows"].as_array().expect("unknown rows");
+
+    assert!(rows.iter().any(|row| {
+        row["category"] == "go_packages_load_failed"
+            && row["suggested_artifact"] == "go_setup"
+            && row.get("provider").is_none()
+            && row.get("family").is_none()
+            && row.get("source_stable_key").is_none()
+    }));
+    let rendered = serde_json::to_string(&value).unwrap();
+    assert!(!rendered.contains("polint.go.semantic"));
+    assert!(!rendered.contains("GoSemanticDiagnostic"));
+    assert!(!rendered.contains("source_stable_key"));
 }
 
 #[test]

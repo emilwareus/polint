@@ -3,12 +3,14 @@
   "$id": "https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-unknowns-v1.json",
   "title": "polint unknowns report v1",
   "type": "object",
+  "additionalProperties": false,
   "required": ["version", "schema", "tool", "capability", "rows"],
   "properties": {
     "version": { "const": 1 },
     "schema": { "type": "string" },
     "tool": {
       "type": "object",
+      "additionalProperties": false,
       "required": ["name", "version"],
       "properties": {
         "name": { "const": "polint" },
@@ -16,6 +18,31 @@
       }
     },
     "capability": { "type": "string" },
-    "rows": { "type": "array" }
+    "rows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["file", "status"],
+        "properties": {
+          "file": { "type": "string" },
+          "span": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["line", "column"],
+            "properties": {
+              "line": { "type": "integer", "minimum": 1 },
+              "column": { "type": "integer", "minimum": 1 }
+            }
+          },
+          "category": { "type": "string" },
+          "status": { "type": "string" },
+          "reason": { "type": "string" },
+          "precision": { "type": "string" },
+          "docs_path": { "type": "string" },
+          "suggested_artifact": { "type": "string" }
+        }
+      }
+    }
   }
 }

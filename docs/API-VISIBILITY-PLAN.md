@@ -46,7 +46,8 @@ no-leak proof all exist. Broad raw graph/database APIs stay deferred.
 | `polint inspect rule` | stable | Versioned JSON schema, deterministic rule ordering, rule metadata, derived fact views, support rows, docs paths. |
 | `polint test` | stable | Versioned JSON schema, deterministic case ordering, positive/negative fixture semantics, no temp-root leakage. |
 | `polint facts` | stable | `facts list` and bounded `facts sample` expose only supported public fact fields and reserved capability dispositions. |
-| `polint unknowns` | stable | Reports public setup/resolution gaps for supported facts and unsupported rows for reserved capabilities. |
+| `polint inspect unknowns` | stable | Reports the consolidated public unknown taxonomy queue as versioned JSON without exposing solver or provider internals. |
+| `polint unknowns` | stable | Compatibility alias for cap-filtered public setup/resolution gaps and unsupported rows for reserved capabilities. |
 | `polint explain` | stable | Explains rule-derived fact views and capability support without provider execution graphs or layer-cache internals. |
 | `polint diff` | defer | No stable public contract in Phase 41. |
 | `polint eval` | internal | Evaluation and benchmark schemas remain internal; stable public `polint eval` is deferred. |
