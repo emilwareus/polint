@@ -666,16 +666,15 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
         // with the projection so the declared read-set never overstates consumption):
         // functions/packages (syntax), scopes (symbol graph), call sites (calls),
         // value facts (type/value/alias), MIR places (semantic MIR), Go semantic rows,
-        // and the private TS object-model rows refreshed inside the semantic-graph
-        // provider. The producer/current-row digest of each is folded into the
-        // provider output digest in `semantic_graph::provider::semantic_graph_output_digest`
-        // (D-17).
+        // repo-local adaptation model files, and the private TS object-model rows
+        // refreshed inside the semantic-graph provider. The producer/current-row
+        // digest of each is folded into the provider output digest in
+        // `semantic_graph::provider::semantic_graph_output_digest` (D-17).
         //
         // SC3 inputs with NO producer yet are intentionally ABSENT until their
-        // producer lands (not silently dropped): CFG / summaries (Phase 47), accepted
-        // adaptation models / `ModelEdge` (Phase 49), and solver budgets (Phase
-        // 51/53). When the projection begins reading a new family, add it here AND
-        // fold its producer digest in the same change.
+        // producer lands (not silently dropped): CFG / summaries (Phase 47). When
+        // the projection begins reading a new family, add it here AND fold its
+        // producer digest in the same change.
         inputs: &[
             "functions",
             "packages",
@@ -690,6 +689,8 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "ts_property_reads",
             "ts_receiver_bindings",
             "ts_prototype_links",
+            "adaptation_model_files",
+            "adaptation_model_budget",
         ],
         outputs: &[
             "ts_object_allocations",
@@ -1410,6 +1411,8 @@ mod tests {
                         "ts_property_reads",
                         "ts_receiver_bindings",
                         "ts_prototype_links",
+                        "adaptation_model_files",
+                        "adaptation_model_budget",
                     ],
                     outputs: vec![
                         "ts_object_allocations",

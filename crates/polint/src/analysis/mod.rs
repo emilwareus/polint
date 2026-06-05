@@ -7,6 +7,7 @@
 )]
 
 pub(crate) mod access_paths;
+pub(crate) mod adaptation;
 pub(crate) mod aliases;
 pub(crate) mod cache_key;
 pub(crate) mod calls;

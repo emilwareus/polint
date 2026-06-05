@@ -169,6 +169,46 @@ pub(crate) fn call_graph_unknown_facts_from_kernel_output(
 }
 
 #[cfg(test)]
+pub(crate) fn adaptation_model_facts_from_kernel_output(
+    output: &crate::analysis_kernel::KernelOutput,
+) -> Vec<ObservedItem> {
+    let accepted = output.db.adaptation_model_facts().iter().map(|fact| {
+        ObservedItem::Fact(ObservedFact {
+            family: "AdaptationModel".to_string(),
+            stable_key: fact.fact.stable_key.clone(),
+            mode: AssertionMode::Exact,
+            producer_id: Some("polint.adaptation.model".to_string()),
+            provenance: Some(format!("model_path={}", fact.fact.model_path)),
+            precision: Some(fact.fact.confidence.as_str().to_string()),
+            status: Some(ObservedStatus::Accepted),
+            payload: Some(format!(
+                "{}:{}:{}",
+                fact.fact.language.as_str(),
+                fact.fact.source_pattern,
+                fact.fact.target_pattern
+            )),
+        })
+    });
+    let rejected = output
+        .db
+        .rejected_adaptation_model_facts()
+        .iter()
+        .map(|fact| {
+            ObservedItem::Fact(ObservedFact {
+                family: "AdaptationModel".to_string(),
+                stable_key: fact.fact.stable_key.clone(),
+                mode: AssertionMode::Exact,
+                producer_id: Some("polint.adaptation.model".to_string()),
+                provenance: Some(format!("model_path={}", fact.fact.model_path)),
+                precision: Some(fact.fact.confidence.as_str().to_string()),
+                status: Some(ObservedStatus::Rejected),
+                payload: Some(fact.reason.as_str().to_string()),
+            })
+        });
+    accepted.chain(rejected).collect()
+}
+
+#[cfg(test)]
 #[expect(
     clippy::too_many_arguments,
     reason = "The row is a mechanical projection from call/refined-call facts."

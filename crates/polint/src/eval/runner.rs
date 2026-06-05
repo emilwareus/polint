@@ -329,6 +329,7 @@ fn run_polint_for_prepared_case<A: BenchmarkAdapter>(
             parallel: true,
         })?;
     let mut observed = adapter.normalize_kernel_output(manifest, case, prepared, &output)?;
+    observed.extend(crate::eval::observed::adaptation_model_facts_from_kernel_output(&output));
     // D-17: thread the suite's scoring_mode into the scoring path. The mode-aware
     // filter consults the reachable-graph marking by call-site stable key. Under
     // oracle-rta only reachable-from-roots edges count; oracle-jelly/whole-repo

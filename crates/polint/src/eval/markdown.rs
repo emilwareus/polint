@@ -91,13 +91,56 @@ pub(crate) fn render_markdown(run: &EvaluationRun) -> String {
     out.push_str("## Adaptation\n\n");
     if let Some(adaptation) = &run.adaptation {
         out.push_str(&format!(
-            "- Prompt: `{}`\n- Prompt hash: `{}`\n- Changed artifacts: {}\n\n",
+            "- Prompt: `{}`\n- Prompt hash: `{}`\n- Sandbox root: `{}`\n- Changed artifacts: {}\n- Changed model digests: {}\n\n",
             escape_cell(&adaptation.agent.prompt_path),
             escape_cell(&adaptation.agent.prompt_hash),
+            escape_cell(adaptation.sandbox_root.as_deref().unwrap_or("-")),
             adaptation.outputs.rules_or_extensions_changed.len()
+            ,
+            adaptation.outputs.model_digests.len()
         ));
     } else {
         out.push_str("_none_\n\n");
+    }
+    if let Some(delta) = &run.adaptation_delta {
+        out.push_str("| Accepted Models | Rejected Models | Resolved Unknowns | New FPs | Runtime Ratio | Cache Scope |\n");
+        out.push_str("|---:|---:|---:|---:|---:|---|\n");
+        out.push_str(&format!(
+            "| {} | {} | {} | {} | {} | `{}` |\n\n",
+            delta.accepted_model_facts,
+            delta.rejected_model_facts,
+            delta.resolved_unknowns,
+            delta.new_false_positives,
+            metric_cell(delta.runtime_overhead_ratio),
+            escape_cell(delta.cache_invalidation_scope.as_deref().unwrap_or("-")),
+        ));
+        if let Some(held_out) = &delta.held_out {
+            out.push_str(&format!(
+                "- Held-out: selection cases {}, held-out cases {}, unknown delta {}, precision delta {}, recall delta {}, runtime ratio {}, cache `{}`\n\n",
+                held_out.selection_cases,
+                held_out.held_out_cases,
+                held_out.held_out_unknown_delta,
+                metric_cell(held_out.held_out_precision_delta),
+                metric_cell(held_out.held_out_recall_delta),
+                metric_cell(held_out.held_out_runtime_overhead_ratio),
+                escape_cell(held_out.held_out_cache_invalidation_scope.as_deref().unwrap_or("-")),
+            ));
+            if !held_out.missing_selection_case_ids.is_empty()
+                || !held_out.missing_held_out_case_ids.is_empty()
+            {
+                out.push_str(&format!(
+                    "- Held-out partition missing cases: selection `{}`, held-out `{}`\n\n",
+                    escape_cell(&held_out.missing_selection_case_ids.join(", ")),
+                    escape_cell(&held_out.missing_held_out_case_ids.join(", ")),
+                ));
+            }
+            if !held_out.overlapping_case_ids.is_empty() {
+                out.push_str(&format!(
+                    "- Held-out partition overlaps: `{}`\n\n",
+                    escape_cell(&held_out.overlapping_case_ids.join(", ")),
+                ));
+            }
+        }
     }
 
     out.push_str("## Limitations\n\n");

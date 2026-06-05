@@ -270,7 +270,9 @@ pub(crate) fn derive_edges(constraints: &[ConstraintFact], budget: &SolverBudget
     }
 
     let mut edges: Vec<DerivedEdgeFact> = Vec::new();
-    let mut run_budget_exceeded = false;
+    let (model_edges, model_budget_exceeded) = model_edges(constraints, budget);
+    edges.extend(model_edges);
+    let mut run_budget_exceeded = model_budget_exceeded;
     // GLOBAL monotonic derivation step (R3): increments once per worklist pop across
     // the WHOLE run and is never reset, so every derived edge's `solver_step` is
     // globally monotonic and the run's progress is totally ordered. The PER-SOURCE
@@ -411,6 +413,82 @@ pub(crate) fn derive_edges(constraints: &[ConstraintFact], budget: &SolverBudget
     .normalized()
 }
 
+fn model_edges(
+    constraints: &[ConstraintFact],
+    budget: &SolverBudget,
+) -> (Vec<DerivedEdgeFact>, bool) {
+    let mut edges = Vec::new();
+    let mut budget_exceeded = false;
+    let mut targets_by_source: BTreeMap<SemanticNodeRef, BTreeSet<SemanticNodeRef>> =
+        BTreeMap::new();
+    let mut expansions_by_model: BTreeMap<String, usize> = BTreeMap::new();
+    let mut model_constraints = constraints
+        .iter()
+        .filter_map(|constraint| match &constraint.kind {
+            ConstraintKind::ModelEdge { source, target, .. } => Some((constraint, source, target)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    model_constraints.sort_by(|left, right| {
+        (left.0.stable_key.as_str(), left.1.0, left.2.0).cmp(&(
+            right.0.stable_key.as_str(),
+            right.1.0,
+            right.2.0,
+        ))
+    });
+
+    for (constraint, source, target) in model_constraints {
+        if edges.len() >= budget.adaptation.max_model_derived_edges {
+            budget_exceeded = true;
+            continue;
+        }
+
+        let expansions = expansions_by_model
+            .entry(constraint.stable_key.clone())
+            .or_default();
+        if *expansions >= budget.adaptation.max_expansions_per_model {
+            budget_exceeded = true;
+            continue;
+        }
+
+        let source_targets = targets_by_source.entry(source.0).or_default();
+        if !source_targets.contains(&target.0)
+            && source_targets.len() >= budget.adaptation.max_targets_per_source
+        {
+            budget_exceeded = true;
+            continue;
+        }
+
+        *expansions += 1;
+        source_targets.insert(target.0);
+        let provenance = DerivedEdgeProvenance::new(
+            [ContributingFact {
+                stable_key: constraint.stable_key.clone(),
+            }],
+            &constraint.kind,
+            0,
+        );
+        let stable_key = stable_key_from_parts(
+            FactFamily::SolverDerivedEdge,
+            &[
+                ("source", source.0.to_string()),
+                ("target", target.0.to_string()),
+                ("provenance", provenance.stable_key_fragment()),
+            ],
+        );
+        edges.push(DerivedEdgeFact {
+            id: DerivedEdgeId(0),
+            source: *source,
+            target: *target,
+            status: constraint.status,
+            precision: constraint.precision,
+            stable_key,
+            provenance,
+        });
+    }
+    (edges, budget_exceeded)
+}
+
 /// Run-local node handle (the `SemanticNodeId.0` value) used as a deterministic
 /// `BTreeMap`/`BTreeSet` key during closure derivation.
 type SemanticNodeRef = u64;
@@ -499,7 +577,7 @@ pub(crate) fn weakest_precision(a: PointsToPrecision, b: PointsToPrecision) -> P
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::ids::{ObjectTokenId, PointsToConstraintId, PtVarId};
+    use crate::analysis::ids::{ObjectTokenId, PointsToConstraintId, PtVarId, SemanticNodeId};
     use crate::analysis::points_to::facts::{
         PointsToConstraintFact, PointsToConstraintKind, PointsToPrecision, PointsToStatus,
     };
@@ -671,6 +749,24 @@ mod tests {
         }
     }
 
+    fn model_constraint(stable_key: &str, source: u64, target: u64) -> ConstraintFact {
+        use crate::analysis::ids::{SemanticConstraintId, SemanticNodeId};
+        ConstraintFact {
+            id: SemanticConstraintId(0),
+            kind: ConstraintKind::ModelEdge {
+                source: SemanticNodeId(source),
+                target: SemanticNodeId(target),
+                language: "typescript".to_string(),
+                scope: "src/app.ts".to_string(),
+                confidence: "heuristic".to_string(),
+                evidence: vec!["src/app.ts:10".to_string()],
+            },
+            status: PointsToStatus::Present,
+            precision: PointsToPrecision::Heuristic,
+            stable_key: stable_key.to_string(),
+        }
+    }
+
     #[test]
     fn derive_edges_emits_transitive_copy_edge_with_provenance() {
         // Chain a -> b -> c: the solver derives the transitive edge a -> c whose
@@ -691,6 +787,79 @@ mod tests {
         assert_eq!(transitive.provenance.constraint_kind, "copy_edge");
         assert_eq!(transitive.provenance.contributing_len(), 2);
         assert!(transitive.provenance.solver_step > 0);
+    }
+
+    #[test]
+    fn solver_model_edge_provenance_is_private_and_deterministic() {
+        let output = derive_edges(
+            &[model_constraint("model|register", 10, 20)],
+            &SolverBudget::default(),
+        );
+
+        let edge = output
+            .derived_edges
+            .iter()
+            .find(|edge| edge.source == SemanticNodeId(10) && edge.target == SemanticNodeId(20))
+            .expect("model edge derived");
+        assert_eq!(edge.provenance.constraint_kind, "model_edge");
+        assert_eq!(edge.provenance.contributing_len(), 1);
+        assert_eq!(
+            edge.provenance.contributing_facts[0].stable_key,
+            "model|register"
+        );
+        assert!(edge.stable_key.contains("model_edge"));
+    }
+
+    #[test]
+    fn solver_model_edge_cache_identity_changes_with_model_input() {
+        let first = derive_edges(
+            &[model_constraint("model|register-a", 10, 20)],
+            &SolverBudget::default(),
+        );
+        let second = derive_edges(
+            &[model_constraint("model|register-b", 10, 20)],
+            &SolverBudget::default(),
+        );
+
+        let first_key = &first.derived_edges[0].stable_key;
+        let second_key = &second.derived_edges[0].stable_key;
+        assert_ne!(
+            first_key, second_key,
+            "model constraint stable keys must affect derived edge identity"
+        );
+    }
+
+    #[test]
+    fn solver_model_edges_respect_derived_edge_budget() {
+        let mut budget = SolverBudget::default();
+        budget.adaptation.max_model_derived_edges = 1;
+        let output = derive_edges(
+            &[
+                model_constraint("model|register-a", 10, 20),
+                model_constraint("model|register-b", 11, 21),
+            ],
+            &budget,
+        );
+
+        assert_eq!(output.derived_edges.len(), 1);
+        assert_eq!(output.budget_status, BudgetStatus::BudgetExceeded);
+    }
+
+    #[test]
+    fn solver_model_edges_respect_per_source_target_fanout_budget() {
+        let mut budget = SolverBudget::default();
+        budget.adaptation.max_targets_per_source = 1;
+        let output = derive_edges(
+            &[
+                model_constraint("model|register-a", 10, 20),
+                model_constraint("model|register-b", 10, 21),
+            ],
+            &budget,
+        );
+
+        assert_eq!(output.derived_edges.len(), 1);
+        assert_eq!(output.derived_edges[0].source, SemanticNodeId(10));
+        assert_eq!(output.budget_status, BudgetStatus::BudgetExceeded);
     }
 
     #[test]

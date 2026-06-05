@@ -67,10 +67,17 @@ pub(crate) enum ConstraintKind {
     /// A call obligation anchored at a callsite node, consumed by the Phase 47
     /// unified solver to resolve dynamic dispatch / refine targets.
     CallConstraint { callsite: SemanticNodeId },
-    /// Reserved adaptation-model edge. No producer exists until Phase 49
-    /// (ADAPT-01); `build_semantic_graph` emits ZERO of these (honest emptiness,
-    /// D-11). The variant is fieldless because no model-edge payload is defined yet.
-    ModelEdge,
+    /// Accepted repo-local adaptation model edge. Only validated model facts produce
+    /// this variant; rejected facts remain report-only and never lower to a
+    /// constraint.
+    ModelEdge {
+        source: SemanticNodeId,
+        target: SemanticNodeId,
+        language: String,
+        scope: String,
+        confidence: String,
+        evidence: Vec<String>,
+    },
     /// A type obligation on a node, referencing an existing `TypeFactId` from the
     /// type substrate (never a run-local dense ID of another family).
     TypeConstraint {
@@ -88,7 +95,7 @@ impl ConstraintKind {
             Self::FieldLoad { .. } => "field_load",
             Self::FieldStore { .. } => "field_store",
             Self::CallConstraint { .. } => "call_constraint",
-            Self::ModelEdge => "model_edge",
+            Self::ModelEdge { .. } => "model_edge",
             Self::TypeConstraint { .. } => "type_constraint",
         }
     }
@@ -116,7 +123,14 @@ impl ConstraintKind {
                 src,
             } => vec![*base, *src],
             Self::CallConstraint { callsite } => vec![*callsite],
-            Self::ModelEdge => Vec::new(),
+            Self::ModelEdge {
+                source,
+                target,
+                language: _,
+                scope: _,
+                confidence: _,
+                evidence: _,
+            } => vec![*source, *target],
             Self::TypeConstraint { node, type_fact: _ } => vec![*node],
         }
     }
@@ -153,7 +167,17 @@ impl ConstraintKind {
             Self::CallConstraint { callsite } => {
                 *callsite = map(*callsite);
             }
-            Self::ModelEdge => {}
+            Self::ModelEdge {
+                source,
+                target,
+                language: _,
+                scope: _,
+                confidence: _,
+                evidence: _,
+            } => {
+                *source = map(*source);
+                *target = map(*target);
+            }
             Self::TypeConstraint { node, type_fact: _ } => {
                 *node = map(*node);
             }
@@ -202,7 +226,7 @@ mod tests {
                 ConstraintKind::FieldLoad { .. } => "field_load",
                 ConstraintKind::FieldStore { .. } => "field_store",
                 ConstraintKind::CallConstraint { .. } => "call_constraint",
-                ConstraintKind::ModelEdge => "model_edge",
+                ConstraintKind::ModelEdge { .. } => "model_edge",
                 ConstraintKind::TypeConstraint { .. } => "type_constraint",
             }
         }
@@ -228,7 +252,7 @@ mod tests {
             assert_all(&ConstraintKind::CallConstraint {
                 callsite: SemanticNodeId(0),
             }),
-            assert_all(&ConstraintKind::ModelEdge),
+            assert_all(&model_edge()),
             assert_all(&ConstraintKind::TypeConstraint {
                 node: SemanticNodeId(0),
                 type_fact: TypeFactId(1),
@@ -247,7 +271,7 @@ mod tests {
                 node: SemanticNodeId(0),
                 type_fact: TypeFactId(0),
             },
-            ConstraintKind::ModelEdge,
+            model_edge(),
             ConstraintKind::CallConstraint {
                 callsite: SemanticNodeId(0),
             },
@@ -304,7 +328,7 @@ mod tests {
             .as_str(),
             "alloc"
         );
-        assert_eq!(ConstraintKind::ModelEdge.as_str(), "model_edge");
+        assert_eq!(model_edge().as_str(), "model_edge");
         assert_eq!(
             ConstraintKind::TypeConstraint {
                 node: SemanticNodeId(0),
@@ -313,6 +337,17 @@ mod tests {
             .as_str(),
             "type_constraint"
         );
+    }
+
+    fn model_edge() -> ConstraintKind {
+        ConstraintKind::ModelEdge {
+            source: SemanticNodeId(0),
+            target: SemanticNodeId(1),
+            language: "typescript".to_string(),
+            scope: "src/app.ts".to_string(),
+            confidence: "heuristic".to_string(),
+            evidence: vec!["src/app.ts:10".to_string()],
+        }
     }
 
     #[test]

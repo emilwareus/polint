@@ -16,6 +16,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::analysis::adaptation::budget::AdaptationModelBudget;
 use crate::analysis::points_to::facts::PointsToBudgetStatus;
 use crate::analysis::points_to::solver::PointsToBudget;
 
@@ -163,6 +164,7 @@ pub(crate) struct SolverBudget {
     pub(crate) js: JsTokensSubBudget,
     pub(crate) object_model_enabled: bool,
     pub(crate) object: JsObjectModelSubBudget,
+    pub(crate) adaptation: AdaptationModelBudget,
 }
 
 impl Default for SolverBudget {
@@ -187,6 +189,10 @@ impl Default for SolverBudget {
             // explicitly opt-in until benchmark gates approve default enablement.
             object_model_enabled: false,
             object: JsObjectModelSubBudget::default(),
+            // Repo-local adaptation model caps (ADAPT-01). Appending this field keeps
+            // existing solver defaults byte-identical while making model expansion
+            // budgeted before graph lowering lands.
+            adaptation: AdaptationModelBudget::default(),
         }
     }
 }
@@ -306,6 +312,7 @@ mod tests {
         assert_eq!(budget.points_to, PointsToSubBudget::default());
         assert_eq!(budget.go, GoRtaSubBudget::default());
         assert_eq!(budget.js, JsTokensSubBudget::default());
+        assert_eq!(budget.adaptation, AdaptationModelBudget::default());
     }
 
     #[test]
@@ -318,6 +325,17 @@ mod tests {
         assert_eq!(budget.object.max_prototype_depth, 8);
         assert_eq!(budget.object.max_receiver_candidates_per_callsite, 64);
         assert_eq!(budget.object.max_object_worklist_steps, 10_000);
+    }
+
+    #[test]
+    fn solver_budget_default_adaptation_sub_budget_matches_adaptation_defaults() {
+        let budget = SolverBudget::default();
+        assert_eq!(budget.adaptation, AdaptationModelBudget::default());
+        assert_eq!(budget.adaptation.max_model_files, 32);
+        assert_eq!(budget.adaptation.max_model_facts, 512);
+        assert_eq!(budget.adaptation.max_expansions_per_model, 64);
+        assert_eq!(budget.adaptation.max_targets_per_source, 16);
+        assert_eq!(budget.adaptation.max_model_derived_edges, 2_048);
     }
 
     #[test]

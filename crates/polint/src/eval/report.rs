@@ -256,6 +256,10 @@ pub(crate) struct AdaptationMetricSection {
     pub(crate) removed_false_negatives: u64,
     pub(crate) accepted_extension_facts: u64,
     pub(crate) rejected_extension_facts: u64,
+    #[serde(default)]
+    pub(crate) accepted_model_facts: u64,
+    #[serde(default)]
+    pub(crate) rejected_model_facts: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -1110,10 +1114,12 @@ mod tests {
             },
             inputs_allowed: vec!["target repository source".to_string()],
             inputs_forbidden: vec!["expected labels before adaptation".to_string()],
+            sandbox_root: Some("target/polint-eval/adaptation-sandbox".to_string()),
             outputs: AdaptationOutputs {
                 rules_or_extensions_changed: Vec::new(),
                 rule_digests: Vec::new(),
                 extension_digests: Vec::new(),
+                model_digests: Vec::new(),
                 notes_path: "target/polint-eval/adaptation-notes.md".to_string(),
                 final_adapted_report_path: "target/polint-eval/adapted.json".to_string(),
                 no_change_reason: Some("report hash fixture uses metadata only".to_string()),

@@ -1,0 +1,7 @@
+selection_cases = ["case-selection-a", "case-selection-b"]
+held_out_cases = ["case-held-out-a", "case-held-out-b", "case-held-out-c"]
+held_out_unknown_delta = -1
+held_out_precision_delta = 0.10
+held_out_recall_delta = 0.10
+held_out_runtime_overhead_ratio = 1.20
+held_out_cache_invalidation_scope = "model-files"

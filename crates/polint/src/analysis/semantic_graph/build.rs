@@ -4,17 +4,16 @@
 //! already-available v1.2 fact families — functions, packages, scopes, call sites,
 //! and values — emitting nodes, `Call`/`MemberOf` edges, and
 //! `CopyEdge`/`CallConstraint` constraints, plus Phase 50's private TS object-model
-//! rows as `Alloc`/`FieldStore`/`FieldLoad`/receiver constraints. It is a
+//! rows as `Alloc`/`FieldStore`/`FieldLoad`/receiver constraints and accepted Phase
+//! 51 adaptation-model facts as `ModelEdge` constraints. It is a
 //! **read-only projection**: it reads `db` and returns a fresh
 //! [`SemanticGraphOutput`], mutating no upstream fact family (D-13). All
 //! node/edge/constraint stable keys are composed from the
 //! referenced existing stable identity via the length-prefixed recipe, never
 //! run-local dense IDs (D-06); the dense IDs are assigned later by `normalized()`.
 //!
-//! Honesty boundaries (D-07/D-11) — these kinds emit **ZERO** rows in this minimal
-//! pass, documented rather than fabricated:
-//! - `ModelEdge`: there is no producer until Phase 49 (ADAPT-01). Reserved emptiness.
-//! - `TypeConstraint`: not emitted in this minimal pass.
+//! Honesty boundaries (D-07/D-11): `TypeConstraint` is not emitted in this minimal
+//! pass.
 
 use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 
@@ -25,6 +24,7 @@ use oxc_parser::Parser;
 use oxc_semantic::{AstNodes, NodeId, SemanticBuilder};
 use oxc_span::{GetSpan, SourceType};
 
+use crate::analysis::adaptation::store::AdaptationModelStore;
 use crate::analysis::ids::{ObjectTokenId, PlaceId, SemanticNodeId};
 use crate::analysis::points_to::facts::{PointsToPrecision, PointsToStatus};
 use crate::analysis::semantic_graph::constraints::{ConstraintFact, ConstraintKind};
@@ -67,6 +67,18 @@ pub(crate) fn build_semantic_graph_with_ts_direct_bindings(
     db: &AnalysisDb,
     ts_direct_bindings: &[TsDirectBindingFact],
 ) -> SemanticGraphOutput {
+    build_semantic_graph_with_ts_direct_bindings_and_adaptation_models(
+        db,
+        ts_direct_bindings,
+        &AdaptationModelStore::default(),
+    )
+}
+
+pub(crate) fn build_semantic_graph_with_ts_direct_bindings_and_adaptation_models(
+    db: &AnalysisDb,
+    ts_direct_bindings: &[TsDirectBindingFact],
+    adaptation_models: &AdaptationModelStore,
+) -> SemanticGraphOutput {
     let mut builder = GraphBuilder::default();
 
     builder.project_nodes(db);
@@ -75,11 +87,12 @@ pub(crate) fn build_semantic_graph_with_ts_direct_bindings(
     builder.project_ts_direct_bindings(db, ts_direct_bindings);
     builder.project_ts_token_source_flows(db);
     builder.project_ts_object_model(db);
+    builder.project_adaptation_models(adaptation_models);
     builder.project_member_of_edges(db);
     builder.project_value_constraints(db);
-    // TypeConstraint and ModelEdge intentionally emit zero rows in this pass (see
-    // module docs / D-07 / D-11). The base places for access-path projections are
-    // already projected as nodes above.
+    // TypeConstraint intentionally emits zero rows in this pass (see module docs).
+    // The base places for access-path projections are already projected as nodes
+    // above.
 
     builder.into_output()
 }
@@ -530,6 +543,31 @@ impl GraphBuilder {
                     src: target_node,
                 },
                 &callsite.stable_key,
+            );
+        }
+    }
+
+    // -- adaptation model constraints --------------------------------------
+
+    fn project_adaptation_models(&mut self, adaptation_models: &AdaptationModelStore) {
+        for accepted in adaptation_models.accepted() {
+            let fact = &accepted.fact;
+            let (Some(&source), Some(&target)) = (
+                self.node_by_key.get(&fact.source_pattern),
+                self.node_by_key.get(&fact.target_pattern),
+            ) else {
+                continue;
+            };
+            self.push_constraint(
+                ConstraintKind::ModelEdge {
+                    source,
+                    target,
+                    language: fact.language.as_str().to_string(),
+                    scope: fact.scope.clone(),
+                    confidence: fact.confidence.as_str().to_string(),
+                    evidence: fact.evidence.clone(),
+                },
+                &fact.stable_key,
             );
         }
     }
@@ -1668,6 +1706,12 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    use crate::analysis::adaptation::budget::AdaptationModelBudget;
+    use crate::analysis::adaptation::facts::{
+        LoadedModelFact, ModelConfidence, ModelLanguage, RejectionReason,
+    };
+    use crate::analysis::adaptation::store::AdaptationModelStore;
+    use crate::analysis::adaptation::validate::ValidationUniverse;
     use crate::analysis::calls::facts::{
         CallCallee, CallPrecision, CallSiteFact, CallSyntaxKind, CallTargetStatus,
     };
@@ -1884,7 +1928,7 @@ mod tests {
         let model_edges = output
             .constraints
             .iter()
-            .filter(|c| matches!(c.kind, ConstraintKind::ModelEdge))
+            .filter(|c| matches!(c.kind, ConstraintKind::ModelEdge { .. }))
             .count();
         assert_eq!(model_edges, 0, "ModelEdge must emit zero rows");
 
@@ -1900,6 +1944,138 @@ mod tests {
         // endpoint and every constraint node reference resolves to a stored node.
         let store = SemanticGraphStore::from_output(output).expect("graph validates");
         assert!(!store.nodes().is_empty());
+    }
+
+    #[test]
+    fn semantic_graph_model_edge_lowers_only_accepted_model_facts() {
+        let db = fixture_db();
+        let base = build_semantic_graph(&db);
+        let source = node_key(&base, |kind| matches!(kind, NodeKind::Callsite(_)));
+        let target = node_key(&base, |kind| matches!(kind, NodeKind::Function(_)));
+        let store = model_store(
+            vec![model_fact(&source, &target)],
+            std::slice::from_ref(&source),
+            std::slice::from_ref(&target),
+        );
+
+        let output =
+            build_semantic_graph_with_ts_direct_bindings_and_adaptation_models(&db, &[], &store);
+        let model_edges = output
+            .constraints
+            .iter()
+            .filter_map(|constraint| match &constraint.kind {
+                ConstraintKind::ModelEdge {
+                    source,
+                    target,
+                    language,
+                    scope,
+                    confidence,
+                    evidence,
+                } => Some((*source, *target, language, scope, confidence, evidence)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(model_edges.len(), 1);
+        let (_, _, language, scope, confidence, evidence) = model_edges[0];
+        assert_eq!(language, "typescript");
+        assert_eq!(scope, "src/app.ts");
+        assert_eq!(confidence, "heuristic");
+        assert_eq!(evidence, &vec!["src/app.ts:10".to_string()]);
+
+        let graph_store = SemanticGraphStore::from_output(output).expect("graph validates");
+        assert_eq!(
+            graph_store
+                .constraints()
+                .iter()
+                .filter(|constraint| matches!(constraint.kind, ConstraintKind::ModelEdge { .. }))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn adaptation_model_rejections_do_not_lower_to_model_edges() {
+        let db = fixture_db();
+        let base = build_semantic_graph(&db);
+        let source = node_key(&base, |kind| matches!(kind, NodeKind::Callsite(_)));
+        let target = node_key(&base, |kind| matches!(kind, NodeKind::Function(_)));
+        let rejected_target = model_store(
+            vec![model_fact(&source, "node|function|missing")],
+            std::slice::from_ref(&source),
+            std::slice::from_ref(&target),
+        );
+        let rejected_pattern = model_store(
+            vec![model_fact(&source, "function::*")],
+            std::slice::from_ref(&source),
+            std::slice::from_ref(&target),
+        );
+        let rejected_oracle = model_store(
+            vec![model_fact(&source, "expected:benchmark-answer")],
+            std::slice::from_ref(&source),
+            std::slice::from_ref(&target),
+        );
+
+        assert_eq!(
+            rejected_target.rejected()[0].reason,
+            RejectionReason::NonResolvingTarget
+        );
+        assert_eq!(
+            rejected_pattern.rejected()[0].reason,
+            RejectionReason::BroadTargetPattern
+        );
+        assert_eq!(
+            rejected_oracle.rejected()[0].reason,
+            RejectionReason::OracleShapedTarget
+        );
+
+        for store in [&rejected_target, &rejected_pattern, &rejected_oracle] {
+            let output =
+                build_semantic_graph_with_ts_direct_bindings_and_adaptation_models(&db, &[], store);
+            assert!(
+                output
+                    .constraints
+                    .iter()
+                    .all(|constraint| !matches!(constraint.kind, ConstraintKind::ModelEdge { .. }))
+            );
+        }
+
+        // Control: the same source with the resolving target is accepted.
+        let accepted = model_store(vec![model_fact(&source, &target)], &[source], &[target]);
+        assert_eq!(accepted.accepted().len(), 1);
+    }
+
+    fn node_key(output: &SemanticGraphOutput, predicate: impl Fn(&NodeKind) -> bool) -> String {
+        output
+            .nodes
+            .iter()
+            .find(|node| predicate(&node.kind))
+            .expect("node exists")
+            .stable_key
+            .clone()
+    }
+
+    fn model_store(
+        facts: Vec<LoadedModelFact>,
+        sources: &[String],
+        targets: &[String],
+    ) -> AdaptationModelStore {
+        let universe = ValidationUniverse::new(sources.iter().cloned(), targets.iter().cloned())
+            .with_oracle_labels(["expected:benchmark-answer"]);
+        AdaptationModelStore::build(facts, &universe, AdaptationModelBudget::default())
+    }
+
+    fn model_fact(source: &str, target: &str) -> LoadedModelFact {
+        LoadedModelFact {
+            model_path: ".polint/models/framework.toml".to_string(),
+            source_pattern: source.to_string(),
+            target_pattern: target.to_string(),
+            confidence: ModelConfidence::Heuristic,
+            language: ModelLanguage::TypeScript,
+            scope: "src/app.ts".to_string(),
+            evidence: vec!["src/app.ts:10".to_string()],
+            stable_key: format!("model:{source}->{target}"),
+        }
     }
 
     #[test]
