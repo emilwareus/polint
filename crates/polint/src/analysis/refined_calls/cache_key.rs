@@ -6,10 +6,8 @@ pub(crate) const REFINED_CALLS_SCHEMA_LABEL: &str = "refined-call-facts-1";
 pub(crate) struct RefinedCallsProviderParameters {
     pub(crate) precision_tier: &'static str,
     pub(crate) direct_mirror: bool,
-    pub(crate) framework_dispatch: &'static str,
-    pub(crate) type_value_function_tokens: &'static str,
-    pub(crate) summary_assistance: &'static str,
-    pub(crate) extension_slot: &'static str,
+    pub(crate) solver_projection: &'static str,
+    pub(crate) retired_heuristic_producers: bool,
 }
 
 impl RefinedCallsProviderParameters {
@@ -17,10 +15,8 @@ impl RefinedCallsProviderParameters {
         Self {
             precision_tier: "setup-aware",
             direct_mirror: true,
-            framework_dispatch: "planned",
-            type_value_function_tokens: "planned",
-            summary_assistance: "planned",
-            extension_slot: "absent",
+            solver_projection: "solver_derived_edges",
+            retired_heuristic_producers: true,
         }
     }
 }
@@ -81,13 +77,11 @@ fn parameter_parts(settings: &RefinedCallsProviderParameters) -> Vec<String> {
         REFINED_CALLS_SCHEMA_LABEL.to_string(),
         format!("precision_tier={}", settings.precision_tier),
         format!("direct_mirror={}", settings.direct_mirror),
-        format!("framework_dispatch={}", settings.framework_dispatch),
+        format!("solver_projection={}", settings.solver_projection),
         format!(
-            "type_value_function_tokens={}",
-            settings.type_value_function_tokens
+            "retired_heuristic_producers={}",
+            settings.retired_heuristic_producers
         ),
-        format!("summary_assistance={}", settings.summary_assistance),
-        format!("extension_slot={}", settings.extension_slot),
     ]
 }
 

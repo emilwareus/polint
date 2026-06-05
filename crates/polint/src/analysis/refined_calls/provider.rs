@@ -1,4 +1,5 @@
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 
 use super::cache_key::{
@@ -7,8 +8,14 @@ use super::cache_key::{
 use super::facts::{
     RefinedCallConfidence, RefinedCallEdgeFact, RefinedCallTier, RefinedCallValidation,
 };
-use super::store::{RefinedCallOutput, next_refined_call_id};
-use crate::analysis::calls::facts::{CallTargetFact, CallTargetStatus};
+use super::store::RefinedCallOutput;
+use crate::analysis::calls::facts::{
+    CallAlgorithm, CallEdgeKind, CallPrecision, CallProvenance, CallSiteFact, CallSyntaxKind,
+    CallTargetFact, CallTargetStatus, UnresolvedCallReason,
+};
+use crate::analysis::points_to::facts::{PointsToPrecision, PointsToStatus};
+use crate::analysis::semantic_graph::facts::NodeKind;
+use crate::analysis::solver::facts::DerivedEdgeFact;
 use crate::analysis_kernel::incremental::{
     CacheStats, Digest, DigestKind, InputComponent, InputSnapshot,
 };
@@ -35,33 +42,19 @@ pub(crate) fn derive_refined_calls_with_cache_stats(
     direct_summaries_output_digest: Digest,
     type_value_alias_output_digest: Digest,
     extensions_output_digest: Digest,
+    solver_output_digest: Digest,
 ) -> RefinedCallsProviderOutput {
     debug_assert_eq!(manifest.id, REFINED_CALLS_PROVIDER_ID);
     let mut output = RefinedCallOutput::empty();
     for target in db.call_targets() {
-        let id = next_refined_call_id(&output.edges);
         output.edges.push(refined_edge_from_base_target(
             db,
             target,
-            id,
+            crate::analysis::ids::RefinedCallEdgeId(0),
             RefinedCallTier::DirectOnly,
         ));
     }
-    output
-        .edges
-        .extend(super::framework::derive_framework_refinements(db).edges);
-    output
-        .edges
-        .extend(super::go::derive_go_refinements(db).edges);
-    output
-        .edges
-        .extend(super::ts_js::derive_ts_js_refinements(db).edges);
-    output
-        .edges
-        .extend(super::summaries::derive_summary_assisted_refinements(db).edges);
-    output
-        .edges
-        .extend(super::extensions::derive_extension_refinements(db).edges);
+    output.edges.extend(derive_solver_refinements(db).edges);
     output = finalized_output(output);
 
     let output_digest = refined_calls_output_digest(
@@ -72,6 +65,7 @@ pub(crate) fn derive_refined_calls_with_cache_stats(
         &direct_summaries_output_digest,
         &type_value_alias_output_digest,
         &extensions_output_digest,
+        &solver_output_digest,
         &output,
     );
     let mut cache_stats = CacheStats::default();
@@ -138,6 +132,184 @@ fn refined_edge_from_base_target(
     }
 }
 
+fn derive_solver_refinements(db: &AnalysisDb) -> RefinedCallOutput {
+    let index = SolverProjectionIndex::new(db);
+    let mut output = RefinedCallOutput::empty();
+    output.edges.extend(
+        db.solver_derived_edges()
+            .iter()
+            .filter_map(|edge| refined_edge_from_solver_edge(&index, edge)),
+    );
+    output
+}
+
+fn refined_edge_from_solver_edge(
+    index: &SolverProjectionIndex<'_>,
+    edge: &DerivedEdgeFact,
+) -> Option<RefinedCallEdgeFact> {
+    if edge.provenance.constraint_kind != "call_constraint" {
+        return None;
+    }
+    let caller = index.function_by_node.get(&edge.source).copied()?;
+    let target_function = index.function_by_node.get(&edge.target).copied()?;
+    let site = index.callsite_for_solver_edge(edge)?;
+    if site.caller != caller {
+        return None;
+    }
+
+    Some(RefinedCallEdgeFact {
+        id: crate::analysis::ids::RefinedCallEdgeId(0),
+        site: site.id,
+        base_target: None,
+        caller,
+        target_function: Some(target_function),
+        target_symbol: None,
+        synthetic_target: None,
+        language: site.language,
+        edge_kind: solver_edge_kind_for_site(site),
+        algorithm: solver_algorithm_for_site(site),
+        tier: RefinedCallTier::PointsToAssisted,
+        status: call_status_for_solver_edge(edge.status),
+        reason: unresolved_reason_for_solver_edge(edge.status),
+        provenance: CallProvenance::Model,
+        precision: call_precision_for_solver_edge(edge.precision),
+        validation: RefinedCallValidation::ReferentiallyValidated,
+        confidence: confidence_for_solver_edge(edge.status),
+        evidence: solver_evidence(edge),
+        input_stable_keys: solver_input_stable_keys(edge),
+        stable_key: stable_refined_call_key_from_solver_edge(site, edge),
+    })
+}
+
+struct SolverProjectionIndex<'a> {
+    function_by_node: BTreeMap<crate::analysis::ids::SemanticNodeId, crate::core::FunctionId>,
+    callsite_by_stable_key: BTreeMap<&'a str, &'a CallSiteFact>,
+}
+
+impl<'a> SolverProjectionIndex<'a> {
+    fn new(db: &'a AnalysisDb) -> Self {
+        let function_by_node = db
+            .semantic_nodes()
+            .iter()
+            .filter_map(|node| {
+                let NodeKind::Function(function) = node.kind else {
+                    return None;
+                };
+                Some((node.id, function))
+            })
+            .collect();
+        let callsite_by_stable_key = db
+            .call_sites()
+            .iter()
+            .map(|site| (site.stable_key.as_str(), site))
+            .collect();
+        Self {
+            function_by_node,
+            callsite_by_stable_key,
+        }
+    }
+
+    fn callsite_for_solver_edge(&self, edge: &DerivedEdgeFact) -> Option<&'a CallSiteFact> {
+        edge.provenance.contributing_facts.iter().find_map(|fact| {
+            self.callsite_by_stable_key
+                .get(fact.stable_key.as_str())
+                .copied()
+        })
+    }
+}
+
+fn solver_edge_kind_for_site(site: &CallSiteFact) -> CallEdgeKind {
+    match site.kind {
+        CallSyntaxKind::Method | CallSyntaxKind::Member => CallEdgeKind::Method,
+        CallSyntaxKind::Constructor | CallSyntaxKind::New => CallEdgeKind::Constructor,
+        CallSyntaxKind::GoRoutine => CallEdgeKind::Spawn,
+        CallSyntaxKind::Deferred => CallEdgeKind::Deferred,
+        CallSyntaxKind::FunctionValue => CallEdgeKind::FunctionValue,
+        CallSyntaxKind::Function => CallEdgeKind::FunctionValue,
+        _ => CallEdgeKind::Unknown,
+    }
+}
+
+fn solver_algorithm_for_site(site: &CallSiteFact) -> CallAlgorithm {
+    match site.language {
+        crate::core::Language::Go => CallAlgorithm::GoRta,
+        language if language.is_ts_family() => CallAlgorithm::PointsTo,
+        _ => CallAlgorithm::PointsTo,
+    }
+}
+
+fn call_status_for_solver_edge(status: PointsToStatus) -> CallTargetStatus {
+    match status {
+        PointsToStatus::Present => CallTargetStatus::Resolved,
+        PointsToStatus::Unknown => CallTargetStatus::Unresolved,
+        PointsToStatus::Unsupported => CallTargetStatus::Unsupported,
+        PointsToStatus::SetupMissing => CallTargetStatus::SetupMissing,
+        PointsToStatus::BudgetExceeded => CallTargetStatus::BudgetExceeded,
+    }
+}
+
+fn unresolved_reason_for_solver_edge(status: PointsToStatus) -> Option<UnresolvedCallReason> {
+    match status {
+        PointsToStatus::BudgetExceeded => Some(UnresolvedCallReason::BudgetExceeded),
+        PointsToStatus::SetupMissing => Some(UnresolvedCallReason::SetupMissing),
+        PointsToStatus::Unsupported => Some(UnresolvedCallReason::UnsupportedSyntax),
+        PointsToStatus::Unknown => Some(UnresolvedCallReason::Unknown),
+        PointsToStatus::Present => None,
+    }
+}
+
+fn call_precision_for_solver_edge(precision: PointsToPrecision) -> CallPrecision {
+    match precision {
+        PointsToPrecision::FlowInsensitive | PointsToPrecision::LocalFlowSensitive => {
+            CallPrecision::SetupAware
+        }
+        PointsToPrecision::SummaryProjected | PointsToPrecision::Heuristic => {
+            CallPrecision::Heuristic
+        }
+        PointsToPrecision::Unknown => CallPrecision::Unknown,
+        PointsToPrecision::Unsupported => CallPrecision::Unsupported,
+    }
+}
+
+fn confidence_for_solver_edge(status: PointsToStatus) -> RefinedCallConfidence {
+    match status {
+        PointsToStatus::Present => RefinedCallConfidence::Medium,
+        PointsToStatus::BudgetExceeded => RefinedCallConfidence::Low,
+        PointsToStatus::Unknown | PointsToStatus::Unsupported | PointsToStatus::SetupMissing => {
+            RefinedCallConfidence::Low
+        }
+    }
+}
+
+fn solver_evidence(edge: &DerivedEdgeFact) -> Vec<String> {
+    vec![
+        "solver_derived_edge".to_string(),
+        format!("constraint:{}", edge.provenance.constraint_kind),
+    ]
+}
+
+fn solver_input_stable_keys(edge: &DerivedEdgeFact) -> Vec<String> {
+    let mut keys = vec![edge.stable_key.clone()];
+    keys.extend(
+        edge.provenance
+            .contributing_facts
+            .iter()
+            .map(|fact| fact.stable_key.clone()),
+    );
+    keys
+}
+
+fn stable_refined_call_key_from_solver_edge(site: &CallSiteFact, edge: &DerivedEdgeFact) -> String {
+    crate::analysis_kernel::stable_key_from_parts(
+        FactFamily::RefinedCallEdge,
+        &[
+            ("tier", format!("{:?}", RefinedCallTier::PointsToAssisted)),
+            ("solver_edge", edge.stable_key.clone()),
+            ("site", site.stable_key.clone()),
+        ],
+    )
+}
+
 fn validation_for_target(target: &CallTargetFact) -> RefinedCallValidation {
     match target.status {
         CallTargetStatus::Rejected => RefinedCallValidation::Rejected,
@@ -185,6 +357,7 @@ fn refined_calls_output_digest(
     direct_summaries_output_digest: &Digest,
     type_value_alias_output_digest: &Digest,
     extensions_output_digest: &Digest,
+    solver_output_digest: &Digest,
     output: &RefinedCallOutput,
 ) -> Digest {
     let upstream = vec![
@@ -193,6 +366,7 @@ fn refined_calls_output_digest(
         direct_summaries_output_digest.clone(),
         type_value_alias_output_digest.clone(),
         extensions_output_digest.clone(),
+        solver_output_digest.clone(),
     ];
     let mut parts = vec![
         format!("provider_id={}", manifest.id),
@@ -209,6 +383,7 @@ fn refined_calls_output_digest(
         format!("direct_summaries={direct_summaries_output_digest}"),
         format!("type_value_alias={type_value_alias_output_digest}"),
         format!("extensions={extensions_output_digest}"),
+        format!("solver={solver_output_digest}"),
     ];
     extend_component_parts(
         &mut parts,
@@ -256,6 +431,243 @@ where
     T: Serialize + Debug,
 {
     serde_json::to_string(fact).unwrap_or_else(|_| format!("{fact:?}"))
+}
+
+#[cfg(test)]
+mod solver_projection_tests {
+    use super::*;
+    use crate::analysis::calls::facts::CallCallee;
+    use crate::analysis::calls::store::CallOutput;
+    use crate::analysis::ids::{CallSiteId, DerivedEdgeId, MirBodyId, MirOpId, SemanticNodeId};
+    use crate::analysis::semantic_graph::constraints::ConstraintKind;
+    use crate::analysis::semantic_graph::facts::{SemanticNodeFact, SemanticPrecision};
+    use crate::analysis::semantic_graph::store::SemanticGraphOutput;
+    use crate::analysis::solver::budget::BudgetStatus;
+    use crate::analysis::solver::provenance::{ContributingFact, DerivedEdgeProvenance};
+    use crate::analysis::solver::store::SolverOutput;
+    use crate::analysis_kernel::AnalysisKernel;
+    use crate::analysis_kernel::incremental::InputSnapshot;
+    use crate::analysis_plan::AnalysisPlan;
+    use crate::config::load_config;
+    use crate::core::{FileId, FunctionFact, FunctionId, Language, Span};
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn solver_derived_call_edges_project_to_refined_calls() {
+        let db = db_with_solver_edge();
+
+        let output = derive_solver_refinements(&db);
+
+        assert_eq!(output.edges.len(), 1);
+        let edge = &output.edges[0];
+        assert_eq!(edge.site, CallSiteId(0));
+        assert_eq!(edge.base_target, None);
+        assert_eq!(edge.caller, FunctionId(0));
+        assert_eq!(edge.target_function, Some(FunctionId(1)));
+        assert_eq!(edge.tier, RefinedCallTier::PointsToAssisted);
+        assert_eq!(edge.status, CallTargetStatus::Resolved);
+        assert_eq!(edge.precision, CallPrecision::SetupAware);
+        assert_eq!(
+            edge.validation,
+            RefinedCallValidation::ReferentiallyValidated
+        );
+        assert!(edge.evidence.contains(&"solver_derived_edge".to_string()));
+        assert!(
+            edge.input_stable_keys
+                .iter()
+                .any(|key| key == "call-site:callee")
+        );
+    }
+
+    #[test]
+    fn refined_calls_digest_changes_with_solver_output_digest() {
+        let mut db_a = db_with_solver_edge();
+        let snapshot_a = snapshot(&db_a);
+        let base = derive_refined_calls_with_cache_stats(
+            &mut db_a,
+            &snapshot_a,
+            manifest(),
+            absent("polint.calls"),
+            absent("polint.entrypoints"),
+            absent("polint.direct_summaries"),
+            absent("polint.type_value_alias"),
+            absent("polint.extensions"),
+            Digest::from_parts(DigestKind::ProviderOutput, "polint.solver", &["a"]),
+        )
+        .output_digest;
+
+        let mut db_b = db_with_solver_edge();
+        let snapshot_b = snapshot(&db_b);
+        let changed = derive_refined_calls_with_cache_stats(
+            &mut db_b,
+            &snapshot_b,
+            manifest(),
+            absent("polint.calls"),
+            absent("polint.entrypoints"),
+            absent("polint.direct_summaries"),
+            absent("polint.type_value_alias"),
+            absent("polint.extensions"),
+            Digest::from_parts(DigestKind::ProviderOutput, "polint.solver", &["b"]),
+        )
+        .output_digest;
+
+        assert_ne!(base, changed);
+    }
+
+    fn db_with_solver_edge() -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            "app.ts".into(),
+            "app.ts".to_string(),
+            "callee();\n".to_string(),
+        );
+        db.push_function(function(
+            FunctionId(0),
+            file,
+            "caller",
+            vec!["callee".to_string()],
+        ));
+        db.push_function(function(FunctionId(1), file, "callee", Vec::new()));
+        db.replace_call_facts(CallOutput {
+            sites: vec![CallSiteFact {
+                id: CallSiteId(0),
+                language: Language::TypeScript,
+                file,
+                caller: FunctionId(0),
+                owner_symbol: None,
+                body: MirBodyId(0),
+                operation: MirOpId(0),
+                span: span(),
+                kind: CallSyntaxKind::Function,
+                callee: CallCallee::Identifier {
+                    reference: None,
+                    name: "callee".to_string(),
+                },
+                receiver: None,
+                arguments: Vec::new(),
+                result: None,
+                status: CallTargetStatus::Resolved,
+                precision: CallPrecision::SetupAware,
+                stable_key: "call-site:callee".to_string(),
+            }],
+            targets: Vec::new(),
+            unresolved: Vec::new(),
+        })
+        .expect("valid calls");
+        db.replace_semantic_graph_facts(SemanticGraphOutput {
+            nodes: vec![
+                semantic_node(
+                    SemanticNodeId(0),
+                    NodeKind::Function(FunctionId(0)),
+                    "node:function:caller",
+                ),
+                semantic_node(
+                    SemanticNodeId(1),
+                    NodeKind::Function(FunctionId(1)),
+                    "node:function:callee",
+                ),
+            ],
+            edges: Vec::new(),
+            constraints: Vec::new(),
+        })
+        .expect("valid semantic graph");
+
+        let caller_node = function_node(&db, FunctionId(0));
+        let callee_node = function_node(&db, FunctionId(1));
+        let provenance = DerivedEdgeProvenance::new(
+            vec![
+                ContributingFact {
+                    stable_key: "call-site:callee".to_string(),
+                },
+                ContributingFact {
+                    stable_key: "constraint:call".to_string(),
+                },
+            ],
+            &ConstraintKind::CallConstraint {
+                callsite: SemanticNodeId(99),
+            },
+            1,
+        );
+        db.replace_solver_facts(SolverOutput {
+            derived_edges: vec![DerivedEdgeFact {
+                id: DerivedEdgeId(0),
+                source: caller_node,
+                target: callee_node,
+                status: PointsToStatus::Present,
+                precision: PointsToPrecision::FlowInsensitive,
+                stable_key: "solver-edge:caller-callee".to_string(),
+                provenance,
+            }],
+            budget_status: BudgetStatus::WithinBudget,
+        })
+        .expect("valid solver facts");
+        db
+    }
+
+    fn function(id: FunctionId, file: FileId, name: &str, calls: Vec<String>) -> FunctionFact {
+        FunctionFact {
+            id,
+            file,
+            name: name.to_string(),
+            span: span(),
+            language: Language::TypeScript,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 1,
+            calls,
+        }
+    }
+
+    fn semantic_node(id: SemanticNodeId, kind: NodeKind, stable_key: &str) -> SemanticNodeFact {
+        SemanticNodeFact {
+            id,
+            kind,
+            precision: SemanticPrecision::SetupAware,
+            stable_key: stable_key.to_string(),
+        }
+    }
+
+    fn function_node(db: &AnalysisDb, function: FunctionId) -> SemanticNodeId {
+        db.semantic_nodes()
+            .iter()
+            .find_map(|node| {
+                let NodeKind::Function(candidate) = node.kind else {
+                    return None;
+                };
+                (candidate == function).then_some(node.id)
+            })
+            .expect("function node")
+    }
+
+    fn manifest() -> &'static ProviderManifest {
+        AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == REFINED_CALLS_PROVIDER_ID)
+            .expect("refined calls manifest")
+    }
+
+    fn snapshot(db: &AnalysisDb) -> InputSnapshot {
+        let temp = tempdir().expect("tempdir");
+        fs::write(temp.path().join(".polint.toml"), "").expect("config");
+        let loaded = load_config(temp.path()).expect("config loads");
+        InputSnapshot::from_run_inputs(
+            &loaded,
+            db,
+            "config-a",
+            "rules-a",
+            AnalysisPlan::empty().digest(),
+            AnalysisKernel::provider_manifests(),
+        )
+    }
+
+    fn absent(provider: &str) -> Digest {
+        Digest::absent(DigestKind::ProviderOutput, provider)
+    }
+
+    fn span() -> Span {
+        Span::point(FileId(0), 1, 1)
+    }
 }
 
 fn provider_error_diagnostic(message: String) -> Diagnostic {

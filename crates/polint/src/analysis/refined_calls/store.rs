@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::analysis::calls::facts::{CallAlgorithm, CallProvenance, CallTargetStatus};
 use crate::analysis::error::AnalysisError;
-use crate::analysis::ids::{CallSiteId, RefinedCallEdgeId};
+use crate::analysis::ids::CallSiteId;
 use crate::analysis::refined_calls::facts::{RefinedCallEdgeFact, RefinedCallTier};
 use crate::core::{FunctionId, SymbolId};
 
@@ -190,14 +190,11 @@ impl RefinedCallStore {
     }
 }
 
-pub(crate) fn next_refined_call_id(edges: &[RefinedCallEdgeFact]) -> RefinedCallEdgeId {
-    RefinedCallEdgeId(edges.len() as u64)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::analysis::calls::facts::{CallEdgeKind, CallPrecision};
+    use crate::analysis::ids::RefinedCallEdgeId;
     use crate::analysis::refined_calls::facts::{RefinedCallConfidence, RefinedCallValidation};
     use crate::core::Language;
 
