@@ -1,5 +1,6 @@
 use crate::analysis::access_paths::facts::AccessPathFact;
 use crate::analysis::access_paths::store::AccessPathStore;
+use crate::analysis::adaptation::facts::{AcceptedModelFact, RejectedModelFact};
 use crate::analysis::aliases::facts::{AliasAnswerFact, AliasPrecision, AliasStatus};
 use crate::analysis::aliases::store::AliasStore;
 use crate::analysis::calls::facts::{
@@ -739,6 +740,8 @@ pub struct AnalysisDb {
         reason = "Rejected extension audit rows are surfaced by the extension provider/debug wiring in the next Phase 34 plan."
     )]
     rejected_extension_facts: Vec<RejectedExtensionFact>,
+    adaptation_model_facts: Vec<AcceptedModelFact>,
+    rejected_adaptation_model_facts: Vec<RejectedModelFact>,
     entrypoint_facts: Vec<EntrypointFact>,
     trust_boundary_facts: Vec<TrustBoundaryFact>,
     dispatch_edge_facts: Vec<FrameworkDispatchEdgeFact>,
@@ -1405,6 +1408,28 @@ impl AnalysisDb {
         &self.rejected_extension_facts
     }
 
+    pub(crate) fn replace_adaptation_model_facts(
+        &mut self,
+        accepted: Vec<AcceptedModelFact>,
+        rejected: Vec<RejectedModelFact>,
+    ) {
+        self.adaptation_model_facts = accepted;
+        self.rejected_adaptation_model_facts = rejected;
+        self.refresh_adaptation_model_metadata();
+    }
+
+    pub(crate) fn adaptation_model_facts(&self) -> &[AcceptedModelFact] {
+        &self.adaptation_model_facts
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Rejected adaptation model audit rows are surfaced by eval fixture observation wiring."
+    )]
+    pub(crate) fn rejected_adaptation_model_facts(&self) -> &[RejectedModelFact] {
+        &self.rejected_adaptation_model_facts
+    }
+
     pub(crate) fn replace_entrypoint_facts(
         &mut self,
         output: EntrypointOutput,
@@ -2048,6 +2073,19 @@ impl AnalysisDb {
             .collect::<Vec<_>>();
         for (run_id, metadata) in metadata {
             self.record_fact_meta(FactFamily::ExtensionFact, run_id, metadata);
+        }
+    }
+
+    fn refresh_adaptation_model_metadata(&mut self) {
+        self.fact_meta.remove_family(FactFamily::AdaptationModel);
+        let metadata = self
+            .adaptation_model_facts
+            .iter()
+            .enumerate()
+            .map(|(index, fact)| (index as u64, adaptation_model_fact_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in metadata {
+            self.record_fact_meta(FactFamily::AdaptationModel, run_id, metadata);
         }
     }
 
@@ -3373,6 +3411,13 @@ impl AnalysisDb {
         }
         for (run_id, _fact) in self.extension_facts().iter().enumerate() {
             self.push_missing_fact_metadata(&mut missing, FactFamily::ExtensionFact, run_id as u64);
+        }
+        for (run_id, _fact) in self.adaptation_model_facts().iter().enumerate() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::AdaptationModel,
+                run_id as u64,
+            );
         }
 
         missing.sort_by(|left, right| {
@@ -5461,6 +5506,29 @@ fn extension_fact_metadata(fact: &AcceptedExtensionFact) -> FactMeta {
         confidence,
         validation: ValidationStatus::SchemaValidated,
         payload_digest,
+    }
+}
+
+fn adaptation_model_fact_metadata(fact: &AcceptedModelFact) -> FactMeta {
+    FactMeta {
+        stable_key: fact.fact.stable_key.clone(),
+        producer_id: "polint.adaptation.model",
+        layer_id: "polint.adaptation.model",
+        precision: FactPrecision::Heuristic,
+        confidence: FactConfidence::Medium,
+        validation: ValidationStatus::SchemaValidated,
+        payload_digest: metadata_payload_digest(
+            &fact.fact.stable_key,
+            &[
+                ("model_path", fact.fact.model_path.clone()),
+                ("source_pattern", fact.fact.source_pattern.clone()),
+                ("target_pattern", fact.fact.target_pattern.clone()),
+                ("confidence", fact.fact.confidence.as_str().to_string()),
+                ("language", fact.fact.language.as_str().to_string()),
+                ("scope", fact.fact.scope.clone()),
+                ("evidence", fact.fact.evidence.join(",")),
+            ],
+        ),
     }
 }
 

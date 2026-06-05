@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use crate::eval::matcher::{MatchItemKind, MatchOutcome};
+use crate::eval::metrics::compute_metrics;
 use crate::eval::model::{ObservedFact, ObservedItem, ObservedStatus};
 use crate::eval::report::{CaseResult, EvaluationRun, normalize_run};
 
@@ -89,6 +90,32 @@ pub(crate) struct HeldOutDeltaReport {
     pub(crate) held_out_cache_invalidation_scope: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) struct HeldOutCasePartition {
+    pub(crate) selection_cases: Vec<String>,
+    pub(crate) held_out_cases: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) held_out_cache_invalidation_scope: Option<String>,
+}
+
+impl HeldOutCasePartition {
+    fn held_out_case_ids(&self) -> BTreeSet<&str> {
+        self.held_out_cases.iter().map(String::as_str).collect()
+    }
+
+    fn is_held_out(&self, case_id: &str) -> bool {
+        self.held_out_cases
+            .iter()
+            .any(|held_out| held_out == case_id)
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct AdaptationDeltaOptions {
+    pub(crate) held_out_partition: Option<HeldOutCasePartition>,
+}
+
 impl CaseDelta {
     fn normalize(&mut self) {
         self.new_true_positive_keys.sort();
@@ -125,6 +152,14 @@ pub(crate) fn compute_adaptation_delta(
     baseline: &EvaluationRun,
     adapted: &EvaluationRun,
 ) -> AdaptationDeltaReport {
+    compute_adaptation_delta_with_options(baseline, adapted, AdaptationDeltaOptions::default())
+}
+
+pub(crate) fn compute_adaptation_delta_with_options(
+    baseline: &EvaluationRun,
+    adapted: &EvaluationRun,
+    options: AdaptationDeltaOptions,
+) -> AdaptationDeltaReport {
     let baseline = normalize_run(baseline);
     let adapted = normalize_run(adapted);
     let baseline_cases = case_map(&baseline.cases);
@@ -151,11 +186,18 @@ pub(crate) fn compute_adaptation_delta(
         collect_match_deltas(baseline_case, adapted_case, &mut case_delta);
         collect_extension_fact_deltas(baseline_case, adapted_case, &mut case_delta);
         collect_model_fact_deltas(baseline_case, adapted_case, &mut case_delta);
-        if !case_delta.is_empty() {
+        if let Some(partition) = &options.held_out_partition {
+            case_delta.held_out = partition.is_held_out(case_id);
+        }
+        if !case_delta.is_empty() || case_delta.held_out {
             accumulate_case(&mut report, &case_delta);
             case_delta.normalize();
             report.cases.push(case_delta);
         }
+    }
+
+    if let Some(partition) = &options.held_out_partition {
+        report.held_out = Some(compute_held_out_delta(&baseline, &adapted, partition));
     }
 
     report.normalize();
@@ -343,17 +385,24 @@ fn model_fact_keys(case: Option<&CaseResult>) -> BTreeMap<String, Option<Observe
 }
 
 fn is_adaptation_model_fact(fact: &ObservedFact) -> bool {
-    fact.family.contains("adaptation_model")
-        || fact.producer_id.as_deref().is_some_and(|producer| {
-            matches!(
-                producer,
-                "polint.adaptation.model" | "polint.adaptation_model" | "polint.adaptation-model"
-            )
-        })
+    is_adaptation_model_label(&fact.family)
+        || fact
+            .producer_id
+            .as_deref()
+            .is_some_and(is_adaptation_model_label)
         || fact
             .provenance
             .as_deref()
-            .is_some_and(|provenance| provenance.contains("adaptation_model"))
+            .is_some_and(is_adaptation_model_label)
+}
+
+fn is_adaptation_model_label(label: &str) -> bool {
+    label
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .collect::<String>()
+        .to_ascii_lowercase()
+        .contains("adaptationmodel")
 }
 
 fn is_false_positive_outcome(outcome: MatchOutcome) -> bool {
@@ -373,6 +422,75 @@ fn runtime_overhead_ratio(baseline: &[CaseResult], adapted: &[CaseResult]) -> Op
 }
 
 fn total_runtime_ms(cases: &[CaseResult]) -> Option<u64> {
+    let mut total = 0_u64;
+    for case in cases {
+        total = total.checked_add(case.runtime.observed_runtime_ms?)?;
+    }
+    Some(total)
+}
+
+fn compute_held_out_delta(
+    baseline: &EvaluationRun,
+    adapted: &EvaluationRun,
+    partition: &HeldOutCasePartition,
+) -> HeldOutDeltaReport {
+    let held_out_ids = partition.held_out_case_ids();
+    let baseline_cases = cases_with_ids(&baseline.cases, &held_out_ids);
+    let adapted_cases = cases_with_ids(&adapted.cases, &held_out_ids);
+    let baseline_matches = matches_for_cases(&baseline_cases);
+    let adapted_matches = matches_for_cases(&adapted_cases);
+    let baseline_metrics = compute_metrics(&baseline_matches);
+    let adapted_metrics = compute_metrics(&adapted_matches);
+
+    HeldOutDeltaReport {
+        selection_cases: partition.selection_cases.len() as u64,
+        held_out_cases: partition.held_out_cases.len() as u64,
+        held_out_unknown_delta: adapted_metrics.unknown_count as i64
+            - baseline_metrics.unknown_count as i64,
+        held_out_precision_delta: metric_delta(
+            baseline_metrics.precision,
+            adapted_metrics.precision,
+        ),
+        held_out_recall_delta: metric_delta(baseline_metrics.recall, adapted_metrics.recall),
+        held_out_runtime_overhead_ratio: runtime_overhead_ratio_for_refs(
+            &baseline_cases,
+            &adapted_cases,
+        ),
+        held_out_cache_invalidation_scope: partition.held_out_cache_invalidation_scope.clone(),
+    }
+}
+
+fn cases_with_ids<'a>(cases: &'a [CaseResult], ids: &BTreeSet<&str>) -> Vec<&'a CaseResult> {
+    cases
+        .iter()
+        .filter(|case| ids.contains(case.case_id.as_str()))
+        .collect()
+}
+
+fn matches_for_cases(cases: &[&CaseResult]) -> Vec<crate::eval::report::MatchSummary> {
+    cases
+        .iter()
+        .flat_map(|case| case.matches.iter().cloned())
+        .collect()
+}
+
+fn metric_delta(before: Option<f64>, after: Option<f64>) -> Option<f64> {
+    Some(after? - before?)
+}
+
+fn runtime_overhead_ratio_for_refs(
+    baseline: &[&CaseResult],
+    adapted: &[&CaseResult],
+) -> Option<f64> {
+    let baseline_ms = total_runtime_ms_for_refs(baseline)?;
+    let adapted_ms = total_runtime_ms_for_refs(adapted)?;
+    if baseline_ms == 0 {
+        return None;
+    }
+    Some(adapted_ms as f64 / baseline_ms as f64)
+}
+
+fn total_runtime_ms_for_refs(cases: &[&CaseResult]) -> Option<u64> {
     let mut total = 0_u64;
     for case in cases {
         total = total.checked_add(case.runtime.observed_runtime_ms?)?;
@@ -496,6 +614,31 @@ mod tests {
     }
 
     #[test]
+    fn adaptation_model_family_facts_are_reported_without_synthetic_producer_hints() {
+        let baseline = run(vec![case("case-a", Vec::new(), Vec::new(), Some(10))]);
+        let adapted = run(vec![case(
+            "case-a",
+            Vec::new(),
+            vec![ObservedItem::Fact(ObservedFact {
+                family: "AdaptationModel".to_string(),
+                stable_key: "edge:/real".to_string(),
+                mode: AssertionMode::Exact,
+                producer_id: None,
+                provenance: None,
+                precision: Some("heuristic".to_string()),
+                status: Some(ObservedStatus::Accepted),
+                payload: None,
+            })],
+            Some(10),
+        )]);
+
+        let delta = compute_adaptation_delta(&baseline, &adapted);
+
+        assert_eq!(delta.accepted_model_facts, 1);
+        assert_eq!(delta.rejected_model_facts, 0);
+    }
+
+    #[test]
     fn extension_adaptation_facts_do_not_count_as_model_facts() {
         let baseline = run(vec![case("case-a", Vec::new(), Vec::new(), Some(10))]);
         let adapted = run(vec![case(
@@ -518,19 +661,148 @@ mod tests {
 
     #[test]
     fn held_out_delta_report_labels_selection_and_held_out_cases() {
-        let report = HeldOutDeltaReport {
-            selection_cases: 2,
-            held_out_cases: 3,
-            held_out_unknown_delta: -1,
-            held_out_precision_delta: Some(0.05),
-            held_out_recall_delta: Some(0.10),
-            held_out_runtime_overhead_ratio: Some(1.2),
-            held_out_cache_invalidation_scope: Some("model-files".to_string()),
-        };
+        #[derive(Deserialize)]
+        struct HeldOutFixture {
+            selection_cases: Vec<String>,
+            held_out_cases: Vec<String>,
+            held_out_unknown_delta: i64,
+            held_out_precision_delta: f64,
+            held_out_recall_delta: f64,
+            held_out_runtime_overhead_ratio: f64,
+            held_out_cache_invalidation_scope: String,
+        }
 
-        assert_eq!(report.selection_cases, 2);
-        assert_eq!(report.held_out_cases, 3);
-        assert_eq!(report.held_out_unknown_delta, -1);
+        let fixture: HeldOutFixture = toml::from_str(
+            &std::fs::read_to_string(
+                repo_root()
+                    .join("tests/eval-fixtures/adaptation-model/held-out-delta/partition.toml"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let partition = HeldOutCasePartition {
+            selection_cases: fixture.selection_cases.clone(),
+            held_out_cases: fixture.held_out_cases.clone(),
+            held_out_cache_invalidation_scope: Some(
+                fixture.held_out_cache_invalidation_scope.clone(),
+            ),
+        };
+        let baseline = run(vec![
+            case("case-selection-a", Vec::new(), Vec::new(), Some(1)),
+            case("case-selection-b", Vec::new(), Vec::new(), Some(1)),
+            case(
+                "case-held-out-a",
+                vec![
+                    summary(
+                        "diagnostic:tp",
+                        MatchOutcome::TruePositive,
+                        MatchItemKind::Diagnostic,
+                    ),
+                    summary(
+                        "diagnostic:fp",
+                        MatchOutcome::FalsePositive,
+                        MatchItemKind::Diagnostic,
+                    ),
+                    summary(
+                        "diagnostic:fn",
+                        MatchOutcome::FalseNegative,
+                        MatchItemKind::Diagnostic,
+                    ),
+                    summary(
+                        "diagnostic:unknown",
+                        MatchOutcome::Unknown,
+                        MatchItemKind::Diagnostic,
+                    ),
+                ],
+                Vec::new(),
+                Some(10),
+            ),
+            case("case-held-out-b", Vec::new(), Vec::new(), Some(0)),
+            case("case-held-out-c", Vec::new(), Vec::new(), Some(0)),
+        ]);
+        let adapted = run(vec![
+            case("case-selection-a", Vec::new(), Vec::new(), Some(1)),
+            case("case-selection-b", Vec::new(), Vec::new(), Some(1)),
+            case(
+                "case-held-out-a",
+                vec![
+                    summary(
+                        "diagnostic:tp-1",
+                        MatchOutcome::TruePositive,
+                        MatchItemKind::Diagnostic,
+                    ),
+                    summary(
+                        "diagnostic:tp-2",
+                        MatchOutcome::TruePositive,
+                        MatchItemKind::Diagnostic,
+                    ),
+                    summary(
+                        "diagnostic:tp-3",
+                        MatchOutcome::TruePositive,
+                        MatchItemKind::Diagnostic,
+                    ),
+                    summary(
+                        "diagnostic:fp-1",
+                        MatchOutcome::FalsePositive,
+                        MatchItemKind::Diagnostic,
+                    ),
+                    summary(
+                        "diagnostic:fp-2",
+                        MatchOutcome::FalsePositive,
+                        MatchItemKind::Diagnostic,
+                    ),
+                    summary(
+                        "diagnostic:fn-1",
+                        MatchOutcome::FalseNegative,
+                        MatchItemKind::Diagnostic,
+                    ),
+                    summary(
+                        "diagnostic:fn-2",
+                        MatchOutcome::FalseNegative,
+                        MatchItemKind::Diagnostic,
+                    ),
+                ],
+                Vec::new(),
+                Some(12),
+            ),
+            case("case-held-out-b", Vec::new(), Vec::new(), Some(0)),
+            case("case-held-out-c", Vec::new(), Vec::new(), Some(0)),
+        ]);
+
+        let delta = compute_adaptation_delta_with_options(
+            &baseline,
+            &adapted,
+            AdaptationDeltaOptions {
+                held_out_partition: Some(partition),
+            },
+        );
+        let report = delta.held_out.unwrap();
+
+        assert_eq!(report.selection_cases, fixture.selection_cases.len() as u64);
+        assert_eq!(report.held_out_cases, fixture.held_out_cases.len() as u64);
+        assert_eq!(
+            report.held_out_unknown_delta,
+            fixture.held_out_unknown_delta
+        );
+        assert_delta(
+            report.held_out_precision_delta,
+            fixture.held_out_precision_delta,
+        );
+        assert_delta(report.held_out_recall_delta, fixture.held_out_recall_delta);
+        assert_delta(
+            report.held_out_runtime_overhead_ratio,
+            fixture.held_out_runtime_overhead_ratio,
+        );
+        assert_eq!(
+            report.held_out_cache_invalidation_scope.as_deref(),
+            Some(fixture.held_out_cache_invalidation_scope.as_str())
+        );
+        assert!(
+            delta
+                .cases
+                .iter()
+                .any(|case| { case.case_id == "case-held-out-b" && case.held_out })
+        );
     }
 
     #[test]
@@ -738,5 +1010,13 @@ mod tests {
             .and_then(|path| path.parent())
             .expect("workspace root")
             .to_path_buf()
+    }
+
+    fn assert_delta(actual: Option<f64>, expected: f64) {
+        let actual = actual.expect("delta should be present");
+        assert!(
+            (actual - expected).abs() < 1e-12,
+            "expected {expected}, got {actual}"
+        );
     }
 }

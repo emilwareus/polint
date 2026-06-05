@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Graph Engine Precision
-status: "Phase 51 shipped -- PR #64"
-last_updated: "2026-06-04T16:17:46.107Z"
-last_activity: "2026-06-04 -- Phase 51 shipped in PR #64"
+status: "Phase 51 shipped -- PR #64; review follow-up fixed"
+last_updated: "2026-06-05T05:30:00.000Z"
+last_activity: "2026-06-05 -- Fixed adaptation delta model-fact and held-out reporting review findings"
 progress:
   total_phases: 13
   completed_phases: 10
@@ -42,8 +42,8 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 Phase: 52 (Refined-Calls Rework & Unknown Taxonomy Consolidation)
 Plan: 0 of 0
-Status: Phase 51 shipped -- PR #64
-Last activity: 2026-06-04 -- Phase 51 shipped in PR #64
+Status: Phase 51 shipped -- PR #64; review follow-up fixed
+Last activity: 2026-06-05 -- Fixed adaptation delta model-fact and held-out reporting review findings
 
 ### Open repo-admin action (T-42-04-10)
 
@@ -558,6 +558,7 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260605-9zj | Fix adaptation delta model fact and held-out reporting review findings | 2026-06-05 | implemented | [260605-9zj-fix-adaptation-delta-model-fact-and-held](./quick/260605-9zj-fix-adaptation-delta-model-fact-and-held/) |
 | 260604-l8k | Finish Phase 50 closeout by adding verification artifact and reconciling roadmap status | 2026-06-04 | artifact-only | [260604-l8k-finish-phase-50-closeout-by-adding-verif](./quick/260604-l8k-finish-phase-50-closeout-by-adding-verif/) |
 | 260604-ik2 | Fix final TS object-model review findings | 2026-06-04 | 3f777d47 | [260604-ik2-fix-pr-review-findings-for-ts-object-mod](./quick/260604-ik2-fix-pr-review-findings-for-ts-object-mod/) |
 | 260604-g7q | Fix PR review findings for TS object-model eval gates | 2026-06-04 | f6a8a956 | [260604-g7q-fix-pr-review-findings-for-ts-object-mod](./quick/260604-g7q-fix-pr-review-findings-for-ts-object-mod/) |

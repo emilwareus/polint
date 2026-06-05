@@ -134,11 +134,17 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
     // from_output). On store error the db keeps its prior state and the facts the
     // digest certifies were not persisted, so return output_digest: None.
     match db.replace_semantic_graph_facts(output) {
-        Ok(()) => SemanticGraphProviderRunOutput {
-            diagnostics: adaptation_models.diagnostics,
-            cache_stats,
-            output_digest: Some(output_digest),
-        },
+        Ok(()) => {
+            db.replace_adaptation_model_facts(
+                adaptation_models.store.accepted().to_vec(),
+                adaptation_models.store.rejected().to_vec(),
+            );
+            SemanticGraphProviderRunOutput {
+                diagnostics: adaptation_models.diagnostics,
+                cache_stats,
+                output_digest: Some(output_digest),
+            }
+        }
         Err(error) => SemanticGraphProviderRunOutput {
             diagnostics: {
                 let mut diagnostics = adaptation_models.diagnostics;
