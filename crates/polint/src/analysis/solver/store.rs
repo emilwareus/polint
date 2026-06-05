@@ -33,6 +33,7 @@ pub(crate) const SOLVER_PROVIDER_ID: &str = "polint.solver";
 pub(crate) struct SolverOutput {
     pub(crate) derived_edges: Vec<DerivedEdgeFact>,
     pub(crate) budget_status: BudgetStatus,
+    pub(crate) budget_reasons: BTreeSet<String>,
 }
 
 impl SolverOutput {

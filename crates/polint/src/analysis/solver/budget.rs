@@ -254,6 +254,8 @@ impl BudgetStatus {
 pub(crate) enum BudgetReason {
     SolverMaxSteps,
     SolverMaxOuterIterations,
+    PointsToMaxObjectsPerVar,
+    PointsToMaxDynamicVars,
     GoAddressTakenThreshold,
     GoMaxCandidatesPerCallsite,
     GoMaxRtaRounds,
@@ -261,10 +263,17 @@ pub(crate) enum BudgetReason {
     JsMaxTokensPerVar,
     JsMaxCandidatesPerCallsite,
     JsMaxTokenWorklistSteps,
+    ObjectMaxObjectsPerPlace,
     ObjectMaxPropertiesPerObject,
+    ObjectMaxTokensPerProperty,
+    ObjectMaxComputedBucketsPerObject,
     ObjectMaxPrototypeDepth,
     ObjectMaxReceiverCandidatesPerCallsite,
     ObjectMaxObjectWorklistSteps,
+    AdaptationMaxModelFiles,
+    AdaptationMaxModelFacts,
+    AdaptationMaxExpansionsPerModel,
+    AdaptationMaxTargetsPerSource,
     AdaptationMaxModelDerivedEdges,
 }
 
@@ -273,6 +282,8 @@ impl BudgetReason {
         match self {
             Self::SolverMaxSteps => "solver.max_steps",
             Self::SolverMaxOuterIterations => "solver.max_outer_iterations",
+            Self::PointsToMaxObjectsPerVar => "points_to.max_objects_per_var",
+            Self::PointsToMaxDynamicVars => "points_to.max_dynamic_vars",
             Self::GoAddressTakenThreshold => "go.address_taken_threshold",
             Self::GoMaxCandidatesPerCallsite => "go.max_candidates_per_callsite",
             Self::GoMaxRtaRounds => "go.max_rta_rounds",
@@ -280,12 +291,19 @@ impl BudgetReason {
             Self::JsMaxTokensPerVar => "js.max_tokens_per_var",
             Self::JsMaxCandidatesPerCallsite => "js.max_candidates_per_callsite",
             Self::JsMaxTokenWorklistSteps => "js.max_token_worklist_steps",
+            Self::ObjectMaxObjectsPerPlace => "object.max_objects_per_place",
             Self::ObjectMaxPropertiesPerObject => "object.max_properties_per_object",
+            Self::ObjectMaxTokensPerProperty => "object.max_tokens_per_property",
+            Self::ObjectMaxComputedBucketsPerObject => "object.max_computed_buckets_per_object",
             Self::ObjectMaxPrototypeDepth => "object.max_prototype_depth",
             Self::ObjectMaxReceiverCandidatesPerCallsite => {
                 "object.max_receiver_candidates_per_callsite"
             }
             Self::ObjectMaxObjectWorklistSteps => "object.max_object_worklist_steps",
+            Self::AdaptationMaxModelFiles => "adaptation.max_model_files",
+            Self::AdaptationMaxModelFacts => "adaptation.max_model_facts",
+            Self::AdaptationMaxExpansionsPerModel => "adaptation.max_expansions_per_model",
+            Self::AdaptationMaxTargetsPerSource => "adaptation.max_targets_per_source",
             Self::AdaptationMaxModelDerivedEdges => "adaptation.max_model_derived_edges",
         }
     }
@@ -294,6 +312,8 @@ impl BudgetReason {
         &[
             Self::SolverMaxSteps,
             Self::SolverMaxOuterIterations,
+            Self::PointsToMaxObjectsPerVar,
+            Self::PointsToMaxDynamicVars,
             Self::GoAddressTakenThreshold,
             Self::GoMaxCandidatesPerCallsite,
             Self::GoMaxRtaRounds,
@@ -301,10 +321,17 @@ impl BudgetReason {
             Self::JsMaxTokensPerVar,
             Self::JsMaxCandidatesPerCallsite,
             Self::JsMaxTokenWorklistSteps,
+            Self::ObjectMaxObjectsPerPlace,
             Self::ObjectMaxPropertiesPerObject,
+            Self::ObjectMaxTokensPerProperty,
+            Self::ObjectMaxComputedBucketsPerObject,
             Self::ObjectMaxPrototypeDepth,
             Self::ObjectMaxReceiverCandidatesPerCallsite,
             Self::ObjectMaxObjectWorklistSteps,
+            Self::AdaptationMaxModelFiles,
+            Self::AdaptationMaxModelFacts,
+            Self::AdaptationMaxExpansionsPerModel,
+            Self::AdaptationMaxTargetsPerSource,
             Self::AdaptationMaxModelDerivedEdges,
         ]
     }
@@ -469,6 +496,8 @@ mod tests {
             vec![
                 "solver.max_steps",
                 "solver.max_outer_iterations",
+                "points_to.max_objects_per_var",
+                "points_to.max_dynamic_vars",
                 "go.address_taken_threshold",
                 "go.max_candidates_per_callsite",
                 "go.max_rta_rounds",
@@ -476,10 +505,17 @@ mod tests {
                 "js.max_tokens_per_var",
                 "js.max_candidates_per_callsite",
                 "js.max_token_worklist_steps",
+                "object.max_objects_per_place",
                 "object.max_properties_per_object",
+                "object.max_tokens_per_property",
+                "object.max_computed_buckets_per_object",
                 "object.max_prototype_depth",
                 "object.max_receiver_candidates_per_callsite",
                 "object.max_object_worklist_steps",
+                "adaptation.max_model_files",
+                "adaptation.max_model_facts",
+                "adaptation.max_expansions_per_model",
+                "adaptation.max_targets_per_source",
                 "adaptation.max_model_derived_edges",
             ]
         );

@@ -746,6 +746,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "points_to_sets",
             "alias_answers",
             "extension_facts",
+            "solver_derived_edges",
         ],
         outputs: &["refined_call_edges"],
         language_scope: LanguageScope::MultiLanguage,
@@ -864,6 +865,30 @@ mod tests {
             let _language_scope = manifest.language_scope;
             let _cache_policy = manifest.cache_policy;
             let _precision_ceiling = manifest.precision_ceiling;
+        }
+    }
+
+    #[test]
+    fn v13_cache_dependency_ledger_matches_provider_manifest_inputs() {
+        for dependency in crate::analysis::cache_key::v13_cache_dependency_ledger() {
+            let manifest = provider_manifests()
+                .iter()
+                .find(|manifest| manifest.id == dependency.provider_id)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "V13 cache dependency provider is not registered: {}",
+                        dependency.provider_id
+                    )
+                });
+
+            for input in dependency.manifest_inputs {
+                assert!(
+                    manifest.inputs.contains(input),
+                    "{} missing V13 cache dependency input `{}`",
+                    manifest.id,
+                    input
+                );
+            }
         }
     }
 
@@ -1455,6 +1480,7 @@ mod tests {
                         "points_to_sets",
                         "alias_answers",
                         "extension_facts",
+                        "solver_derived_edges",
                     ],
                     outputs: vec!["refined_call_edges"],
                 },

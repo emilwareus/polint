@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::analysis::ids::SemanticNodeId;
 use crate::analysis::semantic_graph::facts::NodeKind;
-use crate::analysis::solver::budget::{BudgetStatus, SolverBudget};
+use crate::analysis::solver::budget::{BudgetReason, BudgetStatus, SolverBudget};
 use crate::analysis::solver::facts::DerivedEdgeFact;
 use crate::analysis::solver::ts_tokens::fixpoint::{TsTokenVarState, solve_ts_tokens};
 
@@ -54,6 +54,8 @@ pub(crate) fn solve_ts_object_model(
     let receiver_bindings = resolve_receiver_bindings(&inputs.receiver_bindings);
     let evidence_by_callsite =
         evidence_by_callsite(inputs, &receiver_bindings.evidence_by_callsite);
+    let token_budget_status = token_result.budget_status;
+    let token_budget_reasons = token_result.budget_reasons;
     let token_states = token_result.tokens_by_var;
 
     let mut budget_reasons = BTreeSet::new();
@@ -65,7 +67,11 @@ pub(crate) fn solve_ts_object_model(
     for write in &inputs.property_writes {
         steps += 1;
         if steps > budget.object.max_object_worklist_steps as u64 {
-            budget_reasons.insert("max_object_worklist_steps".to_string());
+            budget_reasons.insert(
+                BudgetReason::ObjectMaxObjectWorklistSteps
+                    .as_str()
+                    .to_string(),
+            );
             break;
         }
 
@@ -93,7 +99,11 @@ pub(crate) fn solve_ts_object_model(
     for read in &inputs.property_reads {
         steps += 1;
         if steps > budget.object.max_object_worklist_steps as u64 {
-            budget_reasons.insert("max_object_worklist_steps".to_string());
+            budget_reasons.insert(
+                BudgetReason::ObjectMaxObjectWorklistSteps
+                    .as_str()
+                    .to_string(),
+            );
             break;
         }
         let base_objects = read_base_objects(read, &receiver_contexts);
@@ -125,7 +135,11 @@ pub(crate) fn solve_ts_object_model(
                 steps,
             );
             if resolution.candidate_cap_exceeded {
-                budget_reasons.insert("max_receiver_candidates_per_callsite".to_string());
+                budget_reasons.insert(
+                    BudgetReason::ObjectMaxReceiverCandidatesPerCallsite
+                        .as_str()
+                        .to_string(),
+                );
             }
             for edge in resolution.edges {
                 edges_by_key.entry(edge.stable_key.clone()).or_insert(edge);
@@ -133,8 +147,8 @@ pub(crate) fn solve_ts_object_model(
         }
     }
 
-    if token_result.budget_status == BudgetStatus::BudgetExceeded {
-        budget_reasons.insert("ts_token_seed_budget_exceeded".to_string());
+    if token_budget_status == BudgetStatus::BudgetExceeded {
+        budget_reasons.extend(token_budget_reasons);
     }
 
     TsObjectModelSolveResult {
@@ -169,7 +183,11 @@ fn receiver_contexts_by_function(
         }
         *steps += 1;
         if *steps > budget.object.max_object_worklist_steps as u64 {
-            budget_reasons.insert("max_object_worklist_steps".to_string());
+            budget_reasons.insert(
+                BudgetReason::ObjectMaxObjectWorklistSteps
+                    .as_str()
+                    .to_string(),
+            );
             break;
         }
         let Some(receiver_object) = read
@@ -304,7 +322,11 @@ impl PropertyBucketAccumulator {
         if !object_properties.contains(&write.field)
             && object_properties.len() >= budget.object.max_properties_per_object
         {
-            budget_reasons.insert("max_properties_per_object".to_string());
+            budget_reasons.insert(
+                BudgetReason::ObjectMaxPropertiesPerObject
+                    .as_str()
+                    .to_string(),
+            );
             return;
         }
         if is_computed_bucket(&write.field) {
@@ -315,7 +337,11 @@ impl PropertyBucketAccumulator {
             if !computed.contains(&write.field)
                 && computed.len() >= budget.object.max_computed_buckets_per_object
             {
-                budget_reasons.insert("max_computed_buckets_per_object".to_string());
+                budget_reasons.insert(
+                    BudgetReason::ObjectMaxComputedBucketsPerObject
+                        .as_str()
+                        .to_string(),
+                );
                 return;
             }
             computed.insert(write.field.clone());
@@ -330,7 +356,11 @@ impl PropertyBucketAccumulator {
         if !bucket.tokens.contains_key(&token)
             && bucket.tokens.len() >= budget.object.max_tokens_per_property
         {
-            budget_reasons.insert("max_tokens_per_property".to_string());
+            budget_reasons.insert(
+                BudgetReason::ObjectMaxTokensPerProperty
+                    .as_str()
+                    .to_string(),
+            );
             return;
         }
         bucket.tokens.entry(token).or_default().extend(evidence);
@@ -360,7 +390,7 @@ fn enforce_objects_per_place(
         if !objects.contains(&allocation.object_node)
             && objects.len() >= budget.object.max_objects_per_place
         {
-            budget_reasons.insert("max_objects_per_place".to_string());
+            budget_reasons.insert(BudgetReason::ObjectMaxObjectsPerPlace.as_str().to_string());
             return;
         }
         objects.insert(allocation.object_node);
@@ -563,7 +593,11 @@ mod tests {
         let result = solve_ts_object_model(&inputs.normalized(), &budget);
 
         assert_eq!(result.budget_status, BudgetStatus::BudgetExceeded);
-        assert!(result.budget_reasons.contains("max_properties_per_object"));
+        assert!(
+            result
+                .budget_reasons
+                .contains(BudgetReason::ObjectMaxPropertiesPerObject.as_str())
+        );
     }
 
     #[test]
@@ -582,7 +616,11 @@ mod tests {
         let result = solve_ts_object_model(&inputs.normalized(), &budget);
 
         assert_eq!(result.budget_status, BudgetStatus::BudgetExceeded);
-        assert!(result.budget_reasons.contains("max_objects_per_place"));
+        assert!(
+            result
+                .budget_reasons
+                .contains(BudgetReason::ObjectMaxObjectsPerPlace.as_str())
+        );
     }
 
     #[test]
@@ -611,7 +649,11 @@ mod tests {
         let result = solve_ts_object_model(&inputs.normalized(), &budget);
 
         assert_eq!(result.budget_status, BudgetStatus::BudgetExceeded);
-        assert!(result.budget_reasons.contains("max_tokens_per_property"));
+        assert!(
+            result
+                .budget_reasons
+                .contains(BudgetReason::ObjectMaxTokensPerProperty.as_str())
+        );
         assert_eq!(result.derived_edges.len(), 1);
     }
 
@@ -632,7 +674,7 @@ mod tests {
         assert!(
             result
                 .budget_reasons
-                .contains("max_computed_buckets_per_object")
+                .contains(BudgetReason::ObjectMaxComputedBucketsPerObject.as_str())
         );
     }
 

@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use serde::{Deserialize, Serialize};
 
 use crate::analysis::ids::SemanticNodeId;
-use crate::analysis::solver::budget::{BudgetStatus, SolverBudget};
+use crate::analysis::solver::budget::{BudgetReason, BudgetStatus, SolverBudget};
 use crate::analysis::solver::facts::DerivedEdgeFact;
 
 use super::dispatch::resolve_token_callsite;
@@ -25,6 +25,7 @@ pub(crate) struct TsTokenSolveResult {
     pub(crate) tokens_by_var: BTreeMap<SemanticNodeId, TsTokenVarState>,
     pub(crate) derived_edges: Vec<DerivedEdgeFact>,
     pub(crate) budget_status: BudgetStatus,
+    pub(crate) budget_reasons: BTreeSet<String>,
     pub(crate) steps: u64,
 }
 
@@ -67,6 +68,7 @@ pub(crate) fn solve_ts_tokens(inputs: &TsTokenInputs, budget: &SolverBudget) -> 
     let mut queue = VecDeque::new();
     let mut queued = BTreeSet::new();
     let mut budget_exceeded = false;
+    let mut budget_reasons = BTreeSet::new();
     let mut steps = 0_u64;
 
     for token in inputs.function_tokens.values() {
@@ -79,6 +81,7 @@ pub(crate) fn solve_ts_tokens(inputs: &TsTokenInputs, budget: &SolverBudget) -> 
         );
         if outcome.budget_exceeded {
             budget_exceeded = true;
+            budget_reasons.insert(BudgetReason::JsMaxTokensPerVar.as_str().to_string());
         }
         if outcome.changed {
             enqueue(token.function_node, &mut queue, &mut queued);
@@ -98,6 +101,7 @@ pub(crate) fn solve_ts_tokens(inputs: &TsTokenInputs, budget: &SolverBudget) -> 
             steps += 1;
             if steps > budget.js.max_token_worklist_steps as u64 {
                 budget_exceeded = true;
+                budget_reasons.insert(BudgetReason::JsMaxTokenWorklistSteps.as_str().to_string());
                 break 'worklist;
             }
 
@@ -105,6 +109,7 @@ pub(crate) fn solve_ts_tokens(inputs: &TsTokenInputs, budget: &SolverBudget) -> 
                 TsTokenVarState::TooManyTokens => {
                     if mark_too_many_tokens(&mut states, edge.dst) {
                         budget_exceeded = true;
+                        budget_reasons.insert(BudgetReason::JsMaxTokensPerVar.as_str().to_string());
                         enqueue(edge.dst, &mut queue, &mut queued);
                     }
                 }
@@ -121,6 +126,8 @@ pub(crate) fn solve_ts_tokens(inputs: &TsTokenInputs, budget: &SolverBudget) -> 
                         );
                         if outcome.budget_exceeded {
                             budget_exceeded = true;
+                            budget_reasons
+                                .insert(BudgetReason::JsMaxTokensPerVar.as_str().to_string());
                         }
                         if outcome.changed {
                             enqueue(edge.dst, &mut queue, &mut queued);
@@ -136,6 +143,7 @@ pub(crate) fn solve_ts_tokens(inputs: &TsTokenInputs, budget: &SolverBudget) -> 
         steps += 1;
         if steps > budget.js.max_token_worklist_steps as u64 {
             budget_exceeded = true;
+            budget_reasons.insert(BudgetReason::JsMaxTokenWorklistSteps.as_str().to_string());
             break;
         }
 
@@ -158,6 +166,11 @@ pub(crate) fn solve_ts_tokens(inputs: &TsTokenInputs, budget: &SolverBudget) -> 
         );
         if resolution.candidate_cap_exceeded {
             budget_exceeded = true;
+            budget_reasons.insert(
+                BudgetReason::JsMaxCandidatesPerCallsite
+                    .as_str()
+                    .to_string(),
+            );
         }
         for edge in resolution.edges {
             edges_by_key.entry(edge.stable_key.clone()).or_insert(edge);
@@ -172,6 +185,7 @@ pub(crate) fn solve_ts_tokens(inputs: &TsTokenInputs, budget: &SolverBudget) -> 
         } else {
             BudgetStatus::WithinBudget
         },
+        budget_reasons,
         steps,
     }
 }

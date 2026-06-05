@@ -266,6 +266,18 @@ mod tests {
         assert!(!markdown.contains("2026-05-26T07:00:00Z"));
     }
 
+    #[test]
+    fn markdown_populates_warm_rss_from_peak_rss_bytes() {
+        let mut report = report();
+        let performance = report.performance.as_mut().unwrap();
+        performance.rss = RssStatsSummary::default();
+        performance.runtime.peak_rss_bytes = Some(2 * 1024 * 1024);
+
+        let markdown = render_markdown(&report);
+
+        assert!(markdown.contains("| - | - | - | 2 |"));
+    }
+
     fn report() -> EvaluationRun {
         EvaluationRun {
             schema_version: crate::eval::report::EVALUATION_SCHEMA_VERSION.to_string(),

@@ -110,7 +110,7 @@ pub(crate) fn derive_solver_with_cache_stats(
     // truncated any source's closure under the per-source step budget, the run is
     // flagged rather than presenting a silently-truncated edge set as complete.
     if output.budget_status == BudgetStatus::BudgetExceeded {
-        diagnostics.push(budget_exceeded_diagnostic());
+        diagnostics.push(budget_exceeded_diagnostic(&output.budget_reasons));
     }
 
     let mut cache_stats = CacheStats::default();
@@ -318,6 +318,12 @@ fn solver_output_digest(
     if output.derived_edges.is_empty() {
         parts.push("solver_output=empty".to_string());
     }
+    parts.extend(
+        output
+            .budget_reasons
+            .iter()
+            .map(|reason| format!("budget_exceeded_reason={reason}")),
+    );
 
     parts.sort();
     let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
@@ -327,8 +333,8 @@ fn solver_output_digest(
 /// Honest budget-exhaustion signal (D-06): emitted when the solver truncated a
 /// source's transitive closure under the per-source step budget. Downstream (Phase 52
 /// unknown taxonomy) categorizes it; it is never a silent precision drop.
-fn budget_exceeded_diagnostic() -> Diagnostic {
-    Diagnostic::warning(
+fn budget_exceeded_diagnostic(budget_reasons: &BTreeSet<String>) -> Diagnostic {
+    let mut diagnostic = Diagnostic::warning(
         "polint/internal",
         "<workspace>",
         TextRange::point(1, 1),
@@ -336,7 +342,11 @@ fn budget_exceeded_diagnostic() -> Diagnostic {
          are flagged BudgetExceeded).",
     )
     .with_evidence("provider", SOLVER_PROVIDER_ID)
-    .with_evidence("budget_status", BudgetStatus::BudgetExceeded.as_str())
+    .with_evidence("budget_status", BudgetStatus::BudgetExceeded.as_str());
+    for reason in budget_reasons {
+        diagnostic = diagnostic.with_evidence("budget_reason", reason.clone());
+    }
+    diagnostic
 }
 
 fn provider_error_diagnostic(message: String) -> Diagnostic {
@@ -828,10 +838,12 @@ mod tests {
         let within = SolverOutput {
             derived_edges: Vec::new(),
             budget_status: BudgetStatus::WithinBudget,
+            ..SolverOutput::default()
         };
         let exceeded = SolverOutput {
             derived_edges: Vec::new(),
             budget_status: BudgetStatus::BudgetExceeded,
+            ..SolverOutput::default()
         };
 
         let within_digest = solver_output_digest(

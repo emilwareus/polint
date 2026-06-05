@@ -2,62 +2,55 @@ use crate::analysis_kernel::incremental::{Digest, DigestKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct V13CacheDependency {
-    pub(crate) family: &'static str,
-    pub(crate) inputs: &'static [&'static str],
+    pub(crate) provider_id: &'static str,
+    pub(crate) manifest_inputs: &'static [&'static str],
 }
 
 pub(crate) fn v13_cache_dependency_ledger() -> &'static [V13CacheDependency] {
     &[
         V13CacheDependency {
-            family: "polint.semantic_graph",
-            inputs: &[
-                "schema_label",
-                "algorithm_label",
-                "upstream_provider_output_digest",
-                "go_semantic_output_digest",
-                "adaptation_model_digest",
-                "solver_budget",
-            ],
-        },
-        V13CacheDependency {
-            family: "polint.go.semantic",
-            inputs: &[
-                "sidecar_digest",
-                "go_version",
-                "x_tools_version",
-                "go_lifecycle_digest",
-                "upstream_provider_output_digest",
-            ],
-        },
-        V13CacheDependency {
-            family: "polint.solver",
-            inputs: &[
-                "schema_label",
-                "algorithm_label",
-                "upstream_provider_output_digest",
-                "solver_budget",
-                "budget_status",
-                "stable_output_keys",
-            ],
-        },
-        V13CacheDependency {
-            family: "polint.refined_calls",
-            inputs: &[
-                "schema_label",
-                "solver_output_digest",
-                "upstream_provider_output_digest",
-                "stable_output_keys",
-            ],
-        },
-        V13CacheDependency {
-            family: "polint.adaptation.model",
-            inputs: &[
-                "schema_label",
-                "validator_version",
-                "adaptation_model_digest",
+            provider_id: "polint.semantic_graph",
+            manifest_inputs: &[
+                "go_semantic_functions",
+                "go_semantic_callsites",
+                "ts_object_allocations",
+                "ts_property_writes",
+                "ts_property_reads",
+                "ts_receiver_bindings",
+                "ts_prototype_links",
                 "adaptation_model_files",
-                "accepted_rejected_status",
-                "solver_budget",
+                "adaptation_model_budget",
+            ],
+        },
+        V13CacheDependency {
+            provider_id: "polint.go.semantic",
+            manifest_inputs: &[
+                "source_files",
+                "packages",
+                "functions",
+                "go.module_roots",
+                "go.package_patterns",
+                "go.build_tags",
+                "go.include_tests",
+                "go.offline",
+            ],
+        },
+        V13CacheDependency {
+            provider_id: "polint.solver",
+            manifest_inputs: &[
+                "semantic_constraints",
+                "semantic_nodes",
+                "points_to_constraints",
+                "points_to_sets",
+            ],
+        },
+        V13CacheDependency {
+            provider_id: "polint.refined_calls",
+            manifest_inputs: &[
+                "call_sites",
+                "call_targets",
+                "unresolved_calls",
+                "solver_derived_edges",
             ],
         },
     ]
@@ -108,30 +101,32 @@ mod semantic_mir_layer_key {
         let ledger = v13_cache_dependency_ledger();
 
         assert_eq!(
-            ledger.iter().map(|entry| entry.family).collect::<Vec<_>>(),
+            ledger
+                .iter()
+                .map(|entry| entry.provider_id)
+                .collect::<Vec<_>>(),
             vec![
                 "polint.semantic_graph",
                 "polint.go.semantic",
                 "polint.solver",
                 "polint.refined_calls",
-                "polint.adaptation.model",
             ]
         );
         assert!(
             ledger
                 .iter()
-                .find(|entry| entry.family == "polint.solver")
+                .find(|entry| entry.provider_id == "polint.solver")
                 .unwrap()
-                .inputs
-                .contains(&"budget_status")
+                .manifest_inputs
+                .contains(&"semantic_constraints")
         );
         assert!(
             ledger
                 .iter()
-                .find(|entry| entry.family == "polint.adaptation.model")
+                .find(|entry| entry.provider_id == "polint.refined_calls")
                 .unwrap()
-                .inputs
-                .contains(&"accepted_rejected_status")
+                .manifest_inputs
+                .contains(&"solver_derived_edges")
         );
     }
 }

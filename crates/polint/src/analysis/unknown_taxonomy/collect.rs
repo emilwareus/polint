@@ -654,6 +654,7 @@ mod tests {
                 ),
             }],
             budget_status: BudgetStatus::BudgetExceeded,
+            ..SolverOutput::default()
         })
         .expect("solver facts");
         let file = db.add_file("a.ts".into(), "a.ts".to_string(), "call();".to_string());

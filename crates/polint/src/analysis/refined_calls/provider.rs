@@ -813,6 +813,7 @@ mod solver_projection_tests {
                 provenance,
             }],
             budget_status: BudgetStatus::WithinBudget,
+            ..SolverOutput::default()
         })
         .expect("valid solver facts");
         db
@@ -912,6 +913,7 @@ mod solver_projection_tests {
                 provenance,
             }],
             budget_status: BudgetStatus::WithinBudget,
+            ..SolverOutput::default()
         })
         .expect("valid solver facts");
         db
@@ -970,6 +972,7 @@ mod solver_projection_tests {
                 provenance,
             }],
             budget_status: BudgetStatus::WithinBudget,
+            ..SolverOutput::default()
         })
         .expect("valid solver facts");
         db
@@ -1131,6 +1134,7 @@ mod solver_projection_tests {
                 provenance,
             }],
             budget_status: BudgetStatus::WithinBudget,
+            ..SolverOutput::default()
         })
         .expect("valid solver facts");
         db

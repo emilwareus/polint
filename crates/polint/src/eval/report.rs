@@ -315,6 +315,7 @@ pub(crate) fn normalize_run(run: &EvaluationRun) -> EvaluationRun {
         .sort_by_cached_key(canonical_json_key);
     normalized.limitations.sort();
     if let Some(performance) = &mut normalized.performance {
+        performance.sync_rss_from_runtime();
         performance.providers.sort();
         performance.demand_queries.sort();
     }

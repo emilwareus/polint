@@ -56,6 +56,14 @@ impl EvalPerformanceReport {
             })
             .collect()
     }
+
+    pub(crate) fn sync_rss_from_runtime(&mut self) {
+        if self.rss.warm_rss_observed_mb.is_none()
+            && let Some(peak_rss_bytes) = self.runtime.peak_rss_bytes
+        {
+            self.rss.warm_rss_observed_mb = Some(bytes_to_mib(peak_rss_bytes));
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -157,6 +165,10 @@ pub(crate) struct RssStatsSummary {
     pub(crate) warm_rss_observed_mb: Option<u64>,
 }
 
+fn bytes_to_mib(bytes: u64) -> u64 {
+    bytes.div_ceil(1024 * 1024)
+}
+
 pub(crate) fn strip_volatile_runtime(report: &mut EvalPerformanceReport) {
     report.runtime.observed_runtime_ms = None;
     report.runtime.peak_rss_bytes = None;
@@ -243,6 +255,21 @@ mod tests {
         assert_eq!(first.rss.cold_rss_observed_mb, None);
         assert_eq!(first.rss.warm_rss_threshold_mb, Some(384));
         assert_eq!(first.rss.warm_rss_observed_mb, None);
+    }
+
+    #[test]
+    fn eval_performance_populates_warm_rss_from_peak_rss_bytes() {
+        let report = kernel_report_with_stats(CacheStats::default());
+        let mut performance = EvalPerformanceReport::from_kernel_report(&report);
+        performance.runtime.peak_rss_bytes = Some(2 * 1024 * 1024 + 1);
+
+        performance.sync_rss_from_runtime();
+
+        assert_eq!(performance.rss.warm_rss_observed_mb, Some(3));
+
+        performance.rss.warm_rss_observed_mb = Some(99);
+        performance.sync_rss_from_runtime();
+        assert_eq!(performance.rss.warm_rss_observed_mb, Some(99));
     }
 
     fn kernel_report_with_stats(stats: CacheStats) -> KernelRunReport {

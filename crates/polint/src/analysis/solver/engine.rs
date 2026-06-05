@@ -27,7 +27,7 @@ use crate::analysis::points_to::facts::{PointsToPrecision, PointsToStatus};
 use crate::analysis::semantic_graph::constraints::{ConstraintFact, ConstraintKind};
 use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
 
-use super::budget::{BudgetStatus, SolverBudget};
+use super::budget::{BudgetReason, BudgetStatus, SolverBudget};
 use super::facts::DerivedEdgeFact;
 use super::policy::{PolicyOutcome, SolverPolicy};
 use super::provenance::{ContributingFact, DerivedEdgeProvenance};
@@ -43,6 +43,8 @@ pub(crate) struct SolverRunResult {
     pub(crate) budget_status: BudgetStatus,
     /// Monotonic worklist step counter for this run (provenance solver-step).
     pub(crate) steps: u64,
+    /// Stable reason labels for every policy or engine-level budget ceiling exhausted.
+    pub(crate) budget_reasons: BTreeSet<String>,
 }
 
 /// One policy's contribution recorded by the engine, tagged by policy id.
@@ -81,6 +83,7 @@ impl SolverEngine {
         let mut queue: VecDeque<usize> = (0..self.policies.len()).collect();
         let mut steps: u64 = 0;
         let mut budget_exceeded = false;
+        let mut budget_reasons = BTreeSet::new();
         let mut records: Vec<PolicyRunRecord> = Vec::with_capacity(self.policies.len());
 
         while let Some(index) = queue.pop_front() {
@@ -89,6 +92,7 @@ impl SolverEngine {
             steps += 1;
             if steps > self.budget.max_outer_iterations as u64 {
                 budget_exceeded = true;
+                budget_reasons.insert(BudgetReason::SolverMaxOuterIterations.as_str().to_string());
                 break;
             }
 
@@ -96,6 +100,7 @@ impl SolverEngine {
             let outcome = policy.solve(&self.budget);
             if outcome.budget_status == BudgetStatus::BudgetExceeded {
                 budget_exceeded = true;
+                budget_reasons.extend(outcome.budget_reasons.iter().cloned());
             }
             // Fold the policy's own internal step count into the run counter so
             // provenance (Plan 02) sees the full worklist progress.
@@ -118,6 +123,7 @@ impl SolverEngine {
             policy_outcomes: records,
             budget_status,
             steps,
+            budget_reasons,
         }
     }
 
@@ -177,11 +183,34 @@ impl SolverEngine {
             .filter(|record| record.outcome.points_to.is_none())
             .map(|record| record.outcome.budget_status)
             .fold(BudgetStatus::NotRun, combine_budget_status);
-        let budget_status =
-            combine_budget_status(points_to_output.budget_status, policy_budget_status);
+        let mut budget_reasons = points_to_output.budget_reasons;
+        for record in &run.policy_outcomes {
+            if record.outcome.points_to.is_none() {
+                budget_reasons.extend(record.outcome.budget_reasons.iter().cloned());
+            }
+        }
+        if run
+            .budget_reasons
+            .contains(BudgetReason::SolverMaxOuterIterations.as_str())
+        {
+            budget_reasons.insert(BudgetReason::SolverMaxOuterIterations.as_str().to_string());
+        }
+        let engine_budget_status = if run
+            .budget_reasons
+            .contains(BudgetReason::SolverMaxOuterIterations.as_str())
+        {
+            BudgetStatus::BudgetExceeded
+        } else {
+            BudgetStatus::NotRun
+        };
+        let budget_status = combine_budget_status(
+            combine_budget_status(points_to_output.budget_status, policy_budget_status),
+            engine_budget_status,
+        );
         SolverOutput {
             derived_edges,
             budget_status,
+            budget_reasons,
         }
         .normalized()
     }
@@ -270,9 +299,11 @@ pub(crate) fn derive_edges(constraints: &[ConstraintFact], budget: &SolverBudget
     }
 
     let mut edges: Vec<DerivedEdgeFact> = Vec::new();
-    let (model_edges, model_budget_exceeded) = model_edges(constraints, budget);
+    let (model_edges, model_budget_exceeded, model_budget_reasons) =
+        model_edges(constraints, budget);
     edges.extend(model_edges);
     let mut run_budget_exceeded = model_budget_exceeded;
+    let mut budget_reasons = model_budget_reasons;
     // GLOBAL monotonic derivation step (R3): increments once per worklist pop across
     // the WHOLE run and is never reset, so every derived edge's `solver_step` is
     // globally monotonic and the run's progress is totally ordered. The PER-SOURCE
@@ -305,6 +336,7 @@ pub(crate) fn derive_edges(constraints: &[ConstraintFact], budget: &SolverBudget
             solver_step += 1;
             if budget_steps > budget.max_steps as u64 {
                 source_budget_exceeded = true;
+                budget_reasons.insert(BudgetReason::SolverMaxSteps.as_str().to_string());
                 break;
             }
             let path = reached.get(&node).cloned().unwrap_or_else(PathMeta::seed);
@@ -409,6 +441,7 @@ pub(crate) fn derive_edges(constraints: &[ConstraintFact], budget: &SolverBudget
     SolverOutput {
         derived_edges: edges,
         budget_status,
+        budget_reasons,
     }
     .normalized()
 }
@@ -416,9 +449,10 @@ pub(crate) fn derive_edges(constraints: &[ConstraintFact], budget: &SolverBudget
 fn model_edges(
     constraints: &[ConstraintFact],
     budget: &SolverBudget,
-) -> (Vec<DerivedEdgeFact>, bool) {
+) -> (Vec<DerivedEdgeFact>, bool, BTreeSet<String>) {
     let mut edges = Vec::new();
     let mut budget_exceeded = false;
+    let mut budget_reasons = BTreeSet::new();
     let mut targets_by_source: BTreeMap<SemanticNodeRef, BTreeSet<SemanticNodeRef>> =
         BTreeMap::new();
     let mut expansions_by_model: BTreeMap<String, usize> = BTreeMap::new();
@@ -440,6 +474,11 @@ fn model_edges(
     for (constraint, source, target) in model_constraints {
         if edges.len() >= budget.adaptation.max_model_derived_edges {
             budget_exceeded = true;
+            budget_reasons.insert(
+                BudgetReason::AdaptationMaxModelDerivedEdges
+                    .as_str()
+                    .to_string(),
+            );
             continue;
         }
 
@@ -448,6 +487,11 @@ fn model_edges(
             .or_default();
         if *expansions >= budget.adaptation.max_expansions_per_model {
             budget_exceeded = true;
+            budget_reasons.insert(
+                BudgetReason::AdaptationMaxExpansionsPerModel
+                    .as_str()
+                    .to_string(),
+            );
             continue;
         }
 
@@ -456,6 +500,11 @@ fn model_edges(
             && source_targets.len() >= budget.adaptation.max_targets_per_source
         {
             budget_exceeded = true;
+            budget_reasons.insert(
+                BudgetReason::AdaptationMaxTargetsPerSource
+                    .as_str()
+                    .to_string(),
+            );
             continue;
         }
 
@@ -486,7 +535,7 @@ fn model_edges(
             provenance,
         });
     }
-    (edges, budget_exceeded)
+    (edges, budget_exceeded, budget_reasons)
 }
 
 /// Run-local node handle (the `SemanticNodeId.0` value) used as a deterministic

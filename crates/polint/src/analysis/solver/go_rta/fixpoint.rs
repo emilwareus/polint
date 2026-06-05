@@ -66,7 +66,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::analysis::solver::budget::{BudgetStatus, SolverBudget};
+use crate::analysis::solver::budget::{BudgetReason, BudgetStatus, SolverBudget};
 use crate::analysis::solver::facts::DerivedEdgeFact;
 use crate::analysis::solver::store::SolverOutput;
 
@@ -117,6 +117,7 @@ pub(crate) fn solve_go_rta(inputs: &GoRtaInputs, budget: &SolverBudget) -> Solve
     let mut edges_by_key: BTreeMap<String, DerivedEdgeFact> = BTreeMap::new();
 
     let mut budget_exceeded = false;
+    let mut budget_reasons = BTreeSet::new();
     // GLOBAL monotonic step counter (R3): increments once per callsite resolution
     // across the WHOLE run and is never reset, so every derived edge's `solver_step`
     // is globally monotonic.
@@ -169,6 +170,7 @@ pub(crate) fn solve_go_rta(inputs: &GoRtaInputs, budget: &SolverBudget) -> Solve
         if dispatch_rounds >= budget.go.max_rta_rounds {
             if frontier_has_pending_work(&frontier) {
                 budget_exceeded = true;
+                budget_reasons.insert(BudgetReason::GoMaxRtaRounds.as_str().to_string());
             }
             break;
         }
@@ -192,7 +194,9 @@ pub(crate) fn solve_go_rta(inputs: &GoRtaInputs, budget: &SolverBudget) -> Solve
                 for callee in static_callees {
                     solver_step += 1;
                     if solver_step > budget.go.max_worklist_steps as u64 {
-                        return finish(edges_by_key, true);
+                        budget_reasons
+                            .insert(BudgetReason::GoMaxWorklistSteps.as_str().to_string());
+                        return finish(edges_by_key, true, budget_reasons);
                     }
                     if !reachable.contains(callee) {
                         newly_reachable.insert(callee.clone());
@@ -213,7 +217,8 @@ pub(crate) fn solve_go_rta(inputs: &GoRtaInputs, budget: &SolverBudget) -> Solve
                 solver_step += 1;
                 if solver_step > budget.go.max_worklist_steps as u64 {
                     // Edges resolved before the cap keep their honest status (R1).
-                    return finish(edges_by_key, true);
+                    budget_reasons.insert(BudgetReason::GoMaxWorklistSteps.as_str().to_string());
+                    return finish(edges_by_key, true, budget_reasons);
                 }
 
                 let callsite = &inputs.callsites[index];
@@ -222,6 +227,8 @@ pub(crate) fn solve_go_rta(inputs: &GoRtaInputs, budget: &SolverBudget) -> Solve
                     && callsite.signature.is_some()
                 {
                     budget_exceeded = true;
+                    budget_reasons
+                        .insert(BudgetReason::GoAddressTakenThreshold.as_str().to_string());
                 }
                 let resolution = resolve_callsite(
                     callsite,
@@ -233,6 +240,11 @@ pub(crate) fn solve_go_rta(inputs: &GoRtaInputs, budget: &SolverBudget) -> Solve
                 );
                 if resolution.candidate_cap_exceeded {
                     budget_exceeded = true;
+                    budget_reasons.insert(
+                        BudgetReason::GoMaxCandidatesPerCallsite
+                            .as_str()
+                            .to_string(),
+                    );
                 }
                 for edge in resolution.edges {
                     // A newly-resolved callee becomes reachable, so its own callsites
@@ -261,12 +273,16 @@ pub(crate) fn solve_go_rta(inputs: &GoRtaInputs, budget: &SolverBudget) -> Solve
         frontier = newly_reachable;
     }
 
-    finish(edges_by_key, budget_exceeded)
+    finish(edges_by_key, budget_exceeded, budget_reasons)
 }
 
 /// Assemble the normalized output from the deduplicated edge accumulator + the
 /// run-level budget status.
-fn finish(edges_by_key: BTreeMap<String, DerivedEdgeFact>, budget_exceeded: bool) -> SolverOutput {
+fn finish(
+    edges_by_key: BTreeMap<String, DerivedEdgeFact>,
+    budget_exceeded: bool,
+    budget_reasons: BTreeSet<String>,
+) -> SolverOutput {
     let budget_status = if budget_exceeded {
         BudgetStatus::BudgetExceeded
     } else {
@@ -275,6 +291,7 @@ fn finish(edges_by_key: BTreeMap<String, DerivedEdgeFact>, budget_exceeded: bool
     SolverOutput {
         derived_edges: edges_by_key.into_values().collect(),
         budget_status,
+        budget_reasons,
     }
     .normalized()
 }
