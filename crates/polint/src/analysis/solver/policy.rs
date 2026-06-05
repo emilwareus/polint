@@ -17,10 +17,10 @@
 
 use std::collections::BTreeSet;
 
-use crate::analysis::points_to::facts::{PointsToBudgetStatus, PointsToConstraintFact};
+use crate::analysis::points_to::facts::PointsToConstraintFact;
 use crate::analysis::points_to::solver::{PointsToSolveResult, solve_points_to};
 
-use super::budget::{BudgetReason, BudgetStatus, SolverBudget};
+use super::budget::{BudgetStatus, SolverBudget};
 use super::facts::DerivedEdgeFact;
 use super::go_rta::{GoRtaInputs, solve_go_rta};
 use super::ts_object_model::{TsObjectModelInputs, solve_ts_object_model};
@@ -107,11 +107,7 @@ impl SolverPolicy for PointsToPolicy {
         // `solve_points_to` directly.
         let result = solve_points_to(&self.constraints, budget.points_to_budget());
         let budget_status = BudgetStatus::from_points_to(result.budget_status);
-        let mut budget_reasons = BTreeSet::new();
-        if result.budget_status == PointsToBudgetStatus::BudgetExceeded {
-            budget_reasons.insert(BudgetReason::PointsToMaxObjectsPerVar.as_str().to_string());
-            budget_reasons.insert(BudgetReason::PointsToMaxDynamicVars.as_str().to_string());
-        }
+        let budget_reasons = result.budget_reasons.clone();
         PolicyOutcome {
             points_to: Some(result),
             // Points-to derived edges flow through `engine::derive_edges` (the

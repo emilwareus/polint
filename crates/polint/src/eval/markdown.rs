@@ -90,19 +90,20 @@ pub(crate) fn render_markdown(run: &EvaluationRun) -> String {
 
     out.push_str("## RSS Thresholds\n\n");
     out.push_str(
-        "| Cold Threshold MiB | Cold Observed MiB | Warm Threshold MiB | Warm Observed MiB |\n",
+        "| Cold Threshold MiB | Cold Observed MiB | Warm Threshold MiB | Warm Observed MiB | Peak Observed MiB |\n",
     );
-    out.push_str("|---:|---:|---:|---:|\n");
+    out.push_str("|---:|---:|---:|---:|---:|\n");
     if let Some(performance) = &run.performance {
         out.push_str(&format!(
-            "| {} | {} | {} | {} |\n\n",
+            "| {} | {} | {} | {} | {} |\n\n",
             optional_u64_cell(performance.rss.cold_rss_threshold_mb),
             optional_u64_cell(performance.rss.cold_rss_observed_mb),
             optional_u64_cell(performance.rss.warm_rss_threshold_mb),
             optional_u64_cell(performance.rss.warm_rss_observed_mb),
+            optional_u64_cell(performance.rss.peak_rss_observed_mb),
         ));
     } else {
-        out.push_str("| - | - | - | - |\n\n");
+        out.push_str("| - | - | - | - | - |\n\n");
     }
 
     out.push_str("## Adaptation\n\n");
@@ -254,7 +255,8 @@ mod tests {
         assert!(markdown.contains("adapter-only: adapter dry run"));
         assert!(markdown.contains("known limitation"));
         assert!(markdown.contains("Cold Threshold MiB"));
-        assert!(markdown.contains("| 512 | 256 | 384 | 128 |"));
+        assert!(markdown.contains("Peak Observed MiB"));
+        assert!(markdown.contains("| 512 | 256 | 384 | 128 | - |"));
     }
 
     #[test]
@@ -267,7 +269,7 @@ mod tests {
     }
 
     #[test]
-    fn markdown_populates_warm_rss_from_peak_rss_bytes() {
+    fn markdown_populates_peak_rss_from_peak_rss_bytes() {
         let mut report = report();
         let performance = report.performance.as_mut().unwrap();
         performance.rss = RssStatsSummary::default();
@@ -275,7 +277,7 @@ mod tests {
 
         let markdown = render_markdown(&report);
 
-        assert!(markdown.contains("| - | - | - | 2 |"));
+        assert!(markdown.contains("| - | - | - | - | 2 |"));
     }
 
     fn report() -> EvaluationRun {
@@ -323,6 +325,7 @@ mod tests {
                     cold_rss_observed_mb: Some(256),
                     warm_rss_threshold_mb: Some(384),
                     warm_rss_observed_mb: Some(128),
+                    peak_rss_observed_mb: None,
                 },
             }),
             comparison_rows: vec![

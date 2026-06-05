@@ -78,19 +78,21 @@ impl SolverEngine {
     /// exhaustion honestly (D-06/D-11) rather than looping unbounded.
     pub(crate) fn run(&self) -> SolverRunResult {
         // Deterministic worklist of policy indices in stable registration order.
-        // The bounded outer-iteration cap (D-11) guards against ever draining
-        // more steps than the budget allows.
+        // The bounded outer-iteration cap (D-11) guards against draining more
+        // policies than the budget allows; policy-internal work contributes to
+        // `steps` for provenance but must not consume this outer cap.
         let mut queue: VecDeque<usize> = (0..self.policies.len()).collect();
+        let mut outer_iterations: u64 = 0;
         let mut steps: u64 = 0;
         let mut budget_exceeded = false;
         let mut budget_reasons = BTreeSet::new();
         let mut records: Vec<PolicyRunRecord> = Vec::with_capacity(self.policies.len());
 
         while let Some(index) = queue.pop_front() {
-            // Bounded outer-iteration cap: each policy drained is one worklist
-            // step; exceeding the cap latches exhaustion instead of looping.
-            steps += 1;
-            if steps > self.budget.max_outer_iterations as u64 {
+            // Bounded outer-iteration cap: each policy drained is one outer
+            // iteration; exceeding the cap latches exhaustion instead of looping.
+            outer_iterations += 1;
+            if outer_iterations > self.budget.max_outer_iterations as u64 {
                 budget_exceeded = true;
                 budget_reasons.insert(BudgetReason::SolverMaxOuterIterations.as_str().to_string());
                 break;
@@ -104,7 +106,7 @@ impl SolverEngine {
             }
             // Fold the policy's own internal step count into the run counter so
             // provenance (Plan 02) sees the full worklist progress.
-            steps = steps.saturating_add(outcome.steps);
+            steps = steps.saturating_add(1 + outcome.steps);
             records.push(PolicyRunRecord {
                 policy_id: policy.id(),
                 outcome,
@@ -774,6 +776,86 @@ mod tests {
                     && record.outcome.derived_edges.is_empty())
         );
         assert_eq!(run.budget_status, BudgetStatus::WithinBudget);
+    }
+
+    #[derive(Clone)]
+    struct FixedPolicy {
+        id: &'static str,
+        outcome: PolicyOutcome,
+    }
+
+    impl SolverPolicy for FixedPolicy {
+        fn id(&self) -> &'static str {
+            self.id
+        }
+
+        fn solve(&self, _budget: &SolverBudget) -> PolicyOutcome {
+            self.outcome.clone()
+        }
+    }
+
+    fn policy_edge(stable_key: &str, source: u64, target: u64) -> DerivedEdgeFact {
+        let source = SemanticNodeId(source);
+        let target = SemanticNodeId(target);
+        let provenance = DerivedEdgeProvenance::new(
+            [ContributingFact::from_parts(
+                FactFamily::ExtensionFact,
+                &[("constraint", stable_key.to_string())],
+            )],
+            &ConstraintKind::ModelEdge {
+                source,
+                target,
+                language: "typescript".to_string(),
+                scope: "src/app.ts".to_string(),
+                confidence: "heuristic".to_string(),
+                evidence: vec!["src/app.ts:1".to_string()],
+            },
+            1,
+        );
+        DerivedEdgeFact {
+            id: DerivedEdgeId(0),
+            source,
+            target,
+            status: PointsToStatus::Present,
+            precision: PointsToPrecision::Heuristic,
+            stable_key: stable_key.to_string(),
+            provenance,
+        }
+    }
+
+    #[test]
+    fn policy_internal_steps_do_not_consume_outer_iteration_budget() {
+        let budget = SolverBudget {
+            max_outer_iterations: 2,
+            ..SolverBudget::default()
+        };
+        let first = FixedPolicy {
+            id: "high_internal_work",
+            outcome: PolicyOutcome {
+                steps: budget.max_outer_iterations as u64 + 1,
+                ..PolicyOutcome::empty()
+            },
+        };
+        let second = FixedPolicy {
+            id: "edge_producer",
+            outcome: PolicyOutcome {
+                derived_edges: vec![policy_edge("edge-after-high-internal-work", 1, 2)],
+                steps: 0,
+                ..PolicyOutcome::empty()
+            },
+        };
+        let engine = SolverEngine::new(vec![Box::new(first), Box::new(second)], budget);
+
+        let run = engine.run();
+
+        assert_eq!(run.policy_outcomes.len(), 2);
+        assert_eq!(run.policy_outcomes[1].policy_id, "edge_producer");
+        assert_eq!(run.policy_outcomes[1].outcome.derived_edges.len(), 1);
+        assert_eq!(run.budget_status, BudgetStatus::WithinBudget);
+        assert!(
+            !run.budget_reasons
+                .contains(BudgetReason::SolverMaxOuterIterations.as_str())
+        );
     }
 
     #[test]

@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Graph Engine Precision
 status: ready_to_plan
-last_updated: 2026-06-05T14:32:42Z
-last_activity: 2026-06-05 -- Completed quick task 260605-mea fixing Phase 53 review findings
+last_updated: 2026-06-05T17:34:45Z
+last_activity: 2026-06-05 -- Completed quick task 260605-n0r critical review/fix loop for Phase 53 follow-up fixes; Phase 54 ready to discuss
 progress:
   total_phases: 13
   completed_phases: 12
@@ -44,7 +44,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 Phase: 54
 Plan: Not started
 Status: Ready to plan
-Last activity: 2026-06-05 - Completed quick task 260605-mea: Fix Phase 53 review findings
+Last activity: 2026-06-05 - Completed quick task 260605-n0r: Critical review/fix loop for Phase 53 follow-up fixes; next action is Phase 54 discussion
 
 ### Open repo-admin action (T-42-04-10)
 
@@ -54,6 +54,7 @@ Add `public surface leak gate (ubuntu-latest)` AND `public surface leak gate (ma
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260605-n0r | Critical review/fix loop for Phase 53 follow-up fixes until two consecutive clean review rounds | 2026-06-05 | implemented | [260605-n0r-loop-critical-review-and-fixes-for-phase](./quick/260605-n0r-loop-critical-review-and-fixes-for-phase/) |
 | 260605-mea | Fix Phase 53 review findings: cache dependency guards, budget reasons, and RSS reporting | 2026-06-05 | 9d3337bc | [260605-mea-fix-phase-53-review-findings-wire-cache-](./quick/260605-mea-fix-phase-53-review-findings-wire-cache-/) |
 
 ## Deferred Items
@@ -178,6 +179,8 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 | 49 | Complete | 3/3 plans complete; Plan 01 JS token budgets/config/cache handoff complete; Plan 02 private ts_tokens closed inputs + deterministic token fixpoint + too-many-tokens sentinel + token DerivedEdgeFact dispatch + real TsTokensPolicy complete; Plan 03 native TS token fixtures + token-explosion BudgetExceeded proof + polyglot/determinism/Jelly evidence + full suite/leak/clippy green. Requirement JS-04 COMPLETE. Caveat: current frontend producers cover direct aliases; parameter/return/closure coverage is solver-level over CopyEdge inputs and awaits frontend producer expansion. |
 | 50 | Complete | 5/5 plans complete; private TS object-model facts/storage/graph lowering, opt-in flag, object budgets, property-bucket fixpoint, prototype/class/accessor lookup, receiver binding, native fixtures, determinism/polyglot evidence, public leak gate, full regression, and final verification done. Requirement JS-05 COMPLETE. Caveat: external Jelly corpus floors remain Phase 54-owned. |
 | 51 | Complete | 4/4 plans complete; private adaptation model schema/loader/store/validator, accepted-only ModelEdge lowering, solver provenance/cache participation, adapted reporting with sandbox/model/held-out evidence, public leak gate, full regression, and final verification done. Requirements ADAPT-01/ADAPT-02 COMPLETE. Caveats: corpus floors remain Phase 54-owned; final refined-call projection and unknown taxonomy remain Phase 52-owned. |
+| 52 | Complete | 4/4 plans complete; solver/direct refined-call projection, consolidated unknown taxonomy, canonical `polint inspect unknowns --format json`, legacy unknowns compatibility, schema/docs/skill updates, eval fixture alignment, and final verification done. Requirements GRAPH-05/TAX-01 COMPLETE. |
+| 53 | Complete | 4/4 plans complete; V13 cache dependency ledger and provider metadata, solver budget consolidation and evidence, deterministic budget diagnostics, RSS evaluation summary/reporting, review fixes, and final verification done. Requirements CACHE-01/CACHE-02 COMPLETE. |
 
 ## Accumulated Context
 
@@ -556,9 +559,9 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 
 ## Session
 
-- Last session: 2026-06-02
-- Last activity: 2026-06-02 - Completed Phase 47 Plan 01 (private analysis::solver core: deterministic VecDeque worklist SolverEngine + unified SolverBudget/BudgetStatus generalizing the points-to budget by projection + SolverPolicy scaffold with one real points-to impl folded by composition plus honest Go/TS stubs); points-to fixtures byte-identical; GRAPH-03 core landed.
-- Stopped at: Completed 47-01-PLAN.md; Phase 47 at 1/3 plans; ready for Phase 47 Plan 02 (DerivedEdgeProvenance on derived edges + polint explain consumption + deletion property test).
+- Last session: 2026-06-05
+- Last activity: 2026-06-05 - Completed quick task 260605-n0r: critical review/fix loop for the Phase 53 review-fix implementation.
+- Stopped at: Phase 53 complete; Phase 54 is ready to discuss and plan.
 - Resume file: None
 
 ### Quick Tasks Completed
@@ -611,8 +614,8 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 
 ## Next Action
 
-Run `/gsd-discuss-phase 40 --auto` to gather context for external benchmark adapters and promotion gates for SAE-PROM-01.
+Run `/gsd-discuss-phase 54 --auto` to gather context for the benchmark promotion gate extension.
 
 ## Operator Next Steps
 
-- Start the next milestone with /gsd-new-milestone
+- Discuss and plan Phase 54.

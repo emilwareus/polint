@@ -7,6 +7,7 @@ use super::facts::{
 use super::store::PointsToOutput;
 use super::vars;
 use crate::analysis::ids::{ObjectTokenId, PointsToSetId, PtVarId};
+use crate::analysis::solver::budget::BudgetReason;
 use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,6 +31,7 @@ impl Default for PointsToBudget {
 pub(crate) struct PointsToSolveResult {
     pub(crate) sets: Vec<PointsToSetFact>,
     pub(crate) budget_status: PointsToBudgetStatus,
+    pub(crate) budget_reasons: BTreeSet<String>,
 }
 
 pub(crate) fn solve_points_to(
@@ -54,6 +56,7 @@ struct Solver<'a> {
     dynamic_vars: BTreeSet<PtVarId>,
     steps: usize,
     budget_exceeded: bool,
+    budget_reasons: BTreeSet<String>,
 }
 
 impl<'a> Solver<'a> {
@@ -72,6 +75,7 @@ impl<'a> Solver<'a> {
             dynamic_vars: BTreeSet::new(),
             steps: 0,
             budget_exceeded: false,
+            budget_reasons: BTreeSet::new(),
         }
     }
 
@@ -221,6 +225,8 @@ impl<'a> Solver<'a> {
         }
         if set.len() > self.budget.max_objects_per_var {
             self.budget_exceeded = true;
+            self.budget_reasons
+                .insert(BudgetReason::PointsToMaxObjectsPerVar.as_str().to_string());
             return;
         }
         if !delta.is_empty() {
@@ -238,6 +244,8 @@ impl<'a> Solver<'a> {
         self.dynamic_vars.insert(var);
         if self.dynamic_vars.len() > self.budget.max_dynamic_vars {
             self.budget_exceeded = true;
+            self.budget_reasons
+                .insert(BudgetReason::PointsToMaxDynamicVars.as_str().to_string());
         }
         var
     }
@@ -246,6 +254,8 @@ impl<'a> Solver<'a> {
         self.steps += 1;
         if self.steps > self.budget.max_steps {
             self.budget_exceeded = true;
+            self.budget_reasons
+                .insert(BudgetReason::SolverMaxSteps.as_str().to_string());
             return false;
         }
         true
@@ -289,6 +299,7 @@ impl<'a> Solver<'a> {
         PointsToSolveResult {
             sets,
             budget_status,
+            budget_reasons: self.budget_reasons.clone(),
         }
     }
 }
@@ -434,11 +445,72 @@ mod tests {
         );
 
         assert_eq!(result.budget_status, PointsToBudgetStatus::BudgetExceeded);
+        assert_eq!(
+            result.budget_reasons,
+            BTreeSet::from(["points_to.max_objects_per_var".to_string()])
+        );
         assert!(
             result
                 .sets
                 .iter()
                 .any(|set| set.status == PointsToStatus::BudgetExceeded)
+        );
+    }
+
+    #[test]
+    fn solver_reports_dynamic_var_budget_reason() {
+        let constraints = vec![
+            constraint(
+                "addr",
+                PointsToConstraintKind::AddressOf {
+                    dst: PtVarId(1),
+                    object: ObjectTokenId(10),
+                },
+            ),
+            constraint(
+                "load",
+                PointsToConstraintKind::Load {
+                    dst: PtVarId(2),
+                    pointer: PtVarId(1),
+                },
+            ),
+        ];
+        let result = solve_points_to(
+            &constraints,
+            PointsToBudget {
+                max_dynamic_vars: 0,
+                ..PointsToBudget::default()
+            },
+        );
+
+        assert_eq!(result.budget_status, PointsToBudgetStatus::BudgetExceeded);
+        assert_eq!(
+            result.budget_reasons,
+            BTreeSet::from(["points_to.max_dynamic_vars".to_string()])
+        );
+    }
+
+    #[test]
+    fn solver_reports_step_budget_reason() {
+        let constraints = vec![constraint(
+            "addr",
+            PointsToConstraintKind::AddressOf {
+                dst: PtVarId(1),
+                object: ObjectTokenId(10),
+            },
+        )];
+        let result = solve_points_to(
+            &constraints,
+            PointsToBudget {
+                max_steps: 0,
+                ..PointsToBudget::default()
+            },
+        );
+
+        assert_eq!(result.budget_status, PointsToBudgetStatus::BudgetExceeded);
+        assert_eq!(
+            result.budget_reasons,
+            BTreeSet::from(["solver.max_steps".to_string()])
         );
     }
 

@@ -463,6 +463,9 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "go_semantic_functions",
             "go_semantic_callsites",
             "go_semantic_method_sets",
+            "go_semantic_address_taken",
+            "go_semantic_instantiated_types",
+            "go_semantic_dynamic_dispatch",
             "go_semantic_package_errors",
         ],
         language_scope: LanguageScope::Go,
@@ -664,11 +667,12 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
         kind: ProviderKind::WholeRepoDerived,
         // Fact families `build_semantic_graph` ACTUALLY reads today (kept in lockstep
         // with the projection so the declared read-set never overstates consumption):
-        // functions/packages (syntax), scopes (symbol graph), call sites (calls),
-        // value facts (type/value/alias), MIR places (semantic MIR), Go semantic rows,
-        // repo-local adaptation model files, and the private TS object-model rows
-        // refreshed inside the semantic-graph provider. The producer/current-row
-        // digest of each is folded into the provider output digest in
+        // source/import/module rows used by TS direct bindings, functions/packages
+        // (syntax), scopes (symbol graph), call sites (calls), value facts
+        // (type/value/alias), MIR places (semantic MIR), Go semantic rows, repo-local
+        // adaptation model files, and the private TS object-model rows refreshed
+        // inside the semantic-graph provider. The producer/current-row digest of
+        // each is folded into the provider output digest in
         // `semantic_graph::provider::semantic_graph_output_digest` (D-17).
         //
         // SC3 inputs with NO producer yet are intentionally ABSENT until their
@@ -676,8 +680,12 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
         // the projection begins reading a new family, add it here AND fold its
         // producer digest in the same change.
         inputs: &[
+            "source_files",
             "functions",
             "packages",
+            "imports",
+            "resolved_imports",
+            "module_nodes",
             "scopes",
             "call_sites",
             "value_facts",
@@ -710,20 +718,41 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
     ProviderManifest {
         // polint.solver runs in the slot Phase 44 reserved: AFTER polint.semantic_graph
         // and BEFORE polint.refined_calls (D-13). It consumes the unified
-        // semantic-graph constraint vocabulary (`semantic_constraints`) plus the
-        // points-to source families produced by polint.type_value_alias
-        // (`points_to_constraints` / `points_to_sets`), and emits derived edges with
-        // provenance. Its output digest folds those upstream digests + the SolverBudget
-        // (D-15). The provider auto-enrolls in the Phase 43 determinism gate (D-14).
+        // semantic-graph constraint vocabulary (`semantic_constraints`) and emits
+        // derived edges with provenance. Its output digest folds the consumed
+        // upstream provider digests (`polint.semantic_graph`, `polint.type_value_alias`,
+        // and `polint.go.semantic`) plus the SolverBudget (D-15); those digest-only
+        // dependencies are not declared here as direct fact reads. The provider
+        // auto-enrolls in the Phase 43 determinism gate (D-14).
         id: "polint.solver",
         kind: ProviderKind::WholeRepoDerived,
         inputs: &[
+            "source_files",
+            "functions",
+            "call_sites",
+            "imports",
+            "resolved_imports",
+            "module_nodes",
+            "reachability_roots",
             "semantic_constraints",
             "semantic_nodes",
-            "points_to_constraints",
-            "points_to_sets",
+            "go_semantic_functions",
+            "go_semantic_callsites",
+            "go_semantic_method_sets",
+            "go_semantic_address_taken",
+            "go_semantic_instantiated_types",
+            "go_semantic_dynamic_dispatch",
+            "ts_object_allocations",
+            "ts_property_writes",
+            "ts_property_reads",
+            "ts_receiver_bindings",
+            "ts_prototype_links",
         ],
-        outputs: &["solver_derived_edges"],
+        outputs: &[
+            "solver_derived_edges",
+            "solver_budget_status",
+            "solver_budget_reasons",
+        ],
         language_scope: LanguageScope::MultiLanguage,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: SOLVER_SCHEMA,
@@ -736,6 +765,8 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "call_sites",
             "call_targets",
             "unresolved_calls",
+            "functions",
+            "symbols",
             "entrypoints",
             "dispatch_edges",
             "summary_call",
@@ -746,6 +777,10 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "points_to_sets",
             "alias_answers",
             "extension_facts",
+            "semantic_nodes",
+            "semantic_constraints",
+            "go_semantic_functions",
+            "go_semantic_callsites",
             "solver_derived_edges",
         ],
         outputs: &["refined_call_edges"],
@@ -850,6 +885,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
     use std::path::{Path, PathBuf};
 
     #[test]
@@ -881,14 +917,17 @@ mod tests {
                     )
                 });
 
-            for input in dependency.manifest_inputs {
-                assert!(
-                    manifest.inputs.contains(input),
-                    "{} missing V13 cache dependency input `{}`",
-                    manifest.id,
-                    input
-                );
-            }
+            let manifest_inputs = manifest.inputs.iter().copied().collect::<BTreeSet<_>>();
+            let ledger_inputs = dependency
+                .manifest_inputs
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>();
+            assert_eq!(
+                ledger_inputs, manifest_inputs,
+                "V13 cache dependency ledger drift for {}",
+                manifest.id
+            );
         }
     }
 
@@ -1247,6 +1286,9 @@ mod tests {
                         "go_semantic_functions",
                         "go_semantic_callsites",
                         "go_semantic_method_sets",
+                        "go_semantic_address_taken",
+                        "go_semantic_instantiated_types",
+                        "go_semantic_dynamic_dispatch",
                         "go_semantic_package_errors",
                     ],
                 },
@@ -1423,8 +1465,12 @@ mod tests {
                     kind: "whole_repo_derived",
                     language_scope: "multi_language",
                     inputs: vec![
+                        "source_files",
                         "functions",
                         "packages",
+                        "imports",
+                        "resolved_imports",
+                        "module_nodes",
                         "scopes",
                         "call_sites",
                         "value_facts",
@@ -1455,12 +1501,32 @@ mod tests {
                     kind: "whole_repo_derived",
                     language_scope: "multi_language",
                     inputs: vec![
+                        "source_files",
+                        "functions",
+                        "call_sites",
+                        "imports",
+                        "resolved_imports",
+                        "module_nodes",
+                        "reachability_roots",
                         "semantic_constraints",
                         "semantic_nodes",
-                        "points_to_constraints",
-                        "points_to_sets",
+                        "go_semantic_functions",
+                        "go_semantic_callsites",
+                        "go_semantic_method_sets",
+                        "go_semantic_address_taken",
+                        "go_semantic_instantiated_types",
+                        "go_semantic_dynamic_dispatch",
+                        "ts_object_allocations",
+                        "ts_property_writes",
+                        "ts_property_reads",
+                        "ts_receiver_bindings",
+                        "ts_prototype_links",
                     ],
-                    outputs: vec!["solver_derived_edges"],
+                    outputs: vec![
+                        "solver_derived_edges",
+                        "solver_budget_status",
+                        "solver_budget_reasons",
+                    ],
                 },
                 ProviderOrderRow {
                     id: "polint.refined_calls",
@@ -1470,6 +1536,8 @@ mod tests {
                         "call_sites",
                         "call_targets",
                         "unresolved_calls",
+                        "functions",
+                        "symbols",
                         "entrypoints",
                         "dispatch_edges",
                         "summary_call",
@@ -1480,6 +1548,10 @@ mod tests {
                         "points_to_sets",
                         "alias_answers",
                         "extension_facts",
+                        "semantic_nodes",
+                        "semantic_constraints",
+                        "go_semantic_functions",
+                        "go_semantic_callsites",
                         "solver_derived_edges",
                     ],
                     outputs: vec!["refined_call_edges"],
@@ -1685,6 +1757,36 @@ mod tests {
             manifest.outputs,
             &["call_sites", "call_targets", "unresolved_calls"]
         );
+    }
+
+    #[test]
+    fn semantic_graph_manifest_declares_ts_direct_binding_inputs() {
+        let manifest = provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.semantic_graph")
+            .expect("semantic graph manifest should exist");
+
+        for input in [
+            "source_files",
+            "imports",
+            "resolved_imports",
+            "module_nodes",
+        ] {
+            assert!(manifest.inputs.contains(&input), "missing input {input}");
+        }
+    }
+
+    #[test]
+    fn refined_calls_manifest_declares_extension_target_identity_inputs() {
+        let manifest = provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.refined_calls")
+            .expect("refined calls manifest should exist");
+
+        for input in ["functions", "symbols", "extension_facts"] {
+            assert!(manifest.inputs.contains(&input), "missing input {input}");
+        }
+        assert!(manifest.outputs.contains(&"refined_call_edges"));
     }
 
     #[test]

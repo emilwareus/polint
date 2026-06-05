@@ -227,33 +227,62 @@ fn go_semantic_diagnostic_unknowns(diagnostics: &[Diagnostic]) -> Vec<UnknownRow
 }
 
 fn solver_unknowns(db: &AnalysisDb) -> Vec<UnknownRow> {
-    db.solver_derived_edges()
-        .iter()
-        .filter(|edge| edge.status != PointsToStatus::Present)
-        .map(|edge| {
-            let category = match edge.status {
-                PointsToStatus::BudgetExceeded => UnknownCategory::BudgetExceeded,
-                PointsToStatus::SetupMissing => UnknownCategory::SetupMissing,
-                PointsToStatus::Unsupported => UnknownCategory::UnsupportedSemantic,
-                PointsToStatus::Unknown => UnknownCategory::MissingFact,
-                PointsToStatus::Present => UnknownCategory::MissingFact,
-            };
-            UnknownRow::new(UnknownRowInput {
-                category,
-                capability: Some("solver".to_string()),
-                family: Some("SolverDerivedEdge".to_string()),
-                provider: "polint.solver".to_string(),
-                file: "<workspace>".to_string(),
-                span: None,
-                status: points_to_status_label(edge.status).to_string(),
-                reason: Some(edge.provenance.constraint_kind.clone()),
-                precision: Some(points_to_precision_label(edge.precision).to_string()),
-                docs_path: Some("docs/facts/capability-plans.md".to_string()),
-                suggested_artifact: Some("budget_or_model".to_string()),
-                source_stable_key: Some(edge.stable_key.clone()),
-            })
-        })
-        .collect()
+    let mut rows = Vec::new();
+    if db.solver_budget_status() == crate::analysis::solver::budget::BudgetStatus::BudgetExceeded {
+        let reason = if db.solver_budget_reasons().is_empty() {
+            "budget_exceeded".to_string()
+        } else {
+            db.solver_budget_reasons()
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        rows.push(UnknownRow::new(UnknownRowInput {
+            category: UnknownCategory::BudgetExceeded,
+            capability: Some("solver".to_string()),
+            family: Some("SolverRun".to_string()),
+            provider: "polint.solver".to_string(),
+            file: "<workspace>".to_string(),
+            span: None,
+            status: "budget_exceeded".to_string(),
+            reason: Some(reason),
+            precision: Some("unknown".to_string()),
+            docs_path: Some("docs/facts/capability-plans.md".to_string()),
+            suggested_artifact: Some("budget_or_model".to_string()),
+            source_stable_key: Some("polint.solver:run-level-budget".to_string()),
+        }));
+    }
+
+    rows.extend(
+        db.solver_derived_edges()
+            .iter()
+            .filter(|edge| edge.status != PointsToStatus::Present)
+            .map(|edge| {
+                let category = match edge.status {
+                    PointsToStatus::BudgetExceeded => UnknownCategory::BudgetExceeded,
+                    PointsToStatus::SetupMissing => UnknownCategory::SetupMissing,
+                    PointsToStatus::Unsupported => UnknownCategory::UnsupportedSemantic,
+                    PointsToStatus::Unknown => UnknownCategory::MissingFact,
+                    PointsToStatus::Present => UnknownCategory::MissingFact,
+                };
+                UnknownRow::new(UnknownRowInput {
+                    category,
+                    capability: Some("solver".to_string()),
+                    family: Some("SolverDerivedEdge".to_string()),
+                    provider: "polint.solver".to_string(),
+                    file: "<workspace>".to_string(),
+                    span: None,
+                    status: points_to_status_label(edge.status).to_string(),
+                    reason: Some(edge.provenance.constraint_kind.clone()),
+                    precision: Some(points_to_precision_label(edge.precision).to_string()),
+                    docs_path: Some("docs/facts/capability-plans.md".to_string()),
+                    suggested_artifact: Some("budget_or_model".to_string()),
+                    source_stable_key: Some(edge.stable_key.clone()),
+                })
+            }),
+    );
+    rows
 }
 
 fn refined_call_unknowns(db: &AnalysisDb) -> Vec<UnknownRow> {
@@ -577,6 +606,7 @@ mod tests {
     use crate::diagnostics::{Diagnostic, TextRange};
     use crate::go::semantic::facts::{GoSemanticPackageErrorFact, GoSemanticPackageErrorId};
     use crate::go::semantic::store::GoSemanticFactsOutput;
+    use std::collections::BTreeSet;
 
     #[test]
     fn public_import_unknowns_preserve_current_status_docs_and_artifact() {
@@ -654,7 +684,7 @@ mod tests {
                 ),
             }],
             budget_status: BudgetStatus::BudgetExceeded,
-            ..SolverOutput::default()
+            budget_reasons: BTreeSet::from(["solver.max_steps".to_string()]),
         })
         .expect("solver facts");
         let file = db.add_file("a.ts".into(), "a.ts".to_string(), "call();".to_string());
@@ -705,6 +735,32 @@ mod tests {
         assert!(categories.contains(&UnknownCategory::GoSidecarTimeout));
         assert!(categories.contains(&UnknownCategory::BudgetExceeded));
         assert!(categories.contains(&UnknownCategory::ModelMissing));
+        assert!(
+            graph_engine_unknowns(&db).iter().any(|row| {
+                row.family.as_deref() == Some("SolverRun")
+                    && row.reason.as_deref() == Some("solver.max_steps")
+            }),
+            "run-level solver budget reason must survive storage and taxonomy projection"
+        );
+    }
+
+    #[test]
+    fn graph_engine_unknowns_include_run_level_solver_budget_without_edge_rows() {
+        let mut db = AnalysisDb::new();
+        db.replace_solver_facts(SolverOutput {
+            budget_status: BudgetStatus::BudgetExceeded,
+            budget_reasons: BTreeSet::from(["go.max_rta_rounds".to_string()]),
+            ..SolverOutput::default()
+        })
+        .expect("solver facts");
+
+        let rows = graph_engine_unknowns(&db);
+
+        assert!(rows.iter().any(|row| {
+            row.family.as_deref() == Some("SolverRun")
+                && row.category == UnknownCategory::BudgetExceeded
+                && row.reason.as_deref() == Some("go.max_rta_rounds")
+        }));
     }
 
     #[test]

@@ -30,7 +30,6 @@ pub(crate) fn lookup_property_with_prototypes(
 
     for depth in 0..=budget.object.max_prototype_depth {
         if !visited.insert(current) {
-            result.budget_reasons.insert("prototype_cycle".to_string());
             return result;
         }
 
@@ -145,7 +144,7 @@ mod tests {
     }
 
     #[test]
-    fn prototype_cycle_terminates_with_budget_evidence() {
+    fn prototype_cycle_terminates_without_budget_evidence() {
         let links = vec![link(1, 2, "p:1-2"), link(2, 1, "p:2-1")];
 
         let result = lookup_property_with_prototypes(
@@ -156,7 +155,7 @@ mod tests {
             &SolverBudget::default(),
         );
 
-        assert!(result.budget_reasons.contains("prototype_cycle"));
+        assert!(result.budget_reasons.is_empty());
         assert!(result.tokens.is_empty());
     }
 

@@ -11,7 +11,9 @@ use crate::analysis::solver::facts::DerivedEdgeFact;
 use crate::analysis::solver::ts_tokens::fixpoint::{TsTokenVarState, solve_ts_tokens};
 
 use super::dispatch::resolve_object_callsite;
-use super::inputs::{TsObjectModelInputs, TsObjectPropertyRead, TsObjectPropertyWrite};
+use super::inputs::{
+    TsObjectModelInputs, TsObjectPropertyRead, TsObjectPropertyWrite, TsObjectPrototypeLink,
+};
 use super::prototype::lookup_property_with_prototypes;
 use super::receiver::resolve_receiver_bindings;
 
@@ -54,19 +56,23 @@ pub(crate) fn solve_ts_object_model(
     let receiver_bindings = resolve_receiver_bindings(&inputs.receiver_bindings);
     let evidence_by_callsite =
         evidence_by_callsite(inputs, &receiver_bindings.evidence_by_callsite);
+    let token_steps = token_result.steps;
     let token_budget_status = token_result.budget_status;
     let token_budget_reasons = token_result.budget_reasons;
     let token_states = token_result.tokens_by_var;
 
     let mut budget_reasons = BTreeSet::new();
-    let mut steps = token_result.steps;
+    let mut object_steps = 0_u64;
 
-    enforce_objects_per_place(inputs, budget, &mut budget_reasons);
+    let rejected_objects = enforce_objects_per_place(inputs, budget, &mut budget_reasons);
     let mut accumulator = PropertyBucketAccumulator::default();
 
     for write in &inputs.property_writes {
-        steps += 1;
-        if steps > budget.object.max_object_worklist_steps as u64 {
+        if rejected_objects.contains(&write.base_object) {
+            continue;
+        }
+        object_steps += 1;
+        if object_steps > budget.object.max_object_worklist_steps as u64 {
             budget_reasons.insert(
                 BudgetReason::ObjectMaxObjectWorklistSteps
                     .as_str()
@@ -87,18 +93,22 @@ pub(crate) fn solve_ts_object_model(
 
     let receiver_contexts = receiver_contexts_by_function(
         inputs,
-        &accumulator.buckets,
-        &receiver_bindings.receiver_by_callsite,
-        &evidence_by_callsite,
+        ReceiverContextInputs {
+            buckets: &accumulator.buckets,
+            receiver_by_callsite: &receiver_bindings.receiver_by_callsite,
+            evidence_by_callsite: &evidence_by_callsite,
+            rejected_objects: &rejected_objects,
+        },
         budget,
         &mut budget_reasons,
-        &mut steps,
+        &mut object_steps,
     );
 
+    let allowed_prototype_links = allowed_prototype_links(inputs, &rejected_objects);
     let mut edges_by_key = BTreeMap::new();
     for read in &inputs.property_reads {
-        steps += 1;
-        if steps > budget.object.max_object_worklist_steps as u64 {
+        object_steps += 1;
+        if object_steps > budget.object.max_object_worklist_steps as u64 {
             budget_reasons.insert(
                 BudgetReason::ObjectMaxObjectWorklistSteps
                     .as_str()
@@ -108,9 +118,12 @@ pub(crate) fn solve_ts_object_model(
         }
         let base_objects = read_base_objects(read, &receiver_contexts);
         for (base_object, receiver_evidence) in base_objects {
+            if rejected_objects.contains(&base_object) {
+                continue;
+            }
             let lookup = lookup_property_with_prototypes(
                 &accumulator.buckets,
-                &inputs.prototype_links,
+                &allowed_prototype_links,
                 base_object,
                 &read.field,
                 budget,
@@ -132,7 +145,7 @@ pub(crate) fn solve_ts_object_model(
                 &lookup.tokens,
                 &handoff_keys,
                 budget.object.max_receiver_candidates_per_callsite,
-                steps,
+                token_steps.saturating_add(object_steps),
             );
             if resolution.candidate_cap_exceeded {
                 budget_reasons.insert(
@@ -160,17 +173,22 @@ pub(crate) fn solve_ts_object_model(
             BudgetStatus::BudgetExceeded
         },
         budget_reasons,
-        steps,
+        steps: token_steps.saturating_add(object_steps),
     }
 }
 
 type ReceiverContextsByFunction = BTreeMap<SemanticNodeId, BTreeMap<SemanticNodeId, Vec<String>>>;
 
+struct ReceiverContextInputs<'a> {
+    buckets: &'a BTreeMap<TsObjectPropertyBucketKey, TsObjectPropertyBucketState>,
+    receiver_by_callsite: &'a BTreeMap<SemanticNodeId, SemanticNodeId>,
+    evidence_by_callsite: &'a BTreeMap<SemanticNodeId, Vec<String>>,
+    rejected_objects: &'a BTreeSet<SemanticNodeId>,
+}
+
 fn receiver_contexts_by_function(
     inputs: &TsObjectModelInputs,
-    buckets: &BTreeMap<TsObjectPropertyBucketKey, TsObjectPropertyBucketState>,
-    receiver_by_callsite: &BTreeMap<SemanticNodeId, SemanticNodeId>,
-    evidence_by_callsite: &BTreeMap<SemanticNodeId, Vec<String>>,
+    context_inputs: ReceiverContextInputs<'_>,
     budget: &SolverBudget,
     budget_reasons: &mut BTreeSet<String>,
     steps: &mut u64,
@@ -192,14 +210,21 @@ fn receiver_contexts_by_function(
         }
         let Some(receiver_object) = read
             .callsite_node
-            .and_then(|callsite| receiver_by_callsite.get(&callsite))
+            .and_then(|callsite| context_inputs.receiver_by_callsite.get(&callsite))
             .copied()
         else {
             continue;
         };
+        if context_inputs.rejected_objects.contains(&receiver_object)
+            || context_inputs.rejected_objects.contains(&read.base_object)
+        {
+            continue;
+        }
+        let allowed_prototype_links =
+            allowed_prototype_links(inputs, context_inputs.rejected_objects);
         let lookup = lookup_property_with_prototypes(
-            buckets,
-            &inputs.prototype_links,
+            context_inputs.buckets,
+            &allowed_prototype_links,
             read.base_object,
             &read.field,
             budget,
@@ -210,7 +235,7 @@ fn receiver_contexts_by_function(
         }
         let receiver_evidence = read
             .callsite_node
-            .and_then(|callsite| evidence_by_callsite.get(&callsite))
+            .and_then(|callsite| context_inputs.evidence_by_callsite.get(&callsite))
             .cloned()
             .unwrap_or_default();
         for token in lookup.tokens.keys() {
@@ -251,6 +276,20 @@ fn read_base_objects(
     }
 
     vec![(read.base_object, Vec::new())]
+}
+
+fn allowed_prototype_links(
+    inputs: &TsObjectModelInputs,
+    rejected_objects: &BTreeSet<SemanticNodeId>,
+) -> Vec<TsObjectPrototypeLink> {
+    inputs
+        .prototype_links
+        .iter()
+        .filter(|link| {
+            !rejected_objects.contains(&link.object) && !rejected_objects.contains(&link.prototype)
+        })
+        .cloned()
+        .collect()
 }
 
 fn source_tokens_for_write(
@@ -383,18 +422,21 @@ fn enforce_objects_per_place(
     inputs: &TsObjectModelInputs,
     budget: &SolverBudget,
     budget_reasons: &mut BTreeSet<String>,
-) {
+) -> BTreeSet<SemanticNodeId> {
     let mut objects_by_place: BTreeMap<SemanticNodeId, BTreeSet<SemanticNodeId>> = BTreeMap::new();
+    let mut rejected_objects = BTreeSet::new();
     for allocation in &inputs.allocations {
         let objects = objects_by_place.entry(allocation.place_node).or_default();
         if !objects.contains(&allocation.object_node)
             && objects.len() >= budget.object.max_objects_per_place
         {
             budget_reasons.insert(BudgetReason::ObjectMaxObjectsPerPlace.as_str().to_string());
-            return;
+            rejected_objects.insert(allocation.object_node);
+            continue;
         }
         objects.insert(allocation.object_node);
     }
+    rejected_objects
 }
 
 fn evidence_by_callsite(
@@ -421,7 +463,7 @@ fn evidence_by_callsite(
 mod tests {
     use super::*;
     use crate::analysis::solver::ts_object_model::inputs::TsObjectPropertyRead;
-    use crate::analysis::solver::ts_tokens::inputs::TsFunctionToken;
+    use crate::analysis::solver::ts_tokens::inputs::{TsFunctionToken, TsTokenCallsite};
 
     #[test]
     fn exact_property_bucket_emits_property_backed_edge() {
@@ -464,6 +506,13 @@ mod tests {
     #[test]
     fn prototype_bucket_lookup_emits_edge_with_prototype_evidence() {
         let mut inputs = basic_inputs("static:m");
+        inputs
+            .allocations
+            .push(super::super::inputs::TsObjectAllocationInput {
+                place_node: SemanticNodeId(31),
+                object_node: SemanticNodeId(11),
+                stable_key: "allocation:prototype".to_string(),
+            });
         inputs.property_writes[0].base_object = SemanticNodeId(11);
         inputs
             .prototype_links
@@ -624,6 +673,74 @@ mod tests {
     }
 
     #[test]
+    fn max_objects_per_place_excludes_over_cap_objects_from_edges() {
+        let mut inputs = basic_inputs("static:target");
+        inputs
+            .allocations
+            .push(super::super::inputs::TsObjectAllocationInput {
+                place_node: SemanticNodeId(30),
+                object_node: SemanticNodeId(11),
+                stable_key: "allocation:over-cap".to_string(),
+            });
+        inputs.token_inputs.function_tokens.insert(
+            SemanticNodeId(3),
+            TsFunctionToken {
+                function_node: SemanticNodeId(3),
+                function_stable_key: "function:over-cap".to_string(),
+                source_stable_key: "node:function:over-cap".to_string(),
+            },
+        );
+        inputs.property_writes.push(TsObjectPropertyWrite {
+            base_object: SemanticNodeId(11),
+            field: "static:over-cap".to_string(),
+            source_node: SemanticNodeId(3),
+            stable_key: "write:over-cap".to_string(),
+        });
+        inputs.property_reads.push(TsObjectPropertyRead {
+            base_object: SemanticNodeId(11),
+            base_is_this: false,
+            field: "static:over-cap".to_string(),
+            destination_node: SemanticNodeId(21),
+            callsite_node: Some(SemanticNodeId(19)),
+            caller_node: Some(SemanticNodeId(1)),
+            callsite_stable_key: Some("callsite:over-cap".to_string()),
+            constraint_stable_key: "read:over-cap".to_string(),
+            stable_key: "read:over-cap".to_string(),
+        });
+        inputs.node_kinds.insert(
+            SemanticNodeId(3),
+            NodeKind::Function(crate::core::FunctionId(3)),
+        );
+        inputs.node_kinds.insert(
+            SemanticNodeId(19),
+            NodeKind::Callsite(crate::analysis::ids::CallSiteId(19)),
+        );
+        inputs.node_kinds.insert(
+            SemanticNodeId(21),
+            NodeKind::Place(crate::analysis::ids::PlaceId(21)),
+        );
+        let mut budget = SolverBudget::default();
+        budget.object.max_objects_per_place = 1;
+
+        let result = solve_ts_object_model(&inputs.normalized(), &budget);
+
+        assert_eq!(result.budget_status, BudgetStatus::BudgetExceeded);
+        assert!(
+            result
+                .budget_reasons
+                .contains(BudgetReason::ObjectMaxObjectsPerPlace.as_str())
+        );
+        assert!(
+            result
+                .derived_edges
+                .iter()
+                .all(|edge| edge.source != SemanticNodeId(19) && edge.target != SemanticNodeId(3)),
+            "over-cap object must not contribute derived edges: {:#?}",
+            result.derived_edges
+        );
+    }
+
+    #[test]
     fn max_tokens_per_property_latches_budget_exceeded_and_keeps_precap_edge() {
         let mut inputs = basic_inputs("static:target");
         inputs.node_kinds.insert(
@@ -676,6 +793,39 @@ mod tests {
                 .budget_reasons
                 .contains(BudgetReason::ObjectMaxComputedBucketsPerObject.as_str())
         );
+    }
+
+    #[test]
+    fn token_steps_do_not_consume_object_worklist_budget() {
+        let mut inputs = basic_inputs("static:target");
+        inputs.token_inputs.callsites = vec![
+            TsTokenCallsite {
+                caller_node: SemanticNodeId(1),
+                callsite_node: SemanticNodeId(91),
+                callsite_stable_key: "callsite:token-a".to_string(),
+                constraint_stable_key: "call:token-a".to_string(),
+            },
+            TsTokenCallsite {
+                caller_node: SemanticNodeId(1),
+                callsite_node: SemanticNodeId(92),
+                callsite_stable_key: "callsite:token-b".to_string(),
+                constraint_stable_key: "call:token-b".to_string(),
+            },
+        ];
+        let mut budget = SolverBudget::default();
+        budget.js.max_token_worklist_steps = 2;
+        budget.object.max_object_worklist_steps = 3;
+
+        let result = solve_ts_object_model(&inputs.normalized(), &budget);
+
+        assert_eq!(result.budget_status, BudgetStatus::WithinBudget);
+        assert!(
+            !result
+                .budget_reasons
+                .contains(BudgetReason::ObjectMaxObjectWorklistSteps.as_str())
+        );
+        assert_eq!(result.steps, 5);
+        assert_eq!(result.derived_edges.len(), 1);
     }
 
     #[test]
