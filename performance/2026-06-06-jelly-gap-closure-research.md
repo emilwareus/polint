@@ -38,6 +38,13 @@ Current measured checkpoint:
 | Go x/tools RTA | 37 | 6 | 0 | 86.05% | 100.00% | 92.50% | 1012 ms | `f9c8f398e133e64b` |
 | Jelly JS/TS callgraph micro | 462 | 552 | 1017 | 45.56% | 31.24% | 37.06% | 81650 ms | `bd04d1cfb14c1da5` |
 
+Deep source review of Jelly confirms the remaining gap is mostly semantic, not
+parser-level. Oxc parses the representative missing cases below. polint fails
+because it does not yet run a Jelly-like token/constraint fixpoint for JS values:
+module export objects, receiver mutation, Promise result objects, and
+generator/iterator result objects are not represented as first-class flow
+entities in the TS/JS frontend.
+
 ## Initial Evidence
 
 Measured on 2026-06-06 after the Go RTA benchmark fix:
@@ -644,6 +651,229 @@ Deliverables:
 
 Do not start with CommonJS, native promises, or patch heuristics. Those are real
 gaps, but they depend on the module/function-object model first.
+
+## Deep Jelly Implementation Review
+
+This continuation looked directly at Jelly's implementation, not just the output
+fixtures. The relevant code path is:
+
+- `src/analysis/infos.ts`: defines `ModuleInfo`, `DummyModuleInfo`, and
+  `FunctionInfo`. Jelly treats a module execution as a call graph node alongside
+  functions.
+- `src/analysis/tokens.ts`: represents runtime-like abstract values as tokens:
+  `FunctionToken`, `AllocationSiteToken`, `ObjectToken`, `PrototypeToken`,
+  `PackageObjectToken`, `NativeObjectToken`, and access-path tokens.
+- `src/analysis/constraintvars.ts`: represents storage locations such as
+  `NodeVar`, `ObjectPropertyVar`, `FunctionReturnVar`, `ThisVar`,
+  `ArgumentsVar`, `IntermediateVar`, `AncestorsVar`, and `ReadResultVar`.
+- `src/analysis/solver.ts`: runs subset constraints and token listeners to a
+  fixpoint. Object property reads, writes, prototype inheritance, and deferred
+  "for all tokens" callbacks are normal solver operations.
+- `src/analysis/fragmentstate.ts`: owns the call graph maps:
+  `functionToFunction`, `callToFunction`, `callToFunctionOrModule`,
+  `callToContainingFunction`, `callToModule`, `callToCalleeVars`, and
+  `requireGraph`.
+- `src/analysis/operations.ts`: converts resolved function tokens into call
+  edges, binds parameters/returns/`this`, handles `new`, reads/writes properties
+  through prototype chains, loads modules, and registers require/import edges.
+- `src/analysis/astvisitor.ts`: emits the constraints for functions, classes,
+  object literals, arrays, imports/exports, returns, yields, awaits, `for...of`,
+  and `for await`.
+- `src/natives/ecmascript.ts` and `src/natives/nativehelpers.ts`: model
+  `Function.prototype.call/apply/bind`, promises, arrays, iterators,
+  generators, and callback invocation/return flow.
+- `src/natives/nodejs.ts`: initializes each module's `exports`,
+  `module.exports`, `require`, and wrapper `arguments`.
+- `src/patching/patchthis.ts`, `src/patching/patchmethodcalls.ts`, and
+  `src/patching/patchdynamics.ts`: run bounded recovery passes after the core
+  solver when `this`, method calls, or dynamic property flows remain empty.
+- `src/testing/runtest.ts` and `src/testing/compare.ts`: compare expected
+  `call2fun` / `fun2fun` soundness fixtures, with optional exact-count checks.
+
+The important architectural difference is that Jelly does not try to solve each
+syntax pattern with local one-off recognizers. It lowers JavaScript into an
+abstract heap of tokens and storage variables, then lets constraints propagate
+until there are no new facts. Native APIs such as promises and generators are
+implemented as additional constraints over the same token world.
+
+## Jelly Fixture Evidence Ported To Rust
+
+I ported three representative Jelly fixture obligations into ignored
+unit-style Rust probes in
+`crates/polint/src/analysis/calls/ts_value_flows.rs`. They are ignored so normal
+CI stays green, but `--ignored` clearly demonstrates the current gap.
+
+### `tests/micro/promises.js`: `Promise.allSettled` result objects
+
+Jelly models `Promise.allSettled([p2, p3]).then(va => ...)` so the array entries
+have object properties:
+
+- `va[0].value()` reaches the function fulfilled by `p2`.
+- `va[1].reason()` reaches the function rejected by `p3`.
+
+Ported probe:
+
+- `jelly_gap_promise_all_settled_result_object_properties`
+
+Current polint result:
+
+- actual edges: `[]`
+- expected edges: `(value call -> fulfilled arrow)`, `(reason call -> rejected arrow)`
+
+Underlying missing semantics:
+
+- `Promise.allSettled` must fulfill with an array of result objects, not a flat
+  collection of functions.
+- Each result object needs `value` and `reason` properties connected to the
+  corresponding input promise fulfillment/rejection tokens.
+- The handler parameter `va` must bind to that fulfilled result array, then
+  indexed property reads must flow into member call targets.
+
+### `tests/micro/asyncawait.js`: async generator result objects and `for await`
+
+Jelly models an async generator so yielded values flow through both explicit
+`.next().then(res => res.value())` and `for await (const q of f7()) { q(); }`.
+
+Ported probe:
+
+- `jelly_gap_async_generator_next_and_for_await_values`
+
+Current polint result:
+
+- actual edges: `[]`
+- expected edges: `(res.value() -> yielded arrow)`, `(q() -> yielded arrow)`
+
+Underlying missing semantics:
+
+- Async generator calls allocate generator/iterator tokens.
+- `.next()` returns a promise whose fulfilled value is an iterator result object.
+- That result object's `value` property receives yielded values.
+- `for await` must read async iterator values and bind the loop variable.
+
+### `tests/micro/classes2.js`: receiver-side effects across calls
+
+Jelly models a constructor argument stored on `this.a1`, then a call through
+`q1.a1()` where the invoked function writes `this.a2 = () => {}`. The later
+`q1.a2()` call reaches that nested arrow.
+
+Ported probe:
+
+- `jelly_gap_receiver_side_effect_adds_instance_method`
+
+Current polint result:
+
+- actual edges: `[]`
+- expected edge: `(q1.a2() -> nested arrow assigned inside a1)`
+
+Underlying missing semantics:
+
+- Calling `q1.a1()` must bind `this` to `q1`.
+- The callee body must be interpreted enough to record writes to receiver
+  properties.
+- Receiver object mutation must persist into later member-call resolution.
+- This is not just a class issue; it requires call-sensitive receiver summaries
+  or a heap-token fixpoint.
+
+To reproduce the passing normal tests and the intentional failures:
+
+```sh
+cargo test -p polint analysis::calls::ts_value_flows --lib --locked
+cargo test -p polint analysis::calls::ts_value_flows::tests::jelly_gap --lib --locked -- --ignored --nocapture
+```
+
+The first command currently passes with 17 tests passed and 3 ignored. The
+second command currently fails all 3 probes as intended, with every actual edge
+list empty.
+
+## Updated Fundamental Diagnosis
+
+There is no evidence that these three cases are blocked by parsing. Oxc parses
+the source snippets well enough for the current unit probes to build AST-backed
+facts. The blockers are semantic:
+
+- polint has bounded same-file value-flow recognizers, but not a general JS
+  abstract heap with token propagation.
+- promise fulfillment is represented mostly as collections of callable targets,
+  not object-shaped values with properties.
+- generator and async-generator calls do not allocate iterator/result objects.
+- member calls do not execute callee bodies with receiver-bound `this`, so
+  receiver-side mutations cannot affect later calls.
+- CommonJS/ESM modules still need module-local export objects and require/import
+  edge propagation like Jelly's `ModuleInfo` plus `%exports`/`%module.exports`
+  model.
+- Recovery passes should be added only after the core facts exist; Jelly's
+  patching is a second-stage approximation, not its foundation.
+
+There are still genuine hard JavaScript cases where both analyzers must use
+approximations or unsupported diagnostics: `eval`, nonliteral `require`,
+unknown computed property names, highly dynamic prototype mutation, and package
+resolution branches controlled by runtime conditions. Those are not the main
+reason for the current Jelly micro-suite recall gap.
+
+## Updated Implementation Plan
+
+The next work should stop adding more local syntactic special cases and instead
+move these semantics into a small private TS/JS value-token layer that can feed
+the existing call graph facts.
+
+1. **Introduce a private JS token heap.**
+
+   Add internal token identities for function values, ordinary objects, arrays,
+   promises, generator/iterator objects, iterator result objects, module export
+   objects, and native objects. Add storage variables for lexical bindings,
+   object properties, return values, arguments, and `this`.
+
+2. **Implement deterministic fixpoint propagation.**
+
+   Reuse the existing analysis-kernel style, but keep the TS/JS heap private.
+   Support subset/copy constraints, property read/write listeners, prototype
+   parent links, and call listeners. Bound token growth explicitly and emit
+   budget diagnostics rather than silently dropping flows.
+
+3. **Bind calls through the heap.**
+
+   A call should read a callee token set, bind parameters, bind receiver `this`,
+   propagate returns, and emit call-target facts when a `FunctionToken` reaches
+   a call site. `new` should allocate an instance token and bind constructor
+   `this`.
+
+4. **Promote current local models into heap constraints.**
+
+   Move arrays, object literals, destructuring, direct parameter flow, class
+   methods, static members, constructor assignments, and async returns out of
+   local one-pass maps into reusable heap operations.
+
+5. **Add the three failing semantic families first.**
+
+   - `Promise.allSettled`: allocate result objects with `value`/`reason`.
+   - Async generators: allocate generator objects; model `.next()` as a promise
+     of iterator result objects; bind `for await` variables from yielded values.
+   - Receiver effects: execute/bind same-file function bodies through `this`
+     enough for receiver property writes to persist.
+
+6. **Add CommonJS/ESM module object graph.**
+
+   Model module execution nodes, `exports`, `module.exports`, static
+   `require`, static imports/exports, and Node-like resolution for static
+   strings. Keep dependency inclusion configurable to avoid the current
+   `helloworld` false-positive/runtime explosion becoming the default product
+   behavior.
+
+7. **Only then add Jelly-style recovery patches.**
+
+   Add `this`, dynamic-property, and method-call recovery with explicit
+   heuristic precision and per-case counters so these passes cannot hide core
+   semantic regressions.
+
+Acceptance for the next implementation slice:
+
+- The three ignored `jelly_gap_*` Rust probes pass, are unignored or replaced
+  by permanent focused tests, and still pass under `cargo test -p polint
+  analysis::calls::ts_value_flows --lib --locked`.
+- Jelly `promises`, `asyncawait`, `generators`, and `classes2` TP counts move
+  up without a major suite-wide FP spike.
+- The release external graph benchmark is re-run and this report is appended
+  with TP/FP/FN, precision, recall, F1, runtime, and hash.
 
 ## Sources
 

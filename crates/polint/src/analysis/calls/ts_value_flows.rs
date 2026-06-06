@@ -3714,6 +3714,154 @@ mod tests {
         );
     }
 
+    #[test]
+    #[ignore = "Jelly gap: Promise.allSettled should expose result objects with value/reason callables"]
+    fn jelly_gap_promise_all_settled_result_object_properties() {
+        let source = "const p2 = Promise.resolve(() => {});\nconst p3 = Promise.reject(() => {});\nPromise.allSettled([p2, p3]).then(va => {\n  va[0].value();\n  va[1].reason();\n});\n";
+        let mut db = db_with_file(source);
+        let file = db.files()[0].id;
+        push_function(
+            &mut db,
+            file,
+            TS_JS_MODULE_FUNCTION_NAME,
+            span_for_range(source, file, 0, source.len()),
+        );
+        let fulfilled = push_function(
+            &mut db,
+            file,
+            "<anonymous>",
+            span_for_nth(source, file, "() => {}", 0),
+        );
+        let rejected = push_function(
+            &mut db,
+            file,
+            "<anonymous>",
+            span_for_nth(source, file, "() => {}", 1),
+        );
+        let handler = push_function(
+            &mut db,
+            file,
+            "<anonymous>",
+            span_for_nth(
+                source,
+                file,
+                "va => {\n  va[0].value();\n  va[1].reason();\n}",
+                0,
+            ),
+        );
+        let sites = vec![
+            member_call_site(source, file, handler, "va[0].value()", "value", 0, 0),
+            member_call_site(source, file, handler, "va[1].reason()", "reason", 0, 1),
+        ];
+
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let target_ids_by_site = resolved_target_ids_by_site(targets);
+
+        assert_eq!(
+            target_ids_by_site,
+            vec![(CallSiteId(0), fulfilled), (CallSiteId(1), rejected)]
+        );
+    }
+
+    #[test]
+    #[ignore = "Jelly gap: async generator next()/for-await should flow yielded values through iterator result objects"]
+    fn jelly_gap_async_generator_next_and_for_await_values() {
+        let source = "(async function() {\n  const f7 = async function*() {\n    yield* [() => {}];\n    return () => {};\n  };\n  const f8 = f7();\n  const p2 = f8.next();\n  p2.then(res => {\n    res.value();\n  });\n  for await (const q of f7()) {\n    q();\n  }\n}());\n";
+        let mut db = db_with_file(source);
+        let file = db.files()[0].id;
+        push_function(
+            &mut db,
+            file,
+            TS_JS_MODULE_FUNCTION_NAME,
+            span_for_range(source, file, 0, source.len()),
+        );
+        let iife_start = source
+            .find("async function()")
+            .expect("async IIFE start exists");
+        let iife_end = source.rfind("}());").expect("async IIFE end exists") + 1;
+        let iife = push_function(
+            &mut db,
+            file,
+            "<anonymous>",
+            span_for_range(source, file, iife_start, iife_end),
+        );
+        push_function(
+            &mut db,
+            file,
+            "<anonymous>",
+            span_for_nth(
+                source,
+                file,
+                "async function*() {\n    yield* [() => {}];\n    return () => {};\n  }",
+                0,
+            ),
+        );
+        let yielded = push_function(
+            &mut db,
+            file,
+            "<anonymous>",
+            span_for_nth(source, file, "() => {}", 0),
+        );
+        push_function(
+            &mut db,
+            file,
+            "<anonymous>",
+            span_for_nth(source, file, "() => {}", 1),
+        );
+        let handler = push_function(
+            &mut db,
+            file,
+            "<anonymous>",
+            span_for_nth(source, file, "res => {\n    res.value();\n  }", 0),
+        );
+        let sites = vec![
+            member_call_site(source, file, handler, "res.value()", "value", 0, 0),
+            call_site_with_id(source, file, iife, "q()", "q", 0, 1),
+        ];
+
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let target_ids_by_site = resolved_target_ids_by_site(targets);
+
+        assert_eq!(
+            target_ids_by_site,
+            vec![(CallSiteId(0), yielded), (CallSiteId(1), yielded)]
+        );
+    }
+
+    #[test]
+    #[ignore = "Jelly gap: receiver-side effects should mutate the receiver object across calls"]
+    fn jelly_gap_receiver_side_effect_adds_instance_method() {
+        let source = "class D {\n  constructor(a) {\n    this.a1 = a;\n  }\n}\nconst q1 = new D(function() {\n  this.a2 = () => {};\n});\nq1.a1();\nq1.a2();\n";
+        let mut db = db_with_file(source);
+        let file = db.files()[0].id;
+        let module = push_function(
+            &mut db,
+            file,
+            TS_JS_MODULE_FUNCTION_NAME,
+            span_for_range(source, file, 0, source.len()),
+        );
+        push_function(
+            &mut db,
+            file,
+            "<anonymous>",
+            span_for_nth(source, file, "function() {\n  this.a2 = () => {};\n}", 0),
+        );
+        let a2 = push_function(
+            &mut db,
+            file,
+            "<anonymous>",
+            span_for_nth(source, file, "() => {}", 0),
+        );
+        let sites = vec![member_call_site(
+            source, file, module, "q1.a2()", "a2", 0, 0,
+        )];
+
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let target_ids_by_site = resolved_target_ids_by_site(targets);
+
+        assert_eq!(target_ids_by_site, vec![(CallSiteId(0), a2)]);
+    }
+
     fn db_with_file(source: &str) -> AnalysisDb {
         let mut db = AnalysisDb::new();
         db.add_file(
@@ -3847,6 +3995,19 @@ mod tests {
         let mut ids = targets
             .drain(..)
             .filter_map(|target| target.target_function)
+            .collect::<Vec<_>>();
+        ids.sort();
+        ids
+    }
+
+    fn resolved_target_ids_by_site(targets: Vec<CallTargetFact>) -> Vec<(CallSiteId, FunctionId)> {
+        let mut ids = targets
+            .into_iter()
+            .filter_map(|target| {
+                target
+                    .target_function
+                    .map(|function| (target.site, function))
+            })
             .collect::<Vec<_>>();
         ids.sort();
         ids

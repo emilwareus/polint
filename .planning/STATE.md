@@ -54,6 +54,7 @@ Add `public surface leak gate (ubuntu-latest)` AND `public surface leak gate (ma
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260606-qjp | Deeply research Jelly JS semantics gaps and add failing unit probes | 2026-06-06 | working tree | [260606-qjp-deeply-research-jelly-js-semantics-gaps-](./quick/260606-qjp-deeply-research-jelly-js-semantics-gaps-/) |
 | 260606-fkk | Continue recall-focused Jelly JS/TS callgraph improvements from 16.16% F1 to 37.06% F1 | 2026-06-06 | working tree | [260606-fkk-continue-recall-focused-jelly-js-ts-call](./quick/260606-fkk-continue-recall-focused-jelly-js-ts-call/) |
 | 260606-ef2 | Iteratively improve Jelly JS/TS callgraph F1 while preserving architecture and benchmark honesty | 2026-06-06 | working tree | [260606-ef2-iteratively-improve-jelly-js-ts-callgraph-f1](./quick/260606-ef2-iteratively-improve-jelly-js-ts-callgraph-f1/) |
 | 260606-ea2 | Research and document how to close the Jelly JS/TS callgraph performance gap | 2026-06-06 | implemented | [260606-ea2-research-and-document-how-to-close-the-j](./quick/260606-ea2-research-and-document-how-to-close-the-j/) |
