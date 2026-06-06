@@ -2,18 +2,19 @@
 
 ## Bottom Line
 
-The current static-analysis engine does **not** meet the v1.3 benchmark target.
-On the full locally available external graph suites, polint baseline performance
-is:
+After fixing benchmark accounting/path normalization and the internal analyzer
+errors, polint is still far below benchmark-grade graph accuracy.
 
 | Suite | Scope | Cases | TP | FP | FN | Precision | Recall | F1 | Runtime |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| Go x/tools RTA callgraph | release tier, all local cases | 5 | 1 | 14 | 36 | 6.67% | 2.70% | 3.85% | 1.124s |
-| Jelly JS/TS callgraph micro | release tier, all local cases | 76 | 0 | 90 | 1479 | 0.00% | 0.00% | 0.00% | 0.877s |
+| Go x/tools RTA callgraph | release tier, all local cases | 5 | 1 | 9 | 36 | 10.00% | 2.70% | 4.26% | 1.053s |
+| Jelly JS/TS callgraph micro | release tier, all local cases | 76 | 8 | 6 | 1471 | 57.14% | 0.54% | 1.07% | 0.716s |
 
-This means the promotion infrastructure exists, but the analyzer output is not
-yet benchmark-grade. The earlier `<3% -> >25-30%` recall goal is **not achieved**
-by the measured implementation.
+The previous measurement overstated false positives and understated Jelly
+matches because it counted benchmark invariant rows as scored false positives
+and compared Jelly case-relative oracle paths against repo-relative observed
+paths. Those were measurement/fundamental defects. The corrected results are
+more honest, but still bad: recall is the blocker.
 
 ## Measurement Context
 
@@ -21,11 +22,11 @@ by the measured implementation.
 |---|---|
 | Date | 2026-06-06 |
 | Branch | `emilwareus/gsd-next-steps-v2` |
-| Commit measured | `b707ff12` plus the test-only benchmark tier selector added in this task |
+| Baseline commit before fixes | `435556ee` |
 | polint version | `0.1.14` |
 | Host | macOS 26.5, Darwin arm64 |
 | Go toolchain | `go1.26.2 darwin/arm64` |
-| Build mode | `cargo test --release` / `target/release/polint` |
+| Build mode | `cargo test --release` / `cargo run --release` |
 | Benchmark repos | gitignored local clones under `research/evaluation-harness/repos/` |
 
 Pinned benchmark commits:
@@ -35,9 +36,19 @@ Pinned benchmark commits:
 | Go x/tools RTA callgraph | `https://github.com/golang/tools` | `7743a285e3d261ca235408e013ec5c14cb5170e4` |
 | Jelly callgraph micro | `https://github.com/cs-au-dk/jelly` | `b799ed4f0d68c670fe398830aaa51dd5c628cf74` |
 
-## External Graph Benchmark Results
+## What Changed
 
-### Release Tier
+Fundamentals fixed before the second measurement:
+
+| Area | Fix |
+|---|---|
+| Self-analysis metadata | `ValuePrecision::ExactLocal` now maps to setup-aware metadata instead of over-claiming exact precision. |
+| TS/JS MIR lowering | Optional chains no longer emit duplicate unsupported rows; empty/blank literals lower to unknown evidence instead of invalid literal facts. |
+| Domain validation | Propagated `UnresolvedCall` top reasons no longer require the later domain observation to be located at the original call-site operation. Diagnostics now include stable evidence. |
+| Benchmark metrics | Invariant/runtime metadata no longer contributes to precision/recall/F-scores. |
+| Jelly adapter | Expected Jelly spans are normalized from JSON-case-relative paths to repo-relative paths, matching observed file identities. |
+
+## Current Release Benchmark
 
 Command:
 
@@ -50,145 +61,143 @@ POLINT_WRITE_GRAPH_BENCH=1 POLINT_GRAPH_BENCH_TIER=release \
 
 Command result:
 
-- Exit status: 0
-- Test body runtime: 2.09s
-- Command wall time including incremental release compile: 65.00s
-- Time output peak memory footprint: 64,012,768 bytes
-- Generated raw artifacts: `.context/graph-benchmarks/`
+| Field | Value |
+|---|---:|
+| Exit status | 0 |
+| Test body runtime | 1.86s |
+| Wall time including incremental release compile | 72.17s |
+| Maximum resident set size | 6,758,203,392 bytes |
+| Peak memory footprint | 63,717,856 bytes |
+| Raw artifacts | `.context/graph-benchmarks/` |
 
 | Suite | Expected graph edges | Observed graph edges | Unknowns | Output hash |
 |---|---:|---:|---:|---|
-| Go x/tools RTA callgraph | 37 | 10 | 26 | `350b040700d09f0d` |
-| Jelly callgraph micro | 1479 | 14 | 104 | `44681262ca6a1cc3` |
+| Go x/tools RTA callgraph | 37 | 10 | 26 | `6ed2619007509930` |
+| Jelly callgraph micro | 1479 | 14 | 104 | `135c493b613dd3cc` |
 
 Observed graph-edge families:
 
-| Suite | Observed families | Status / precision |
+| Suite | Expected families | Observed families |
 |---|---|---|
-| Go x/tools RTA callgraph | 10 `go.rta.call_graph.static_function_call` edges | all `resolved`, all `Heuristic` |
-| Jelly callgraph micro | 7 `jelly.call_graph.fun2fun`, 7 `jelly.call_graph.call2fun` | all `resolved`, all `Heuristic` |
+| Go x/tools RTA callgraph | 4 dynamic function, 14 dynamic method, 8 static function, 10 static method, 1 synthetic | 10 static function |
+| Jelly callgraph micro | 829 `call2fun`, 650 `fun2fun` | 7 `call2fun`, 7 `fun2fun` |
 
-Worst false-negative clusters:
+## Before vs After
 
-| Suite | Case | TP | FP | FN | Runtime |
-|---|---|---:|---:|---:|---:|
-| Go | `go/callgraph/rta/testdata/multipkgs.txtar` | 1 | 4 | 12 | 179ms |
-| Go | `go/callgraph/rta/testdata/generics.txtar` | 0 | 1 | 12 | 204ms |
-| Go | `go/callgraph/rta/testdata/iface.txtar` | 0 | 5 | 5 | 208ms |
-| Jelly | `tests/helloworld/app.json` | 0 | 1 | 342 | 5ms |
-| Jelly | `tests/micro/classes.json` | 0 | 9 | 77 | 27ms |
-| Jelly | `tests/micro/classes2.json` | 0 | 1 | 76 | 41ms |
+| Suite | Run | TP | FP | FN | Precision | Recall | F1 |
+|---|---|---:|---:|---:|---:|---:|---:|
+| Go x/tools RTA | Before fixes | 1 | 14 | 36 | 6.67% | 2.70% | 3.85% |
+| Go x/tools RTA | After fixes | 1 | 9 | 36 | 10.00% | 2.70% | 4.26% |
+| Jelly | Before fixes | 0 | 90 | 1479 | 0.00% | 0.00% | 0.00% |
+| Jelly | After fixes | 8 | 6 | 1471 | 57.14% | 0.54% | 1.07% |
 
-### Fast Tier Smoke Run
+Benchmark metadata rows still appear in per-case match details as unmatched
+invariants, but they no longer affect scored TP/FP/FN metrics.
+
+## Repository Self-Analysis
 
 Command:
 
 ```bash
-POLINT_WRITE_GRAPH_BENCH=1 \
-  /usr/bin/time -l cargo test --release -p polint --lib \
-  eval::external::tests::external_graph_baseline_reports_can_be_generated \
-  --locked -- --nocapture
+/usr/bin/time -l cargo run --release -p polint --locked -- \
+  check --format json --no-cache \
+  > .context/polint-check-internal-clean.json
 ```
 
-Command result:
+Result:
 
-- Exit status: 0
-- Test body runtime: 1.26s
-- Command wall time including release compile: 80.56s
-- Generated raw artifacts: `.context/graph-benchmarks-fast/`
-
-| Suite | Scope | Cases | TP | FP | FN | Precision | Recall | F1 | Runtime |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| Go x/tools RTA callgraph | fast tier; all 5 local cases selected | 5 | 1 | 14 | 36 | 6.67% | 2.70% | 3.85% | 0.991s |
-| Jelly callgraph micro | fast tier deterministic subset | 20 | 0 | 30 | 315 | 0.00% | 0.00% | 0.00% | 0.213s |
-
-## Repository Scan Runtime
-
-These runs measure the current release CLI against this workspace. They do not
-produce precision/recall, but they show throughput and internal diagnostic
-health on a real repository.
-
-Workspace source-file count, excluding `target/` and benchmark clones:
-
-| Extension | Count |
+| Field | Value |
 |---|---:|
-| `.rs` | 387 |
-| `.ts` | 57 |
-| `.go` | 54 |
-| `.js` | 10 |
-| `.tsx` | 8 |
-| Total | 516 |
+| Exit status | 0 |
+| Diagnostics | 1 warning |
+| `polint/internal` diagnostics | 0 |
+| Wall time | 89.57s |
+| User CPU | 35.11s |
+| Sys CPU | 2.17s |
+| Peak memory footprint | 9,895,355,848 bytes |
+| Maximum resident set size | 13,960,413,184 bytes |
 
-Commands:
+The only diagnostic is the existing unused ignore warning in
+`examples/comment-ignores/app.ts`.
 
-```bash
-/usr/bin/time -l target/release/polint check --format json --no-cache \
-  > .context/polint-check-no-cache-seq.json \
-  2> .context/polint-check-no-cache-seq.time.txt
+## Root Cause Notes
 
-/usr/bin/time -l target/release/polint check --format json \
-  > .context/polint-check-cache-seq.json \
-  2> .context/polint-check-cache-seq.time.txt
-```
+### Go x/tools RTA
 
-| Run | Exit | Wall time | User CPU | Sys CPU | Peak memory footprint | Diagnostics |
-|---|---:|---:|---:|---:|---:|---:|
-| No cache | 1 | 35.60s | 33.35s | 1.84s | 9,568,086,312 bytes | 14 |
-| Cache enabled | 1 | 35.76s | 33.39s | 1.77s | 9,505,007,912 bytes | 17 |
+The Go benchmark is failing because polint is not producing the RTA oracle edge
+families for the external fixtures.
 
-Diagnostic summary:
+| Case | Expected | Observed | TP | Notes |
+|---|---:|---:|---:|---|
+| `func.txtar` | 2 | 2 | 0 | Expected dynamic function-value calls; observed unrelated static function calls. |
+| `generics.txtar` | 12 | 0 | 0 | No observed graph edges. |
+| `iface.txtar` | 5 | 4 | 0 | Expected dynamic method calls; observed static function calls to `use`/`live`. |
+| `multipkgs.txtar` | 13 | 4 | 1 | Only one static function edge matches; dynamic/static method edges missing. |
+| `reflectcall.txtar` | 5 | 0 | 0 | Static method and synthetic reflect edges missing. |
 
-| Run | Errors | Warnings | Main finding |
-|---|---:|---:|---|
-| No cache | 13 | 1 | Fact metadata precision-ceiling/stable-key conflicts plus one unused ignore |
-| Cache enabled | 13 | 4 | Same internal errors plus 3 `internal/cache` warnings |
+Unknown reasons in the Go run:
 
-Cache did not materially improve the full-workspace scan in this run. The
-cache-enabled run was slightly slower and produced additional cache warnings.
+| Reason | Count |
+|---|---:|
+| `DynamicProperty` | 13 |
+| `MissingSemanticReference` | 9 |
+| `Reflection` | 3 |
+| `UnknownCallee` | 1 |
 
-## Interpretation
+Interpretation: the external RTA cases appear to fall back to syntax/MIR-style
+call modeling instead of yielding enough Go semantic RTA inputs and anchored
+solver/refined edges. The solver/refined-call bridge exists, so the next debug
+target is the Go semantic lifecycle/input join for these materialized txtar
+repos: functions, callsites, method sets, instantiated types, address-taken
+functions, dynamic dispatch rows, and semantic-node/callsite anchors.
 
-- **Accuracy is the blocker.** Runtime for the external graph benchmark is low
-  enough for iteration, but precision/recall are far below the promotion target.
-- **Go RTA is not scoring as intended yet.** It emits a small number of heuristic
-  graph edges, but only one matches the x/tools oracle.
-- **JS/TS callgraph scoring is effectively failing.** Jelly reports zero true
-  positives across all 76 local cases.
-- **The repository scan is not healthy.** Running `polint check` on this repo
-  exits non-zero because internal metadata validation emits 13 errors.
-- **The promotion gate should currently fail on real measurements.** The gate
-  infrastructure works, but the measured analyzer should not be promoted as
-  benchmark-grade.
+### Jelly JS/TS
 
-## Reproduction Notes
+Jelly path identity is fixed, but recall remains tiny because polint emits only
+14 graph edges against 1,479 expected oracle edges.
 
-The graph benchmark writer is currently an internal test helper, not a public
-CLI. This task added a test-only selector:
+| Signal | Value |
+|---|---:|
+| Expected `jelly.call_graph.call2fun` | 829 |
+| Expected `jelly.call_graph.fun2fun` | 650 |
+| Observed `jelly.call_graph.call2fun` | 7 |
+| Observed `jelly.call_graph.fun2fun` | 7 |
+| Jelly oracle endpoint spans matched | 14 / 1460 |
 
-```bash
-POLINT_GRAPH_BENCH_TIER=fast    # default
-POLINT_GRAPH_BENCH_TIER=nightly
-POLINT_GRAPH_BENCH_TIER=release
-```
+Observed graph edges only appear in:
 
-Raw generated files are intentionally under `.context/` and are not committed:
+| Case | Expected edges | Observed edges | TP | Graph FP |
+|---|---:|---:|---:|---:|
+| `tests/micro/classes.json` | 77 | 8 | 4 | 4 |
+| `tests/micro/defineProperty.json` | 15 | 2 | 0 | 2 |
+| `tests/micro/generators.json` | 50 | 4 | 4 | 0 |
 
-- `.context/graph-benchmarks/summary.md`
-- `.context/graph-benchmarks/go-x-tools-rta-callgraph-baseline.json`
-- `.context/graph-benchmarks/jelly-callgraph-micro-baseline.json`
-- `.context/graph-benchmarks-fast/summary.md`
-- `.context/polint-check-no-cache-seq.json`
-- `.context/polint-check-cache-seq.json`
+Unknown reasons in the Jelly run:
+
+| Reason | Count |
+|---|---:|
+| `MissingSemanticReference` | 54 |
+| `DynamicProperty` | 46 |
+| `CallApplyBind` | 4 |
+
+Interpretation: JS/TS recall is limited by semantic binding and object/member
+modeling. The current implementation can find a few direct or shape-derived
+edges, but most Jelly oracle edges require function-value propagation,
+member/property resolution, prototype/class modeling, call/apply/bind handling,
+and broader identity coverage.
 
 ## Recommended Next Work
 
-1. Fix `polint check` internal metadata errors first. A benchmark run is hard to
-   trust while the analyzer fails on its own repository.
-2. Debug identity normalization for callgraph matching. The engine emits
-   heuristic graph edges, but they mostly do not match Go/Jelly oracle identities.
-3. Add a supported `polint benchmark` or `polint eval` CLI surface for benchmark
-   execution. Today the only runnable path is a `#[cfg(test)]` helper.
-4. Promote release-tier external graph benchmark execution into CI only after
-   precision and recall are above the gate floors.
-5. Re-run this report after fixes and compare against this baseline:
-   Go 6.67% precision / 2.70% recall; Jelly 0.00% precision / 0.00% recall.
+1. Add provider-count instrumentation or targeted tests for the external Go RTA
+   cases: assert nonzero `go_semantic_dynamic_dispatch`, method sets,
+   instantiated types, and solver-derived/refined Go RTA edges where the oracle
+   expects them.
+2. Fix Go external-case semantic lifecycle and anchoring before tuning matcher
+   identities. The benchmark currently lacks the core dynamic edge families.
+3. Add Go static method and synthetic reflect-call projection once semantic
+   inputs are flowing.
+4. Improve JS/TS semantic reference propagation and object/member modeling,
+   prioritizing the Jelly unknown clusters: `MissingSemanticReference` and
+   `DynamicProperty`.
+5. Keep `polint check --format json --no-cache` on this repository at zero
+   `polint/internal` diagnostics before trusting future benchmark deltas.

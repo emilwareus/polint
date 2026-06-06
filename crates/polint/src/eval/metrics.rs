@@ -154,11 +154,16 @@ pub(crate) fn compute_metrics(matches: &[MatchSummary]) -> ComputedMetrics {
     };
 
     for summary in matches {
+        let score_bearing = score_bearing_item_kind(summary.item_kind);
         match summary.outcome {
-            MatchOutcome::TruePositive => metrics.true_positives += 1,
-            MatchOutcome::FalsePositive => metrics.false_positives += 1,
-            MatchOutcome::FalseNegative => metrics.false_negatives += 1,
-            MatchOutcome::TrueNegative => metrics.true_negatives += 1,
+            MatchOutcome::TruePositive if score_bearing => metrics.true_positives += 1,
+            MatchOutcome::FalsePositive if score_bearing => metrics.false_positives += 1,
+            MatchOutcome::FalseNegative if score_bearing => metrics.false_negatives += 1,
+            MatchOutcome::TrueNegative if score_bearing => metrics.true_negatives += 1,
+            MatchOutcome::TruePositive
+            | MatchOutcome::FalsePositive
+            | MatchOutcome::FalseNegative
+            | MatchOutcome::TrueNegative => {}
             MatchOutcome::Unconfirmed => metrics.unconfirmed += 1,
             MatchOutcome::ForbiddenHit => metrics.forbidden_hits += 1,
             MatchOutcome::TrapHit => metrics.false_positive_trap_hits += 1,
@@ -267,6 +272,16 @@ pub(crate) fn compute_metrics(matches: &[MatchSummary]) -> ComputedMetrics {
     );
 
     metrics
+}
+
+fn score_bearing_item_kind(kind: MatchItemKind) -> bool {
+    matches!(
+        kind,
+        MatchItemKind::Diagnostic
+            | MatchItemKind::Fact
+            | MatchItemKind::GraphEdge
+            | MatchItemKind::Path
+    )
 }
 
 /// Computes deterministic Jelly oracle-span coverage (D-20, D-21).
@@ -705,6 +720,33 @@ mod tests {
                 false_positive_rate: Some(0.5),
             }
         );
+    }
+
+    #[test]
+    fn eval_metrics_do_not_score_unmatched_invariants_as_false_positives() {
+        let metrics = compute_metrics(&[
+            summary(
+                MatchOutcome::TruePositive,
+                MatchItemKind::GraphEdge,
+                true,
+                true,
+            ),
+            summary(
+                MatchOutcome::FalsePositive,
+                MatchItemKind::Invariant,
+                false,
+                true,
+            ),
+        ]);
+
+        assert_eq!(metrics.true_positives, 1);
+        assert_eq!(metrics.false_positives, 0);
+        assert_eq!(metrics.false_negatives, 0);
+        assert_eq!(metrics.precision, Some(1.0));
+        assert_eq!(metrics.recall, Some(1.0));
+        assert_eq!(metrics.f1, Some(1.0));
+        assert_eq!(metrics.graph_edges_expected, 1);
+        assert_eq!(metrics.graph_edges_observed, 1);
     }
 
     #[test]

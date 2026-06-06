@@ -1108,14 +1108,6 @@ impl<'source> FunctionLowering<'source> {
                 last.or_else(|| Some(self.temporary_shape(places, sequence.span)))
             }
             Expression::ChainExpression(chain) => {
-                self.push_unsupported(
-                    operations,
-                    unsupported,
-                    chain.span,
-                    "optional chaining",
-                    Vec::new(),
-                    ConservativeAction::HavocAffectedPlaces,
-                );
                 self.lower_chain_element(&chain.expression, places, operations, unsupported)
             }
             Expression::AwaitExpression(await_expression) => {
@@ -2220,8 +2212,11 @@ impl ValueDraft {
                 },
                 MirValue::Place,
             ),
+            Self::Literal { value } if value.trim().is_empty() => MirValue::Unknown {
+                evidence: "empty literal lowering".to_string(),
+            },
             Self::Literal { value } => MirValue::Literal {
-                value: value.clone(),
+                value: value.trim().to_string(),
             },
             Self::Unknown { evidence } => MirValue::Unknown {
                 evidence: evidence.clone(),
@@ -2680,6 +2675,7 @@ mod operations {
     use crate::analysis::mir::op::{
         AssignMode, ConservativeAction, MirOperationKind, UnsupportedDomain,
     };
+    use std::collections::BTreeSet;
     use std::path::PathBuf;
 
     fn lower(path: &str, source: &str) -> MirOutput {
@@ -3128,5 +3124,33 @@ class Box {
                 }
             )
         }));
+    }
+
+    #[test]
+    fn ts_optional_chaining_emits_unique_mir_and_unsupported_keys() {
+        let output = lower(
+            "src/optional.ts",
+            r#"
+export function flow(options, data) {
+  if (options?.enabled) {
+    return data.model?.display_name;
+  }
+}
+"#,
+        );
+
+        let operation_keys = output
+            .operations
+            .iter()
+            .map(|operation| operation.stable_key.as_str())
+            .collect::<BTreeSet<_>>();
+        let unsupported_keys = output
+            .unsupported
+            .iter()
+            .map(|row| row.stable_key.as_str())
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(operation_keys.len(), output.operations.len());
+        assert_eq!(unsupported_keys.len(), output.unsupported.len());
     }
 }

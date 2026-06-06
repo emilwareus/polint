@@ -6119,7 +6119,7 @@ fn value_metadata_precision(
         ValueStatus::Unknown => FactPrecision::Unresolved,
         ValueStatus::BudgetExceeded => FactPrecision::Heuristic,
         ValueStatus::Present => match precision {
-            ValuePrecision::ExactLocal => FactPrecision::Exact,
+            ValuePrecision::ExactLocal => FactPrecision::SetupAware,
             ValuePrecision::SetupAware => FactPrecision::SetupAware,
             ValuePrecision::Conservative | ValuePrecision::Heuristic => FactPrecision::Heuristic,
             ValuePrecision::Unknown => FactPrecision::Unresolved,
@@ -8182,6 +8182,44 @@ mod tests {
                 }],
                 budgets: Vec::new(),
             }
+        }
+    }
+
+    mod type_value_alias_metadata {
+        use super::*;
+        use crate::analysis::ids::{AbstractValueId, ValueFactId};
+        use crate::analysis::values::facts::{ValueKind, ValueProvenance, ValueSubject};
+        use crate::analysis::values::store::ValueOutput;
+
+        #[test]
+        fn exact_local_value_metadata_stays_within_setup_aware_provider_ceiling() {
+            let mut db = AnalysisDb::new();
+            db.replace_type_value_alias_facts(TypeValueAliasOutput {
+                values: ValueOutput {
+                    values: vec![ValueFact {
+                        id: ValueFactId(0),
+                        subject: ValueSubject::Synthetic("literal".to_string()),
+                        value: AbstractValueId(0),
+                        kind: ValueKind::String("\"ok\"".to_string()),
+                        language: Language::TypeScript,
+                        file: None,
+                        function: None,
+                        body: None,
+                        precision: ValuePrecision::ExactLocal,
+                        status: ValueStatus::Present,
+                        provenance: ValueProvenance::Native,
+                        stable_key: "value:literal".to_string(),
+                    }],
+                    allocations: Vec::new(),
+                },
+                ..TypeValueAliasOutput::default()
+            });
+
+            let metadata = db
+                .metadata_for(FactRef::new(FactFamily::Value, 0))
+                .expect("value metadata exists");
+
+            assert_eq!(metadata.precision, FactPrecision::SetupAware);
         }
     }
 

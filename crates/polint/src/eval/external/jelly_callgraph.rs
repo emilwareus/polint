@@ -245,7 +245,10 @@ fn jelly_case(root: &Path, relative_path: String) -> anyhow::Result<Option<Evalu
     if graph.functions.is_empty() && graph.calls.is_empty() {
         return Ok(None);
     }
-    let expected: Vec<ExpectedItem> = jelly_expected_edges(&graph)?
+    let case_dir = Path::new(&relative_path)
+        .parent()
+        .unwrap_or_else(|| Path::new(""));
+    let expected: Vec<ExpectedItem> = jelly_expected_edges(&graph, case_dir)?
         .into_iter()
         .map(ExpectedItem::GraphEdge)
         .collect();
@@ -269,13 +272,16 @@ fn parse_jelly_graph_file(path: &Path) -> anyhow::Result<JellyCallgraph> {
         .with_context(|| format!("parse Jelly call graph {}", path.display()))
 }
 
-fn jelly_expected_edges(graph: &JellyCallgraph) -> anyhow::Result<Vec<ExpectedGraphEdge>> {
+fn jelly_expected_edges(
+    graph: &JellyCallgraph,
+    case_dir: &Path,
+) -> anyhow::Result<Vec<ExpectedGraphEdge>> {
     let mut edges = Vec::new();
     for [from, to] in &graph.fun2fun {
         edges.push(ExpectedGraphEdge {
             graph: "jelly.call_graph.fun2fun".to_string(),
-            from: canonical_location(&graph.files, &graph.functions, *from)?,
-            to: canonical_location(&graph.files, &graph.functions, *to)?,
+            from: canonical_location(&graph.files, &graph.functions, *from, case_dir)?,
+            to: canonical_location(&graph.files, &graph.functions, *to, case_dir)?,
             mode: AssertionMode::Exact,
             partial_truth: false,
         });
@@ -283,8 +289,8 @@ fn jelly_expected_edges(graph: &JellyCallgraph) -> anyhow::Result<Vec<ExpectedGr
     for [from, to] in &graph.call2fun {
         edges.push(ExpectedGraphEdge {
             graph: "jelly.call_graph.call2fun".to_string(),
-            from: canonical_location(&graph.files, &graph.calls, *from)?,
-            to: canonical_location(&graph.files, &graph.functions, *to)?,
+            from: canonical_location(&graph.files, &graph.calls, *from, case_dir)?,
+            to: canonical_location(&graph.files, &graph.functions, *to, case_dir)?,
             mode: AssertionMode::Exact,
             partial_truth: false,
         });
@@ -296,6 +302,7 @@ fn canonical_location(
     files: &[String],
     locations: &[String],
     index: usize,
+    case_dir: &Path,
 ) -> anyhow::Result<String> {
     let raw = locations
         .get(index)
@@ -309,6 +316,7 @@ fn canonical_location(
     let file = files
         .get(file_index)
         .ok_or_else(|| anyhow::anyhow!("Jelly file index {file_index} out of bounds"))?;
+    let file = canonical_case_file_path(case_dir, file)?;
     let start_line = next_location_part(&mut parts, raw, "start line")?;
     let start_col = next_location_part(&mut parts, raw, "start column")?;
     let end_line = next_location_part(&mut parts, raw, "end line")?;
@@ -319,6 +327,15 @@ fn canonical_location(
     Ok(format!(
         "{file}:{start_line}:{start_col}:{end_line}:{end_col}"
     ))
+}
+
+fn canonical_case_file_path(case_dir: &Path, file: &str) -> anyhow::Result<String> {
+    let file = normalize_repo_relative_path("jelly graph file path", file)?;
+    let joined = case_dir.join(file);
+    normalize_repo_relative_path(
+        "jelly resolved graph file path",
+        &joined.to_string_lossy().replace('\\', "/"),
+    )
 }
 
 fn next_location_part<'a>(
@@ -376,7 +393,7 @@ mod tests {
             call2fun: vec![[0, 1]],
         };
 
-        let edges = jelly_expected_edges(&graph).unwrap();
+        let edges = jelly_expected_edges(&graph, Path::new("")).unwrap();
 
         assert_eq!(edges.len(), 2);
         assert_eq!(edges[0].graph, "jelly.call_graph.fun2fun");
@@ -414,6 +431,13 @@ mod tests {
             ["tests/micro/a.json", "tests/micro/b.json"]
         );
         assert_eq!(enumeration.cases[0].expected.len(), 2);
+        assert_eq!(
+            match &enumeration.cases[0].expected[0] {
+                ExpectedItem::GraphEdge(edge) => edge.from.as_str(),
+                _ => unreachable!("Jelly cases only emit expected graph edges"),
+            },
+            "tests/micro/a.js:1:1:1:8"
+        );
     }
 
     #[test]
