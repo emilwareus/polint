@@ -44,10 +44,11 @@ mod tests {
         jelly_suite.checkout.path = jelly_repo.to_string_lossy().to_string();
         jelly_suite.checkout.local_clone_policy = LocalClonePolicy::AllowAbsolute;
 
+        let tier = graph_bench_tier();
         let go_artifacts = run_external_suite_for_test(
             &GoXToolsCallgraphAdapter,
             &go_suite,
-            SuiteTier::Fast,
+            tier,
             EvaluationMode::PolintBaseline,
             &output_dir,
         )
@@ -55,7 +56,7 @@ mod tests {
         let jelly_artifacts = run_external_suite_for_test(
             &JellyCallgraphAdapter,
             &jelly_suite,
-            SuiteTier::Fast,
+            tier,
             EvaluationMode::PolintBaseline,
             &output_dir,
         )
@@ -74,6 +75,18 @@ mod tests {
 
         if std::env::var_os("POLINT_WRITE_GRAPH_BENCH").is_some() {
             write_summary(&output_dir, &[go, jelly]).unwrap();
+        }
+    }
+
+    fn graph_bench_tier() -> SuiteTier {
+        match std::env::var("POLINT_GRAPH_BENCH_TIER")
+            .unwrap_or_else(|_| "fast".to_string())
+            .as_str()
+        {
+            "fast" => SuiteTier::Fast,
+            "nightly" => SuiteTier::Nightly,
+            "release" => SuiteTier::Release,
+            other => panic!("unsupported POLINT_GRAPH_BENCH_TIER: {other}"),
         }
     }
 
