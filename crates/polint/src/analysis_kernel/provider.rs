@@ -148,8 +148,8 @@ const GO_SYNTAX_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
 }];
 
 const TS_SYNTAX_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
-    name: "ts-facts-v2",
-    version: 2,
+    name: "ts-facts-v3",
+    version: 3,
 }];
 
 const MODULE_GRAPH_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
@@ -295,7 +295,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
         ],
         language_scope: LanguageScope::TypeScriptJavaScript,
         cache_policy: CachePolicy::ExistingFileFactCache {
-            schema: "ts-facts-v2",
+            schema: "ts-facts-v3",
         },
         schema_versions: TS_SYNTAX_SCHEMA,
         precision_ceiling: PrecisionCeiling::Syntax,

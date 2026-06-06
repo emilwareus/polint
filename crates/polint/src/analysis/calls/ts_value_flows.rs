@@ -4157,6 +4157,32 @@ mod tests {
     }
 
     #[test]
+    fn real_ts_pipeline_resolves_function_constructor_static_and_instance_calls() {
+        let source = "function F1() {\n    this.q1 = () => {console.log(\"q1\")};\n}\nF1.s1 = () => {console.log(\"s1\")};\nfunction F2() {\n    this.q2 = () => {console.log(\"q2\")};\n}\nF2.s2 = () => {console.log(\"s2\")};\nF2.prototype = new F1;\nconst x2 = new F2();\nx2.q1();\nx2.q2();\nF1.s1();\nF2.s2();\n";
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let resolved = resolved_target_ids_by_site(targets);
+
+        for (call, target) in [
+            ("x2.q1()", "() => {console.log(\"q1\")}"),
+            ("x2.q2()", "() => {console.log(\"q2\")}"),
+            ("F1.s1()", "() => {console.log(\"s1\")}"),
+            ("F2.s2()", "() => {console.log(\"s2\")}"),
+        ] {
+            let site = site_id_for_span(source, &sites, call);
+            let target = function_id_for_span(source, &db, target);
+            assert!(
+                resolved.contains(&(site, target)),
+                "expected real TS pipeline to resolve {call} to {target:?}; got {resolved:?}"
+            );
+        }
+    }
+
+    #[test]
     fn jelly_gap_promise_all_settled_result_object_properties() {
         let source = "const p2 = new Promise((resolve, reject) => {\n  resolve(() => {\n    console.log(\"p2resolve\");\n  });\n});\nconst p3 = new Promise((resolve, reject) => {\n  reject(() => {\n    console.log(\"p3reject\");\n  });\n});\nPromise.allSettled([p2, p3]).then(\n  va => {\n    va[0].value();\n    va[1].reason();\n  }\n);\n";
         let mut db = db_with_file(source);
@@ -4480,6 +4506,34 @@ mod tests {
             .map(|offset| start + offset)
             .unwrap_or_else(|| panic!("end pattern {end_pattern:?} not found"));
         span_for_range(source, file, start, end)
+    }
+
+    fn site_id_for_span(source: &str, sites: &[CallSiteFact], needle: &str) -> CallSiteId {
+        let file = sites
+            .first()
+            .map(|site| site.file)
+            .expect("at least one call site");
+        let span = span_for_nth(source, file, needle, 0);
+        sites
+            .iter()
+            .find(|site| {
+                site.span.start_byte == span.start_byte && site.span.end_byte == span.end_byte
+            })
+            .map(|site| site.id)
+            .unwrap_or_else(|| panic!("missing call site for {needle}"))
+    }
+
+    fn function_id_for_span(source: &str, db: &AnalysisDb, needle: &str) -> FunctionId {
+        let file = db.files()[0].id;
+        let span = span_for_nth(source, file, needle, 0);
+        db.functions()
+            .iter()
+            .find(|function| {
+                function.span.start_byte == span.start_byte
+                    && function.span.end_byte == span.end_byte
+            })
+            .map(|function| function.id)
+            .unwrap_or_else(|| panic!("missing function for {needle}"))
     }
 
     fn span_for_range(source: &str, file: FileId, start: usize, end: usize) -> Span {

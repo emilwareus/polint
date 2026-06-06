@@ -20,23 +20,26 @@ Close the gap in this order:
    `Function.prototype.call/apply/bind`.
 6. Add Jelly-style recovery passes only after the core model works.
 
-The implementation loops have now moved Jelly F1 from **1.07%** to **37.06%**.
+The implementation loops have now moved Jelly F1 from **1.07%** to **41.46%**.
 The first loop made module execution, IIFEs, expression-span function identities,
 and constructor calls visible. The second loop added bounded same-file JS value
 flow for arrays, sets, maps, `Array.from`, object literals, destructuring, rest
 arguments, and direct function-parameter flows. The third loop made the benchmark
 fairer by including explicit dependency files, then added Promise, class/static,
-async/await, and module-`this` value-flow models. That is a real improvement, but
-not yet close to Jelly: remaining recall is still blocked by CommonJS module
-semantics, Promise result objects, generators/iterators, receiver side effects,
-broader object/property flow, and exact Jelly call-site span normalization.
+async/await, module-`this`, class-constructor identities, and nested callable
+inventory inside function/class bodies. That is a real improvement, but not yet
+close to Jelly: remaining recall is still blocked by CommonJS module semantics,
+Promise result objects, generators/iterators, broader object/property flow, and
+exact Jelly call-site/function span normalization. The latest slice also exposed
+more dependency false positives, so the next recall work needs module/dependency
+precision, not just more edge production.
 
 Current measured checkpoint:
 
 | Suite | TP | FP | FN | Precision | Recall | F1 | Runtime | Hash |
 |---|---:|---:|---:|---:|---:|---:|---:|---|
-| Go x/tools RTA | 37 | 6 | 0 | 86.05% | 100.00% | 92.50% | 841 ms | `f9c8f398e133e64b` |
-| Jelly JS/TS callgraph micro | 517 | 557 | 962 | 48.14% | 34.96% | 40.50% | 71226 ms | `72c1f5416eb1a343` |
+| Go x/tools RTA | 37 | 6 | 0 | 86.05% | 100.00% | 92.50% | 1119 ms | `f9c8f398e133e64b` |
+| Jelly JS/TS callgraph micro | 555 | 643 | 924 | 46.33% | 37.53% | 41.46% | 108051 ms | `e8a9b6846ac8b57e` |
 
 Deep source review of Jelly confirms the remaining gap is mostly semantic, not
 parser-level. Oxc parses the representative missing cases below. polint fails
@@ -127,6 +130,7 @@ Measured continuation iterations:
 | 21 | Bounded async-generator yielded-value model for `.next()` and `for await` unit probes | 462 | 552 | 1017 | 45.56% | 31.24% | 37.06% | 72228 ms | `bd04d1cfb14c1da5` |
 | 22 | Receiver-bound same-file side effects for member calls | 464 | 552 | 1015 | 45.67% | 31.37% | 37.19% | 75230 ms | `bbc61a257cb3d07e` |
 | 23 | Class declarations emitted as constructor-callable function identities | 517 | 557 | 962 | 48.14% | 34.96% | 40.50% | 71226 ms | `72c1f5416eb1a343` |
+| 24 | Nested anonymous callable inventory inside function/class bodies | 555 | 643 | 924 | 46.33% | 37.53% | 41.46% | 108051 ms | `e8a9b6846ac8b57e` |
 
 Current Go score remains unchanged:
 
@@ -157,16 +161,16 @@ visible, but it also surfaced large dependency noise and runtime cost. Iteration
 15 proved that simply enabling the existing object-model option does not close
 the gap; the missing facts must be produced by the TS/JS frontend.
 
-Remaining largest recall blockers after iteration 23:
+Remaining largest recall blockers after iteration 24:
 
 | Case | TP | FP | FN | Dominant missing capability |
 |---|---:|---:|---:|---|
-| `tests/helloworld/app.json` | 99 | 439 | 243 | CommonJS dependency/module object semantics and dependency precision |
+| `tests/helloworld/app.json` | 110 | 523 | 232 | CommonJS dependency/module object semantics and dependency precision |
 | `tests/micro/promises.json` | 10 | 5 | 46 | Promise result objects, looped handler propagation, allSettled object shape |
-| `tests/micro/classes2.json` | 38 | 17 | 38 | prototype-constructor inheritance, static inheritance, object-return flow, class method span alignment |
 | `tests/micro/fun.json` | 8 | 2 | 37 | broader assignment/return/closure function value flow |
 | `tests/micro/generators.json` | 18 | 3 | 32 | generator/iterator yielded value flow |
-| `tests/micro/classes.json` | 53 | 12 | 24 | class/prototype/super/object identity flow and method span alignment |
+| `tests/micro/classes.json` | 55 | 12 | 22 | class/prototype/super/object identity flow and method span alignment |
+| `tests/micro/classes2.json` | 59 | 17 | 17 | class method span alignment, object-return flow, and inherited static alias precision |
 
 The next high-leverage work is no longer simple Promise executor modeling; that
 first slice is implemented. The remaining Promise gap needs object-shaped
@@ -223,6 +227,25 @@ class misses are now mostly prototype/static inheritance, receiver-created
 instance methods like `x2.q1()`, and Jelly-vs-polint span alignment for class
 methods.
 
+Iteration 24 fixed a frontend fact-coverage hole rather than adding another
+resolver heuristic. The TS adapter's anonymous callable walker already handled
+module-level expression and variable initializers, but skipped
+`FunctionDeclaration` and `ClassDeclaration` bodies. That meant constructor body
+assignments like `this.q1 = () => ...`, class fields like `b = () => ...`, and
+static block assignments like `this.s1 = () => ...` had no `FunctionFact` in the
+real pipeline even though hand-built unit tests supplied one manually. The
+walker now descends into function bodies, class fields, method bodies, static
+blocks, class expressions, and export declarations; the TS syntax cache schema
+moved to `ts-facts-v3` / `ts-syntax-layer-v3`. Verification: **21
+`ts_value_flows` tests passed**, **179 TS adapter tests passed**, **15 provider
+manifest tests passed**, and the release Jelly benchmark gained **+38 TP / -38
+FN**. The cost was **+86 FP**, mostly from newly visible dependency callables,
+so this is a recall win but also evidence that module/dependency precision must
+be tightened next. `tests/micro/classes2.json` moved from **38 TP / 17 FP / 38
+FN** to **59 TP / 17 FP / 17 FN**; `tests/micro/classes.json` moved to **55 TP /
+12 FP / 22 FN**; `tests/helloworld/app.json` moved to **110 TP / 523 FP / 232
+FN**.
+
 What moved the first implementation-loop score:
 
 - The module execution bridge is the main recall gain. Top-level calls now have
@@ -271,13 +294,13 @@ Current best per-case movement:
 | Case | Before TP/FP/FN | Current TP/FP/FN | Current note |
 |---|---:|---:|---|
 | `tests/micro/call-expressions.json` | 10 / 28 / 35 during direct-call baseline | 24 / 22 / 21 | module body, IIFE identity, and constructor lowering helped, but parenthesized call spans still cause paired FP/FN rows |
-| `tests/micro/classes.json` | 8 / 15 / 69 after module/IIFE work | 53 / 12 / 24 | class/static/prototype/self-alias flow plus class constructor identities helped; remaining misses are super/object flow and span alignment |
-| `tests/micro/classes2.json` | 0 / 11 / 76 after module/IIFE work | 38 / 17 / 38 | constructor/static/this-alias, receiver-bound side effects, and class constructor identities recovered more edges; prototype/static inheritance and object-return flow remain |
+| `tests/micro/classes.json` | 8 / 15 / 69 after module/IIFE work | 55 / 12 / 22 | class/static/prototype/self-alias flow, class constructor identities, and nested callable inventory helped; remaining misses are super/object flow and span alignment |
+| `tests/micro/classes2.json` | 0 / 11 / 76 after module/IIFE work | 59 / 17 / 17 | constructor/static/this-alias, receiver-bound side effects, class constructor identities, and nested callable inventory recovered most class edges; remaining paired rows are mostly span alignment and object-return/static-alias precision |
 | `tests/micro/iterators.json` | 0 / 0 / 65 at baseline | 61 / 11 / 4 | collection element flow recovered almost all iterator value calls |
 | `tests/micro/more1.json` | 0 / 1 / 49 at continuation start | 30 / 2 / 19 | set/map/Array.from/object/direct-param flow recovered most plain higher-order cases |
 | `tests/micro/rest.json` | 6 / 1 / 38 at continuation start | 38 / 10 / 6 | array/object destructuring plus rest parameter flow closed most of the fixture |
 | `tests/micro/asyncawait.json` | 1 / 2 / 28 after dependency-inclusive run | 7 / 2 / 22 | async IIFE/await/async-return flow recovered non-generator edges; async generators remain missing |
-| Full Jelly micro suite | 8 / 6 / 1471 | 517 / 557 / 962 | much better, still recall-limited by modules, promise objects, classes, generators, and spans |
+| Full Jelly micro suite | 8 / 6 / 1471 | 555 / 643 / 924 | much better, still recall-limited by modules, promise objects, classes, generators, and spans; FP pressure increased after nested callable inventory |
 
 Next high-leverage iteration:
 

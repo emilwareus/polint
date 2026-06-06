@@ -28,9 +28,9 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 
-const TS_CACHE_SCHEMA: &str = "ts-facts-v2";
+const TS_CACHE_SCHEMA: &str = "ts-facts-v3";
 const TS_PROVIDER_ID: &str = "polint.ts.syntax";
-const TS_SYNTAX_LAYER_SCHEMA: &str = "ts-syntax-layer-v2";
+const TS_SYNTAX_LAYER_SCHEMA: &str = "ts-syntax-layer-v3";
 
 // Relationship resolution converts this non-string import expression sentinel to Dynamic.
 pub(crate) const DYNAMIC_IMPORT_SPECIFIER: &str = "<dynamic>";
@@ -1394,6 +1394,14 @@ fn extract_anonymous_callables_from_statement(
                 }
             }
         }
+        Statement::FunctionDeclaration(function) => {
+            if let Some(body) = function.body.as_deref() {
+                extract_anonymous_callables_from_function_body(db, ctx, body);
+            }
+        }
+        Statement::ClassDeclaration(class) => {
+            extract_anonymous_callables_from_class(db, ctx, class);
+        }
         Statement::ReturnStatement(statement) => {
             if let Some(argument) = &statement.argument {
                 extract_anonymous_callables_from_expression(db, ctx, argument, true);
@@ -1436,7 +1444,89 @@ fn extract_anonymous_callables_from_statement(
             }
             extract_anonymous_callables_from_statement(db, ctx, &statement.body);
         }
+        Statement::ExportNamedDeclaration(export) => {
+            if let Some(declaration) = &export.declaration {
+                extract_anonymous_callables_from_declaration(db, ctx, declaration);
+            }
+        }
+        Statement::ExportDefaultDeclaration(export) => match &export.declaration {
+            ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
+                if let Some(body) = function.body.as_deref() {
+                    extract_anonymous_callables_from_function_body(db, ctx, body);
+                }
+            }
+            ExportDefaultDeclarationKind::ClassDeclaration(class) => {
+                extract_anonymous_callables_from_class(db, ctx, class);
+            }
+            ExportDefaultDeclarationKind::CallExpression(call) => {
+                extract_anonymous_callables_from_expression(db, ctx, &call.callee, true);
+                for argument in &call.arguments {
+                    extract_anonymous_callables_from_argument(db, ctx, argument);
+                }
+            }
+            _ => {}
+        },
         _ => {}
+    }
+}
+
+fn extract_anonymous_callables_from_declaration(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    declaration: &Declaration<'_>,
+) {
+    match declaration {
+        Declaration::FunctionDeclaration(function) => {
+            if let Some(body) = function.body.as_deref() {
+                extract_anonymous_callables_from_function_body(db, ctx, body);
+            }
+        }
+        Declaration::ClassDeclaration(class) => {
+            extract_anonymous_callables_from_class(db, ctx, class);
+        }
+        Declaration::VariableDeclaration(variable) => {
+            for declarator in &variable.declarations {
+                if let Some(init) = &declarator.init {
+                    extract_anonymous_callables_from_expression(db, ctx, init, false);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn extract_anonymous_callables_from_class(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    class: &Class<'_>,
+) {
+    if let Some(super_class) = &class.super_class {
+        extract_anonymous_callables_from_expression(db, ctx, super_class, true);
+    }
+    for element in &class.body.body {
+        match element {
+            ClassElement::StaticBlock(block) => {
+                for statement in &block.body {
+                    extract_anonymous_callables_from_statement(db, ctx, statement);
+                }
+            }
+            ClassElement::MethodDefinition(method) => {
+                if let Some(body) = method.value.body.as_deref() {
+                    extract_anonymous_callables_from_function_body(db, ctx, body);
+                }
+            }
+            ClassElement::PropertyDefinition(property) => {
+                if let Some(value) = &property.value {
+                    extract_anonymous_callables_from_expression(db, ctx, value, true);
+                }
+            }
+            ClassElement::AccessorProperty(property) => {
+                if let Some(value) = &property.value {
+                    extract_anonymous_callables_from_expression(db, ctx, value, true);
+                }
+            }
+            ClassElement::TSIndexSignature(_) => {}
+        }
     }
 }
 
@@ -1492,6 +1582,9 @@ fn extract_anonymous_callables_from_expression(
             if let Some(body) = function.body.as_deref() {
                 extract_anonymous_callables_from_function_body(db, ctx, body);
             }
+        }
+        Expression::ClassExpression(class) => {
+            extract_anonymous_callables_from_class(db, ctx, class);
         }
         Expression::CallExpression(call) => {
             extract_anonymous_callables_from_expression(db, ctx, &call.callee, true);
