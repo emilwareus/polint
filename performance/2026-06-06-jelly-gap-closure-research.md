@@ -36,7 +36,7 @@ Current measured checkpoint:
 | Suite | TP | FP | FN | Precision | Recall | F1 | Runtime | Hash |
 |---|---:|---:|---:|---:|---:|---:|---:|---|
 | Go x/tools RTA | 37 | 6 | 0 | 86.05% | 100.00% | 92.50% | 1012 ms | `f9c8f398e133e64b` |
-| Jelly JS/TS callgraph micro | 462 | 552 | 1017 | 45.56% | 31.24% | 37.06% | 81650 ms | `bd04d1cfb14c1da5` |
+| Jelly JS/TS callgraph micro | 464 | 552 | 1015 | 45.67% | 31.37% | 37.19% | 75230 ms | `bbc61a257cb3d07e` |
 
 Deep source review of Jelly confirms the remaining gap is mostly semantic, not
 parser-level. Oxc parses the representative missing cases below. polint fails
@@ -125,6 +125,7 @@ Measured continuation iterations:
 | 19 | Module-level `this` assignment plus object-literal `this` alias model | 462 | 552 | 1017 | 45.56% | 31.24% | 37.06% | 81650 ms | `bd04d1cfb14c1da5` |
 | 20 | `Promise.allSettled` result-object lane for unit-level `value`/`reason` flows | 462 | 552 | 1017 | 45.56% | 31.24% | 37.06% | 74866 ms | `bd04d1cfb14c1da5` |
 | 21 | Bounded async-generator yielded-value model for `.next()` and `for await` unit probes | 462 | 552 | 1017 | 45.56% | 31.24% | 37.06% | 72228 ms | `bd04d1cfb14c1da5` |
+| 22 | Receiver-bound same-file side effects for member calls | 464 | 552 | 1015 | 45.67% | 31.37% | 37.19% | 75230 ms | `bbc61a257cb3d07e` |
 
 Current Go score remains unchanged:
 
@@ -196,6 +197,16 @@ semantics are useful regression scaffolding, but the benchmark-visible gap is
 still in the broader graph-output/integration path and remaining receiver/module
 semantics.
 
+Iteration 22 added receiver-bound same-file side-effect execution for resolved
+member calls. When `q1.a1()` resolves to a local function, the value-flow pass
+now evaluates that callee body with `this` bound to `q1`, then merges mutated
+receiver properties back before later calls such as `q1.a2()`. The focused suite
+now reports **20 passed / 0 ignored**. This is the first benchmark-visible win
+from the current loop: the release Jelly benchmark gained **+2 TP / -2 FN** with
+no FP increase, and `tests/micro/classes2.json` moved from **26 TP / 17 FP / 50
+FN** to **28 TP / 17 FP / 48 FN**. The remaining `classes2` gap still needs
+broader receiver/prototype/object-return flow rather than one syntactic pattern.
+
 What moved the first implementation-loop score:
 
 - The module execution bridge is the main recall gain. Top-level calls now have
@@ -245,12 +256,12 @@ Current best per-case movement:
 |---|---:|---:|---|
 | `tests/micro/call-expressions.json` | 10 / 28 / 35 during direct-call baseline | 24 / 22 / 21 | module body, IIFE identity, and constructor lowering helped, but parenthesized call spans still cause paired FP/FN rows |
 | `tests/micro/classes.json` | 8 / 15 / 69 after module/IIFE work | 37 / 12 / 40 | class/static/prototype/self-alias flow helped, but super/receiver effects remain |
-| `tests/micro/classes2.json` | 0 / 11 / 76 after module/IIFE work | 26 / 17 / 50 | constructor/static/this-alias flow recovered more edges, but receiver side effects remain mostly missing |
+| `tests/micro/classes2.json` | 0 / 11 / 76 after module/IIFE work | 28 / 17 / 48 | constructor/static/this-alias and receiver-bound side effects recovered more edges, but prototype/static inheritance and object-return flow remain |
 | `tests/micro/iterators.json` | 0 / 0 / 65 at baseline | 61 / 11 / 4 | collection element flow recovered almost all iterator value calls |
 | `tests/micro/more1.json` | 0 / 1 / 49 at continuation start | 30 / 2 / 19 | set/map/Array.from/object/direct-param flow recovered most plain higher-order cases |
 | `tests/micro/rest.json` | 6 / 1 / 38 at continuation start | 38 / 10 / 6 | array/object destructuring plus rest parameter flow closed most of the fixture |
 | `tests/micro/asyncawait.json` | 1 / 2 / 28 after dependency-inclusive run | 7 / 2 / 22 | async IIFE/await/async-return flow recovered non-generator edges; async generators remain missing |
-| Full Jelly micro suite | 8 / 6 / 1471 | 462 / 552 / 1017 | much better, still recall-limited by modules, promise objects, classes, generators, and spans |
+| Full Jelly micro suite | 8 / 6 / 1471 | 464 / 552 / 1015 | much better, still recall-limited by modules, promise objects, classes, generators, and spans |
 
 Next high-leverage iteration:
 

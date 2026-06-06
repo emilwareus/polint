@@ -58,6 +58,7 @@ pub(crate) fn resolve_ts_value_flow_targets(
             sites: file_sites,
             functions_by_start: &functions_by_file_start,
             function_declarations: BTreeMap::new(),
+            function_flows_by_id: BTreeMap::new(),
             classes: BTreeMap::new(),
             rows: Vec::new(),
             next_id,
@@ -88,6 +89,7 @@ struct TsValueFlowCollector<'db, 'ast> {
     sites: &'db [&'db CallSiteFact],
     functions_by_start: &'db BTreeMap<(FileId, u32), Vec<&'db FunctionFact>>,
     function_declarations: BTreeMap<String, FunctionFlow<'db, 'ast>>,
+    function_flows_by_id: BTreeMap<FunctionId, FunctionFlow<'db, 'ast>>,
     classes: BTreeMap<String, ClassTargets>,
     rows: Vec<CallTargetFact>,
     next_id: u64,
@@ -116,6 +118,7 @@ enum ParamPattern {
 
 impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
     fn collect_program(&mut self, program: &'ast Program<'ast>) {
+        self.collect_expression_function_flows(program);
         self.collect_function_declarations(program);
         self.collect_class_declarations(program);
         let mut env = FlowEnv::default();
@@ -126,6 +129,183 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
         }
         for statement in &program.body {
             self.collect_statement(statement, self.module, &mut env);
+        }
+    }
+
+    fn collect_expression_function_flows(&mut self, program: &'ast Program<'ast>) {
+        for statement in &program.body {
+            self.collect_expression_function_flows_from_statement(statement);
+        }
+    }
+
+    fn collect_expression_function_flows_from_statement(
+        &mut self,
+        statement: &'ast Statement<'ast>,
+    ) {
+        match statement {
+            Statement::VariableDeclaration(variable) => {
+                for declarator in &variable.declarations {
+                    if let Some(init) = &declarator.init {
+                        self.collect_expression_function_flows_from_expression(init);
+                    }
+                }
+            }
+            Statement::ExpressionStatement(statement) => {
+                self.collect_expression_function_flows_from_expression(&statement.expression);
+            }
+            Statement::ReturnStatement(statement) => {
+                if let Some(argument) = &statement.argument {
+                    self.collect_expression_function_flows_from_expression(argument);
+                }
+            }
+            Statement::BlockStatement(block) => {
+                for statement in &block.body {
+                    self.collect_expression_function_flows_from_statement(statement);
+                }
+            }
+            Statement::IfStatement(statement) => {
+                self.collect_expression_function_flows_from_expression(&statement.test);
+                self.collect_expression_function_flows_from_statement(&statement.consequent);
+                if let Some(alternate) = &statement.alternate {
+                    self.collect_expression_function_flows_from_statement(alternate);
+                }
+            }
+            Statement::ForOfStatement(statement) => {
+                self.collect_expression_function_flows_from_expression(&statement.right);
+                self.collect_expression_function_flows_from_statement(&statement.body);
+            }
+            Statement::FunctionDeclaration(function) => {
+                if let Some(body) = function.body.as_deref() {
+                    for statement in &body.statements {
+                        self.collect_expression_function_flows_from_statement(statement);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn collect_expression_function_flows_from_expression(
+        &mut self,
+        expression: &'ast Expression<'ast>,
+    ) {
+        match expression {
+            Expression::FunctionExpression(function) => {
+                if let Some(body) = function.body.as_deref()
+                    && let Some(function_fact) = self.function_for_expression(expression)
+                {
+                    let flow = FunctionFlow {
+                        function: function_fact,
+                        body,
+                        params: function
+                            .params
+                            .items
+                            .iter()
+                            .map(|param| param_pattern_from_binding(&param.pattern))
+                            .collect(),
+                        rest: function
+                            .params
+                            .rest
+                            .as_ref()
+                            .map(|rest| param_pattern_from_binding(&rest.rest.argument)),
+                    };
+                    self.function_flows_by_id.insert(function_fact.id, flow);
+                    for statement in &body.statements {
+                        self.collect_expression_function_flows_from_statement(statement);
+                    }
+                }
+            }
+            Expression::ArrowFunctionExpression(function) => {
+                if let Some(function_fact) = self.function_for_expression(expression) {
+                    let flow = FunctionFlow {
+                        function: function_fact,
+                        body: &function.body,
+                        params: function
+                            .params
+                            .items
+                            .iter()
+                            .map(|param| param_pattern_from_binding(&param.pattern))
+                            .collect(),
+                        rest: function
+                            .params
+                            .rest
+                            .as_ref()
+                            .map(|rest| param_pattern_from_binding(&rest.rest.argument)),
+                    };
+                    self.function_flows_by_id.insert(function_fact.id, flow);
+                }
+                if let Some(expression) = function.get_expression() {
+                    self.collect_expression_function_flows_from_expression(expression);
+                } else {
+                    for statement in &function.body.statements {
+                        self.collect_expression_function_flows_from_statement(statement);
+                    }
+                }
+            }
+            Expression::CallExpression(call) => {
+                self.collect_expression_function_flows_from_expression(&call.callee);
+                for argument in &call.arguments {
+                    if let Some(argument) = argument_expression(argument) {
+                        self.collect_expression_function_flows_from_expression(argument);
+                    }
+                }
+            }
+            Expression::NewExpression(expression) => {
+                self.collect_expression_function_flows_from_expression(&expression.callee);
+                for argument in &expression.arguments {
+                    if let Some(argument) = argument_expression(argument) {
+                        self.collect_expression_function_flows_from_expression(argument);
+                    }
+                }
+            }
+            Expression::AssignmentExpression(assignment) => {
+                self.collect_expression_function_flows_from_expression(&assignment.right);
+            }
+            Expression::ArrayExpression(array) => {
+                for element in &array.elements {
+                    if let Some(expression) = array_element_expression(element) {
+                        self.collect_expression_function_flows_from_expression(expression);
+                    }
+                }
+            }
+            Expression::ObjectExpression(object) => {
+                for property in &object.properties {
+                    match property {
+                        ObjectPropertyKind::ObjectProperty(property) => {
+                            self.collect_expression_function_flows_from_expression(&property.value);
+                        }
+                        ObjectPropertyKind::SpreadProperty(spread) => {
+                            self.collect_expression_function_flows_from_expression(
+                                &spread.argument,
+                            );
+                        }
+                    }
+                }
+            }
+            Expression::StaticMemberExpression(member) => {
+                self.collect_expression_function_flows_from_expression(&member.object);
+            }
+            Expression::ComputedMemberExpression(member) => {
+                self.collect_expression_function_flows_from_expression(&member.object);
+                self.collect_expression_function_flows_from_expression(&member.expression);
+            }
+            Expression::AwaitExpression(expression) => {
+                self.collect_expression_function_flows_from_expression(&expression.argument);
+            }
+            Expression::YieldExpression(expression) => {
+                if let Some(argument) = &expression.argument {
+                    self.collect_expression_function_flows_from_expression(argument);
+                }
+            }
+            Expression::SequenceExpression(sequence) => {
+                for expression in &sequence.expressions {
+                    self.collect_expression_function_flows_from_expression(expression);
+                }
+            }
+            Expression::ParenthesizedExpression(expression) => {
+                self.collect_expression_function_flows_from_expression(&expression.expression);
+            }
+            _ => {}
         }
     }
 
@@ -141,24 +321,24 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                 continue;
             };
             if let Some(function_fact) = self.function_for_span(function.span) {
-                self.function_declarations.insert(
-                    name.clone(),
-                    FunctionFlow {
-                        function: function_fact,
-                        body,
-                        params: function
-                            .params
-                            .items
-                            .iter()
-                            .map(|param| param_pattern_from_binding(&param.pattern))
-                            .collect(),
-                        rest: function
-                            .params
-                            .rest
-                            .as_ref()
-                            .map(|rest| param_pattern_from_binding(&rest.rest.argument)),
-                    },
-                );
+                let flow = FunctionFlow {
+                    function: function_fact,
+                    body,
+                    params: function
+                        .params
+                        .items
+                        .iter()
+                        .map(|param| param_pattern_from_binding(&param.pattern))
+                        .collect(),
+                    rest: function
+                        .params
+                        .rest
+                        .as_ref()
+                        .map(|rest| param_pattern_from_binding(&rest.rest.argument)),
+                };
+                self.function_flows_by_id
+                    .insert(function_fact.id, flow.clone());
+                self.function_declarations.insert(name.clone(), flow);
             }
             let mut targets = ClassTargets::default();
             self.collect_constructor_assignments_from_statements(
@@ -842,14 +1022,16 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
             }
         }
 
-        if let Some((object_name, property)) = static_member_call(&call.callee)
-            && let Some(targets) = env
+        if let Some((object_name, property)) = static_member_call(&call.callee) {
+            let targets = env
                 .objects
                 .get(object_name)
                 .and_then(|object| object.properties.get(property))
-                .cloned()
-        {
-            self.emit_member_targets(owner, property, call.span, Some(targets));
+                .cloned();
+            if let Some(targets) = targets {
+                self.emit_member_targets(owner, property, call.span, Some(targets.clone()));
+                self.collect_receiver_side_effects(object_name, &targets, call, env);
+            }
         }
         if let Expression::StaticMemberExpression(member) = &call.callee
             && let Some(object) = self.object_targets_from_expression(&member.object, env)
@@ -952,6 +1134,62 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
         }
         for statement in &flow.body.statements {
             self.collect_statement(statement, flow.function, &mut param_env);
+        }
+    }
+
+    fn collect_receiver_side_effects(
+        &mut self,
+        object_name: &str,
+        targets: &[FunctionId],
+        call: &'ast CallExpression<'ast>,
+        env: &mut FlowEnv,
+    ) {
+        let Some(receiver) = env.objects.get(object_name).cloned() else {
+            return;
+        };
+        let mut merged_receiver = receiver.clone();
+        for target in targets {
+            let Some(flow) = self.function_flows_by_id.get(target).cloned() else {
+                continue;
+            };
+            let mut callee_env = env.clone();
+            callee_env.this_object = receiver.clone();
+            self.bind_call_arguments_to_flow(&flow, call, env, &mut callee_env);
+            for statement in &flow.body.statements {
+                self.collect_statement(statement, flow.function, &mut callee_env);
+            }
+            merged_receiver.merge(callee_env.this_object);
+        }
+        env.objects.insert(object_name.to_string(), merged_receiver);
+    }
+
+    fn bind_call_arguments_to_flow(
+        &self,
+        flow: &FunctionFlow<'db, 'ast>,
+        call: &'ast CallExpression<'ast>,
+        parent_env: &FlowEnv,
+        callee_env: &mut FlowEnv,
+    ) {
+        for (index, pattern) in flow.params.iter().enumerate() {
+            if let Some(argument) = call.arguments.get(index).and_then(argument_expression) {
+                if let Some(targets) = self.targets_from_argument_expression(argument, parent_env) {
+                    bind_param_pattern(pattern, &targets, callee_env);
+                }
+                if let Some(targets) = self.object_targets_from_expression(argument, parent_env) {
+                    bind_param_object_pattern(pattern, &targets, callee_env);
+                }
+            }
+        }
+        if let Some(rest) = &flow.rest {
+            let mut targets = CollectionTargets::default();
+            for argument in call.arguments.iter().skip(flow.params.len()) {
+                if let Some(function) = argument_expression(argument)
+                    .and_then(|expression| self.function_for_expression(expression))
+                {
+                    targets.values.push(function.id);
+                }
+            }
+            bind_param_pattern(rest, &targets, callee_env);
         }
     }
 
@@ -4041,7 +4279,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Jelly gap: receiver-side effects should mutate the receiver object across calls"]
     fn jelly_gap_receiver_side_effect_adds_instance_method() {
         let source = "class D {\n  constructor(a) {\n    this.a1 = a;\n  }\n}\nconst q1 = new D(function() {\n  this.a2 = () => {};\n});\nq1.a1();\nq1.a2();\n";
         let mut db = db_with_file(source);
