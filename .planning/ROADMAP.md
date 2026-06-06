@@ -30,7 +30,7 @@ Phase numbering continues from v1.2's last phase 41. Phases 45/46 may run in par
 - [x] **Phase 51: Adaptation Model Layer** - Private `analysis::adaptation` (TOML schema, loader, validator confirming target symbols exist, `ModelEdge` emission); `benchmark adapted` mode with prompt hash, accepted/rejected facts, deltas, held-out subset reporting, sandboxed agent.
 - [x] **Phase 52: Refined-Calls Rework & Unknown Taxonomy Consolidation** - `refined_calls::provider` projects over solver output preserving v1.2 `RefinedCallEdgeFact` contract; consolidated taxonomy via `polint inspect unknowns --format json`.
 - [x] **Phase 53: Cache & Solver Budgets Consolidation** - Cache keys digest sidecar binary, Go toolchain, adaptation model files, and solver budgets across every new family; solver budgets enforce token-set/property/fanout/model/package-depth caps with `BudgetExceeded` as facts.
-- [ ] **Phase 54: Benchmark Promotion Gate Extension** - Per-suite precision floors (Go ≥60%, Jelly configurable), F-score β=0.5 alongside F1, per-language deltas, polyglot Go+TS canary, public-API leak CI gate (no v1.3 solver types in `polint::sdk::prelude::*`).
+- [x] **Phase 54: Benchmark Promotion Gate Extension** - Per-suite precision floors (Go ≥60%, Jelly configurable), F-score β=0.5 alongside F1, per-language deltas, polyglot Go+TS canary, public-API leak CI gate (no v1.3 solver types in `polint::sdk::prelude::*`). ✅ Verified 10/10 with external Go/Jelly recall values recorded as limited/skipped in `54-AUDIT.md`.
 
 ## Phase Details
 
@@ -193,7 +193,11 @@ May run in parallel with Phase 48 (drivers share the solver core but their itera
   2. Private `analysis::unknown_taxonomy` consolidates categories across providers: `SetupMissing`, `UnsupportedSemantic`, `MissingFact`, `OutOfScope`, plus sidecar-specific `GoPackagesLoadFailed`, `GoVersionUnsupported`, `GoSidecarTimeout`.
   3. `polint inspect unknowns --format json` is added as a public CLI surface (the only new public CLI surface in v1.3) and returns the consolidated taxonomy with stable JSON.
   4. v1.2 heuristic refiners are removed; downstream data-flow/evidence fixtures continue to pass byte-identical or with explicitly-documented improvements.
-**Plans**: TBD
+**Plans**:
+  1. F0.5 Metric & Promotion Report Foundation
+  2. Precision/Flooding/Per-Language Promotion Gates
+  3. Polyglot Canary & CI Leak Gate
+  4. Final Audit & State Closeout
 
 ### Phase 53: Cache & Solver Budgets Consolidation
 **Goal**: polint threads cache key participation and solver budgets uniformly across every new v1.3 fact family, with positive (must-invalidate) and negative (must-preserve-hit) fixtures proving correct cross-family invalidation.
@@ -234,7 +238,7 @@ May run in parallel with Phase 48 (drivers share the solver core but their itera
 | 51 | Adaptation Model Layer | 4/4 | Complete | 2026-06-04 |
 | 52 | Refined-Calls Rework & Unknown Taxonomy Consolidation | 4/4 | Complete | 2026-06-05 |
 | 53 | Cache & Solver Budgets Consolidation | 4/4 | Complete    | 2026-06-05 |
-| 54 | Benchmark Promotion Gate Extension | 3/4 | In Progress|  |
+| 54 | Benchmark Promotion Gate Extension | 4/4 | Complete    | 2026-06-06 |
 
 ## Parallel-Eligible Phases
 
