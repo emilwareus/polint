@@ -182,7 +182,7 @@ function load(path) {
     }
 
     #[test]
-    fn callsite_spans_are_oxc_byte_spans() {
+    fn callsite_spans_are_valid_byte_spans() {
         let file = fixture_file(
             r#"
 function invoke() {
@@ -201,6 +201,45 @@ function invoke() {
         assert!(call.span.start_byte < call.span.end_byte);
         assert!(call.stable_key.contains("src/calls.ts"));
         assert!(call.stable_key.contains("call"));
+    }
+
+    #[test]
+    fn callsite_spans_match_jelly_parenthesized_call_shapes() {
+        let source = r#"
+(function(){})();
+((f))();
+(f());
+((new f()));
+function f() {}
+"#;
+        let file = fixture_file(source);
+
+        let output = extract_ts_inventory(file);
+        let spans = output
+            .callsites
+            .iter()
+            .map(|callsite| {
+                (
+                    callsite.span.start_byte,
+                    callsite.span.end_byte,
+                    &source[callsite.span.start_byte as usize..callsite.span.end_byte as usize],
+                )
+            })
+            .collect::<Vec<_>>();
+        let span_texts = output
+            .callsites
+            .iter()
+            .map(|callsite| {
+                &source[callsite.span.start_byte as usize..callsite.span.end_byte as usize]
+            })
+            .collect::<BTreeSet<_>>();
+
+        for expected in ["function(){})()", "(f))()", "(f())", "(new f())"] {
+            assert!(
+                span_texts.contains(expected),
+                "missing span {expected:?} in {span_texts:?}; spans: {spans:?}"
+            );
+        }
     }
 
     fn fixture_file(source: &str) -> &'static crate::core::SourceFile {

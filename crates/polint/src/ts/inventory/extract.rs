@@ -79,7 +79,7 @@ fn extract_ts_inventory_from_program(
         .iter_enumerated()
         .filter_map(|(node_id, node)| {
             let kind = callsite_inventory_kind(node.kind())?;
-            let span = node.kind().span();
+            let span = crate::ts::spans::normalized_callsite_span(source, node.kind())?;
             Some((span.start, span.end, kind, node_id, node.kind()))
         })
         .collect::<Vec<_>>();
@@ -87,7 +87,12 @@ fn extract_ts_inventory_from_program(
 
     let mut callsite_rows = Vec::new();
     for (_, _, kind, node_id, ast_kind) in callsite_entries {
-        let span = span_from_oxc(file.id, source, ast_kind.span());
+        let span = span_from_oxc(
+            file.id,
+            source,
+            crate::ts::spans::normalized_callsite_span(source, ast_kind)
+                .expect("callsite entries have normalized callsite spans"),
+        );
         let display_name = callsite_display_name(ast_kind);
         let lexical_parent_key = lexical_parent_key(file, nodes, node_id);
         let status = callsite_status(ast_kind, display_name.as_deref());

@@ -7,6 +7,7 @@ pub(crate) mod binding;
 pub(crate) mod inventory;
 pub(crate) mod object_model;
 pub(crate) mod scope;
+pub(crate) mod spans;
 #[cfg(test)]
 mod tests;
 

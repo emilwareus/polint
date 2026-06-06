@@ -731,11 +731,11 @@ fn collect_ts_token_source_flows(file: &SourceFile) -> Vec<TsTokenSourceFlow> {
     let semantic = SemanticBuilder::new().build(&parsed.program).semantic;
     let nodes = semantic.nodes();
     let mut index = TsTokenSourceFlowIndex::from_inventory(&inventory, nodes);
-    index.collect_parameter_calls(nodes);
+    index.collect_parameter_calls(source, nodes);
     index.collect_local_alias_assignments(nodes);
     index.collect_returned_functions(nodes);
     index.collect_local_return_assignments(nodes);
-    index.collect_flows(nodes)
+    index.collect_flows(source, nodes)
 }
 
 impl TsTokenSourceFlowIndex {
@@ -782,7 +782,7 @@ impl TsTokenSourceFlowIndex {
         index
     }
 
-    fn collect_parameter_calls(&mut self, nodes: &AstNodes<'_>) {
+    fn collect_parameter_calls(&mut self, source: &str, nodes: &AstNodes<'_>) {
         for (node_id, node) in nodes.iter_enumerated() {
             let AstKind::CallExpression(call) = node.kind() else {
                 continue;
@@ -801,7 +801,7 @@ impl TsTokenSourceFlowIndex {
             else {
                 continue;
             };
-            let Some(callsite_key) = self.callsite_key_for_kind(node.kind()) else {
+            let Some(callsite_key) = self.callsite_key_for_kind(source, node.kind()) else {
                 continue;
             };
 
@@ -901,13 +901,13 @@ impl TsTokenSourceFlowIndex {
         }
     }
 
-    fn collect_flows(&self, nodes: &AstNodes<'_>) -> Vec<TsTokenSourceFlow> {
+    fn collect_flows(&self, source: &str, nodes: &AstNodes<'_>) -> Vec<TsTokenSourceFlow> {
         let mut flows = Vec::new();
         for (node_id, node) in nodes.iter_enumerated() {
             let AstKind::CallExpression(call) = node.kind() else {
                 continue;
             };
-            let Some(callsite_key) = self.callsite_key_for_kind(node.kind()) else {
+            let Some(callsite_key) = self.callsite_key_for_kind(source, node.kind()) else {
                 continue;
             };
             let Some(callee_name) = expression_identifier_name(&call.callee) else {
@@ -998,8 +998,8 @@ impl TsTokenSourceFlowIndex {
         self.function_by_span.get(&(span.start, span.end))
     }
 
-    fn callsite_key_for_kind(&self, kind: AstKind<'_>) -> Option<String> {
-        let span = kind.span();
+    fn callsite_key_for_kind(&self, source: &str, kind: AstKind<'_>) -> Option<String> {
+        let span = crate::ts::spans::normalized_callsite_span(source, kind)?;
         self.callsite_key_by_span
             .get(&(span.start, span.end))
             .cloned()

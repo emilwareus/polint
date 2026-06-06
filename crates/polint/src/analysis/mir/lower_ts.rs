@@ -27,7 +27,10 @@ use crate::core::{
     AnalysisDb, FileId, FunctionFact, FunctionId, Language, SourceFile, Span,
     is_synthetic_ts_js_module_function,
 };
-use crate::ts::anonymous_callable_name;
+use crate::ts::{
+    anonymous_callable_name,
+    spans::{normalized_call_expression_span, normalized_new_expression_span},
+};
 
 pub(crate) fn lower_ts_mir(db: &AnalysisDb) -> MirOutput {
     let mut lowering = TsMirLowering::default();
@@ -1301,7 +1304,10 @@ impl<'source> FunctionLowering<'source> {
                 .lower_call(call, places, operations, unsupported)
                 .map(|key| PlaceShape {
                     root: PlaceRoot::CallReturn {
-                        call: call_site_for_span(call.span),
+                        call: call_site_for_span(normalized_call_expression_span(
+                            self.source,
+                            call,
+                        )),
                     },
                     projections: Vec::new(),
                     status: PlaceStatus::Partial,
@@ -1431,7 +1437,10 @@ impl<'source> FunctionLowering<'source> {
                 .lower_new_expression(new_expression, places, operations, unsupported)
                 .map(|key| PlaceShape {
                     root: PlaceRoot::CallReturn {
-                        call: call_site_for_span(new_expression.span),
+                        call: call_site_for_span(normalized_new_expression_span(
+                            self.source,
+                            new_expression,
+                        )),
                     },
                     projections: Vec::new(),
                     status: PlaceStatus::Partial,
@@ -1564,7 +1573,10 @@ impl<'source> FunctionLowering<'source> {
                 .lower_call(call, places, operations, unsupported)
                 .map(|key| PlaceShape {
                     root: PlaceRoot::CallReturn {
-                        call: call_site_for_span(call.span),
+                        call: call_site_for_span(normalized_call_expression_span(
+                            self.source,
+                            call,
+                        )),
                     },
                     projections: Vec::new(),
                     status: PlaceStatus::Partial,
@@ -2114,7 +2126,8 @@ impl<'source> FunctionLowering<'source> {
                 ConservativeAction::HavocAffectedPlaces,
             );
         }
-        let site = call_site_for_span(call.span);
+        let span = normalized_call_expression_span(self.source, call);
+        let site = call_site_for_span(span);
         let return_key = self.insert_place(
             places,
             PlaceRoot::CallReturn { call: site },
@@ -2136,7 +2149,7 @@ impl<'source> FunctionLowering<'source> {
         }
         self.push_operation(
             operations,
-            call.span,
+            span,
             OperationKindDraft::Call {
                 site,
                 callee,
@@ -2165,7 +2178,8 @@ impl<'source> FunctionLowering<'source> {
                 ConservativeAction::HavocAffectedPlaces,
             );
         }
-        let site = call_site_for_span(expression.span);
+        let span = normalized_new_expression_span(self.source, expression);
+        let site = call_site_for_span(span);
         let return_key = self.insert_place(
             places,
             PlaceRoot::CallReturn { call: site },
@@ -2189,7 +2203,7 @@ impl<'source> FunctionLowering<'source> {
         }
         self.push_operation(
             operations,
-            expression.span,
+            span,
             OperationKindDraft::Call {
                 site,
                 callee,
@@ -3148,6 +3162,32 @@ k1.a4().a2();
 
         assert_eq!(same_start_calls.len(), 2);
         assert_eq!(unique_sites.len(), 2);
+    }
+
+    #[test]
+    fn ts_call_operation_spans_match_jelly_parenthesized_call_shapes() {
+        let source = r#"
+(function(){})();
+((f))();
+(f());
+((new f()));
+function f() {}
+"#;
+        let output = lower("src/call_shapes.js", source);
+        let span_texts = output
+            .operations
+            .iter()
+            .filter_map(|operation| match operation.kind {
+                MirOperationKind::Call { .. } => Some(
+                    &source[operation.span.start_byte as usize..operation.span.end_byte as usize],
+                ),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+
+        for expected in ["function(){})()", "(f))()", "(f())", "(new f())"] {
+            assert!(span_texts.contains(expected), "missing span {expected:?}");
+        }
     }
 
     #[test]
