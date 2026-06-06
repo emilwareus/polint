@@ -1077,6 +1077,12 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                 .get(member.property.name.as_str())
                 .cloned()
         {
+            self.emit_call_span_targets(
+                owner,
+                call.span,
+                member.property.name.as_str(),
+                Some(targets.clone()),
+            );
             self.emit_member_targets(
                 owner,
                 member.property.name.as_str(),
@@ -1489,6 +1495,7 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                     .collect::<Vec<_>>();
                 self.class_instance_targets(name, &arguments, env)
             }
+            Expression::CallExpression(call) => self.object_targets_from_call(call, env),
             Expression::StaticMemberExpression(member) => {
                 let object = self.object_targets_from_expression(&member.object, env)?;
                 object
@@ -1498,6 +1505,60 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
             }
             Expression::ParenthesizedExpression(expression) => {
                 self.object_targets_from_expression(&expression.expression, env)
+            }
+            _ => None,
+        }
+    }
+
+    fn object_targets_from_call(
+        &self,
+        call: &'ast CallExpression<'ast>,
+        env: &FlowEnv,
+    ) -> Option<ObjectTargets> {
+        let Expression::StaticMemberExpression(member) = &call.callee else {
+            return None;
+        };
+        let receiver = self.object_targets_from_expression(&member.object, env)?;
+        let function_ids = receiver.properties.get(member.property.name.as_str())?;
+        let mut returned = ObjectTargets::default();
+        let mut found = false;
+
+        for function_id in function_ids {
+            let Some(flow) = self.function_flows_by_id.get(function_id) else {
+                continue;
+            };
+            let Some(expression) = returned_expression_from_statements(&flow.body.statements)
+            else {
+                continue;
+            };
+            if let Some(object) =
+                self.object_targets_from_return_expression(expression, &receiver, env)
+            {
+                returned.merge(object);
+                found = true;
+            }
+        }
+
+        found.then_some(returned)
+    }
+
+    fn object_targets_from_return_expression(
+        &self,
+        expression: &'ast Expression<'ast>,
+        receiver: &ObjectTargets,
+        env: &FlowEnv,
+    ) -> Option<ObjectTargets> {
+        match expression {
+            Expression::ThisExpression(_) => Some(receiver.clone()),
+            Expression::ObjectExpression(object) => {
+                Some(self.object_literal_targets(object, Some(env)))
+            }
+            Expression::Identifier(identifier) => {
+                env.objects.get(identifier.name.as_str()).cloned()
+            }
+            Expression::CallExpression(call) => self.object_targets_from_call(call, env),
+            Expression::ParenthesizedExpression(expression) => {
+                self.object_targets_from_return_expression(&expression.expression, receiver, env)
             }
             _ => None,
         }
@@ -4291,7 +4352,7 @@ mod tests {
         let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
         let resolved = resolved_target_ids_by_site(targets);
 
-        for (call, target) in [("k1.a2()", a2), ("k1.a4()", a4)] {
+        for (call, target) in [("k1.a2()", a2), ("k1.a4()", a4), ("k1.a4().a2()", a2)] {
             let site = site_id_for_span(source, &sites, call);
             assert!(
                 resolved.contains(&(site, target)),
