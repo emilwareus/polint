@@ -3,8 +3,9 @@ use std::collections::BTreeMap;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
     Argument, ArrayExpressionElement, AssignmentTarget, BindingPattern, CallExpression, Class,
-    ClassElement, Expression, ForStatementLeft, FunctionBody, MethodDefinitionKind,
-    ObjectPropertyKind, Program, PropertyKey, Statement, VariableDeclaration, VariableDeclarator,
+    ClassElement, Expression, ForStatementLeft, FunctionBody, MethodDefinition,
+    MethodDefinitionKind, ObjectPropertyKind, Program, PropertyKey, Statement, VariableDeclaration,
+    VariableDeclarator,
 };
 use oxc_parser::Parser;
 use oxc_span::{GetSpan, SourceType};
@@ -402,7 +403,7 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                     let Some(name) = static_property_key(&method.key, method.computed) else {
                         continue;
                     };
-                    let Some(function) = self.function_for_span(method.span) else {
+                    let Some(function) = self.function_for_class_method(method) else {
                         continue;
                     };
                     if method.r#static {
@@ -2365,6 +2366,15 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
         self.function_for_span(span)
     }
 
+    fn function_for_class_method(
+        &self,
+        method: &'ast MethodDefinition<'ast>,
+    ) -> Option<&'db FunctionFact> {
+        let span = class_method_function_span(method);
+        self.function_for_span(span)
+            .or_else(|| self.function_for_span(method.span))
+    }
+
     fn function_for_span(&self, span: oxc_span::Span) -> Option<&'db FunctionFact> {
         let functions = self.functions_by_start.get(&(self.file.id, span.start))?;
         functions
@@ -3070,6 +3080,13 @@ fn static_property_key(key: &PropertyKey<'_>, computed: bool) -> Option<String> 
         PropertyKey::NumericLiteral(literal) => Some(literal.value.to_string()),
         _ => None,
     }
+}
+
+fn class_method_function_span(method: &MethodDefinition<'_>) -> oxc_span::Span {
+    if method.r#static && method.kind == MethodDefinitionKind::Method {
+        return oxc_span::Span::new(method.key.span().start, method.span.end);
+    }
+    method.span
 }
 
 fn callee_text(expression: &Expression<'_>) -> Option<String> {
@@ -4180,6 +4197,35 @@ mod tests {
                 "expected real TS pipeline to resolve {call} to {target:?}; got {resolved:?}"
             );
         }
+    }
+
+    #[test]
+    fn real_ts_pipeline_reports_static_class_method_spans_from_method_name() {
+        let source = "class D {\n    static m2() {console.log(\"m2\")}\n}\nD.m2();\n";
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let file = db.files()[0].id;
+        let expected_span = span_for_nth(source, file, "m2() {console.log(\"m2\")}", 0);
+        let (method_id, actual_span) = db
+            .functions()
+            .iter()
+            .find(|function| function.name == "D.m2")
+            .map(|function| (function.id, function.span.clone()))
+            .expect("static class method function fact exists");
+
+        assert_eq!(actual_span, expected_span);
+
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let resolved = resolved_target_ids_by_site(targets);
+        let site = site_id_for_span(source, &sites, "D.m2()");
+
+        assert!(
+            resolved.contains(&(site, method_id)),
+            "expected real TS pipeline to resolve D.m2() to {method_id:?}; got {resolved:?}"
+        );
     }
 
     #[test]

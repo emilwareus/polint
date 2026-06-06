@@ -17,20 +17,20 @@ use oxc_ast::ast::{
     Class, ClassElement, Declaration, ExportDefaultDeclarationKind, Expression, ForStatementInit,
     ForStatementLeft, Function, FunctionBody, ImportOrExportKind, JSXAttributeItem,
     JSXAttributeName, JSXAttributeValue, JSXChild, JSXElement, JSXExpression, JSXFragment,
-    MethodDefinition, ModuleExportName, ObjectPropertyKind, Program, PropertyKey, RegExpLiteral,
-    Statement, TemplateLiteral, VariableDeclarator,
+    MethodDefinition, MethodDefinitionKind, ModuleExportName, ObjectPropertyKind, Program,
+    PropertyKey, RegExpLiteral, Statement, TemplateLiteral, VariableDeclarator,
 };
 use oxc_parser::Parser;
-use oxc_span::SourceType;
+use oxc_span::{GetSpan, SourceType};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 
-const TS_CACHE_SCHEMA: &str = "ts-facts-v3";
+const TS_CACHE_SCHEMA: &str = "ts-facts-v4";
 const TS_PROVIDER_ID: &str = "polint.ts.syntax";
-const TS_SYNTAX_LAYER_SCHEMA: &str = "ts-syntax-layer-v3";
+const TS_SYNTAX_LAYER_SCHEMA: &str = "ts-syntax-layer-v4";
 
 // Relationship resolution converts this non-string import expression sentinel to Dynamic.
 pub(crate) const DYNAMIC_IMPORT_SPECIFIER: &str = "<dynamic>";
@@ -1819,7 +1819,7 @@ fn push_ts_class(
                 },
                 TsFunctionSpec {
                     name: format!("{name}.{method_name}"),
-                    span: method.span,
+                    span: class_method_function_span(method),
                     is_exported,
                     cyclomatic_complexity: ts_cyclomatic_complexity(&method.value),
                     calls: function_body_calls(method.value.body.as_deref()),
@@ -1836,6 +1836,13 @@ fn method_name(method: &MethodDefinition<'_>) -> Option<String> {
         PropertyKey::StringLiteral(literal) => Some(literal.value.to_string()),
         _ => None,
     }
+}
+
+fn class_method_function_span(method: &MethodDefinition<'_>) -> oxc_span::Span {
+    if method.r#static && method.kind == MethodDefinitionKind::Method {
+        return oxc_span::Span::new(method.key.span().start, method.span.end);
+    }
+    method.span
 }
 
 fn expression_calls(expression: &Expression<'_>) -> Vec<String> {
