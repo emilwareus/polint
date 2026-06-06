@@ -124,6 +124,7 @@ Measured continuation iterations:
 | 18 | Async IIFE, `await`, and async function return value-flow model | 460 | 552 | 1019 | 45.45% | 31.10% | 36.93% | 79270 ms | `5730dbebd6555488` |
 | 19 | Module-level `this` assignment plus object-literal `this` alias model | 462 | 552 | 1017 | 45.56% | 31.24% | 37.06% | 81650 ms | `bd04d1cfb14c1da5` |
 | 20 | `Promise.allSettled` result-object lane for unit-level `value`/`reason` flows | 462 | 552 | 1017 | 45.56% | 31.24% | 37.06% | 74866 ms | `bd04d1cfb14c1da5` |
+| 21 | Bounded async-generator yielded-value model for `.next()` and `for await` unit probes | 462 | 552 | 1017 | 45.56% | 31.24% | 37.06% | 72228 ms | `bd04d1cfb14c1da5` |
 
 Current Go score remains unchanged:
 
@@ -182,6 +183,18 @@ semantics are now covered, but this particular slice is not yet benchmark-visibl
 in the full call graph output; the next iterations should target benchmark
 wiring and larger semantic families rather than treating this as a suite-level
 recall win.
+
+Iteration 21 added a bounded async-generator model: async generator variable
+initializers record yielded callable values, generator calls produce iterator
+state, `.next()` produces a Promise of an iterator result object with a `value`
+property, and `for await` binds yielded values directly. The focused suite now
+reports **19 passed / 1 ignored**. The release Jelly benchmark again stayed flat
+with the same output hash, and the relevant benchmark cases remained at:
+`asyncawait` **7 TP / 2 FP / 22 FN**, `generators` **16 TP / 3 FP / 34 FN**.
+The result reinforces the same finding as iteration 20: these unit-level
+semantics are useful regression scaffolding, but the benchmark-visible gap is
+still in the broader graph-output/integration path and remaining receiver/module
+semantics.
 
 What moved the first implementation-loop score:
 

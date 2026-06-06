@@ -548,6 +548,18 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
             {
                 env.async_functions.insert(name, targets);
             }
+            if let Some(name) = binding_identifier_name(&declarator.id)
+                && let Some(init) = &declarator.init
+                && let Some(targets) = self.async_generator_yield_targets(init, env)
+            {
+                env.async_generators.insert(name, targets);
+            }
+            if let Some(name) = binding_identifier_name(&declarator.id)
+                && let Some(init) = &declarator.init
+                && let Some(targets) = self.generator_iterator_targets(init, env)
+            {
+                env.async_iterators.insert(name, targets);
+            }
             if let Some(init) = &declarator.init
                 && let Some(targets) = self.collection_targets_from_expression(init, env)
             {
@@ -1118,6 +1130,11 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                 .cloned()
                 .unwrap_or_default(),
             Expression::CallExpression(call) => {
+                if let Some(name) = callee_identifier(&call.callee)
+                    && let Some(targets) = env.async_generators.get(name)
+                {
+                    return targets.clone();
+                }
                 if let Some((collection_name, method)) = static_member_call(&call.callee)
                     && let Some(source) = env.bindings.get(collection_name)
                 {
@@ -1247,6 +1264,18 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
         {
             return Some(targets.clone());
         }
+        if let Some((iterator_name, "next")) = static_member_call(&call.callee)
+            && let Some(values) = env.async_iterators.get(iterator_name)
+        {
+            return Some(PromiseTargets {
+                fulfilled: CollectionTargets {
+                    keys: Vec::new(),
+                    values: Vec::new(),
+                    object_values: vec![iterator_result_object(values)],
+                },
+                rejected: CollectionTargets::default(),
+            });
+        }
 
         match callee_text(&call.callee).as_deref() {
             Some("Promise.resolve") => Some(PromiseTargets {
@@ -1355,6 +1384,108 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                 self.async_function_promise_targets(&expression.expression, env)
             }
             _ => None,
+        }
+    }
+
+    fn async_generator_yield_targets(
+        &self,
+        expression: &'ast Expression<'ast>,
+        env: &FlowEnv,
+    ) -> Option<CollectionTargets> {
+        match expression {
+            Expression::FunctionExpression(function) if function.r#async && function.generator => {
+                function
+                    .body
+                    .as_deref()
+                    .map(|body| self.yield_targets_from_statements(&body.statements, env))
+            }
+            Expression::ParenthesizedExpression(expression) => {
+                self.async_generator_yield_targets(&expression.expression, env)
+            }
+            _ => None,
+        }
+    }
+
+    fn generator_iterator_targets(
+        &self,
+        expression: &'ast Expression<'ast>,
+        env: &FlowEnv,
+    ) -> Option<CollectionTargets> {
+        match expression {
+            Expression::CallExpression(call) => {
+                let name = callee_identifier(&call.callee)?;
+                env.async_generators.get(name).cloned()
+            }
+            Expression::ParenthesizedExpression(expression) => {
+                self.generator_iterator_targets(&expression.expression, env)
+            }
+            _ => None,
+        }
+    }
+
+    fn yield_targets_from_statements(
+        &self,
+        statements: &'ast oxc_allocator::Vec<'ast, Statement<'ast>>,
+        env: &FlowEnv,
+    ) -> CollectionTargets {
+        let mut targets = CollectionTargets::default();
+        for statement in statements {
+            targets.extend(self.yield_targets_from_statement(statement, env));
+        }
+        targets
+    }
+
+    fn yield_targets_from_statement(
+        &self,
+        statement: &'ast Statement<'ast>,
+        env: &FlowEnv,
+    ) -> CollectionTargets {
+        match statement {
+            Statement::ExpressionStatement(statement) => {
+                self.yield_targets_from_expression(&statement.expression, env)
+            }
+            Statement::BlockStatement(block) => {
+                self.yield_targets_from_statements(&block.body, env)
+            }
+            Statement::IfStatement(statement) => {
+                let mut targets = self.yield_targets_from_statement(&statement.consequent, env);
+                if let Some(alternate) = &statement.alternate {
+                    targets.extend(self.yield_targets_from_statement(alternate, env));
+                }
+                targets
+            }
+            _ => CollectionTargets::default(),
+        }
+    }
+
+    fn yield_targets_from_expression(
+        &self,
+        expression: &'ast Expression<'ast>,
+        env: &FlowEnv,
+    ) -> CollectionTargets {
+        match expression {
+            Expression::YieldExpression(yield_expression) => {
+                let Some(argument) = &yield_expression.argument else {
+                    return CollectionTargets::default();
+                };
+                if yield_expression.delegate {
+                    self.collection_targets_from_expression(argument, env)
+                        .unwrap_or_else(|| self.callable_targets_from_expression(argument, env))
+                } else {
+                    self.callable_targets_from_expression(argument, env)
+                }
+            }
+            Expression::SequenceExpression(sequence) => {
+                let mut targets = CollectionTargets::default();
+                for expression in &sequence.expressions {
+                    targets.extend(self.yield_targets_from_expression(expression, env));
+                }
+                targets
+            }
+            Expression::ParenthesizedExpression(expression) => {
+                self.yield_targets_from_expression(&expression.expression, env)
+            }
+            _ => CollectionTargets::default(),
         }
     }
 
@@ -2012,6 +2143,8 @@ struct FlowEnv {
     objects: BTreeMap<String, ObjectTargets>,
     promises: BTreeMap<String, PromiseTargets>,
     async_functions: BTreeMap<String, PromiseTargets>,
+    async_generators: BTreeMap<String, CollectionTargets>,
+    async_iterators: BTreeMap<String, CollectionTargets>,
     this_object: ObjectTargets,
 }
 
@@ -2071,6 +2204,10 @@ impl CollectionTargets {
 
     fn object_at(&self, index: usize) -> Option<ObjectTargets> {
         self.object_values.get(index).cloned()
+    }
+
+    fn singular_object(&self) -> Option<ObjectTargets> {
+        (self.object_values.len() == 1).then(|| self.object_values[0].clone())
     }
 }
 
@@ -2215,6 +2352,9 @@ fn bind_collection_pattern(
 ) {
     match pattern {
         BindingPattern::BindingIdentifier(identifier) => {
+            if let Some(object) = targets.singular_object() {
+                env.objects.insert(identifier.name.to_string(), object);
+            }
             env.bindings
                 .insert(identifier.name.to_string(), targets.clone());
         }
@@ -2312,6 +2452,9 @@ fn param_pattern_from_binding(pattern: &BindingPattern<'_>) -> ParamPattern {
 fn bind_param_pattern(pattern: &ParamPattern, targets: &CollectionTargets, env: &mut FlowEnv) {
     match pattern {
         ParamPattern::Binding(name) => {
+            if let Some(object) = targets.singular_object() {
+                env.objects.insert(name.clone(), object);
+            }
             env.bindings.insert(name.clone(), targets.clone());
         }
         ParamPattern::Array { elements, rest } => {
@@ -2456,6 +2599,14 @@ fn callback_targets_for_parameter(
         _ if index == 0 => collection.values.clone(),
         _ => Vec::new(),
     }
+}
+
+fn iterator_result_object(values: &CollectionTargets) -> ObjectTargets {
+    let mut result = ObjectTargets::default();
+    for target in values.all_targets() {
+        result.add_property_target("value".to_string(), target);
+    }
+    result
 }
 
 fn callback_param_patterns(expression: &Expression<'_>) -> Vec<ParamPattern> {
@@ -3826,7 +3977,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Jelly gap: async generator next()/for-await should flow yielded values through iterator result objects"]
     fn jelly_gap_async_generator_next_and_for_await_values() {
         let source = "(async function() {\n  const f7 = async function*() {\n    yield* [() => {}];\n    return () => {};\n  };\n  const f8 = f7();\n  const p2 = f8.next();\n  p2.then(res => {\n    res.value();\n  });\n  for await (const q of f7()) {\n    q();\n  }\n}());\n";
         let mut db = db_with_file(source);
