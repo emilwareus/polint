@@ -604,6 +604,14 @@ fn collect_anonymous_functions_from_expression<'ast>(
         Expression::AssignmentExpression(expression) => {
             collect_anonymous_functions_from_expression(&expression.right, true, functions);
         }
+        Expression::AwaitExpression(expression) => {
+            collect_anonymous_functions_from_expression(&expression.argument, true, functions);
+        }
+        Expression::YieldExpression(expression) => {
+            if let Some(argument) = &expression.argument {
+                collect_anonymous_functions_from_expression(argument, true, functions);
+            }
+        }
         Expression::SequenceExpression(expression) => {
             for expression in &expression.expressions {
                 collect_anonymous_functions_from_expression(expression, true, functions);

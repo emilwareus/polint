@@ -103,6 +103,7 @@ struct FunctionFlow<'db, 'ast> {
     expression_body: Option<&'ast Expression<'ast>>,
     params: Vec<ParamPattern>,
     rest: Option<ParamPattern>,
+    generator: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -211,6 +212,7 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                             .rest
                             .as_ref()
                             .map(|rest| param_pattern_from_binding(&rest.rest.argument)),
+                        generator: false,
                     };
                     self.function_flows_by_id.insert(function_fact.id, flow);
                     for statement in &body.statements {
@@ -235,6 +237,7 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                             .rest
                             .as_ref()
                             .map(|rest| param_pattern_from_binding(&rest.rest.argument)),
+                        generator: false,
                     };
                     self.function_flows_by_id.insert(function_fact.id, flow);
                 }
@@ -338,6 +341,7 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                         .rest
                         .as_ref()
                         .map(|rest| param_pattern_from_binding(&rest.rest.argument)),
+                    generator: function.generator,
                 };
                 self.function_flows_by_id.insert(function_fact.id, flow);
                 for statement in &body.statements {
@@ -377,6 +381,7 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                         .rest
                         .as_ref()
                         .map(|rest| param_pattern_from_binding(&rest.rest.argument)),
+                    generator: function.generator,
                 };
                 self.function_flows_by_id
                     .insert(function_fact.id, flow.clone());
@@ -1989,8 +1994,9 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
     ) -> CollectionTargets {
         match expression {
             Expression::Identifier(identifier) => env
-                .bindings
+                .async_iterators
                 .get(identifier.name.as_str())
+                .or_else(|| env.bindings.get(identifier.name.as_str()))
                 .cloned()
                 .unwrap_or_default(),
             Expression::CallExpression(call) => {
@@ -1998,6 +2004,9 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                     && let Some(targets) = env.async_generators.get(name)
                 {
                     return targets.clone();
+                }
+                if let Some(targets) = self.generator_targets_from_call(call, env, 0) {
+                    return targets;
                 }
                 if let Some((collection_name, method)) = static_member_call(&call.callee)
                     && let Some(source) = env.bindings.get(collection_name)
@@ -2098,6 +2107,12 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
         call: &'ast CallExpression<'ast>,
         env: &FlowEnv,
     ) -> Option<ObjectTargets> {
+        if let Some((iterator_name, "next")) = static_member_call(&call.callee)
+            && let Some(values) = env.async_iterators.get(iterator_name)
+        {
+            return Some(iterator_result_object(values));
+        }
+
         let Expression::StaticMemberExpression(member) = &call.callee else {
             return None;
         };
@@ -2331,15 +2346,100 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
         env: &FlowEnv,
     ) -> Option<CollectionTargets> {
         match expression {
-            Expression::CallExpression(call) => {
-                let name = callee_identifier(&call.callee)?;
-                env.async_generators.get(name).cloned()
-            }
+            Expression::CallExpression(call) => self.generator_targets_from_call(call, env, 0),
             Expression::ParenthesizedExpression(expression) => {
                 self.generator_iterator_targets(&expression.expression, env)
             }
             _ => None,
         }
+    }
+
+    fn generator_targets_from_call(
+        &self,
+        call: &'ast CallExpression<'ast>,
+        env: &FlowEnv,
+        depth: usize,
+    ) -> Option<CollectionTargets> {
+        if depth > 8 {
+            return None;
+        }
+        if let Some(name) = callee_identifier(&call.callee) {
+            if let Some(targets) = env.async_generators.get(name) {
+                return Some(targets.clone());
+            }
+            if let Some(flow) = self.function_declarations.get(name)
+                && flow.generator
+            {
+                return Some(self.generator_targets_from_flow(flow, env, depth + 1));
+            }
+        }
+        if let Some((collection_name, method)) = static_member_call(&call.callee)
+            && let Some(source) = env.bindings.get(collection_name)
+        {
+            return match method {
+                "values" => Some(CollectionTargets {
+                    keys: Vec::new(),
+                    values: source.values.clone(),
+                    object_values: source.object_values.clone(),
+                }),
+                "keys" => Some(CollectionTargets {
+                    keys: Vec::new(),
+                    values: source.keys_or_values(),
+                    object_values: Vec::new(),
+                }),
+                "entries" => Some(source.clone()),
+                _ => None,
+            };
+        }
+        if let Expression::StaticMemberExpression(member) = &call.callee
+            && let Some(object) = self.object_targets_from_expression(&member.object, env)
+            && let Some(function_ids) = object.properties.get(member.property.name.as_str())
+        {
+            let mut targets = CollectionTargets::default();
+            for function_id in function_ids {
+                if let Some(flow) = self.function_flows_by_id.get(function_id)
+                    && flow.generator
+                {
+                    targets.extend(self.generator_targets_from_flow(flow, env, depth + 1));
+                }
+            }
+            if !targets.is_empty() {
+                return Some(targets);
+            }
+        }
+        None
+    }
+
+    fn generator_targets_from_expression(
+        &self,
+        expression: &'ast Expression<'ast>,
+        env: &FlowEnv,
+        depth: usize,
+    ) -> Option<CollectionTargets> {
+        match expression {
+            Expression::CallExpression(call) => self.generator_targets_from_call(call, env, depth),
+            Expression::Identifier(identifier) => env
+                .async_iterators
+                .get(identifier.name.as_str())
+                .or_else(|| env.async_generators.get(identifier.name.as_str()))
+                .cloned(),
+            Expression::ParenthesizedExpression(expression) => {
+                self.generator_targets_from_expression(&expression.expression, env, depth)
+            }
+            _ => None,
+        }
+    }
+
+    fn generator_targets_from_flow(
+        &self,
+        flow: &FunctionFlow<'db, 'ast>,
+        env: &FlowEnv,
+        depth: usize,
+    ) -> CollectionTargets {
+        if depth > 8 {
+            return CollectionTargets::default();
+        }
+        self.yield_targets_from_statements(&flow.body.statements, env)
     }
 
     fn yield_targets_from_statements(
@@ -2363,6 +2463,11 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
             Statement::ExpressionStatement(statement) => {
                 self.yield_targets_from_expression(&statement.expression, env)
             }
+            Statement::ReturnStatement(statement) => statement
+                .argument
+                .as_ref()
+                .map(|argument| self.callable_targets_from_expression(argument, env))
+                .unwrap_or_default(),
             Statement::BlockStatement(block) => {
                 self.yield_targets_from_statements(&block.body, env)
             }
@@ -2388,7 +2493,8 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                     return CollectionTargets::default();
                 };
                 if yield_expression.delegate {
-                    self.collection_targets_from_expression(argument, env)
+                    self.generator_targets_from_expression(argument, env, 0)
+                        .or_else(|| self.collection_targets_from_expression(argument, env))
                         .unwrap_or_else(|| self.callable_targets_from_expression(argument, env))
                 } else {
                     self.callable_targets_from_expression(argument, env)
@@ -4652,6 +4758,60 @@ mod tests {
     }
 
     #[test]
+    fn real_ts_pipeline_resolves_sync_generator_next_and_for_of_values() {
+        let source = "function* gen() {\n    yield () => {console.log(\"1\")};\n    yield* gen2();\n    yield* [() => {console.log(\"3\")}, () => {console.log(\"4\")}];\n}\nfunction* gen2() {\n    yield () => {console.log(\"2\")};\n}\nconst x = gen();\nconst v1 = x.next();\nv1.value();\nfor (const v of x) {\n    v();\n}\nvar q = [() => {console.log(\"5\")}];\nconst y = q.values();\nconst v2 = y.next();\nv2.value();\nfunction* gen3() {\n    return () => {console.log(\"6\")};\n}\nconst z = gen3();\nconst v3 = z.next();\nv3.value();\nfunction* gen5() {\n    yield () => {console.log(\"8\")};\n    return () => {console.log(\"9\")};\n}\nconst u = gen5();\nu.next().value();\nu.next().value();\n";
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let yielded1 = function_id_for_span(source, &db, "() => {console.log(\"1\")}");
+        let yielded2 = function_id_for_span(source, &db, "() => {console.log(\"2\")}");
+        let yielded3 = function_id_for_span(source, &db, "() => {console.log(\"3\")}");
+        let yielded4 = function_id_for_span(source, &db, "() => {console.log(\"4\")}");
+        let array_value = function_id_for_span(source, &db, "() => {console.log(\"5\")}");
+        let returned6 = function_id_for_span(source, &db, "() => {console.log(\"6\")}");
+        let yielded8 = function_id_for_span(source, &db, "() => {console.log(\"8\")}");
+        let returned9 = function_id_for_span(source, &db, "() => {console.log(\"9\")}");
+
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let resolved = resolved_target_ids_by_site(targets);
+        let first_next_value = site_id_for_span(source, &sites, "v1.value()");
+        let loop_value = site_id_for_span(source, &sites, "v()");
+        let array_next_value = site_id_for_span(source, &sites, "v2.value()");
+        let return_next_value = site_id_for_span(source, &sites, "v3.value()");
+        let gen5_first_next_value = site_id_for_nth_span(source, &sites, "u.next().value()", 0);
+        let gen5_second_next_value = site_id_for_nth_span(source, &sites, "u.next().value()", 1);
+
+        for target in [yielded1, yielded2, yielded3, yielded4] {
+            assert!(
+                resolved.contains(&(loop_value, target)),
+                "expected for-of generator value {target:?}; got {resolved:?}"
+            );
+        }
+        assert!(
+            resolved.contains(&(first_next_value, yielded1)),
+            "expected first generator next value; got {resolved:?}"
+        );
+        assert!(
+            resolved.contains(&(array_next_value, array_value)),
+            "expected array iterator next value; got {resolved:?}"
+        );
+        assert!(
+            resolved.contains(&(return_next_value, returned6)),
+            "expected generator return value through next().value; got {resolved:?}"
+        );
+        for site in [gen5_first_next_value, gen5_second_next_value] {
+            for target in [yielded8, returned9] {
+                assert!(
+                    resolved.contains(&(site, target)),
+                    "expected gen5 next value {target:?}; got {resolved:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn resolves_promise_handlers_inside_for_of_blocks() {
         let source = "const p2 = Promise.resolve(() => {});\nfor (const round of [1, 2, 3]) {\n  const p1 = new Promise((resolve, reject) => {\n    switch (round) {\n      case 1:\n        resolve(() => {});\n        break;\n      case 2:\n        reject(() => {});\n        break;\n      case 3:\n        resolve(p2);\n        break;\n    }\n  });\n  p1.then(a => {\n    a();\n  }, b => {\n    b();\n  });\n}\n";
         let mut db = db_with_file(source);
@@ -5272,7 +5432,7 @@ mod tests {
             "<anonymous>",
             span_for_nth(source, file, "() => {}", 0),
         );
-        push_function(
+        let returned = push_function(
             &mut db,
             file,
             "<anonymous>",
@@ -5294,7 +5454,12 @@ mod tests {
 
         assert_eq!(
             target_ids_by_site,
-            vec![(CallSiteId(0), yielded), (CallSiteId(1), yielded)]
+            vec![
+                (CallSiteId(0), yielded),
+                (CallSiteId(0), returned),
+                (CallSiteId(1), yielded),
+                (CallSiteId(1), returned),
+            ]
         );
     }
 
@@ -5503,11 +5668,20 @@ mod tests {
     }
 
     fn site_id_for_span(source: &str, sites: &[CallSiteFact], needle: &str) -> CallSiteId {
+        site_id_for_nth_span(source, sites, needle, 0)
+    }
+
+    fn site_id_for_nth_span(
+        source: &str,
+        sites: &[CallSiteFact],
+        needle: &str,
+        ordinal: usize,
+    ) -> CallSiteId {
         let file = sites
             .first()
             .map(|site| site.file)
             .expect("at least one call site");
-        let span = span_for_nth(source, file, needle, 0);
+        let span = span_for_nth(source, file, needle, ordinal);
         sites
             .iter()
             .find(|site| {

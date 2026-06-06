@@ -28,9 +28,9 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 
-const TS_CACHE_SCHEMA: &str = "ts-facts-v6";
+const TS_CACHE_SCHEMA: &str = "ts-facts-v7";
 const TS_PROVIDER_ID: &str = "polint.ts.syntax";
-const TS_SYNTAX_LAYER_SCHEMA: &str = "ts-syntax-layer-v6";
+const TS_SYNTAX_LAYER_SCHEMA: &str = "ts-syntax-layer-v7";
 
 // Relationship resolution converts this non-string import expression sentinel to Dynamic.
 pub(crate) const DYNAMIC_IMPORT_SPECIFIER: &str = "<dynamic>";
@@ -1647,6 +1647,14 @@ fn extract_anonymous_callables_from_expression(
         }
         Expression::AssignmentExpression(expression) => {
             extract_anonymous_callables_from_expression(db, ctx, &expression.right, true);
+        }
+        Expression::AwaitExpression(expression) => {
+            extract_anonymous_callables_from_expression(db, ctx, &expression.argument, true);
+        }
+        Expression::YieldExpression(expression) => {
+            if let Some(argument) = &expression.argument {
+                extract_anonymous_callables_from_expression(db, ctx, argument, true);
+            }
         }
         Expression::SequenceExpression(expression) => {
             for expression in &expression.expressions {
