@@ -126,6 +126,38 @@ func main() {
 	assertDynamicDispatchJoinsCallsite(t, rows)
 }
 
+func TestEmitDirectRTAEdgesForFunctionValues(t *testing.T) {
+	root := writeFixture(t, map[string]string{
+		"go.mod": "module example.com\n\ngo 1.24\n",
+		"main.go": `package main
+
+func A1() {
+	A2(0)
+}
+
+func A2(int) {}
+
+var (
+	C = func(int) {}
+	D = func(int) {}
+)
+
+func main() {
+	A1()
+	pfn := C
+	pfn(0)
+}
+`,
+	})
+	rows, err := Emit(Config{Root: root, ModuleRoots: []string{"."}, Patterns: []string{"./..."}, IncludeTests: false})
+	if err != nil {
+		t.Fatalf("Emit failed: %v", err)
+	}
+
+	assertRTAEdge(t, rows, "main", "dynamic function call", "init$1")
+	assertRTAEdge(t, rows, "main", "dynamic function call", "init$2")
+}
+
 func TestEmitHarvestsRTASignalsInsideClosureBodies(t *testing.T) {
 	// Regression for WR-01: the concrete type Dog is converted to an interface
 	// (*ssa.MakeInterface) ONLY inside the closure passed to run(...). Its method
@@ -742,6 +774,19 @@ func assertDynamicDispatchMethod(t *testing.T, rows []Row, method string) {
 		}
 	}
 	t.Fatalf("missing dynamic_dispatch with method %q in %#v", method, rows)
+}
+
+func assertRTAEdge(t *testing.T, rows []Row, caller string, kind string, callee string) {
+	t.Helper()
+	for _, row := range rows {
+		if row["kind"] == "rta_edge" &&
+			row["caller"] == caller &&
+			row["edge_kind"] == kind &&
+			row["callee"] == callee {
+			return
+		}
+	}
+	t.Fatalf("missing rta_edge %s --%s--> %s in %#v", caller, kind, callee, rows)
 }
 
 func writeGoWorkspaceFixture(t *testing.T, checkedInWork bool) string {

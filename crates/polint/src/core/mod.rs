@@ -89,7 +89,7 @@ use crate::diagnostics::{
 use crate::go::semantic::facts::{
     GoSemanticAddressTakenFact, GoSemanticCallsiteFact, GoSemanticDynamicDispatchFact,
     GoSemanticFunctionFact, GoSemanticInstantiatedTypeFact, GoSemanticMethodSetFact,
-    GoSemanticPackageErrorFact, GoSemanticPackageFact,
+    GoSemanticPackageErrorFact, GoSemanticPackageFact, GoSemanticRtaEdgeFact,
 };
 use crate::go::semantic::store::{GoSemanticFactsOutput, GoSemanticStore, GoSemanticStoreReport};
 use crate::module_graph::topology::{
@@ -793,6 +793,7 @@ pub struct AnalysisDb {
     go_semantic_address_taken: Vec<GoSemanticAddressTakenFact>,
     go_semantic_instantiated_types: Vec<GoSemanticInstantiatedTypeFact>,
     go_semantic_dynamic_dispatch: Vec<GoSemanticDynamicDispatchFact>,
+    go_semantic_rta_edges: Vec<GoSemanticRtaEdgeFact>,
     go_semantic_package_errors: Vec<GoSemanticPackageErrorFact>,
     type_facts: Vec<TypeFact>,
     narrowed_type_facts: Vec<NarrowedTypeFact>,
@@ -930,6 +931,7 @@ impl Default for AnalysisDb {
             go_semantic_address_taken: Vec::new(),
             go_semantic_instantiated_types: Vec::new(),
             go_semantic_dynamic_dispatch: Vec::new(),
+            go_semantic_rta_edges: Vec::new(),
             go_semantic_package_errors: Vec::new(),
             type_facts: Vec::new(),
             narrowed_type_facts: Vec::new(),
@@ -1775,6 +1777,7 @@ impl AnalysisDb {
         self.go_semantic_address_taken = store.output().address_taken.clone();
         self.go_semantic_instantiated_types = store.output().instantiated_types.clone();
         self.go_semantic_dynamic_dispatch = store.output().dynamic_dispatch.clone();
+        self.go_semantic_rta_edges = store.output().rta_edges.clone();
         self.go_semantic_package_errors = store.output().package_errors.clone();
         Ok(store.report())
     }
@@ -1793,6 +1796,7 @@ impl AnalysisDb {
             address_taken: self.go_semantic_address_taken.clone(),
             instantiated_types: self.go_semantic_instantiated_types.clone(),
             dynamic_dispatch: self.go_semantic_dynamic_dispatch.clone(),
+            rta_edges: self.go_semantic_rta_edges.clone(),
             package_errors: self.go_semantic_package_errors.clone(),
         }
     }
@@ -1839,6 +1843,11 @@ impl AnalysisDb {
     )]
     pub(crate) fn go_semantic_dynamic_dispatch(&self) -> &[GoSemanticDynamicDispatchFact] {
         &self.go_semantic_dynamic_dispatch
+    }
+
+    #[cfg(test)]
+    pub(crate) fn go_semantic_rta_edges(&self) -> &[GoSemanticRtaEdgeFact] {
+        &self.go_semantic_rta_edges
     }
 
     #[allow(

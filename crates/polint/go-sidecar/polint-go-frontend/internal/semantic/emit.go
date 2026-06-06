@@ -14,6 +14,8 @@ import (
 	"strings"
 
 	"golang.org/x/mod/modfile"
+	"golang.org/x/tools/go/callgraph"
+	"golang.org/x/tools/go/callgraph/rta"
 	"golang.org/x/tools/go/packages"
 	"golang.org/x/tools/go/ssa"
 	"golang.org/x/tools/go/ssa/ssautil"
@@ -123,7 +125,7 @@ func Emit(config Config) ([]Row, error) {
 	}
 	sort.Slice(pkgs, func(i, j int) bool { return pkgs[i].ID < pkgs[j].ID })
 
-	prog, ssaPkgs := ssautil.AllPackages(pkgs, ssa.SanityCheckFunctions)
+	prog, ssaPkgs := ssautil.AllPackages(pkgs, ssa.SanityCheckFunctions|ssa.InstantiateGenerics)
 	prog.Build()
 	sort.Slice(ssaPkgs, func(i, j int) bool {
 		return packageID(ssaPkgs[i]) < packageID(ssaPkgs[j])
@@ -148,6 +150,7 @@ func Emit(config Config) ([]Row, error) {
 	for _, pkg := range ssaPkgs {
 		e.emitSSAPackage(pkg)
 	}
+	e.emitRTAEdges(ssaPkgs)
 	e.add(Row{
 		"kind":       "session_end",
 		"schema":     SchemaVersion,
@@ -211,6 +214,65 @@ func (e *emitter) emitSSAPackage(pkg *ssa.Package) {
 	}
 	e.emitMethodSets(pkg)
 	e.emitInstantiatedMethodSets(pkg)
+}
+
+func (e *emitter) emitRTAEdges(pkgs []*ssa.Package) {
+	mainPkgs := make([]*ssa.Package, 0)
+	for _, pkg := range pkgs {
+		if pkg == nil || pkg.Pkg == nil || pkg.Pkg.Name() != "main" {
+			continue
+		}
+		mainPkgs = append(mainPkgs, pkg)
+	}
+	sort.Slice(mainPkgs, func(i, j int) bool {
+		return packageID(mainPkgs[i]) < packageID(mainPkgs[j])
+	})
+
+	for _, mainPkg := range mainPkgs {
+		roots := make([]*ssa.Function, 0, 2)
+		if mainFn := mainPkg.Func("main"); mainFn != nil {
+			roots = append(roots, mainFn)
+		}
+		if initFn := mainPkg.Func("init"); initFn != nil {
+			roots = append(roots, initFn)
+		}
+		if len(roots) == 0 {
+			continue
+		}
+		result := rta.Analyze(roots, true)
+		if result == nil || result.CallGraph == nil {
+			continue
+		}
+
+		var rows []Row
+		callgraph.GraphVisitEdges(result.CallGraph, func(edge *callgraph.Edge) error {
+			if edge == nil || edge.Caller == nil || edge.Callee == nil || edge.Caller.Func == nil || edge.Callee.Func == nil {
+				return nil
+			}
+			from := edge.Caller.Func.RelString(mainPkg.Pkg)
+			to := edge.Callee.Func.RelString(mainPkg.Pkg)
+			description := edge.Description()
+			if from == "" || to == "" || description == "" {
+				return nil
+			}
+			rows = append(rows, Row{
+				"kind":         "rta_edge",
+				"package_id":   packageID(mainPkg),
+				"package_path": packagePath(mainPkg),
+				"caller":       from,
+				"callee":       to,
+				"edge_kind":    description,
+				"stable_key":   stableKey(packageID(mainPkg), "rta_edge", from, description, to),
+			})
+			return nil
+		})
+		sort.Slice(rows, func(i, j int) bool {
+			return fmt.Sprint(rows[i]["stable_key"]) < fmt.Sprint(rows[j]["stable_key"])
+		})
+		for _, row := range rows {
+			e.add(row)
+		}
+	}
 }
 
 func (e *emitter) emitFunction(pkg *ssa.Package, fn *ssa.Function) {
