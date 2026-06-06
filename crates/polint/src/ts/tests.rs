@@ -1,6 +1,6 @@
 use super::*;
 use crate::analysis_plan::AnalysisPlan;
-use crate::core::AnalysisDb;
+use crate::core::{AnalysisDb, TS_JS_MODULE_FUNCTION_NAME};
 use crate::diagnostics::Diagnostic;
 use crate::graph::ImportGraph;
 use std::fs;
@@ -449,9 +449,13 @@ return formatLabel("dialog");
     let function_names: Vec<_> = db
         .functions()
         .iter()
+        .filter(|function| function.name != TS_JS_MODULE_FUNCTION_NAME)
         .map(|function| function.name.as_str())
         .collect();
-    assert_eq!(function_names, ["helper", "Button", "Dialog.render"]);
+    assert_eq!(
+        function_names,
+        ["helper", "Button", "Dialog", "Dialog.render"]
+    );
 
     let classes: Vec<_> = db.ts_classes().iter().collect();
     assert_eq!(classes.len(), 1);
@@ -473,6 +477,20 @@ return formatLabel("dialog");
         .expect("expected Button function");
     assert!(button.is_exported);
     assert_eq!(button.calls, ["helper"]);
+
+    let dialog_constructor = db
+        .functions()
+        .iter()
+        .find(|function| function.name == "Dialog")
+        .expect("expected Dialog constructor function");
+    assert!(dialog_constructor.is_exported);
+    assert_eq!(dialog_constructor.calls, Vec::<String>::new());
+    assert!(
+        source[dialog_constructor.span.start_byte as usize
+            ..dialog_constructor.span.end_byte as usize]
+            .contains("class Dialog"),
+        "class constructor function should use the class declaration span"
+    );
 
     let render = db
         .functions()
@@ -505,6 +523,7 @@ obj.notExported = function notExported(): void {};
     let functions = db
         .functions()
         .iter()
+        .filter(|function| function.is_exported)
         .map(|function| {
             (
                 function.name.as_str(),
@@ -888,6 +907,12 @@ export { Button, Panel };
         .find(|class| class.name == "Panel")
         .expect("expected Panel class fact");
     assert!(panel.is_exported);
+    let panel_constructor = db
+        .functions()
+        .iter()
+        .find(|function| function.name == "Panel")
+        .expect("expected Panel constructor function fact");
+    assert!(panel_constructor.is_exported);
 }
 
 #[test]
@@ -940,6 +965,12 @@ export default Panel;
         .find(|class| class.name == "Panel")
         .expect("expected Panel class fact");
     assert!(panel.is_exported);
+    let panel_constructor = class_db
+        .functions()
+        .iter()
+        .find(|function| function.name == "Panel")
+        .expect("expected Panel constructor function fact");
+    assert!(panel_constructor.is_exported);
 }
 
 #[test]

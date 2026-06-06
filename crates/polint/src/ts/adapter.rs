@@ -28,9 +28,9 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 
-const TS_CACHE_SCHEMA: &str = "ts-facts-v1";
+const TS_CACHE_SCHEMA: &str = "ts-facts-v2";
 const TS_PROVIDER_ID: &str = "polint.ts.syntax";
-const TS_SYNTAX_LAYER_SCHEMA: &str = "ts-syntax-layer-v1";
+const TS_SYNTAX_LAYER_SCHEMA: &str = "ts-syntax-layer-v2";
 
 // Relationship resolution converts this non-string import expression sentinel to Dynamic.
 pub(crate) const DYNAMIC_IMPORT_SPECIFIER: &str = "<dynamic>";
@@ -1686,6 +1686,22 @@ fn push_ts_class(
         is_exported,
         is_component_like,
     });
+    push_ts_function(
+        db,
+        TsAstCtx {
+            file,
+            source,
+            language,
+        },
+        TsFunctionSpec {
+            name: name.clone(),
+            span: class.span,
+            is_exported,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+            is_component_like: false,
+        },
+    );
 
     if is_component_like {
         // syntax-level component heuristic: PascalCase classes are component-like only.
