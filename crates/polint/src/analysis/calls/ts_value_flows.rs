@@ -4,8 +4,8 @@ use oxc_allocator::Allocator;
 use oxc_ast::ast::{
     Argument, ArrayExpressionElement, AssignmentTarget, BindingPattern, CallExpression, Class,
     ClassElement, Expression, ForStatementLeft, FunctionBody, MethodDefinition,
-    MethodDefinitionKind, ObjectPropertyKind, Program, PropertyKey, Statement, VariableDeclaration,
-    VariableDeclarator,
+    MethodDefinitionKind, ObjectProperty, ObjectPropertyKind, Program, PropertyKey, Statement,
+    VariableDeclaration, VariableDeclarator,
 };
 use oxc_parser::Parser;
 use oxc_span::{GetSpan, SourceType};
@@ -273,7 +273,7 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                 for property in &object.properties {
                     match property {
                         ObjectPropertyKind::ObjectProperty(property) => {
-                            self.collect_expression_function_flows_from_expression(&property.value);
+                            self.collect_expression_function_flows_from_object_property(property);
                         }
                         ObjectPropertyKind::SpreadProperty(spread) => {
                             self.collect_expression_function_flows_from_expression(
@@ -308,6 +308,42 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
             }
             _ => {}
         }
+    }
+
+    fn collect_expression_function_flows_from_object_property(
+        &mut self,
+        property: &'ast ObjectProperty<'ast>,
+    ) {
+        if property.method
+            && let Expression::FunctionExpression(function) = &property.value
+        {
+            if let Some(body) = function.body.as_deref()
+                && let Some(function_fact) = self.function_for_object_property(property)
+            {
+                let flow = FunctionFlow {
+                    function: function_fact,
+                    body,
+                    params: function
+                        .params
+                        .items
+                        .iter()
+                        .map(|param| param_pattern_from_binding(&param.pattern))
+                        .collect(),
+                    rest: function
+                        .params
+                        .rest
+                        .as_ref()
+                        .map(|rest| param_pattern_from_binding(&rest.rest.argument)),
+                };
+                self.function_flows_by_id.insert(function_fact.id, flow);
+                for statement in &body.statements {
+                    self.collect_expression_function_flows_from_statement(statement);
+                }
+            }
+            return;
+        }
+
+        self.collect_expression_function_flows_from_expression(&property.value);
     }
 
     fn collect_function_declarations(&mut self, program: &'ast Program<'ast>) {
@@ -2145,10 +2181,7 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
             let Some(name) = static_property_key(&property.key, property.computed) else {
                 continue;
             };
-            if let Some(function) = self
-                .function_for_expression(&property.value)
-                .or_else(|| self.function_for_span(property.span))
-            {
+            if let Some(function) = self.function_for_object_property(property) {
                 targets.add_property_target(name, function.id);
                 continue;
             }
@@ -2373,6 +2406,15 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
         let span = class_method_function_span(method);
         self.function_for_span(span)
             .or_else(|| self.function_for_span(method.span))
+    }
+
+    fn function_for_object_property(
+        &self,
+        property: &'ast ObjectProperty<'ast>,
+    ) -> Option<&'db FunctionFact> {
+        let span = object_property_function_span(property);
+        self.function_for_span(span)
+            .or_else(|| self.function_for_expression(&property.value))
     }
 
     fn function_for_span(&self, span: oxc_span::Span) -> Option<&'db FunctionFact> {
@@ -3087,6 +3129,13 @@ fn class_method_function_span(method: &MethodDefinition<'_>) -> oxc_span::Span {
         return oxc_span::Span::new(method.key.span().start, method.span.end);
     }
     method.span
+}
+
+fn object_property_function_span(property: &ObjectProperty<'_>) -> oxc_span::Span {
+    if property.method {
+        return property.span;
+    }
+    property.value.span()
 }
 
 fn callee_text(expression: &Expression<'_>) -> Option<String> {
@@ -4226,6 +4275,29 @@ mod tests {
             resolved.contains(&(site, method_id)),
             "expected real TS pipeline to resolve D.m2() to {method_id:?}; got {resolved:?}"
         );
+    }
+
+    #[test]
+    fn real_ts_pipeline_reports_object_method_spans_from_property_name() {
+        let source = "const k1 = {\n    a2() {console.log(\"a2\")},\n    a4() {\n        return this;\n    }\n};\nk1.a2();\nk1.a4().a2();\n";
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let a2 = function_id_for_span(source, &db, "a2() {console.log(\"a2\")}");
+        let a4 = function_id_for_span(source, &db, "a4() {\n        return this;\n    }");
+
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let resolved = resolved_target_ids_by_site(targets);
+
+        for (call, target) in [("k1.a2()", a2), ("k1.a4()", a4)] {
+            let site = site_id_for_span(source, &sites, call);
+            assert!(
+                resolved.contains(&(site, target)),
+                "expected real TS pipeline to resolve {call} to {target:?}; got {resolved:?}"
+            );
+        }
     }
 
     #[test]

@@ -17,8 +17,8 @@ use oxc_ast::ast::{
     Class, ClassElement, Declaration, ExportDefaultDeclarationKind, Expression, ForStatementInit,
     ForStatementLeft, Function, FunctionBody, ImportOrExportKind, JSXAttributeItem,
     JSXAttributeName, JSXAttributeValue, JSXChild, JSXElement, JSXExpression, JSXFragment,
-    MethodDefinition, MethodDefinitionKind, ModuleExportName, ObjectPropertyKind, Program,
-    PropertyKey, RegExpLiteral, Statement, TemplateLiteral, VariableDeclarator,
+    MethodDefinition, MethodDefinitionKind, ModuleExportName, ObjectProperty, ObjectPropertyKind,
+    Program, PropertyKey, RegExpLiteral, Statement, TemplateLiteral, VariableDeclarator,
 };
 use oxc_parser::Parser;
 use oxc_span::{GetSpan, SourceType};
@@ -28,9 +28,9 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 
-const TS_CACHE_SCHEMA: &str = "ts-facts-v4";
+const TS_CACHE_SCHEMA: &str = "ts-facts-v5";
 const TS_PROVIDER_ID: &str = "polint.ts.syntax";
-const TS_SYNTAX_LAYER_SCHEMA: &str = "ts-syntax-layer-v4";
+const TS_SYNTAX_LAYER_SCHEMA: &str = "ts-syntax-layer-v5";
 
 // Relationship resolution converts this non-string import expression sentinel to Dynamic.
 pub(crate) const DYNAMIC_IMPORT_SPECIFIER: &str = "<dynamic>";
@@ -1627,7 +1627,7 @@ fn extract_anonymous_callables_from_expression(
             for property in &object.properties {
                 match property {
                     ObjectPropertyKind::ObjectProperty(property) => {
-                        extract_anonymous_callables_from_expression(db, ctx, &property.value, true);
+                        extract_anonymous_callables_from_object_property(db, ctx, property);
                     }
                     ObjectPropertyKind::SpreadProperty(spread) => {
                         extract_anonymous_callables_from_expression(
@@ -1836,6 +1836,35 @@ fn method_name(method: &MethodDefinition<'_>) -> Option<String> {
         PropertyKey::StringLiteral(literal) => Some(literal.value.to_string()),
         _ => None,
     }
+}
+
+fn extract_anonymous_callables_from_object_property(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    property: &ObjectProperty<'_>,
+) {
+    if property.method
+        && let Expression::FunctionExpression(function) = &property.value
+    {
+        push_ts_function(
+            db,
+            ctx,
+            TsFunctionSpec {
+                name: anonymous_callable_name(property.span.start, property.span.end),
+                span: property.span,
+                is_exported: false,
+                cyclomatic_complexity: ts_cyclomatic_complexity(function),
+                calls: function_body_calls(function.body.as_deref()),
+                is_component_like: function_returns_jsx(function),
+            },
+        );
+        if let Some(body) = function.body.as_deref() {
+            extract_anonymous_callables_from_function_body(db, ctx, body);
+        }
+        return;
+    }
+
+    extract_anonymous_callables_from_expression(db, ctx, &property.value, true);
 }
 
 fn class_method_function_span(method: &MethodDefinition<'_>) -> oxc_span::Span {
