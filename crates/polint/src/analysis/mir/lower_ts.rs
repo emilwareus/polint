@@ -1301,7 +1301,7 @@ impl<'source> FunctionLowering<'source> {
                 .lower_call(call, places, operations, unsupported)
                 .map(|key| PlaceShape {
                     root: PlaceRoot::CallReturn {
-                        call: CallSiteId(call.span.start as u64),
+                        call: call_site_for_span(call.span),
                     },
                     projections: Vec::new(),
                     status: PlaceStatus::Partial,
@@ -1431,7 +1431,7 @@ impl<'source> FunctionLowering<'source> {
                 .lower_new_expression(new_expression, places, operations, unsupported)
                 .map(|key| PlaceShape {
                     root: PlaceRoot::CallReturn {
-                        call: CallSiteId(new_expression.span.start as u64),
+                        call: call_site_for_span(new_expression.span),
                     },
                     projections: Vec::new(),
                     status: PlaceStatus::Partial,
@@ -1564,7 +1564,7 @@ impl<'source> FunctionLowering<'source> {
                 .lower_call(call, places, operations, unsupported)
                 .map(|key| PlaceShape {
                     root: PlaceRoot::CallReturn {
-                        call: CallSiteId(call.span.start as u64),
+                        call: call_site_for_span(call.span),
                     },
                     projections: Vec::new(),
                     status: PlaceStatus::Partial,
@@ -2114,7 +2114,7 @@ impl<'source> FunctionLowering<'source> {
                 ConservativeAction::HavocAffectedPlaces,
             );
         }
-        let site = CallSiteId(call.span.start as u64);
+        let site = call_site_for_span(call.span);
         let return_key = self.insert_place(
             places,
             PlaceRoot::CallReturn { call: site },
@@ -2165,7 +2165,7 @@ impl<'source> FunctionLowering<'source> {
                 ConservativeAction::HavocAffectedPlaces,
             );
         }
-        let site = CallSiteId(expression.span.start as u64);
+        let site = call_site_for_span(expression.span);
         let return_key = self.insert_place(
             places,
             PlaceRoot::CallReturn { call: site },
@@ -2795,6 +2795,10 @@ fn span_from_oxc(file: FileId, source: &str, span: oxc_span::Span) -> Span {
     crate::core::span_from_byte_range(file, source, span.start as usize, span.end as usize)
 }
 
+fn call_site_for_span(span: oxc_span::Span) -> CallSiteId {
+    CallSiteId(((span.start as u64) << 32) | span.end as u64)
+}
+
 fn parse_source_type(path: &Path) -> SourceType {
     SourceType::from_path(path).unwrap_or_default()
 }
@@ -3114,6 +3118,36 @@ export function flow(token, count) {
                     evidence: "direct target".to_string()
                 }
         );
+    }
+
+    #[test]
+    fn ts_nested_same_start_calls_get_distinct_call_site_ids() {
+        let source = r#"
+const k1 = {
+  a2() {},
+  a4() { return this; },
+};
+k1.a4().a2();
+"#;
+        let output = lower("src/chained.js", source);
+        let chain_start = source.find("k1.a4()").expect("chained call source exists") as u32;
+        let same_start_calls = output
+            .operations
+            .iter()
+            .filter_map(|operation| match &operation.kind {
+                MirOperationKind::Call { site, .. } if operation.span.start_byte == chain_start => {
+                    Some((*site, operation.span.end_byte))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let unique_sites = same_start_calls
+            .iter()
+            .map(|(site, _)| *site)
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(same_start_calls.len(), 2);
+        assert_eq!(unique_sites.len(), 2);
     }
 
     #[test]
