@@ -234,7 +234,7 @@ May run in parallel with Phase 48 (drivers share the solver core but their itera
 | 51 | Adaptation Model Layer | 4/4 | Complete | 2026-06-04 |
 | 52 | Refined-Calls Rework & Unknown Taxonomy Consolidation | 4/4 | Complete | 2026-06-05 |
 | 53 | Cache & Solver Budgets Consolidation | 4/4 | Complete    | 2026-06-05 |
-| 54 | Benchmark Promotion Gate Extension | 1/4 | In Progress|  |
+| 54 | Benchmark Promotion Gate Extension | 3/4 | In Progress|  |
 
 ## Parallel-Eligible Phases
 
