@@ -37,3 +37,18 @@ Every committed baseline summary must record:
 Local generated reports belong under ignored output directories such as
 `target/polint-eval/`. Commit only the normalized summary needed for regression
 gates or benchmark tables.
+
+## Phase 54 Closeout Note
+
+The final BENCH-01 audit is recorded at
+`.planning/phases/54-benchmark-promotion-gate-extension/54-AUDIT.md`.
+
+Local promotion verification passed for precision-floor enforcement, F0.5/F1
+reporting, per-language deltas, false-positive trap flooding, the polyglot
+canary, public-surface leak gate, determinism, clippy, rustfmt, and whitespace
+checks.
+
+External Go x/tools RTA and Jelly corpus final recall values are marked
+limited/skipped in that audit because benchmark clones and generated full-corpus
+outputs are not committed under this policy. Do not use the local Phase 54 audit
+alone to claim a measured recall lift against those full external suites.

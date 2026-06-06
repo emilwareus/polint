@@ -54,7 +54,7 @@ Requirements for the v1.3 milestone. Each maps to exactly one roadmap phase.
 
 ### Benchmark Promotion
 
-- [ ] **BENCH-01**: the benchmark promotion gate enforces hard per-suite precision floors (Go ≥60%, Jelly configurable), tracks F-score β=0.5 alongside F1, enforces per-language deltas separately, includes a polyglot Go+TS canary fixture, and asserts a public-API leak CI gate (no v1.3 solver types reachable from `polint::sdk::prelude::*`).
+- [x] **BENCH-01**: the benchmark promotion gate enforces hard per-suite precision floors (Go ≥60%, Jelly configurable), tracks F-score β=0.5 alongside F1, enforces per-language deltas separately, includes a polyglot Go+TS canary fixture, and asserts a public-API leak CI gate (no v1.3 solver types reachable from `polint::sdk::prelude::*`).
 
 ## Future Requirements
 
@@ -132,7 +132,7 @@ Which phases cover which requirements. Filled by the roadmapper after roadmap cr
 | CACHE-01 | Phase 53 | Complete |
 | CACHE-02 | Phase 53 | Complete |
 | TAX-01 | Phase 52 | Pending |
-| BENCH-01 | Phase 54 | Pending |
+| BENCH-01 | Phase 54 | Complete |
 
 **Coverage:**
 - v1.3 requirements: 27 total
