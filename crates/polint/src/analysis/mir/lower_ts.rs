@@ -431,6 +431,9 @@ fn collect_anonymous_functions_from_statement<'ast>(
                 collect_anonymous_functions_from_expression(argument, true, functions);
             }
         }
+        Statement::ThrowStatement(statement) => {
+            collect_anonymous_functions_from_expression(&statement.argument, true, functions);
+        }
         Statement::IfStatement(statement) => {
             collect_anonymous_functions_from_expression(&statement.test, true, functions);
             collect_anonymous_functions_from_statement(&statement.consequent, functions);
@@ -441,6 +444,10 @@ fn collect_anonymous_functions_from_statement<'ast>(
         Statement::WhileStatement(statement) => {
             collect_anonymous_functions_from_expression(&statement.test, true, functions);
             collect_anonymous_functions_from_statement(&statement.body, functions);
+        }
+        Statement::DoWhileStatement(statement) => {
+            collect_anonymous_functions_from_statement(&statement.body, functions);
+            collect_anonymous_functions_from_expression(&statement.test, true, functions);
         }
         Statement::ForStatement(statement) => {
             if let Some(init) = &statement.init {
@@ -466,6 +473,25 @@ fn collect_anonymous_functions_from_statement<'ast>(
                 collect_anonymous_functions_from_expression(update, true, functions);
             }
             collect_anonymous_functions_from_statement(&statement.body, functions);
+        }
+        Statement::ForInStatement(statement) => {
+            collect_anonymous_functions_from_expression(&statement.right, true, functions);
+            collect_anonymous_functions_from_statement(&statement.body, functions);
+        }
+        Statement::ForOfStatement(statement) => {
+            collect_anonymous_functions_from_expression(&statement.right, true, functions);
+            collect_anonymous_functions_from_statement(&statement.body, functions);
+        }
+        Statement::SwitchStatement(statement) => {
+            collect_anonymous_functions_from_expression(&statement.discriminant, true, functions);
+            for case in &statement.cases {
+                if let Some(test) = &case.test {
+                    collect_anonymous_functions_from_expression(test, true, functions);
+                }
+                for statement in &case.consequent {
+                    collect_anonymous_functions_from_statement(statement, functions);
+                }
+            }
         }
         Statement::ClassDeclaration(class) => {
             collect_anonymous_functions_from_class(class, functions)
@@ -555,6 +581,19 @@ fn collect_anonymous_functions_from_expression<'ast>(
                 collect_anonymous_functions_from_argument(argument, functions);
             }
         }
+        Expression::StaticMemberExpression(member) => {
+            collect_anonymous_functions_from_expression(&member.object, true, functions);
+        }
+        Expression::ComputedMemberExpression(member) => {
+            collect_anonymous_functions_from_expression(&member.object, true, functions);
+            collect_anonymous_functions_from_expression(&member.expression, true, functions);
+        }
+        Expression::PrivateFieldExpression(member) => {
+            collect_anonymous_functions_from_expression(&member.object, true, functions);
+        }
+        Expression::ChainExpression(chain) => {
+            collect_anonymous_functions_from_chain_element(&chain.expression, functions);
+        }
         Expression::ParenthesizedExpression(expression) => {
             collect_anonymous_functions_from_expression(
                 &expression.expression,
@@ -622,6 +661,33 @@ fn collect_anonymous_functions_from_expression<'ast>(
     }
 }
 
+fn collect_anonymous_functions_from_chain_element<'ast>(
+    element: &'ast oxc_ast::ast::ChainElement<'ast>,
+    functions: &mut Vec<TsFunctionCandidate<'ast>>,
+) {
+    match element {
+        oxc_ast::ast::ChainElement::CallExpression(call) => {
+            collect_anonymous_functions_from_expression(&call.callee, true, functions);
+            for argument in &call.arguments {
+                collect_anonymous_functions_from_argument(argument, functions);
+            }
+        }
+        oxc_ast::ast::ChainElement::StaticMemberExpression(member) => {
+            collect_anonymous_functions_from_expression(&member.object, true, functions);
+        }
+        oxc_ast::ast::ChainElement::ComputedMemberExpression(member) => {
+            collect_anonymous_functions_from_expression(&member.object, true, functions);
+            collect_anonymous_functions_from_expression(&member.expression, true, functions);
+        }
+        oxc_ast::ast::ChainElement::PrivateFieldExpression(member) => {
+            collect_anonymous_functions_from_expression(&member.object, true, functions);
+        }
+        oxc_ast::ast::ChainElement::TSNonNullExpression(expression) => {
+            collect_anonymous_functions_from_expression(&expression.expression, true, functions);
+        }
+    }
+}
+
 fn collect_anonymous_functions_from_argument<'ast>(
     argument: &'ast Argument<'ast>,
     functions: &mut Vec<TsFunctionCandidate<'ast>>,
@@ -629,6 +695,30 @@ fn collect_anonymous_functions_from_argument<'ast>(
     match argument {
         Argument::SpreadElement(spread) => {
             collect_anonymous_functions_from_expression(&spread.argument, true, functions);
+        }
+        Argument::ArrowFunctionExpression(function) => {
+            functions.push(TsFunctionCandidate {
+                name: anonymous_callable_name(function.span.start, function.span.end),
+                span: function.span,
+                parameters: parameter_names(&function.params),
+                body: &function.body,
+                r#async: function.r#async,
+                span_for_unsupported: function.span,
+            });
+            collect_anonymous_functions_from_body(&function.body, functions);
+        }
+        Argument::FunctionExpression(function) => {
+            if let Some(body) = function.body.as_deref() {
+                functions.push(TsFunctionCandidate {
+                    name: anonymous_callable_name(function.span.start, function.span.end),
+                    span: function.span,
+                    parameters: parameter_names(&function.params),
+                    body,
+                    r#async: function.r#async,
+                    span_for_unsupported: function.span,
+                });
+                collect_anonymous_functions_from_body(body, functions);
+            }
         }
         _ => collect_anonymous_functions_from_expression(argument.to_expression(), true, functions),
     }

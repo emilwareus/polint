@@ -28,9 +28,9 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 
-const TS_CACHE_SCHEMA: &str = "ts-facts-v5";
+const TS_CACHE_SCHEMA: &str = "ts-facts-v6";
 const TS_PROVIDER_ID: &str = "polint.ts.syntax";
-const TS_SYNTAX_LAYER_SCHEMA: &str = "ts-syntax-layer-v5";
+const TS_SYNTAX_LAYER_SCHEMA: &str = "ts-syntax-layer-v6";
 
 // Relationship resolution converts this non-string import expression sentinel to Dynamic.
 pub(crate) const DYNAMIC_IMPORT_SPECIFIER: &str = "<dynamic>";
@@ -1407,6 +1407,9 @@ fn extract_anonymous_callables_from_statement(
                 extract_anonymous_callables_from_expression(db, ctx, argument, true);
             }
         }
+        Statement::ThrowStatement(statement) => {
+            extract_anonymous_callables_from_expression(db, ctx, &statement.argument, true);
+        }
         Statement::IfStatement(statement) => {
             extract_anonymous_callables_from_expression(db, ctx, &statement.test, true);
             extract_anonymous_callables_from_statement(db, ctx, &statement.consequent);
@@ -1417,6 +1420,10 @@ fn extract_anonymous_callables_from_statement(
         Statement::WhileStatement(statement) => {
             extract_anonymous_callables_from_expression(db, ctx, &statement.test, true);
             extract_anonymous_callables_from_statement(db, ctx, &statement.body);
+        }
+        Statement::DoWhileStatement(statement) => {
+            extract_anonymous_callables_from_statement(db, ctx, &statement.body);
+            extract_anonymous_callables_from_expression(db, ctx, &statement.test, true);
         }
         Statement::ForStatement(statement) => {
             if let Some(init) = &statement.init {
@@ -1443,6 +1450,25 @@ fn extract_anonymous_callables_from_statement(
                 extract_anonymous_callables_from_expression(db, ctx, update, true);
             }
             extract_anonymous_callables_from_statement(db, ctx, &statement.body);
+        }
+        Statement::ForInStatement(statement) => {
+            extract_anonymous_callables_from_expression(db, ctx, &statement.right, true);
+            extract_anonymous_callables_from_statement(db, ctx, &statement.body);
+        }
+        Statement::ForOfStatement(statement) => {
+            extract_anonymous_callables_from_expression(db, ctx, &statement.right, true);
+            extract_anonymous_callables_from_statement(db, ctx, &statement.body);
+        }
+        Statement::SwitchStatement(statement) => {
+            extract_anonymous_callables_from_expression(db, ctx, &statement.discriminant, true);
+            for case in &statement.cases {
+                if let Some(test) = &case.test {
+                    extract_anonymous_callables_from_expression(db, ctx, test, true);
+                }
+                for statement in &case.consequent {
+                    extract_anonymous_callables_from_statement(db, ctx, statement);
+                }
+            }
         }
         Statement::ExportNamedDeclaration(export) => {
             if let Some(declaration) = &export.declaration {
@@ -1598,6 +1624,19 @@ fn extract_anonymous_callables_from_expression(
                 extract_anonymous_callables_from_argument(db, ctx, argument);
             }
         }
+        Expression::StaticMemberExpression(member) => {
+            extract_anonymous_callables_from_expression(db, ctx, &member.object, true);
+        }
+        Expression::ComputedMemberExpression(member) => {
+            extract_anonymous_callables_from_expression(db, ctx, &member.object, true);
+            extract_anonymous_callables_from_expression(db, ctx, &member.expression, true);
+        }
+        Expression::PrivateFieldExpression(member) => {
+            extract_anonymous_callables_from_expression(db, ctx, &member.object, true);
+        }
+        Expression::ChainExpression(chain) => {
+            extract_anonymous_callables_from_chain_element(db, ctx, &chain.expression);
+        }
         Expression::ParenthesizedExpression(expression) => {
             extract_anonymous_callables_from_expression(
                 db,
@@ -1667,6 +1706,34 @@ fn extract_anonymous_callables_from_expression(
     }
 }
 
+fn extract_anonymous_callables_from_chain_element(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    element: &oxc_ast::ast::ChainElement<'_>,
+) {
+    match element {
+        oxc_ast::ast::ChainElement::CallExpression(call) => {
+            extract_anonymous_callables_from_expression(db, ctx, &call.callee, true);
+            for argument in &call.arguments {
+                extract_anonymous_callables_from_argument(db, ctx, argument);
+            }
+        }
+        oxc_ast::ast::ChainElement::StaticMemberExpression(member) => {
+            extract_anonymous_callables_from_expression(db, ctx, &member.object, true);
+        }
+        oxc_ast::ast::ChainElement::ComputedMemberExpression(member) => {
+            extract_anonymous_callables_from_expression(db, ctx, &member.object, true);
+            extract_anonymous_callables_from_expression(db, ctx, &member.expression, true);
+        }
+        oxc_ast::ast::ChainElement::PrivateFieldExpression(member) => {
+            extract_anonymous_callables_from_expression(db, ctx, &member.object, true);
+        }
+        oxc_ast::ast::ChainElement::TSNonNullExpression(expression) => {
+            extract_anonymous_callables_from_expression(db, ctx, &expression.expression, true);
+        }
+    }
+}
+
 fn extract_anonymous_callables_from_argument(
     db: &mut AnalysisDb,
     ctx: TsAstCtx<'_>,
@@ -1675,6 +1742,38 @@ fn extract_anonymous_callables_from_argument(
     match argument {
         Argument::SpreadElement(spread) => {
             extract_anonymous_callables_from_expression(db, ctx, &spread.argument, true);
+        }
+        Argument::ArrowFunctionExpression(function) => {
+            push_ts_function(
+                db,
+                ctx,
+                TsFunctionSpec {
+                    name: anonymous_callable_name(function.span.start, function.span.end),
+                    span: function.span,
+                    is_exported: false,
+                    cyclomatic_complexity: arrow_cyclomatic_complexity(function),
+                    calls: function_body_calls(Some(&function.body)),
+                    is_component_like: arrow_returns_jsx(function),
+                },
+            );
+            extract_anonymous_callables_from_function_body(db, ctx, &function.body);
+        }
+        Argument::FunctionExpression(function) => {
+            push_ts_function(
+                db,
+                ctx,
+                TsFunctionSpec {
+                    name: anonymous_callable_name(function.span.start, function.span.end),
+                    span: function.span,
+                    is_exported: false,
+                    cyclomatic_complexity: ts_cyclomatic_complexity(function),
+                    calls: function_body_calls(function.body.as_deref()),
+                    is_component_like: function_returns_jsx(function),
+                },
+            );
+            if let Some(body) = function.body.as_deref() {
+                extract_anonymous_callables_from_function_body(db, ctx, body);
+            }
         }
         _ => {
             extract_anonymous_callables_from_expression(db, ctx, argument.to_expression(), true);

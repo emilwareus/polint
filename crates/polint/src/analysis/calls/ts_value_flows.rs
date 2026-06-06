@@ -3837,6 +3837,59 @@ mod tests {
     }
 
     #[test]
+    fn real_ts_pipeline_resolves_promise_resolve_handler_values() {
+        let source = "Promise.resolve(() => {console.log(\"promiseresolve1\");}).then(\n    v => {\n        v();\n    },\n    r => {\n        r();\n    },\n);\n";
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let resolved_value =
+            function_id_for_span(source, &db, "() => {console.log(\"promiseresolve1\");}");
+
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let resolved = resolved_target_ids_by_site(targets);
+        let site = site_id_for_span(source, &sites, "v()");
+
+        assert!(
+            resolved.contains(&(site, resolved_value)),
+            "expected real TS pipeline to resolve Promise.resolve handler value; got {resolved:?}"
+        );
+    }
+
+    #[test]
+    fn real_ts_pipeline_resolves_promise_executor_values_inside_for_of_switch() {
+        let source = "const p2 = new Promise((resolve, reject) => {\n    resolve(() => { console.log(\"p2resolve\"); });\n});\nfor (const round of [1,2,3,4]) {\n    const p1 = new Promise((resolve, reject) => {\n        switch (round) {\n            case 1:\n                resolve(() => { console.log(\"resolve1\"); });\n                break;\n            case 2:\n                reject(() => { console.log(\"reject2\"); });\n                break;\n            case 3:\n                throw () => { console.log(\"throw30\"); };\n            case 4:\n                resolve(p2);\n                break;\n        }\n    });\n    p1.then(a => {\n        a();\n    }, b => {\n        b();\n    });\n}\n";
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let p2_value = function_id_for_span(source, &db, "() => { console.log(\"p2resolve\"); }");
+        let resolved = function_id_for_span(source, &db, "() => { console.log(\"resolve1\"); }");
+        let rejected = function_id_for_span(source, &db, "() => { console.log(\"reject2\"); }");
+        let thrown = function_id_for_span(source, &db, "() => { console.log(\"throw30\"); }");
+
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let resolved_targets = resolved_target_ids_by_site(targets);
+        let fulfilled_site = site_id_for_span(source, &sites, "a()");
+        let rejected_site = site_id_for_span(source, &sites, "b()");
+
+        for target in [p2_value, resolved] {
+            assert!(
+                resolved_targets.contains(&(fulfilled_site, target)),
+                "expected fulfilled handler to resolve {target:?}; got {resolved_targets:?}"
+            );
+        }
+        for target in [rejected, thrown] {
+            assert!(
+                resolved_targets.contains(&(rejected_site, target)),
+                "expected rejected handler to resolve {target:?}; got {resolved_targets:?}"
+            );
+        }
+    }
+
+    #[test]
     fn resolves_promise_handlers_inside_for_of_blocks() {
         let source = "const p2 = Promise.resolve(() => {});\nfor (const round of [1, 2, 3]) {\n  const p1 = new Promise((resolve, reject) => {\n    switch (round) {\n      case 1:\n        resolve(() => {});\n        break;\n      case 2:\n        reject(() => {});\n        break;\n      case 3:\n        resolve(p2);\n        break;\n    }\n  });\n  p1.then(a => {\n    a();\n  }, b => {\n    b();\n  });\n}\n";
         let mut db = db_with_file(source);
