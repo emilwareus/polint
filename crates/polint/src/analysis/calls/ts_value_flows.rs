@@ -538,6 +538,7 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                     CollectionTargets {
                         keys: Vec::new(),
                         values: vec![function.id],
+                        object_values: Vec::new(),
                     },
                 );
             }
@@ -951,6 +952,7 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
             return Some(CollectionTargets {
                 keys: Vec::new(),
                 values: vec![function.id],
+                object_values: Vec::new(),
             });
         }
         self.collection_targets_from_expression(expression, env)
@@ -1081,15 +1083,18 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                         | "concat" => Some(CollectionTargets {
                             keys: Vec::new(),
                             values: source.values.clone(),
+                            object_values: source.object_values.clone(),
                         }),
                         "keys" => Some(CollectionTargets {
                             keys: Vec::new(),
                             values: source.keys_or_values(),
+                            object_values: Vec::new(),
                         }),
                         "entries" => Some(source.clone()),
                         "pop" | "at" | "find" => Some(CollectionTargets {
                             keys: Vec::new(),
                             values: source.values.clone(),
+                            object_values: source.object_values.clone(),
                         }),
                         _ => None,
                     }
@@ -1120,10 +1125,12 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                         "values" => CollectionTargets {
                             keys: Vec::new(),
                             values: source.values.clone(),
+                            object_values: source.object_values.clone(),
                         },
                         "keys" => CollectionTargets {
                             keys: Vec::new(),
                             values: source.keys_or_values(),
+                            object_values: Vec::new(),
                         },
                         "entries" => source.clone(),
                         _ => CollectionTargets::default(),
@@ -1174,6 +1181,12 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
             Expression::ThisExpression(_) => Some(env.this_object.clone()),
             Expression::ObjectExpression(object) => {
                 Some(self.object_literal_targets(object, Some(env)))
+            }
+            Expression::ComputedMemberExpression(member) => {
+                let source = expression_identifier(&member.object)
+                    .and_then(|name| env.bindings.get(name))?;
+                let index = numeric_index(&member.expression)?;
+                source.object_at(index)
             }
             Expression::NewExpression(expression) => {
                 let name = callee_identifier(&expression.callee)?;
@@ -1259,21 +1272,11 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                 .first()
                 .and_then(argument_expression)
                 .map(|argument| self.aggregate_promise_targets(argument, env)),
-            Some("Promise.allSettled") => {
-                call.arguments
-                    .first()
-                    .and_then(argument_expression)
-                    .map(|argument| {
-                        let aggregate = self.aggregate_promise_targets(argument, env);
-                        PromiseTargets {
-                            fulfilled: CollectionTargets {
-                                keys: Vec::new(),
-                                values: aggregate.fulfilled.all_targets(),
-                            },
-                            rejected: CollectionTargets::default(),
-                        }
-                    })
-            }
+            Some("Promise.allSettled") => call
+                .arguments
+                .first()
+                .and_then(argument_expression)
+                .map(|argument| self.all_settled_promise_targets(argument, env)),
             _ => self
                 .promise_method_source(call, env)
                 .map(|(source, method)| {
@@ -1544,7 +1547,7 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
         targets: CollectionTargets,
         env: &FlowEnv,
     ) {
-        if targets.values.is_empty() && targets.keys.is_empty() {
+        if targets.is_empty() {
             return;
         }
         let Some(expression) = call
@@ -1663,6 +1666,7 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
             return CollectionTargets {
                 keys: Vec::new(),
                 values: vec![function.id],
+                object_values: Vec::new(),
             };
         }
         if let Expression::StaticMemberExpression(member) = expression
@@ -1672,6 +1676,7 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
             return CollectionTargets {
                 keys: Vec::new(),
                 values: targets.clone(),
+                object_values: Vec::new(),
             };
         }
         self.collection_targets_from_expression(expression, env)
@@ -1706,6 +1711,40 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
             }
         }
         targets
+    }
+
+    fn all_settled_promise_targets(
+        &self,
+        expression: &'ast Expression<'ast>,
+        env: &FlowEnv,
+    ) -> PromiseTargets {
+        let mut fulfilled = CollectionTargets::default();
+        let Expression::ArrayExpression(array) = expression else {
+            return PromiseTargets {
+                fulfilled,
+                rejected: CollectionTargets::default(),
+            };
+        };
+        for element in &array.elements {
+            let Some(expression) = array_element_expression(element) else {
+                continue;
+            };
+            let Some(promise) = self.promise_targets_from_expression(expression, env) else {
+                continue;
+            };
+            let mut result = ObjectTargets::default();
+            for target in promise.fulfilled.all_targets() {
+                result.add_property_target("value".to_string(), target);
+            }
+            for target in promise.rejected.all_targets() {
+                result.add_property_target("reason".to_string(), target);
+            }
+            fulfilled.object_values.push(result);
+        }
+        PromiseTargets {
+            fulfilled,
+            rejected: CollectionTargets::default(),
+        }
     }
 
     fn array_literal_targets(
@@ -1980,16 +2019,22 @@ struct FlowEnv {
 struct CollectionTargets {
     keys: Vec<FunctionId>,
     values: Vec<FunctionId>,
+    object_values: Vec<ObjectTargets>,
 }
 
 impl CollectionTargets {
     fn extend(&mut self, other: Self) {
         self.keys.extend(other.keys);
         self.values.extend(other.values);
+        self.object_values.extend(other.object_values);
         self.keys.sort();
         self.keys.dedup();
         self.values.sort();
         self.values.dedup();
+    }
+
+    fn is_empty(&self) -> bool {
+        self.keys.is_empty() && self.values.is_empty() && self.object_values.is_empty()
     }
 
     fn all_targets(&self) -> Vec<FunctionId> {
@@ -2012,6 +2057,7 @@ impl CollectionTargets {
         Self {
             keys: Vec::new(),
             values: self.values.get(index).copied().into_iter().collect(),
+            object_values: self.object_values.get(index).cloned().into_iter().collect(),
         }
     }
 
@@ -2019,7 +2065,12 @@ impl CollectionTargets {
         Self {
             keys: Vec::new(),
             values: self.values.iter().skip(index).copied().collect(),
+            object_values: self.object_values.iter().skip(index).cloned().collect(),
         }
+    }
+
+    fn object_at(&self, index: usize) -> Option<ObjectTargets> {
+        self.object_values.get(index).cloned()
     }
 }
 
@@ -2207,6 +2258,7 @@ fn bind_object_pattern(pattern: &BindingPattern<'_>, targets: &ObjectTargets, en
                         &CollectionTargets {
                             keys: Vec::new(),
                             values: values.clone(),
+                            object_values: Vec::new(),
                         },
                         env,
                     );
@@ -2291,6 +2343,7 @@ fn bind_param_object_pattern(pattern: &ParamPattern, targets: &ObjectTargets, en
                         &CollectionTargets {
                             keys: Vec::new(),
                             values: values.clone(),
+                            object_values: Vec::new(),
                         },
                         env,
                     );
@@ -3715,9 +3768,8 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Jelly gap: Promise.allSettled should expose result objects with value/reason callables"]
     fn jelly_gap_promise_all_settled_result_object_properties() {
-        let source = "const p2 = Promise.resolve(() => {});\nconst p3 = Promise.reject(() => {});\nPromise.allSettled([p2, p3]).then(va => {\n  va[0].value();\n  va[1].reason();\n});\n";
+        let source = "const p2 = new Promise((resolve, reject) => {\n  resolve(() => {\n    console.log(\"p2resolve\");\n  });\n});\nconst p3 = new Promise((resolve, reject) => {\n  reject(() => {\n    console.log(\"p3reject\");\n  });\n});\nPromise.allSettled([p2, p3]).then(\n  va => {\n    va[0].value();\n    va[1].reason();\n  }\n);\n";
         let mut db = db_with_file(source);
         let file = db.files()[0].id;
         push_function(
@@ -3730,13 +3782,23 @@ mod tests {
             &mut db,
             file,
             "<anonymous>",
-            span_for_nth(source, file, "() => {}", 0),
+            span_for_nth(
+                source,
+                file,
+                "() => {\n    console.log(\"p2resolve\");\n  }",
+                0,
+            ),
         );
         let rejected = push_function(
             &mut db,
             file,
             "<anonymous>",
-            span_for_nth(source, file, "() => {}", 1),
+            span_for_nth(
+                source,
+                file,
+                "() => {\n    console.log(\"p3reject\");\n  }",
+                0,
+            ),
         );
         let handler = push_function(
             &mut db,
@@ -3745,7 +3807,7 @@ mod tests {
             span_for_nth(
                 source,
                 file,
-                "va => {\n  va[0].value();\n  va[1].reason();\n}",
+                "va => {\n    va[0].value();\n    va[1].reason();\n  }",
                 0,
             ),
         );

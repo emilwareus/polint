@@ -123,6 +123,7 @@ Measured continuation iterations:
 | 17 | Function-constructor span decoupling regression guard | 454 | 552 | 1025 | 45.13% | 30.70% | 36.54% | 106685 ms | `9c523e5c5701af3a` |
 | 18 | Async IIFE, `await`, and async function return value-flow model | 460 | 552 | 1019 | 45.45% | 31.10% | 36.93% | 79270 ms | `5730dbebd6555488` |
 | 19 | Module-level `this` assignment plus object-literal `this` alias model | 462 | 552 | 1017 | 45.56% | 31.24% | 37.06% | 81650 ms | `bd04d1cfb14c1da5` |
+| 20 | `Promise.allSettled` result-object lane for unit-level `value`/`reason` flows | 462 | 552 | 1017 | 45.56% | 31.24% | 37.06% | 74866 ms | `bd04d1cfb14c1da5` |
 
 Current Go score remains unchanged:
 
@@ -171,6 +172,16 @@ looped handler propagation that matches Jelly's whole-program constraint model.
 Class/prototype work should move out of local syntactic heuristics and into the
 existing object/points-to substrate so receiver side effects such as
 `q1.a1(); q1.a2();` can be represented.
+
+Iteration 20 added an internal object-value lane to the bounded TS/JS value-flow
+model and promoted the Jelly-shaped `Promise.allSettled` result-object probe
+into normal unit coverage. The focused suite now reports **18 passed / 2
+ignored** for `analysis::calls::ts_value_flows`. The release Jelly benchmark did
+not move and produced the same output hash. That means the minimal resolver
+semantics are now covered, but this particular slice is not yet benchmark-visible
+in the full call graph output; the next iterations should target benchmark
+wiring and larger semantic families rather than treating this as a suite-level
+recall win.
 
 What moved the first implementation-loop score:
 
