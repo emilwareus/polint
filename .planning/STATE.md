@@ -54,6 +54,7 @@ Add `public surface leak gate (ubuntu-latest)` AND `public surface leak gate (ma
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260606-ea2 | Research and document how to close the Jelly JS/TS callgraph performance gap | 2026-06-06 | implemented | [260606-ea2-research-and-document-how-to-close-the-j](./quick/260606-ea2-research-and-document-how-to-close-the-j/) |
 | 260606-c3l | Measure current static-analysis performance and write a dated report under performance/ | 2026-06-06 | implemented | [260606-c3l-measure-current-static-analysis-performa](./quick/260606-c3l-measure-current-static-analysis-performa/) |
 | 260605-n0r | Critical review/fix loop for Phase 53 follow-up fixes until two consecutive clean review rounds | 2026-06-05 | implemented | [260605-n0r-loop-critical-review-and-fixes-for-phase](./quick/260605-n0r-loop-critical-review-and-fixes-for-phase/) |
 | 260605-mea | Fix Phase 53 review findings: cache dependency guards, budget reasons, and RSS reporting | 2026-06-05 | 9d3337bc | [260605-mea-fix-phase-53-review-findings-wire-cache-](./quick/260605-mea-fix-phase-53-review-findings-wire-cache-/) |
