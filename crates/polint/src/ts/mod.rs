@@ -16,6 +16,7 @@ pub use adapter::analyze_with_options;
 #[allow(unused_imports)]
 pub(crate) use adapter::{
     DYNAMIC_IMPORT_SPECIFIER, analyze_with_plan_options, analyze_with_plan_options_and_cache_stats,
+    anonymous_callable_name, is_anonymous_callable_name,
 };
 #[cfg(test)]
 pub(crate) use adapter::{analyze, analyze_with_cache};

@@ -8,7 +8,7 @@ use crate::analysis_plan::AnalysisPlan;
 use crate::cache::Cache;
 use crate::core::{
     AnalysisDb, ComplexityMetricFact, FileId, FileMetricFact, FunctionFact, FunctionMetricFact,
-    SourceFile, Span,
+    SourceFile, Span, is_synthetic_ts_js_module_function,
 };
 use crate::diagnostics::{Diagnostic, TextRange};
 use serde::{Deserialize, Serialize};
@@ -145,7 +145,11 @@ fn derive_requested_metrics_uncached(
     }
 
     let mut function_counts = BTreeMap::<FileId, u32>::new();
-    for function in db.functions() {
+    for function in db
+        .functions()
+        .iter()
+        .filter(|function| !is_synthetic_ts_js_module_function(function))
+    {
         let count = function_counts.entry(function.file).or_default();
         *count = count.saturating_add(1);
     }
@@ -166,6 +170,7 @@ fn derive_requested_metrics_uncached(
     let function_metrics = db
         .functions()
         .iter()
+        .filter(|function| !is_synthetic_ts_js_module_function(function))
         .map(|function| FunctionMetricFact {
             function: function.id,
             file: function.file,
@@ -183,6 +188,7 @@ fn derive_requested_metrics_uncached(
     let complexity_metrics = db
         .functions()
         .iter()
+        .filter(|function| !is_synthetic_ts_js_module_function(function))
         .map(|function| ComplexityMetricFact {
             function: function.id,
             file: function.file,
@@ -453,7 +459,11 @@ fn sorted_files(db: &AnalysisDb) -> Vec<&SourceFile> {
 }
 
 fn sorted_functions(db: &AnalysisDb) -> Vec<&FunctionFact> {
-    let mut functions = db.functions().iter().collect::<Vec<_>>();
+    let mut functions = db
+        .functions()
+        .iter()
+        .filter(|function| !is_synthetic_ts_js_module_function(function))
+        .collect::<Vec<_>>();
     functions.sort_by(|left, right| {
         (
             db.path_for(left.file),
@@ -592,7 +602,9 @@ mod tests {
     use crate::analysis_plan::AnalysisPlan;
     use crate::cache::Cache;
     use crate::config::load_config;
-    use crate::core::{FileId, FunctionFact, FunctionId, Language, Span};
+    use crate::core::{
+        FileId, FunctionFact, FunctionId, Language, Span, TS_JS_MODULE_FUNCTION_NAME,
+    };
     use std::fs;
     use std::path::{Path, PathBuf};
 
@@ -748,6 +760,25 @@ mod tests {
             end_line: 4,
             end_col: 2,
         };
+        db.push_function(FunctionFact {
+            id: FunctionId(0),
+            file,
+            name: TS_JS_MODULE_FUNCTION_NAME.to_string(),
+            span: Span {
+                file,
+                start_byte: 0,
+                end_byte: 63,
+                start_line: 1,
+                start_col: 1,
+                end_line: 5,
+                end_col: 1,
+            },
+            language: Language::TypeScript,
+            is_test: false,
+            is_exported: false,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+        });
         let function = db.push_function(FunctionFact {
             id: FunctionId(0),
             file,
@@ -774,6 +805,7 @@ mod tests {
         assert_eq!(db.complexity_metrics().len(), 1);
         assert_eq!(db.complexity_metrics()[0].function, function);
         assert_eq!(db.complexity_metrics()[0].cyclomatic_complexity, 2);
+        assert_eq!(metrics_function_fact_digests(&db).len(), 1);
     }
 
     #[test]

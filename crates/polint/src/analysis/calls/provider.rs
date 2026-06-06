@@ -5,6 +5,7 @@ use crate::analysis::calls::cache_key::calls_provider_parameter_digest;
 use crate::analysis::calls::direct::resolve_direct_call_targets;
 use crate::analysis::calls::extract::extract_call_sites;
 use crate::analysis::calls::store::CallOutput;
+use crate::analysis::calls::ts_value_flows::resolve_ts_value_flow_targets;
 use crate::analysis::calls::unresolved::derive_unresolved_calls;
 use crate::analysis::ids::CallSiteId;
 use crate::analysis_kernel::incremental::{
@@ -33,7 +34,12 @@ pub(crate) fn derive_calls_with_cache_stats(
     upstream_syntax_output_digests: Vec<Digest>,
 ) -> CallsProviderOutput {
     let mut sites = extract_call_sites(db);
-    let targets = resolve_direct_call_targets(db, &sites);
+    let mut targets = resolve_direct_call_targets(db, &sites);
+    targets.extend(resolve_ts_value_flow_targets(
+        db,
+        &sites,
+        targets.len() as u64,
+    ));
     let resolved_sites = targets
         .iter()
         .filter(|target| target.status == crate::analysis::calls::facts::CallTargetStatus::Resolved)

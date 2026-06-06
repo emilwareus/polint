@@ -275,6 +275,12 @@ pub struct FunctionFact {
     pub calls: Vec<String>,
 }
 
+pub(crate) const TS_JS_MODULE_FUNCTION_NAME: &str = "<polint:module>";
+
+pub(crate) fn is_synthetic_ts_js_module_function(function: &FunctionFact) -> bool {
+    function.language.is_ts_family() && function.name == TS_JS_MODULE_FUNCTION_NAME
+}
+
 /// Source-file size and aggregate function metrics derived from parsed facts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileMetricFact {

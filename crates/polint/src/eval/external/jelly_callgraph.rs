@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
@@ -9,10 +9,9 @@ use crate::analysis_kernel::KernelOutput;
 #[cfg(test)]
 use crate::core::Span;
 use crate::eval::adapter::{BenchmarkAdapter, PreparedCase, RawObservedOutput};
-#[cfg(test)]
-use crate::eval::model::ObservedGraphEdge;
 use crate::eval::model::{
-    AssertionMode, EvaluationCase, ExpectedGraphEdge, ExpectedItem, FixtureArea, ObservedItem,
+    AssertionMode, EvaluationCase, ExpectedGraphEdge, ExpectedItem, FixtureArea, ObservedGraphEdge,
+    ObservedItem,
 };
 use crate::eval::report::CaseResult;
 use crate::eval::runner::safe_join_workspace;
@@ -64,9 +63,14 @@ impl BenchmarkAdapter for JellyCallgraphAdapter {
             .parent()
             .unwrap_or_else(|| Path::new(""));
         let mut target_files = Vec::new();
-        for entry in &graph.entries {
-            target_files.push(safe_join_workspace(&root, &case_dir.join(entry))?);
+        for file in graph.files.iter().chain(graph.entries.iter()) {
+            let path = safe_join_workspace(&root, &case_dir.join(file))?;
+            if path.is_file() && is_jelly_source_file(&path) {
+                target_files.push(path);
+            }
         }
+        target_files.sort();
+        target_files.dedup();
         if target_files.is_empty() {
             target_files.push(json_path);
         }
@@ -138,6 +142,7 @@ impl BenchmarkAdapter for JellyCallgraphAdapter {
             ))
         };
         let mut items = Vec::new();
+        let mut seen_graph_edges = BTreeSet::new();
         for edge in crate::eval::observed::graph_edges_from_kernel_output(output) {
             let Some(call_site) = render_span(&edge.site_span) else {
                 continue;
@@ -151,32 +156,58 @@ impl BenchmarkAdapter for JellyCallgraphAdapter {
             let Some(target) = render_span(target_span) else {
                 continue;
             };
-            items.push(ObservedItem::GraphEdge(ObservedGraphEdge {
-                graph: "jelly.call_graph.call2fun".to_string(),
-                from: call_site,
-                to: target.clone(),
-                mode: AssertionMode::Exact,
-                partial_truth: false,
-                producer_id: Some(edge.producer_id.clone()),
-                provenance: Some(edge.provenance.clone()),
-                precision: Some(edge.precision.clone()),
-                status: Some(edge.status),
-            }));
-            items.push(ObservedItem::GraphEdge(ObservedGraphEdge {
-                graph: "jelly.call_graph.fun2fun".to_string(),
-                from: caller,
-                to: target,
-                mode: AssertionMode::Exact,
-                partial_truth: false,
-                producer_id: Some(edge.producer_id),
-                provenance: Some(edge.provenance),
-                precision: Some(edge.precision),
-                status: Some(edge.status),
-            }));
+            push_unique_jelly_graph_edge(
+                &mut items,
+                &mut seen_graph_edges,
+                ObservedGraphEdge {
+                    graph: "jelly.call_graph.call2fun".to_string(),
+                    from: call_site,
+                    to: target.clone(),
+                    mode: AssertionMode::Exact,
+                    partial_truth: false,
+                    producer_id: Some(edge.producer_id.clone()),
+                    provenance: Some(edge.provenance.clone()),
+                    precision: Some(edge.precision.clone()),
+                    status: Some(edge.status),
+                },
+            );
+            push_unique_jelly_graph_edge(
+                &mut items,
+                &mut seen_graph_edges,
+                ObservedGraphEdge {
+                    graph: "jelly.call_graph.fun2fun".to_string(),
+                    from: caller,
+                    to: target,
+                    mode: AssertionMode::Exact,
+                    partial_truth: false,
+                    producer_id: Some(edge.producer_id),
+                    provenance: Some(edge.provenance),
+                    precision: Some(edge.precision),
+                    status: Some(edge.status),
+                },
+            );
         }
         items.extend(crate::eval::observed::call_graph_unknown_facts_from_kernel_output(output));
         Ok(items)
     }
+}
+
+fn push_unique_jelly_graph_edge(
+    items: &mut Vec<ObservedItem>,
+    seen: &mut BTreeSet<(String, String, String)>,
+    edge: ObservedGraphEdge,
+) {
+    let key = (edge.graph.clone(), edge.from.clone(), edge.to.clone());
+    if seen.insert(key) {
+        items.push(ObservedItem::GraphEdge(edge));
+    }
+}
+
+fn is_jelly_source_file(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|extension| extension.to_str()),
+        Some("js" | "jsx" | "ts" | "tsx")
+    )
 }
 
 pub(crate) fn enumerate_jelly_callgraph_cases(
@@ -495,7 +526,7 @@ mod tests {
         std::fs::write(tests.join("helper.js"), "function helper() {}\n").unwrap();
         std::fs::write(
             tests.join("entry.json"),
-            r#"{"entries":["entry.js","helper.js"],"files":["entry.js","helper.js"],"functions":["0:1:1:1:20"],"calls":[],"fun2fun":[],"call2fun":[]}"#,
+            r#"{"entries":["entry.js"],"files":["entry.js","helper.js","missing.js","package.json"],"functions":["0:1:1:1:20"],"calls":[],"fun2fun":[],"call2fun":[]}"#,
         )
         .unwrap();
         let manifest = manifest(root.path().to_string_lossy().as_ref());
@@ -552,6 +583,28 @@ mod tests {
 
         assert_eq!(metrics["jelly.callgraph_micro.case_count"], 1.0);
         assert_eq!(metrics["jelly.callgraph_micro.expected_edge_count"], 1.0);
+    }
+
+    #[test]
+    fn jelly_normalized_graph_edges_are_set_semantics() {
+        let mut items = Vec::new();
+        let mut seen = BTreeSet::new();
+        let edge = ObservedGraphEdge {
+            graph: "jelly.call_graph.fun2fun".to_string(),
+            from: "app.js:1:1:2:1".to_string(),
+            to: "app.js:3:1:4:1".to_string(),
+            mode: AssertionMode::Exact,
+            partial_truth: false,
+            producer_id: Some("first".to_string()),
+            provenance: Some("direct".to_string()),
+            precision: Some("heuristic".to_string()),
+            status: None,
+        };
+
+        super::push_unique_jelly_graph_edge(&mut items, &mut seen, edge.clone());
+        super::push_unique_jelly_graph_edge(&mut items, &mut seen, edge);
+
+        assert_eq!(items.len(), 1);
     }
 
     #[test]

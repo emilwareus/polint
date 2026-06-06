@@ -20,10 +20,25 @@ Close the gap in this order:
    `Function.prototype.call/apply/bind`.
 6. Add Jelly-style recovery passes only after the core model works.
 
-The first two steps should move Jelly recall from near-zero to visibly useful.
-Matching Jelly closely requires all six.
+The implementation loops have now moved Jelly F1 from **1.07%** to **37.06%**.
+The first loop made module execution, IIFEs, expression-span function identities,
+and constructor calls visible. The second loop added bounded same-file JS value
+flow for arrays, sets, maps, `Array.from`, object literals, destructuring, rest
+arguments, and direct function-parameter flows. The third loop made the benchmark
+fairer by including explicit dependency files, then added Promise, class/static,
+async/await, and module-`this` value-flow models. That is a real improvement, but
+not yet close to Jelly: remaining recall is still blocked by CommonJS module
+semantics, Promise result objects, generators/iterators, receiver side effects,
+broader object/property flow, and exact Jelly call-site span normalization.
 
-## Current Evidence
+Current measured checkpoint:
+
+| Suite | TP | FP | FN | Precision | Recall | F1 | Runtime | Hash |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| Go x/tools RTA | 37 | 6 | 0 | 86.05% | 100.00% | 92.50% | 1012 ms | `f9c8f398e133e64b` |
+| Jelly JS/TS callgraph micro | 462 | 552 | 1017 | 45.56% | 31.24% | 37.06% | 81650 ms | `bd04d1cfb14c1da5` |
+
+## Initial Evidence
 
 Measured on 2026-06-06 after the Go RTA benchmark fix:
 
@@ -50,6 +65,170 @@ The smallest smoking gun is `tests/micro/call-expressions.json`: Jelly expects
 calls, IIFEs, method calls, optional calls, and constructors. This proves the
 first bottleneck is not an exotic JavaScript feature. It is that top-level
 program execution is not represented as a call graph owner in polint.
+
+## Iteration Progress
+
+Measured on 2026-06-06 with:
+
+```sh
+POLINT_WRITE_GRAPH_BENCH=1 POLINT_GRAPH_BENCH_TIER=release \
+  cargo test --release -p polint --lib \
+  eval::external::tests::external_graph_baseline_reports_can_be_generated \
+  --locked -- --nocapture
+```
+
+| Iteration | Change | TP | FP | FN | Precision | Recall | F1 | Runtime | Hash |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|
+| Baseline | Go RTA oracle fix only; no JS/TS callgraph fixes | 8 | 6 | 1471 | 57.14% | 0.54% | 1.07% | 793 ms | `135c493b613dd3cc` |
+| 1 | Synthetic TS/JS module owner plus module MIR body lowering | 87 | 59 | 1392 | 59.59% | 5.88% | 10.71% | 6823 ms | `1d09901f4b65d763` |
+| 2 | Anonymous callable identities for IIFEs plus lexical callee classification | 103 | 73 | 1376 | 58.52% | 6.96% | 12.45% | 7743 ms | `5dc7bb0c8bba5f9c` |
+| 3 | Include existing Jelly `files` sources, not only `entries` | 103 | 73 | 1376 | 58.52% | 6.96% | 12.45% | measured unchanged | unchanged |
+| 4 | Treat normalized Jelly observed graph edges as set semantics | 103 | 48 | 1376 | 68.21% | 6.96% | 12.64% | 7150 ms | `1a9f0de43cd7b4d4` |
+| 5 | Use function/arrow expression spans for variable-initialized function identities | 111 | 40 | 1368 | 73.51% | 7.51% | 13.62% | 7186 ms | `e864721933a7c2fe` |
+| 6 | Lower TS/JS `new` expressions as constructor call operations | 134 | 45 | 1345 | 74.86% | 9.06% | 16.16% | 7808 ms | `9d351e5eb129ce84` |
+
+## Recall-Focused Continuation Progress
+
+Starting checkpoint for the second loop was iteration 6 above: **134 TP / 45 FP
+/ 1345 FN**, precision **74.86%**, recall **9.06%**, F1 **16.16%**.
+
+The main finding was that Jelly does not primarily score "host API invokes
+callback" edges for iterators and promises. It scores the later call sites where
+function values flow into a variable/property/parameter and are invoked, such as
+`f()`, `v()`, `rest[0]()`, or `tail.e3()`. A naive native-callback host-edge
+experiment confirmed this: it added no true positives, increased false positives
+from 45 to 95, dropped precision to 58.52%, and was reverted.
+
+Measured continuation iterations:
+
+| Iteration | Change | TP | FP | FN | Precision | Recall | F1 | Runtime | Hash |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|
+| 7 | Same-file collection value flow for array/set/map iteration and callback parameters | 206 | 56 | 1273 | 78.63% | 13.93% | 23.68% | 10255 ms | `80432718fab04a47` |
+| 8 | `new Set(...)`, `new Map(...)`, `Array.from(...)`, and mapper-return collection propagation | 224 | 56 | 1255 | 80.00% | 15.15% | 25.47% | 13876 ms | `6af2c3730b4617c9` |
+| 9 | Static object-literal property flow plus `Array.from(..., mapper, thisArg)` | 238 | 56 | 1241 | 80.95% | 16.09% | 26.85% | 7799 ms | `8f775210deea433d` |
+| 10 | Array destructuring, rest slices, numeric index reads, and indexed call targets | 251 | 68 | 1228 | 78.68% | 16.97% | 27.92% | 7766 ms | `65f20046551c4155` |
+| 11 | Direct same-file function parameter and rest-argument flow | 283 | 73 | 1196 | 79.49% | 19.13% | 30.86% | 7768 ms | `87fb87099191c45f` |
+| 12 | Object destructuring and object rest parameter flow | 293 | 79 | 1186 | 78.76% | 19.81% | 31.66% | 7744 ms | `0b9626037b69e523` |
+| 13 | Promise executor, `Promise.resolve/reject`, and `then`/`catch` chain value-flow model | 303 | 83 | 1176 | 78.50% | 20.49% | 32.50% | 9732 ms | `32adfc94c7edff2d` |
+| 14 | Evaluation harness honors explicit Jelly target files and bypasses gitignore for prepared cases | 405 | 519 | 1074 | 43.83% | 27.38% | 33.70% | 86477 ms | `13fc7f34992c9860` |
+| 15 | Trial enabling existing `[solver.js] object_model = true` on Jelly checkout | 405 | 519 | 1074 | 43.83% | 27.38% | 33.70% | 135965 ms | unchanged |
+| 16 | Class/static/prototype/self-alias value-flow model | 454 | 552 | 1025 | 45.13% | 30.70% | 36.54% | 77688 ms | `9c523e5c5701af3a` |
+| 17 | Function-constructor span decoupling regression guard | 454 | 552 | 1025 | 45.13% | 30.70% | 36.54% | 106685 ms | `9c523e5c5701af3a` |
+| 18 | Async IIFE, `await`, and async function return value-flow model | 460 | 552 | 1019 | 45.45% | 31.10% | 36.93% | 79270 ms | `5730dbebd6555488` |
+| 19 | Module-level `this` assignment plus object-literal `this` alias model | 462 | 552 | 1017 | 45.56% | 31.24% | 37.06% | 81650 ms | `bd04d1cfb14c1da5` |
+
+Current Go score remains unchanged:
+
+| Suite | TP | FP | FN | Precision | Recall | F1 | Hash |
+|---|---:|---:|---:|---:|---:|---:|---|
+| Go x/tools RTA | 37 | 6 | 0 | 86.05% | 100.00% | 92.50% | `f9c8f398e133e64b` |
+
+What moved in the second loop:
+
+- `tests/micro/iterators.json` went from **14 TP / 65 FN** before the
+  collection-flow model to **61 TP / 4 FN**. The correct abstraction was
+  collection element function values reaching actual callee sites, not host API
+  callback edges.
+- `tests/micro/more1.json` moved from **0 TP / 49 FN** at the continuation
+  start to **30 TP / 19 FN** through set/map constructors, `Array.from`,
+  object-literal property calls, and direct function-parameter propagation.
+- `tests/micro/rest.json` moved from **6 TP / 38 FN** to **38 TP / 6 FN** through
+  ordered array destructuring, rest slices, numeric index reads, direct
+  function rest parameters, and object rest binding.
+- `tests/micro/spread.json` moved from **2 TP / 28 FN** to **13 TP / 17 FN** as
+  a side effect of direct function parameter and collection flow.
+- `tests/micro/destructuring.json` moved from **0 TP / 21 FN** to **6 TP / 15
+  FN** from array/object destructuring support.
+
+Iteration 14 is not a pure analyzer win. It fixed benchmark fairness for
+explicit Jelly files and dependencies, which made `tests/helloworld/app.json`
+visible, but it also surfaced large dependency noise and runtime cost. Iteration
+15 proved that simply enabling the existing object-model option does not close
+the gap; the missing facts must be produced by the TS/JS frontend.
+
+Remaining largest recall blockers after iteration 19:
+
+| Case | TP | FP | FN | Dominant missing capability |
+|---|---:|---:|---:|---|
+| `tests/helloworld/app.json` | 99 | 439 | 243 | CommonJS dependency/module object semantics and dependency precision |
+| `tests/micro/classes2.json` | 26 | 17 | 50 | receiver side effects, constructor calls, static inheritance, object-return flow |
+| `tests/micro/promises.json` | 10 | 5 | 46 | Promise result objects, looped handler propagation, allSettled object shape |
+| `tests/micro/classes.json` | 37 | 12 | 40 | class/prototype/super/object identity flow |
+| `tests/micro/fun.json` | 8 | 2 | 37 | broader assignment/return/closure function value flow |
+| `tests/micro/generators.json` | 16 | 3 | 34 | generator/iterator yielded value flow |
+
+The next high-leverage work is no longer simple Promise executor modeling; that
+first slice is implemented. The remaining Promise gap needs object-shaped
+fulfillment values such as `{ value, reason }`, async-generator `next()`, and
+looped handler propagation that matches Jelly's whole-program constraint model.
+Class/prototype work should move out of local syntactic heuristics and into the
+existing object/points-to substrate so receiver side effects such as
+`q1.a1(); q1.a2();` can be represented.
+
+What moved the first implementation-loop score:
+
+- The module execution bridge is the main recall gain. Top-level calls now have
+  a caller identity and a lowered MIR body, which turns previously invisible
+  program execution into call graph evidence.
+- Anonymous callable identities recovered IIFE targets after the call extractor
+  learned to classify those synthetic names as lexical callees instead of
+  unknown dynamic evidence.
+- The Jelly input preparation change did not move this score, but it fixes a
+  benchmark correctness issue: existing source files listed by the Jelly case
+  are now analyzed instead of analyzing entries only.
+- Graph-edge dedupe improved precision because call graph edges are set
+  semantics. Duplicate observed `fun2fun`/`call2fun` edges should not count as
+  independent false positives.
+- Expression-span identities improved exact span matching for variable-backed
+  functions and class-related targets. This is a correctness fix: the callable
+  identity should be the function/arrow expression, not the full `const f = ...`
+  declarator.
+- Constructor lowering made `new` participate in the existing call extraction
+  and direct resolution pipeline. Unknowns increased because built-in
+  constructors are now surfaced as unresolved calls, but true graph edges
+  increased enough to improve both precision and F1.
+
+Important caveats:
+
+- This implementation uses a synthetic private TS/JS module `FunctionFact` as a
+  bridge because the current MIR/callgraph stores are keyed by function owner.
+  Metrics now filter it out so file/function metrics do not expose the bridge.
+  The cleaner long-term design is still a private `ExecutionOwner` abstraction.
+- A temporary experiment enabling `[solver.js] object_model = true` on the Jelly
+  checkout produced no score change. That suggests the remaining gap is not
+  solved by flipping the existing object-model option; the TS/JS frontend still
+  needs to emit the exact function-object, property, module, and native-model
+  facts that Jelly relies on.
+- 351 expected Jelly edges in this checkout point at unavailable source files,
+  mostly `tests/helloworld/app.json`. The score still uses the full Jelly oracle
+  instead of filtering those edges away, so the reported F1 is conservative.
+  Even after accounting for that, available-source recall is still the core
+  underperformance.
+- `tests/micro/call-expressions.json` still has many paired FP/FN rows that are
+  exact span mismatches around parenthesized calls. The fix should be a principled
+  Jelly span renderer or MIR span contract, not ad hoc per-line matching.
+
+Current best per-case movement:
+
+| Case | Before TP/FP/FN | Current TP/FP/FN | Current note |
+|---|---:|---:|---|
+| `tests/micro/call-expressions.json` | 10 / 28 / 35 during direct-call baseline | 24 / 22 / 21 | module body, IIFE identity, and constructor lowering helped, but parenthesized call spans still cause paired FP/FN rows |
+| `tests/micro/classes.json` | 8 / 15 / 69 after module/IIFE work | 37 / 12 / 40 | class/static/prototype/self-alias flow helped, but super/receiver effects remain |
+| `tests/micro/classes2.json` | 0 / 11 / 76 after module/IIFE work | 26 / 17 / 50 | constructor/static/this-alias flow recovered more edges, but receiver side effects remain mostly missing |
+| `tests/micro/iterators.json` | 0 / 0 / 65 at baseline | 61 / 11 / 4 | collection element flow recovered almost all iterator value calls |
+| `tests/micro/more1.json` | 0 / 1 / 49 at continuation start | 30 / 2 / 19 | set/map/Array.from/object/direct-param flow recovered most plain higher-order cases |
+| `tests/micro/rest.json` | 6 / 1 / 38 at continuation start | 38 / 10 / 6 | array/object destructuring plus rest parameter flow closed most of the fixture |
+| `tests/micro/asyncawait.json` | 1 / 2 / 28 after dependency-inclusive run | 7 / 2 / 22 | async IIFE/await/async-return flow recovered non-generator edges; async generators remain missing |
+| Full Jelly micro suite | 8 / 6 / 1471 | 462 / 552 / 1017 | much better, still recall-limited by modules, promise objects, classes, generators, and spans |
+
+Next high-leverage iteration:
+
+1. Add CommonJS/ESM module-object and dependency execution modeling for the
+   `helloworld` gap without exploding false positives on dependencies.
+2. Represent Promise and async-generator fulfilled values as objects, not only
+   direct function collections.
+3. Feed class/prototype/static field facts into the existing object/points-to
+   infrastructure instead of growing local syntactic heuristics.
 
 ## What Jelly Is Optimized Around
 

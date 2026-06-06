@@ -319,6 +319,7 @@ pub struct LoadedConfig {
     pub(crate) root: PathBuf,
     pub(crate) config: PolintConfig,
     pub(crate) missing: bool,
+    pub(crate) respect_gitignore: bool,
 }
 
 impl LoadedConfig {
@@ -361,6 +362,7 @@ pub fn load_config(root: impl AsRef<Path>) -> Result<LoadedConfig> {
                     root,
                     config: PolintConfig::default(),
                     missing: true,
+                    respect_gitignore: true,
                 });
             }
             Err(error) => anyhow::bail!(
@@ -374,6 +376,7 @@ pub fn load_config(root: impl AsRef<Path>) -> Result<LoadedConfig> {
         root,
         config,
         missing: false,
+        respect_gitignore: true,
     })
 }
 
@@ -450,6 +453,7 @@ mod tests {
             root: PathBuf::from("."),
             config: PolintConfig::default(),
             missing: true,
+            respect_gitignore: true,
         };
 
         assert!(loaded.config.profiles.is_empty());
@@ -518,6 +522,7 @@ rules = ["local/example"]
             root: PathBuf::from("."),
             config,
             missing: false,
+            respect_gitignore: true,
         };
 
         assert_eq!(config.profile_rules(None).unwrap(), None);

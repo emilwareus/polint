@@ -1156,6 +1156,7 @@ mod source_config_rule_model_extension {
             root: root.to_path_buf(),
             config: PolintConfig::default(),
             missing: false,
+            respect_gitignore: true,
         }
     }
 
@@ -1415,6 +1416,7 @@ mod lifecycle {
             root: root.to_path_buf(),
             config,
             missing: false,
+            respect_gitignore: true,
         }
     }
 

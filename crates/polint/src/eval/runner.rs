@@ -308,13 +308,7 @@ fn run_polint_for_prepared_case<A: BenchmarkAdapter>(
     prepared: &PreparedCase,
 ) -> anyhow::Result<Vec<ObservedItem>> {
     let mut loaded = crate::config::load_config(&prepared.workspace_root)?;
-    if !prepared.target_files.is_empty() {
-        loaded.config.workspace.include = prepared
-            .target_files
-            .iter()
-            .map(|path| check_path_pattern(&prepared.workspace_root, path))
-            .collect();
-    }
+    apply_prepared_target_file_filter(&mut loaded, prepared);
     let config_digest = crate::cache::keys::config_hash(&loaded);
     let rule_digest = crate::cache::keys::rule_hash(&[], None, &std::collections::BTreeMap::new());
     let cache = crate::cache::Cache::default_for_repo(&prepared.workspace_root, false);
@@ -342,6 +336,23 @@ fn run_polint_for_prepared_case<A: BenchmarkAdapter>(
         scored.len(),
     ));
     Ok(observed)
+}
+
+#[cfg(test)]
+fn apply_prepared_target_file_filter(
+    loaded: &mut crate::config::LoadedConfig,
+    prepared: &PreparedCase,
+) {
+    if prepared.target_files.is_empty() {
+        return;
+    }
+    loaded.config.workspace.include = prepared
+        .target_files
+        .iter()
+        .map(|path| check_path_pattern(&prepared.workspace_root, path))
+        .collect();
+    loaded.config.workspace.exclude.clear();
+    loaded.respect_gitignore = false;
 }
 
 #[cfg(test)]
@@ -608,6 +619,29 @@ mod tests {
 
         assert!(plan.should_run_polint_analysis);
         assert_eq!(plan.selection.selected_case_ids, ["case-a"]);
+    }
+
+    #[test]
+    fn prepared_target_files_override_default_workspace_excludes() {
+        let root = tempdir().unwrap();
+        let target = root.path().join("node_modules/pkg/index.js");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, "module.exports = function pkg() {};").unwrap();
+        let mut loaded = crate::config::load_config(root.path()).unwrap();
+        let prepared = PreparedCase {
+            case_id: "case-a".to_string(),
+            workspace_root: root.path().to_path_buf(),
+            target_files: vec![target],
+        };
+
+        apply_prepared_target_file_filter(&mut loaded, &prepared);
+
+        assert_eq!(
+            loaded.config.workspace.include,
+            ["node_modules/pkg/index.js"]
+        );
+        assert!(loaded.config.workspace.exclude.is_empty());
+        assert!(!loaded.respect_gitignore);
     }
 
     #[test]

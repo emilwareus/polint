@@ -23,7 +23,11 @@ use crate::analysis::places::{
 };
 use crate::analysis::stable_key::semantic_stable_key;
 use crate::analysis_kernel::FactFamily;
-use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, Language, SourceFile, Span};
+use crate::core::{
+    AnalysisDb, FileId, FunctionFact, FunctionId, Language, SourceFile, Span,
+    is_synthetic_ts_js_module_function,
+};
+use crate::ts::anonymous_callable_name;
 
 pub(crate) fn lower_ts_mir(db: &AnalysisDb) -> MirOutput {
     let mut lowering = TsMirLowering::default();
@@ -102,6 +106,24 @@ impl TsMirLowering {
                     conservative_action: ConservativeAction::StopLowering,
                 }));
         }
+        if let Some(module_function) = matching_module_function(db, file.id, file.language) {
+            let span = crate::core::span_from_byte_range(
+                file.id,
+                file.source.as_ref(),
+                0,
+                file.source.len(),
+            );
+            let body = self.push_body(db, file, module_function, span);
+            let mut module_lowering =
+                FunctionLowering::new(file, file.source.as_ref(), module_function.id, &body);
+            module_lowering.lower_statements(
+                &parsed.program.body,
+                &mut self.places,
+                &mut self.operations,
+                &mut self.unsupported,
+            );
+        }
+
         let mut functions = Vec::new();
         collect_functions(file.source.as_ref(), &parsed.program, &mut functions);
         functions.sort_by(|left, right| {
@@ -230,6 +252,7 @@ fn collect_functions<'ast>(
 ) {
     for statement in &program.body {
         collect_statement_functions(source, statement, functions);
+        collect_anonymous_functions_from_statement(statement, functions);
     }
 }
 
@@ -315,7 +338,7 @@ fn collect_variable_function<'ast>(
         Expression::ArrowFunctionExpression(function) => {
             functions.push(TsFunctionCandidate {
                 name: name.name.to_string(),
-                span: declarator.span,
+                span: function.span,
                 parameters: parameter_names(&function.params),
                 body: &function.body,
                 r#async: function.r#async,
@@ -326,7 +349,7 @@ fn collect_variable_function<'ast>(
             if let Some(body) = function.body.as_deref() {
                 functions.push(TsFunctionCandidate {
                     name: name.name.to_string(),
-                    span: declarator.span,
+                    span: function.span,
                     parameters: parameter_names(&function.params),
                     body,
                     r#async: function.r#async,
@@ -372,6 +395,239 @@ fn collect_class_functions<'ast>(
                 functions,
             );
         }
+    }
+}
+
+fn collect_anonymous_functions_from_statement<'ast>(
+    statement: &'ast Statement<'ast>,
+    functions: &mut Vec<TsFunctionCandidate<'ast>>,
+) {
+    match statement {
+        Statement::BlockStatement(block) => {
+            for statement in &block.body {
+                collect_anonymous_functions_from_statement(statement, functions);
+            }
+        }
+        Statement::ExpressionStatement(statement) => {
+            collect_anonymous_functions_from_expression(&statement.expression, true, functions);
+        }
+        Statement::VariableDeclaration(variable) => {
+            for declarator in &variable.declarations {
+                if let Some(init) = &declarator.init {
+                    collect_anonymous_functions_from_expression(init, false, functions);
+                }
+            }
+        }
+        Statement::FunctionDeclaration(function) => {
+            if let Some(body) = function.body.as_deref() {
+                collect_anonymous_functions_from_body(body, functions);
+            }
+        }
+        Statement::ReturnStatement(statement) => {
+            if let Some(argument) = &statement.argument {
+                collect_anonymous_functions_from_expression(argument, true, functions);
+            }
+        }
+        Statement::IfStatement(statement) => {
+            collect_anonymous_functions_from_expression(&statement.test, true, functions);
+            collect_anonymous_functions_from_statement(&statement.consequent, functions);
+            if let Some(alternate) = &statement.alternate {
+                collect_anonymous_functions_from_statement(alternate, functions);
+            }
+        }
+        Statement::WhileStatement(statement) => {
+            collect_anonymous_functions_from_expression(&statement.test, true, functions);
+            collect_anonymous_functions_from_statement(&statement.body, functions);
+        }
+        Statement::ForStatement(statement) => {
+            if let Some(init) = &statement.init {
+                match init {
+                    oxc_ast::ast::ForStatementInit::VariableDeclaration(variable) => {
+                        for declarator in &variable.declarations {
+                            if let Some(init) = &declarator.init {
+                                collect_anonymous_functions_from_expression(init, false, functions);
+                            }
+                        }
+                    }
+                    _ => collect_anonymous_functions_from_expression(
+                        init.to_expression(),
+                        true,
+                        functions,
+                    ),
+                }
+            }
+            if let Some(test) = &statement.test {
+                collect_anonymous_functions_from_expression(test, true, functions);
+            }
+            if let Some(update) = &statement.update {
+                collect_anonymous_functions_from_expression(update, true, functions);
+            }
+            collect_anonymous_functions_from_statement(&statement.body, functions);
+        }
+        Statement::ClassDeclaration(class) => {
+            collect_anonymous_functions_from_class(class, functions)
+        }
+        _ => {}
+    }
+}
+
+fn collect_anonymous_functions_from_class<'ast>(
+    class: &'ast Class<'ast>,
+    functions: &mut Vec<TsFunctionCandidate<'ast>>,
+) {
+    for element in &class.body.body {
+        match element {
+            ClassElement::MethodDefinition(method) => {
+                if let Some(body) = method.value.body.as_deref() {
+                    collect_anonymous_functions_from_body(body, functions);
+                }
+            }
+            ClassElement::PropertyDefinition(property) => {
+                if let Some(value) = &property.value {
+                    collect_anonymous_functions_from_expression(value, true, functions);
+                }
+            }
+            ClassElement::StaticBlock(block) => {
+                for statement in &block.body {
+                    collect_anonymous_functions_from_statement(statement, functions);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn collect_anonymous_functions_from_body<'ast>(
+    body: &'ast FunctionBody<'ast>,
+    functions: &mut Vec<TsFunctionCandidate<'ast>>,
+) {
+    for statement in &body.statements {
+        collect_anonymous_functions_from_statement(statement, functions);
+    }
+}
+
+fn collect_anonymous_functions_from_expression<'ast>(
+    expression: &'ast Expression<'ast>,
+    include_self: bool,
+    functions: &mut Vec<TsFunctionCandidate<'ast>>,
+) {
+    match expression {
+        Expression::ArrowFunctionExpression(function) => {
+            if include_self {
+                functions.push(TsFunctionCandidate {
+                    name: anonymous_callable_name(function.span.start, function.span.end),
+                    span: function.span,
+                    parameters: parameter_names(&function.params),
+                    body: &function.body,
+                    r#async: function.r#async,
+                    span_for_unsupported: function.span,
+                });
+            }
+            collect_anonymous_functions_from_body(&function.body, functions);
+        }
+        Expression::FunctionExpression(function) => {
+            if include_self && let Some(body) = function.body.as_deref() {
+                functions.push(TsFunctionCandidate {
+                    name: anonymous_callable_name(function.span.start, function.span.end),
+                    span: function.span,
+                    parameters: parameter_names(&function.params),
+                    body,
+                    r#async: function.r#async,
+                    span_for_unsupported: function.span,
+                });
+            }
+            if let Some(body) = function.body.as_deref() {
+                collect_anonymous_functions_from_body(body, functions);
+            }
+        }
+        Expression::CallExpression(call) => {
+            collect_anonymous_functions_from_expression(&call.callee, true, functions);
+            for argument in &call.arguments {
+                collect_anonymous_functions_from_argument(argument, functions);
+            }
+        }
+        Expression::NewExpression(expression) => {
+            collect_anonymous_functions_from_expression(&expression.callee, true, functions);
+            for argument in &expression.arguments {
+                collect_anonymous_functions_from_argument(argument, functions);
+            }
+        }
+        Expression::ParenthesizedExpression(expression) => {
+            collect_anonymous_functions_from_expression(
+                &expression.expression,
+                include_self,
+                functions,
+            );
+        }
+        Expression::AssignmentExpression(expression) => {
+            collect_anonymous_functions_from_expression(&expression.right, true, functions);
+        }
+        Expression::SequenceExpression(expression) => {
+            for expression in &expression.expressions {
+                collect_anonymous_functions_from_expression(expression, true, functions);
+            }
+        }
+        Expression::ConditionalExpression(expression) => {
+            collect_anonymous_functions_from_expression(&expression.test, true, functions);
+            collect_anonymous_functions_from_expression(&expression.consequent, true, functions);
+            collect_anonymous_functions_from_expression(&expression.alternate, true, functions);
+        }
+        Expression::LogicalExpression(expression) => {
+            collect_anonymous_functions_from_expression(&expression.left, true, functions);
+            collect_anonymous_functions_from_expression(&expression.right, true, functions);
+        }
+        Expression::ObjectExpression(object) => {
+            for property in &object.properties {
+                match property {
+                    ObjectPropertyKind::ObjectProperty(property) => {
+                        collect_anonymous_functions_from_expression(
+                            &property.value,
+                            true,
+                            functions,
+                        );
+                    }
+                    ObjectPropertyKind::SpreadProperty(spread) => {
+                        collect_anonymous_functions_from_expression(
+                            &spread.argument,
+                            true,
+                            functions,
+                        );
+                    }
+                }
+            }
+        }
+        Expression::ArrayExpression(array) => {
+            for element in &array.elements {
+                match element {
+                    oxc_ast::ast::ArrayExpressionElement::SpreadElement(spread) => {
+                        collect_anonymous_functions_from_expression(
+                            &spread.argument,
+                            true,
+                            functions,
+                        );
+                    }
+                    oxc_ast::ast::ArrayExpressionElement::Elision(_) => {}
+                    _ => collect_anonymous_functions_from_expression(
+                        element.to_expression(),
+                        true,
+                        functions,
+                    ),
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_anonymous_functions_from_argument<'ast>(
+    argument: &'ast Argument<'ast>,
+    functions: &mut Vec<TsFunctionCandidate<'ast>>,
+) {
+    match argument {
+        Argument::SpreadElement(spread) => {
+            collect_anonymous_functions_from_expression(&spread.argument, true, functions);
+        }
+        _ => collect_anonymous_functions_from_expression(argument.to_expression(), true, functions),
     }
 }
 
@@ -454,7 +710,17 @@ impl<'source> FunctionLowering<'source> {
         operations: &mut Vec<OperationDraft>,
         unsupported: &mut Vec<UnsupportedDraft>,
     ) {
-        for statement in &body.statements {
+        self.lower_statements(&body.statements, places, operations, unsupported);
+    }
+
+    fn lower_statements(
+        &mut self,
+        statements: &[Statement<'_>],
+        places: &mut PlaceTableBuilder,
+        operations: &mut Vec<OperationDraft>,
+        unsupported: &mut Vec<UnsupportedDraft>,
+    ) {
+        for statement in statements {
             self.lower_statement(statement, places, operations, unsupported);
         }
     }
@@ -1161,29 +1427,16 @@ impl<'source> FunctionLowering<'source> {
                     self.lower_expression(argument, places, operations, unsupported, false)
                 })
             }
-            Expression::NewExpression(new_expression) => {
-                if callee_text(&new_expression.callee).as_deref() == Some("Proxy") {
-                    self.push_unsupported(
-                        operations,
-                        unsupported,
-                        new_expression.span,
-                        "Proxy",
-                        Vec::new(),
-                        ConservativeAction::HavocAffectedPlaces,
-                    );
-                }
-                self.lower_expression(
-                    &new_expression.callee,
-                    places,
-                    operations,
-                    unsupported,
-                    false,
-                );
-                for argument in &new_expression.arguments {
-                    self.lower_argument(argument, places, operations, unsupported);
-                }
-                Some(self.temporary_shape(places, new_expression.span))
-            }
+            Expression::NewExpression(new_expression) => self
+                .lower_new_expression(new_expression, places, operations, unsupported)
+                .map(|key| PlaceShape {
+                    root: PlaceRoot::CallReturn {
+                        call: CallSiteId(new_expression.span.start as u64),
+                    },
+                    projections: Vec::new(),
+                    status: PlaceStatus::Partial,
+                    key,
+                }),
             Expression::PrivateFieldExpression(private) => self.lower_private_field(
                 private,
                 places,
@@ -1296,32 +1549,6 @@ impl<'source> FunctionLowering<'source> {
             | Expression::NullLiteral(_)
             | Expression::NumericLiteral(_)
             | Expression::StringLiteral(_) => Some(self.temporary_shape(places, expression.span())),
-        }
-    }
-
-    fn lower_argument(
-        &mut self,
-        argument: &Argument<'_>,
-        places: &mut PlaceTableBuilder,
-        operations: &mut Vec<OperationDraft>,
-        unsupported: &mut Vec<UnsupportedDraft>,
-    ) {
-        match argument {
-            Argument::SpreadElement(spread) => {
-                self.push_unsupported(
-                    operations,
-                    unsupported,
-                    spread.span,
-                    "spread",
-                    Vec::new(),
-                    ConservativeAction::HavocAffectedPlaces,
-                );
-                self.lower_expression(&spread.argument, places, operations, unsupported, false);
-            }
-            _ => {
-                let expression = argument.to_expression();
-                self.lower_expression(expression, places, operations, unsupported, false);
-            }
         }
     }
 
@@ -1921,6 +2148,59 @@ impl<'source> FunctionLowering<'source> {
         Some(return_key)
     }
 
+    fn lower_new_expression(
+        &mut self,
+        expression: &oxc_ast::ast::NewExpression<'_>,
+        places: &mut PlaceTableBuilder,
+        operations: &mut Vec<OperationDraft>,
+        unsupported: &mut Vec<UnsupportedDraft>,
+    ) -> Option<String> {
+        if callee_text(&expression.callee).as_deref() == Some("Proxy") {
+            self.push_unsupported(
+                operations,
+                unsupported,
+                expression.span,
+                "Proxy",
+                Vec::new(),
+                ConservativeAction::HavocAffectedPlaces,
+            );
+        }
+        let site = CallSiteId(expression.span.start as u64);
+        let return_key = self.insert_place(
+            places,
+            PlaceRoot::CallReturn { call: site },
+            Vec::new(),
+            PlaceStatus::Partial,
+        );
+        self.lower_expression(&expression.callee, places, operations, unsupported, false);
+        let callee = callee_text(&expression.callee).map_or_else(
+            || ValueDraft::Unknown {
+                evidence: "new".to_string(),
+            },
+            |evidence| ValueDraft::Unknown {
+                evidence: format!("new {evidence}"),
+            },
+        );
+        let mut arguments = Vec::new();
+        for argument in &expression.arguments {
+            if let Some(shape) = self.argument_shape(argument, places, operations, unsupported) {
+                arguments.push(shape.key);
+            }
+        }
+        self.push_operation(
+            operations,
+            expression.span,
+            OperationKindDraft::Call {
+                site,
+                callee,
+                arguments,
+                return_place_key: return_key.clone(),
+            },
+            MirStatus::Partial,
+        );
+        Some(return_key)
+    }
+
     fn argument_shape(
         &mut self,
         argument: &Argument<'_>,
@@ -2447,6 +2727,14 @@ fn callee_text(expression: &Expression<'_>) -> Option<String> {
             let object = callee_text(&member.object)?;
             Some(format!("{}.{}", object, member.property.name))
         }
+        Expression::ArrowFunctionExpression(function) => Some(anonymous_callable_name(
+            function.span.start,
+            function.span.end,
+        )),
+        Expression::FunctionExpression(function) => Some(anonymous_callable_name(
+            function.span.start,
+            function.span.end,
+        )),
         Expression::ParenthesizedExpression(parenthesized) => {
             callee_text(&parenthesized.expression)
         }
@@ -2470,6 +2758,18 @@ fn matching_function<'db>(
             && function.language == language
             && function.name == name
             && span_contains(span, &function.span)
+    })
+}
+
+fn matching_module_function(
+    db: &AnalysisDb,
+    file: FileId,
+    language: Language,
+) -> Option<&FunctionFact> {
+    db.functions().iter().find(|function| {
+        function.file == file
+            && function.language == language
+            && is_synthetic_ts_js_module_function(function)
     })
 }
 
@@ -2513,7 +2813,7 @@ fn language_label(language: Language) -> &'static str {
 mod places {
     use super::*;
     use crate::analysis::places::{PlaceProjection, PlaceRoot};
-    use crate::core::{AnalysisDb, FunctionId, Language};
+    use crate::core::{AnalysisDb, Language, TS_JS_MODULE_FUNCTION_NAME};
     use std::path::PathBuf;
 
     fn lower(path: &str, source: &str) -> MirOutput {
@@ -2536,8 +2836,19 @@ export function render(user, index) {
         let first = lower("src/render.ts", source);
         let second = lower("src/render.ts", source);
 
-        assert_eq!(first.bodies.len(), 1);
-        assert!(first.bodies[0].stable_key.contains("render"));
+        assert_eq!(first.bodies.len(), 2);
+        assert!(
+            first
+                .bodies
+                .iter()
+                .any(|body| body.owner_stable_key.contains(TS_JS_MODULE_FUNCTION_NAME))
+        );
+        assert!(
+            first
+                .bodies
+                .iter()
+                .any(|body| body.owner_stable_key.contains("render"))
+        );
         assert_eq!(
             first
                 .places
@@ -2633,7 +2944,7 @@ class View {
                 function,
                 index: 0,
                 name: Some(name),
-            } if *function == FunctionId(0) && name == "user"
+            } if *function == arrow.id && name == "user"
         )));
         assert!(output.places.iter().any(|place| matches!(
             &place.root,
@@ -2641,7 +2952,7 @@ class View {
                 function,
                 index: 0,
                 name: Some(name),
-            } if *function == FunctionId(1) && name == "user"
+            } if *function == method.id && name == "user"
         )));
     }
 
@@ -2675,6 +2986,7 @@ mod operations {
     use crate::analysis::mir::op::{
         AssignMode, ConservativeAction, MirOperationKind, UnsupportedDomain,
     };
+    use crate::core::TS_JS_MODULE_FUNCTION_NAME;
     use std::collections::BTreeSet;
     use std::path::PathBuf;
 
@@ -2802,6 +3114,108 @@ export function flow(token, count) {
                     evidence: "direct target".to_string()
                 }
         );
+    }
+
+    #[test]
+    fn ts_module_body_lowering_emits_top_level_calls() {
+        let output = lower(
+            "src/main.ts",
+            r#"
+function boot() {
+  return 1;
+}
+
+boot();
+"#,
+        );
+        let module = output
+            .bodies
+            .iter()
+            .find(|body| body.owner_stable_key.contains(TS_JS_MODULE_FUNCTION_NAME))
+            .expect("module body should be lowered");
+        let module_boot_calls = output
+            .operations
+            .iter()
+            .filter(|operation| operation.body == module.id)
+            .filter(|operation| {
+                matches!(
+                    &operation.kind,
+                    MirOperationKind::Call {
+                        callee: MirValue::Unknown { evidence },
+                        ..
+                    } if evidence == "boot"
+                )
+            })
+            .count();
+
+        assert_eq!(module_boot_calls, 1);
+    }
+
+    #[test]
+    fn ts_new_expression_lowers_constructor_call() {
+        let output = lower(
+            "src/new.ts",
+            r#"
+function Widget(value) {
+  this.value = value;
+}
+
+new Widget(1);
+"#,
+        );
+
+        let constructor_calls = output
+            .operations
+            .iter()
+            .filter(|operation| {
+                matches!(
+                    &operation.kind,
+                    MirOperationKind::Call {
+                        callee: MirValue::Unknown { evidence },
+                        arguments,
+                        ..
+                    } if evidence == "new Widget" && arguments.len() == 1
+                )
+            })
+            .count();
+
+        assert_eq!(constructor_calls, 1);
+    }
+
+    #[test]
+    fn ts_iife_callees_use_anonymous_callable_identity() {
+        let output = lower(
+            "src/iife.ts",
+            r#"
+(function(value) {
+  return value;
+})(1);
+
+(() => helper())();
+"#,
+        );
+
+        let anonymous_bodies = output
+            .bodies
+            .iter()
+            .filter(|body| body.owner_stable_key.contains("<polint:anonymous:"))
+            .count();
+        let anonymous_calls = output
+            .operations
+            .iter()
+            .filter(|operation| {
+                matches!(
+                    &operation.kind,
+                    MirOperationKind::Call {
+                        callee: MirValue::Unknown { evidence },
+                        ..
+                    } if evidence.starts_with("<polint:anonymous:")
+                )
+            })
+            .count();
+
+        assert_eq!(anonymous_bodies, 2);
+        assert_eq!(anonymous_calls, 2);
     }
 
     #[test]

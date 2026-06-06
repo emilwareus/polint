@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Graph Engine Precision
 status: milestone_complete
-last_updated: 2026-06-06T05:02:35.739Z
+last_updated: 2026-06-06T10:05:33Z
 last_activity: 2026-06-06
 progress:
   total_phases: 13
@@ -54,6 +54,8 @@ Add `public surface leak gate (ubuntu-latest)` AND `public surface leak gate (ma
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260606-fkk | Continue recall-focused Jelly JS/TS callgraph improvements from 16.16% F1 to 37.06% F1 | 2026-06-06 | working tree | [260606-fkk-continue-recall-focused-jelly-js-ts-call](./quick/260606-fkk-continue-recall-focused-jelly-js-ts-call/) |
+| 260606-ef2 | Iteratively improve Jelly JS/TS callgraph F1 while preserving architecture and benchmark honesty | 2026-06-06 | working tree | [260606-ef2-iteratively-improve-jelly-js-ts-callgraph-f1](./quick/260606-ef2-iteratively-improve-jelly-js-ts-callgraph-f1/) |
 | 260606-ea2 | Research and document how to close the Jelly JS/TS callgraph performance gap | 2026-06-06 | implemented | [260606-ea2-research-and-document-how-to-close-the-j](./quick/260606-ea2-research-and-document-how-to-close-the-j/) |
 | 260606-c3l | Measure current static-analysis performance and write a dated report under performance/ | 2026-06-06 | implemented | [260606-c3l-measure-current-static-analysis-performa](./quick/260606-c3l-measure-current-static-analysis-performa/) |
 | 260605-n0r | Critical review/fix loop for Phase 53 follow-up fixes until two consecutive clean review rounds | 2026-06-05 | implemented | [260605-n0r-loop-critical-review-and-fixes-for-phase](./quick/260605-n0r-loop-critical-review-and-fixes-for-phase/) |
@@ -561,9 +563,9 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 
 ## Session
 
-- Last session: 2026-06-05
-- Last activity: 2026-06-05 - Completed quick task 260605-n0r: critical review/fix loop for the Phase 53 review-fix implementation.
-- Stopped at: Phase 53 complete; Phase 54 is ready to discuss and plan.
+- Last session: 2026-06-06
+- Last activity: 2026-06-06 - Completed quick task 260606-ef2 in the working tree: Jelly JS/TS callgraph F1 improved from 1.07% to 16.16% with module execution, IIFE callable identities, expression-span function identities, constructor lowering, and benchmark normalization fixes.
+- Stopped at: Milestone complete; current quick-task changes are ready for review/commit.
 - Resume file: None
 
 ### Quick Tasks Completed

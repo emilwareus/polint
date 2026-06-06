@@ -223,6 +223,18 @@ fn evidence_callee(
         );
     }
 
+    if crate::ts::is_anonymous_callable_name(evidence) {
+        return (
+            CallCallee::Identifier {
+                reference: None,
+                name: evidence.to_string(),
+            },
+            None,
+            CallSyntaxKind::Function,
+            format!("identifier:{evidence}"),
+        );
+    }
+
     if is_identifier_like(evidence) {
         if is_constructor_name(language, evidence) {
             return (
@@ -487,6 +499,7 @@ mod tests {
     use crate::analysis::mir::op::{MirOperation, MirOperationKind, MirValue};
     use crate::analysis::places::{PlaceFact, PlaceProjection, PlaceRoot, PlaceStatus};
     use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, Language, Span};
+    use crate::ts::anonymous_callable_name;
 
     fn span(file: FileId, line: u32, start_byte: u32) -> Span {
         Span {
@@ -649,6 +662,48 @@ mod tests {
         assert_eq!(site.result, Some(PlaceId(2)));
         assert_eq!(site.status, CallTargetStatus::Unresolved);
         assert_eq!(site.precision, CallPrecision::Conservative);
+    }
+
+    #[test]
+    fn extract_call_sites_treats_anonymous_callable_evidence_as_lexical_callee() {
+        let mut db = AnalysisDb::new();
+        let (file, function) = add_file_and_function(&mut db, "src/iife.ts");
+        let anonymous = anonymous_callable_name(1, 14);
+        db.replace_semantic_mir(MirOutput {
+            bodies: vec![body(file, function, Language::TypeScript)],
+            places: vec![place(
+                9,
+                file,
+                function,
+                PlaceRoot::CallReturn {
+                    call: CallSiteId(10),
+                },
+                Vec::new(),
+            )],
+            operations: vec![call_op(
+                1,
+                0,
+                file,
+                10,
+                MirValue::Unknown {
+                    evidence: anonymous.clone(),
+                },
+                Vec::new(),
+            )],
+            unsupported: Vec::new(),
+        })
+        .expect("semantic MIR should store");
+
+        let sites = super::extract_call_sites(&db);
+
+        assert_eq!(
+            sites[0].callee,
+            CallCallee::Identifier {
+                reference: None,
+                name: anonymous
+            }
+        );
+        assert_eq!(sites[0].kind, CallSyntaxKind::Function);
     }
 
     #[test]
