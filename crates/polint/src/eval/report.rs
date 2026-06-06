@@ -103,6 +103,8 @@ pub(crate) struct MetricSections {
     pub(crate) performance: PerformanceMetricSection,
     #[serde(default)]
     pub(crate) suite_native: BTreeMap<String, f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) per_language_deltas: Vec<PerLanguageDeltaRow>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) adaptation: Option<AdaptationMetricSection>,
     #[serde(default)]
@@ -210,9 +212,28 @@ pub(crate) struct ScannerMetricSection {
     pub(crate) precision: Option<f64>,
     pub(crate) recall: Option<f64>,
     pub(crate) f1: Option<f64>,
+    pub(crate) f0_5: Option<f64>,
     pub(crate) f2: Option<f64>,
     pub(crate) f3: Option<f64>,
     pub(crate) false_positive_rate: Option<f64>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) struct PerLanguageDeltaRow {
+    pub(crate) language: String,
+    pub(crate) suite_id: String,
+    pub(crate) scoring_mode: String,
+    pub(crate) precision_tier: String,
+    pub(crate) baseline_precision: Option<f64>,
+    pub(crate) current_precision: Option<f64>,
+    pub(crate) precision_delta: Option<f64>,
+    pub(crate) baseline_recall: Option<f64>,
+    pub(crate) current_recall: Option<f64>,
+    pub(crate) recall_delta: Option<f64>,
+    pub(crate) baseline_f0_5: Option<f64>,
+    pub(crate) current_f0_5: Option<f64>,
+    pub(crate) f0_5_delta: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
@@ -323,6 +344,29 @@ pub(crate) fn normalize_run(run: &EvaluationRun) -> EvaluationRun {
         delta.normalize();
     }
     normalized
+        .metrics
+        .sections
+        .per_language_deltas
+        .sort_by(per_language_delta_sort);
+    normalized
+}
+
+fn per_language_delta_sort(
+    left: &PerLanguageDeltaRow,
+    right: &PerLanguageDeltaRow,
+) -> std::cmp::Ordering {
+    (
+        left.language.as_str(),
+        left.suite_id.as_str(),
+        left.scoring_mode.as_str(),
+        left.precision_tier.as_str(),
+    )
+        .cmp(&(
+            right.language.as_str(),
+            right.suite_id.as_str(),
+            right.scoring_mode.as_str(),
+            right.precision_tier.as_str(),
+        ))
 }
 
 pub(crate) fn to_deterministic_json_pretty(run: &EvaluationRun) -> String {
@@ -632,6 +676,7 @@ mod tests {
                 "precision": null,
                 "recall": null,
                 "f1": null,
+                "f0_5": null,
                 "f2": null,
                 "f3": null,
                 "false_positive_rate": null
@@ -806,6 +851,25 @@ mod tests {
         });
         let sections: MetricSections = serde_json::from_value(older_json).unwrap();
         assert_eq!(sections.solver, SolverMetricSection::default());
+        assert!(sections.per_language_deltas.is_empty());
+        assert_eq!(sections.scanner.f0_5, None);
+    }
+
+    #[test]
+    fn per_language_deltas_sort_deterministically() {
+        let mut run = report_with_order(Ordering::Forward);
+        run.metrics.sections.per_language_deltas = vec![
+            delta_row("typescript", "oracle-jelly", "setup_aware"),
+            delta_row("go", "oracle-rta", "setup_aware"),
+        ];
+
+        let normalized = normalize_run(&run);
+        let rows = normalized.metrics.sections.per_language_deltas;
+
+        assert_eq!(rows[0].language, "go");
+        assert_eq!(rows[0].scoring_mode, "oracle-rta");
+        assert_eq!(rows[1].language, "typescript");
+        assert_eq!(rows[1].scoring_mode, "oracle-jelly");
     }
 
     #[test]
@@ -1094,6 +1158,24 @@ mod tests {
             },
             metrics: [("precision".to_string(), 0.8)].into_iter().collect(),
             limitations: Vec::new(),
+        }
+    }
+
+    fn delta_row(language: &str, scoring_mode: &str, precision_tier: &str) -> PerLanguageDeltaRow {
+        PerLanguageDeltaRow {
+            language: language.to_string(),
+            suite_id: "deterministic-suite".to_string(),
+            scoring_mode: scoring_mode.to_string(),
+            precision_tier: precision_tier.to_string(),
+            baseline_precision: Some(0.5),
+            current_precision: Some(0.75),
+            precision_delta: Some(0.25),
+            baseline_recall: Some(0.4),
+            current_recall: Some(0.6),
+            recall_delta: Some(0.2),
+            baseline_f0_5: Some(0.47),
+            current_f0_5: Some(0.7),
+            f0_5_delta: Some(0.23),
         }
     }
 
