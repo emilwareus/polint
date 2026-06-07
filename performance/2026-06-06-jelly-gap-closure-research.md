@@ -210,6 +210,38 @@ Remaining module-modeling work (next iterations):
 3. **`client*` / namespace method calls** — namespace-object method resolution
    and class-export instantiation.
 
+### Iteration 37 attempt: cross-file function-return summaries (reverted — no benchmark movement)
+
+Implemented and measured, then reverted. A per-function return summary (callable
+values + returned object shape) was harvested for every function during the same
+bounded fixpoint and stored globally by `FunctionId`; `object_targets_from_call`
+/ `collection_targets_from_call` then seeded the result of calling a function
+defined in another file. A focused multi-file regression (factory returning an
+object with a method, and a curried function returning a closure) passed.
+
+The release Jelly suite was **byte-identical** to iteration 36 (`863 / 609 / 616`,
+hash `4ffb6b2eacf2971c`, +4s runtime) — **zero** new edges. Diagnosis: the cases
+this was meant to unlock each need a *dependent* mechanism the return summary
+alone does not supply:
+
+- **express `app.get` / `res.send`** — `createApplication` builds `app` via
+  `mixin(app, proto)` (dynamic property copy), so its return shape carries none
+  of the methods. Needs `mixin`/`Object.assign`-style dynamic property modeling.
+- **`client1` `filter(cb)(arr)`** — the scored edge is `iteratee(x) → cb` *inside*
+  the returned closure; identifying the closure is not enough, the argument `cb`
+  must flow into the closure's captured parameter. Needs closure parameter-capture
+  flow, not just return identity.
+- **`client4`/`client5` `__importDefault(require(...)).default()`** — the wrapper
+  returns a ternary `(mod && mod.__esModule) ? mod : { default: mod }` over a
+  *parameter*; harvesting returns in a fresh scope cannot evaluate it. Needs
+  parameter-sensitive return evaluation (interop helper modeling).
+
+Conclusion: cross-file return identity is necessary but not sufficient. The next
+attempt should pair it with (a) dynamic property-copy modeling (`Object.assign`/
+`mixin`) and (b) parameter-capture flow through returned closures, validated
+against `client1` and a `mixin` fixture *before* re-introducing the global
+return-summary map. Carrying the un-paired infrastructure was not justified.
+
 Current Go score remains unchanged:
 
 | Suite | TP | FP | FN | Precision | Recall | F1 | Hash |
