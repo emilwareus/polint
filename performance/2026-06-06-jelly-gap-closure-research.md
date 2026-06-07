@@ -319,6 +319,35 @@ pass.
 Cumulative over baseline (iterations 35–39): F1 **57.48% → 67.97% (+10.5pp)**,
 precision **58.17% → 90.84%**.
 
+| 40 | Class-body `this`/`super`/private resolution with class-node caller | 821 | 82 | 658 | 90.92% | 55.51% | 68.94% | 96961 ms | `5dda5e2284a6940b` |
+
+Iteration 40 starts the recall phase (precision is now ~91%, so the gap is FN).
+It walks each class method/constructor/static-block body with `this` bound to the
+instance/static object and the super-class member objects in scope, resolving:
+`this.foo()`, `this.#bar()` / `Class.#baz()` (private members, `PrivateFieldExpression`
+callees keyed by `#name`, with private methods now getting `FunctionFact`s via
+`method_name`), and `super.m()` / `super.s()` / `super.f()` against the super
+class's instance/static objects.
+
+The earlier class-body-walking attempt was reverted because constructor-body
+edges carried the `constructor()` span as caller while Jelly attributes them to
+the class node (+5 FP). This iteration fixes that cleanly with a value-flow
+`caller_override`: the constructor body is walked owned by the constructor fact
+(to match its call sites) but emits edges with the **class** function fact as
+caller. No MIR change.
+
+Gain: **+18 TP, +1 FP**. `tests/micro/private.json` **2/0/10 → 10/1/2**,
+`tests/micro/super.json` **10/4/16 → 16/4/10**, `tests/micro/super2.json`
+**6/4/4 → 10/4/0 (closed)**. `super4`/`super5` are unchanged — they return an
+anonymous `class extends A` from a function (`var a = postMixin(); new a()`),
+which needs class-expression collection plus class-return-from-function flow.
+A focused real-kernel test
+(`real_ts_pipeline_resolves_super_this_and_private_member_calls`) covers the new
+resolution; the full lib suite has no new regressions.
+
+Cumulative over baseline (iterations 35–40): F1 **57.48% → 68.94% (+11.5pp)**,
+precision **58.17% → 90.92%**.
+
 Remaining module-modeling work (next iterations):
 
 1. **Cross-file function-return summaries** — the dominant remaining `helloworld`

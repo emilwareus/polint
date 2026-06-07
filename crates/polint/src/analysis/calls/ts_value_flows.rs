@@ -76,6 +76,8 @@ pub(crate) fn resolve_ts_value_flow_targets(
             function_flows_by_id: BTreeMap::new(),
             classes: BTreeMap::new(),
             exports: ModuleExportSummary::default(),
+            caller_override: None,
+            current_super: None,
             rows: Vec::new(),
             next_id,
         };
@@ -118,6 +120,15 @@ struct TsValueFlowCollector<'db, 'ast, 'env> {
     /// summary pre-pass `sites` is empty, so the `emit_*` helpers naturally
     /// produce no rows and only `exports` is harvested.
     exports: ModuleExportSummary,
+    /// When set, emitted edges use this function as the caller instead of the
+    /// call site's enclosing function. Jelly attributes constructor-body (and
+    /// field-initializer) calls to the class node, not the `constructor()` node,
+    /// so the class-body walk sets this to the class function fact while walking
+    /// the constructor.
+    caller_override: Option<FunctionId>,
+    /// The super-class instance/static member objects in scope while walking a
+    /// class method body, used to resolve `super.m()` / `super.s()` / `super.f`.
+    current_super: Option<ObjectTargets>,
     rows: Vec<CallTargetFact>,
     next_id: u64,
 }
@@ -281,6 +292,8 @@ fn compute_module_export_summaries(
                 function_flows_by_id: BTreeMap::new(),
                 classes: BTreeMap::new(),
                 exports: ModuleExportSummary::default(),
+                caller_override: None,
+                current_super: None,
                 rows: Vec::new(),
                 next_id: 0,
             };
@@ -313,6 +326,97 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         for statement in &program.body {
             self.collect_esm_export(statement, &mut env);
             self.collect_statement(statement, self.module, &mut env);
+        }
+        // Resolve intra-method calls (`this.foo()`, `super.m()`, `this.#bar()`)
+        // with `this`/`super` bound, after the module env is fully populated.
+        self.collect_class_body_call_flows(program, &env);
+    }
+
+    /// Walk each class method and constructor body for call resolution with
+    /// `this`/`super` in scope. Jelly treats every class function as reachable,
+    /// and attributes constructor-body calls to the class node (via
+    /// `caller_override`).
+    fn collect_class_body_call_flows(
+        &mut self,
+        program: &'ast Program<'ast>,
+        module_env: &FlowEnv,
+    ) {
+        for statement in &program.body {
+            let Statement::ClassDeclaration(class) = statement else {
+                continue;
+            };
+            let Some(name) = class.id.as_ref().map(|id| id.name.to_string()) else {
+                continue;
+            };
+            self.collect_class_method_bodies(class, &name, module_env);
+        }
+    }
+
+    fn collect_class_method_bodies(
+        &mut self,
+        class: &'ast Class<'ast>,
+        name: &str,
+        module_env: &FlowEnv,
+    ) {
+        let instance = self
+            .class_instance_targets(name, &[], module_env)
+            .unwrap_or_default();
+        let static_object = self.class_static_targets(name).unwrap_or_default();
+        // Super-class member objects for `super.m()` / `super.s()` / `super.f`.
+        let super_name = self
+            .classes
+            .get(name)
+            .and_then(|class| class.super_name.clone());
+        let super_instance = super_name
+            .as_ref()
+            .and_then(|super_name| self.class_instance_targets(super_name, &[], module_env));
+        let super_static = super_name
+            .as_ref()
+            .and_then(|super_name| self.class_static_targets(super_name));
+        // The class function fact owns constructor-body call attribution.
+        let class_fact = self.function_for_span(class.span).map(|fact| fact.id);
+
+        for element in &class.body.body {
+            let (statements, owner, is_static, is_constructor) = match element {
+                ClassElement::MethodDefinition(method) => {
+                    let Some(body) = method.value.body.as_deref() else {
+                        continue;
+                    };
+                    let Some(owner) = self.function_for_class_method(method) else {
+                        continue;
+                    };
+                    let is_constructor = method.kind == MethodDefinitionKind::Constructor;
+                    (&body.statements, owner, method.r#static, is_constructor)
+                }
+                ClassElement::StaticBlock(block) => {
+                    let Some(owner) = self.function_for_span(block.span) else {
+                        continue;
+                    };
+                    (&block.body, owner, true, false)
+                }
+                _ => continue,
+            };
+            let mut env = module_env.clone();
+            env.this_object = if is_static {
+                static_object.clone()
+            } else {
+                instance.clone()
+            };
+            // Bind the class name to its static object so `Class.staticM()` and
+            // `Class.#priv()` resolve inside the body.
+            env.objects.insert(name.to_string(), static_object.clone());
+            self.current_super = if is_static {
+                super_static.clone()
+            } else {
+                super_instance.clone()
+            };
+            // Constructor-body calls are attributed to the class node by Jelly.
+            self.caller_override = if is_constructor { class_fact } else { None };
+            for statement in statements {
+                self.collect_statement(statement, owner, &mut env);
+            }
+            self.caller_override = None;
+            self.current_super = None;
         }
     }
 
@@ -2112,6 +2216,42 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 call.span,
                 Some(targets),
             );
+        }
+
+        // `super.m()` / `super.s()`: resolve against the super-class member
+        // object bound while walking this class method body.
+        if let Expression::StaticMemberExpression(member) = &call.callee
+            && matches!(&member.object, Expression::Super(_))
+            && let Some(super_object) = &self.current_super
+            && let Some(targets) = super_object
+                .properties
+                .get(member.property.name.as_str())
+                .cloned()
+        {
+            self.emit_call_span_targets(
+                owner,
+                call.span,
+                member.property.name.as_str(),
+                Some(targets.clone()),
+            );
+            self.emit_member_targets(
+                owner,
+                member.property.name.as_str(),
+                call.span,
+                Some(targets),
+            );
+        }
+
+        // Private member calls: `this.#foo()`, `Class.#baz()`. The callee is a
+        // PrivateFieldExpression; private members are keyed by `#name`.
+        if let Expression::PrivateFieldExpression(member) = &call.callee {
+            let property = format!("#{}", member.field.name);
+            if let Some(object) = self.object_targets_from_expression(&member.object, env)
+                && let Some(targets) = object.properties.get(&property).cloned()
+            {
+                self.emit_call_span_targets(owner, call.span, &property, Some(targets.clone()));
+                self.emit_member_targets(owner, &property, call.span, Some(targets));
+            }
         }
 
         if let Expression::Identifier(identifier) = &call.callee {
@@ -4441,7 +4581,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 self.rows.push(CallTargetFact {
                     id: CallTargetId(self.next_id + self.rows.len() as u64),
                     site: site.id,
-                    caller: site.caller,
+                    caller: self.caller_override.unwrap_or(site.caller),
                     target_function: Some(*target),
                     target_symbol: None,
                     edge_kind: CallEdgeKind::FunctionValue,
@@ -4485,7 +4625,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 self.rows.push(CallTargetFact {
                     id: CallTargetId(self.next_id + self.rows.len() as u64),
                     site: site.id,
-                    caller: site.caller,
+                    caller: self.caller_override.unwrap_or(site.caller),
                     target_function: Some(*target),
                     target_symbol: None,
                     edge_kind: CallEdgeKind::FunctionValue,
@@ -4522,7 +4662,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 self.rows.push(CallTargetFact {
                     id: CallTargetId(self.next_id + self.rows.len() as u64),
                     site: site.id,
-                    caller: site.caller,
+                    caller: self.caller_override.unwrap_or(site.caller),
                     target_function: Some(*target),
                     target_symbol: None,
                     edge_kind: CallEdgeKind::FunctionValue,
@@ -4567,7 +4707,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             self.rows.push(CallTargetFact {
                 id: CallTargetId(self.next_id + self.rows.len() as u64),
                 site: site.id,
-                caller: site.caller,
+                caller: self.caller_override.unwrap_or(site.caller),
                 target_function: Some(*target),
                 target_symbol: None,
                 edge_kind: CallEdgeKind::FunctionValue,
@@ -5510,6 +5650,7 @@ fn static_property_key(key: &PropertyKey<'_>, computed: bool) -> Option<String> 
     }
     match key {
         PropertyKey::StaticIdentifier(identifier) => Some(identifier.name.to_string()),
+        PropertyKey::PrivateIdentifier(identifier) => Some(format!("#{}", identifier.name)),
         PropertyKey::StringLiteral(literal) => Some(literal.value.to_string()),
         PropertyKey::NumericLiteral(literal) => Some(literal.value.to_string()),
         _ => None,
@@ -7634,6 +7775,72 @@ obj.right();
                 .any(|span| span.contains("function foo(")),
             "expected __importDefault interop to resolve lib5a.default() to foo; got {resolved_target_spans:?}"
         );
+    }
+
+    #[test]
+    fn real_ts_pipeline_resolves_super_this_and_private_member_calls() {
+        let source = r#"class A {
+    m() {
+        console.log("A.m");
+    }
+    static s() {
+        console.log("A.s");
+    }
+}
+class B extends A {
+    constructor() {
+        super.m();
+        this.helper();
+    }
+    helper() {
+        console.log("helper");
+    }
+    m() {
+        super.m();
+    }
+    static s() {
+        super.s();
+    }
+    #priv() {
+        console.log("priv");
+    }
+    callPriv() {
+        this.#priv();
+    }
+}
+new B();
+"#;
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+
+        let resolve_for = |needle: &str| -> Vec<String> {
+            let site = site_id_for_span(source, &sites, needle);
+            targets
+                .iter()
+                .filter(|t| t.site == site)
+                .filter_map(|t| t.target_function)
+                .filter_map(|id| db.functions().iter().find(|f| f.id == id))
+                .map(|f| source[f.span.start_byte as usize..f.span.end_byte as usize].to_string())
+                .collect()
+        };
+        // `super.m()` (both in B's constructor and B.m), `super.s()`,
+        // `this.helper()`, and `this.#priv()` all resolve.
+        for (site, target) in [
+            ("super.m()", "\"A.m\""),
+            ("super.s()", "\"A.s\""),
+            ("this.helper()", "\"helper\""),
+            ("this.#priv()", "\"priv\""),
+        ] {
+            assert!(
+                resolve_for(site).iter().any(|s| s.contains(target)),
+                "expected {site} to reach a target containing `{target}`; got {:?}",
+                resolve_for(site)
+            );
+        }
     }
 
     fn db_with_file(source: &str) -> AnalysisDb {
