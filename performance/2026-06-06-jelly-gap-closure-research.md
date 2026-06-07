@@ -237,6 +237,50 @@ iteration-29's intended `(f())`/`((f))()`/`(new f())` spans still pass.
 Cumulative over baseline (iterations 35–38): **+34 TP, −34 FN, −2 FP**, F1
 **57.48% → 59.15%**.
 
+## Gap decomposition: it is one case plus a reachability mismatch
+
+Removing the single `helloworld` case from the F1 59.15% checkpoint:
+
+| Slice | TP | FP | FN | Precision | Recall | F1 |
+|---|---:|---:|---:|---:|---:|---:|
+| helloworld alone | 120 | **526** | 222 | 18.6% | 35.1% | 0.245 |
+| all 75 other fixtures | 754 | **76** | 383 | **90.8%** | 66.3% | **0.767** |
+
+`helloworld` (one real-world Express app, 81 loaded files) carries **87% of all
+false positives** and drags F1 from 0.77 to 0.59. On controlled fixtures polint
+is already at **90.8% precision / F1 0.767** — much closer to Jelly than the
+headline suggests.
+
+### Why helloworld's FP are mostly a reachability mismatch, not analysis error
+
+`app.js` only does `express(); app.get(); app.listen()` and never uses
+body-parser. So body-parser's `read()` (which calls `http-errors`' `createError`)
+is **never invoked**. Jelly is demand-driven and emits edges only from reached
+functions — its oracle has no `createError` node and emits from only **35 of 81
+loaded files**. polint analyzes every function body, so it emits 16 *correct*
+`createError(...)` edges from the unreachable `read()`. **247 of helloworld's 526
+FP (47%) come from files Jelly never reaches.**
+
+### Exploration: reachability-pruned oracle-jelly scoring (reverted — metric-gaming)
+
+Tried filtering observed edges to callers reachable from the module-execution
+roots (BFS over resolved call edges) in the jelly adapter. Result: **874/602/605
+→ 702/62/777** (F1 59.15% → 62.6%, precision **92%**) — but it **pruned 172 TP**
+and the *clean* micro suite regressed (`tests/micro/promises.json`
+**56/4/0 → 0/0/56**; iterators 61→37; micro F1 0.767 → 0.707). The aggregate F1
+rose only because removing helloworld's ~520 FP dominates; helloworld's own F1
+was flat (0.245 → 0.251).
+
+Root cause: polint's call graph deliberately omits "host invokes callback" edges
+(adding them was tried in the 2nd loop and reverted — it added FP without TP). So
+promise/iterator handlers are **orphan callers** — invoked by Jelly's native
+models but unreachable through polint's resolved-call graph, *indistinguishable*
+from genuinely-dead functions like `read()`. The naive reachability filter prunes
+both. **Reachability alignment is correct in principle but is gated on
+callback-reachability**: the native models must record which callbacks they invoke
+(a value-flow addition) before reachability can separate reached handlers from
+dead code. Reverted; it games the aggregate metric while degrading real quality.
+
 Remaining module-modeling work (next iterations):
 
 1. **Cross-file function-return summaries** — the dominant remaining `helloworld`
