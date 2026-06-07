@@ -1435,12 +1435,13 @@ class C {
             r#"
 class C {
   ["na" + "me"]() {}
+  ["a" + "b" + "c"]() {}
   static [("static") + "G"]() {}
 }
 "#,
         );
 
-        for expected in ["name", "staticG"] {
+        for expected in ["name", "abc", "staticG"] {
             assert!(
                 output.property_writes.iter().any(|write| {
                     write.property_key.kind == TsPropertyKeyKind::StringLiteral

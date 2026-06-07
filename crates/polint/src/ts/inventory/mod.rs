@@ -108,6 +108,7 @@ function outer() {
             r#"
 class Box {
   ["na" + "me"]() {}
+  ["a" + "b" + "c"]() {}
   static [("static") + "G"]() {}
 }
 "#,
@@ -120,6 +121,7 @@ class Box {
             .collect::<BTreeSet<_>>();
 
         assert!(names.contains("name"), "missing names in {names:?}");
+        assert!(names.contains("abc"), "missing names in {names:?}");
         assert!(names.contains("staticG"), "missing names in {names:?}");
     }
 

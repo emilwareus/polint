@@ -751,6 +751,13 @@ fn method_name(method: &MethodDefinition<'_>) -> Option<String> {
 fn constant_property_key_expression(expression: &Expression<'_>) -> Option<String> {
     match expression {
         Expression::StringLiteral(literal) => Some(literal.value.to_string()),
+        Expression::BinaryExpression(binary) if binary.operator == BinaryOperator::Addition => {
+            Some(format!(
+                "{}{}",
+                constant_property_key_expression(&binary.left)?,
+                constant_property_key_expression(&binary.right)?
+            ))
+        }
         Expression::ParenthesizedExpression(expression) => {
             constant_property_key_expression(&expression.expression)
         }

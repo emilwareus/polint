@@ -1131,6 +1131,17 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
         }
     }
 
+    fn computed_member_property_names(
+        &self,
+        expression: &'ast Expression<'ast>,
+        env: &FlowEnv,
+    ) -> Vec<String> {
+        let mut properties = self.constant_strings_from_expression(expression, env);
+        sort_dedup_strings(&mut properties);
+        properties.truncate(8);
+        properties
+    }
+
     fn constant_string_from_expression(
         &self,
         expression: &'ast Expression<'ast>,
@@ -1575,7 +1586,16 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                     .all_targets();
                 if !targets.is_empty() {
                     self.emit_call_span_targets(owner, call.span, property, Some(targets.clone()));
-                    self.emit_member_targets(owner, property, call.span, Some(targets));
+                    self.emit_member_targets(owner, property, call.span, Some(targets.clone()));
+                    if let Some(receiver) = env.objects.get(object_name).cloned() {
+                        self.collect_returned_callable_invocation(
+                            Some(object_name),
+                            &targets,
+                            call,
+                            receiver,
+                            env,
+                        );
+                    }
                 }
             }
         }
@@ -1623,17 +1643,74 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                     .map(CollectionTargets::all_targets),
             );
         }
-        if let Expression::ComputedMemberExpression(member) = &call.callee
-            && let Some(source) = self.collection_targets_from_expression(&member.object, env)
-            && let Some(index) = numeric_index(&member.expression)
-        {
-            let binding = callee_text(&call.callee).unwrap_or_else(|| "indexed".to_string());
-            self.emit_call_span_targets(
-                owner,
-                call.span,
-                &binding,
-                Some(source.value_at(index).all_targets()),
-            );
+        if let Expression::ComputedMemberExpression(member) = &call.callee {
+            let object_name = expression_identifier(&member.object);
+            if let Some(object) = self.object_targets_from_expression(&member.object, env) {
+                for property in self.computed_member_property_names(&member.expression, env) {
+                    if let Some(targets) = object.properties.get(&property).cloned() {
+                        self.emit_call_span_targets(
+                            owner,
+                            call.span,
+                            &property,
+                            Some(targets.clone()),
+                        );
+                        self.emit_member_targets(
+                            owner,
+                            &property,
+                            call.span,
+                            Some(targets.clone()),
+                        );
+                        if let Some(object_name) = object_name {
+                            self.collect_receiver_side_effects(object_name, &targets, call, env);
+                        }
+                    }
+                    if let Some(getters) = object.getter_properties.get(&property).cloned() {
+                        let targets = self
+                            .callable_return_targets_from_function_ids(
+                                getters,
+                                Vec::new(),
+                                Vec::new(),
+                                object.clone(),
+                                CollectionTargets::default(),
+                                1,
+                            )
+                            .all_targets();
+                        if !targets.is_empty() {
+                            self.emit_call_span_targets(
+                                owner,
+                                call.span,
+                                &property,
+                                Some(targets.clone()),
+                            );
+                            self.emit_member_targets(
+                                owner,
+                                &property,
+                                call.span,
+                                Some(targets.clone()),
+                            );
+                            self.collect_returned_callable_invocation(
+                                object_name,
+                                &targets,
+                                call,
+                                object.clone(),
+                                env,
+                            );
+                        }
+                    }
+                }
+            }
+
+            if let Some(source) = self.collection_targets_from_expression(&member.object, env)
+                && let Some(index) = numeric_index(&member.expression)
+            {
+                let binding = callee_text(&call.callee).unwrap_or_else(|| "indexed".to_string());
+                self.emit_call_span_targets(
+                    owner,
+                    call.span,
+                    &binding,
+                    Some(source.value_at(index).all_targets()),
+                );
+            }
         }
     }
 
@@ -1809,6 +1886,34 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
         }
 
         env.objects.insert(object_name.to_string(), merged_receiver);
+    }
+
+    fn collect_returned_callable_invocation(
+        &mut self,
+        object_name: Option<&str>,
+        targets: &[FunctionId],
+        call: &'ast CallExpression<'ast>,
+        receiver: ObjectTargets,
+        env: &mut FlowEnv,
+    ) {
+        let arguments = self.argument_targets_from_call(call, env);
+        let object_arguments = self.object_arguments_from_call(call, env);
+        let mut merged_receiver = receiver.clone();
+
+        for target in targets {
+            let Some(flow) = self.function_flows_by_id.get(target).cloned() else {
+                continue;
+            };
+            let mut callee_env = env.clone();
+            callee_env.this_object = receiver.clone();
+            self.bind_invocation_arguments(&flow, &arguments, &object_arguments, &mut callee_env);
+            self.collect_function_flow_invocation(&flow, &mut callee_env);
+            merged_receiver.merge(callee_env.this_object);
+        }
+
+        if let Some(object_name) = object_name {
+            env.objects.insert(object_name.to_string(), merged_receiver);
+        }
     }
 
     fn bind_call_arguments_to_flow(
@@ -6307,11 +6412,11 @@ class A {
         this._x = x;
     }
     static ["static"+"F"] = function () {console.log("a")};
-    static ["static"+"G"]() {console.log("e")}
+    static [("sta" + "tic") + "G"]() {console.log("e")}
     ["method"]() {console.log("b")};
     get ["field"] () {return this._x}
     set ["field"](x) {this._x = x}
-    ["name" + ""]() {}
+    ["na" + "m" + "e"]() {}
 }
 const a = new A(function fooArg() {console.log("c")});
 A.staticF();
@@ -6421,6 +6526,59 @@ a.field();
         assert!(
             !resolved.contains(&(field_site, assigned)),
             "setter-only field assignment must not install a callable data property; got {resolved:?}"
+        );
+    }
+
+    #[test]
+    fn real_ts_pipeline_resolves_computed_object_property_calls() {
+        let source = r#"const obj = {};
+obj["left"] = function left() {};
+obj["right"] = function right() {};
+obj[unknown ? "left" : "right"]();
+"#;
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let resolved = resolved_target_ids_by_site(targets);
+        let site = site_id_for_span(source, &sites, "obj[unknown ? \"left\" : \"right\"]()");
+
+        for target in ["function left() {}", "function right() {}"] {
+            let target = function_id_for_span(source, &db, target);
+            assert!(
+                resolved.contains(&(site, target)),
+                "expected computed object call to resolve {target:?}; got {resolved:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn real_ts_pipeline_invokes_getter_returned_callable_with_call_arguments() {
+        let source = r#"class A {
+    get ["cb"]() {
+        return function inner(x) {
+            x();
+        };
+    }
+}
+const a = new A();
+a["cb"](function target() {});
+"#;
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let resolved = resolved_target_ids_by_site(targets);
+        let inner_site = site_id_for_span(source, &sites, "x()");
+        let target = function_id_for_span(source, &db, "function target() {}");
+
+        assert!(
+            resolved.contains(&(inner_site, target)),
+            "expected getter-returned callable to invoke outer argument; got {resolved:?}"
         );
     }
 
