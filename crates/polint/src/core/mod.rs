@@ -63,6 +63,7 @@ use crate::analysis::refined_calls::store::{RefinedCallOutput, RefinedCallStore}
 use crate::analysis::semantic_graph::constraints::ConstraintFact;
 use crate::analysis::semantic_graph::facts::{SemanticEdgeFact, SemanticNodeFact};
 use crate::analysis::semantic_graph::store::{SemanticGraphOutput, SemanticGraphStore};
+use crate::analysis::solver::budget::BudgetStatus;
 use crate::analysis::solver::facts::DerivedEdgeFact;
 use crate::analysis::solver::store::{SolverOutput, SolverStore};
 use crate::analysis::store::SemanticStore;
@@ -88,7 +89,7 @@ use crate::diagnostics::{
 use crate::go::semantic::facts::{
     GoSemanticAddressTakenFact, GoSemanticCallsiteFact, GoSemanticDynamicDispatchFact,
     GoSemanticFunctionFact, GoSemanticInstantiatedTypeFact, GoSemanticMethodSetFact,
-    GoSemanticPackageErrorFact, GoSemanticPackageFact,
+    GoSemanticPackageErrorFact, GoSemanticPackageFact, GoSemanticRtaEdgeFact,
 };
 use crate::go::semantic::store::{GoSemanticFactsOutput, GoSemanticStore, GoSemanticStoreReport};
 use crate::module_graph::topology::{
@@ -272,6 +273,12 @@ pub struct FunctionFact {
     pub is_exported: bool,
     pub cyclomatic_complexity: u32,
     pub calls: Vec<String>,
+}
+
+pub(crate) const TS_JS_MODULE_FUNCTION_NAME: &str = "<polint:module>";
+
+pub(crate) fn is_synthetic_ts_js_module_function(function: &FunctionFact) -> bool {
+    function.language.is_ts_family() && function.name == TS_JS_MODULE_FUNCTION_NAME
 }
 
 /// Source-file size and aggregate function metrics derived from parsed facts.
@@ -645,7 +652,7 @@ pub struct CachedFileFacts {
     pub jsx_attributes: Vec<JsxAttributeFact>,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct AnalysisDb {
     files: Vec<SourceFile>,
     fact_meta: FactMetaStore,
@@ -783,6 +790,8 @@ pub struct AnalysisDb {
     )]
     ts_object_model_store: Option<TsObjectModelStore>,
     solver_derived_edges: Vec<DerivedEdgeFact>,
+    solver_budget_status: BudgetStatus,
+    solver_budget_reasons: BTreeSet<String>,
     go_semantic_packages: Vec<GoSemanticPackageFact>,
     go_semantic_functions: Vec<GoSemanticFunctionFact>,
     go_semantic_callsites: Vec<GoSemanticCallsiteFact>,
@@ -790,6 +799,7 @@ pub struct AnalysisDb {
     go_semantic_address_taken: Vec<GoSemanticAddressTakenFact>,
     go_semantic_instantiated_types: Vec<GoSemanticInstantiatedTypeFact>,
     go_semantic_dynamic_dispatch: Vec<GoSemanticDynamicDispatchFact>,
+    go_semantic_rta_edges: Vec<GoSemanticRtaEdgeFact>,
     go_semantic_package_errors: Vec<GoSemanticPackageErrorFact>,
     type_facts: Vec<TypeFact>,
     narrowed_type_facts: Vec<NarrowedTypeFact>,
@@ -805,6 +815,146 @@ pub struct AnalysisDb {
     points_to_store: Option<PointsToStore>,
     alias_store: Option<AliasStore>,
     path_contexts: Option<crate::path_context::PathContextIndex>,
+}
+
+impl Default for AnalysisDb {
+    fn default() -> Self {
+        Self {
+            files: Vec::new(),
+            fact_meta: FactMetaStore::default(),
+            packages: Vec::new(),
+            functions: Vec::new(),
+            imports: Vec::new(),
+            resolved_imports: Vec::new(),
+            module_nodes: Vec::new(),
+            module_edges: Vec::new(),
+            workspace_roots: Vec::new(),
+            topology_packages: Vec::new(),
+            source_sets: Vec::new(),
+            dependency_requirements: Vec::new(),
+            resolved_dependency_edges: Vec::new(),
+            import_to_package_edges: Vec::new(),
+            repo_topology_overlays: Vec::new(),
+            scopes: Vec::new(),
+            semantic_imports: Vec::new(),
+            exports: Vec::new(),
+            aliases: Vec::new(),
+            resolution_facts: Vec::new(),
+            generated_symbols: Vec::new(),
+            stable_exports: Vec::new(),
+            scopes_by_id: BTreeMap::new(),
+            semantic_imports_by_id: BTreeMap::new(),
+            exports_by_id: BTreeMap::new(),
+            aliases_by_id: BTreeMap::new(),
+            resolution_facts_by_id: BTreeMap::new(),
+            generated_symbols_by_id: BTreeMap::new(),
+            stable_exports_by_id: BTreeMap::new(),
+            symbols: Vec::new(),
+            definitions: Vec::new(),
+            references: Vec::new(),
+            symbols_by_id: BTreeMap::new(),
+            definitions_by_symbol: BTreeMap::new(),
+            references_by_target: BTreeMap::new(),
+            symbols_by_file: BTreeMap::new(),
+            references_by_file: BTreeMap::new(),
+            symbols_by_name: BTreeMap::new(),
+            branches: Vec::new(),
+            tests: Vec::new(),
+            coverage: Vec::new(),
+            file_metrics: Vec::new(),
+            function_metrics: Vec::new(),
+            complexity_metrics: Vec::new(),
+            ts_components: Vec::new(),
+            ts_classes: Vec::new(),
+            string_literals: Vec::new(),
+            jsx_attributes: Vec::new(),
+            semantic: None,
+            cfg_functions: Vec::new(),
+            cfg_nodes: Vec::new(),
+            cfg_blocks: Vec::new(),
+            cfg_edges: Vec::new(),
+            cfg_reachability: Vec::new(),
+            cfg_dominators: Vec::new(),
+            cfg_postdominators: Vec::new(),
+            cfg_control_dependence: Vec::new(),
+            unsupported_control_flow: Vec::new(),
+            call_sites: Vec::new(),
+            call_targets: Vec::new(),
+            unresolved_calls: Vec::new(),
+            call_store: None,
+            identity_records: Vec::new(),
+            identity_store: None,
+            refined_call_edges: Vec::new(),
+            refined_call_store: None,
+            data_flow_nodes: Vec::new(),
+            data_flow_edges: Vec::new(),
+            data_flow_models: Vec::new(),
+            data_flow_budgets: Vec::new(),
+            data_flow_store: None,
+            evidence_nodes: Vec::new(),
+            evidence_edges: Vec::new(),
+            evidence_bundles: Vec::new(),
+            evidence_paths: Vec::new(),
+            evidence_slices: Vec::new(),
+            evidence_unknowns: Vec::new(),
+            evidence_omitted_regions: Vec::new(),
+            evidence_replay_keys: Vec::new(),
+            evidence_store: None,
+            abstract_domain_observations: Vec::new(),
+            abstract_domain_events: Vec::new(),
+            abstract_domain_store: None,
+            summary_facts: Vec::new(),
+            summary_events: Vec::new(),
+            summary_store: None,
+            extension_activations: Vec::new(),
+            extension_facts: Vec::new(),
+            rejected_extension_facts: Vec::new(),
+            adaptation_model_facts: Vec::new(),
+            rejected_adaptation_model_facts: Vec::new(),
+            entrypoint_facts: Vec::new(),
+            trust_boundary_facts: Vec::new(),
+            dispatch_edge_facts: Vec::new(),
+            unresolved_framework_facts: Vec::new(),
+            entrypoint_store: None,
+            reachability_roots: Vec::new(),
+            reachability_marks: Vec::new(),
+            semantic_nodes: Vec::new(),
+            semantic_edges: Vec::new(),
+            semantic_constraints: Vec::new(),
+            ts_object_allocations: Vec::new(),
+            ts_property_writes: Vec::new(),
+            ts_property_reads: Vec::new(),
+            ts_receiver_bindings: Vec::new(),
+            ts_prototype_links: Vec::new(),
+            ts_object_model_store: None,
+            solver_derived_edges: Vec::new(),
+            solver_budget_status: BudgetStatus::NotRun,
+            solver_budget_reasons: BTreeSet::new(),
+            go_semantic_packages: Vec::new(),
+            go_semantic_functions: Vec::new(),
+            go_semantic_callsites: Vec::new(),
+            go_semantic_method_sets: Vec::new(),
+            go_semantic_address_taken: Vec::new(),
+            go_semantic_instantiated_types: Vec::new(),
+            go_semantic_dynamic_dispatch: Vec::new(),
+            go_semantic_rta_edges: Vec::new(),
+            go_semantic_package_errors: Vec::new(),
+            type_facts: Vec::new(),
+            narrowed_type_facts: Vec::new(),
+            value_facts: Vec::new(),
+            allocation_tokens: Vec::new(),
+            access_path_facts: Vec::new(),
+            points_to_constraints: Vec::new(),
+            points_to_sets: Vec::new(),
+            alias_answers: Vec::new(),
+            type_store: None,
+            value_store: None,
+            access_path_store: None,
+            points_to_store: None,
+            alias_store: None,
+            path_contexts: None,
+        }
+    }
 }
 
 impl AnalysisDb {
@@ -1592,6 +1742,8 @@ impl AnalysisDb {
     ) -> Result<(), AnalysisError> {
         let store = SolverStore::from_output(output)?;
         self.solver_derived_edges = store.derived_edges().to_vec();
+        self.solver_budget_status = store.budget_status();
+        self.solver_budget_reasons = store.budget_reasons().clone();
         Ok(())
     }
 
@@ -1603,6 +1755,16 @@ impl AnalysisDb {
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn solver_derived_edges(&self) -> &[DerivedEdgeFact] {
         &self.solver_derived_edges
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn solver_budget_status(&self) -> BudgetStatus {
+        self.solver_budget_status
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn solver_budget_reasons(&self) -> &BTreeSet<String> {
+        &self.solver_budget_reasons
     }
 
     /// Store the Go semantic facts, returning the resilience report (malformed RTA-signal
@@ -1621,6 +1783,7 @@ impl AnalysisDb {
         self.go_semantic_address_taken = store.output().address_taken.clone();
         self.go_semantic_instantiated_types = store.output().instantiated_types.clone();
         self.go_semantic_dynamic_dispatch = store.output().dynamic_dispatch.clone();
+        self.go_semantic_rta_edges = store.output().rta_edges.clone();
         self.go_semantic_package_errors = store.output().package_errors.clone();
         Ok(store.report())
     }
@@ -1639,6 +1802,7 @@ impl AnalysisDb {
             address_taken: self.go_semantic_address_taken.clone(),
             instantiated_types: self.go_semantic_instantiated_types.clone(),
             dynamic_dispatch: self.go_semantic_dynamic_dispatch.clone(),
+            rta_edges: self.go_semantic_rta_edges.clone(),
             package_errors: self.go_semantic_package_errors.clone(),
         }
     }
@@ -1685,6 +1849,11 @@ impl AnalysisDb {
     )]
     pub(crate) fn go_semantic_dynamic_dispatch(&self) -> &[GoSemanticDynamicDispatchFact] {
         &self.go_semantic_dynamic_dispatch
+    }
+
+    #[cfg(test)]
+    pub(crate) fn go_semantic_rta_edges(&self) -> &[GoSemanticRtaEdgeFact] {
+        &self.go_semantic_rta_edges
     }
 
     #[allow(
@@ -5965,7 +6134,7 @@ fn value_metadata_precision(
         ValueStatus::Unknown => FactPrecision::Unresolved,
         ValueStatus::BudgetExceeded => FactPrecision::Heuristic,
         ValueStatus::Present => match precision {
-            ValuePrecision::ExactLocal => FactPrecision::Exact,
+            ValuePrecision::ExactLocal => FactPrecision::SetupAware,
             ValuePrecision::SetupAware => FactPrecision::SetupAware,
             ValuePrecision::Conservative | ValuePrecision::Heuristic => FactPrecision::Heuristic,
             ValuePrecision::Unknown => FactPrecision::Unresolved,
@@ -7283,6 +7452,31 @@ mod tests {
         behavior: TestRuleBehavior,
     }
 
+    #[test]
+    fn analysis_db_solver_budget_status_tracks_not_run_and_replacements() {
+        let mut db = AnalysisDb::new();
+
+        assert_eq!(db.solver_budget_status(), BudgetStatus::NotRun);
+        assert!(db.solver_budget_reasons().is_empty());
+
+        db.replace_solver_facts(SolverOutput::default())
+            .expect("within-budget solver facts");
+        assert_eq!(db.solver_budget_status(), BudgetStatus::WithinBudget);
+        assert!(db.solver_budget_reasons().is_empty());
+
+        db.replace_solver_facts(SolverOutput {
+            budget_status: BudgetStatus::BudgetExceeded,
+            budget_reasons: BTreeSet::from(["solver.max_steps".to_string()]),
+            ..SolverOutput::default()
+        })
+        .expect("budget-exceeded solver facts");
+        assert_eq!(db.solver_budget_status(), BudgetStatus::BudgetExceeded);
+        assert_eq!(
+            db.solver_budget_reasons(),
+            &BTreeSet::from(["solver.max_steps".to_string()])
+        );
+    }
+
     impl TestRule {
         fn report(id: &'static str, severity: Severity, fingerprint: &'static str) -> Self {
             Self {
@@ -8003,6 +8197,44 @@ mod tests {
                 }],
                 budgets: Vec::new(),
             }
+        }
+    }
+
+    mod type_value_alias_metadata {
+        use super::*;
+        use crate::analysis::ids::{AbstractValueId, ValueFactId};
+        use crate::analysis::values::facts::{ValueKind, ValueProvenance, ValueSubject};
+        use crate::analysis::values::store::ValueOutput;
+
+        #[test]
+        fn exact_local_value_metadata_stays_within_setup_aware_provider_ceiling() {
+            let mut db = AnalysisDb::new();
+            db.replace_type_value_alias_facts(TypeValueAliasOutput {
+                values: ValueOutput {
+                    values: vec![ValueFact {
+                        id: ValueFactId(0),
+                        subject: ValueSubject::Synthetic("literal".to_string()),
+                        value: AbstractValueId(0),
+                        kind: ValueKind::String("\"ok\"".to_string()),
+                        language: Language::TypeScript,
+                        file: None,
+                        function: None,
+                        body: None,
+                        precision: ValuePrecision::ExactLocal,
+                        status: ValueStatus::Present,
+                        provenance: ValueProvenance::Native,
+                        stable_key: "value:literal".to_string(),
+                    }],
+                    allocations: Vec::new(),
+                },
+                ..TypeValueAliasOutput::default()
+            });
+
+            let metadata = db
+                .metadata_for(FactRef::new(FactFamily::Value, 0))
+                .expect("value metadata exists");
+
+            assert_eq!(metadata.precision, FactPrecision::SetupAware);
         }
     }
 

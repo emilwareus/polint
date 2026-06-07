@@ -177,6 +177,42 @@ jobs:
       - name: run determinism gate (N=10 seeded permutations)
         run: cargo test -p polint --lib eval::determinism_gate --locked
 
+  promotion-gate:
+    # V1.3 PROMOTION GATE — see Phase 54 BENCH-01.
+    # Runs the polyglot Go+TS canary, public-surface leak gate, and determinism
+    # gate together on Linux AND macOS. fail-fast: false keeps platform verdicts
+    # independent: a pass on one platform never hides a failure on the other.
+    name: promotion gate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.x"
+          cache-dependency-path: |
+            crates/polint/go-sidecar/polint-go-frontend/go.sum
+            tools/polint-go-symbols/go.sum
+            crates/polint/go-sidecar/polint-go-symbols/go.sum
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: run polyglot Go+TS canary
+        run: cargo test -p polint polyglot --lib --locked
+
+      - name: run public-surface-leak gate
+        run: cargo test --package polint --test public_surface_leak --locked
+
+      - name: run determinism gate
+        run: cargo test -p polint --lib eval::determinism_gate --locked
+
   install-smoke:
     name: cargo install smoke (ubuntu)
     runs-on: ubuntu-latest

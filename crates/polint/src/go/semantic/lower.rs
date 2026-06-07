@@ -9,7 +9,8 @@ use crate::go::semantic::facts::{
     GoSemanticDynamicDispatchId, GoSemanticFunctionFact, GoSemanticFunctionId,
     GoSemanticFunctionKind, GoSemanticInstantiatedTypeFact, GoSemanticInstantiatedTypeId,
     GoSemanticMethodSetFact, GoSemanticMethodSetId, GoSemanticPackageErrorFact,
-    GoSemanticPackageErrorId, GoSemanticPackageFact, GoSemanticPackageId,
+    GoSemanticPackageErrorId, GoSemanticPackageFact, GoSemanticPackageId, GoSemanticRtaEdgeFact,
+    GoSemanticRtaEdgeId,
 };
 use crate::go::semantic::protocol::{GoSemanticOutput, GoSemanticRawFrame, GoSemanticSpan};
 use crate::go::semantic::store::GoSemanticFactsOutput;
@@ -63,6 +64,7 @@ pub(crate) fn lower_go_semantic(
                     .push(lower_instantiated_type(row));
             }
             "dynamic_dispatch" => lowered.dynamic_dispatch.push(lower_dynamic_dispatch(row)),
+            "rta_edge" => lowered.rta_edges.push(lower_rta_edge(row)),
             "package_error" => lowered.package_errors.push(lower_package_error(row)),
             "receiver_type" | "unsupported" | "type_fact" => {}
             _ => {}
@@ -195,6 +197,18 @@ fn lower_dynamic_dispatch(row: &GoSemanticRawFrame) -> GoSemanticDynamicDispatch
     }
 }
 
+fn lower_rta_edge(row: &GoSemanticRawFrame) -> GoSemanticRtaEdgeFact {
+    GoSemanticRtaEdgeFact {
+        id: GoSemanticRtaEdgeId(0),
+        stable_key: harvest_stable_key(row),
+        package_id: row.package_id.clone(),
+        package_path: row.package_path.clone(),
+        caller: row.caller.clone(),
+        callee: row.callee.clone(),
+        edge_kind: row.edge_kind.clone(),
+    }
+}
+
 fn lower_package_error(row: &GoSemanticRawFrame) -> GoSemanticPackageErrorFact {
     GoSemanticPackageErrorFact {
         id: GoSemanticPackageErrorId(0),
@@ -309,6 +323,7 @@ mod tests {
 {"schema":"polint-go-semantic-2","kind":"address_taken","package_id":"example.com/p","package_path":"example.com/p","function":"example.com/p.F","stable_key":"at"}
 {"schema":"polint-go-semantic-2","kind":"instantiated_type","package_id":"example.com/p","package_path":"example.com/p","type":"example.com/p.T","stable_key":"it"}
 {"schema":"polint-go-semantic-2","kind":"dynamic_dispatch","package_id":"example.com/p","package_path":"example.com/p","caller":"example.com/p.call","callsite_stable_key":"cs","interface_type":"example.com/p.I","method":"M","stable_key":"dd"}
+{"schema":"polint-go-semantic-2","kind":"rta_edge","package_id":"example.com/p","package_path":"example.com/p","caller":"main","callee":"init$1","edge_kind":"dynamic function call","stable_key":"rta"}
 {"schema":"polint-go-semantic-2","kind":"session_end"}
 "#,
         )
@@ -323,6 +338,9 @@ mod tests {
         assert_eq!(lowered.dynamic_dispatch[0].method.as_deref(), Some("M"));
         assert_eq!(lowered.dynamic_dispatch[0].signature, None);
         assert_eq!(lowered.dynamic_dispatch[0].callsite_stable_key, "cs");
+        assert_eq!(lowered.rta_edges[0].caller, "main");
+        assert_eq!(lowered.rta_edges[0].callee, "init$1");
+        assert_eq!(lowered.rta_edges[0].edge_kind, "dynamic function call");
     }
 
     #[test]

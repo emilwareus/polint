@@ -382,6 +382,12 @@ fn go_semantic_output_digest(
             dynamic_dispatch.signature.as_deref().unwrap_or("")
         )
     }));
+    parts.extend(output.rta_edges.iter().map(|edge| {
+        format!(
+            "rta_edge={} package={} caller={} callee={} kind={}",
+            edge.stable_key, edge.package_path, edge.caller, edge.callee, edge.edge_kind
+        )
+    }));
     parts.extend(output.package_errors.iter().map(|package_error| {
         format!(
             "package_error={} package={} message={}",
@@ -395,6 +401,7 @@ fn go_semantic_output_digest(
         && output.instantiated_types.is_empty()
         && output.address_taken.is_empty()
         && output.dynamic_dispatch.is_empty()
+        && output.rta_edges.is_empty()
         && output.package_errors.is_empty()
     {
         parts.push("go_semantic_output=empty".to_string());
@@ -926,7 +933,7 @@ mod tests {
         use crate::go::semantic::facts::{
             GoSemanticAddressTakenFact, GoSemanticAddressTakenId, GoSemanticDynamicDispatchFact,
             GoSemanticDynamicDispatchId, GoSemanticInstantiatedTypeFact,
-            GoSemanticInstantiatedTypeId,
+            GoSemanticInstantiatedTypeId, GoSemanticRtaEdgeFact, GoSemanticRtaEdgeId,
         };
 
         // A non-empty base so the emptiness sentinel is not what carries the signal.
@@ -996,13 +1003,29 @@ mod tests {
         );
 
         // (c) Changing the dynamic-dispatch discriminant (the invoked method) changes it.
-        // `base` is no longer needed (only `base_digest` is compared against), so move it.
-        let mut changed_dispatch = base;
+        let mut changed_dispatch = base.clone();
         changed_dispatch.dynamic_dispatch[0].method = Some("Bark".to_string());
         assert_ne!(
             base_digest,
             output_digest_for(&changed_dispatch.normalized()),
             "a dynamic_dispatch discriminant change must invalidate the go.semantic output digest"
+        );
+
+        // (d) Adding a direct x/tools RTA edge changes it.
+        let mut changed_rta_edge = base;
+        changed_rta_edge.rta_edges.push(GoSemanticRtaEdgeFact {
+            id: GoSemanticRtaEdgeId(0),
+            stable_key: "rta|main|init1".to_string(),
+            package_id: "pkg".to_string(),
+            package_path: "pkg".to_string(),
+            caller: "main".to_string(),
+            callee: "init$1".to_string(),
+            edge_kind: "dynamic function call".to_string(),
+        });
+        assert_ne!(
+            base_digest,
+            output_digest_for(&changed_rta_edge.normalized()),
+            "an rta_edge change must invalidate the go.semantic output digest"
         );
     }
 }

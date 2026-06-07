@@ -457,6 +457,7 @@ mod tests {
                     observed_runtime_ms: Some(runtime_ms),
                     peak_rss_bytes: None,
                 },
+                rss: Default::default(),
             }),
             comparison_rows: Vec::new(),
             adaptation: None,

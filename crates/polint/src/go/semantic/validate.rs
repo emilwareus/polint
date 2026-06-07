@@ -5,7 +5,7 @@ use crate::analysis::error::AnalysisError;
 use crate::go::semantic::facts::{
     GoSemanticAddressTakenFact, GoSemanticCallsiteFact, GoSemanticDynamicDispatchFact,
     GoSemanticFunctionFact, GoSemanticInstantiatedTypeFact, GoSemanticMethodSetFact,
-    GoSemanticPackageFact,
+    GoSemanticPackageFact, GoSemanticRtaEdgeFact,
 };
 use crate::go::semantic::store::{GO_SEMANTIC_PROVIDER_ID, GoSemanticFactsOutput};
 
@@ -53,6 +53,10 @@ pub(crate) fn validate_go_semantic_output(
             .map(|fact| fact.stable_key.as_str()),
     )?;
     validate_unique(
+        "rta_edge",
+        output.rta_edges.iter().map(|fact| fact.stable_key.as_str()),
+    )?;
+    validate_unique(
         "package_error",
         output
             .package_errors
@@ -86,6 +90,11 @@ pub(crate) fn validate_go_semantic_output(
     }
     for dynamic_dispatch in &output.dynamic_dispatch {
         if let Some(reason) = dynamic_dispatch_rejection(dynamic_dispatch) {
+            return Err(invalid_fact(reason));
+        }
+    }
+    for rta_edge in &output.rta_edges {
+        if let Some(reason) = rta_edge_rejection(rta_edge) {
             return Err(invalid_fact(reason));
         }
     }
@@ -175,6 +184,31 @@ pub(crate) fn dynamic_dispatch_rejection(fact: &GoSemanticDynamicDispatchFact) -
     None
 }
 
+pub(crate) fn rta_edge_rejection(fact: &GoSemanticRtaEdgeFact) -> Option<String> {
+    if fact.stable_key.is_empty() {
+        return Some("Go semantic rta_edge row is missing a stable_key".to_string());
+    }
+    if fact.caller.is_empty() {
+        return Some(format!(
+            "Go semantic rta_edge `{}` has an empty caller identity",
+            fact.stable_key
+        ));
+    }
+    if fact.callee.is_empty() {
+        return Some(format!(
+            "Go semantic rta_edge `{}` has an empty callee identity",
+            fact.stable_key
+        ));
+    }
+    if fact.edge_kind.is_empty() {
+        return Some(format!(
+            "Go semantic rta_edge `{}` has an empty edge kind",
+            fact.stable_key
+        ));
+    }
+    None
+}
+
 fn validate_unique<'a>(
     family: &str,
     stable_keys: impl Iterator<Item = &'a str>,
@@ -247,7 +281,8 @@ mod tests {
     use crate::go::semantic::facts::{
         GoSemanticAddressTakenFact, GoSemanticAddressTakenId, GoSemanticCallStatus,
         GoSemanticCallsiteId, GoSemanticFunctionId, GoSemanticFunctionKind,
-        GoSemanticInstantiatedTypeFact, GoSemanticInstantiatedTypeId,
+        GoSemanticInstantiatedTypeFact, GoSemanticInstantiatedTypeId, GoSemanticRtaEdgeFact,
+        GoSemanticRtaEdgeId,
     };
 
     #[test]
@@ -400,6 +435,24 @@ mod tests {
             ..GoSemanticFactsOutput::default()
         };
         assert!(validate_go_semantic_output(&output).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_rta_edge_without_identity() {
+        let output = GoSemanticFactsOutput {
+            rta_edges: vec![GoSemanticRtaEdgeFact {
+                id: GoSemanticRtaEdgeId(0),
+                stable_key: "rta".to_string(),
+                package_id: "pkg".to_string(),
+                package_path: "example.com/pkg".to_string(),
+                caller: "main".to_string(),
+                callee: String::new(),
+                edge_kind: "dynamic function call".to_string(),
+            }],
+            ..GoSemanticFactsOutput::default()
+        };
+        let err = validate_go_semantic_output(&output).unwrap_err();
+        assert!(err.to_string().contains("empty callee identity"), "{err}");
     }
 
     fn function(stable_key: &str, relative_file: Option<&str>) -> GoSemanticFunctionFact {

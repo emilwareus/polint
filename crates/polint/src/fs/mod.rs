@@ -23,10 +23,11 @@ pub(crate) fn discover_files(config: &LoadedConfig) -> Result<Vec<DiscoveredFile
 
     let walker = WalkBuilder::new(&config.root)
         .hidden(false)
-        .git_ignore(true)
-        .git_exclude(true)
+        .ignore(config.respect_gitignore)
+        .git_ignore(config.respect_gitignore)
+        .git_exclude(config.respect_gitignore)
         .require_git(false)
-        .parents(true)
+        .parents(config.respect_gitignore)
         .build();
 
     for entry in walker {
@@ -239,6 +240,24 @@ exclude = ["src/excluded.tsx", "src/vendor/**"]
             relative_paths(&files),
             ["src/included.js", "src/nested/component.tsx"]
         );
+    }
+
+    #[test]
+    fn discovery_can_bypass_gitignore_for_explicit_internal_target_files() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(temp.path().join(".gitignore"), "node_modules/\n").unwrap();
+        write_file(
+            temp.path().join("node_modules/pkg/index.js"),
+            "module.exports = function pkg() {};",
+        );
+        let mut config = load_config(temp.path()).unwrap();
+        config.config.workspace.include = vec!["node_modules/pkg/index.js".to_string()];
+        config.config.workspace.exclude.clear();
+        config.respect_gitignore = false;
+
+        let files = discover_files(&config).unwrap();
+
+        assert_eq!(relative_paths(&files), ["node_modules/pkg/index.js"]);
     }
 
     proptest! {

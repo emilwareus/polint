@@ -15,6 +15,8 @@
 //! See [`super`] for the D-04 naming-collision guard (unified core vs. the
 //! points-to sub-domain's internal `PointsToConstraintKind`/`PtVarId` language).
 
+use std::collections::BTreeSet;
+
 use crate::analysis::points_to::facts::PointsToConstraintFact;
 use crate::analysis::points_to::solver::{PointsToSolveResult, solve_points_to};
 
@@ -42,6 +44,8 @@ pub(crate) struct PolicyOutcome {
     pub(crate) derived_edges: Vec<DerivedEdgeFact>,
     /// The policy's budget outcome, projected to the unified [`BudgetStatus`].
     pub(crate) budget_status: BudgetStatus,
+    /// Stable reason labels for every budget ceiling this policy exhausted.
+    pub(crate) budget_reasons: BTreeSet<String>,
     /// Number of worklist steps the policy reported consuming (sourced into the
     /// engine's monotonic step counter for provenance in Plan 02).
     pub(crate) steps: u64,
@@ -55,6 +59,7 @@ impl PolicyOutcome {
             points_to: None,
             derived_edges: Vec::new(),
             budget_status: BudgetStatus::WithinBudget,
+            budget_reasons: BTreeSet::new(),
             steps: 0,
         }
     }
@@ -102,12 +107,14 @@ impl SolverPolicy for PointsToPolicy {
         // `solve_points_to` directly.
         let result = solve_points_to(&self.constraints, budget.points_to_budget());
         let budget_status = BudgetStatus::from_points_to(result.budget_status);
+        let budget_reasons = result.budget_reasons.clone();
         PolicyOutcome {
             points_to: Some(result),
             // Points-to derived edges flow through `engine::derive_edges` (the
             // byte-identical CopyEdge closure), not this channel.
             derived_edges: Vec::new(),
             budget_status,
+            budget_reasons,
             steps: 0,
         }
     }
@@ -141,6 +148,7 @@ impl SolverPolicy for GoRtaPolicy {
             points_to: None,
             derived_edges: output.derived_edges,
             budget_status: output.budget_status,
+            budget_reasons: output.budget_reasons,
             steps: 0,
         }
     }
@@ -169,6 +177,7 @@ impl SolverPolicy for TsTokensPolicy {
             points_to: None,
             derived_edges: output.derived_edges,
             budget_status: output.budget_status,
+            budget_reasons: output.budget_reasons,
             steps: output.steps,
         }
     }
@@ -197,6 +206,7 @@ impl SolverPolicy for TsObjectModelPolicy {
             points_to: None,
             derived_edges: output.derived_edges,
             budget_status: output.budget_status,
+            budget_reasons: output.budget_reasons,
             steps: output.steps,
         }
     }

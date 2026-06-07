@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::analysis::error::AnalysisError;
 use crate::analysis::ids::DerivedEdgeId;
 
-use super::budget::BudgetStatus;
+use super::budget::{BudgetReason, BudgetStatus};
 use super::facts::DerivedEdgeFact;
 
 /// The provider id for the unified solver (registered in the kernel manifest in
@@ -33,6 +33,7 @@ pub(crate) const SOLVER_PROVIDER_ID: &str = "polint.solver";
 pub(crate) struct SolverOutput {
     pub(crate) derived_edges: Vec<DerivedEdgeFact>,
     pub(crate) budget_status: BudgetStatus,
+    pub(crate) budget_reasons: BTreeSet<String>,
 }
 
 impl SolverOutput {
@@ -56,6 +57,8 @@ impl SolverOutput {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SolverStore {
     derived_edges: Vec<DerivedEdgeFact>,
+    budget_status: BudgetStatus,
+    budget_reasons: BTreeSet<String>,
     /// Derived edges indexed by their producing constraint-kind tag (the owned
     /// `provenance.constraint_kind` snake_case label).
     edges_by_constraint_kind: BTreeMap<String, Vec<usize>>,
@@ -68,6 +71,11 @@ impl SolverStore {
     /// than silently accepted.
     pub(crate) fn from_output(output: SolverOutput) -> Result<Self, AnalysisError> {
         let output = output.normalized();
+        validate_budget_evidence(
+            output.budget_status,
+            &output.budget_reasons,
+            output.derived_edges.is_empty(),
+        )?;
 
         let mut seen_keys: BTreeSet<&str> = BTreeSet::new();
         for edge in &output.derived_edges {
@@ -90,6 +98,8 @@ impl SolverStore {
 
         let mut store = Self {
             derived_edges: output.derived_edges,
+            budget_status: output.budget_status,
+            budget_reasons: output.budget_reasons,
             ..Self::default()
         };
 
@@ -110,12 +120,62 @@ impl SolverStore {
         &self.derived_edges
     }
 
+    pub(crate) fn budget_status(&self) -> BudgetStatus {
+        self.budget_status
+    }
+
+    pub(crate) fn budget_reasons(&self) -> &BTreeSet<String> {
+        &self.budget_reasons
+    }
+
     /// Indices into [`Self::derived_edges`] for every edge produced by the given
     /// constraint-kind tag (the `ConstraintKind::as_str()` snake_case label).
     pub(crate) fn edges_for_constraint_kind(&self, kind: &str) -> &[usize] {
         self.edges_by_constraint_kind
             .get(kind)
             .map_or(&[], Vec::as_slice)
+    }
+}
+
+fn validate_budget_evidence(
+    budget_status: BudgetStatus,
+    budget_reasons: &BTreeSet<String>,
+    derived_edges_empty: bool,
+) -> Result<(), AnalysisError> {
+    let canonical_reasons: BTreeSet<&str> = BudgetReason::all()
+        .iter()
+        .map(|reason| reason.as_str())
+        .collect();
+    if let Some(reason) = budget_reasons
+        .iter()
+        .find(|reason| !canonical_reasons.contains(reason.as_str()))
+    {
+        return Err(AnalysisError::InvalidFact {
+            provider: SOLVER_PROVIDER_ID,
+            reason: format!("unknown solver budget reason `{reason}`"),
+        });
+    }
+
+    if budget_status == BudgetStatus::NotRun && !derived_edges_empty {
+        return Err(AnalysisError::InvalidFact {
+            provider: SOLVER_PROVIDER_ID,
+            reason: "solver NotRun status cannot contain derived edges".to_string(),
+        });
+    }
+
+    match (budget_status, budget_reasons.is_empty()) {
+        (BudgetStatus::WithinBudget | BudgetStatus::NotRun, true)
+        | (BudgetStatus::BudgetExceeded, false) => Ok(()),
+        (BudgetStatus::WithinBudget | BudgetStatus::NotRun, false) => {
+            Err(AnalysisError::InvalidFact {
+                provider: SOLVER_PROVIDER_ID,
+                reason: "solver budget reasons require BudgetExceeded status".to_string(),
+            })
+        }
+        (BudgetStatus::BudgetExceeded, true) => Err(AnalysisError::InvalidFact {
+            provider: SOLVER_PROVIDER_ID,
+            reason: "solver BudgetExceeded status requires at least one budget reason".to_string(),
+        }),
     }
 }
 
@@ -215,10 +275,120 @@ mod tests {
     fn from_output_builds_constraint_kind_index() {
         let store = SolverStore::from_output(sample_output()).expect("store");
         assert_eq!(store.derived_edges().len(), 2);
+        assert_eq!(store.budget_status(), BudgetStatus::WithinBudget);
+        assert!(store.budget_reasons().is_empty());
         // Both edges were produced by a copy_edge constraint.
         assert_eq!(store.edges_for_constraint_kind("copy_edge").len(), 2);
         // A kind with no rows resolves to an empty slice.
         assert!(store.edges_for_constraint_kind("alloc").is_empty());
+    }
+
+    #[test]
+    fn from_output_preserves_run_level_budget_reasons_without_edge_rows() {
+        let output = SolverOutput {
+            budget_status: BudgetStatus::BudgetExceeded,
+            budget_reasons: BTreeSet::from(["solver.max_steps".to_string()]),
+            ..SolverOutput::default()
+        };
+
+        let store = SolverStore::from_output(output).expect("store");
+
+        assert!(store.derived_edges().is_empty());
+        assert_eq!(store.budget_status(), BudgetStatus::BudgetExceeded);
+        assert_eq!(
+            store.budget_reasons(),
+            &BTreeSet::from(["solver.max_steps".to_string()])
+        );
+    }
+
+    #[test]
+    fn from_output_rejects_budget_reasons_without_budget_exceeded_status() {
+        let output = SolverOutput {
+            budget_status: BudgetStatus::WithinBudget,
+            budget_reasons: BTreeSet::from(["solver.max_steps".to_string()]),
+            ..SolverOutput::default()
+        };
+
+        let error = SolverStore::from_output(output).expect_err("inconsistent budget rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("solver budget reasons require BudgetExceeded status")
+        );
+        assert!(error.to_string().contains("polint.solver"));
+    }
+
+    #[test]
+    fn from_output_accepts_not_run_without_budget_reasons() {
+        let output = SolverOutput {
+            budget_status: BudgetStatus::NotRun,
+            ..SolverOutput::default()
+        };
+
+        let store = SolverStore::from_output(output).expect("not-run store");
+
+        assert_eq!(store.budget_status(), BudgetStatus::NotRun);
+        assert!(store.budget_reasons().is_empty());
+    }
+
+    #[test]
+    fn from_output_rejects_not_run_with_derived_edges() {
+        let output = SolverOutput {
+            derived_edges: vec![edge(
+                0,
+                1,
+                2,
+                "edge|copy_edge|not-run",
+                provenance(&["copy"], 1),
+            )],
+            budget_status: BudgetStatus::NotRun,
+            ..SolverOutput::default()
+        };
+
+        let error = SolverStore::from_output(output).expect_err("not-run edge rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("solver NotRun status cannot contain derived edges")
+        );
+        assert!(error.to_string().contains("polint.solver"));
+    }
+
+    #[test]
+    fn from_output_rejects_budget_exceeded_without_budget_reasons() {
+        let output = SolverOutput {
+            budget_status: BudgetStatus::BudgetExceeded,
+            ..SolverOutput::default()
+        };
+
+        let error = SolverStore::from_output(output).expect_err("missing budget reason rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("solver BudgetExceeded status requires at least one budget reason")
+        );
+        assert!(error.to_string().contains("polint.solver"));
+    }
+
+    #[test]
+    fn from_output_rejects_unknown_budget_reason_labels() {
+        let output = SolverOutput {
+            budget_status: BudgetStatus::BudgetExceeded,
+            budget_reasons: BTreeSet::from(["prototype_cycle".to_string()]),
+            ..SolverOutput::default()
+        };
+
+        let error = SolverStore::from_output(output).expect_err("unknown reason rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("unknown solver budget reason `prototype_cycle`")
+        );
+        assert!(error.to_string().contains("polint.solver"));
     }
 
     #[test]

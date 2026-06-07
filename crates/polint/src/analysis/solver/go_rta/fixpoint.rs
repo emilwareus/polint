@@ -50,11 +50,12 @@
 //! than the cap. Termination does not depend on the round cap: `reachable` is monotonic
 //! and bounded by the finite function set; `max_worklist_steps` is the real runaway guard.
 //! A cap latches the run-level [`BudgetStatus::BudgetExceeded`] only when it actually
-//! prevents pending work — the round cap latches BudgetExceeded only if the cap-time
-//! frontier still has a static-call target or a dynamic callsite to resolve; a non-empty
-//! frontier whose members have neither is already converged, so hitting the cap there is
-//! honest convergence, not truncation (FINDING 6). Edges resolved before a cap keep their
-//! honest status (review finding #R1); the loop never runs unbounded.
+//! prevents pending work — the round cap latches BudgetExceeded only when dynamic
+//! dispatch work is prevented. Static-only pending work remains bounded by
+//! `max_worklist_steps`. A non-empty frontier with no dynamic callsites at the cap
+//! boundary can still converge honestly without a round-cap budget signal. Edges
+//! resolved before a cap keep their honest status (review finding #R1); the loop never
+//! runs unbounded.
 //!
 //! The frontier-only scan is what keeps the worklist-step count proportional to real
 //! work (≈ Σ reachable_callers × their_callsites) instead of growing super-linearly
@@ -66,7 +67,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::analysis::solver::budget::{BudgetStatus, SolverBudget};
+use crate::analysis::solver::budget::{BudgetReason, BudgetStatus, SolverBudget};
 use crate::analysis::solver::facts::DerivedEdgeFact;
 use crate::analysis::solver::store::SolverOutput;
 
@@ -117,6 +118,7 @@ pub(crate) fn solve_go_rta(inputs: &GoRtaInputs, budget: &SolverBudget) -> Solve
     let mut edges_by_key: BTreeMap<String, DerivedEdgeFact> = BTreeMap::new();
 
     let mut budget_exceeded = false;
+    let mut budget_reasons = BTreeSet::new();
     // GLOBAL monotonic step counter (R3): increments once per callsite resolution
     // across the WHOLE run and is never reset, so every derived edge's `solver_step`
     // is globally monotonic.
@@ -146,33 +148,7 @@ pub(crate) fn solve_go_rta(inputs: &GoRtaInputs, budget: &SolverBudget) -> Solve
     // a signature-bearing callsite and therefore actually skips work. An unreachable
     // func-value callsite must not taint the run-level budget status.
 
-    // A frontier member carries PENDING WORK only if it has a static-call target or a
-    // dynamic callsite to resolve. A non-empty frontier whose members have neither is
-    // already CONVERGED — processing it would resolve nothing (FINDING 6).
-    let frontier_has_pending_work = |frontier: &BTreeSet<String>| -> bool {
-        frontier.iter().any(|caller| {
-            inputs.static_call_targets.contains_key(caller.as_str())
-                || callsites_by_caller.contains_key(caller.as_str())
-        })
-    };
-
     while !frontier.is_empty() {
-        // Round cap (D-13, FIX 1): bound only GENUINE dynamic-dispatch re-iteration —
-        // `dispatch_rounds` counts only rounds that actually resolved a dynamic callsite,
-        // never static-BFS levels. Latch BudgetExceeded ONLY when the cap actually prevents
-        // genuinely pending work (FINDING 6): a non-empty frontier whose members have no
-        // static target and no dynamic callsite is converged, so hitting the cap there is
-        // honest convergence, not truncation — break WithinBudget rather than a false
-        // BudgetExceeded. A genuine dispatch fixpoint that re-iterates past the cap (e.g.
-        // the runaway test) still latches honestly here; a genuine work explosion latches
-        // via `max_worklist_steps`.
-        if dispatch_rounds >= budget.go.max_rta_rounds {
-            if frontier_has_pending_work(&frontier) {
-                budget_exceeded = true;
-            }
-            break;
-        }
-
         // Resolve only the callsites of THIS round's frontier (the callers newly
         // reached in the prior round, or the roots in round 1). Collect callees that
         // become newly reachable — they are the next round's frontier. Track whether this
@@ -192,7 +168,9 @@ pub(crate) fn solve_go_rta(inputs: &GoRtaInputs, budget: &SolverBudget) -> Solve
                 for callee in static_callees {
                     solver_step += 1;
                     if solver_step > budget.go.max_worklist_steps as u64 {
-                        return finish(edges_by_key, true);
+                        budget_reasons
+                            .insert(BudgetReason::GoMaxWorklistSteps.as_str().to_string());
+                        return finish(edges_by_key, true, budget_reasons);
                     }
                     if !reachable.contains(callee) {
                         newly_reachable.insert(callee.clone());
@@ -203,6 +181,15 @@ pub(crate) fn solve_go_rta(inputs: &GoRtaInputs, budget: &SolverBudget) -> Solve
             let Some(callsite_indices) = callsites_by_caller.get(caller.as_str()) else {
                 continue;
             };
+            // Round cap (D-13): bound only genuine dynamic-dispatch re-iteration.
+            // Static-call expansion above is independent and remains governed by
+            // `go.max_worklist_steps`; the dispatch cap must never block static
+            // reachability closure or falsely latch when only static work remains.
+            if dispatch_rounds >= budget.go.max_rta_rounds {
+                budget_exceeded = true;
+                budget_reasons.insert(BudgetReason::GoMaxRtaRounds.as_str().to_string());
+                continue;
+            }
             // This caller has at least one dynamic callsite: the round performs genuine
             // dispatch resolution, so it counts toward the round cap (FIX 1).
             resolved_dispatch_this_round = true;
@@ -213,7 +200,8 @@ pub(crate) fn solve_go_rta(inputs: &GoRtaInputs, budget: &SolverBudget) -> Solve
                 solver_step += 1;
                 if solver_step > budget.go.max_worklist_steps as u64 {
                     // Edges resolved before the cap keep their honest status (R1).
-                    return finish(edges_by_key, true);
+                    budget_reasons.insert(BudgetReason::GoMaxWorklistSteps.as_str().to_string());
+                    return finish(edges_by_key, true, budget_reasons);
                 }
 
                 let callsite = &inputs.callsites[index];
@@ -222,6 +210,8 @@ pub(crate) fn solve_go_rta(inputs: &GoRtaInputs, budget: &SolverBudget) -> Solve
                     && callsite.signature.is_some()
                 {
                     budget_exceeded = true;
+                    budget_reasons
+                        .insert(BudgetReason::GoAddressTakenThreshold.as_str().to_string());
                 }
                 let resolution = resolve_callsite(
                     callsite,
@@ -233,6 +223,11 @@ pub(crate) fn solve_go_rta(inputs: &GoRtaInputs, budget: &SolverBudget) -> Solve
                 );
                 if resolution.candidate_cap_exceeded {
                     budget_exceeded = true;
+                    budget_reasons.insert(
+                        BudgetReason::GoMaxCandidatesPerCallsite
+                            .as_str()
+                            .to_string(),
+                    );
                 }
                 for edge in resolution.edges {
                     // A newly-resolved callee becomes reachable, so its own callsites
@@ -261,12 +256,16 @@ pub(crate) fn solve_go_rta(inputs: &GoRtaInputs, budget: &SolverBudget) -> Solve
         frontier = newly_reachable;
     }
 
-    finish(edges_by_key, budget_exceeded)
+    finish(edges_by_key, budget_exceeded, budget_reasons)
 }
 
 /// Assemble the normalized output from the deduplicated edge accumulator + the
 /// run-level budget status.
-fn finish(edges_by_key: BTreeMap<String, DerivedEdgeFact>, budget_exceeded: bool) -> SolverOutput {
+fn finish(
+    edges_by_key: BTreeMap<String, DerivedEdgeFact>,
+    budget_exceeded: bool,
+    budget_reasons: BTreeSet<String>,
+) -> SolverOutput {
     let budget_status = if budget_exceeded {
         BudgetStatus::BudgetExceeded
     } else {
@@ -275,6 +274,7 @@ fn finish(edges_by_key: BTreeMap<String, DerivedEdgeFact>, budget_exceeded: bool
     SolverOutput {
         derived_edges: edges_by_key.into_values().collect(),
         budget_status,
+        budget_reasons,
     }
     .normalized()
 }
@@ -1066,10 +1066,11 @@ mod tests {
     fn convergence_at_round_boundary_with_no_pending_work_stays_within_budget() {
         // FINDING 6: at the `max_rta_rounds` boundary the cap must latch BudgetExceeded
         // ONLY when there is genuinely pending dispatch work. Here `main` (root) invokes
-        // `Step`, resolving to (pkg.A).Step in round 1; (pkg.A).Step has NO callsites, so
-        // the round-2 frontier {A.Step} has nothing left to resolve — the analysis has
-        // CONVERGED. With max_rta_rounds = 1 the old code latched BudgetExceeded purely
-        // because the frontier was non-empty, a false positive. (Contrast the runaway test
+        // `Step`, resolving to (pkg.A).Step in round 1; (pkg.A).Step has NO callsites
+        // and only a static edge back to already-reachable main, so the round-2 frontier
+        // {A.Step} has nothing left to resolve — the analysis has CONVERGED. With
+        // max_rta_rounds = 1 the old code latched BudgetExceeded purely because the
+        // frontier had a static-call row, a false positive. (Contrast the runaway test
         // where A.Step DOES invoke B.Step — genuine pending work that still latches.)
         let mut function_node = BTreeMap::new();
         function_node.insert("main.main".to_string(), SemanticNodeId(1));
@@ -1096,8 +1097,9 @@ mod tests {
 
         let inputs = GoRtaInputs {
             roots: BTreeSet::from(["main.main".to_string()]),
-            // Only main has a callsite; (pkg.A).Step has none → the round-2 frontier is
-            // converged with no pending work.
+            // Only main has a callsite; (pkg.A).Step has none, and its static edge is
+            // already closed over reachable main → the round-2 frontier is converged
+            // with no pending work.
             callsites: vec![GoRtaCallsite {
                 caller: "main.main".to_string(),
                 callsite_node: SemanticNodeId(2),
@@ -1112,6 +1114,10 @@ mod tests {
             instantiated_keys,
             methods_by_receiver,
             function_node,
+            static_call_targets: BTreeMap::from([(
+                "(pkg.A).Step".to_string(),
+                BTreeSet::from(["main.main".to_string()]),
+            )]),
             ..GoRtaInputs::default()
         }
         .finalize_indexes();
@@ -1132,6 +1138,79 @@ mod tests {
             output.budget_status,
             BudgetStatus::WithinBudget,
             "convergence at the round boundary with no pending work must NOT latch BudgetExceeded"
+        );
+    }
+
+    #[test]
+    fn static_only_expansion_after_dispatch_round_cap_stays_within_budget() {
+        // The dispatch round cap is a dynamic-dispatch cap, not a static reachability
+        // cap. Round 1 resolves main -> A dynamically. At the cap boundary, A has only
+        // a static call to B, so the analysis must still close over B without latching
+        // go.max_rta_rounds.
+        let mut function_node = BTreeMap::new();
+        function_node.insert("main.main".to_string(), SemanticNodeId(1));
+        function_node.insert("(pkg.A).Step".to_string(), SemanticNodeId(3));
+        function_node.insert("pkg.B".to_string(), SemanticNodeId(4));
+
+        let mut method_sets = BTreeMap::new();
+        method_sets.insert("pkg.A".to_string(), BTreeSet::from(["Step".to_string()]));
+        let mut method_set_keys = BTreeMap::new();
+        method_set_keys.insert("pkg.A".to_string(), "ms|A".to_string());
+
+        let mut methods_by_receiver = BTreeMap::new();
+        methods_by_receiver.insert(
+            "pkg.A".to_string(),
+            vec![GoRtaMethod {
+                method_name: "Step".to_string(),
+                qualified: "(pkg.A).Step".to_string(),
+                node: SemanticNodeId(3),
+            }],
+        );
+
+        let inputs = GoRtaInputs {
+            roots: BTreeSet::from(["main.main".to_string()]),
+            callsites: vec![GoRtaCallsite {
+                caller: "main.main".to_string(),
+                callsite_node: SemanticNodeId(2),
+                callsite_stable_key: "cs|main".to_string(),
+                interface_method: Some("Step".to_string()),
+                signature: None,
+                dispatch_stable_key: "dd|main".to_string(),
+            }],
+            method_sets,
+            method_set_keys,
+            instantiated: BTreeSet::from(["pkg.A".to_string()]),
+            instantiated_keys: BTreeMap::from([("pkg.A".to_string(), "inst|A".to_string())]),
+            methods_by_receiver,
+            function_node,
+            static_call_targets: BTreeMap::from([(
+                "(pkg.A).Step".to_string(),
+                BTreeSet::from(["pkg.B".to_string()]),
+            )]),
+            ..GoRtaInputs::default()
+        }
+        .finalize_indexes();
+
+        let mut budget = SolverBudget::default();
+        budget.go.max_rta_rounds = 1;
+
+        let output = solve_go_rta(&inputs, &budget);
+
+        assert!(
+            output
+                .derived_edges
+                .iter()
+                .any(|edge| edge.source == SemanticNodeId(1) && edge.target == SemanticNodeId(3)),
+            "round 1 must still resolve the dynamic main -> A edge"
+        );
+        assert_eq!(
+            output.budget_status,
+            BudgetStatus::WithinBudget,
+            "static-only expansion after the dispatch cap must not latch BudgetExceeded"
+        );
+        assert!(
+            output.budget_reasons.is_empty(),
+            "static-only expansion must not record a dispatch budget reason"
         );
     }
 

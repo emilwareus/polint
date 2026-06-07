@@ -1118,8 +1118,11 @@ enum ValueDraft {
 impl ValueDraft {
     fn to_value(&self, place_ids: &BTreeMap<String, PlaceId>) -> MirValue {
         match self {
+            Self::Literal { value } if value.trim().is_empty() => MirValue::Unknown {
+                evidence: "empty literal lowering".to_string(),
+            },
             Self::Literal { value } => MirValue::Literal {
-                value: value.clone(),
+                value: value.trim().to_string(),
             },
             Self::PlaceKey(key) => place_ids
                 .get(key)

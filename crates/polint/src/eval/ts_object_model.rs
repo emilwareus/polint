@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use crate::analysis::ids::{CallSiteId, ObjectTokenId, PlaceId, SemanticNodeId};
 use crate::analysis::semantic_graph::facts::NodeKind;
-use crate::analysis::solver::budget::{BudgetStatus, SolverBudget};
+use crate::analysis::solver::budget::{BudgetReason, BudgetStatus, SolverBudget};
 use crate::analysis::solver::facts::DerivedEdgeFact;
 use crate::analysis::solver::ts_object_model::fixpoint::solve_ts_object_model;
 use crate::analysis::solver::ts_object_model::inputs::{
@@ -146,7 +146,11 @@ fn budget_fixture_latches_object_model_budget_evidence() {
 
     let result = solve_ts_object_model(&two_token_property_inputs(), &budget);
     assert_eq!(result.budget_status, BudgetStatus::BudgetExceeded);
-    assert!(result.budget_reasons.contains("max_tokens_per_property"));
+    assert!(
+        result
+            .budget_reasons
+            .contains(BudgetReason::ObjectMaxTokensPerProperty.as_str())
+    );
 
     let mut receiver_budget = budget;
     receiver_budget.object.max_tokens_per_property = 8;
@@ -155,13 +159,17 @@ fn budget_fixture_latches_object_model_budget_evidence() {
     assert!(
         result
             .budget_reasons
-            .contains("max_receiver_candidates_per_callsite")
+            .contains(BudgetReason::ObjectMaxReceiverCandidatesPerCallsite.as_str())
     );
     assert_eq!(result.derived_edges.len(), 1);
 
     let result = solve_ts_object_model(&prototype_depth_inputs(), &budget);
     assert_eq!(result.budget_status, BudgetStatus::BudgetExceeded);
-    assert!(result.budget_reasons.contains("max_prototype_depth"));
+    assert!(
+        result
+            .budget_reasons
+            .contains(BudgetReason::ObjectMaxPrototypeDepth.as_str())
+    );
     assert!(
         result.derived_edges.is_empty(),
         "prototype-depth exhaustion must not fabricate a post-cap target"

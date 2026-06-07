@@ -38,6 +38,7 @@ pub(crate) struct ComputedMetrics {
     pub(crate) precision: Option<f64>,
     pub(crate) recall: Option<f64>,
     pub(crate) f1: Option<f64>,
+    pub(crate) f0_5: Option<f64>,
     pub(crate) f2: Option<f64>,
     pub(crate) f3: Option<f64>,
     pub(crate) false_positive_rate: Option<f64>,
@@ -54,6 +55,7 @@ impl From<ComputedMetrics> for MetricSummary {
                 precision: metrics.precision,
                 recall: metrics.recall,
                 f1: metrics.f1,
+                f0_5: metrics.f0_5,
                 f2: metrics.f2,
                 f3: metrics.f3,
                 false_positive_rate: metrics.false_positive_rate,
@@ -79,6 +81,7 @@ impl From<ComputedMetrics> for MetricSummary {
                 cache_misses: 0,
             },
             suite_native: std::collections::BTreeMap::new(),
+            per_language_deltas: Vec::new(),
             adaptation: None,
             jelly_oracle_coverage: JellyOracleCoverageSection::default(),
             categorized_failures: CategorizedFailureSection::default(),
@@ -144,17 +147,23 @@ pub(crate) fn compute_metrics(matches: &[MatchSummary]) -> ComputedMetrics {
         precision: None,
         recall: None,
         f1: None,
+        f0_5: None,
         f2: None,
         f3: None,
         false_positive_rate: None,
     };
 
     for summary in matches {
+        let score_bearing = score_bearing_item_kind(summary.item_kind);
         match summary.outcome {
-            MatchOutcome::TruePositive => metrics.true_positives += 1,
-            MatchOutcome::FalsePositive => metrics.false_positives += 1,
-            MatchOutcome::FalseNegative => metrics.false_negatives += 1,
-            MatchOutcome::TrueNegative => metrics.true_negatives += 1,
+            MatchOutcome::TruePositive if score_bearing => metrics.true_positives += 1,
+            MatchOutcome::FalsePositive if score_bearing => metrics.false_positives += 1,
+            MatchOutcome::FalseNegative if score_bearing => metrics.false_negatives += 1,
+            MatchOutcome::TrueNegative if score_bearing => metrics.true_negatives += 1,
+            MatchOutcome::TruePositive
+            | MatchOutcome::FalsePositive
+            | MatchOutcome::FalseNegative
+            | MatchOutcome::TrueNegative => {}
             MatchOutcome::Unconfirmed => metrics.unconfirmed += 1,
             MatchOutcome::ForbiddenHit => metrics.forbidden_hits += 1,
             MatchOutcome::TrapHit => metrics.false_positive_trap_hits += 1,
@@ -239,6 +248,12 @@ pub(crate) fn compute_metrics(matches: &[MatchSummary]) -> ComputedMetrics {
         metrics.false_positives,
         metrics.false_negatives,
     );
+    metrics.f0_5 = f_score(
+        0.5,
+        metrics.true_positives,
+        metrics.false_positives,
+        metrics.false_negatives,
+    );
     metrics.f2 = f_score(
         2.0,
         metrics.true_positives,
@@ -257,6 +272,16 @@ pub(crate) fn compute_metrics(matches: &[MatchSummary]) -> ComputedMetrics {
     );
 
     metrics
+}
+
+fn score_bearing_item_kind(kind: MatchItemKind) -> bool {
+    matches!(
+        kind,
+        MatchItemKind::Diagnostic
+            | MatchItemKind::Fact
+            | MatchItemKind::GraphEdge
+            | MatchItemKind::Path
+    )
 }
 
 /// Computes deterministic Jelly oracle-span coverage (D-20, D-21).
@@ -689,11 +714,39 @@ mod tests {
                 precision: Some(2.0 / 3.0),
                 recall: Some(0.5),
                 f1: Some(4.0 / 7.0),
+                f0_5: Some(5.0 / 8.0),
                 f2: Some(10.0 / 19.0),
                 f3: Some(20.0 / 39.0),
                 false_positive_rate: Some(0.5),
             }
         );
+    }
+
+    #[test]
+    fn eval_metrics_do_not_score_unmatched_invariants_as_false_positives() {
+        let metrics = compute_metrics(&[
+            summary(
+                MatchOutcome::TruePositive,
+                MatchItemKind::GraphEdge,
+                true,
+                true,
+            ),
+            summary(
+                MatchOutcome::FalsePositive,
+                MatchItemKind::Invariant,
+                false,
+                true,
+            ),
+        ]);
+
+        assert_eq!(metrics.true_positives, 1);
+        assert_eq!(metrics.false_positives, 0);
+        assert_eq!(metrics.false_negatives, 0);
+        assert_eq!(metrics.precision, Some(1.0));
+        assert_eq!(metrics.recall, Some(1.0));
+        assert_eq!(metrics.f1, Some(1.0));
+        assert_eq!(metrics.graph_edges_expected, 1);
+        assert_eq!(metrics.graph_edges_observed, 1);
     }
 
     #[test]
@@ -703,6 +756,7 @@ mod tests {
         assert_eq!(metrics.precision, None);
         assert_eq!(metrics.recall, None);
         assert_eq!(metrics.f1, None);
+        assert_eq!(metrics.f0_5, None);
         assert_eq!(metrics.f2, None);
         assert_eq!(metrics.f3, None);
         assert_eq!(metrics.false_positive_rate, None);
@@ -775,6 +829,52 @@ mod tests {
     }
 
     #[test]
+    fn eval_metrics_compute_precision_weighted_f0_5() {
+        let metrics = compute_metrics(&[
+            summary(
+                MatchOutcome::TruePositive,
+                MatchItemKind::Diagnostic,
+                true,
+                true,
+            ),
+            summary(
+                MatchOutcome::TruePositive,
+                MatchItemKind::Diagnostic,
+                true,
+                true,
+            ),
+            summary(
+                MatchOutcome::TruePositive,
+                MatchItemKind::Diagnostic,
+                true,
+                true,
+            ),
+            summary(
+                MatchOutcome::FalsePositive,
+                MatchItemKind::Diagnostic,
+                false,
+                true,
+            ),
+            summary(
+                MatchOutcome::FalseNegative,
+                MatchItemKind::Diagnostic,
+                true,
+                false,
+            ),
+            summary(
+                MatchOutcome::FalseNegative,
+                MatchItemKind::Diagnostic,
+                true,
+                false,
+            ),
+        ]);
+
+        assert_eq!(metrics.precision, Some(0.75));
+        assert_eq!(metrics.recall, Some(0.6));
+        assert_eq!(metrics.f0_5, Some(5.0 / 7.0));
+    }
+
+    #[test]
     fn eval_metrics_count_fact_statuses_separately() {
         let metrics = compute_metrics(&[
             summary_with_status(
@@ -823,6 +923,7 @@ mod tests {
         assert_eq!(summary.false_positive_trap_hits, 1);
         assert_eq!(summary.runtime_budget_failed, 1);
         assert_eq!(summary.sections.scanner.true_positives, 1);
+        assert_eq!(summary.sections.scanner.f0_5, Some(1.0));
         assert_eq!(summary.sections.performance.runtime_budget_failed, 1);
     }
 

@@ -6,8 +6,8 @@
 use oxc_allocator::Allocator;
 use oxc_ast::AstKind;
 use oxc_ast::ast::{
-    Argument, BindingPattern, Expression, FunctionType, MethodDefinition, MethodDefinitionKind,
-    Program, PropertyKey, VariableDeclarator,
+    Argument, BinaryOperator, BindingPattern, Expression, FunctionType, MethodDefinition,
+    MethodDefinitionKind, Program, PropertyKey, VariableDeclarator,
 };
 use oxc_parser::Parser;
 use oxc_semantic::{AstNodes, NodeId, SemanticBuilder};
@@ -79,7 +79,7 @@ fn extract_ts_inventory_from_program(
         .iter_enumerated()
         .filter_map(|(node_id, node)| {
             let kind = callsite_inventory_kind(node.kind())?;
-            let span = node.kind().span();
+            let span = crate::ts::spans::normalized_callsite_span(source, node.kind())?;
             Some((span.start, span.end, kind, node_id, node.kind()))
         })
         .collect::<Vec<_>>();
@@ -87,7 +87,12 @@ fn extract_ts_inventory_from_program(
 
     let mut callsite_rows = Vec::new();
     for (_, _, kind, node_id, ast_kind) in callsite_entries {
-        let span = span_from_oxc(file.id, source, ast_kind.span());
+        let span = span_from_oxc(
+            file.id,
+            source,
+            crate::ts::spans::normalized_callsite_span(source, ast_kind)
+                .expect("callsite entries have normalized callsite spans"),
+        );
         let display_name = callsite_display_name(ast_kind);
         let lexical_parent_key = lexical_parent_key(file, nodes, node_id);
         let status = callsite_status(ast_kind, display_name.as_deref());
@@ -206,6 +211,30 @@ fn method_name(method: &MethodDefinition<'_>) -> Option<String> {
         PropertyKey::StaticIdentifier(identifier) => Some(identifier.name.to_string()),
         PropertyKey::PrivateIdentifier(identifier) => Some(format!("#{}", identifier.name)),
         PropertyKey::StringLiteral(literal) => Some(literal.value.to_string()),
+        PropertyKey::BinaryExpression(binary) if binary.operator == BinaryOperator::Addition => {
+            Some(format!(
+                "{}{}",
+                constant_property_key_expression(&binary.left)?,
+                constant_property_key_expression(&binary.right)?
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn constant_property_key_expression(expression: &Expression<'_>) -> Option<String> {
+    match expression {
+        Expression::StringLiteral(literal) => Some(literal.value.to_string()),
+        Expression::BinaryExpression(binary) if binary.operator == BinaryOperator::Addition => {
+            Some(format!(
+                "{}{}",
+                constant_property_key_expression(&binary.left)?,
+                constant_property_key_expression(&binary.right)?
+            ))
+        }
+        Expression::ParenthesizedExpression(expression) => {
+            constant_property_key_expression(&expression.expression)
+        }
         _ => None,
     }
 }

@@ -6,34 +6,44 @@ use crate::analysis_plan::AnalysisPlan;
 use crate::cache::CacheReadStatus;
 use crate::core::{
     AnalysisDb, CachedFileAnalysis, FileId, FunctionFact, FunctionId, ImportFact, JsxAttributeFact,
-    Language, SourceFile, Span, StringLiteralFact, TsClassFact, TsComponentFact,
-    span_from_byte_range,
+    Language, SourceFile, Span, StringLiteralFact, TS_JS_MODULE_FUNCTION_NAME, TsClassFact,
+    TsComponentFact, span_from_byte_range,
 };
 use crate::diagnostics::{Diagnostic, TextRange};
 use anyhow::{Context, Result};
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
-    Argument, ArrayExpressionElement, ArrowFunctionExpression, AssignmentTarget, BindingPattern,
-    Class, ClassElement, Declaration, ExportDefaultDeclarationKind, Expression, ForStatementInit,
-    ForStatementLeft, Function, FunctionBody, ImportOrExportKind, JSXAttributeItem,
-    JSXAttributeName, JSXAttributeValue, JSXChild, JSXElement, JSXExpression, JSXFragment,
-    MethodDefinition, ModuleExportName, ObjectPropertyKind, Program, PropertyKey, RegExpLiteral,
-    Statement, TemplateLiteral, VariableDeclarator,
+    Argument, ArrayExpressionElement, ArrowFunctionExpression, AssignmentTarget, BinaryOperator,
+    BindingPattern, Class, ClassElement, Declaration, ExportDefaultDeclarationKind, Expression,
+    ForStatementInit, ForStatementLeft, Function, FunctionBody, ImportOrExportKind,
+    JSXAttributeItem, JSXAttributeName, JSXAttributeValue, JSXChild, JSXElement, JSXExpression,
+    JSXFragment, MethodDefinition, MethodDefinitionKind, ModuleExportName, ObjectProperty,
+    ObjectPropertyKind, Program, PropertyKey, RegExpLiteral, Statement, TemplateLiteral,
+    VariableDeclarator,
 };
 use oxc_parser::Parser;
-use oxc_span::SourceType;
+use oxc_span::{GetSpan, SourceType};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 
-const TS_CACHE_SCHEMA: &str = "ts-facts-v1";
+const TS_CACHE_SCHEMA: &str = "ts-facts-v7";
 const TS_PROVIDER_ID: &str = "polint.ts.syntax";
-const TS_SYNTAX_LAYER_SCHEMA: &str = "ts-syntax-layer-v1";
+const TS_SYNTAX_LAYER_SCHEMA: &str = "ts-syntax-layer-v7";
 
 // Relationship resolution converts this non-string import expression sentinel to Dynamic.
 pub(crate) const DYNAMIC_IMPORT_SPECIFIER: &str = "<dynamic>";
+const ANONYMOUS_CALLABLE_PREFIX: &str = "<polint:anonymous:";
+
+pub(crate) fn anonymous_callable_name(start: u32, end: u32) -> String {
+    format!("{ANONYMOUS_CALLABLE_PREFIX}{start}:{end}>")
+}
+
+pub(crate) fn is_anonymous_callable_name(value: &str) -> bool {
+    value.starts_with(ANONYMOUS_CALLABLE_PREFIX) && value.ends_with('>')
+}
 
 /// Convenience wrapper used by TS-adapter unit tests (no cache, sequential).
 #[cfg(test)]
@@ -1096,6 +1106,7 @@ fn extract_declarations(
         source,
         language,
     };
+    push_ts_module_function(db, ctx);
     let exported_names = exported_local_names(program);
     for statement in &program.body {
         match statement {
@@ -1181,7 +1192,22 @@ fn extract_declarations(
             },
             _ => {}
         }
+        extract_anonymous_callables_from_statement(db, ctx, statement);
     }
+}
+
+fn push_ts_module_function(db: &mut AnalysisDb, ctx: TsAstCtx<'_>) -> FunctionId {
+    db.push_function(FunctionFact {
+        id: FunctionId(0),
+        file: ctx.file,
+        name: TS_JS_MODULE_FUNCTION_NAME.to_string(),
+        span: span_from_byte_range(ctx.file, ctx.source, 0, ctx.source.len()),
+        language: ctx.language,
+        is_test: false,
+        is_exported: false,
+        cyclomatic_complexity: 1,
+        calls: Vec::new(),
+    })
 }
 
 fn extract_commonjs_exported_function_assignment(
@@ -1318,7 +1344,7 @@ fn extract_variable_declarator(
                 ctx,
                 TsFunctionSpec {
                     name,
-                    span: declarator.span,
+                    span: function.span,
                     is_exported,
                     cyclomatic_complexity: arrow_cyclomatic_complexity(function),
                     calls: function_body_calls(Some(&function.body)),
@@ -1333,7 +1359,7 @@ fn extract_variable_declarator(
                 ctx,
                 TsFunctionSpec {
                     name,
-                    span: declarator.span,
+                    span: function.span,
                     is_exported,
                     cyclomatic_complexity: ts_cyclomatic_complexity(function),
                     calls: function_body_calls(function.body.as_deref()),
@@ -1345,6 +1371,422 @@ fn extract_variable_declarator(
             push_ts_class(db, file, source, language, name, class, is_exported);
         }
         _ => {}
+    }
+}
+
+fn extract_anonymous_callables_from_statement(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    statement: &Statement<'_>,
+) {
+    match statement {
+        Statement::BlockStatement(block) => {
+            for statement in &block.body {
+                extract_anonymous_callables_from_statement(db, ctx, statement);
+            }
+        }
+        Statement::ExpressionStatement(statement) => {
+            extract_anonymous_callables_from_expression(db, ctx, &statement.expression, true);
+        }
+        Statement::VariableDeclaration(variable) => {
+            for declarator in &variable.declarations {
+                if let Some(init) = &declarator.init {
+                    extract_anonymous_callables_from_expression(db, ctx, init, false);
+                }
+            }
+        }
+        Statement::FunctionDeclaration(function) => {
+            if let Some(body) = function.body.as_deref() {
+                extract_anonymous_callables_from_function_body(db, ctx, body);
+            }
+        }
+        Statement::ClassDeclaration(class) => {
+            extract_anonymous_callables_from_class(db, ctx, class);
+        }
+        Statement::ReturnStatement(statement) => {
+            if let Some(argument) = &statement.argument {
+                extract_anonymous_callables_from_expression(db, ctx, argument, true);
+            }
+        }
+        Statement::ThrowStatement(statement) => {
+            extract_anonymous_callables_from_expression(db, ctx, &statement.argument, true);
+        }
+        Statement::IfStatement(statement) => {
+            extract_anonymous_callables_from_expression(db, ctx, &statement.test, true);
+            extract_anonymous_callables_from_statement(db, ctx, &statement.consequent);
+            if let Some(alternate) = &statement.alternate {
+                extract_anonymous_callables_from_statement(db, ctx, alternate);
+            }
+        }
+        Statement::WhileStatement(statement) => {
+            extract_anonymous_callables_from_expression(db, ctx, &statement.test, true);
+            extract_anonymous_callables_from_statement(db, ctx, &statement.body);
+        }
+        Statement::DoWhileStatement(statement) => {
+            extract_anonymous_callables_from_statement(db, ctx, &statement.body);
+            extract_anonymous_callables_from_expression(db, ctx, &statement.test, true);
+        }
+        Statement::ForStatement(statement) => {
+            if let Some(init) = &statement.init {
+                match init {
+                    ForStatementInit::VariableDeclaration(variable) => {
+                        for declarator in &variable.declarations {
+                            if let Some(init) = &declarator.init {
+                                extract_anonymous_callables_from_expression(db, ctx, init, false);
+                            }
+                        }
+                    }
+                    _ => extract_anonymous_callables_from_expression(
+                        db,
+                        ctx,
+                        init.to_expression(),
+                        true,
+                    ),
+                }
+            }
+            if let Some(test) = &statement.test {
+                extract_anonymous_callables_from_expression(db, ctx, test, true);
+            }
+            if let Some(update) = &statement.update {
+                extract_anonymous_callables_from_expression(db, ctx, update, true);
+            }
+            extract_anonymous_callables_from_statement(db, ctx, &statement.body);
+        }
+        Statement::ForInStatement(statement) => {
+            extract_anonymous_callables_from_expression(db, ctx, &statement.right, true);
+            extract_anonymous_callables_from_statement(db, ctx, &statement.body);
+        }
+        Statement::ForOfStatement(statement) => {
+            extract_anonymous_callables_from_expression(db, ctx, &statement.right, true);
+            extract_anonymous_callables_from_statement(db, ctx, &statement.body);
+        }
+        Statement::SwitchStatement(statement) => {
+            extract_anonymous_callables_from_expression(db, ctx, &statement.discriminant, true);
+            for case in &statement.cases {
+                if let Some(test) = &case.test {
+                    extract_anonymous_callables_from_expression(db, ctx, test, true);
+                }
+                for statement in &case.consequent {
+                    extract_anonymous_callables_from_statement(db, ctx, statement);
+                }
+            }
+        }
+        Statement::ExportNamedDeclaration(export) => {
+            if let Some(declaration) = &export.declaration {
+                extract_anonymous_callables_from_declaration(db, ctx, declaration);
+            }
+        }
+        Statement::ExportDefaultDeclaration(export) => match &export.declaration {
+            ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
+                if let Some(body) = function.body.as_deref() {
+                    extract_anonymous_callables_from_function_body(db, ctx, body);
+                }
+            }
+            ExportDefaultDeclarationKind::ClassDeclaration(class) => {
+                extract_anonymous_callables_from_class(db, ctx, class);
+            }
+            ExportDefaultDeclarationKind::CallExpression(call) => {
+                extract_anonymous_callables_from_expression(db, ctx, &call.callee, true);
+                for argument in &call.arguments {
+                    extract_anonymous_callables_from_argument(db, ctx, argument);
+                }
+            }
+            _ => {}
+        },
+        _ => {}
+    }
+}
+
+fn extract_anonymous_callables_from_declaration(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    declaration: &Declaration<'_>,
+) {
+    match declaration {
+        Declaration::FunctionDeclaration(function) => {
+            if let Some(body) = function.body.as_deref() {
+                extract_anonymous_callables_from_function_body(db, ctx, body);
+            }
+        }
+        Declaration::ClassDeclaration(class) => {
+            extract_anonymous_callables_from_class(db, ctx, class);
+        }
+        Declaration::VariableDeclaration(variable) => {
+            for declarator in &variable.declarations {
+                if let Some(init) = &declarator.init {
+                    extract_anonymous_callables_from_expression(db, ctx, init, false);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn extract_anonymous_callables_from_class(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    class: &Class<'_>,
+) {
+    if let Some(super_class) = &class.super_class {
+        extract_anonymous_callables_from_expression(db, ctx, super_class, true);
+    }
+    for element in &class.body.body {
+        match element {
+            ClassElement::StaticBlock(block) => {
+                for statement in &block.body {
+                    extract_anonymous_callables_from_statement(db, ctx, statement);
+                }
+            }
+            ClassElement::MethodDefinition(method) => {
+                if let Some(body) = method.value.body.as_deref() {
+                    extract_anonymous_callables_from_function_body(db, ctx, body);
+                }
+            }
+            ClassElement::PropertyDefinition(property) => {
+                if let Some(value) = &property.value {
+                    extract_anonymous_callables_from_expression(db, ctx, value, true);
+                }
+            }
+            ClassElement::AccessorProperty(property) => {
+                if let Some(value) = &property.value {
+                    extract_anonymous_callables_from_expression(db, ctx, value, true);
+                }
+            }
+            ClassElement::TSIndexSignature(_) => {}
+        }
+    }
+}
+
+fn extract_anonymous_callables_from_function_body(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    body: &FunctionBody<'_>,
+) {
+    for statement in &body.statements {
+        extract_anonymous_callables_from_statement(db, ctx, statement);
+    }
+}
+
+fn extract_anonymous_callables_from_expression(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    expression: &Expression<'_>,
+    include_self: bool,
+) {
+    match expression {
+        Expression::ArrowFunctionExpression(function) => {
+            if include_self {
+                push_ts_function(
+                    db,
+                    ctx,
+                    TsFunctionSpec {
+                        name: anonymous_callable_name(function.span.start, function.span.end),
+                        span: function.span,
+                        is_exported: false,
+                        cyclomatic_complexity: arrow_cyclomatic_complexity(function),
+                        calls: function_body_calls(Some(&function.body)),
+                        is_component_like: arrow_returns_jsx(function),
+                    },
+                );
+            }
+            extract_anonymous_callables_from_function_body(db, ctx, &function.body);
+        }
+        Expression::FunctionExpression(function) => {
+            if include_self {
+                push_ts_function(
+                    db,
+                    ctx,
+                    TsFunctionSpec {
+                        name: anonymous_callable_name(function.span.start, function.span.end),
+                        span: function.span,
+                        is_exported: false,
+                        cyclomatic_complexity: ts_cyclomatic_complexity(function),
+                        calls: function_body_calls(function.body.as_deref()),
+                        is_component_like: function_returns_jsx(function),
+                    },
+                );
+            }
+            if let Some(body) = function.body.as_deref() {
+                extract_anonymous_callables_from_function_body(db, ctx, body);
+            }
+        }
+        Expression::ClassExpression(class) => {
+            extract_anonymous_callables_from_class(db, ctx, class);
+        }
+        Expression::CallExpression(call) => {
+            extract_anonymous_callables_from_expression(db, ctx, &call.callee, true);
+            for argument in &call.arguments {
+                extract_anonymous_callables_from_argument(db, ctx, argument);
+            }
+        }
+        Expression::NewExpression(expression) => {
+            extract_anonymous_callables_from_expression(db, ctx, &expression.callee, true);
+            for argument in &expression.arguments {
+                extract_anonymous_callables_from_argument(db, ctx, argument);
+            }
+        }
+        Expression::StaticMemberExpression(member) => {
+            extract_anonymous_callables_from_expression(db, ctx, &member.object, true);
+        }
+        Expression::ComputedMemberExpression(member) => {
+            extract_anonymous_callables_from_expression(db, ctx, &member.object, true);
+            extract_anonymous_callables_from_expression(db, ctx, &member.expression, true);
+        }
+        Expression::PrivateFieldExpression(member) => {
+            extract_anonymous_callables_from_expression(db, ctx, &member.object, true);
+        }
+        Expression::ChainExpression(chain) => {
+            extract_anonymous_callables_from_chain_element(db, ctx, &chain.expression);
+        }
+        Expression::ParenthesizedExpression(expression) => {
+            extract_anonymous_callables_from_expression(
+                db,
+                ctx,
+                &expression.expression,
+                include_self,
+            );
+        }
+        Expression::AssignmentExpression(expression) => {
+            extract_anonymous_callables_from_expression(db, ctx, &expression.right, true);
+        }
+        Expression::AwaitExpression(expression) => {
+            extract_anonymous_callables_from_expression(db, ctx, &expression.argument, true);
+        }
+        Expression::YieldExpression(expression) => {
+            if let Some(argument) = &expression.argument {
+                extract_anonymous_callables_from_expression(db, ctx, argument, true);
+            }
+        }
+        Expression::SequenceExpression(expression) => {
+            for expression in &expression.expressions {
+                extract_anonymous_callables_from_expression(db, ctx, expression, true);
+            }
+        }
+        Expression::ConditionalExpression(expression) => {
+            extract_anonymous_callables_from_expression(db, ctx, &expression.test, true);
+            extract_anonymous_callables_from_expression(db, ctx, &expression.consequent, true);
+            extract_anonymous_callables_from_expression(db, ctx, &expression.alternate, true);
+        }
+        Expression::LogicalExpression(expression) => {
+            extract_anonymous_callables_from_expression(db, ctx, &expression.left, true);
+            extract_anonymous_callables_from_expression(db, ctx, &expression.right, true);
+        }
+        Expression::ObjectExpression(object) => {
+            for property in &object.properties {
+                match property {
+                    ObjectPropertyKind::ObjectProperty(property) => {
+                        extract_anonymous_callables_from_object_property(db, ctx, property);
+                    }
+                    ObjectPropertyKind::SpreadProperty(spread) => {
+                        extract_anonymous_callables_from_expression(
+                            db,
+                            ctx,
+                            &spread.argument,
+                            true,
+                        );
+                    }
+                }
+            }
+        }
+        Expression::ArrayExpression(array) => {
+            for element in &array.elements {
+                match element {
+                    ArrayExpressionElement::SpreadElement(spread) => {
+                        extract_anonymous_callables_from_expression(
+                            db,
+                            ctx,
+                            &spread.argument,
+                            true,
+                        );
+                    }
+                    ArrayExpressionElement::Elision(_) => {}
+                    _ => {
+                        extract_anonymous_callables_from_expression(
+                            db,
+                            ctx,
+                            element.to_expression(),
+                            true,
+                        );
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn extract_anonymous_callables_from_chain_element(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    element: &oxc_ast::ast::ChainElement<'_>,
+) {
+    match element {
+        oxc_ast::ast::ChainElement::CallExpression(call) => {
+            extract_anonymous_callables_from_expression(db, ctx, &call.callee, true);
+            for argument in &call.arguments {
+                extract_anonymous_callables_from_argument(db, ctx, argument);
+            }
+        }
+        oxc_ast::ast::ChainElement::StaticMemberExpression(member) => {
+            extract_anonymous_callables_from_expression(db, ctx, &member.object, true);
+        }
+        oxc_ast::ast::ChainElement::ComputedMemberExpression(member) => {
+            extract_anonymous_callables_from_expression(db, ctx, &member.object, true);
+            extract_anonymous_callables_from_expression(db, ctx, &member.expression, true);
+        }
+        oxc_ast::ast::ChainElement::PrivateFieldExpression(member) => {
+            extract_anonymous_callables_from_expression(db, ctx, &member.object, true);
+        }
+        oxc_ast::ast::ChainElement::TSNonNullExpression(expression) => {
+            extract_anonymous_callables_from_expression(db, ctx, &expression.expression, true);
+        }
+    }
+}
+
+fn extract_anonymous_callables_from_argument(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    argument: &Argument<'_>,
+) {
+    match argument {
+        Argument::SpreadElement(spread) => {
+            extract_anonymous_callables_from_expression(db, ctx, &spread.argument, true);
+        }
+        Argument::ArrowFunctionExpression(function) => {
+            push_ts_function(
+                db,
+                ctx,
+                TsFunctionSpec {
+                    name: anonymous_callable_name(function.span.start, function.span.end),
+                    span: function.span,
+                    is_exported: false,
+                    cyclomatic_complexity: arrow_cyclomatic_complexity(function),
+                    calls: function_body_calls(Some(&function.body)),
+                    is_component_like: arrow_returns_jsx(function),
+                },
+            );
+            extract_anonymous_callables_from_function_body(db, ctx, &function.body);
+        }
+        Argument::FunctionExpression(function) => {
+            push_ts_function(
+                db,
+                ctx,
+                TsFunctionSpec {
+                    name: anonymous_callable_name(function.span.start, function.span.end),
+                    span: function.span,
+                    is_exported: false,
+                    cyclomatic_complexity: ts_cyclomatic_complexity(function),
+                    calls: function_body_calls(function.body.as_deref()),
+                    is_component_like: function_returns_jsx(function),
+                },
+            );
+            if let Some(body) = function.body.as_deref() {
+                extract_anonymous_callables_from_function_body(db, ctx, body);
+            }
+        }
+        _ => {
+            extract_anonymous_callables_from_expression(db, ctx, argument.to_expression(), true);
+        }
     }
 }
 
@@ -1445,6 +1887,22 @@ fn push_ts_class(
         is_exported,
         is_component_like,
     });
+    push_ts_function(
+        db,
+        TsAstCtx {
+            file,
+            source,
+            language,
+        },
+        TsFunctionSpec {
+            name: name.clone(),
+            span: class.span,
+            is_exported,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+            is_component_like: false,
+        },
+    );
 
     if is_component_like {
         // syntax-level component heuristic: PascalCase classes are component-like only.
@@ -1469,7 +1927,7 @@ fn push_ts_class(
                 },
                 TsFunctionSpec {
                     name: format!("{name}.{method_name}"),
-                    span: method.span,
+                    span: class_method_function_span(method),
                     is_exported,
                     cyclomatic_complexity: ts_cyclomatic_complexity(&method.value),
                     calls: function_body_calls(method.value.body.as_deref()),
@@ -1484,8 +1942,68 @@ fn method_name(method: &MethodDefinition<'_>) -> Option<String> {
     match &method.key {
         PropertyKey::StaticIdentifier(identifier) => Some(identifier.name.to_string()),
         PropertyKey::StringLiteral(literal) => Some(literal.value.to_string()),
+        PropertyKey::BinaryExpression(binary) if binary.operator == BinaryOperator::Addition => {
+            Some(format!(
+                "{}{}",
+                constant_property_key_expression(&binary.left)?,
+                constant_property_key_expression(&binary.right)?
+            ))
+        }
         _ => None,
     }
+}
+
+fn constant_property_key_expression(expression: &Expression<'_>) -> Option<String> {
+    match expression {
+        Expression::StringLiteral(literal) => Some(literal.value.to_string()),
+        Expression::BinaryExpression(binary) if binary.operator == BinaryOperator::Addition => {
+            Some(format!(
+                "{}{}",
+                constant_property_key_expression(&binary.left)?,
+                constant_property_key_expression(&binary.right)?
+            ))
+        }
+        Expression::ParenthesizedExpression(expression) => {
+            constant_property_key_expression(&expression.expression)
+        }
+        _ => None,
+    }
+}
+
+fn extract_anonymous_callables_from_object_property(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    property: &ObjectProperty<'_>,
+) {
+    if property.method
+        && let Expression::FunctionExpression(function) = &property.value
+    {
+        push_ts_function(
+            db,
+            ctx,
+            TsFunctionSpec {
+                name: anonymous_callable_name(property.span.start, property.span.end),
+                span: property.span,
+                is_exported: false,
+                cyclomatic_complexity: ts_cyclomatic_complexity(function),
+                calls: function_body_calls(function.body.as_deref()),
+                is_component_like: function_returns_jsx(function),
+            },
+        );
+        if let Some(body) = function.body.as_deref() {
+            extract_anonymous_callables_from_function_body(db, ctx, body);
+        }
+        return;
+    }
+
+    extract_anonymous_callables_from_expression(db, ctx, &property.value, true);
+}
+
+fn class_method_function_span(method: &MethodDefinition<'_>) -> oxc_span::Span {
+    if method.r#static && method.kind == MethodDefinitionKind::Method {
+        return oxc_span::Span::new(method.key.span().start, method.span.end);
+    }
+    method.span
 }
 
 fn expression_calls(expression: &Expression<'_>) -> Vec<String> {
@@ -2697,6 +3215,14 @@ fn callee_text(expression: &Expression<'_>) -> Option<String> {
         Expression::StaticMemberExpression(member) => {
             callee_text(&member.object).map(|object| format!("{object}.{}", member.property.name))
         }
+        Expression::ArrowFunctionExpression(function) => Some(anonymous_callable_name(
+            function.span.start,
+            function.span.end,
+        )),
+        Expression::FunctionExpression(function) => Some(anonymous_callable_name(
+            function.span.start,
+            function.span.end,
+        )),
         Expression::ParenthesizedExpression(expression) => callee_text(&expression.expression),
         Expression::TSAsExpression(expression) => callee_text(&expression.expression),
         Expression::TSSatisfiesExpression(expression) => callee_text(&expression.expression),

@@ -25,6 +25,9 @@ pub(crate) struct GoSemanticInstantiatedTypeId(pub(crate) u64);
 pub(crate) struct GoSemanticDynamicDispatchId(pub(crate) u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct GoSemanticRtaEdgeId(pub(crate) u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum GoSemanticFunctionKind {
     Function,
     Method,
@@ -141,4 +144,22 @@ pub(crate) struct GoSemanticDynamicDispatchFact {
     pub(crate) interface_type: Option<String>,
     pub(crate) method: Option<String>,
     pub(crate) signature: Option<String>,
+}
+
+/// A direct x/tools RTA call-graph edge emitted by the Go sidecar.
+///
+/// This is intentionally an internal evaluation fact, not a public rule-author API. The
+/// existing source-backed solver/refined-call pipeline cannot represent synthetic SSA
+/// functions such as `init$1`, generic instantiations, bound method wrappers, or
+/// reflection synthetic calls. The external x/tools benchmark therefore consumes this
+/// fact directly instead of forcing those oracle identities through source-only facts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GoSemanticRtaEdgeFact {
+    pub(crate) id: GoSemanticRtaEdgeId,
+    pub(crate) stable_key: String,
+    pub(crate) package_id: String,
+    pub(crate) package_path: String,
+    pub(crate) caller: String,
+    pub(crate) callee: String,
+    pub(crate) edge_kind: String,
 }

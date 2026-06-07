@@ -56,6 +56,11 @@ pub(crate) fn resolve_direct_call_targets(
         if !is_direct_callable_symbol(symbol) {
             continue;
         }
+        if symbol.kind == SymbolKind::Class
+            && !matches!(site.kind, CallSyntaxKind::Constructor | CallSyntaxKind::New)
+        {
+            continue;
+        }
 
         let algorithm = if index.is_import_binding(site, reference) {
             CallAlgorithm::ImportBinding

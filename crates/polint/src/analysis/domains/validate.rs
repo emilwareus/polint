@@ -35,16 +35,7 @@ pub(crate) fn validate_abstract_domains(db: &AnalysisDb, diagnostics: &mut Vec<D
     );
 
     for row in db.abstract_domain_observations() {
-        validate_observation(
-            db,
-            diagnostics,
-            &bodies,
-            &blocks,
-            &operations,
-            &places,
-            &call_operations,
-            row,
-        );
+        validate_observation(db, diagnostics, &bodies, &blocks, &operations, &places, row);
     }
 
     for row in db.abstract_domain_events() {
@@ -77,10 +68,6 @@ pub(crate) fn validate_abstract_domains(db: &AnalysisDb, diagnostics: &mut Vec<D
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Validation checks a normalized domain row against several existing fact indexes."
-)]
 fn validate_observation(
     db: &AnalysisDb,
     diagnostics: &mut Vec<Diagnostic>,
@@ -88,7 +75,6 @@ fn validate_observation(
     blocks: &BTreeSet<crate::analysis::cfg::ids::BasicBlockId>,
     operations: &BTreeSet<MirOpId>,
     places: &BTreeSet<crate::analysis::ids::PlaceId>,
-    call_operations: &BTreeSet<MirOpId>,
     row: &DomainObservationFact,
 ) {
     if row.stable_key.trim().is_empty() {
@@ -194,15 +180,6 @@ fn validate_observation(
             }
         }
     }
-
-    validate_unresolved_call_reference(
-        diagnostics,
-        "DomainObservation",
-        &row.stable_key,
-        row.operation,
-        call_operations,
-        reason_from_value(&row.value),
-    );
 }
 
 fn validate_event(
@@ -406,13 +383,6 @@ fn reason_required(status: DomainStatus) -> bool {
     )
 }
 
-fn reason_from_value(value: &DomainValue) -> Option<&str> {
-    match value {
-        DomainValue::TopReason(reason) => Some(reason.as_str()),
-        DomainValue::Label(_) | DomainValue::DigestParts(_) => None,
-    }
-}
-
 fn reason_contract(reason: &str) -> Option<(DomainStatus, &'static [DomainPrecision])> {
     match reason {
         "unknown_value" | "dynamic_write" | "unresolved_call" => {
@@ -494,10 +464,91 @@ fn push_domain_diagnostic(
         reason,
         "abstract domain validation failed"
     );
-    diagnostics.push(Diagnostic::error(
-        "polint/internal",
-        "<workspace>",
-        TextRange::point(1, 1),
-        "Internal analysis validation failed.",
-    ));
+    diagnostics.push(
+        Diagnostic::error(
+            "polint/internal",
+            "<workspace>",
+            TextRange::point(1, 1),
+            "Internal analysis validation failed.",
+        )
+        .with_evidence("family", family)
+        .with_evidence("stable_key", stable_key)
+        .with_evidence("field", field)
+        .with_evidence("reason", reason),
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::analysis::cfg::ids::BasicBlockId;
+    use crate::analysis::domains::facts::{DomainLocation, DomainObservationFact, DomainSlot};
+    use crate::analysis::ids::{DomainObservationId, MirBodyId, PlaceId};
+    use crate::analysis_kernel::{FactConfidence, FactMeta, FactPrecision, ValidationStatus};
+
+    #[test]
+    fn unresolved_call_observation_allows_propagated_non_call_operation() {
+        let stable_key = "domain:propagated-unresolved-call";
+        let mut db = AnalysisDb::new();
+        db.fact_meta_mut_for_test().insert(
+            FactRef::new(FactFamily::DomainObservation, 0),
+            FactMeta {
+                stable_key: stable_key.to_string(),
+                producer_id: "polint.abstract_domains",
+                layer_id: "polint.abstract_domains",
+                precision: FactPrecision::Unresolved,
+                confidence: FactConfidence::Low,
+                validation: ValidationStatus::NativeTrusted,
+                payload_digest: "digest".to_string(),
+            },
+        );
+        let row = DomainObservationFact {
+            id: DomainObservationId(0),
+            body: MirBodyId(1),
+            block: Some(BasicBlockId(2)),
+            operation: Some(MirOpId(3)),
+            place: Some(PlaceId(4)),
+            slot: DomainSlot::Truthiness,
+            location: DomainLocation::AfterOperation,
+            value: DomainValue::TopReason("unresolved_call".to_string()),
+            status: DomainStatus::Unknown,
+            precision: DomainPrecision::Unknown,
+            stable_key: stable_key.to_string(),
+        };
+        let mut diagnostics = Vec::new();
+
+        validate_observation(
+            &db,
+            &mut diagnostics,
+            &BTreeSet::from([MirBodyId(1)]),
+            &BTreeSet::from([BasicBlockId(2)]),
+            &BTreeSet::from([MirOpId(3)]),
+            &BTreeSet::from([PlaceId(4)]),
+            &row,
+        );
+
+        assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+    }
+
+    #[test]
+    fn unresolved_call_event_still_requires_matching_call_site_operation() {
+        let mut diagnostics = Vec::new();
+
+        validate_unresolved_call_reference(
+            &mut diagnostics,
+            "DomainEvent",
+            "domain:event",
+            Some(MirOpId(3)),
+            &BTreeSet::new(),
+            Some("unresolved_call"),
+        );
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.evidence.iter().any(|evidence| {
+                evidence.label == "reason"
+                    && evidence.value
+                        == "unresolved-call rows require a matching call-site operation"
+            })
+        }));
+    }
 }

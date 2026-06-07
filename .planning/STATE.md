@@ -1,16 +1,17 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.3
-milestone_name: milestone
-status: completed
-last_updated: "2026-06-05T11:45:00.000Z"
-last_activity: 2026-06-05 -- Phase 52 PR review findings fixed with two clean review rounds
+milestone_name: Graph Engine Precision
+status: milestone_complete
+last_updated: 2026-06-06T10:05:33Z
+last_activity: 2026-06-06
 progress:
   total_phases: 13
-  completed_phases: 11
-  total_plans: 42
-  completed_plans: 42
-  percent: 85
+  completed_phases: 13
+  total_plans: 50
+  completed_plans: 50
+  percent: 100
+stopped_at: Milestone complete (Phase 54 was final phase)
 ---
 
 # State: polint
@@ -21,7 +22,7 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 52 — Refined-Calls Rework & Unknown Taxonomy Consolidation
+**Current focus:** Milestone complete
 
 ## Current Status
 
@@ -40,14 +41,27 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 ## Current Position
 
-Phase: 52 — COMPLETE
-Plan: 4 of 4
-Status: Phase 52 complete; PR review findings fixed
-Last activity: 2026-06-05 -- Phase 52 PR review findings fixed with two clean review rounds
+Phase: 54
+Plan: Not started
+Status: Milestone complete
+Last activity: 2026-06-06
 
 ### Open repo-admin action (T-42-04-10)
 
 Add `public surface leak gate (ubuntu-latest)` AND `public surface leak gate (macos-latest)` to GitHub branch protection required checks on `main` and `release/*`. Only a repo admin can configure branch protection; until then a PR can merge with the v1.3 leak gate failing. Source: Phase 42 Plan 04 (`crates/polint/tests/public_surface_leak.rs`).
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260607-bzh | Improve Jelly JS recall through native object/array models and computed property key flow | 2026-06-07 | working tree | [260607-bzh-native-computed-js-recall](./quick/260607-bzh-native-computed-js-recall/) |
+| 260606-qjp | Deeply research Jelly JS semantics gaps and add failing unit probes | 2026-06-06 | working tree | [260606-qjp-deeply-research-jelly-js-semantics-gaps-](./quick/260606-qjp-deeply-research-jelly-js-semantics-gaps-/) |
+| 260606-fkk | Continue recall-focused Jelly JS/TS callgraph improvements from 16.16% F1 to 37.06% F1 | 2026-06-06 | working tree | [260606-fkk-continue-recall-focused-jelly-js-ts-call](./quick/260606-fkk-continue-recall-focused-jelly-js-ts-call/) |
+| 260606-ef2 | Iteratively improve Jelly JS/TS callgraph F1 while preserving architecture and benchmark honesty | 2026-06-06 | working tree | [260606-ef2-iteratively-improve-jelly-js-ts-callgraph-f1](./quick/260606-ef2-iteratively-improve-jelly-js-ts-callgraph-f1/) |
+| 260606-ea2 | Research and document how to close the Jelly JS/TS callgraph performance gap | 2026-06-06 | implemented | [260606-ea2-research-and-document-how-to-close-the-j](./quick/260606-ea2-research-and-document-how-to-close-the-j/) |
+| 260606-c3l | Measure current static-analysis performance and write a dated report under performance/ | 2026-06-06 | implemented | [260606-c3l-measure-current-static-analysis-performa](./quick/260606-c3l-measure-current-static-analysis-performa/) |
+| 260605-n0r | Critical review/fix loop for Phase 53 follow-up fixes until two consecutive clean review rounds | 2026-06-05 | implemented | [260605-n0r-loop-critical-review-and-fixes-for-phase](./quick/260605-n0r-loop-critical-review-and-fixes-for-phase/) |
+| 260605-mea | Fix Phase 53 review findings: cache dependency guards, budget reasons, and RSS reporting | 2026-06-05 | 9d3337bc | [260605-mea-fix-phase-53-review-findings-wire-cache-](./quick/260605-mea-fix-phase-53-review-findings-wire-cache-/) |
 
 ## Deferred Items
 
@@ -171,6 +185,8 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 | 49 | Complete | 3/3 plans complete; Plan 01 JS token budgets/config/cache handoff complete; Plan 02 private ts_tokens closed inputs + deterministic token fixpoint + too-many-tokens sentinel + token DerivedEdgeFact dispatch + real TsTokensPolicy complete; Plan 03 native TS token fixtures + token-explosion BudgetExceeded proof + polyglot/determinism/Jelly evidence + full suite/leak/clippy green. Requirement JS-04 COMPLETE. Caveat: current frontend producers cover direct aliases; parameter/return/closure coverage is solver-level over CopyEdge inputs and awaits frontend producer expansion. |
 | 50 | Complete | 5/5 plans complete; private TS object-model facts/storage/graph lowering, opt-in flag, object budgets, property-bucket fixpoint, prototype/class/accessor lookup, receiver binding, native fixtures, determinism/polyglot evidence, public leak gate, full regression, and final verification done. Requirement JS-05 COMPLETE. Caveat: external Jelly corpus floors remain Phase 54-owned. |
 | 51 | Complete | 4/4 plans complete; private adaptation model schema/loader/store/validator, accepted-only ModelEdge lowering, solver provenance/cache participation, adapted reporting with sandbox/model/held-out evidence, public leak gate, full regression, and final verification done. Requirements ADAPT-01/ADAPT-02 COMPLETE. Caveats: corpus floors remain Phase 54-owned; final refined-call projection and unknown taxonomy remain Phase 52-owned. |
+| 52 | Complete | 4/4 plans complete; solver/direct refined-call projection, consolidated unknown taxonomy, canonical `polint inspect unknowns --format json`, legacy unknowns compatibility, schema/docs/skill updates, eval fixture alignment, and final verification done. Requirements GRAPH-05/TAX-01 COMPLETE. |
+| 53 | Complete | 4/4 plans complete; V13 cache dependency ledger and provider metadata, solver budget consolidation and evidence, deterministic budget diagnostics, RSS evaluation summary/reporting, review fixes, and final verification done. Requirements CACHE-01/CACHE-02 COMPLETE. |
 
 ## Accumulated Context
 
@@ -549,15 +565,16 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 
 ## Session
 
-- Last session: 2026-06-02
-- Last activity: 2026-06-02 - Completed Phase 47 Plan 01 (private analysis::solver core: deterministic VecDeque worklist SolverEngine + unified SolverBudget/BudgetStatus generalizing the points-to budget by projection + SolverPolicy scaffold with one real points-to impl folded by composition plus honest Go/TS stubs); points-to fixtures byte-identical; GRAPH-03 core landed.
-- Stopped at: Completed 47-01-PLAN.md; Phase 47 at 1/3 plans; ready for Phase 47 Plan 02 (DerivedEdgeProvenance on derived edges + polint explain consumption + deletion property test).
+- Last session: 2026-06-07
+- Last activity: 2026-06-07 - Completed quick task 260607-e7j in the working tree: bounded computed-property object/class flow moved Jelly from 814/609/665 to 840/604/639 and computedProperties from 8/4/18 to 24/3/2.
+- Stopped at: Quick-task implementation committed; push still pending.
 - Resume file: None
 
 ### Quick Tasks Completed
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260607-e7j | Improve Jelly computed-property recall with bounded key evaluation and accessor flow | 2026-06-07 | implemented | [260607-e7j-computed-property-recall](./quick/260607-e7j-computed-property-recall/) |
 | 260605-h96 | Review and fix Phase 52 PR findings until two consecutive clean review rounds | 2026-06-05 | implemented | [260605-h96-review-and-fix-phase-52-pr-findings-unti](./quick/260605-h96-review-and-fix-phase-52-pr-findings-unti/) |
 | 260605-gwr | Fix PR review findings: include provider diagnostics in inspect unknowns taxonomy and enforce extension-model invariant value | 2026-06-05 | implemented | [260605-gwr-fix-pr-review-findings-include-provider-](./quick/260605-gwr-fix-pr-review-findings-include-provider-/) |
 | 260605-ajl | Fix adaptation delta duplicate model counts and held-out separation | 2026-06-05 | implemented | [260605-ajl-fix-adaptation-delta-duplicate-model-cou](./quick/260605-ajl-fix-adaptation-delta-duplicate-model-cou/) |
@@ -604,8 +621,9 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 
 ## Next Action
 
-Run `/gsd-discuss-phase 40 --auto` to gather context for external benchmark adapters and promotion gates for SAE-PROM-01.
+Push quick task 260607-e7j, then continue recall work on the next largest Jelly blockers.
 
 ## Operator Next Steps
 
-- Start the next milestone with /gsd-new-milestone
+- Push the computed-property recall improvements.
+- Pick the next recall slice from `performance/2026-06-06-jelly-gap-closure-research.md`.

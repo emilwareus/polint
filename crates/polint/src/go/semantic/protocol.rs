@@ -81,6 +81,10 @@ pub(crate) struct GoSemanticRawFrame {
     #[serde(default)]
     pub(crate) caller: String,
     #[serde(default)]
+    pub(crate) callee: String,
+    #[serde(default)]
+    pub(crate) edge_kind: String,
+    #[serde(default)]
     pub(crate) static_callee: String,
     #[serde(default)]
     pub(crate) function: String,
@@ -219,6 +223,7 @@ fn allowed_kinds() -> BTreeSet<&'static str> {
         "address_taken",
         "instantiated_type",
         "dynamic_dispatch",
+        "rta_edge",
     ]
     .into_iter()
     .collect()

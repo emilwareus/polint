@@ -17,8 +17,13 @@ use super::stable_hash;
 /// format changes (fine for correctness; avoids hidden serde-json key ordering quirks).
 pub(crate) fn config_hash(config: &LoadedConfig) -> String {
     let missing = if config.missing { "missing" } else { "loaded" };
+    let respect_gitignore = if config.respect_gitignore {
+        "respect_gitignore=true"
+    } else {
+        "respect_gitignore=false"
+    };
     let serialized = deterministic_polint_config(&config.config);
-    stable_hash(&[missing, &serialized])
+    stable_hash(&[missing, respect_gitignore, &serialized])
 }
 
 pub(crate) fn rule_hash(
@@ -275,6 +280,7 @@ mod tests {
             root: Default::default(),
             config: PolintConfig::default(),
             missing,
+            respect_gitignore: true,
         }
     }
 
@@ -301,6 +307,15 @@ mod tests {
         let on_disk = sample_loaded(false);
         let missing = sample_loaded(true);
         assert_ne!(config_hash(&on_disk), config_hash(&missing));
+    }
+
+    #[test]
+    fn config_hash_differs_when_gitignore_policy_changes() {
+        let baseline = sample_loaded(false);
+        let mut modified = baseline.clone();
+        modified.respect_gitignore = false;
+
+        assert_ne!(config_hash(&baseline), config_hash(&modified));
     }
 
     #[test]

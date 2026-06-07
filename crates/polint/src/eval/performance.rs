@@ -9,6 +9,8 @@ pub(crate) struct EvalPerformanceReport {
     pub(crate) cache: CacheStatsSummary,
     pub(crate) demand_queries: Vec<DemandQueryStatsRow>,
     pub(crate) runtime: RuntimeStatsSummary,
+    #[serde(default)]
+    pub(crate) rss: RssStatsSummary,
 }
 
 impl EvalPerformanceReport {
@@ -41,6 +43,7 @@ impl EvalPerformanceReport {
             cache: CacheStatsSummary::from_cache_stats(&report.cache_stats),
             demand_queries,
             runtime: RuntimeStatsSummary::default(),
+            rss: RssStatsSummary::default(),
         }
     }
 
@@ -52,6 +55,14 @@ impl EvalPerformanceReport {
                 cache: provider.cache.clone(),
             })
             .collect()
+    }
+
+    pub(crate) fn sync_peak_rss_from_runtime(&mut self) {
+        if self.rss.peak_rss_observed_mb.is_none()
+            && let Some(peak_rss_bytes) = self.runtime.peak_rss_bytes
+        {
+            self.rss.peak_rss_observed_mb = Some(bytes_to_mib(peak_rss_bytes));
+        }
     }
 }
 
@@ -145,9 +156,31 @@ pub(crate) struct RuntimeStatsSummary {
     pub(crate) peak_rss_bytes: Option<u64>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) struct RssStatsSummary {
+    #[serde(default)]
+    pub(crate) cold_rss_threshold_mb: Option<u64>,
+    #[serde(default)]
+    pub(crate) cold_rss_observed_mb: Option<u64>,
+    #[serde(default)]
+    pub(crate) warm_rss_threshold_mb: Option<u64>,
+    #[serde(default)]
+    pub(crate) warm_rss_observed_mb: Option<u64>,
+    #[serde(default)]
+    pub(crate) peak_rss_observed_mb: Option<u64>,
+}
+
+fn bytes_to_mib(bytes: u64) -> u64 {
+    bytes.div_ceil(1024 * 1024)
+}
+
 pub(crate) fn strip_volatile_runtime(report: &mut EvalPerformanceReport) {
     report.runtime.observed_runtime_ms = None;
     report.runtime.peak_rss_bytes = None;
+    report.rss.cold_rss_observed_mb = None;
+    report.rss.warm_rss_observed_mb = None;
+    report.rss.peak_rss_observed_mb = None;
     for provider in &mut report.providers {
         provider.observed_runtime_ms = None;
     }
@@ -207,9 +240,21 @@ mod tests {
         let mut first = EvalPerformanceReport::from_kernel_report(&report);
         let mut second = first.clone();
         first.runtime.observed_runtime_ms = Some(10);
+        first.runtime.peak_rss_bytes = Some(333 * 1024 * 1024);
+        first.rss.cold_rss_threshold_mb = Some(512);
+        first.rss.cold_rss_observed_mb = Some(300);
+        first.rss.warm_rss_threshold_mb = Some(384);
+        first.rss.warm_rss_observed_mb = Some(200);
+        first.rss.peak_rss_observed_mb = Some(333);
         first.providers[0].observed_runtime_ms = Some(20);
         first.demand_queries[0].compute_duration_micros = Some(30);
         second.runtime.observed_runtime_ms = Some(999);
+        second.runtime.peak_rss_bytes = Some(777 * 1024 * 1024);
+        second.rss.cold_rss_threshold_mb = Some(512);
+        second.rss.cold_rss_observed_mb = Some(999);
+        second.rss.warm_rss_threshold_mb = Some(384);
+        second.rss.warm_rss_observed_mb = Some(888);
+        second.rss.peak_rss_observed_mb = Some(777);
         second.providers[0].observed_runtime_ms = Some(888);
         second.demand_queries[0].compute_duration_micros = Some(777);
 
@@ -217,6 +262,63 @@ mod tests {
         strip_volatile_runtime(&mut second);
 
         assert_eq!(first, second);
+        assert_eq!(first.rss.cold_rss_threshold_mb, Some(512));
+        assert_eq!(first.rss.cold_rss_observed_mb, None);
+        assert_eq!(first.rss.warm_rss_threshold_mb, Some(384));
+        assert_eq!(first.rss.warm_rss_observed_mb, None);
+        assert_eq!(first.rss.peak_rss_observed_mb, None);
+        assert_eq!(first.runtime.peak_rss_bytes, None);
+    }
+
+    #[test]
+    fn eval_performance_rss_summary_accepts_older_reports_without_peak_rss() {
+        let report = serde_json::json!({
+            "providers": [],
+            "cache": {
+                "hits": 0,
+                "misses": 0,
+                "recomputes": 0,
+                "writes": 0,
+                "bypasses_disabled": 0,
+                "invalid_evicted_reads": 0,
+                "verified_reuse": 0,
+                "quarantines": 0
+            },
+            "demand_queries": [],
+            "runtime": {
+                "observed_runtime_ms": null,
+                "peak_rss_bytes": null
+            },
+            "rss": {
+                "cold_rss_threshold_mb": 512,
+                "cold_rss_observed_mb": null,
+                "warm_rss_threshold_mb": 384,
+                "warm_rss_observed_mb": null
+            }
+        });
+
+        let performance: EvalPerformanceReport =
+            serde_json::from_value(report).expect("older rss summary deserializes");
+
+        assert_eq!(performance.rss.cold_rss_threshold_mb, Some(512));
+        assert_eq!(performance.rss.warm_rss_threshold_mb, Some(384));
+        assert_eq!(performance.rss.peak_rss_observed_mb, None);
+    }
+
+    #[test]
+    fn eval_performance_populates_peak_rss_from_peak_rss_bytes() {
+        let report = kernel_report_with_stats(CacheStats::default());
+        let mut performance = EvalPerformanceReport::from_kernel_report(&report);
+        performance.runtime.peak_rss_bytes = Some(2 * 1024 * 1024 + 1);
+
+        performance.sync_peak_rss_from_runtime();
+
+        assert_eq!(performance.rss.peak_rss_observed_mb, Some(3));
+        assert_eq!(performance.rss.warm_rss_observed_mb, None);
+
+        performance.rss.peak_rss_observed_mb = Some(99);
+        performance.sync_peak_rss_from_runtime();
+        assert_eq!(performance.rss.peak_rss_observed_mb, Some(99));
     }
 
     fn kernel_report_with_stats(stats: CacheStats) -> KernelRunReport {

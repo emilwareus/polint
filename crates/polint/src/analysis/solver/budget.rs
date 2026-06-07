@@ -250,6 +250,93 @@ impl BudgetStatus {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) enum BudgetReason {
+    SolverMaxSteps,
+    SolverMaxOuterIterations,
+    PointsToMaxObjectsPerVar,
+    PointsToMaxDynamicVars,
+    GoAddressTakenThreshold,
+    GoMaxCandidatesPerCallsite,
+    GoMaxRtaRounds,
+    GoMaxWorklistSteps,
+    JsMaxTokensPerVar,
+    JsMaxCandidatesPerCallsite,
+    JsMaxTokenWorklistSteps,
+    ObjectMaxObjectsPerPlace,
+    ObjectMaxPropertiesPerObject,
+    ObjectMaxTokensPerProperty,
+    ObjectMaxComputedBucketsPerObject,
+    ObjectMaxPrototypeDepth,
+    ObjectMaxReceiverCandidatesPerCallsite,
+    ObjectMaxObjectWorklistSteps,
+    AdaptationMaxModelFiles,
+    AdaptationMaxModelFacts,
+    AdaptationMaxExpansionsPerModel,
+    AdaptationMaxTargetsPerSource,
+    AdaptationMaxModelDerivedEdges,
+}
+
+impl BudgetReason {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::SolverMaxSteps => "solver.max_steps",
+            Self::SolverMaxOuterIterations => "solver.max_outer_iterations",
+            Self::PointsToMaxObjectsPerVar => "points_to.max_objects_per_var",
+            Self::PointsToMaxDynamicVars => "points_to.max_dynamic_vars",
+            Self::GoAddressTakenThreshold => "go.address_taken_threshold",
+            Self::GoMaxCandidatesPerCallsite => "go.max_candidates_per_callsite",
+            Self::GoMaxRtaRounds => "go.max_rta_rounds",
+            Self::GoMaxWorklistSteps => "go.max_worklist_steps",
+            Self::JsMaxTokensPerVar => "js.max_tokens_per_var",
+            Self::JsMaxCandidatesPerCallsite => "js.max_candidates_per_callsite",
+            Self::JsMaxTokenWorklistSteps => "js.max_token_worklist_steps",
+            Self::ObjectMaxObjectsPerPlace => "object.max_objects_per_place",
+            Self::ObjectMaxPropertiesPerObject => "object.max_properties_per_object",
+            Self::ObjectMaxTokensPerProperty => "object.max_tokens_per_property",
+            Self::ObjectMaxComputedBucketsPerObject => "object.max_computed_buckets_per_object",
+            Self::ObjectMaxPrototypeDepth => "object.max_prototype_depth",
+            Self::ObjectMaxReceiverCandidatesPerCallsite => {
+                "object.max_receiver_candidates_per_callsite"
+            }
+            Self::ObjectMaxObjectWorklistSteps => "object.max_object_worklist_steps",
+            Self::AdaptationMaxModelFiles => "adaptation.max_model_files",
+            Self::AdaptationMaxModelFacts => "adaptation.max_model_facts",
+            Self::AdaptationMaxExpansionsPerModel => "adaptation.max_expansions_per_model",
+            Self::AdaptationMaxTargetsPerSource => "adaptation.max_targets_per_source",
+            Self::AdaptationMaxModelDerivedEdges => "adaptation.max_model_derived_edges",
+        }
+    }
+
+    pub(crate) fn all() -> &'static [Self] {
+        &[
+            Self::SolverMaxSteps,
+            Self::SolverMaxOuterIterations,
+            Self::PointsToMaxObjectsPerVar,
+            Self::PointsToMaxDynamicVars,
+            Self::GoAddressTakenThreshold,
+            Self::GoMaxCandidatesPerCallsite,
+            Self::GoMaxRtaRounds,
+            Self::GoMaxWorklistSteps,
+            Self::JsMaxTokensPerVar,
+            Self::JsMaxCandidatesPerCallsite,
+            Self::JsMaxTokenWorklistSteps,
+            Self::ObjectMaxObjectsPerPlace,
+            Self::ObjectMaxPropertiesPerObject,
+            Self::ObjectMaxTokensPerProperty,
+            Self::ObjectMaxComputedBucketsPerObject,
+            Self::ObjectMaxPrototypeDepth,
+            Self::ObjectMaxReceiverCandidatesPerCallsite,
+            Self::ObjectMaxObjectWorklistSteps,
+            Self::AdaptationMaxModelFiles,
+            Self::AdaptationMaxModelFacts,
+            Self::AdaptationMaxExpansionsPerModel,
+            Self::AdaptationMaxTargetsPerSource,
+            Self::AdaptationMaxModelDerivedEdges,
+        ]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -394,6 +481,43 @@ mod tests {
         assert_eq!(
             BudgetStatus::from_points_to(PointsToBudgetStatus::NotRun),
             BudgetStatus::NotRun
+        );
+    }
+
+    #[test]
+    fn budget_reason_labels_are_stable_and_specific() {
+        let labels = BudgetReason::all()
+            .iter()
+            .map(|reason| reason.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            labels,
+            vec![
+                "solver.max_steps",
+                "solver.max_outer_iterations",
+                "points_to.max_objects_per_var",
+                "points_to.max_dynamic_vars",
+                "go.address_taken_threshold",
+                "go.max_candidates_per_callsite",
+                "go.max_rta_rounds",
+                "go.max_worklist_steps",
+                "js.max_tokens_per_var",
+                "js.max_candidates_per_callsite",
+                "js.max_token_worklist_steps",
+                "object.max_objects_per_place",
+                "object.max_properties_per_object",
+                "object.max_tokens_per_property",
+                "object.max_computed_buckets_per_object",
+                "object.max_prototype_depth",
+                "object.max_receiver_candidates_per_callsite",
+                "object.max_object_worklist_steps",
+                "adaptation.max_model_files",
+                "adaptation.max_model_facts",
+                "adaptation.max_expansions_per_model",
+                "adaptation.max_targets_per_source",
+                "adaptation.max_model_derived_edges",
+            ]
         );
     }
 }

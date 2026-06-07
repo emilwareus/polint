@@ -9,8 +9,9 @@ use std::path::Path;
 use oxc_allocator::Allocator;
 use oxc_ast::AstKind;
 use oxc_ast::ast::{
-    Argument, AssignmentTarget, BindingPattern, Class, Expression, FunctionType, MethodDefinition,
-    MethodDefinitionKind, ObjectPropertyKind, Program, PropertyKey, VariableDeclarator,
+    Argument, AssignmentTarget, BinaryOperator, BindingPattern, Class, Expression, FunctionType,
+    MethodDefinition, MethodDefinitionKind, ObjectPropertyKind, Program, PropertyKey,
+    VariableDeclarator,
 };
 use oxc_parser::Parser;
 use oxc_semantic::{AstNodes, NodeId, Scoping, SemanticBuilder, SymbolId as OxcSymbolId};
@@ -1121,6 +1122,30 @@ fn method_name(method: &MethodDefinition<'_>) -> Option<String> {
         PropertyKey::StaticIdentifier(identifier) => Some(identifier.name.to_string()),
         PropertyKey::PrivateIdentifier(identifier) => Some(format!("#{}", identifier.name)),
         PropertyKey::StringLiteral(literal) => Some(literal.value.to_string()),
+        PropertyKey::BinaryExpression(binary) if binary.operator == BinaryOperator::Addition => {
+            Some(format!(
+                "{}{}",
+                constant_property_key_expression(&binary.left)?,
+                constant_property_key_expression(&binary.right)?
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn constant_property_key_expression(expression: &Expression<'_>) -> Option<String> {
+    match expression {
+        Expression::StringLiteral(literal) => Some(literal.value.to_string()),
+        Expression::BinaryExpression(binary) if binary.operator == BinaryOperator::Addition => {
+            Some(format!(
+                "{}{}",
+                constant_property_key_expression(&binary.left)?,
+                constant_property_key_expression(&binary.right)?
+            ))
+        }
+        Expression::ParenthesizedExpression(expression) => {
+            constant_property_key_expression(&expression.expression)
+        }
         _ => None,
     }
 }
@@ -1172,6 +1197,22 @@ fn property_key_from_property_expression(key: &PropertyKey<'_>) -> TsPropertyKey
             kind: TsPropertyKeyKind::NumericLiteral,
             value: Some(literal.value.to_string()),
         },
+        PropertyKey::BinaryExpression(binary) if binary.operator == BinaryOperator::Addition => {
+            if let (Some(left), Some(right)) = (
+                constant_property_key_expression(&binary.left),
+                constant_property_key_expression(&binary.right),
+            ) {
+                TsPropertyKey {
+                    kind: TsPropertyKeyKind::StringLiteral,
+                    value: Some(format!("{left}{right}")),
+                }
+            } else {
+                TsPropertyKey {
+                    kind: TsPropertyKeyKind::ComputedBucket,
+                    value: None,
+                }
+            }
+        }
         _ => TsPropertyKey {
             kind: TsPropertyKeyKind::ComputedBucket,
             value: None,
@@ -1180,11 +1221,14 @@ fn property_key_from_property_expression(key: &PropertyKey<'_>) -> TsPropertyKey
 }
 
 fn property_key_from_expression(expression: &Expression<'_>) -> TsPropertyKey {
-    match expression {
-        Expression::StringLiteral(literal) => TsPropertyKey {
+    if let Some(value) = constant_property_key_expression(expression) {
+        return TsPropertyKey {
             kind: TsPropertyKeyKind::StringLiteral,
-            value: Some(literal.value.to_string()),
-        },
+            value: Some(value),
+        };
+    }
+
+    match expression {
         Expression::NumericLiteral(literal) => TsPropertyKey {
             kind: TsPropertyKeyKind::NumericLiteral,
             value: Some(literal.value.to_string()),
@@ -1383,6 +1427,31 @@ class C {
                 && write.value_function_stable_key.is_some()
         }));
         assert!(!output.prototype_links.is_empty());
+    }
+
+    #[test]
+    fn computed_string_concatenation_class_methods_yield_named_writes() {
+        let output = extract(
+            r#"
+class C {
+  ["na" + "me"]() {}
+  ["a" + "b" + "c"]() {}
+  static [("static") + "G"]() {}
+}
+"#,
+        );
+
+        for expected in ["name", "abc", "staticG"] {
+            assert!(
+                output.property_writes.iter().any(|write| {
+                    write.property_key.kind == TsPropertyKeyKind::StringLiteral
+                        && write.property_key.value.as_deref() == Some(expected)
+                        && write.value_function_stable_key.is_some()
+                }),
+                "missing computed method property write for {expected}: {:?}",
+                output.property_writes
+            );
+        }
     }
 
     #[test]

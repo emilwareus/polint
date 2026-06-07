@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::analysis::ids::SemanticNodeId;
-use crate::analysis::solver::budget::SolverBudget;
+use crate::analysis::solver::budget::{BudgetReason, SolverBudget};
 
 use super::fixpoint::{TsObjectPropertyBucketKey, TsObjectPropertyBucketState, TsObjectValueToken};
 use super::inputs::TsObjectPrototypeLink;
@@ -30,7 +30,6 @@ pub(crate) fn lookup_property_with_prototypes(
 
     for depth in 0..=budget.object.max_prototype_depth {
         if !visited.insert(current) {
-            result.budget_reasons.insert("prototype_cycle".to_string());
             return result;
         }
 
@@ -57,7 +56,7 @@ pub(crate) fn lookup_property_with_prototypes(
         if depth == budget.object.max_prototype_depth {
             result
                 .budget_reasons
-                .insert("max_prototype_depth".to_string());
+                .insert(BudgetReason::ObjectMaxPrototypeDepth.as_str().to_string());
             return result;
         }
         if let Some(link_key) = link_key_by_pair.get(&(current, prototype)) {
@@ -90,6 +89,7 @@ fn link_key_by_pair(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis::solver::budget::BudgetReason;
 
     #[test]
     fn instance_lookup_reaches_prototype_bucket() {
@@ -144,7 +144,7 @@ mod tests {
     }
 
     #[test]
-    fn prototype_cycle_terminates_with_budget_evidence() {
+    fn prototype_cycle_terminates_without_budget_evidence() {
         let links = vec![link(1, 2, "p:1-2"), link(2, 1, "p:2-1")];
 
         let result = lookup_property_with_prototypes(
@@ -155,7 +155,7 @@ mod tests {
             &SolverBudget::default(),
         );
 
-        assert!(result.budget_reasons.contains("prototype_cycle"));
+        assert!(result.budget_reasons.is_empty());
         assert!(result.tokens.is_empty());
     }
 
@@ -173,7 +173,11 @@ mod tests {
             &budget,
         );
 
-        assert!(result.budget_reasons.contains("max_prototype_depth"));
+        assert!(
+            result
+                .budget_reasons
+                .contains(BudgetReason::ObjectMaxPrototypeDepth.as_str())
+        );
         assert!(result.tokens.is_empty());
     }
 

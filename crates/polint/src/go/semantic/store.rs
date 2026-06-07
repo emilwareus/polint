@@ -2,7 +2,7 @@ use crate::analysis::error::AnalysisError;
 use crate::go::semantic::facts::{
     GoSemanticAddressTakenFact, GoSemanticCallsiteFact, GoSemanticDynamicDispatchFact,
     GoSemanticFunctionFact, GoSemanticInstantiatedTypeFact, GoSemanticMethodSetFact,
-    GoSemanticPackageErrorFact, GoSemanticPackageFact,
+    GoSemanticPackageErrorFact, GoSemanticPackageFact, GoSemanticRtaEdgeFact,
 };
 use crate::go::semantic::validate::validate_go_semantic_output;
 
@@ -55,6 +55,7 @@ pub(crate) struct GoSemanticFactsOutput {
     pub(crate) address_taken: Vec<GoSemanticAddressTakenFact>,
     pub(crate) instantiated_types: Vec<GoSemanticInstantiatedTypeFact>,
     pub(crate) dynamic_dispatch: Vec<GoSemanticDynamicDispatchFact>,
+    pub(crate) rta_edges: Vec<GoSemanticRtaEdgeFact>,
     pub(crate) package_errors: Vec<GoSemanticPackageErrorFact>,
 }
 
@@ -123,6 +124,14 @@ impl GoSemanticFactsOutput {
             fact.id = crate::go::semantic::facts::GoSemanticDynamicDispatchId(index as u64);
         }
 
+        self.rta_edges
+            .sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+        self.rta_edges
+            .dedup_by(|left, right| left.stable_key == right.stable_key);
+        for (index, fact) in self.rta_edges.iter_mut().enumerate() {
+            fact.id = crate::go::semantic::facts::GoSemanticRtaEdgeId(index as u64);
+        }
+
         self.package_errors
             .sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
         for (index, fact) in self.package_errors.iter_mut().enumerate() {
@@ -151,12 +160,13 @@ impl GoSemanticFactsOutput {
     fn drop_invalid_harvest_rows(mut self) -> (Self, usize) {
         use crate::go::semantic::validate::{
             address_taken_rejection, dynamic_dispatch_rejection, instantiated_type_rejection,
-            method_set_rejection,
+            method_set_rejection, rta_edge_rejection,
         };
         let before = self.method_sets.len()
             + self.address_taken.len()
             + self.instantiated_types.len()
-            + self.dynamic_dispatch.len();
+            + self.dynamic_dispatch.len()
+            + self.rta_edges.len();
         self.method_sets
             .retain(|fact| method_set_rejection(fact).is_none());
         self.address_taken
@@ -165,10 +175,13 @@ impl GoSemanticFactsOutput {
             .retain(|fact| instantiated_type_rejection(fact).is_none());
         self.dynamic_dispatch
             .retain(|fact| dynamic_dispatch_rejection(fact).is_none());
+        self.rta_edges
+            .retain(|fact| rta_edge_rejection(fact).is_none());
         let after = self.method_sets.len()
             + self.address_taken.len()
             + self.instantiated_types.len()
-            + self.dynamic_dispatch.len();
+            + self.dynamic_dispatch.len()
+            + self.rta_edges.len();
         let dropped = before - after;
         (self, dropped)
     }

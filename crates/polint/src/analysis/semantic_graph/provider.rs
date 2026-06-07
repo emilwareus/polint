@@ -482,7 +482,6 @@ fn semantic_graph_output_digest(
         format!("provider_version={}", manifest.provider_version()),
         format!("schema={}", manifest.primary_schema_label()),
         format!("parameters={}", semantic_graph_provider_parameter_digest()),
-        format!("config={}", input_snapshot.config.digest),
         format!("calls_output={calls_output_digest}"),
         format!("identity_output={identity_output_digest}"),
         format!("abstract_domains_output={abstract_domains_output_digest}"),

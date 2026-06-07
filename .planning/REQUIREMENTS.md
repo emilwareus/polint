@@ -48,13 +48,13 @@ Requirements for the v1.3 milestone. Each maps to exactly one roadmap phase.
 
 - [ ] **ADAPT-01**: polint has a private `analysis::adaptation/` with a TOML model schema (source pattern, target pattern, confidence, language, scope, evidence), a loader, and a validator that confirms target symbols exist in the semantic graph before accepting facts.
 - [ ] **ADAPT-02**: `benchmark adapted` mode reports prompt hash, changed model files, accepted/rejected facts, unknown delta, precision/recall delta, runtime/cache delta, and held-out subset deltas; the adaptation agent runs in a sandbox that cannot read benchmark oracle files.
-- [ ] **CACHE-01**: every new v1.3 fact family has a dependency index and cache key participating digests for the sidecar binary, Go toolchain version, adaptation model files, and solver budgets, verified by both must-invalidate and must-preserve-hit fixtures.
-- [ ] **CACHE-02**: polint enforces solver budgets across token-set size, property abstraction, dynamic-call fanout, model expansion, and package depth, with budget exhaustion surfaced as facts rather than silent precision drops.
+- [x] **CACHE-01**: every new v1.3 fact family has a dependency index and cache key participating digests for the sidecar binary, Go toolchain version, adaptation model files, and solver budgets, verified by both must-invalidate and must-preserve-hit fixtures.
+- [x] **CACHE-02**: polint enforces solver budgets across token-set size, property abstraction, dynamic-call fanout, model expansion, and package depth, with budget exhaustion surfaced as facts rather than silent precision drops.
 - [ ] **TAX-01**: polint consolidates the unsupported/unknown taxonomy across providers (`SetupMissing`, `UnsupportedSemantic`, `MissingFact`, `OutOfScope`, plus sidecar-specific failure modes) and exposes it via `polint inspect unknowns --format json`.
 
 ### Benchmark Promotion
 
-- [ ] **BENCH-01**: the benchmark promotion gate enforces hard per-suite precision floors (Go ≥60%, Jelly configurable), tracks F-score β=0.5 alongside F1, enforces per-language deltas separately, includes a polyglot Go+TS canary fixture, and asserts a public-API leak CI gate (no v1.3 solver types reachable from `polint::sdk::prelude::*`).
+- [x] **BENCH-01**: the benchmark promotion gate enforces hard per-suite precision floors (Go ≥60%, Jelly configurable), tracks F-score β=0.5 alongside F1, enforces per-language deltas separately, includes a polyglot Go+TS canary fixture, and asserts a public-API leak CI gate (no v1.3 solver types reachable from `polint::sdk::prelude::*`).
 
 ## Future Requirements
 
@@ -129,10 +129,10 @@ Which phases cover which requirements. Filled by the roadmapper after roadmap cr
 | JS-05 | Phase 50 | Complete |
 | ADAPT-01 | Phase 51 | Pending |
 | ADAPT-02 | Phase 51 | Pending |
-| CACHE-01 | Phase 53 | Pending |
-| CACHE-02 | Phase 53 | Pending |
+| CACHE-01 | Phase 53 | Complete |
+| CACHE-02 | Phase 53 | Complete |
 | TAX-01 | Phase 52 | Pending |
-| BENCH-01 | Phase 54 | Pending |
+| BENCH-01 | Phase 54 | Complete |
 
 **Coverage:**
 - v1.3 requirements: 27 total

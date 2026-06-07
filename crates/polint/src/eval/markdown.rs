@@ -25,34 +25,36 @@ pub(crate) fn render_markdown(run: &EvaluationRun) -> String {
     }
 
     out.push_str("## Comparison\n\n");
-    out.push_str("| Product | Mode | Source | Precision | Recall | F1 | Limitations |\n|---|---|---|---:|---:|---:|---|\n");
+    out.push_str("| Product | Mode | Source | Precision | Recall | F0.5 | F1 | Limitations |\n|---|---|---|---:|---:|---:|---:|---|\n");
     for row in &run.comparison_rows {
         out.push_str(&format!(
-            "| {} | `{}` | {} | {} | {} | {} | {} |\n",
+            "| {} | `{}` | {} | {} | {} | {} | {} | {} |\n",
             escape_cell(&row.product.name),
             mode_label(row.mode),
             result_source_label(&row.result_source),
             metric_cell(row.metrics.get("precision").copied()),
             metric_cell(row.metrics.get("recall").copied()),
+            metric_cell(row.metrics.get("f0_5").copied()),
             metric_cell(row.metrics.get("f1").copied()),
             escape_cell(&row.limitations.join("; "))
         ));
     }
     if run.comparison_rows.is_empty() {
-        out.push_str("| _none_ |  |  |  |  |  |  |\n");
+        out.push_str("| _none_ |  |  |  |  |  |  |  |\n");
     }
     out.push('\n');
 
     out.push_str("## Scanner Metrics\n\n");
-    out.push_str("| TP | FP | FN | TN | Precision | Recall | F1 | FPR |\n|---:|---:|---:|---:|---:|---:|---:|---:|\n");
+    out.push_str("| TP | FP | FN | TN | Precision | Recall | F0.5 | F1 | FPR |\n|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n");
     out.push_str(&format!(
-        "| {} | {} | {} | {} | {} | {} | {} | {} |\n\n",
+        "| {} | {} | {} | {} | {} | {} | {} | {} | {} |\n\n",
         run.metrics.true_positives,
         run.metrics.false_positives,
         run.metrics.false_negatives,
         run.metrics.true_negatives,
         metric_cell(run.metrics.precision),
         metric_cell(run.metrics.recall),
+        metric_cell(run.metrics.sections.scanner.f0_5),
         metric_cell(run.metrics.f1),
         metric_cell(run.metrics.false_positive_rate),
     ));
@@ -87,6 +89,24 @@ pub(crate) fn render_markdown(run: &EvaluationRun) -> String {
         }
     }
     out.push('\n');
+
+    out.push_str("## RSS Thresholds\n\n");
+    out.push_str(
+        "| Cold Threshold MiB | Cold Observed MiB | Warm Threshold MiB | Warm Observed MiB | Peak Observed MiB |\n",
+    );
+    out.push_str("|---:|---:|---:|---:|---:|\n");
+    if let Some(performance) = &run.performance {
+        out.push_str(&format!(
+            "| {} | {} | {} | {} | {} |\n\n",
+            optional_u64_cell(performance.rss.cold_rss_threshold_mb),
+            optional_u64_cell(performance.rss.cold_rss_observed_mb),
+            optional_u64_cell(performance.rss.warm_rss_threshold_mb),
+            optional_u64_cell(performance.rss.warm_rss_observed_mb),
+            optional_u64_cell(performance.rss.peak_rss_observed_mb),
+        ));
+    } else {
+        out.push_str("| - | - | - | - | - |\n\n");
+    }
 
     out.push_str("## Adaptation\n\n");
     if let Some(adaptation) = &run.adaptation {
@@ -143,6 +163,27 @@ pub(crate) fn render_markdown(run: &EvaluationRun) -> String {
         }
     }
 
+    out.push_str("## Per-Language Deltas\n\n");
+    out.push_str("| Language | Suite | Scoring Mode | Precision Tier | Precision Delta | Recall Delta | F0.5 Delta |\n");
+    out.push_str("|---|---|---|---|---:|---:|---:|\n");
+    if run.metrics.sections.per_language_deltas.is_empty() {
+        out.push_str("| _none_ |  |  |  |  |  |  |\n\n");
+    } else {
+        for row in &run.metrics.sections.per_language_deltas {
+            out.push_str(&format!(
+                "| `{}` | `{}` | `{}` | `{}` | {} | {} | {} |\n",
+                escape_cell(&row.language),
+                escape_cell(&row.suite_id),
+                escape_cell(&row.scoring_mode),
+                escape_cell(&row.precision_tier),
+                metric_cell(row.precision_delta),
+                metric_cell(row.recall_delta),
+                metric_cell(row.f0_5_delta),
+            ));
+        }
+        out.push('\n');
+    }
+
     out.push_str("## Limitations\n\n");
     for limitation in &run.limitations {
         out.push_str(&format!("- {}\n", escape_cell(limitation)));
@@ -194,6 +235,10 @@ fn metric_cell(value: Option<f64>) -> String {
     value.map_or_else(|| "-".to_string(), |value| format!("{value:.4}"))
 }
 
+fn optional_u64_cell(value: Option<u64>) -> String {
+    value.map_or_else(|| "-".to_string(), |value| value.to_string())
+}
+
 fn escape_cell(value: &str) -> String {
     value.replace('|', "\\|")
 }
@@ -203,8 +248,10 @@ mod tests {
     use super::*;
     use crate::eval::competitors::{BenchmarkComparisonRow, ProductIdentity, ResultSource};
     use crate::eval::model::EvaluationMode;
-    use crate::eval::performance::{CacheStatsSummary, EvalPerformanceReport, ProviderStatsRow};
-    use crate::eval::report::{MetricSections, MetricSummary};
+    use crate::eval::performance::{
+        CacheStatsSummary, EvalPerformanceReport, ProviderStatsRow, RssStatsSummary,
+    };
+    use crate::eval::report::{MetricSections, MetricSummary, PerLanguageDeltaRow};
     use crate::eval::suite::{
         CaseSelector, ExpectedSource, ExpectedSourceFormat, SuiteCheckout, SuiteCheckoutStrategy,
         SuiteId, SuiteKind, SuiteLanguageSupport, SuiteManifest, SuiteScoring, SuiteTier,
@@ -226,10 +273,16 @@ mod tests {
     fn markdown_labels_adapter_only_and_imported_competitors() {
         let markdown = render_markdown(&report());
 
+        assert!(markdown.contains("F0.5"));
+        assert!(markdown.contains("## Per-Language Deltas"));
+        assert!(markdown.contains("| `javascript` | `secbench-js-smoke` | `whole-repo` | `syntax` | 0.1000 | 0.2000 | 0.1500 |"));
         assert!(markdown.contains("adapter_only"));
         assert!(markdown.contains("imported: published table"));
         assert!(markdown.contains("adapter-only: adapter dry run"));
         assert!(markdown.contains("known limitation"));
+        assert!(markdown.contains("Cold Threshold MiB"));
+        assert!(markdown.contains("Peak Observed MiB"));
+        assert!(markdown.contains("| 512 | 256 | 384 | 128 | - |"));
     }
 
     #[test]
@@ -241,6 +294,18 @@ mod tests {
         assert!(!markdown.contains("2026-05-26T07:00:00Z"));
     }
 
+    #[test]
+    fn markdown_populates_peak_rss_from_peak_rss_bytes() {
+        let mut report = report();
+        let performance = report.performance.as_mut().unwrap();
+        performance.rss = RssStatsSummary::default();
+        performance.runtime.peak_rss_bytes = Some(2 * 1024 * 1024);
+
+        let markdown = render_markdown(&report);
+
+        assert!(markdown.contains("| - | - | - | - | 2 |"));
+    }
+
     fn report() -> EvaluationRun {
         EvaluationRun {
             schema_version: crate::eval::report::EVALUATION_SCHEMA_VERSION.to_string(),
@@ -248,39 +313,65 @@ mod tests {
             mode: EvaluationMode::AdapterOnly,
             suite_manifest: Some(suite_manifest()),
             cases: Vec::new(),
-            metrics: MetricSummary {
-                true_positives: 1,
-                false_positives: 2,
-                false_negatives: 3,
-                true_negatives: 4,
-                unconfirmed: 0,
-                false_positive_trap_hits: 0,
-                forbidden_hits: 0,
-                unknown_count: 5,
-                facts_present: 0,
-                facts_accepted: 0,
-                facts_rejected: 0,
-                graph_edges_expected: 6,
-                graph_edges_observed: 7,
-                graph_edges_unconfirmed: 8,
-                paths_expected: 9,
-                paths_observed: 10,
-                paths_unconfirmed: 11,
-                runtime_budget_passed: 1,
-                runtime_budget_failed: 0,
-                precision: Some(0.5),
-                recall: Some(0.25),
-                f1: Some(0.3333),
-                f2: None,
-                f3: None,
-                false_positive_rate: Some(0.2),
-                sections: MetricSections::default(),
+            metrics: {
+                let mut sections = MetricSections::default();
+                sections.scanner.f0_5 = Some(0.3333);
+                sections.per_language_deltas = vec![PerLanguageDeltaRow {
+                    language: "javascript".to_string(),
+                    suite_id: "secbench-js-smoke".to_string(),
+                    scoring_mode: "whole-repo".to_string(),
+                    precision_tier: "syntax".to_string(),
+                    baseline_precision: Some(0.4),
+                    current_precision: Some(0.5),
+                    precision_delta: Some(0.1),
+                    baseline_recall: Some(0.05),
+                    current_recall: Some(0.25),
+                    recall_delta: Some(0.2),
+                    baseline_f0_5: Some(0.18),
+                    current_f0_5: Some(0.33),
+                    f0_5_delta: Some(0.15),
+                }];
+                MetricSummary {
+                    true_positives: 1,
+                    false_positives: 2,
+                    false_negatives: 3,
+                    true_negatives: 4,
+                    unconfirmed: 0,
+                    false_positive_trap_hits: 0,
+                    forbidden_hits: 0,
+                    unknown_count: 5,
+                    facts_present: 0,
+                    facts_accepted: 0,
+                    facts_rejected: 0,
+                    graph_edges_expected: 6,
+                    graph_edges_observed: 7,
+                    graph_edges_unconfirmed: 8,
+                    paths_expected: 9,
+                    paths_observed: 10,
+                    paths_unconfirmed: 11,
+                    runtime_budget_passed: 1,
+                    runtime_budget_failed: 0,
+                    precision: Some(0.5),
+                    recall: Some(0.25),
+                    f1: Some(0.3333),
+                    f2: None,
+                    f3: None,
+                    false_positive_rate: Some(0.2),
+                    sections,
+                }
             },
             performance: Some(EvalPerformanceReport {
                 providers: vec![provider("polint.ts.syntax"), provider("polint.source")],
                 cache: CacheStatsSummary::default(),
                 demand_queries: Vec::new(),
                 runtime: Default::default(),
+                rss: RssStatsSummary {
+                    cold_rss_threshold_mb: Some(512),
+                    cold_rss_observed_mb: Some(256),
+                    warm_rss_threshold_mb: Some(384),
+                    warm_rss_observed_mb: Some(128),
+                    peak_rss_observed_mb: None,
+                },
             }),
             comparison_rows: vec![
                 comparison("Semgrep", EvaluationMode::ImportedScanner),
@@ -383,9 +474,14 @@ mod tests {
                     reason: "adapter dry run".to_string(),
                 }
             },
-            metrics: [("precision".to_string(), 0.5), ("recall".to_string(), 0.25)]
-                .into_iter()
-                .collect(),
+            metrics: [
+                ("precision".to_string(), 0.5),
+                ("recall".to_string(), 0.25),
+                ("f0_5".to_string(), 0.3333),
+                ("f1".to_string(), 0.3333),
+            ]
+            .into_iter()
+            .collect(),
             limitations: vec!["known limitation".to_string()],
         }
     }

@@ -349,6 +349,7 @@ fn go_rta_solver_output_is_byte_identical_under_permuted_fact_insertion_order() 
         address_taken: output.db.go_semantic_address_taken().to_vec(),
         instantiated_types: output.db.go_semantic_instantiated_types().to_vec(),
         dynamic_dispatch: output.db.go_semantic_dynamic_dispatch().to_vec(),
+        rta_edges: output.db.go_semantic_rta_edges().to_vec(),
         package_errors: output.db.go_semantic_package_errors().to_vec(),
     };
     // The fixture must genuinely exercise the RTA path (a resolved interface edge), or this
@@ -389,7 +390,8 @@ fn go_rta_solver_output_is_byte_identical_under_permuted_fact_insertion_order() 
         seeded_shuffle(&mut permuted.address_taken, seed ^ 0x4444_4444);
         seeded_shuffle(&mut permuted.instantiated_types, seed ^ 0x5555_5555);
         seeded_shuffle(&mut permuted.dynamic_dispatch, seed ^ 0x6666_6666);
-        seeded_shuffle(&mut permuted.package_errors, seed ^ 0x7777_7777);
+        seeded_shuffle(&mut permuted.rta_edges, seed ^ 0x7777_7777);
+        seeded_shuffle(&mut permuted.package_errors, seed ^ 0x8888_8888);
 
         output
             .db
