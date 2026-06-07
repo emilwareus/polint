@@ -206,7 +206,7 @@ fn push_unique_jelly_graph_edge(
 fn is_jelly_source_file(path: &Path) -> bool {
     matches!(
         path.extension().and_then(|extension| extension.to_str()),
-        Some("js" | "jsx" | "ts" | "tsx")
+        Some("js" | "jsx" | "mjs" | "cjs" | "ts" | "tsx" | "mts" | "cts")
     )
 }
 

@@ -196,9 +196,9 @@ impl Language {
             .unwrap_or_default()
         {
             "go" => Self::Go,
-            "ts" => Self::TypeScript,
+            "ts" | "mts" | "cts" => Self::TypeScript,
             "tsx" => Self::Tsx,
-            "js" => Self::JavaScript,
+            "js" | "mjs" | "cjs" => Self::JavaScript,
             "jsx" => Self::Jsx,
             _ => Self::Unknown,
         }

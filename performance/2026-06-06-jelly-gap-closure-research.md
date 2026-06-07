@@ -148,6 +148,67 @@ Measured continuation iterations:
 | 32 | Flow-insensitive sync/async generator iterator value model | 749 | 609 | 730 | 55.15% | 50.64% | 52.80% | 83896 ms | `35f0324f80bc8f0d` |
 | 33 | Bounded native object/array models plus constant computed property key flow | 814 | 609 | 665 | 57.20% | 55.04% | 56.10% | 85843 ms | `42affa8016fd6580` |
 | 34 | Bounded computed object/class property keys plus getter/setter flow | 840 | 604 | 639 | 58.17% | 56.80% | 57.48% | 123846 ms | `a6484b3cc6213e28` |
+| 35 | CommonJS module export summaries + `require` resolution (cross-file seeding) | 851 | 605 | 628 | 58.45% | 57.54% | 57.99% | 94836 ms | `f0dea063cd6de335` |
+
+Iteration 35 began the third loop (module/dependency modeling). It adds:
+
+- A standalone Node-style `require` resolver (`oxc_resolver`) that maps each
+  `(importer file, specifier)` to a target file. This intentionally does NOT
+  depend on the kernel module-graph layer (`resolved_imports`), because that
+  layer is only populated when a rule requests it; under the benchmark's empty
+  analysis plan it is absent. `require` specifiers are still captured as
+  `ImportFact`s by the TS frontend regardless of plan, so the resolver runs from
+  those.
+- A per-file `ModuleExportSummary` (callable values for `module.exports = fn`
+  plus a property object for `exports.foo = ...` / `module.exports = { foo }`),
+  computed by a bounded fixpoint (`MAX_MODULE_SUMMARY_ROUNDS = 4`) so re-export
+  chains such as `module.exports = require('./lib/foo')` converge. Single-file
+  cases (no resolvable imports) skip the fixpoint entirely.
+- Seeding `require("x")` results into the existing value-flow evaluators
+  (`object_targets_from_call` → summary object, `collection_targets_from_call`
+  → summary callables), so `const x = require('y'); x()` and `x.foo()` resolve
+  through the unchanged declarator/member/call machinery.
+
+This is a real but modest gain (+11 TP, −11 FN, +1 FP). `helloworld` moved only
+**115 → 117 TP** because its remaining 160 cross-file oracle edges (86 call2fun,
+74 fun2fun) are dominated by *return-value* chains — `const app = express();
+app.get(...)` requires the return value of the required `createApplication`
+function, which is defined in another file. The per-file collector does not yet
+carry cross-file function-return summaries, so `express()` resolves to its
+exported function but `app.get` does not. The next iterations build on this
+infrastructure: ESM `import`/`export`, then cross-file return-value summaries,
+then dependency-precision controls for the `helloworld` false positives.
+
+| 36 | ESM `import`/`export` summaries + `.mjs`/`.cjs` recognition | 863 | 609 | 616 | 58.63% | 58.35% | 58.49% | 98681 ms | `4ffb6b2eacf2971c` |
+
+Iteration 36 extended module modeling to ECMAScript modules:
+
+- `Language::from_path` now recognizes `.mjs`/`.cjs` as JavaScript and
+  `.mts`/`.cts` as TypeScript. Previously these resolved to `Language::Unknown`,
+  so file discovery skipped them entirely — every Jelly `.mjs` ESM fixture
+  analyzed zero files. The Jelly adapter's source-file filter was widened too.
+- The value-flow collector captures ESM exports into the same
+  `ModuleExportSummary`: `export { a, b as c }` (local and re-export
+  `... from './m'`), `export const/var/function ...`, `export default ...`, and
+  `export * from './m'`. The `default` export is stored under the `"default"`
+  property (Jelly's convention) and also as a callable for CommonJS interop.
+- ESM imports are seeded into `env` before the body walk (imports are hoisted):
+  default, named (`{ a, b as c }`), and namespace (`* as ns`) imports bind to
+  the corresponding export-summary slot, with CommonJS default-interop.
+
+Gain: +12 TP, −12 FN, +4 FP. The wins are the ESM micro fixtures:
+`tests/micro/import1.json` **0 → 6 TP**, `tests/micro/import12.json` **0 → 2 TP
+(closed)**, plus several `client*` cases. Combined, iterations 35–36 moved the
+suite from **840 / 604 / 639 (F1 57.48%)** to **863 / 609 / 616 (F1 58.49%)**.
+
+Remaining module-modeling work (next iterations):
+
+1. **Cross-file function-return summaries** — the dominant remaining `helloworld`
+   gap and the `const app = express(); app.get(...)` pattern.
+2. **Dependency precision** — `helloworld` still carries 529 of the suite's 609
+   false positives from intra-dependency over-approximation.
+3. **`client*` / namespace method calls** — namespace-object method resolution
+   and class-export instantiation.
 
 Current Go score remains unchanged:
 
