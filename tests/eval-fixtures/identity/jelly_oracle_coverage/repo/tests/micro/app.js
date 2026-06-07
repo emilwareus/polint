@@ -4,3 +4,4 @@ function helper() {
 function main() {
   return helper();
 }
+main();
