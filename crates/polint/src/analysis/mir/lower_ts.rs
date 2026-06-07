@@ -3,9 +3,10 @@ use std::path::Path;
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
-    Argument, BindingPattern, Class, ClassElement, Declaration, ExportDefaultDeclarationKind,
-    Expression, FormalParameters, Function, FunctionBody, LogicalOperator, MethodDefinition,
-    ObjectPropertyKind, Program, PropertyKey, Statement, VariableDeclarator,
+    Argument, BinaryOperator, BindingPattern, Class, ClassElement, Declaration,
+    ExportDefaultDeclarationKind, Expression, FormalParameters, Function, FunctionBody,
+    LogicalOperator, MethodDefinition, ObjectPropertyKind, Program, PropertyKey, Statement,
+    VariableDeclarator,
 };
 use oxc_parser::Parser;
 use oxc_span::{GetSpan, SourceType};
@@ -736,6 +737,23 @@ fn method_name(method: &MethodDefinition<'_>) -> Option<String> {
     match &method.key {
         PropertyKey::StaticIdentifier(identifier) => Some(identifier.name.to_string()),
         PropertyKey::StringLiteral(literal) => Some(literal.value.to_string()),
+        PropertyKey::BinaryExpression(binary) if binary.operator == BinaryOperator::Addition => {
+            Some(format!(
+                "{}{}",
+                constant_property_key_expression(&binary.left)?,
+                constant_property_key_expression(&binary.right)?
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn constant_property_key_expression(expression: &Expression<'_>) -> Option<String> {
+    match expression {
+        Expression::StringLiteral(literal) => Some(literal.value.to_string()),
+        Expression::ParenthesizedExpression(expression) => {
+            constant_property_key_expression(&expression.expression)
+        }
         _ => None,
     }
 }

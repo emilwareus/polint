@@ -565,15 +565,16 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 
 ## Session
 
-- Last session: 2026-06-06
-- Last activity: 2026-06-06 - Completed quick task 260606-ef2 in the working tree: Jelly JS/TS callgraph F1 improved from 1.07% to 16.16% with module execution, IIFE callable identities, expression-span function identities, constructor lowering, and benchmark normalization fixes.
-- Stopped at: Milestone complete; current quick-task changes are ready for review/commit.
+- Last session: 2026-06-07
+- Last activity: 2026-06-07 - Completed quick task 260607-e7j in the working tree: bounded computed-property object/class flow moved Jelly from 814/609/665 to 840/604/639 and computedProperties from 8/4/18 to 24/3/2.
+- Stopped at: Quick-task implementation committed; push still pending.
 - Resume file: None
 
 ### Quick Tasks Completed
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260607-e7j | Improve Jelly computed-property recall with bounded key evaluation and accessor flow | 2026-06-07 | implemented | [260607-e7j-computed-property-recall](./quick/260607-e7j-computed-property-recall/) |
 | 260605-h96 | Review and fix Phase 52 PR findings until two consecutive clean review rounds | 2026-06-05 | implemented | [260605-h96-review-and-fix-phase-52-pr-findings-unti](./quick/260605-h96-review-and-fix-phase-52-pr-findings-unti/) |
 | 260605-gwr | Fix PR review findings: include provider diagnostics in inspect unknowns taxonomy and enforce extension-model invariant value | 2026-06-05 | implemented | [260605-gwr-fix-pr-review-findings-include-provider-](./quick/260605-gwr-fix-pr-review-findings-include-provider-/) |
 | 260605-ajl | Fix adaptation delta duplicate model counts and held-out separation | 2026-06-05 | implemented | [260605-ajl-fix-adaptation-delta-duplicate-model-cou](./quick/260605-ajl-fix-adaptation-delta-duplicate-model-cou/) |
@@ -620,8 +621,9 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 
 ## Next Action
 
-Run `/gsd-discuss-phase 54 --auto` to gather context for the benchmark promotion gate extension.
+Push quick task 260607-e7j, then continue recall work on the next largest Jelly blockers.
 
 ## Operator Next Steps
 
-- Discuss and plan Phase 54.
+- Push the computed-property recall improvements.
+- Pick the next recall slice from `performance/2026-06-06-jelly-gap-closure-research.md`.

@@ -5,7 +5,7 @@ use oxc_ast::ast::{
     Argument, ArrayExpressionElement, AssignmentTarget, BinaryOperator, BindingPattern,
     CallExpression, Class, ClassElement, Expression, ForStatementLeft, FunctionBody,
     MethodDefinition, MethodDefinitionKind, ObjectProperty, ObjectPropertyKind, Program,
-    PropertyKey, Statement, VariableDeclaration, VariableDeclarator,
+    PropertyKey, PropertyKind, Statement, VariableDeclaration, VariableDeclarator,
 };
 use oxc_parser::Parser;
 use oxc_span::{GetSpan, SourceType};
@@ -184,6 +184,9 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                     }
                 }
             }
+            Statement::ClassDeclaration(class) => {
+                self.collect_expression_function_flows_from_class(class);
+            }
             _ => {}
         }
     }
@@ -289,6 +292,9 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                     }
                 }
             }
+            Expression::ClassExpression(class) => {
+                self.collect_expression_function_flows_from_class(class);
+            }
             Expression::StaticMemberExpression(member) => {
                 self.collect_expression_function_flows_from_expression(&member.object);
             }
@@ -352,6 +358,60 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
         }
 
         self.collect_expression_function_flows_from_expression(&property.value);
+    }
+
+    fn collect_expression_function_flows_from_class(&mut self, class: &'ast Class<'ast>) {
+        for element in &class.body.body {
+            match element {
+                ClassElement::MethodDefinition(method) => {
+                    let Some(body) = method.value.body.as_deref() else {
+                        continue;
+                    };
+                    let Some(function_fact) = self.function_for_class_method(method) else {
+                        continue;
+                    };
+                    let flow = FunctionFlow {
+                        function: function_fact,
+                        body,
+                        expression_body: None,
+                        params: method
+                            .value
+                            .params
+                            .items
+                            .iter()
+                            .map(|param| param_pattern_from_binding(&param.pattern))
+                            .collect(),
+                        rest: method
+                            .value
+                            .params
+                            .rest
+                            .as_ref()
+                            .map(|rest| param_pattern_from_binding(&rest.rest.argument)),
+                        generator: method.value.generator,
+                    };
+                    self.function_flows_by_id.insert(function_fact.id, flow);
+                    for statement in &body.statements {
+                        self.collect_expression_function_flows_from_statement(statement);
+                    }
+                }
+                ClassElement::PropertyDefinition(property) => {
+                    if let Some(value) = &property.value {
+                        self.collect_expression_function_flows_from_expression(value);
+                    }
+                }
+                ClassElement::AccessorProperty(property) => {
+                    if let Some(value) = &property.value {
+                        self.collect_expression_function_flows_from_expression(value);
+                    }
+                }
+                ClassElement::StaticBlock(block) => {
+                    for statement in &block.body {
+                        self.collect_expression_function_flows_from_statement(statement);
+                    }
+                }
+                ClassElement::TSIndexSignature(_) => {}
+            }
+        }
     }
 
     fn collect_function_declarations(&mut self, program: &'ast Program<'ast>) {
@@ -446,22 +506,36 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                         }
                         continue;
                     }
-                    let Some(name) = static_property_key(&method.key, method.computed) else {
+                    let names = self.property_key_names(&method.key, method.computed, None);
+                    if names.is_empty() {
                         continue;
                     };
                     let Some(function) = self.function_for_class_method(method) else {
                         continue;
                     };
-                    if method.r#static {
-                        targets.static_object.add_property_target(name, function.id);
-                    } else {
-                        targets
-                            .instance_object
-                            .add_property_target(name, function.id);
+                    for name in names {
+                        let object = if method.r#static {
+                            &mut targets.static_object
+                        } else {
+                            &mut targets.instance_object
+                        };
+                        match method.kind {
+                            MethodDefinitionKind::Get => {
+                                object.add_getter_target(name, function.id);
+                            }
+                            MethodDefinitionKind::Set => {
+                                object.add_setter_target(name, function.id);
+                            }
+                            MethodDefinitionKind::Method => {
+                                object.add_property_target(name, function.id);
+                            }
+                            MethodDefinitionKind::Constructor => {}
+                        }
                     }
                 }
                 ClassElement::PropertyDefinition(property) => {
-                    let Some(name) = static_property_key(&property.key, property.computed) else {
+                    let names = self.property_key_names(&property.key, property.computed, None);
+                    if names.is_empty() {
                         continue;
                     };
                     let object = if property.r#static {
@@ -475,10 +549,12 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                         &mut targets.instance_self_aliases
                     };
                     if let Some(value) = &property.value {
-                        if let Some(function) = self.function_for_expression(value) {
-                            object.add_property_target(name, function.id);
-                        } else if matches!(value, Expression::ThisExpression(_)) {
-                            self_aliases.push(name);
+                        for name in names {
+                            if let Some(function) = self.function_for_expression(value) {
+                                object.add_property_target(name, function.id);
+                            } else if matches!(value, Expression::ThisExpression(_)) {
+                                self_aliases.push(name);
+                            }
                         }
                     }
                 }
@@ -764,6 +840,18 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
             }
             if let Some(name) = binding_identifier_name(&declarator.id)
                 && let Some(init) = &declarator.init
+                && let Some(value) = self.constant_bool_from_expression(init, env)
+            {
+                env.bool_bindings.insert(name, value);
+            }
+            if let Some(name) = binding_identifier_name(&declarator.id)
+                && let Some(Expression::ArrayExpression(array)) = &declarator.init
+                && let Some(values) = self.string_array_from_literal(array, env)
+            {
+                env.string_arrays.insert(name, values);
+            }
+            if let Some(name) = binding_identifier_name(&declarator.id)
+                && let Some(init) = &declarator.init
                 && let Expression::CallExpression(call) = init
                 && let Some(bound_targets) = self.bound_function_targets_from_bind_call(call, env)
             {
@@ -1020,21 +1108,256 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
         expression: &'ast Expression<'ast>,
         env: &FlowEnv,
     ) -> Option<String> {
+        self.constant_strings_from_expression(expression, env)
+            .into_iter()
+            .next()
+    }
+
+    fn constant_strings_from_expression(
+        &self,
+        expression: &'ast Expression<'ast>,
+        env: &FlowEnv,
+    ) -> Vec<String> {
         match expression {
-            Expression::StringLiteral(literal) => Some(literal.value.to_string()),
-            Expression::Identifier(identifier) => {
-                env.string_bindings.get(identifier.name.as_str()).cloned()
-            }
+            Expression::StringLiteral(literal) => vec![literal.value.to_string()],
+            Expression::Identifier(identifier) => env
+                .string_bindings
+                .get(identifier.name.as_str())
+                .cloned()
+                .into_iter()
+                .collect(),
             Expression::BinaryExpression(binary) if binary.operator == BinaryOperator::Addition => {
-                let left = self.constant_string_from_expression(&binary.left, env)?;
-                let right = self.constant_string_from_expression(&binary.right, env)?;
-                Some(format!("{left}{right}"))
+                let left = self.constant_strings_from_expression(&binary.left, env);
+                let right = self.constant_strings_from_expression(&binary.right, env);
+                if left.is_empty() || right.is_empty() {
+                    return Vec::new();
+                }
+                bounded_string_product(&left, &right)
+            }
+            Expression::ConditionalExpression(conditional) => {
+                if let Some(value) = self.constant_bool_from_expression(&conditional.test, env) {
+                    if value {
+                        self.constant_strings_from_expression(&conditional.consequent, env)
+                    } else {
+                        self.constant_strings_from_expression(&conditional.alternate, env)
+                    }
+                } else {
+                    let mut values =
+                        self.constant_strings_from_expression(&conditional.consequent, env);
+                    values
+                        .extend(self.constant_strings_from_expression(&conditional.alternate, env));
+                    sort_dedup_strings(&mut values);
+                    values.truncate(8);
+                    values
+                }
+            }
+            Expression::ComputedMemberExpression(member) => {
+                let Some(source) = expression_identifier(&member.object)
+                    .and_then(|name| env.string_arrays.get(name))
+                else {
+                    return Vec::new();
+                };
+                let Some(index) = numeric_index(&member.expression) else {
+                    return Vec::new();
+                };
+                source.get(index).cloned().into_iter().collect()
+            }
+            Expression::TemplateLiteral(template) if template.expressions.is_empty() => template
+                .quasis
+                .iter()
+                .map(|quasi| {
+                    quasi
+                        .value
+                        .cooked
+                        .as_ref()
+                        .unwrap_or(&quasi.value.raw)
+                        .to_string()
+                })
+                .collect(),
+            Expression::TemplateLiteral(template) => {
+                let mut values = vec![String::new()];
+                for (index, quasi) in template.quasis.iter().enumerate() {
+                    let text = quasi
+                        .value
+                        .cooked
+                        .as_ref()
+                        .unwrap_or(&quasi.value.raw)
+                        .to_string();
+                    for value in &mut values {
+                        value.push_str(&text);
+                    }
+                    if let Some(expression) = template.expressions.get(index) {
+                        let parts = self.constant_strings_from_expression(expression, env);
+                        if parts.is_empty() {
+                            return Vec::new();
+                        }
+                        values = bounded_string_product(&values, &parts);
+                    }
+                }
+                values
             }
             Expression::ParenthesizedExpression(expression) => {
-                self.constant_string_from_expression(&expression.expression, env)
+                self.constant_strings_from_expression(&expression.expression, env)
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn constant_bool_from_expression(
+        &self,
+        expression: &'ast Expression<'ast>,
+        env: &FlowEnv,
+    ) -> Option<bool> {
+        match expression {
+            Expression::BooleanLiteral(literal) => Some(literal.value),
+            Expression::Identifier(identifier) => {
+                env.bool_bindings.get(identifier.name.as_str()).copied()
+            }
+            Expression::BinaryExpression(binary)
+                if matches!(
+                    binary.operator,
+                    BinaryOperator::Equality | BinaryOperator::StrictEquality
+                ) =>
+            {
+                if let (Some(left), Some(right)) = (
+                    self.constant_bool_from_expression(&binary.left, env),
+                    self.constant_bool_from_expression(&binary.right, env),
+                ) {
+                    return Some(left == right);
+                }
+                if let (Some(left), Some(right)) = (
+                    self.constant_string_from_expression(&binary.left, env),
+                    self.constant_string_from_expression(&binary.right, env),
+                ) {
+                    return Some(left == right);
+                }
+                None
+            }
+            Expression::BinaryExpression(binary)
+                if matches!(
+                    binary.operator,
+                    BinaryOperator::Inequality | BinaryOperator::StrictInequality
+                ) =>
+            {
+                if let (Some(left), Some(right)) = (
+                    self.constant_bool_from_expression(&binary.left, env),
+                    self.constant_bool_from_expression(&binary.right, env),
+                ) {
+                    return Some(left != right);
+                }
+                if let (Some(left), Some(right)) = (
+                    self.constant_string_from_expression(&binary.left, env),
+                    self.constant_string_from_expression(&binary.right, env),
+                ) {
+                    return Some(left != right);
+                }
+                None
+            }
+            Expression::ParenthesizedExpression(expression) => {
+                self.constant_bool_from_expression(&expression.expression, env)
             }
             _ => None,
         }
+    }
+
+    fn string_array_from_literal(
+        &self,
+        array: &'ast oxc_ast::ast::ArrayExpression<'ast>,
+        env: &FlowEnv,
+    ) -> Option<Vec<String>> {
+        let mut values = Vec::new();
+        for element in &array.elements {
+            let expression = array_element_expression(element)?;
+            let value = self.constant_string_from_expression(expression, env)?;
+            values.push(value);
+        }
+        Some(values)
+    }
+
+    fn property_key_names(
+        &self,
+        key: &'ast PropertyKey<'ast>,
+        computed: bool,
+        env: Option<&FlowEnv>,
+    ) -> Vec<String> {
+        if !computed {
+            return static_property_key(key, false).into_iter().collect();
+        }
+
+        let empty;
+        let env = if let Some(env) = env {
+            env
+        } else {
+            empty = FlowEnv::default();
+            &empty
+        };
+
+        let mut names = match key {
+            PropertyKey::StringLiteral(literal) => vec![literal.value.to_string()],
+            PropertyKey::NumericLiteral(literal) => vec![literal.value.to_string()],
+            PropertyKey::Identifier(identifier) => env
+                .string_bindings
+                .get(identifier.name.as_str())
+                .cloned()
+                .into_iter()
+                .collect(),
+            PropertyKey::BinaryExpression(binary)
+                if binary.operator == BinaryOperator::Addition =>
+            {
+                let left = self.constant_strings_from_expression(&binary.left, env);
+                let right = self.constant_strings_from_expression(&binary.right, env);
+                if left.is_empty() || right.is_empty() {
+                    Vec::new()
+                } else {
+                    bounded_string_product(&left, &right)
+                }
+            }
+            PropertyKey::ConditionalExpression(conditional) => {
+                if let Some(value) = self.constant_bool_from_expression(&conditional.test, env) {
+                    if value {
+                        self.constant_strings_from_expression(&conditional.consequent, env)
+                    } else {
+                        self.constant_strings_from_expression(&conditional.alternate, env)
+                    }
+                } else {
+                    let mut values =
+                        self.constant_strings_from_expression(&conditional.consequent, env);
+                    values
+                        .extend(self.constant_strings_from_expression(&conditional.alternate, env));
+                    values
+                }
+            }
+            PropertyKey::ComputedMemberExpression(member) => {
+                let Some(source) = expression_identifier(&member.object)
+                    .and_then(|name| env.string_arrays.get(name))
+                else {
+                    return Vec::new();
+                };
+                let Some(index) = numeric_index(&member.expression) else {
+                    return Vec::new();
+                };
+                source.get(index).cloned().into_iter().collect()
+            }
+            PropertyKey::TemplateLiteral(template) if template.expressions.is_empty() => template
+                .quasis
+                .iter()
+                .map(|quasi| {
+                    quasi
+                        .value
+                        .cooked
+                        .as_ref()
+                        .unwrap_or(&quasi.value.raw)
+                        .to_string()
+                })
+                .collect(),
+            PropertyKey::ParenthesizedExpression(expression) => {
+                self.constant_strings_from_expression(&expression.expression, env)
+            }
+            _ => Vec::new(),
+        };
+        sort_dedup_strings(&mut names);
+        names.truncate(8);
+        names
     }
 
     fn collect_call_callee_expression(
@@ -1595,6 +1918,41 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
         match expression {
             Expression::CallExpression(call) => {
                 self.callable_return_targets_from_call(call, env, depth + 1)
+            }
+            Expression::StaticMemberExpression(member) => {
+                if let Some(object) = self.object_targets_from_expression(&member.object, env)
+                    && let Some(getters) = object
+                        .getter_properties
+                        .get(member.property.name.as_str())
+                        .cloned()
+                {
+                    return self.callable_return_targets_from_function_ids(
+                        getters,
+                        Vec::new(),
+                        Vec::new(),
+                        object,
+                        CollectionTargets::default(),
+                        depth + 1,
+                    );
+                }
+                self.callable_targets_from_expression(expression, env)
+            }
+            Expression::ComputedMemberExpression(member) => {
+                if let Some(object) = self.object_targets_from_expression(&member.object, env)
+                    && let Some(property) =
+                        self.constant_string_from_expression(&member.expression, env)
+                    && let Some(getters) = object.getter_properties.get(&property).cloned()
+                {
+                    return self.callable_return_targets_from_function_ids(
+                        getters,
+                        Vec::new(),
+                        Vec::new(),
+                        object,
+                        CollectionTargets::default(),
+                        depth + 1,
+                    );
+                }
+                self.callable_targets_from_expression(expression, env)
             }
             Expression::ParenthesizedExpression(expression) => {
                 self.callable_return_targets_from_expression(&expression.expression, env, depth)
@@ -3171,29 +3529,42 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
             let ObjectPropertyKind::ObjectProperty(property) = property else {
                 continue;
             };
-            let Some(name) = static_property_key(&property.key, property.computed) else {
+            let names = self.property_key_names(&property.key, property.computed, env);
+            if names.is_empty() {
                 continue;
             };
             if let Some(function) = self.function_for_object_property(property) {
-                targets.add_property_target(name, function.id);
+                for name in names {
+                    match property.kind {
+                        PropertyKind::Get => targets.add_getter_target(name, function.id),
+                        PropertyKind::Set => targets.add_setter_target(name, function.id),
+                        PropertyKind::Init => targets.add_property_target(name, function.id),
+                    }
+                }
                 continue;
             }
             if let Expression::ObjectExpression(value) = &property.value {
                 let nested = self.object_literal_targets(value, env);
-                if name == "__proto__" {
-                    targets.merge(nested);
-                } else {
-                    targets.add_object_property(name, nested);
+                for name in names {
+                    if name == "__proto__" {
+                        targets.merge(nested.clone());
+                    } else {
+                        targets.add_object_property(name, nested.clone());
+                    }
                 }
             } else if let Some(env) = env
                 && let Some(collection) =
                     self.collection_targets_from_expression(&property.value, env)
             {
-                targets.add_collection_property(name, collection);
+                for name in names {
+                    targets.add_collection_property(name, collection.clone());
+                }
             } else if matches!(&property.value, Expression::ThisExpression(_))
                 && let Some(env) = env
             {
-                targets.add_object_property(name, env.this_object.clone());
+                for name in names {
+                    targets.add_object_property(name, env.this_object.clone());
+                }
             }
         }
         targets
@@ -3448,6 +3819,7 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
         let span = class_method_function_span(method);
         self.function_for_span(span)
             .or_else(|| self.function_for_span(method.span))
+            .or_else(|| self.function_inside_span(method.span))
     }
 
     fn function_for_object_property(
@@ -3467,6 +3839,24 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
             .find(|function| function.span.end_byte == span.end)
             .or_else(|| functions.first().copied())
     }
+
+    fn function_inside_span(&self, span: oxc_span::Span) -> Option<&'db FunctionFact> {
+        self.db
+            .functions()
+            .iter()
+            .filter(|function| {
+                function.file == self.file.id
+                    && function.language.is_ts_family()
+                    && function.span.start_byte >= span.start
+                    && function.span.end_byte <= span.end
+            })
+            .min_by_key(|function| {
+                (
+                    function.span.end_byte - function.span.start_byte,
+                    function.id.0,
+                )
+            })
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -3475,6 +3865,8 @@ struct FlowEnv {
     bound_functions: BTreeMap<String, Vec<BoundFunctionTarget>>,
     objects: BTreeMap<String, ObjectTargets>,
     string_bindings: BTreeMap<String, String>,
+    bool_bindings: BTreeMap<String, bool>,
+    string_arrays: BTreeMap<String, Vec<String>>,
     promises: BTreeMap<String, PromiseTargets>,
     async_functions: BTreeMap<String, PromiseTargets>,
     async_generators: BTreeMap<String, CollectionTargets>,
@@ -3576,6 +3968,8 @@ impl CollectionTargets {
 #[derive(Clone, Debug, Default)]
 struct ObjectTargets {
     properties: BTreeMap<String, Vec<FunctionId>>,
+    getter_properties: BTreeMap<String, Vec<FunctionId>>,
+    setter_properties: BTreeMap<String, Vec<FunctionId>>,
     object_properties: BTreeMap<String, Box<ObjectTargets>>,
     collection_properties: BTreeMap<String, CollectionTargets>,
 }
@@ -3583,12 +3977,28 @@ struct ObjectTargets {
 impl ObjectTargets {
     fn is_empty(&self) -> bool {
         self.properties.is_empty()
+            && self.getter_properties.is_empty()
+            && self.setter_properties.is_empty()
             && self.object_properties.is_empty()
             && self.collection_properties.is_empty()
     }
 
     fn add_property_target(&mut self, name: String, target: FunctionId) {
         let targets = self.properties.entry(name).or_default();
+        targets.push(target);
+        targets.sort();
+        targets.dedup();
+    }
+
+    fn add_getter_target(&mut self, name: String, target: FunctionId) {
+        let targets = self.getter_properties.entry(name).or_default();
+        targets.push(target);
+        targets.sort();
+        targets.dedup();
+    }
+
+    fn add_setter_target(&mut self, name: String, target: FunctionId) {
+        let targets = self.setter_properties.entry(name).or_default();
         targets.push(target);
         targets.sort();
         targets.dedup();
@@ -3609,6 +4019,18 @@ impl ObjectTargets {
             slot.sort();
             slot.dedup();
         }
+        for (name, mut targets) in other.getter_properties {
+            let slot = self.getter_properties.entry(name).or_default();
+            slot.append(&mut targets);
+            slot.sort();
+            slot.dedup();
+        }
+        for (name, mut targets) in other.setter_properties {
+            let slot = self.setter_properties.entry(name).or_default();
+            slot.append(&mut targets);
+            slot.sort();
+            slot.dedup();
+        }
         for (name, targets) in other.object_properties {
             self.object_properties.entry(name).or_insert(targets);
         }
@@ -3622,6 +4044,18 @@ impl ObjectTargets {
         Self {
             properties: self
                 .properties
+                .iter()
+                .filter(|(name, _)| !used.contains(name))
+                .map(|(name, targets)| (name.clone(), targets.clone()))
+                .collect(),
+            getter_properties: self
+                .getter_properties
+                .iter()
+                .filter(|(name, _)| !used.contains(name))
+                .map(|(name, targets)| (name.clone(), targets.clone()))
+                .collect(),
+            setter_properties: self
+                .setter_properties
                 .iter()
                 .filter(|(name, _)| !used.contains(name))
                 .map(|(name, targets)| (name.clone(), targets.clone()))
@@ -4242,6 +4676,27 @@ fn static_property_key(key: &PropertyKey<'_>, computed: bool) -> Option<String> 
         PropertyKey::NumericLiteral(literal) => Some(literal.value.to_string()),
         _ => None,
     }
+}
+
+fn bounded_string_product(left: &[String], right: &[String]) -> Vec<String> {
+    let mut values = Vec::new();
+    for left in left {
+        for right in right {
+            values.push(format!("{left}{right}"));
+            if values.len() >= 8 {
+                sort_dedup_strings(&mut values);
+                values.truncate(8);
+                return values;
+            }
+        }
+    }
+    sort_dedup_strings(&mut values);
+    values
+}
+
+fn sort_dedup_strings(values: &mut Vec<String>) {
+    values.sort();
+    values.dedup();
 }
 
 fn class_method_function_span(method: &MethodDefinition<'_>) -> oxc_span::Span {
@@ -5577,7 +6032,11 @@ mod tests {
             ("F2.s2()", "() => {console.log(\"s2\")}"),
         ] {
             let site = site_id_for_span(source, &sites, call);
-            let target = function_id_for_span(source, &db, target);
+            let target = if call == "A.staticG()" {
+                function_id_containing_span(source, &db, target)
+            } else {
+                function_id_for_span(source, &db, target)
+            };
             assert!(
                 resolved.contains(&(site, target)),
                 "expected real TS pipeline to resolve {call} to {target:?}; got {resolved:?}"
@@ -5726,6 +6185,104 @@ x5.arr6[0]();
             assert!(
                 resolved.contains(&(site, target)),
                 "expected real TS pipeline to resolve {call} to {target:?}; got {resolved:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn real_ts_pipeline_resolves_computed_property_creation_flows() {
+        let source = r#"let x = {["fo" + "o"]: function foo() {}}
+x.foo();
+const tautology = true === true;
+let m = {
+    [tautology ? "tautology" : "impossible"](b) {
+    }
+}
+m.tautology()
+class A {
+    _x;
+    ["computedProperty"] = function () {console.log("e")}
+    constructor(x) {
+        this._x = x;
+    }
+    static ["static"+"F"] = function () {console.log("a")};
+    static ["static"+"G"]() {console.log("e")}
+    ["method"]() {console.log("b")};
+    get ["field"] () {return this._x}
+    set ["field"](x) {this._x = x}
+    ["name" + ""]() {}
+}
+const a = new A(function fooArg() {console.log("c")});
+A.staticF();
+a.method();
+let f = a.field;
+f();
+a.field = function () {console.log("d")}
+a.field();
+a.computedProperty()
+A.staticG();
+a.name();
+const arr = ["p1", "p2"];
+const top = {
+    mid: {
+        [arr[0]]: function () {console.log("1")},
+        [arr[1]]() {
+            console.log("2")
+        }
+    },
+    ["bot"]: {
+        ["some" + "thing"]: {
+            [arr[0]+arr[1]]: function () {console.log("3")}
+        }
+    }
+}
+top.mid.p1();
+top.mid.p2();
+top.bot.something.p1p2();
+"#;
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let resolved = resolved_target_ids_by_site(targets);
+
+        for (call, target) in [
+            ("x.foo()", "function foo() {}"),
+            (
+                "m.tautology()",
+                "[tautology ? \"tautology\" : \"impossible\"](b) {\n    }",
+            ),
+            ("A.staticF()", "function () {console.log(\"a\")}"),
+            ("a.method()", "[\"method\"]() {console.log(\"b\")}"),
+            ("f()", "function fooArg() {console.log(\"c\")}"),
+            ("a.field()", "function () {console.log(\"d\")}"),
+            ("a.computedProperty()", "function () {console.log(\"e\")}"),
+            ("top.mid.p1()", "function () {console.log(\"1\")}"),
+            (
+                "top.mid.p2()",
+                "[arr[1]]() {\n            console.log(\"2\")\n        }",
+            ),
+            (
+                "top.bot.something.p1p2()",
+                "function () {console.log(\"3\")}",
+            ),
+        ] {
+            let site = site_id_for_span(source, &sites, call);
+            let target = function_id_containing_span(source, &db, target);
+            assert!(
+                resolved.contains(&(site, target)),
+                "expected real TS pipeline to resolve {call} to {target:?}; got {resolved:?}"
+            );
+        }
+
+        for (call, target_name) in [("A.staticG()", "A.staticG"), ("a.name()", "A.name")] {
+            let site = site_id_for_span(source, &sites, call);
+            let target = function_id_for_name(&db, target_name);
+            assert!(
+                resolved.contains(&(site, target)),
+                "expected real TS pipeline to resolve {call} to {target_name}; got {resolved:?}"
             );
         }
     }
@@ -6103,6 +6660,29 @@ x5.arr6[0]();
 
     fn function_id_for_span(source: &str, db: &AnalysisDb, needle: &str) -> FunctionId {
         function_id_for_nth_span(source, db, needle, 0)
+    }
+
+    fn function_id_containing_span(source: &str, db: &AnalysisDb, needle: &str) -> FunctionId {
+        let file = db.files()[0].id;
+        let span = span_for_nth(source, file, needle, 0);
+        db.functions()
+            .iter()
+            .filter(|function| {
+                function.file == file
+                    && function.span.start_byte <= span.start_byte
+                    && function.span.end_byte >= span.end_byte
+            })
+            .min_by_key(|function| function.span.end_byte - function.span.start_byte)
+            .map(|function| function.id)
+            .unwrap_or_else(|| panic!("missing function containing {needle}"))
+    }
+
+    fn function_id_for_name(db: &AnalysisDb, name: &str) -> FunctionId {
+        db.functions()
+            .iter()
+            .find(|function| function.name == name)
+            .map(|function| function.id)
+            .unwrap_or_else(|| panic!("missing function named {name}"))
     }
 
     fn function_id_for_nth_span(
