@@ -1132,10 +1132,15 @@ mod abstract_domains {
             domain.len() >= 7,
             "expected abstract-domain validation diagnostics: {diagnostics:#?}"
         );
+        // The user-facing rule id and message stay generic so malformed internal
+        // rows never leak specifics into the public message; the per-row specifics
+        // (family, stable_key, field, reason) are carried as structured evidence
+        // for internal telemetry (mirrored by
+        // `metadata_validation_conflict_records_render_internal_diagnostics_with_evidence`).
         assert!(domain.iter().all(|diagnostic| {
             diagnostic.rule_id == "polint/internal"
                 && diagnostic.message == "Internal analysis validation failed."
-                && diagnostic.evidence.is_empty()
+                && !diagnostic.evidence.is_empty()
         }));
     }
 

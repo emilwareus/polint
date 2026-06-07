@@ -1,10 +1,12 @@
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
     Argument, ArrayExpressionElement, AssignmentTarget, BinaryOperator, BindingPattern,
-    CallExpression, Class, ClassElement, Expression, ForStatementLeft, FunctionBody,
-    MethodDefinition, MethodDefinitionKind, ObjectProperty, ObjectPropertyKind, Program,
+    CallExpression, Class, ClassElement, Declaration, ExportDefaultDeclarationKind, Expression,
+    ForStatementLeft, FunctionBody, ImportDeclarationSpecifier, MethodDefinition,
+    MethodDefinitionKind, ModuleExportName, ObjectProperty, ObjectPropertyKind, Program,
     PropertyKey, PropertyKind, Statement, VariableDeclaration, VariableDeclarator,
 };
 use oxc_parser::Parser;
@@ -21,6 +23,13 @@ use crate::core::{
     AnalysisDb, FileId, FunctionFact, FunctionId, SourceFile, TS_JS_MODULE_FUNCTION_NAME,
 };
 
+/// Maximum bounded rounds for the cross-module export-summary fixpoint. Each
+/// round lets a module's `require`/`import` targets observe the previous
+/// round's summaries, so re-export chains such as
+/// `module.exports = require('./lib/foo')` converge after a few rounds. The
+/// bound keeps deep dependency graphs (e.g. express) finite.
+const MAX_MODULE_SUMMARY_ROUNDS: usize = 4;
+
 pub(crate) fn resolve_ts_value_flow_targets(
     db: &AnalysisDb,
     sites: &[CallSiteFact],
@@ -30,6 +39,9 @@ pub(crate) fn resolve_ts_value_flow_targets(
     let mut next_id = id_offset;
     let sites_by_file = sites_by_file(sites);
     let functions_by_file_start = functions_by_file_start(db);
+    let resolution_map = module_resolution_map(db);
+    let module_summaries =
+        compute_module_export_summaries(db, &functions_by_file_start, &resolution_map);
 
     for file in db
         .files()
@@ -58,9 +70,14 @@ pub(crate) fn resolve_ts_value_flow_targets(
             module,
             sites: file_sites,
             functions_by_start: &functions_by_file_start,
+            resolution_map: &resolution_map,
+            module_summaries: &module_summaries,
             function_declarations: BTreeMap::new(),
             function_flows_by_id: BTreeMap::new(),
             classes: BTreeMap::new(),
+            exports: ModuleExportSummary::default(),
+            caller_override: None,
+            current_super: None,
             rows: Vec::new(),
             next_id,
         };
@@ -83,17 +100,52 @@ pub(crate) fn resolve_ts_value_flow_targets(
     rows
 }
 
-struct TsValueFlowCollector<'db, 'ast> {
+struct TsValueFlowCollector<'db, 'ast, 'env> {
     db: &'db AnalysisDb,
     file: &'db SourceFile,
     module: &'db FunctionFact,
     sites: &'db [&'db CallSiteFact],
     functions_by_start: &'db BTreeMap<(FileId, u32), Vec<&'db FunctionFact>>,
+    /// `(importer file, specifier) -> resolved target file`, reusing the kernel
+    /// module graph's `require`/`import` resolution.
+    resolution_map: &'env BTreeMap<(FileId, String), FileId>,
+    /// Converged per-file CommonJS/ESM export summaries used to seed
+    /// `require(...)` / `import` results into the current file's value flow.
+    module_summaries: &'env BTreeMap<FileId, ModuleExportSummary>,
     function_declarations: BTreeMap<String, FunctionFlow<'db, 'ast>>,
     function_flows_by_id: BTreeMap<FunctionId, FunctionFlow<'db, 'ast>>,
     classes: BTreeMap<String, ClassTargets>,
+    /// This file's own exports, accumulated while walking module-level
+    /// statements (only meaningful during the summary pre-pass). During the
+    /// summary pre-pass `sites` is empty, so the `emit_*` helpers naturally
+    /// produce no rows and only `exports` is harvested.
+    exports: ModuleExportSummary,
+    /// When set, emitted edges use this function as the caller instead of the
+    /// call site's enclosing function. Jelly attributes constructor-body (and
+    /// field-initializer) calls to the class node, not the `constructor()` node,
+    /// so the class-body walk sets this to the class function fact while walking
+    /// the constructor.
+    caller_override: Option<FunctionId>,
+    /// The super-class instance/static member objects in scope while walking a
+    /// class method body, used to resolve `super.m()` / `super.s()` / `super.f`.
+    current_super: Option<ObjectTargets>,
     rows: Vec<CallTargetFact>,
     next_id: u64,
+}
+
+/// CommonJS/ESM export shape of a single module: the callable values reachable
+/// through `module.exports = fn` (or `export default`) plus the property object
+/// reachable through `exports.foo = ...` / `module.exports = { foo }`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ModuleExportSummary {
+    object: ObjectTargets,
+    callables: CollectionTargets,
+}
+
+impl ModuleExportSummary {
+    fn is_empty(&self) -> bool {
+        self.object.is_empty() && self.callables.is_empty()
+    }
 }
 
 #[derive(Clone)]
@@ -119,7 +171,146 @@ enum ParamPattern {
     },
 }
 
-impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
+/// Build `(importer file, specifier) -> resolved target file`. `require("x")`
+/// and static `import` specifiers are captured as `ImportFact`s by the TS
+/// frontend regardless of the analysis plan; we resolve each specifier against
+/// the file set with a Node-style resolver. This intentionally does NOT rely on
+/// the kernel module-graph layer (`resolved_imports`), which is only populated
+/// when a rule requests it — the benchmark/value-flow path must work standalone.
+fn module_resolution_map(db: &AnalysisDb) -> BTreeMap<(FileId, String), FileId> {
+    let imports = db.imports();
+    if imports.is_empty() {
+        return BTreeMap::new();
+    }
+    // Index every analyzed file by both its stored path and its canonicalized
+    // path so resolver output (which canonicalizes symlinks, e.g. macOS
+    // /var -> /private/var) maps back to a FileId.
+    let mut file_by_path: BTreeMap<PathBuf, FileId> = BTreeMap::new();
+    for file in db.files() {
+        file_by_path.entry(file.path.clone()).or_insert(file.id);
+        if let Ok(canonical) = file.path.canonicalize() {
+            file_by_path.entry(canonical).or_insert(file.id);
+        }
+    }
+    let resolver = oxc_resolver::Resolver::new(module_resolve_options());
+    let mut map = BTreeMap::new();
+    for import in imports {
+        let Some(importer) = db.file(import.file) else {
+            continue;
+        };
+        let Ok(resolution) = resolver.resolve_file(&importer.path, import.path.as_str()) else {
+            continue;
+        };
+        let resolved = resolution.path();
+        let target = file_by_path.get(resolved).copied().or_else(|| {
+            resolved
+                .canonicalize()
+                .ok()
+                .and_then(|canonical| file_by_path.get(&canonical).copied())
+        });
+        if let Some(target) = target
+            && target != import.file
+        // A module never resolves to itself; self-edges would create
+        // spurious recursion in the summary fixpoint.
+        {
+            map.insert((import.file, import.path.clone()), target);
+        }
+    }
+    map
+}
+
+/// Node-style resolution options for `require`/`import` specifiers: JS/TS/JSON
+/// extensions, `index` main file, and `main`/`module` package fields.
+fn module_resolve_options() -> oxc_resolver::ResolveOptions {
+    oxc_resolver::ResolveOptions {
+        extensions: vec![
+            ".js".into(),
+            ".jsx".into(),
+            ".ts".into(),
+            ".tsx".into(),
+            ".cjs".into(),
+            ".mjs".into(),
+            ".json".into(),
+            ".node".into(),
+        ],
+        main_files: vec!["index".into()],
+        main_fields: vec!["main".into(), "module".into()],
+        condition_names: vec![
+            "require".into(),
+            "node".into(),
+            "import".into(),
+            "default".into(),
+        ],
+        ..oxc_resolver::ResolveOptions::default()
+    }
+}
+
+/// Compute each module's export summary via a bounded fixpoint. Round 0 sees no
+/// upstream summaries (so only locally-defined exports resolve); each later
+/// round lets `require`/`import` results observe the previous round's
+/// summaries, converging re-export chains.
+fn compute_module_export_summaries(
+    db: &AnalysisDb,
+    functions_by_file_start: &BTreeMap<(FileId, u32), Vec<&FunctionFact>>,
+    resolution_map: &BTreeMap<(FileId, String), FileId>,
+) -> BTreeMap<FileId, ModuleExportSummary> {
+    let mut summaries: BTreeMap<FileId, ModuleExportSummary> = BTreeMap::new();
+    if resolution_map.is_empty() {
+        // No cross-module imports were resolved, so there is nothing for the
+        // summary fixpoint to feed; skip the (expensive) pre-pass entirely.
+        return summaries;
+    }
+    for _round in 0..MAX_MODULE_SUMMARY_ROUNDS {
+        let mut next: BTreeMap<FileId, ModuleExportSummary> = BTreeMap::new();
+        for file in db
+            .files()
+            .iter()
+            .filter(|file| file.language.is_ts_family())
+        {
+            let Some(module) = module_function(db, file) else {
+                continue;
+            };
+            let allocator = Allocator::default();
+            let parsed = Parser::new(
+                &allocator,
+                file.source.as_ref(),
+                SourceType::from_path(&file.path).unwrap_or_default(),
+            )
+            .parse();
+            if parsed.panicked && parsed.program.body.is_empty() {
+                continue;
+            }
+            let mut collector = TsValueFlowCollector {
+                db,
+                file,
+                module,
+                sites: &[],
+                functions_by_start: functions_by_file_start,
+                resolution_map,
+                module_summaries: &summaries,
+                function_declarations: BTreeMap::new(),
+                function_flows_by_id: BTreeMap::new(),
+                classes: BTreeMap::new(),
+                exports: ModuleExportSummary::default(),
+                caller_override: None,
+                current_super: None,
+                rows: Vec::new(),
+                next_id: 0,
+            };
+            collector.collect_program(&parsed.program);
+            if !collector.exports.is_empty() {
+                next.insert(file.id, collector.exports);
+            }
+        }
+        if next == summaries {
+            break;
+        }
+        summaries = next;
+    }
+    summaries
+}
+
+impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
     fn collect_program(&mut self, program: &'ast Program<'ast>) {
         self.collect_expression_function_flows(program);
         self.collect_function_declarations(program);
@@ -130,8 +321,102 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                 env.objects.insert(name.clone(), targets);
             }
         }
+        // ESM imports are hoisted: seed their bindings before walking the body.
+        self.collect_esm_imports(program, &mut env);
         for statement in &program.body {
+            self.collect_esm_export(statement, &mut env);
             self.collect_statement(statement, self.module, &mut env);
+        }
+        // Resolve intra-method calls (`this.foo()`, `super.m()`, `this.#bar()`)
+        // with `this`/`super` bound, after the module env is fully populated.
+        self.collect_class_body_call_flows(program, &env);
+    }
+
+    /// Walk each class method and constructor body for call resolution with
+    /// `this`/`super` in scope. Jelly treats every class function as reachable,
+    /// and attributes constructor-body calls to the class node (via
+    /// `caller_override`).
+    fn collect_class_body_call_flows(
+        &mut self,
+        program: &'ast Program<'ast>,
+        module_env: &FlowEnv,
+    ) {
+        for statement in &program.body {
+            let Statement::ClassDeclaration(class) = statement else {
+                continue;
+            };
+            let Some(name) = class.id.as_ref().map(|id| id.name.to_string()) else {
+                continue;
+            };
+            self.collect_class_method_bodies(class, &name, module_env);
+        }
+    }
+
+    fn collect_class_method_bodies(
+        &mut self,
+        class: &'ast Class<'ast>,
+        name: &str,
+        module_env: &FlowEnv,
+    ) {
+        let instance = self
+            .class_instance_targets(name, &[], module_env)
+            .unwrap_or_default();
+        let static_object = self.class_static_targets(name).unwrap_or_default();
+        // Super-class member objects for `super.m()` / `super.s()` / `super.f`.
+        let super_name = self
+            .classes
+            .get(name)
+            .and_then(|class| class.super_name.clone());
+        let super_instance = super_name
+            .as_ref()
+            .and_then(|super_name| self.class_instance_targets(super_name, &[], module_env));
+        let super_static = super_name
+            .as_ref()
+            .and_then(|super_name| self.class_static_targets(super_name));
+        // The class function fact owns constructor-body call attribution.
+        let class_fact = self.function_for_span(class.span).map(|fact| fact.id);
+
+        for element in &class.body.body {
+            let (statements, owner, is_static, is_constructor) = match element {
+                ClassElement::MethodDefinition(method) => {
+                    let Some(body) = method.value.body.as_deref() else {
+                        continue;
+                    };
+                    let Some(owner) = self.function_for_class_method(method) else {
+                        continue;
+                    };
+                    let is_constructor = method.kind == MethodDefinitionKind::Constructor;
+                    (&body.statements, owner, method.r#static, is_constructor)
+                }
+                ClassElement::StaticBlock(block) => {
+                    let Some(owner) = self.function_for_span(block.span) else {
+                        continue;
+                    };
+                    (&block.body, owner, true, false)
+                }
+                _ => continue,
+            };
+            let mut env = module_env.clone();
+            env.this_object = if is_static {
+                static_object.clone()
+            } else {
+                instance.clone()
+            };
+            // Bind the class name to its static object so `Class.staticM()` and
+            // `Class.#priv()` resolve inside the body.
+            env.objects.insert(name.to_string(), static_object.clone());
+            self.current_super = if is_static {
+                super_static.clone()
+            } else {
+                super_instance.clone()
+            };
+            // Constructor-body calls are attributed to the class node by Jelly.
+            self.caller_override = if is_constructor { class_fact } else { None };
+            for statement in statements {
+                self.collect_statement(statement, owner, &mut env);
+            }
+            self.caller_override = None;
+            self.current_super = None;
         }
     }
 
@@ -997,6 +1282,7 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
         assignment: &'ast oxc_ast::ast::AssignmentExpression<'ast>,
         env: &mut FlowEnv,
     ) {
+        self.collect_commonjs_export_assignment(assignment, env);
         if let Some((class_name, super_name)) =
             prototype_assignment_super_name(&assignment.left, &assignment.right)
         {
@@ -1101,6 +1387,323 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                 }
             }
         }
+    }
+
+    /// Capture CommonJS export writes into `self.exports`: `module.exports = X`,
+    /// `module.exports.foo = X`, and `exports.foo = X`. This is what later
+    /// rounds of the summary fixpoint (and requiring modules) read back.
+    fn collect_commonjs_export_assignment(
+        &mut self,
+        assignment: &'ast oxc_ast::ast::AssignmentExpression<'ast>,
+        env: &FlowEnv,
+    ) {
+        let Some(target) = export_assignment_target(&assignment.left) else {
+            return;
+        };
+        let mut callables = self.callable_targets_from_expression(&assignment.right, env);
+        // An identifier RHS may name a top-level function declaration (e.g.
+        // `function foo() {}` ... `module.exports = foo`), which lives in
+        // `function_declarations` rather than `env.bindings`.
+        if let Expression::Identifier(identifier) = &assignment.right
+            && let Some(flow) = self.function_declarations.get(identifier.name.as_str())
+            && !callables.values.contains(&flow.function.id)
+        {
+            callables.values.push(flow.function.id);
+        }
+        let object = self.object_targets_from_expression(&assignment.right, env);
+        let collection = self.collection_targets_from_expression(&assignment.right, env);
+        // `module.exports = require('./x')` re-exports another module: fold its
+        // summary in directly so callers see the re-exported shape.
+        let reexport = match &assignment.right {
+            Expression::CallExpression(call) => self.require_summary(call).cloned(),
+            _ => None,
+        };
+        match target {
+            ExportAssignmentTarget::WholeExports => {
+                self.exports.callables.extend(callables);
+                if let Some(object) = object {
+                    self.exports.object.merge(object);
+                }
+                if let Some(reexport) = reexport {
+                    self.exports.callables.extend(reexport.callables);
+                    self.exports.object.merge(reexport.object);
+                }
+            }
+            ExportAssignmentTarget::Property(name) => {
+                for target in callables.all_targets() {
+                    self.exports
+                        .object
+                        .add_property_target(name.clone(), target);
+                }
+                if let Some(object) = object {
+                    self.exports
+                        .object
+                        .add_object_property(name.clone(), object);
+                }
+                if let Some(collection) = collection {
+                    self.exports
+                        .object
+                        .add_collection_property(name, collection);
+                }
+            }
+        }
+    }
+
+    /// Resolve a `require`/`import`/`export ... from` specifier string to the
+    /// converged export summary of the target module, if any.
+    fn summary_for_specifier(&self, specifier: &str) -> Option<&'env ModuleExportSummary> {
+        let target = self
+            .resolution_map
+            .get(&(self.file.id, specifier.to_string()))?;
+        self.module_summaries.get(target)
+    }
+
+    /// Bind ESM imports for this module into `env` before the body is walked.
+    fn collect_esm_imports(&self, program: &'ast Program<'ast>, env: &mut FlowEnv) {
+        for statement in &program.body {
+            let Statement::ImportDeclaration(import) = statement else {
+                continue;
+            };
+            let Some(summary) = self.summary_for_specifier(import.source.value.as_str()) else {
+                continue;
+            };
+            let summary = summary.clone();
+            let Some(specifiers) = &import.specifiers else {
+                continue;
+            };
+            for specifier in specifiers {
+                match specifier {
+                    ImportDeclarationSpecifier::ImportDefaultSpecifier(default) => {
+                        self.bind_imported_value(
+                            &summary,
+                            "default",
+                            default.local.name.as_str(),
+                            true,
+                            env,
+                        );
+                    }
+                    ImportDeclarationSpecifier::ImportNamespaceSpecifier(namespace) => {
+                        if !summary.object.is_empty() {
+                            env.objects
+                                .insert(namespace.local.name.to_string(), summary.object.clone());
+                        }
+                        if !summary.callables.is_empty() {
+                            env.bindings.insert(
+                                namespace.local.name.to_string(),
+                                summary.callables.clone(),
+                            );
+                        }
+                    }
+                    ImportDeclarationSpecifier::ImportSpecifier(named) => {
+                        let imported = module_export_name_string(&named.imported);
+                        self.bind_imported_value(
+                            &summary,
+                            &imported,
+                            named.local.name.as_str(),
+                            imported == "default",
+                            env,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Bind a single imported name `local` to the value of `key` in `summary`.
+    fn bind_imported_value(
+        &self,
+        summary: &ModuleExportSummary,
+        key: &str,
+        local: &str,
+        is_default: bool,
+        env: &mut FlowEnv,
+    ) {
+        let mut callables = summary
+            .object
+            .properties
+            .get(key)
+            .cloned()
+            .unwrap_or_default();
+        // CommonJS default-interop: `import x from './cjs'` where the module did
+        // `module.exports = fn` exposes the function as the default.
+        if is_default {
+            callables.extend(summary.callables.values.iter().copied());
+        }
+        if !callables.is_empty() {
+            env.bindings.insert(
+                local.to_string(),
+                CollectionTargets {
+                    keys: Vec::new(),
+                    values: callables,
+                    object_values: Vec::new(),
+                },
+            );
+        }
+        if let Some(object) = summary.object.object_properties.get(key) {
+            env.objects.insert(local.to_string(), (**object).clone());
+        } else if is_default && !summary.object.is_empty() && summary.callables.is_empty() {
+            // CommonJS default-interop for object exports: the whole exports
+            // object is the default value.
+            env.objects
+                .insert(local.to_string(), summary.object.clone());
+        }
+        if let Some(collection) = summary.object.collection_properties.get(key) {
+            env.bindings.insert(local.to_string(), collection.clone());
+        }
+    }
+
+    /// Capture ESM exports into `self.exports`.
+    fn collect_esm_export(&mut self, statement: &'ast Statement<'ast>, env: &mut FlowEnv) {
+        match statement {
+            Statement::ExportNamedDeclaration(export) => {
+                if let Some(source) = &export.source {
+                    // Re-export: `export { a, b as c } from './m'`.
+                    let Some(summary) = self.summary_for_specifier(source.value.as_str()) else {
+                        return;
+                    };
+                    let summary = summary.clone();
+                    for specifier in &export.specifiers {
+                        let local = module_export_name_string(&specifier.local);
+                        let exported = module_export_name_string(&specifier.exported);
+                        self.reexport_property(&summary, &local, &exported);
+                    }
+                } else if let Some(declaration) = &export.declaration {
+                    self.capture_exported_declaration(declaration, env);
+                } else {
+                    // Local: `export { a, b as c }`.
+                    for specifier in &export.specifiers {
+                        let local = module_export_name_string(&specifier.local);
+                        let exported = module_export_name_string(&specifier.exported);
+                        self.export_local_name(&local, &exported, env);
+                    }
+                }
+            }
+            Statement::ExportDefaultDeclaration(export) => {
+                self.capture_default_export(&export.declaration, env);
+            }
+            Statement::ExportAllDeclaration(export) => {
+                if export.exported.is_none()
+                    && let Some(summary) = self.summary_for_specifier(export.source.value.as_str())
+                {
+                    let summary = summary.clone();
+                    self.exports.object.merge(summary.object);
+                    self.exports.callables.extend(summary.callables);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Copy property `local` from a re-exported module's summary into this
+    /// module's exports under name `exported`.
+    fn reexport_property(&mut self, summary: &ModuleExportSummary, local: &str, exported: &str) {
+        let mut callables = summary
+            .object
+            .properties
+            .get(local)
+            .cloned()
+            .unwrap_or_default();
+        if local == "default" {
+            callables.extend(summary.callables.values.iter().copied());
+        }
+        for target in callables {
+            self.exports
+                .object
+                .add_property_target(exported.to_string(), target);
+        }
+        if let Some(object) = summary.object.object_properties.get(local) {
+            self.exports
+                .object
+                .add_object_property(exported.to_string(), (**object).clone());
+        }
+        if let Some(collection) = summary.object.collection_properties.get(local) {
+            self.exports
+                .object
+                .add_collection_property(exported.to_string(), collection.clone());
+        }
+    }
+
+    /// Export a locally-bound name (`export { foo }` / `export { foo as bar }`).
+    fn export_local_name(&mut self, local: &str, exported: &str, env: &FlowEnv) {
+        if let Some(flow) = self.function_declarations.get(local) {
+            self.exports
+                .object
+                .add_property_target(exported.to_string(), flow.function.id);
+        }
+        if let Some(targets) = env.bindings.get(local) {
+            for target in targets.all_targets() {
+                self.exports
+                    .object
+                    .add_property_target(exported.to_string(), target);
+            }
+        }
+        if let Some(object) = env.objects.get(local) {
+            self.exports
+                .object
+                .add_object_property(exported.to_string(), object.clone());
+        }
+    }
+
+    /// Capture `export const/var/function/class ...` declarations.
+    fn capture_exported_declaration(
+        &mut self,
+        declaration: &'ast Declaration<'ast>,
+        env: &mut FlowEnv,
+    ) {
+        match declaration {
+            Declaration::FunctionDeclaration(function) => {
+                if let Some(id) = &function.id
+                    && let Some(fact) = self.function_for_span(function.span)
+                {
+                    self.exports
+                        .object
+                        .add_property_target(id.name.to_string(), fact.id);
+                }
+            }
+            Declaration::VariableDeclaration(variable) => {
+                self.collect_variable_declaration(variable, self.module, env);
+                for declarator in &variable.declarations {
+                    if let Some(name) = binding_identifier_name(&declarator.id) {
+                        self.export_local_name(&name, &name, env);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Capture `export default ...`.
+    fn capture_default_export(
+        &mut self,
+        declaration: &'ast ExportDefaultDeclarationKind<'ast>,
+        env: &FlowEnv,
+    ) {
+        let mut callables = CollectionTargets::default();
+        match declaration {
+            ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
+                if let Some(fact) = self.function_for_span(function.span) {
+                    callables.values.push(fact.id);
+                }
+            }
+            expression => {
+                if let Some(expression) = expression.as_expression() {
+                    callables = self.callable_targets_from_expression(expression, env);
+                    if let Some(object) = self.object_targets_from_expression(expression, env) {
+                        self.exports
+                            .object
+                            .add_object_property("default".to_string(), object);
+                    }
+                }
+            }
+        }
+        for target in callables.all_targets() {
+            self.exports
+                .object
+                .add_property_target("default".to_string(), target);
+            self.exports.callables.values.push(target);
+        }
+        self.exports.callables.values.sort();
+        self.exports.callables.values.dedup();
     }
 
     fn assignment_member_names(
@@ -1613,6 +2216,42 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                 call.span,
                 Some(targets),
             );
+        }
+
+        // `super.m()` / `super.s()`: resolve against the super-class member
+        // object bound while walking this class method body.
+        if let Expression::StaticMemberExpression(member) = &call.callee
+            && matches!(&member.object, Expression::Super(_))
+            && let Some(super_object) = &self.current_super
+            && let Some(targets) = super_object
+                .properties
+                .get(member.property.name.as_str())
+                .cloned()
+        {
+            self.emit_call_span_targets(
+                owner,
+                call.span,
+                member.property.name.as_str(),
+                Some(targets.clone()),
+            );
+            self.emit_member_targets(
+                owner,
+                member.property.name.as_str(),
+                call.span,
+                Some(targets),
+            );
+        }
+
+        // Private member calls: `this.#foo()`, `Class.#baz()`. The callee is a
+        // PrivateFieldExpression; private members are keyed by `#name`.
+        if let Expression::PrivateFieldExpression(member) = &call.callee {
+            let property = format!("#{}", member.field.name);
+            if let Some(object) = self.object_targets_from_expression(&member.object, env)
+                && let Some(targets) = object.properties.get(&property).cloned()
+            {
+                self.emit_call_span_targets(owner, call.span, &property, Some(targets.clone()));
+                self.emit_member_targets(owner, &property, call.span, Some(targets));
+            }
         }
 
         if let Expression::Identifier(identifier) = &call.callee {
@@ -2749,11 +3388,68 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
         }
     }
 
+    /// If `call` is a static `require("literal")` or `import("literal")` whose
+    /// specifier resolves (via the kernel module graph) to a module we have a
+    /// converged export summary for, return that summary.
+    fn require_summary(
+        &self,
+        call: &'ast CallExpression<'ast>,
+    ) -> Option<&'env ModuleExportSummary> {
+        let specifier = self.require_specifier(call)?;
+        let target = self
+            .resolution_map
+            .get(&(self.file.id, specifier.to_string()))?;
+        self.module_summaries.get(target)
+    }
+
+    /// TypeScript/Babel emit interop wrappers around `require(...)` that pass the
+    /// module value through (`__importDefault`, `__importStar`,
+    /// `_interopRequireDefault`, `_interopRequireWildcard`). For call-graph
+    /// purposes they are identity on the module's export shape, so return the
+    /// wrapped argument expression for the caller to evaluate.
+    fn commonjs_interop_argument(
+        &self,
+        call: &'ast CallExpression<'ast>,
+    ) -> Option<&'ast Expression<'ast>> {
+        let name = callee_identifier(&call.callee)?;
+        if matches!(
+            name,
+            "__importDefault"
+                | "__importStar"
+                | "_interopRequireDefault"
+                | "_interopRequireWildcard"
+        ) {
+            call.arguments.first().and_then(argument_expression)
+        } else {
+            None
+        }
+    }
+
+    /// Extract the static string specifier of a `require("x")` call, if present.
+    fn require_specifier(&self, call: &'ast CallExpression<'ast>) -> Option<&'ast str> {
+        let is_require = matches!(&call.callee, Expression::Identifier(identifier) if identifier.name == "require");
+        if !is_require {
+            return None;
+        }
+        match call.arguments.first().and_then(argument_expression) {
+            Some(Expression::StringLiteral(literal)) => Some(literal.value.as_str()),
+            _ => None,
+        }
+    }
+
     fn collection_targets_from_call(
         &self,
         call: &'ast CallExpression<'ast>,
         env: &FlowEnv,
     ) -> Option<CollectionTargets> {
+        if let Some(summary) = self.require_summary(call)
+            && !summary.callables.is_empty()
+        {
+            return Some(summary.callables.clone());
+        }
+        if let Some(inner) = self.commonjs_interop_argument(call) {
+            return self.collection_targets_from_expression(inner, env);
+        }
         if callee_text(&call.callee).as_deref() == Some("Array.from") {
             self.array_from_targets(call, env)
         } else if callee_text(&call.callee).as_deref() == Some("Array.of") {
@@ -2834,6 +3530,14 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
         call: &'ast CallExpression<'ast>,
         env: &FlowEnv,
     ) -> Option<ObjectTargets> {
+        if let Some(summary) = self.require_summary(call)
+            && !summary.object.is_empty()
+        {
+            return Some(summary.object.clone());
+        }
+        if let Some(inner) = self.commonjs_interop_argument(call) {
+            return self.object_targets_from_expression(inner, env);
+        }
         match callee_text(&call.callee).as_deref() {
             Some("Object.create") => return Some(ObjectTargets::default()),
             Some("Object.getOwnPropertyDescriptor") => {
@@ -3877,7 +4581,7 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                 self.rows.push(CallTargetFact {
                     id: CallTargetId(self.next_id + self.rows.len() as u64),
                     site: site.id,
-                    caller: site.caller,
+                    caller: self.caller_override.unwrap_or(site.caller),
                     target_function: Some(*target),
                     target_symbol: None,
                     edge_kind: CallEdgeKind::FunctionValue,
@@ -3921,7 +4625,7 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                 self.rows.push(CallTargetFact {
                     id: CallTargetId(self.next_id + self.rows.len() as u64),
                     site: site.id,
-                    caller: site.caller,
+                    caller: self.caller_override.unwrap_or(site.caller),
                     target_function: Some(*target),
                     target_symbol: None,
                     edge_kind: CallEdgeKind::FunctionValue,
@@ -3958,7 +4662,7 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                 self.rows.push(CallTargetFact {
                     id: CallTargetId(self.next_id + self.rows.len() as u64),
                     site: site.id,
-                    caller: site.caller,
+                    caller: self.caller_override.unwrap_or(site.caller),
                     target_function: Some(*target),
                     target_symbol: None,
                     edge_kind: CallEdgeKind::FunctionValue,
@@ -4003,7 +4707,7 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
             self.rows.push(CallTargetFact {
                 id: CallTargetId(self.next_id + self.rows.len() as u64),
                 site: site.id,
-                caller: site.caller,
+                caller: self.caller_override.unwrap_or(site.caller),
                 target_function: Some(*target),
                 target_symbol: None,
                 edge_kind: CallEdgeKind::FunctionValue,
@@ -4096,7 +4800,7 @@ struct BoundFunctionTarget {
     bound_arguments: Vec<CollectionTargets>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct CollectionTargets {
     keys: Vec<FunctionId>,
     values: Vec<FunctionId>,
@@ -4178,7 +4882,7 @@ impl CollectionTargets {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct ObjectTargets {
     properties: BTreeMap<String, Vec<FunctionId>>,
     getter_properties: BTreeMap<String, Vec<FunctionId>>,
@@ -4420,6 +5124,49 @@ fn binding_identifier_name(pattern: &BindingPattern<'_>) -> Option<String> {
         BindingPattern::AssignmentPattern(pattern) => binding_identifier_name(&pattern.left),
         _ => None,
     }
+}
+
+fn module_export_name_string(name: &ModuleExportName<'_>) -> String {
+    match name {
+        ModuleExportName::IdentifierName(identifier) => identifier.name.to_string(),
+        ModuleExportName::IdentifierReference(identifier) => identifier.name.to_string(),
+        ModuleExportName::StringLiteral(literal) => literal.value.to_string(),
+    }
+}
+
+/// Which CommonJS export slot an assignment target writes to.
+enum ExportAssignmentTarget {
+    /// `module.exports = ...`
+    WholeExports,
+    /// `exports.foo = ...` or `module.exports.foo = ...`
+    Property(String),
+}
+
+fn export_assignment_target(target: &AssignmentTarget<'_>) -> Option<ExportAssignmentTarget> {
+    let AssignmentTarget::StaticMemberExpression(member) = target else {
+        return None;
+    };
+    let property = member.property.name.as_str();
+    match expression_identifier(&member.object) {
+        // module.exports = ...
+        Some("module") if property == "exports" => {
+            return Some(ExportAssignmentTarget::WholeExports);
+        }
+        Some("module") => return None,
+        // exports.foo = ...
+        Some("exports") => {
+            return Some(ExportAssignmentTarget::Property(property.to_string()));
+        }
+        _ => {}
+    }
+    // module.exports.foo = ...
+    if let Expression::StaticMemberExpression(inner) = &member.object
+        && expression_identifier(&inner.object) == Some("module")
+        && inner.property.name.as_str() == "exports"
+    {
+        return Some(ExportAssignmentTarget::Property(property.to_string()));
+    }
+    None
 }
 
 fn bind_collection_pattern(
@@ -4903,6 +5650,7 @@ fn static_property_key(key: &PropertyKey<'_>, computed: bool) -> Option<String> 
     }
     match key {
         PropertyKey::StaticIdentifier(identifier) => Some(identifier.name.to_string()),
+        PropertyKey::PrivateIdentifier(identifier) => Some(format!("#{}", identifier.name)),
         PropertyKey::StringLiteral(literal) => Some(literal.value.to_string()),
         PropertyKey::NumericLiteral(literal) => Some(literal.value.to_string()),
         _ => None,
@@ -6877,6 +7625,222 @@ obj.right();
         let target_ids_by_site = resolved_target_ids_by_site(targets);
 
         assert_eq!(target_ids_by_site, vec![(CallSiteId(0), a2)]);
+    }
+
+    #[test]
+    fn real_kernel_resolves_commonjs_require_exports_across_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("leaf.js"),
+            "function leafFn() {}\nmodule.exports = leafFn;\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("utils.js"),
+            "exports.merge = function mergeFn() {};\nmodule.exports.clone = function cloneFn() {};\n",
+        )
+        .unwrap();
+        // Re-export chain: index re-exports the leaf module wholesale, exercising
+        // the bounded summary fixpoint.
+        std::fs::write(
+            root.join("index.js"),
+            "module.exports = require('./leaf');\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("app.js"),
+            "const leaf = require('./index');\nleaf();\nconst utils = require('./utils');\nutils.merge();\nutils.clone();\n",
+        )
+        .unwrap();
+
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        // Resolved cross-module targets, keyed by (target function span text) so
+        // the assertion is independent of how the frontend names the callee.
+        let resolved_target_spans: std::collections::BTreeSet<String> = db
+            .call_targets()
+            .iter()
+            .filter(|target| target.status == CallTargetStatus::Resolved)
+            .filter_map(|target| target.target_function)
+            .filter_map(|function_id| db.functions().iter().find(|f| f.id == function_id))
+            .filter_map(|function| {
+                let file = db.file(function.file)?;
+                Some(
+                    file.source[function.span.start_byte as usize..function.span.end_byte as usize]
+                        .to_string(),
+                )
+            })
+            .collect();
+
+        for expected in ["function leafFn", "function mergeFn", "function cloneFn"] {
+            assert!(
+                resolved_target_spans
+                    .iter()
+                    .any(|span| span.contains(expected)),
+                "expected cross-module require resolution to reach `{expected}`; got {resolved_target_spans:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn real_kernel_resolves_esm_import_export_across_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("export2.mjs"),
+            "export default function function1(x) { return x; }\nexport function function2(x) { return x; }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("export1.mjs"),
+            "export { default as function1, function2 } from './export2.mjs';\nfunction cube(x) { return x; }\nvar graph = { draw: function drawFn() {} };\nexport { cube, graph };\nexport default function cube2(x) { return x; }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("import1.mjs"),
+            "import cube2, { cube, graph, function1, function2 } from './export1.mjs';\ngraph.draw();\ncube(3);\ncube2(3);\nfunction1(2);\nfunction2(2);\n",
+        )
+        .unwrap();
+
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        let resolved_target_spans: std::collections::BTreeSet<String> = db
+            .call_targets()
+            .iter()
+            .filter(|target| target.status == CallTargetStatus::Resolved)
+            .filter_map(|target| target.target_function)
+            .filter_map(|function_id| db.functions().iter().find(|f| f.id == function_id))
+            .filter_map(|function| {
+                let file = db.file(function.file)?;
+                Some(
+                    file.source[function.span.start_byte as usize..function.span.end_byte as usize]
+                        .to_string(),
+                )
+            })
+            .collect();
+
+        for expected in [
+            "function cube(",
+            "function drawFn(",
+            "function cube2(",
+            "function function1(",
+            "function function2(",
+        ] {
+            assert!(
+                resolved_target_spans
+                    .iter()
+                    .any(|span| span.contains(expected)),
+                "expected ESM import resolution to reach `{expected}`; got {resolved_target_spans:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn real_kernel_resolves_typescript_commonjs_interop_default_import() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("lib5a.js"),
+            "Object.defineProperty(exports, \"__esModule\", { value: true });\nexports.default = function foo() {};\n",
+        )
+        .unwrap();
+        // The standard TypeScript-emitted CommonJS default-import shape.
+        std::fs::write(
+            root.join("client5.js"),
+            "var __importDefault = (this && this.__importDefault) || function (mod) {\n    return (mod && mod.__esModule) ? mod : { \"default\": mod };\n};\nconst lib5a = __importDefault(require('./lib5a'));\nlib5a.default();\n",
+        )
+        .unwrap();
+
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        let resolved_target_spans: std::collections::BTreeSet<String> = db
+            .call_targets()
+            .iter()
+            .filter(|target| target.status == CallTargetStatus::Resolved)
+            .filter_map(|target| target.target_function)
+            .filter_map(|function_id| db.functions().iter().find(|f| f.id == function_id))
+            .filter_map(|function| {
+                let file = db.file(function.file)?;
+                Some(
+                    file.source[function.span.start_byte as usize..function.span.end_byte as usize]
+                        .to_string(),
+                )
+            })
+            .collect();
+
+        assert!(
+            resolved_target_spans
+                .iter()
+                .any(|span| span.contains("function foo(")),
+            "expected __importDefault interop to resolve lib5a.default() to foo; got {resolved_target_spans:?}"
+        );
+    }
+
+    #[test]
+    fn real_ts_pipeline_resolves_super_this_and_private_member_calls() {
+        let source = r#"class A {
+    m() {
+        console.log("A.m");
+    }
+    static s() {
+        console.log("A.s");
+    }
+}
+class B extends A {
+    constructor() {
+        super.m();
+        this.helper();
+    }
+    helper() {
+        console.log("helper");
+    }
+    m() {
+        super.m();
+    }
+    static s() {
+        super.s();
+    }
+    #priv() {
+        console.log("priv");
+    }
+    callPriv() {
+        this.#priv();
+    }
+}
+new B();
+"#;
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+
+        let resolve_for = |needle: &str| -> Vec<String> {
+            let site = site_id_for_span(source, &sites, needle);
+            targets
+                .iter()
+                .filter(|t| t.site == site)
+                .filter_map(|t| t.target_function)
+                .filter_map(|id| db.functions().iter().find(|f| f.id == id))
+                .map(|f| source[f.span.start_byte as usize..f.span.end_byte as usize].to_string())
+                .collect()
+        };
+        // `super.m()` (both in B's constructor and B.m), `super.s()`,
+        // `this.helper()`, and `this.#priv()` all resolve.
+        for (site, target) in [
+            ("super.m()", "\"A.m\""),
+            ("super.s()", "\"A.s\""),
+            ("this.helper()", "\"helper\""),
+            ("this.#priv()", "\"priv\""),
+        ] {
+            assert!(
+                resolve_for(site).iter().any(|s| s.contains(target)),
+                "expected {site} to reach a target containing `{target}`; got {:?}",
+                resolve_for(site)
+            );
+        }
     }
 
     fn db_with_file(source: &str) -> AnalysisDb {

@@ -327,15 +327,70 @@ pub(crate) fn command_for_frontend(
             Ok(command)
         }
         GoSemanticCommand::SourceDir(path) => {
-            ensure_local_go_toolchain_supported()?;
-            let mut command = Command::new("go");
-            command
-                .arg("run")
-                .arg(".")
-                .current_dir(path)
-                .env("GOWORK", "off")
-                .env("GOTOOLCHAIN", "local");
+            // Build the frontend binary once (cached next to the materialized
+            // source) and run that, rather than `go run .` on every request. The
+            // cold compile of x/tools can approach the per-request timeout, so
+            // building here — outside the timed analysis request — keeps the
+            // timeout covering only analysis and avoids flaky CI timeouts.
+            let binary = ensure_frontend_binary(path)?;
+            let mut command = Command::new(binary);
+            command.current_dir(root);
             Ok(command)
+        }
+    }
+}
+
+/// Build the embedded frontend into a cached `polint-go-frontend` binary next to
+/// its materialized source, returning the binary path. Concurrent builds are
+/// made safe by compiling to a unique staging path and atomically renaming.
+fn ensure_frontend_binary(source_dir: &Path) -> Result<PathBuf, GoSemanticProcessError> {
+    let binary = source_dir.join(frontend_binary_name());
+    if binary.is_file() {
+        return Ok(binary);
+    }
+    ensure_local_go_toolchain_supported()?;
+    let staging = source_dir.join(format!(
+        ".build-{}-{}",
+        std::process::id(),
+        unique_materialization_suffix()
+    ));
+    let output = Command::new("go")
+        .arg("build")
+        .arg("-o")
+        .arg(&staging)
+        .arg(".")
+        .current_dir(source_dir)
+        .env("GOWORK", "off")
+        .env("GOTOOLCHAIN", "local")
+        .output()
+        .map_err(|error| {
+            GoSemanticProcessError::CommandFailed(format!(
+                "failed to start go build of embedded frontend: {error}"
+            ))
+        })?;
+    if !output.status.success() {
+        let _ = fs::remove_file(&staging);
+        // If another process already published the binary, use it.
+        if binary.is_file() {
+            return Ok(binary);
+        }
+        return Err(GoSemanticProcessError::CommandFailed(format!(
+            "go build of embedded frontend failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    match fs::rename(&staging, &binary) {
+        Ok(()) => Ok(binary),
+        Err(_) if binary.is_file() => {
+            let _ = fs::remove_file(&staging);
+            Ok(binary)
+        }
+        Err(error) => {
+            let _ = fs::remove_file(&staging);
+            Err(GoSemanticProcessError::CommandFailed(format!(
+                "failed to publish embedded frontend binary `{}`: {error}",
+                binary.display()
+            )))
         }
     }
 }

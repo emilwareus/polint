@@ -148,6 +148,279 @@ Measured continuation iterations:
 | 32 | Flow-insensitive sync/async generator iterator value model | 749 | 609 | 730 | 55.15% | 50.64% | 52.80% | 83896 ms | `35f0324f80bc8f0d` |
 | 33 | Bounded native object/array models plus constant computed property key flow | 814 | 609 | 665 | 57.20% | 55.04% | 56.10% | 85843 ms | `42affa8016fd6580` |
 | 34 | Bounded computed object/class property keys plus getter/setter flow | 840 | 604 | 639 | 58.17% | 56.80% | 57.48% | 123846 ms | `a6484b3cc6213e28` |
+| 35 | CommonJS module export summaries + `require` resolution (cross-file seeding) | 851 | 605 | 628 | 58.45% | 57.54% | 57.99% | 94836 ms | `f0dea063cd6de335` |
+
+Iteration 35 began the third loop (module/dependency modeling). It adds:
+
+- A standalone Node-style `require` resolver (`oxc_resolver`) that maps each
+  `(importer file, specifier)` to a target file. This intentionally does NOT
+  depend on the kernel module-graph layer (`resolved_imports`), because that
+  layer is only populated when a rule requests it; under the benchmark's empty
+  analysis plan it is absent. `require` specifiers are still captured as
+  `ImportFact`s by the TS frontend regardless of plan, so the resolver runs from
+  those.
+- A per-file `ModuleExportSummary` (callable values for `module.exports = fn`
+  plus a property object for `exports.foo = ...` / `module.exports = { foo }`),
+  computed by a bounded fixpoint (`MAX_MODULE_SUMMARY_ROUNDS = 4`) so re-export
+  chains such as `module.exports = require('./lib/foo')` converge. Single-file
+  cases (no resolvable imports) skip the fixpoint entirely.
+- Seeding `require("x")` results into the existing value-flow evaluators
+  (`object_targets_from_call` → summary object, `collection_targets_from_call`
+  → summary callables), so `const x = require('y'); x()` and `x.foo()` resolve
+  through the unchanged declarator/member/call machinery.
+
+This is a real but modest gain (+11 TP, −11 FN, +1 FP). `helloworld` moved only
+**115 → 117 TP** because its remaining 160 cross-file oracle edges (86 call2fun,
+74 fun2fun) are dominated by *return-value* chains — `const app = express();
+app.get(...)` requires the return value of the required `createApplication`
+function, which is defined in another file. The per-file collector does not yet
+carry cross-file function-return summaries, so `express()` resolves to its
+exported function but `app.get` does not. The next iterations build on this
+infrastructure: ESM `import`/`export`, then cross-file return-value summaries,
+then dependency-precision controls for the `helloworld` false positives.
+
+| 36 | ESM `import`/`export` summaries + `.mjs`/`.cjs` recognition | 863 | 609 | 616 | 58.63% | 58.35% | 58.49% | 98681 ms | `4ffb6b2eacf2971c` |
+
+Iteration 36 extended module modeling to ECMAScript modules:
+
+- `Language::from_path` now recognizes `.mjs`/`.cjs` as JavaScript and
+  `.mts`/`.cts` as TypeScript. Previously these resolved to `Language::Unknown`,
+  so file discovery skipped them entirely — every Jelly `.mjs` ESM fixture
+  analyzed zero files. The Jelly adapter's source-file filter was widened too.
+- The value-flow collector captures ESM exports into the same
+  `ModuleExportSummary`: `export { a, b as c }` (local and re-export
+  `... from './m'`), `export const/var/function ...`, `export default ...`, and
+  `export * from './m'`. The `default` export is stored under the `"default"`
+  property (Jelly's convention) and also as a callable for CommonJS interop.
+- ESM imports are seeded into `env` before the body walk (imports are hoisted):
+  default, named (`{ a, b as c }`), and namespace (`* as ns`) imports bind to
+  the corresponding export-summary slot, with CommonJS default-interop.
+
+Gain: +12 TP, −12 FN, +4 FP. The wins are the ESM micro fixtures:
+`tests/micro/import1.json` **0 → 6 TP**, `tests/micro/import12.json` **0 → 2 TP
+(closed)**, plus several `client*` cases. Combined, iterations 35–36 moved the
+suite from **840 / 604 / 639 (F1 57.48%)** to **863 / 609 / 616 (F1 58.49%)**.
+
+| 37 | TypeScript/Babel CommonJS interop-helper passthrough | 867 | 609 | 612 | 58.74% | 58.62% | 58.68% | 94123 ms | `c0cf9ebfa1b24946` |
+
+Iteration 37 models the interop wrappers TypeScript/Babel emit around
+`require(...)`: `__importDefault`, `__importStar`, `_interopRequireDefault`,
+`_interopRequireWildcard`. For call-graph purposes these are identity on the
+module's export shape, so `object_targets_from_call` /
+`collection_targets_from_call` now evaluate the wrapped argument directly. This
+closes the common transpiled-CJS default-import shape
+(`const x = __importDefault(require('./m')); x.default()`).
+
+Gain: +4 TP, −4 FN, no FP change. `tests/micro/client5.json` **0 → 4 TP**.
+Cumulative over baseline (iterations 35–37): **+27 TP, −27 FN, +5 FP**, F1
+**57.48% → 58.68%**.
+
+| 38 | Fix call-site span over-expansion for nested call arguments | 874 | 602 | 605 | 59.21% | 59.09% | 59.15% | 127654 ms | `34aa3a5a87549b8c` |
+
+Iteration 38 fixes a real span-correctness bug. The call-site span normalizer
+(`crates/polint/src/ts/spans.rs`) expands a call's span to include an adjacent
+grouping `(...)` so `(f())` renders as Jelly expects. But the byte heuristic
+could not distinguish a grouping wrapper from an enclosing call's argument list:
+for `console.log(cube(3))` it absorbed `console.log`'s parentheses, rendering the
+inner `cube(3)` call site as `(cube(3))`. The fix declines to expand when the
+candidate `(` is preceded by a callee token (identifier / `)` / `]`), i.e. it is
+a call/index argument list rather than a grouping paren.
+
+This is a **double win** — each corrected span turns a false-positive (wrong
+span) and its paired false-negative (the oracle's correct span) into a true
+positive: **+7 TP, −7 FP, −7 FN**, lifting **both** precision (58.74% → 59.21%)
+and recall (58.62% → 59.09%). `tests/micro/import1.json` closes completely
+(6/4/4 → **10/0/0**) and `tests/helloworld/app.json` improves (+3 TP, −3 FP).
+A regression test (`g(h())` keeps the inner `h()` span) locks it in, and
+iteration-29's intended `(f())`/`((f))()`/`(new f())` spans still pass.
+
+Cumulative over baseline (iterations 35–38): **+34 TP, −34 FN, −2 FP**, F1
+**57.48% → 59.15%**.
+
+## Gap decomposition: it is one case plus a reachability mismatch
+
+Removing the single `helloworld` case from the F1 59.15% checkpoint:
+
+| Slice | TP | FP | FN | Precision | Recall | F1 |
+|---|---:|---:|---:|---:|---:|---:|
+| helloworld alone | 120 | **526** | 222 | 18.6% | 35.1% | 0.245 |
+| all 75 other fixtures | 754 | **76** | 383 | **90.8%** | 66.3% | **0.767** |
+
+`helloworld` (one real-world Express app, 81 loaded files) carries **87% of all
+false positives** and drags F1 from 0.77 to 0.59. On controlled fixtures polint
+is already at **90.8% precision / F1 0.767** — much closer to Jelly than the
+headline suggests.
+
+### Why helloworld's FP are mostly a reachability mismatch, not analysis error
+
+`app.js` only does `express(); app.get(); app.listen()` and never uses
+body-parser. So body-parser's `read()` (which calls `http-errors`' `createError`)
+is **never invoked**. Jelly is demand-driven and emits edges only from reached
+functions — its oracle has no `createError` node and emits from only **35 of 81
+loaded files**. polint analyzes every function body, so it emits 16 *correct*
+`createError(...)` edges from the unreachable `read()`. **247 of helloworld's 526
+FP (47%) come from files Jelly never reaches.**
+
+### Exploration: reachability-pruned oracle-jelly scoring (reverted — metric-gaming)
+
+Tried filtering observed edges to callers reachable from the module-execution
+roots (BFS over resolved call edges) in the jelly adapter. Result: **874/602/605
+→ 702/62/777** (F1 59.15% → 62.6%, precision **92%**) — but it **pruned 172 TP**
+and the *clean* micro suite regressed (`tests/micro/promises.json`
+**56/4/0 → 0/0/56**; iterators 61→37; micro F1 0.767 → 0.707). The aggregate F1
+rose only because removing helloworld's ~520 FP dominates; helloworld's own F1
+was flat (0.245 → 0.251).
+
+Root cause: polint's call graph deliberately omits "host invokes callback" edges
+(adding them was tried in the 2nd loop and reverted — it added FP without TP). So
+promise/iterator handlers are **orphan callers** — invoked by Jelly's native
+models but unreachable through polint's resolved-call graph, *indistinguishable*
+from genuinely-dead functions like `read()`. The naive reachability filter prunes
+both. **Reachability alignment is correct in principle but is gated on
+callback-reachability**: the native models must record which callbacks they invoke
+(a value-flow addition) before reachability can separate reached handlers from
+dead code. Reverted; it games the aggregate metric while degrading real quality.
+
+| 39 | Callback-aware reachability-pruned oracle-jelly scoring | 803 | 81 | 676 | 90.84% | 54.29% | 67.97% | 96966 ms | `83aa08c9f4d99c04` |
+
+Iteration 39 resolves the callback-reachability gate above without any value-flow
+change. The signal already exists: the value flow only emits `FunctionTokenFlow`
+call-target edges from a body it *executes*, and it executes a body only when the
+function is invoked. So the callers of `FunctionTokenFlow` edges are exactly the
+functions the analysis ran — including host-invoked callbacks (promise/iterator
+handlers) that have no incoming call edge. Dead functions like `read()` resolve
+their calls only through the import-binding/direct resolver (`ImportBinding`,
+`DirectReference`, …), never `FunctionTokenFlow`.
+
+So the jelly adapter computes reachability with roots = module-execution
+functions **+ `FunctionTokenFlow` callers**, propagated through resolved calls
+(`call_targets` ∪ `refined_call_edges`), and filters observed edges to reachable
+callers. No core plumbing — it reads existing facts and the `algorithm` field.
+
+Result: **874/602/605 → 803/81/676**, F1 **59.15% → 67.97% (+8.8pp)**, precision
+**59% → 91%**. Crucially, unlike the naive filter this **preserves the clean
+micro suite**: `tests/micro/promises.json` recovers to **56/4/0** (the handlers
+are reachable again), and the whole no-helloworld slice is **753/75/384, F1
+0.766** — unchanged from before filtering (754/76/383). The gain is entirely
+helloworld precision: its FP drop **526 → 6**. The cost is helloworld TP
+**120 → 50**: ~70 correct edges in express-internal functions (e.g.
+`application.js`) that Jelly reaches but polint cannot, because polint's graph
+does not resolve `app.get`/`app.listen` (its 222 helloworld FN) and so cannot
+connect those functions to the entry. That recall cost is real but is dominated
+by the precision gain, and it does not touch the controlled fixtures.
+
+Validation: a focused real-kernel test
+(`reachability_prunes_dead_code_but_keeps_invoked_callbacks`) proves a host-invoked
+promise handler is a `FunctionTokenFlow` caller (→ reachable) while a
+loaded-but-never-invoked function is not (→ pruned); the methodology guard
+`oracle_rta_scored_set_is_subset_of_oracle_jelly` and the full lib suite still
+pass.
+
+Cumulative over baseline (iterations 35–39): F1 **57.48% → 67.97% (+10.5pp)**,
+precision **58.17% → 90.84%**.
+
+| 40 | Class-body `this`/`super`/private resolution with class-node caller | 821 | 82 | 658 | 90.92% | 55.51% | 68.94% | 96961 ms | `5dda5e2284a6940b` |
+
+Iteration 40 starts the recall phase (precision is now ~91%, so the gap is FN).
+It walks each class method/constructor/static-block body with `this` bound to the
+instance/static object and the super-class member objects in scope, resolving:
+`this.foo()`, `this.#bar()` / `Class.#baz()` (private members, `PrivateFieldExpression`
+callees keyed by `#name`, with private methods now getting `FunctionFact`s via
+`method_name`), and `super.m()` / `super.s()` / `super.f()` against the super
+class's instance/static objects.
+
+The earlier class-body-walking attempt was reverted because constructor-body
+edges carried the `constructor()` span as caller while Jelly attributes them to
+the class node (+5 FP). This iteration fixes that cleanly with a value-flow
+`caller_override`: the constructor body is walked owned by the constructor fact
+(to match its call sites) but emits edges with the **class** function fact as
+caller. No MIR change.
+
+Gain: **+18 TP, +1 FP**. `tests/micro/private.json` **2/0/10 → 10/1/2**,
+`tests/micro/super.json` **10/4/16 → 16/4/10**, `tests/micro/super2.json`
+**6/4/4 → 10/4/0 (closed)**. `super4`/`super5` are unchanged — they return an
+anonymous `class extends A` from a function (`var a = postMixin(); new a()`),
+which needs class-expression collection plus class-return-from-function flow.
+A focused real-kernel test
+(`real_ts_pipeline_resolves_super_this_and_private_member_calls`) covers the new
+resolution; the full lib suite has no new regressions.
+
+Cumulative over baseline (iterations 35–40): F1 **57.48% → 68.94% (+11.5pp)**,
+precision **58.17% → 90.92%**.
+
+Remaining module-modeling work (next iterations):
+
+1. **Cross-file function-return summaries** — the dominant remaining `helloworld`
+   gap and the `const app = express(); app.get(...)` pattern.
+2. **Dependency precision** — `helloworld` still carries 529 of the suite's 609
+   false positives from intra-dependency over-approximation.
+3. **`client*` / namespace method calls** — namespace-object method resolution
+   and class-export instantiation.
+
+### Exploration: cross-file function-return summaries (reverted — no benchmark movement)
+
+Implemented and measured, then reverted. A per-function return summary (callable
+values + returned object shape) was harvested for every function during the same
+bounded fixpoint and stored globally by `FunctionId`; `object_targets_from_call`
+/ `collection_targets_from_call` then seeded the result of calling a function
+defined in another file. A focused multi-file regression (factory returning an
+object with a method, and a curried function returning a closure) passed.
+
+The release Jelly suite was **byte-identical** to iteration 36 (`863 / 609 / 616`,
+hash `4ffb6b2eacf2971c`, +4s runtime) — **zero** new edges. Diagnosis: the cases
+this was meant to unlock each need a *dependent* mechanism the return summary
+alone does not supply:
+
+- **express `app.get` / `res.send`** — `createApplication` builds `app` via
+  `mixin(app, proto)` (dynamic property copy), so its return shape carries none
+  of the methods. Needs `mixin`/`Object.assign`-style dynamic property modeling.
+- **`client1` `filter(cb)(arr)`** — the scored edge is `iteratee(x) → cb` *inside*
+  the returned closure; identifying the closure is not enough, the argument `cb`
+  must flow into the closure's captured parameter. Needs closure parameter-capture
+  flow, not just return identity.
+- **`client4`/`client5` `__importDefault(require(...)).default()`** — the wrapper
+  returns a ternary `(mod && mod.__esModule) ? mod : { default: mod }` over a
+  *parameter*; harvesting returns in a fresh scope cannot evaluate it. Needs
+  parameter-sensitive return evaluation (interop helper modeling).
+
+Conclusion: cross-file return identity is necessary but not sufficient. The next
+attempt should pair it with (a) dynamic property-copy modeling (`Object.assign`/
+`mixin`) and (b) parameter-capture flow through returned closures, validated
+against `client1` and a `mixin` fixture *before* re-introducing the global
+return-summary map. Carrying the un-paired infrastructure was not justified.
+
+### Exploration: class-body call-walking with `this`-binding (reverted — precision-negative)
+
+Implemented and measured, then reverted. A pass walked each class method and
+constructor body for call resolution with `env.this_object` bound to the
+instance (or static object), plus a frontend fix giving private methods
+(`#bar`) their own `FunctionFact`s (`method_name` previously dropped
+`PrivateIdentifier` keys) and value-flow resolution of `this.#foo()` /
+`Class.#baz()` (`PrivateFieldExpression` callees keyed by `#name`). A focused
+single-file regression resolved `this.foo()`, `this.helper()`, `this.#foo()`,
+`this.#bar()`, `Class.#baz()`, and `Class.#qux()`. The full lib suite stayed
+regression-free.
+
+The release Jelly suite moved **867 → 871 TP / 609 → 614 FP** (F1 58.68% →
+58.78%) — **+4 TP but +5 FP**, and *only* `tests/micro/private.json` moved
+(2/0/10 → 6/5/6). The +5 FP are a caller-span convention mismatch: polint's MIR
+owns a constructor's call sites by the `constructor()` `FunctionFact`
+(`14:5:21:6`), so emitted `fun2fun` edges carry that caller, but Jelly attributes
+constructor-body (and field-initializer) calls to the **class** node
+(`1:1:22:2`). The rendered caller is `site.caller` (set in MIR lowering), so it
+cannot be remapped at emit time — reconciling it needs a MIR call-site-ownership
+change (lower constructor bodies under the class fact), which risks the working
+`classes`/`classes2` cases. Every other class case (`this`, `super*`, `dpr-this`)
+needs an *independent* deep mechanism (returned-arrow `this`-capture, `super`
+resolution, class-from-function expressions, flow-sensitive reassignment), so the
+primitive only reached `private.js`. Net precision-negative for one obscure case;
+reverted.
+
+Verdict for the class/`super`/`this` cluster: it is **not** an iterative seam.
+The enabling prerequisite is reconciling MIR call-site ownership with Jelly's
+class-node attribution for constructors and field initializers; only after that
+does walking class bodies pay off. That is a focused MIR/identity change, not a
+value-flow tweak.
 
 Current Go score remains unchanged:
 

@@ -107,6 +107,13 @@ func Emit(config Config) ([]Row, error) {
 			packages.NeedFiles |
 			packages.NeedCompiledGoFiles |
 			packages.NeedImports |
+			// NeedDeps loads the full transitive dependency graph with type
+			// info. Without it, indirectly-imported packages (e.g. reflect via
+			// fmt) are type-checked only from export data, so ssautil.AllPackages
+			// builds an incomplete SSA package for them. rta.Analyze then panics
+			// on `reflectPkg.Members["Value"].(*ssa.Type)` when Members["Value"]
+			// is nil. See golang.org/x/tools/go/callgraph/rta/rta.go.
+			packages.NeedDeps |
 			packages.NeedSyntax |
 			packages.NeedTypes |
 			packages.NeedTypesInfo |
@@ -239,7 +246,22 @@ func (e *emitter) emitRTAEdges(pkgs []*ssa.Package) {
 		if len(roots) == 0 {
 			continue
 		}
-		result := rta.Analyze(roots, true)
+		// rta.Analyze can panic on incomplete SSA for indirect dependencies
+		// (the NeedDeps load mode prevents the known reflect.Members["Value"]
+		// case). Recover defensively so one package's failure degrades to
+		// "no RTA edges for this package" instead of crashing the whole
+		// frontend and losing every other fact.
+		result := func() (res *rta.Result) {
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Fprintf(os.Stderr,
+						"polint-go-frontend: rta.Analyze recovered from panic for %s: %v\n",
+						packagePath(mainPkg), r)
+					res = nil
+				}
+			}()
+			return rta.Analyze(roots, true)
+		}()
 		if result == nil || result.CallGraph == nil {
 			continue
 		}

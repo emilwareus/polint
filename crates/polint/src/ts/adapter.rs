@@ -1941,6 +1941,7 @@ fn push_ts_class(
 fn method_name(method: &MethodDefinition<'_>) -> Option<String> {
     match &method.key {
         PropertyKey::StaticIdentifier(identifier) => Some(identifier.name.to_string()),
+        PropertyKey::PrivateIdentifier(identifier) => Some(format!("#{}", identifier.name)),
         PropertyKey::StringLiteral(literal) => Some(literal.value.to_string()),
         PropertyKey::BinaryExpression(binary) if binary.operator == BinaryOperator::Addition => {
             Some(format!(
