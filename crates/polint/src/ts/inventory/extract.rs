@@ -6,8 +6,8 @@
 use oxc_allocator::Allocator;
 use oxc_ast::AstKind;
 use oxc_ast::ast::{
-    Argument, BindingPattern, Expression, FunctionType, MethodDefinition, MethodDefinitionKind,
-    Program, PropertyKey, VariableDeclarator,
+    Argument, BinaryOperator, BindingPattern, Expression, FunctionType, MethodDefinition,
+    MethodDefinitionKind, Program, PropertyKey, VariableDeclarator,
 };
 use oxc_parser::Parser;
 use oxc_semantic::{AstNodes, NodeId, SemanticBuilder};
@@ -211,6 +211,30 @@ fn method_name(method: &MethodDefinition<'_>) -> Option<String> {
         PropertyKey::StaticIdentifier(identifier) => Some(identifier.name.to_string()),
         PropertyKey::PrivateIdentifier(identifier) => Some(format!("#{}", identifier.name)),
         PropertyKey::StringLiteral(literal) => Some(literal.value.to_string()),
+        PropertyKey::BinaryExpression(binary) if binary.operator == BinaryOperator::Addition => {
+            Some(format!(
+                "{}{}",
+                constant_property_key_expression(&binary.left)?,
+                constant_property_key_expression(&binary.right)?
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn constant_property_key_expression(expression: &Expression<'_>) -> Option<String> {
+    match expression {
+        Expression::StringLiteral(literal) => Some(literal.value.to_string()),
+        Expression::BinaryExpression(binary) if binary.operator == BinaryOperator::Addition => {
+            Some(format!(
+                "{}{}",
+                constant_property_key_expression(&binary.left)?,
+                constant_property_key_expression(&binary.right)?
+            ))
+        }
+        Expression::ParenthesizedExpression(expression) => {
+            constant_property_key_expression(&expression.expression)
+        }
         _ => None,
     }
 }

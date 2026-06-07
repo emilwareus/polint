@@ -102,6 +102,27 @@ function outer() {
         assert!(inner.span.start_byte < inner.span.end_byte);
     }
 
+    #[test]
+    fn computed_string_concatenation_methods_keep_display_names() {
+        let file = fixture_file(
+            r#"
+class Box {
+  ["na" + "me"]() {}
+  static [("static") + "G"]() {}
+}
+"#,
+        );
+        let output = extract_ts_inventory(file);
+        let names = output
+            .functions
+            .iter()
+            .filter_map(|function| function.display_name.as_deref())
+            .collect::<BTreeSet<_>>();
+
+        assert!(names.contains("name"), "missing names in {names:?}");
+        assert!(names.contains("staticG"), "missing names in {names:?}");
+    }
+
     fn fixture_file(source: &str) -> &'static crate::core::SourceFile {
         let mut db = Box::new(AnalysisDb::new());
         let file_id = db.add_file(

@@ -1038,68 +1038,96 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
             return;
         }
 
-        let Some((object_name, property)) = self.assignment_member_name(&assignment.left, env)
-        else {
+        let assignments = self.assignment_member_names(&assignment.left, env);
+        if assignments.is_empty() {
             return;
-        };
+        }
         let callable_targets = self
             .callable_targets_from_expression(&assignment.right, env)
             .all_targets();
         let nested_object = self.object_targets_from_expression(&assignment.right, env);
         let nested_collection = self.collection_targets_from_expression(&assignment.right, env);
 
-        if let Some(object) = env.objects.get_mut(object_name) {
-            for target in &callable_targets {
-                object.add_property_target(property.clone(), *target);
-            }
-            if let Some(nested_object) = nested_object.clone() {
-                object.add_object_property(property.clone(), nested_object);
-            }
-            if let Some(nested_collection) = nested_collection.clone() {
-                object.add_collection_property(property.clone(), nested_collection);
-            }
-        }
-
-        if self.classes.contains_key(object_name) {
-            if let Some(class) = self.classes.get_mut(object_name) {
-                for target in &callable_targets {
-                    class
-                        .static_object
-                        .add_property_target(property.clone(), *target);
-                }
-                if let Some(nested_object) = nested_object {
-                    class
-                        .static_object
-                        .add_object_property(property.clone(), nested_object);
-                }
-                if let Some(nested_collection) = nested_collection {
-                    class
-                        .static_object
-                        .add_collection_property(property, nested_collection);
-                }
-            }
-            if let Some(statics) = self.class_static_targets(object_name) {
+        for (object_name, property) in assignments {
+            if self.classes.contains_key(object_name)
+                && !env.objects.contains_key(object_name)
+                && let Some(statics) = self.class_static_targets(object_name)
+            {
                 env.objects.insert(object_name.to_string(), statics);
+            }
+
+            let setter_targets = env
+                .objects
+                .get(object_name)
+                .and_then(|object| object.setter_properties.get(&property))
+                .cloned()
+                .unwrap_or_default();
+            let handled_by_setter = !setter_targets.is_empty();
+            if handled_by_setter {
+                self.collect_setter_assignment_side_effects(
+                    object_name,
+                    &setter_targets,
+                    &assignment.right,
+                    env,
+                );
+            } else if let Some(object) = env.objects.get_mut(object_name) {
+                add_assignment_to_object_property(
+                    object,
+                    property.clone(),
+                    &callable_targets,
+                    nested_object.clone(),
+                    nested_collection.clone(),
+                );
+            }
+
+            if self.classes.contains_key(object_name) {
+                if handled_by_setter {
+                    if let Some(object) = env.objects.get(object_name).cloned()
+                        && let Some(class) = self.classes.get_mut(object_name)
+                    {
+                        class.static_object = object;
+                    }
+                } else if let Some(class) = self.classes.get_mut(object_name) {
+                    add_assignment_to_object_property(
+                        &mut class.static_object,
+                        property,
+                        &callable_targets,
+                        nested_object.clone(),
+                        nested_collection.clone(),
+                    );
+                }
+                if let Some(statics) = self.class_static_targets(object_name) {
+                    env.objects.insert(object_name.to_string(), statics);
+                }
             }
         }
     }
 
-    fn assignment_member_name(
+    fn assignment_member_names(
         &self,
         target: &'ast AssignmentTarget<'ast>,
         env: &FlowEnv,
-    ) -> Option<(&'ast str, String)> {
+    ) -> Vec<(&'ast str, String)> {
         match target {
             AssignmentTarget::StaticMemberExpression(member) => {
-                let object = expression_identifier(&member.object)?;
-                Some((object, member.property.name.to_string()))
+                let Some(object) = expression_identifier(&member.object) else {
+                    return Vec::new();
+                };
+                vec![(object, member.property.name.to_string())]
             }
             AssignmentTarget::ComputedMemberExpression(member) => {
-                let object = expression_identifier(&member.object)?;
-                let property = self.constant_string_from_expression(&member.expression, env)?;
-                Some((object, property))
+                let Some(object) = expression_identifier(&member.object) else {
+                    return Vec::new();
+                };
+                let mut properties = self.constant_strings_from_expression(&member.expression, env);
+                sort_dedup_strings(&mut properties);
+                properties.truncate(8);
+                properties
+                    .into_iter()
+                    .map(|property| (object, property))
+                    .collect()
             }
-            _ => None,
+            _ => Vec::new(),
         }
     }
 
@@ -1526,6 +1554,30 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                 self.emit_member_targets(owner, property, call.span, Some(targets.clone()));
                 self.collect_receiver_side_effects(object_name, &targets, call, env);
             }
+
+            let getter = env.objects.get(object_name).and_then(|object| {
+                object
+                    .getter_properties
+                    .get(property)
+                    .cloned()
+                    .map(|targets| (targets, object.clone()))
+            });
+            if let Some((getters, receiver)) = getter {
+                let targets = self
+                    .callable_return_targets_from_function_ids(
+                        getters,
+                        Vec::new(),
+                        Vec::new(),
+                        receiver,
+                        CollectionTargets::default(),
+                        1,
+                    )
+                    .all_targets();
+                if !targets.is_empty() {
+                    self.emit_call_span_targets(owner, call.span, property, Some(targets.clone()));
+                    self.emit_member_targets(owner, property, call.span, Some(targets));
+                }
+            }
         }
         if let Expression::StaticMemberExpression(member) = &call.callee
             && let Some(object) = self.object_targets_from_expression(&member.object, env)
@@ -1725,6 +1777,37 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
             }
             merged_receiver.merge(callee_env.this_object);
         }
+        env.objects.insert(object_name.to_string(), merged_receiver);
+    }
+
+    fn collect_setter_assignment_side_effects(
+        &mut self,
+        object_name: &str,
+        targets: &[FunctionId],
+        value: &'ast Expression<'ast>,
+        env: &mut FlowEnv,
+    ) {
+        let Some(receiver) = env.objects.get(object_name).cloned() else {
+            return;
+        };
+        let arguments = vec![
+            self.targets_from_argument_expression(value, env)
+                .unwrap_or_default(),
+        ];
+        let object_arguments = vec![self.object_targets_from_expression(value, env)];
+        let mut merged_receiver = receiver.clone();
+
+        for target in targets {
+            let Some(flow) = self.function_flows_by_id.get(target).cloned() else {
+                continue;
+            };
+            let mut callee_env = env.clone();
+            callee_env.this_object = receiver.clone();
+            self.bind_invocation_arguments(&flow, &arguments, &object_arguments, &mut callee_env);
+            self.collect_function_flow_invocation(&flow, &mut callee_env);
+            merged_receiver.merge(callee_env.this_object);
+        }
+
         env.objects.insert(object_name.to_string(), merged_receiver);
     }
 
@@ -4076,6 +4159,24 @@ impl ObjectTargets {
     }
 }
 
+fn add_assignment_to_object_property(
+    object: &mut ObjectTargets,
+    property: String,
+    callable_targets: &[FunctionId],
+    nested_object: Option<ObjectTargets>,
+    nested_collection: Option<CollectionTargets>,
+) {
+    for target in callable_targets {
+        object.add_property_target(property.clone(), *target);
+    }
+    if let Some(nested_object) = nested_object {
+        object.add_object_property(property.clone(), nested_object);
+    }
+    if let Some(nested_collection) = nested_collection {
+        object.add_collection_property(property, nested_collection);
+    }
+}
+
 fn descriptor_for_property(source: &ObjectTargets, property: &str) -> ObjectTargets {
     let mut descriptor = ObjectTargets::default();
     if let Some(targets) = source.properties.get(property) {
@@ -6283,6 +6384,67 @@ top.bot.something.p1p2();
             assert!(
                 resolved.contains(&(site, target)),
                 "expected real TS pipeline to resolve {call} to {target_name}; got {resolved:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn real_ts_pipeline_invokes_setter_assignments_without_overwriting_accessors() {
+        let source = r#"class A {
+    set ["field"](x) {
+        this._x = x;
+    }
+    get ["other"]() {
+        return this._x;
+    }
+}
+const a = new A();
+a.field = function assigned() {};
+a.other();
+a.field();
+"#;
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let resolved = resolved_target_ids_by_site(targets);
+        let assigned = function_id_for_span(source, &db, "function assigned() {}");
+        let other_site = site_id_for_span(source, &sites, "a.other()");
+        let field_site = site_id_for_span(source, &sites, "a.field()");
+
+        assert!(
+            resolved.contains(&(other_site, assigned)),
+            "expected getter to return setter-assigned callable; got {resolved:?}"
+        );
+        assert!(
+            !resolved.contains(&(field_site, assigned)),
+            "setter-only field assignment must not install a callable data property; got {resolved:?}"
+        );
+    }
+
+    #[test]
+    fn real_ts_pipeline_preserves_computed_assignment_key_unions() {
+        let source = r#"const obj = {};
+obj[unknown ? "left" : "right"] = function assigned() {};
+obj.left();
+obj.right();
+"#;
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let resolved = resolved_target_ids_by_site(targets);
+        let assigned = function_id_for_span(source, &db, "function assigned() {}");
+
+        for call in ["obj.left()", "obj.right()"] {
+            let site = site_id_for_span(source, &sites, call);
+            assert!(
+                resolved.contains(&(site, assigned)),
+                "expected computed assignment union to resolve {call}; got {resolved:?}"
             );
         }
     }
