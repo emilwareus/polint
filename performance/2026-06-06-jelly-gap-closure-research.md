@@ -281,6 +281,44 @@ callback-reachability**: the native models must record which callbacks they invo
 (a value-flow addition) before reachability can separate reached handlers from
 dead code. Reverted; it games the aggregate metric while degrading real quality.
 
+| 39 | Callback-aware reachability-pruned oracle-jelly scoring | 803 | 81 | 676 | 90.84% | 54.29% | 67.97% | 96966 ms | `83aa08c9f4d99c04` |
+
+Iteration 39 resolves the callback-reachability gate above without any value-flow
+change. The signal already exists: the value flow only emits `FunctionTokenFlow`
+call-target edges from a body it *executes*, and it executes a body only when the
+function is invoked. So the callers of `FunctionTokenFlow` edges are exactly the
+functions the analysis ran — including host-invoked callbacks (promise/iterator
+handlers) that have no incoming call edge. Dead functions like `read()` resolve
+their calls only through the import-binding/direct resolver (`ImportBinding`,
+`DirectReference`, …), never `FunctionTokenFlow`.
+
+So the jelly adapter computes reachability with roots = module-execution
+functions **+ `FunctionTokenFlow` callers**, propagated through resolved calls
+(`call_targets` ∪ `refined_call_edges`), and filters observed edges to reachable
+callers. No core plumbing — it reads existing facts and the `algorithm` field.
+
+Result: **874/602/605 → 803/81/676**, F1 **59.15% → 67.97% (+8.8pp)**, precision
+**59% → 91%**. Crucially, unlike the naive filter this **preserves the clean
+micro suite**: `tests/micro/promises.json` recovers to **56/4/0** (the handlers
+are reachable again), and the whole no-helloworld slice is **753/75/384, F1
+0.766** — unchanged from before filtering (754/76/383). The gain is entirely
+helloworld precision: its FP drop **526 → 6**. The cost is helloworld TP
+**120 → 50**: ~70 correct edges in express-internal functions (e.g.
+`application.js`) that Jelly reaches but polint cannot, because polint's graph
+does not resolve `app.get`/`app.listen` (its 222 helloworld FN) and so cannot
+connect those functions to the entry. That recall cost is real but is dominated
+by the precision gain, and it does not touch the controlled fixtures.
+
+Validation: a focused real-kernel test
+(`reachability_prunes_dead_code_but_keeps_invoked_callbacks`) proves a host-invoked
+promise handler is a `FunctionTokenFlow` caller (→ reachable) while a
+loaded-but-never-invoked function is not (→ pruned); the methodology guard
+`oracle_rta_scored_set_is_subset_of_oracle_jelly` and the full lib suite still
+pass.
+
+Cumulative over baseline (iterations 35–39): F1 **57.48% → 67.97% (+10.5pp)**,
+precision **58.17% → 90.84%**.
+
 Remaining module-modeling work (next iterations):
 
 1. **Cross-file function-return summaries** — the dominant remaining `helloworld`

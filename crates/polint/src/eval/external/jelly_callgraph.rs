@@ -141,9 +141,26 @@ impl BenchmarkAdapter for JellyCallgraphAdapter {
                 record, source,
             ))
         };
+        // Jelly is demand-driven: it only emits call edges from functions reached
+        // from the loaded modules' execution, so its oracle is reachability-pruned
+        // (helloworld loads 81 files but emits edges from only 35 — the rest are
+        // required but never invoked). polint analyzes every function body, so to
+        // compare like-for-like we filter observed edges to those whose caller is
+        // reachable. Reachability roots are module executions plus the functions
+        // the value flow actually executed (host-invoked callbacks such as promise
+        // handlers, which have no incoming call edge), propagated through resolved
+        // calls. See `jelly_reachable_caller_spans`.
+        let reachable_caller_spans = jelly_reachable_caller_spans(&output.db);
         let mut items = Vec::new();
         let mut seen_graph_edges = BTreeSet::new();
         for edge in crate::eval::observed::graph_edges_from_kernel_output(output) {
+            if !reachable_caller_spans.contains(&(
+                edge.caller_span.file,
+                edge.caller_span.start_byte,
+                edge.caller_span.end_byte,
+            )) {
+                continue;
+            }
             let Some(call_site) = render_span(&edge.site_span) else {
                 continue;
             };
@@ -190,6 +207,77 @@ impl BenchmarkAdapter for JellyCallgraphAdapter {
         items.extend(crate::eval::observed::call_graph_unknown_facts_from_kernel_output(output));
         Ok(items)
     }
+}
+
+/// Compute the set of function spans reachable under Jelly's demand-driven
+/// semantics, keyed by `(file, start_byte, end_byte)`.
+///
+/// Reachability roots are:
+/// - every synthetic TS/JS module function — Jelly module-evaluates all loaded
+///   modules, so their top-level code is always reachable; and
+/// - every function the value flow actually *executed* — the value flow only
+///   emits `FunctionTokenFlow` edges from a body it walks, and it walks a body
+///   only when that function is invoked. This captures host-invoked callbacks
+///   (promise/iterator handlers) that have no incoming call edge, distinguishing
+///   them from genuinely dead functions whose calls are resolved only by the
+///   import-binding/direct resolver (e.g. `body-parser/lib/read.js` in
+///   helloworld, never invoked from the entry).
+///
+/// Reachability then propagates through resolved call edges (both `call_targets`
+/// and `refined_call_edges`), so cross-file targets such as express's
+/// `createApplication` are reached via the resolved `express()` edge.
+#[cfg(test)]
+fn jelly_reachable_caller_spans(
+    db: &crate::core::AnalysisDb,
+) -> BTreeSet<(crate::core::FileId, u32, u32)> {
+    use crate::analysis::calls::facts::CallAlgorithm;
+    use crate::core::{FunctionId, is_synthetic_ts_js_module_function};
+
+    let mut adjacency: BTreeMap<FunctionId, Vec<FunctionId>> = BTreeMap::new();
+    let mut reachable: BTreeSet<FunctionId> = BTreeSet::new();
+    let mut stack: Vec<FunctionId> = Vec::new();
+
+    for target in db.call_targets() {
+        if let Some(callee) = target.target_function {
+            adjacency.entry(target.caller).or_default().push(callee);
+        }
+        // A `FunctionTokenFlow` edge is emitted only from a body the value flow
+        // executed, so its caller was invoked — seed it as a root.
+        if target.algorithm == CallAlgorithm::FunctionTokenFlow && reachable.insert(target.caller) {
+            stack.push(target.caller);
+        }
+    }
+    for edge in db.refined_call_edges() {
+        if let Some(callee) = edge.target_function {
+            adjacency.entry(edge.caller).or_default().push(callee);
+        }
+    }
+    for function in db.functions() {
+        if is_synthetic_ts_js_module_function(function) && reachable.insert(function.id) {
+            stack.push(function.id);
+        }
+    }
+    while let Some(function) = stack.pop() {
+        if let Some(callees) = adjacency.get(&function) {
+            for &callee in callees {
+                if reachable.insert(callee) {
+                    stack.push(callee);
+                }
+            }
+        }
+    }
+
+    db.functions()
+        .iter()
+        .filter(|function| reachable.contains(&function.id))
+        .map(|function| {
+            (
+                function.span.file,
+                function.span.start_byte,
+                function.span.end_byte,
+            )
+        })
+        .collect()
 }
 
 fn push_unique_jelly_graph_edge(
@@ -411,6 +499,100 @@ mod tests {
 
         assert!(enumeration.cases.is_empty());
         assert!(enumeration.limitations[0].contains("local clone is absent"));
+    }
+
+    #[test]
+    fn reachability_prunes_dead_code_but_keeps_invoked_callbacks() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        // `deadFn` is loaded (required) but never invoked, so Jelly would not emit
+        // edges from its body (even though it has a resolvable internal call). The
+        // entry invokes `reached()` from top level and registers a promise handler
+        // the value flow executes — a host-invoked callback with no incoming call
+        // edge of its own.
+        std::fs::write(
+            root.join("dead.js"),
+            "function deadFn() {\n  const local = () => {};\n  local();\n}\nmodule.exports = deadFn;\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("entry.js"),
+            "require('./dead');\nfunction helper() {}\nfunction reached() { helper(); }\nreached();\nconst p = Promise.resolve(() => {});\np.then(function handler(v) { v(); });\n",
+        )
+        .unwrap();
+
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+
+        // Find a function fact by a substring of its source text, picking the
+        // tightest-spanning match (named function expressions passed as callbacks
+        // get anonymous fact names, and the whole-file module function also
+        // contains every needle).
+        let find_fn = |needle: &str| {
+            db.functions()
+                .iter()
+                .filter(|f| {
+                    db.file(f.span.file).is_some_and(|file| {
+                        file.source[f.span.start_byte as usize..f.span.end_byte as usize]
+                            .contains(needle)
+                    })
+                })
+                .min_by_key(|f| f.span.end_byte - f.span.start_byte)
+                .unwrap_or_else(|| panic!("function containing `{needle}` not found"))
+        };
+
+        // Confirm the value flow only emits `FunctionTokenFlow` edges from bodies
+        // it executes: the promise handler has such an edge, the never-invoked
+        // `deadFn` does not (so it cannot be seeded as a reachability root).
+        let token_flow_callers: BTreeSet<crate::core::FunctionId> = db
+            .call_targets()
+            .iter()
+            .filter(|t| {
+                t.algorithm == crate::analysis::calls::facts::CallAlgorithm::FunctionTokenFlow
+            })
+            .map(|t| t.caller)
+            .collect();
+        let dead_fn = find_fn("function deadFn");
+        assert!(
+            !token_flow_callers.contains(&dead_fn.id),
+            "never-invoked deadFn must not be a value-flow (FunctionTokenFlow) caller"
+        );
+        assert!(
+            token_flow_callers.contains(&find_fn("function handler(v)").id),
+            "the executed promise handler must be a FunctionTokenFlow caller"
+        );
+
+        let reachable = jelly_reachable_caller_spans(db);
+        let span_key =
+            |f: &crate::core::FunctionFact| (f.span.file, f.span.start_byte, f.span.end_byte);
+        let is_reachable = |needle: &str| reachable.contains(&span_key(find_fn(needle)));
+
+        // Invoked from top level -> reachable.
+        assert!(
+            is_reachable("function reached"),
+            "top-level-invoked `reached` must be reachable"
+        );
+        // Promise handler the value flow executed -> reachable (the whole point).
+        assert!(
+            is_reachable("function handler(v)"),
+            "value-flow-invoked promise handler must be reachable"
+        );
+        // Module executions are always roots.
+        assert!(
+            reachable.iter().any(|&(file, start, _)| {
+                start == 0
+                    && db
+                        .functions()
+                        .iter()
+                        .any(|f| f.span.file == file && f.span.start_byte == 0)
+            }),
+            "module-execution functions must be reachable roots"
+        );
+        // Loaded-but-never-invoked function -> NOT reachable (its FP gets pruned).
+        assert!(
+            !is_reachable("function deadFn"),
+            "loaded-but-never-invoked deadFn must be pruned"
+        );
     }
 
     #[test]
