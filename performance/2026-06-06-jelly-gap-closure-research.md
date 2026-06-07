@@ -256,6 +256,39 @@ attempt should pair it with (a) dynamic property-copy modeling (`Object.assign`/
 against `client1` and a `mixin` fixture *before* re-introducing the global
 return-summary map. Carrying the un-paired infrastructure was not justified.
 
+### Exploration: class-body call-walking with `this`-binding (reverted — precision-negative)
+
+Implemented and measured, then reverted. A pass walked each class method and
+constructor body for call resolution with `env.this_object` bound to the
+instance (or static object), plus a frontend fix giving private methods
+(`#bar`) their own `FunctionFact`s (`method_name` previously dropped
+`PrivateIdentifier` keys) and value-flow resolution of `this.#foo()` /
+`Class.#baz()` (`PrivateFieldExpression` callees keyed by `#name`). A focused
+single-file regression resolved `this.foo()`, `this.helper()`, `this.#foo()`,
+`this.#bar()`, `Class.#baz()`, and `Class.#qux()`. The full lib suite stayed
+regression-free.
+
+The release Jelly suite moved **867 → 871 TP / 609 → 614 FP** (F1 58.68% →
+58.78%) — **+4 TP but +5 FP**, and *only* `tests/micro/private.json` moved
+(2/0/10 → 6/5/6). The +5 FP are a caller-span convention mismatch: polint's MIR
+owns a constructor's call sites by the `constructor()` `FunctionFact`
+(`14:5:21:6`), so emitted `fun2fun` edges carry that caller, but Jelly attributes
+constructor-body (and field-initializer) calls to the **class** node
+(`1:1:22:2`). The rendered caller is `site.caller` (set in MIR lowering), so it
+cannot be remapped at emit time — reconciling it needs a MIR call-site-ownership
+change (lower constructor bodies under the class fact), which risks the working
+`classes`/`classes2` cases. Every other class case (`this`, `super*`, `dpr-this`)
+needs an *independent* deep mechanism (returned-arrow `this`-capture, `super`
+resolution, class-from-function expressions, flow-sensitive reassignment), so the
+primitive only reached `private.js`. Net precision-negative for one obscure case;
+reverted.
+
+Verdict for the class/`super`/`this` cluster: it is **not** an iterative seam.
+The enabling prerequisite is reconciling MIR call-site ownership with Jelly's
+class-node attribution for constructors and field initializers; only after that
+does walking class bodies pay off. That is a focused MIR/identity change, not a
+value-flow tweak.
+
 Current Go score remains unchanged:
 
 | Suite | TP | FP | FN | Precision | Recall | F1 | Hash |
