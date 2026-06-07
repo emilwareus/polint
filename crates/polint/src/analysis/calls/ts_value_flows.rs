@@ -1119,10 +1119,7 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                 let Some(object) = expression_identifier(&member.object) else {
                     return Vec::new();
                 };
-                let mut properties = self.constant_strings_from_expression(&member.expression, env);
-                sort_dedup_strings(&mut properties);
-                properties.truncate(8);
-                properties
+                self.computed_member_property_names(&member.expression, env)
                     .into_iter()
                     .map(|property| (object, property))
                     .collect()
@@ -1136,7 +1133,13 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
         expression: &'ast Expression<'ast>,
         env: &FlowEnv,
     ) -> Vec<String> {
-        let mut properties = self.constant_strings_from_expression(expression, env);
+        let mut properties = match expression {
+            Expression::NumericLiteral(literal) => vec![literal.value.to_string()],
+            Expression::ParenthesizedExpression(expression) => {
+                self.computed_member_property_names(&expression.expression, env)
+            }
+            _ => self.constant_strings_from_expression(expression, env),
+        };
         sort_dedup_strings(&mut properties);
         properties.truncate(8);
         properties
@@ -1574,28 +1577,20 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                     .map(|targets| (targets, object.clone()))
             });
             if let Some((getters, receiver)) = getter {
-                let targets = self
-                    .callable_return_targets_from_function_ids(
-                        getters,
-                        Vec::new(),
-                        Vec::new(),
-                        receiver,
-                        CollectionTargets::default(),
-                        1,
-                    )
-                    .all_targets();
+                let (returned, receiver) = self.collect_getter_return_targets(getters, receiver, 1);
+                env.objects
+                    .insert(object_name.to_string(), receiver.clone());
+                let targets = returned.all_targets();
                 if !targets.is_empty() {
                     self.emit_call_span_targets(owner, call.span, property, Some(targets.clone()));
                     self.emit_member_targets(owner, property, call.span, Some(targets.clone()));
-                    if let Some(receiver) = env.objects.get(object_name).cloned() {
-                        self.collect_returned_callable_invocation(
-                            Some(object_name),
-                            &targets,
-                            call,
-                            receiver,
-                            env,
-                        );
-                    }
+                    self.collect_returned_callable_invocation(
+                        Some(object_name),
+                        &targets,
+                        call,
+                        receiver,
+                        env,
+                    );
                 }
             }
         }
@@ -1665,16 +1660,16 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                         }
                     }
                     if let Some(getters) = object.getter_properties.get(&property).cloned() {
-                        let targets = self
-                            .callable_return_targets_from_function_ids(
-                                getters,
-                                Vec::new(),
-                                Vec::new(),
-                                object.clone(),
-                                CollectionTargets::default(),
-                                1,
-                            )
-                            .all_targets();
+                        let receiver = object_name
+                            .and_then(|name| env.objects.get(name).cloned())
+                            .unwrap_or_else(|| object.clone());
+                        let (returned, receiver) =
+                            self.collect_getter_return_targets(getters, receiver, 1);
+                        if let Some(object_name) = object_name {
+                            env.objects
+                                .insert(object_name.to_string(), receiver.clone());
+                        }
+                        let targets = returned.all_targets();
                         if !targets.is_empty() {
                             self.emit_call_span_targets(
                                 owner,
@@ -1692,7 +1687,7 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                                 object_name,
                                 &targets,
                                 call,
-                                object.clone(),
+                                receiver,
                                 env,
                             );
                         }
@@ -1888,6 +1883,33 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
         env.objects.insert(object_name.to_string(), merged_receiver);
     }
 
+    fn collect_getter_return_targets(
+        &mut self,
+        getters: Vec<FunctionId>,
+        receiver: ObjectTargets,
+        depth: usize,
+    ) -> (CollectionTargets, ObjectTargets) {
+        if depth > 8 {
+            return (CollectionTargets::default(), receiver);
+        }
+
+        let mut returned = CollectionTargets::default();
+        let mut merged_receiver = receiver.clone();
+        for target in getters {
+            let Some(flow) = self.function_flows_by_id.get(&target).cloned() else {
+                continue;
+            };
+            let mut callee_env = FlowEnv {
+                this_object: receiver.clone(),
+                ..FlowEnv::default()
+            };
+            returned.extend(self.collect_function_flow_invocation(&flow, &mut callee_env));
+            merged_receiver.merge(callee_env.this_object);
+        }
+
+        (returned, merged_receiver)
+    }
+
     fn collect_returned_callable_invocation(
         &mut self,
         object_name: Option<&str>,
@@ -1896,6 +1918,9 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
         receiver: ObjectTargets,
         env: &mut FlowEnv,
     ) {
+        let receiver = object_name
+            .and_then(|name| env.objects.get(name).cloned())
+            .unwrap_or(receiver);
         let arguments = self.argument_targets_from_call(call, env);
         let object_arguments = self.object_arguments_from_call(call, env);
         let mut merged_receiver = receiver.clone();
@@ -6555,6 +6580,28 @@ obj[unknown ? "left" : "right"]();
     }
 
     #[test]
+    fn real_ts_pipeline_resolves_numeric_computed_object_property_calls() {
+        let source = r#"const obj = {};
+obj[0] = function zero() {};
+obj[0]();
+"#;
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let resolved = resolved_target_ids_by_site(targets);
+        let site = site_id_for_span(source, &sites, "obj[0]()");
+        let target = function_id_for_span(source, &db, "function zero() {}");
+
+        assert!(
+            resolved.contains(&(site, target)),
+            "expected numeric computed object call to resolve zero; got {resolved:?}"
+        );
+    }
+
+    #[test]
     fn real_ts_pipeline_invokes_getter_returned_callable_with_call_arguments() {
         let source = r#"class A {
     get ["cb"]() {
@@ -6580,6 +6627,71 @@ a["cb"](function target() {});
             resolved.contains(&(inner_site, target)),
             "expected getter-returned callable to invoke outer argument; got {resolved:?}"
         );
+    }
+
+    #[test]
+    fn real_ts_pipeline_preserves_getter_receiver_side_effects_before_returned_call() {
+        let source = r#"class A {
+    get ["cb"]() {
+        this.prep = function target() {};
+        return function inner() {};
+    }
+}
+const a = new A();
+a["cb"]();
+a.prep();
+"#;
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let resolved = resolved_target_ids_by_site(targets);
+        let site = site_id_for_span(source, &sites, "a.prep()");
+        let target = function_id_for_span(source, &db, "function target() {}");
+
+        assert!(
+            resolved.contains(&(site, target)),
+            "expected getter receiver side effects to be preserved; got {resolved:?}"
+        );
+    }
+
+    #[test]
+    fn real_ts_pipeline_merges_union_getter_receiver_side_effects() {
+        let source = r#"class A {
+    get ["a"]() {
+        return function left(x) {
+            this.left = x;
+        };
+    }
+    get ["b"]() {
+        return function right(x) {
+            this.right = x;
+        };
+    }
+}
+const obj = new A();
+obj[unknown ? "a" : "b"](function target() {});
+obj.left();
+obj.right();
+"#;
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let resolved = resolved_target_ids_by_site(targets);
+        let target = function_id_for_span(source, &db, "function target() {}");
+
+        for call in ["obj.left()", "obj.right()"] {
+            let site = site_id_for_span(source, &sites, call);
+            assert!(
+                resolved.contains(&(site, target)),
+                "expected union getter side effects to preserve {call}; got {resolved:?}"
+            );
+        }
     }
 
     #[test]
