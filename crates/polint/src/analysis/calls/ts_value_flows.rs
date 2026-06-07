@@ -2,10 +2,10 @@ use std::collections::BTreeMap;
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
-    Argument, ArrayExpressionElement, AssignmentTarget, BindingPattern, CallExpression, Class,
-    ClassElement, Expression, ForStatementLeft, FunctionBody, MethodDefinition,
-    MethodDefinitionKind, ObjectProperty, ObjectPropertyKind, Program, PropertyKey, Statement,
-    VariableDeclaration, VariableDeclarator,
+    Argument, ArrayExpressionElement, AssignmentTarget, BinaryOperator, BindingPattern,
+    CallExpression, Class, ClassElement, Expression, ForStatementLeft, FunctionBody,
+    MethodDefinition, MethodDefinitionKind, ObjectProperty, ObjectPropertyKind, Program,
+    PropertyKey, Statement, VariableDeclaration, VariableDeclarator,
 };
 use oxc_parser::Parser;
 use oxc_span::{GetSpan, SourceType};
@@ -758,6 +758,12 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
             }
             if let Some(name) = binding_identifier_name(&declarator.id)
                 && let Some(init) = &declarator.init
+                && let Some(value) = self.constant_string_from_expression(init, env)
+            {
+                env.string_bindings.insert(name, value);
+            }
+            if let Some(name) = binding_identifier_name(&declarator.id)
+                && let Some(init) = &declarator.init
                 && let Expression::CallExpression(call) = init
                 && let Some(bound_targets) = self.bound_function_targets_from_bind_call(call, env)
             {
@@ -944,14 +950,15 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
             return;
         }
 
-        let Some((object_name, property)) = assignment_static_member_name(&assignment.left) else {
+        let Some((object_name, property)) = self.assignment_member_name(&assignment.left, env)
+        else {
             return;
         };
-        let property = property.to_string();
         let callable_targets = self
             .callable_targets_from_expression(&assignment.right, env)
             .all_targets();
         let nested_object = self.object_targets_from_expression(&assignment.right, env);
+        let nested_collection = self.collection_targets_from_expression(&assignment.right, env);
 
         if let Some(object) = env.objects.get_mut(object_name) {
             for target in &callable_targets {
@@ -959,6 +966,9 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
             }
             if let Some(nested_object) = nested_object.clone() {
                 object.add_object_property(property.clone(), nested_object);
+            }
+            if let Some(nested_collection) = nested_collection.clone() {
+                object.add_collection_property(property.clone(), nested_collection);
             }
         }
 
@@ -972,12 +982,58 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                 if let Some(nested_object) = nested_object {
                     class
                         .static_object
-                        .add_object_property(property, nested_object);
+                        .add_object_property(property.clone(), nested_object);
+                }
+                if let Some(nested_collection) = nested_collection {
+                    class
+                        .static_object
+                        .add_collection_property(property, nested_collection);
                 }
             }
             if let Some(statics) = self.class_static_targets(object_name) {
                 env.objects.insert(object_name.to_string(), statics);
             }
+        }
+    }
+
+    fn assignment_member_name(
+        &self,
+        target: &'ast AssignmentTarget<'ast>,
+        env: &FlowEnv,
+    ) -> Option<(&'ast str, String)> {
+        match target {
+            AssignmentTarget::StaticMemberExpression(member) => {
+                let object = expression_identifier(&member.object)?;
+                Some((object, member.property.name.to_string()))
+            }
+            AssignmentTarget::ComputedMemberExpression(member) => {
+                let object = expression_identifier(&member.object)?;
+                let property = self.constant_string_from_expression(&member.expression, env)?;
+                Some((object, property))
+            }
+            _ => None,
+        }
+    }
+
+    fn constant_string_from_expression(
+        &self,
+        expression: &'ast Expression<'ast>,
+        env: &FlowEnv,
+    ) -> Option<String> {
+        match expression {
+            Expression::StringLiteral(literal) => Some(literal.value.to_string()),
+            Expression::Identifier(identifier) => {
+                env.string_bindings.get(identifier.name.as_str()).cloned()
+            }
+            Expression::BinaryExpression(binary) if binary.operator == BinaryOperator::Addition => {
+                let left = self.constant_string_from_expression(&binary.left, env)?;
+                let right = self.constant_string_from_expression(&binary.right, env)?;
+                Some(format!("{left}{right}"))
+            }
+            Expression::ParenthesizedExpression(expression) => {
+                self.constant_string_from_expression(&expression.expression, env)
+            }
+            _ => None,
         }
     }
 
@@ -1018,6 +1074,7 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
         env: &mut FlowEnv,
     ) {
         self.collect_inline_callee_value_flows(call, env);
+        self.collect_native_object_call(call, env);
 
         if let Some((source, method)) = self.promise_method_source(call, env) {
             self.collect_promise_handler_flows(call, method, &source, env);
@@ -1192,8 +1249,7 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
             );
         }
         if let Expression::ComputedMemberExpression(member) = &call.callee
-            && let Some(source) =
-                expression_identifier(&member.object).and_then(|name| env.bindings.get(name))
+            && let Some(source) = self.collection_targets_from_expression(&member.object, env)
             && let Some(index) = numeric_index(&member.expression)
         {
             let binding = callee_text(&call.callee).unwrap_or_else(|| "indexed".to_string());
@@ -1203,6 +1259,86 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                 &binding,
                 Some(source.value_at(index).all_targets()),
             );
+        }
+    }
+
+    fn collect_native_object_call(&mut self, call: &'ast CallExpression<'ast>, env: &mut FlowEnv) {
+        match callee_text(&call.callee).as_deref() {
+            Some("Object.assign") => {
+                let Some(target_name) = call
+                    .arguments
+                    .first()
+                    .and_then(argument_expression)
+                    .and_then(expression_identifier)
+                else {
+                    return;
+                };
+                let mut merged = ObjectTargets::default();
+                for source in call
+                    .arguments
+                    .iter()
+                    .skip(1)
+                    .filter_map(argument_expression)
+                {
+                    if let Some(targets) = self.object_targets_from_expression(source, env) {
+                        merged.merge(targets);
+                    }
+                }
+                if !merged.is_empty()
+                    && let Some(target) = env.objects.get_mut(target_name)
+                {
+                    target.merge(merged);
+                }
+            }
+            Some("Object.defineProperty") => {
+                let Some(target_name) = call
+                    .arguments
+                    .first()
+                    .and_then(argument_expression)
+                    .and_then(expression_identifier)
+                else {
+                    return;
+                };
+                let Some(property) = call
+                    .arguments
+                    .get(1)
+                    .and_then(argument_expression)
+                    .and_then(|expression| self.constant_string_from_expression(expression, env))
+                else {
+                    return;
+                };
+                let descriptor = call
+                    .arguments
+                    .get(2)
+                    .and_then(argument_expression)
+                    .and_then(|expression| self.object_targets_from_expression(expression, env));
+                if let (Some(target), Some(descriptor)) =
+                    (env.objects.get_mut(target_name), descriptor)
+                {
+                    copy_descriptor_value_to_property(target, property, &descriptor);
+                }
+            }
+            Some("Object.defineProperties") => {
+                let Some(target_name) = call
+                    .arguments
+                    .first()
+                    .and_then(argument_expression)
+                    .and_then(expression_identifier)
+                else {
+                    return;
+                };
+                let descriptors = call
+                    .arguments
+                    .get(1)
+                    .and_then(argument_expression)
+                    .and_then(|expression| self.object_targets_from_expression(expression, env));
+                if let (Some(target), Some(descriptors)) =
+                    (env.objects.get_mut(target_name), descriptors)
+                {
+                    target.merge(descriptors);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1935,7 +2071,9 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
     ) -> Option<CollectionTargets> {
         let init = declarator.init.as_ref()?;
         match init {
-            Expression::ArrayExpression(array) => Some(self.array_literal_targets(array)),
+            Expression::ArrayExpression(array) => {
+                Some(self.array_literal_targets(array, Some(env)))
+            }
             Expression::NewExpression(expression) => {
                 let name = callee_identifier(&expression.callee)?;
                 match name {
@@ -1954,35 +2092,7 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                     _ => None,
                 }
             }
-            Expression::CallExpression(call) => {
-                if callee_text(&call.callee).as_deref() == Some("Array.from") {
-                    self.array_from_targets(call, env)
-                } else if let Some((collection_name, method)) = static_member_call(&call.callee) {
-                    let source = env.bindings.get(collection_name)?;
-                    match method {
-                        "values" | "slice" | "splice" | "filter" | "map" | "flatMap" | "flat"
-                        | "concat" => Some(CollectionTargets {
-                            keys: Vec::new(),
-                            values: source.values.clone(),
-                            object_values: source.object_values.clone(),
-                        }),
-                        "keys" => Some(CollectionTargets {
-                            keys: Vec::new(),
-                            values: source.keys_or_values(),
-                            object_values: Vec::new(),
-                        }),
-                        "entries" => Some(source.clone()),
-                        "pop" | "at" | "find" => Some(CollectionTargets {
-                            keys: Vec::new(),
-                            values: source.values.clone(),
-                            object_values: source.object_values.clone(),
-                        }),
-                        _ => None,
-                    }
-                } else {
-                    None
-                }
-            }
+            Expression::CallExpression(call) => self.collection_targets_from_call(call, env),
             _ => None,
         }
     }
@@ -2042,20 +2152,67 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
             Expression::Identifier(identifier) => {
                 env.bindings.get(identifier.name.as_str()).cloned()
             }
-            Expression::ArrayExpression(array) => Some(self.array_literal_targets(array)),
+            Expression::ArrayExpression(array) => {
+                Some(self.array_literal_targets(array, Some(env)))
+            }
             Expression::ComputedMemberExpression(member) => {
-                let source = expression_identifier(&member.object)
-                    .and_then(|name| env.bindings.get(name))?;
+                let source = self.collection_targets_from_expression(&member.object, env)?;
                 let index = numeric_index(&member.expression)?;
                 Some(source.value_at(index))
+            }
+            Expression::StaticMemberExpression(member) => {
+                let object = self.object_targets_from_expression(&member.object, env)?;
+                object
+                    .collection_properties
+                    .get(member.property.name.as_str())
+                    .cloned()
             }
             Expression::AwaitExpression(expression) => {
                 Some(self.fulfilled_targets_from_expression(&expression.argument, env))
             }
+            Expression::CallExpression(call) => self.collection_targets_from_call(call, env),
             Expression::ParenthesizedExpression(expression) => {
                 self.collection_targets_from_expression(&expression.expression, env)
             }
             _ => None,
+        }
+    }
+
+    fn collection_targets_from_call(
+        &self,
+        call: &'ast CallExpression<'ast>,
+        env: &FlowEnv,
+    ) -> Option<CollectionTargets> {
+        if callee_text(&call.callee).as_deref() == Some("Array.from") {
+            self.array_from_targets(call, env)
+        } else if callee_text(&call.callee).as_deref() == Some("Array.of") {
+            Some(self.array_of_targets(call, env))
+        } else if let Some((collection_name, method)) = static_member_call(&call.callee) {
+            let source = env.bindings.get(collection_name)?;
+            match method {
+                "concat" => Some(self.concat_targets(source, call, env)),
+                "values" | "slice" | "splice" | "filter" | "map" | "flatMap" | "flat" => {
+                    Some(CollectionTargets {
+                        keys: Vec::new(),
+                        values: source.values.clone(),
+                        object_values: source.object_values.clone(),
+                    })
+                }
+                "keys" => Some(CollectionTargets {
+                    keys: Vec::new(),
+                    values: source.keys_or_values(),
+                    object_values: Vec::new(),
+                }),
+                "entries" => Some(source.clone()),
+                "pop" | "at" | "find" => Some(CollectionTargets {
+                    keys: Vec::new(),
+                    values: source.values.clone(),
+                    object_values: source.object_values.clone(),
+                }),
+                _ => None,
+            }
+        } else {
+            None
         }
     }
 
@@ -2073,8 +2230,7 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                 Some(self.object_literal_targets(object, Some(env)))
             }
             Expression::ComputedMemberExpression(member) => {
-                let source = expression_identifier(&member.object)
-                    .and_then(|name| env.bindings.get(name))?;
+                let source = self.collection_targets_from_expression(&member.object, env)?;
                 let index = numeric_index(&member.expression)?;
                 source.object_at(index)
             }
@@ -2107,6 +2263,31 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
         call: &'ast CallExpression<'ast>,
         env: &FlowEnv,
     ) -> Option<ObjectTargets> {
+        match callee_text(&call.callee).as_deref() {
+            Some("Object.create") => return Some(ObjectTargets::default()),
+            Some("Object.getOwnPropertyDescriptor") => {
+                let source = call
+                    .arguments
+                    .first()
+                    .and_then(argument_expression)
+                    .and_then(|expression| self.object_targets_from_expression(expression, env))?;
+                let property = call
+                    .arguments
+                    .get(1)
+                    .and_then(argument_expression)
+                    .and_then(|expression| self.constant_string_from_expression(expression, env))?;
+                return Some(descriptor_for_property(&source, &property));
+            }
+            Some("Object.getOwnPropertyDescriptors") => {
+                return call
+                    .arguments
+                    .first()
+                    .and_then(argument_expression)
+                    .and_then(|expression| self.object_targets_from_expression(expression, env));
+            }
+            _ => {}
+        }
+
         if let Some((iterator_name, "next")) = static_member_call(&call.callee)
             && let Some(values) = env.async_iterators.get(iterator_name)
         {
@@ -2835,6 +3016,17 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                 object_values: Vec::new(),
             };
         }
+        if let Expression::ComputedMemberExpression(member) = expression
+            && let Some(object) = self.object_targets_from_expression(&member.object, env)
+            && let Some(property) = self.constant_string_from_expression(&member.expression, env)
+            && let Some(targets) = object.properties.get(&property)
+        {
+            return CollectionTargets {
+                keys: Vec::new(),
+                values: targets.clone(),
+                object_values: Vec::new(),
+            };
+        }
         self.collection_targets_from_expression(expression, env)
             .unwrap_or_default()
     }
@@ -2906,13 +3098,64 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
     fn array_literal_targets(
         &self,
         array: &'ast oxc_ast::ast::ArrayExpression<'ast>,
+        env: Option<&FlowEnv>,
     ) -> CollectionTargets {
         let mut targets = CollectionTargets::default();
         for element in &array.elements {
-            if let Some(function) = array_element_expression(element)
-                .and_then(|expression| self.function_for_expression(expression))
-            {
+            let Some(expression) = array_element_expression(element) else {
+                continue;
+            };
+            if let Some(function) = self.function_for_expression(expression) {
                 targets.values.push(function.id);
+                continue;
+            }
+            if let Some(env) = env {
+                if let Some(object) = self.object_targets_from_expression(expression, env) {
+                    targets.object_values.push(object);
+                    continue;
+                }
+                if let Some(collection) = self.collection_targets_from_expression(expression, env) {
+                    targets.append_ordered(collection);
+                }
+            }
+        }
+        targets
+    }
+
+    fn array_of_targets(
+        &self,
+        call: &'ast CallExpression<'ast>,
+        env: &FlowEnv,
+    ) -> CollectionTargets {
+        let mut targets = CollectionTargets::default();
+        for argument in call.arguments.iter().filter_map(argument_expression) {
+            targets.append_ordered(
+                self.targets_from_argument_expression(argument, env)
+                    .unwrap_or_default(),
+            );
+        }
+        targets
+    }
+
+    fn concat_targets(
+        &self,
+        source: &CollectionTargets,
+        call: &'ast CallExpression<'ast>,
+        env: &FlowEnv,
+    ) -> CollectionTargets {
+        let mut targets = CollectionTargets {
+            keys: Vec::new(),
+            values: source.values.clone(),
+            object_values: source.object_values.clone(),
+        };
+        for argument in call.arguments.iter().filter_map(argument_expression) {
+            if let Some(collection) = self.collection_targets_from_expression(argument, env) {
+                targets.append_ordered(collection);
+            } else {
+                targets.append_ordered(
+                    self.targets_from_argument_expression(argument, env)
+                        .unwrap_or_default(),
+                );
             }
         }
         targets
@@ -2942,6 +3185,11 @@ impl<'db, 'ast> TsValueFlowCollector<'db, 'ast> {
                 } else {
                     targets.add_object_property(name, nested);
                 }
+            } else if let Some(env) = env
+                && let Some(collection) =
+                    self.collection_targets_from_expression(&property.value, env)
+            {
+                targets.add_collection_property(name, collection);
             } else if matches!(&property.value, Expression::ThisExpression(_))
                 && let Some(env) = env
             {
@@ -3226,6 +3474,7 @@ struct FlowEnv {
     bindings: BTreeMap<String, CollectionTargets>,
     bound_functions: BTreeMap<String, Vec<BoundFunctionTarget>>,
     objects: BTreeMap<String, ObjectTargets>,
+    string_bindings: BTreeMap<String, String>,
     promises: BTreeMap<String, PromiseTargets>,
     async_functions: BTreeMap<String, PromiseTargets>,
     async_generators: BTreeMap<String, CollectionTargets>,
@@ -3258,6 +3507,20 @@ impl CollectionTargets {
         self.keys.dedup();
         self.values.sort();
         self.values.dedup();
+    }
+
+    fn append_ordered(&mut self, other: Self) {
+        for key in other.keys {
+            if !self.keys.contains(&key) {
+                self.keys.push(key);
+            }
+        }
+        for value in other.values {
+            if !self.values.contains(&value) {
+                self.values.push(value);
+            }
+        }
+        self.object_values.extend(other.object_values);
     }
 
     fn is_empty(&self) -> bool {
@@ -3314,11 +3577,14 @@ impl CollectionTargets {
 struct ObjectTargets {
     properties: BTreeMap<String, Vec<FunctionId>>,
     object_properties: BTreeMap<String, Box<ObjectTargets>>,
+    collection_properties: BTreeMap<String, CollectionTargets>,
 }
 
 impl ObjectTargets {
     fn is_empty(&self) -> bool {
-        self.properties.is_empty() && self.object_properties.is_empty()
+        self.properties.is_empty()
+            && self.object_properties.is_empty()
+            && self.collection_properties.is_empty()
     }
 
     fn add_property_target(&mut self, name: String, target: FunctionId) {
@@ -3332,6 +3598,10 @@ impl ObjectTargets {
         self.object_properties.insert(name, Box::new(targets));
     }
 
+    fn add_collection_property(&mut self, name: String, targets: CollectionTargets) {
+        self.collection_properties.insert(name, targets);
+    }
+
     fn merge(&mut self, other: Self) {
         for (name, mut targets) in other.properties {
             let slot = self.properties.entry(name).or_default();
@@ -3341,6 +3611,9 @@ impl ObjectTargets {
         }
         for (name, targets) in other.object_properties {
             self.object_properties.entry(name).or_insert(targets);
+        }
+        for (name, targets) in other.collection_properties {
+            self.collection_properties.entry(name).or_insert(targets);
         }
     }
 
@@ -3359,7 +3632,47 @@ impl ObjectTargets {
                 .filter(|(name, _)| !used.contains(name))
                 .map(|(name, targets)| (name.clone(), targets.clone()))
                 .collect(),
+            collection_properties: self
+                .collection_properties
+                .iter()
+                .filter(|(name, _)| !used.contains(name))
+                .map(|(name, targets)| (name.clone(), targets.clone()))
+                .collect(),
         }
+    }
+}
+
+fn descriptor_for_property(source: &ObjectTargets, property: &str) -> ObjectTargets {
+    let mut descriptor = ObjectTargets::default();
+    if let Some(targets) = source.properties.get(property) {
+        for target in targets {
+            descriptor.add_property_target("value".to_string(), *target);
+        }
+    }
+    if let Some(targets) = source.object_properties.get(property) {
+        descriptor.add_object_property("value".to_string(), (**targets).clone());
+    }
+    if let Some(targets) = source.collection_properties.get(property) {
+        descriptor.add_collection_property("value".to_string(), targets.clone());
+    }
+    descriptor
+}
+
+fn copy_descriptor_value_to_property(
+    target: &mut ObjectTargets,
+    property: String,
+    descriptor: &ObjectTargets,
+) {
+    if let Some(targets) = descriptor.properties.get("value") {
+        for target_id in targets {
+            target.add_property_target(property.clone(), *target_id);
+        }
+    }
+    if let Some(targets) = descriptor.object_properties.get("value") {
+        target.add_object_property(property.clone(), (**targets).clone());
+    }
+    if let Some(targets) = descriptor.collection_properties.get("value") {
+        target.add_collection_property(property, targets.clone());
     }
 }
 
@@ -3613,18 +3926,6 @@ fn this_assignment_property(target: &AssignmentTarget<'_>) -> Option<String> {
             if matches!(&member.object, Expression::ThisExpression(_)) =>
         {
             Some(member.property.name.to_string())
-        }
-        _ => None,
-    }
-}
-
-fn assignment_static_member_name<'a>(
-    target: &'a AssignmentTarget<'a>,
-) -> Option<(&'a str, &'a str)> {
-    match target {
-        AssignmentTarget::StaticMemberExpression(member) => {
-            let object = expression_identifier(&member.object)?;
-            Some((object, member.property.name.as_str()))
         }
         _ => None,
     }
@@ -5329,6 +5630,99 @@ mod tests {
 
         for (call, target) in [("k1.a2()", a2), ("k1.a4()", a4), ("k1.a4().a2()", a2)] {
             let site = site_id_for_span(source, &sites, call);
+            assert!(
+                resolved.contains(&(site, target)),
+                "expected real TS pipeline to resolve {call} to {target:?}; got {resolved:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn real_ts_pipeline_resolves_native_object_array_and_computed_property_flows() {
+        let source = r#"const p = "p";
+const y = { f: function yf() {} };
+const x1 = Object.create(null);
+x1[p] = y;
+x1.p.f();
+const a = { foo: function fooFn() {} };
+const b = { bar: function barFn() {}, baz: function bazFn() {} };
+const x2 = {};
+Object.assign(x2, a, b);
+x2.foo();
+x2.bar();
+x2.baz();
+const x3 = { val: function valFn() {}, otherVal: { t: function tFn() {} } };
+const x4 = {};
+const v = "val";
+const desc = Object.getOwnPropertyDescriptor(x3, v);
+Object.defineProperty(x4, p, desc);
+x4.p();
+Object.defineProperties(x4, Object.getOwnPropertyDescriptors(x3));
+x4.val();
+x4.otherVal.t();
+function Foo() {}
+const bound = Foo.bind();
+const obj = {};
+obj["bo" + "und"] = bound;
+obj.bound();
+const arr1 = Array.from([function a1() {}, function a2() {}]);
+const x5 = {};
+x5["arr" + "1"] = arr1;
+x5.arr1[0]();
+x5.arr1[1]();
+const arr2 = Array.of(function of1() {}, function of2() {});
+x5["arr" + "2"] = arr2;
+x5.arr2[0]();
+x5.arr2[1]();
+const t1 = [function a3() {}];
+const t2 = [function a4() {}];
+const arr3 = t2.concat(t1);
+x5["arr" + "3"] = arr3;
+x5.arr3[0]();
+x5.arr3[1]();
+const t3 = [t1, t2];
+x5["arr" + "4"] = t3.flat();
+x5.arr4[0]();
+x5.arr4[1]();
+const t4 = [{ p1: function p1Fn() {} }, { p2: "foo" }];
+const arr5 = t4.filter(entry => "p1" in entry);
+x5["arr" + "5"] = arr5;
+x5.arr5[0].p1();
+const t5 = [function slicedFn() {}, "foo"];
+const arr6 = t5.slice(0, 1);
+x5["arr" + "6"] = arr6;
+x5.arr6[0]();
+"#;
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let resolved = resolved_target_ids_by_site(targets);
+
+        for (call, target) in [
+            ("x1.p.f()", "function yf() {}"),
+            ("x2.foo()", "function fooFn() {}"),
+            ("x2.bar()", "function barFn() {}"),
+            ("x2.baz()", "function bazFn() {}"),
+            ("x4.p()", "function valFn() {}"),
+            ("x4.val()", "function valFn() {}"),
+            ("x4.otherVal.t()", "function tFn() {}"),
+            ("obj.bound()", "function Foo() {}"),
+            ("x5.arr1[0]()", "function a1() {}"),
+            ("x5.arr1[1]()", "function a2() {}"),
+            ("x5.arr2[0]()", "function of1() {}"),
+            ("x5.arr2[1]()", "function of2() {}"),
+            ("x5.arr3[0]()", "function a4() {}"),
+            ("x5.arr3[1]()", "function a3() {}"),
+            ("x5.arr4[0]()", "function a3() {}"),
+            ("x5.arr4[1]()", "function a4() {}"),
+            ("x5.arr5[0].p1()", "function p1Fn() {}"),
+            ("x5.arr6[0]()", "function slicedFn() {}"),
+        ] {
+            let site = site_id_for_span(source, &sites, call);
+            let target = function_id_for_span(source, &db, target);
             assert!(
                 resolved.contains(&(site, target)),
                 "expected real TS pipeline to resolve {call} to {target:?}; got {resolved:?}"
