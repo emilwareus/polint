@@ -233,7 +233,10 @@ function invoke() {
 ((f))();
 (f());
 ((new f()));
+g(h());
 function f() {}
+function g(x) {}
+function h() {}
 "#;
         let file = fixture_file(source);
 
@@ -263,6 +266,16 @@ function f() {}
                 "missing span {expected:?} in {span_texts:?}; spans: {spans:?}"
             );
         }
+        // A call passed as a call argument keeps its own span: the inner `h()`
+        // must not absorb the enclosing `g(...)` argument-list parentheses.
+        assert!(
+            span_texts.contains("h()"),
+            "inner call `h()` should keep its own span, not `(h())`; spans: {spans:?}"
+        );
+        assert!(
+            span_texts.contains("g(h())"),
+            "outer call `g(h())` span missing; spans: {spans:?}"
+        );
     }
 
     fn fixture_file(source: &str) -> &'static crate::core::SourceFile {

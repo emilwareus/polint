@@ -104,6 +104,17 @@ fn expand_single_parenthesized_expression(source: &str, span: OxcSpan) -> OxcSpa
         return span;
     }
 
+    // Only expand into a `(` that is a grouping wrapper around this expression,
+    // not the argument list of an enclosing call/index. In `g(f())` the `(`
+    // preceding `f()` belongs to `g(...)`, so `f()` must keep its own span
+    // rather than rendering as `(f())`. A grouping `(` is not preceded by a
+    // callee token (identifier / `)` / `]`).
+    if let Some(before_open) = previous_non_whitespace(bytes, open)
+        && is_callee_end_byte(bytes[before_open])
+    {
+        return span;
+    }
+
     let Some(close) = next_non_whitespace(bytes, end) else {
         return span;
     };
@@ -112,6 +123,12 @@ fn expand_single_parenthesized_expression(source: &str, span: OxcSpan) -> OxcSpa
     }
 
     OxcSpan::new(open as u32, close as u32 + 1)
+}
+
+/// Whether `byte` can end a callee expression, meaning a following `(` opens a
+/// call/index argument list rather than a grouping parenthesis.
+fn is_callee_end_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$' | b')' | b']')
 }
 
 fn previous_non_whitespace(bytes: &[u8], before: usize) -> Option<usize> {

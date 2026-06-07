@@ -215,6 +215,28 @@ Gain: +4 TP, −4 FN, no FP change. `tests/micro/client5.json` **0 → 4 TP**.
 Cumulative over baseline (iterations 35–37): **+27 TP, −27 FN, +5 FP**, F1
 **57.48% → 58.68%**.
 
+| 38 | Fix call-site span over-expansion for nested call arguments | 874 | 602 | 605 | 59.21% | 59.09% | 59.15% | 127654 ms | `34aa3a5a87549b8c` |
+
+Iteration 38 fixes a real span-correctness bug. The call-site span normalizer
+(`crates/polint/src/ts/spans.rs`) expands a call's span to include an adjacent
+grouping `(...)` so `(f())` renders as Jelly expects. But the byte heuristic
+could not distinguish a grouping wrapper from an enclosing call's argument list:
+for `console.log(cube(3))` it absorbed `console.log`'s parentheses, rendering the
+inner `cube(3)` call site as `(cube(3))`. The fix declines to expand when the
+candidate `(` is preceded by a callee token (identifier / `)` / `]`), i.e. it is
+a call/index argument list rather than a grouping paren.
+
+This is a **double win** — each corrected span turns a false-positive (wrong
+span) and its paired false-negative (the oracle's correct span) into a true
+positive: **+7 TP, −7 FP, −7 FN**, lifting **both** precision (58.74% → 59.21%)
+and recall (58.62% → 59.09%). `tests/micro/import1.json` closes completely
+(6/4/4 → **10/0/0**) and `tests/helloworld/app.json` improves (+3 TP, −3 FP).
+A regression test (`g(h())` keeps the inner `h()` span) locks it in, and
+iteration-29's intended `(f())`/`((f))()`/`(new f())` spans still pass.
+
+Cumulative over baseline (iterations 35–38): **+34 TP, −34 FN, −2 FP**, F1
+**57.48% → 59.15%**.
+
 Remaining module-modeling work (next iterations):
 
 1. **Cross-file function-return summaries** — the dominant remaining `helloworld`
