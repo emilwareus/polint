@@ -3262,6 +3262,29 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         self.module_summaries.get(target)
     }
 
+    /// TypeScript/Babel emit interop wrappers around `require(...)` that pass the
+    /// module value through (`__importDefault`, `__importStar`,
+    /// `_interopRequireDefault`, `_interopRequireWildcard`). For call-graph
+    /// purposes they are identity on the module's export shape, so return the
+    /// wrapped argument expression for the caller to evaluate.
+    fn commonjs_interop_argument(
+        &self,
+        call: &'ast CallExpression<'ast>,
+    ) -> Option<&'ast Expression<'ast>> {
+        let name = callee_identifier(&call.callee)?;
+        if matches!(
+            name,
+            "__importDefault"
+                | "__importStar"
+                | "_interopRequireDefault"
+                | "_interopRequireWildcard"
+        ) {
+            call.arguments.first().and_then(argument_expression)
+        } else {
+            None
+        }
+    }
+
     /// Extract the static string specifier of a `require("x")` call, if present.
     fn require_specifier(&self, call: &'ast CallExpression<'ast>) -> Option<&'ast str> {
         let is_require = matches!(&call.callee, Expression::Identifier(identifier) if identifier.name == "require");
@@ -3283,6 +3306,9 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             && !summary.callables.is_empty()
         {
             return Some(summary.callables.clone());
+        }
+        if let Some(inner) = self.commonjs_interop_argument(call) {
+            return self.collection_targets_from_expression(inner, env);
         }
         if callee_text(&call.callee).as_deref() == Some("Array.from") {
             self.array_from_targets(call, env)
@@ -3368,6 +3394,9 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             && !summary.object.is_empty()
         {
             return Some(summary.object.clone());
+        }
+        if let Some(inner) = self.commonjs_interop_argument(call) {
+            return self.object_targets_from_expression(inner, env);
         }
         match callee_text(&call.callee).as_deref() {
             Some("Object.create") => return Some(ObjectTargets::default()),
@@ -7564,6 +7593,47 @@ obj.right();
                 "expected ESM import resolution to reach `{expected}`; got {resolved_target_spans:?}"
             );
         }
+    }
+
+    #[test]
+    fn real_kernel_resolves_typescript_commonjs_interop_default_import() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("lib5a.js"),
+            "Object.defineProperty(exports, \"__esModule\", { value: true });\nexports.default = function foo() {};\n",
+        )
+        .unwrap();
+        // The standard TypeScript-emitted CommonJS default-import shape.
+        std::fs::write(
+            root.join("client5.js"),
+            "var __importDefault = (this && this.__importDefault) || function (mod) {\n    return (mod && mod.__esModule) ? mod : { \"default\": mod };\n};\nconst lib5a = __importDefault(require('./lib5a'));\nlib5a.default();\n",
+        )
+        .unwrap();
+
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        let resolved_target_spans: std::collections::BTreeSet<String> = db
+            .call_targets()
+            .iter()
+            .filter(|target| target.status == CallTargetStatus::Resolved)
+            .filter_map(|target| target.target_function)
+            .filter_map(|function_id| db.functions().iter().find(|f| f.id == function_id))
+            .filter_map(|function| {
+                let file = db.file(function.file)?;
+                Some(
+                    file.source[function.span.start_byte as usize..function.span.end_byte as usize]
+                        .to_string(),
+                )
+            })
+            .collect();
+
+        assert!(
+            resolved_target_spans
+                .iter()
+                .any(|span| span.contains("function foo(")),
+            "expected __importDefault interop to resolve lib5a.default() to foo; got {resolved_target_spans:?}"
+        );
     }
 
     fn db_with_file(source: &str) -> AnalysisDb {

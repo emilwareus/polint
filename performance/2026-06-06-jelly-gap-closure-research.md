@@ -201,6 +201,20 @@ Gain: +12 TP, −12 FN, +4 FP. The wins are the ESM micro fixtures:
 (closed)**, plus several `client*` cases. Combined, iterations 35–36 moved the
 suite from **840 / 604 / 639 (F1 57.48%)** to **863 / 609 / 616 (F1 58.49%)**.
 
+| 37 | TypeScript/Babel CommonJS interop-helper passthrough | 867 | 609 | 612 | 58.74% | 58.62% | 58.68% | 94123 ms | `c0cf9ebfa1b24946` |
+
+Iteration 37 models the interop wrappers TypeScript/Babel emit around
+`require(...)`: `__importDefault`, `__importStar`, `_interopRequireDefault`,
+`_interopRequireWildcard`. For call-graph purposes these are identity on the
+module's export shape, so `object_targets_from_call` /
+`collection_targets_from_call` now evaluate the wrapped argument directly. This
+closes the common transpiled-CJS default-import shape
+(`const x = __importDefault(require('./m')); x.default()`).
+
+Gain: +4 TP, −4 FN, no FP change. `tests/micro/client5.json` **0 → 4 TP**.
+Cumulative over baseline (iterations 35–37): **+27 TP, −27 FN, +5 FP**, F1
+**57.48% → 58.68%**.
+
 Remaining module-modeling work (next iterations):
 
 1. **Cross-file function-return summaries** — the dominant remaining `helloworld`
@@ -210,7 +224,7 @@ Remaining module-modeling work (next iterations):
 3. **`client*` / namespace method calls** — namespace-object method resolution
    and class-export instantiation.
 
-### Iteration 37 attempt: cross-file function-return summaries (reverted — no benchmark movement)
+### Exploration: cross-file function-return summaries (reverted — no benchmark movement)
 
 Implemented and measured, then reverted. A per-function return summary (callable
 values + returned object shape) was harvested for every function during the same
