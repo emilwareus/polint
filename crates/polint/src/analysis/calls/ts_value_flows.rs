@@ -75,6 +75,7 @@ pub(crate) fn resolve_ts_value_flow_targets(
             function_declarations: BTreeMap::new(),
             function_flows_by_id: BTreeMap::new(),
             classes: BTreeMap::new(),
+            class_expressions: Vec::new(),
             exports: ModuleExportSummary::default(),
             caller_override: None,
             current_super: None,
@@ -115,6 +116,11 @@ struct TsValueFlowCollector<'db, 'ast, 'env> {
     function_declarations: BTreeMap<String, FunctionFlow<'db, 'ast>>,
     function_flows_by_id: BTreeMap<FunctionId, FunctionFlow<'db, 'ast>>,
     classes: BTreeMap<String, ClassTargets>,
+    /// Class **expressions** (named, anonymous, or returned from a function),
+    /// each keyed by a span-derived synthetic name registered in `classes`.
+    /// Their method/constructor/static bodies are walked with `this`/`super`
+    /// bound just like top-level class declarations.
+    class_expressions: Vec<(String, &'ast Class<'ast>)>,
     /// This file's own exports, accumulated while walking module-level
     /// statements (only meaningful during the summary pre-pass). During the
     /// summary pre-pass `sites` is empty, so the `emit_*` helpers naturally
@@ -291,6 +297,7 @@ fn compute_module_export_summaries(
                 function_declarations: BTreeMap::new(),
                 function_flows_by_id: BTreeMap::new(),
                 classes: BTreeMap::new(),
+                class_expressions: Vec::new(),
                 exports: ModuleExportSummary::default(),
                 caller_override: None,
                 current_super: None,
@@ -341,6 +348,23 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         program: &'ast Program<'ast>,
         module_env: &FlowEnv,
     ) {
+        // Seed top-level function declarations as callable bindings so direct
+        // calls to them inside class bodies (e.g. `f1()` in a constructor or
+        // static block) resolve and are attributed via `caller_override` to the
+        // class node (Jelly attributes constructor/field/static-block calls to
+        // the class). `function` declarations are otherwise absent from
+        // `env.bindings` (unlike `const f = () => …`).
+        let mut class_env = module_env.clone();
+        for (name, flow) in &self.function_declarations {
+            class_env
+                .bindings
+                .entry(name.clone())
+                .or_insert_with(|| CollectionTargets {
+                    keys: Vec::new(),
+                    values: vec![flow.function.id],
+                    object_values: Vec::new(),
+                });
+        }
         for statement in &program.body {
             let Statement::ClassDeclaration(class) = statement else {
                 continue;
@@ -348,7 +372,12 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             let Some(name) = class.id.as_ref().map(|id| id.name.to_string()) else {
                 continue;
             };
-            self.collect_class_method_bodies(class, &name, module_env);
+            self.collect_class_method_bodies(class, &name, &class_env);
+        }
+        // Class expressions (named, anonymous, or returned from a function) are
+        // walked the same way, keyed by their span-derived synthetic name.
+        for (key, class) in self.class_expressions.clone() {
+            self.collect_class_method_bodies(class, &key, &class_env);
         }
     }
 
@@ -578,6 +607,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 }
             }
             Expression::ClassExpression(class) => {
+                self.register_class_expression(class);
                 self.collect_expression_function_flows_from_class(class);
             }
             Expression::StaticMemberExpression(member) => {
@@ -762,6 +792,57 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         }
     }
 
+    /// Register a class **expression** under a span-derived synthetic key so its
+    /// instance/static targets are resolvable and its bodies get walked with
+    /// `this`/`super` bound (see `collect_class_body_call_flows`). Keyed by span
+    /// (not by the class's own name) to avoid clobbering a same-named top-level
+    /// class declaration; `new`/return flow binds variables to this key in A3.
+    fn register_class_expression(&mut self, class: &'ast Class<'ast>) {
+        let key = class_expression_key(class);
+        if self.classes.contains_key(&key) {
+            return;
+        }
+        let targets = self.class_targets(class);
+        self.classes.insert(key.clone(), targets);
+        self.class_expressions.push((key, class));
+    }
+
+    /// Resolve the class key a variable would hold for `var v = <expr>`, so a
+    /// class flowed through a variable (returned from a function, aliased, or a
+    /// direct class expression) resolves under `new v()` / `v.staticM()`.
+    fn class_key_from_expression(
+        &self,
+        expression: &'ast Expression<'ast>,
+        env: &FlowEnv,
+    ) -> Option<String> {
+        match expression {
+            Expression::ClassExpression(class) => Some(class_expression_key(class)),
+            Expression::ParenthesizedExpression(inner) => {
+                self.class_key_from_expression(&inner.expression, env)
+            }
+            Expression::Identifier(identifier) => {
+                let name = identifier.name.as_str();
+                env.class_bindings
+                    .get(name)
+                    .cloned()
+                    .or_else(|| self.classes.contains_key(name).then(|| name.to_string()))
+            }
+            Expression::CallExpression(call) => {
+                let name = callee_identifier(&call.callee)?;
+                let flow = self.function_declarations.get(name)?;
+                let returned = returned_expression_from_statements(&flow.body.statements)?;
+                match returned {
+                    Expression::ClassExpression(class) => Some(class_expression_key(class)),
+                    Expression::Identifier(_) | Expression::ParenthesizedExpression(_) => {
+                        self.class_key_from_expression(returned, env)
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
     fn class_targets(&self, class: &'ast Class<'ast>) -> ClassTargets {
         let mut targets = ClassTargets {
             super_name: class
@@ -769,6 +850,9 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 .as_ref()
                 .and_then(|super_class| expression_identifier(super_class))
                 .map(ToOwned::to_owned),
+            constructor: self
+                .function_for_span(class.span)
+                .map(|function| function.id),
             ..ClassTargets::default()
         };
         for element in &class.body.body {
@@ -790,6 +874,26 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                             );
                         }
                         continue;
+                    }
+                    // Jelly resolves instance properties flow-insensitively: a
+                    // `this.p = fn` in any non-static instance method flows to all
+                    // instances (e.g. super5's `c.www()` where `www` is assigned in
+                    // `m()`, never called). Harvest those assignments too.
+                    if !method.r#static
+                        && let Some(body) = method.value.body.as_deref()
+                    {
+                        let params = method
+                            .value
+                            .params
+                            .items
+                            .iter()
+                            .map(|param| param_pattern_from_binding(&param.pattern))
+                            .collect::<Vec<_>>();
+                        self.collect_constructor_assignments_from_statements(
+                            &body.statements,
+                            &params,
+                            &mut targets,
+                        );
                     }
                     let names = self.property_key_names(&method.key, method.computed, None);
                     if names.is_empty() {
@@ -1010,7 +1114,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         {
             object.merge(super_object);
         }
-        object.merge(class.instance_object.clone());
+        object.override_with(class.instance_object.clone());
         for assignment in &class.constructor_assignments {
             match assignment {
                 ConstructorAssignment::Param { property, index } => {
@@ -1046,7 +1150,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         {
             object.merge(super_object);
         }
-        object.merge(class.static_object.clone());
+        object.override_with(class.static_object.clone());
         for alias in &class.static_self_aliases {
             object.add_object_property(alias.clone(), object.clone());
         }
@@ -1111,6 +1215,18 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 if let Some(statics) = self.class_static_targets(&name) {
                     env.objects.insert(name, statics);
                 }
+            }
+            // Bind a variable to a class flowed through it (returned from a
+            // function, aliased, or a direct class expression) so `new v()` /
+            // `v.staticM()` resolve. Seed the static object for static calls.
+            if let Some(name) = binding_identifier_name(&declarator.id)
+                && let Some(init) = &declarator.init
+                && let Some(key) = self.class_key_from_expression(init, env)
+            {
+                if let Some(statics) = self.class_static_targets(&key) {
+                    env.objects.insert(name.clone(), statics);
+                }
+                env.class_bindings.insert(name, key);
             }
             if let Some(name) = binding_identifier_name(&declarator.id)
                 && let Some(targets) = self.targets_for_declarator_init(declarator, env)
@@ -1228,6 +1344,23 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 self.collect_call_expression(call, owner, env);
                 self.collect_call_callee_expression(&call.callee, owner, env);
                 for argument in &call.arguments {
+                    if let Some(expression) = argument_expression(argument) {
+                        self.collect_expression(expression, owner, env);
+                    }
+                }
+            }
+            Expression::NewExpression(new) => {
+                // `new v()` where `v` is a variable bound to a class flowed through
+                // it: emit the constructor edge (direct `new ClassName()` is already
+                // resolved by the direct/MIR path).
+                if let Some(name) = callee_identifier(&new.callee)
+                    && let Some(key) = env.class_bindings.get(name)
+                    && let Some(constructor) =
+                        self.classes.get(key).and_then(|class| class.constructor)
+                {
+                    self.emit_call_span_targets(owner, new.span, "new", Some(vec![constructor]));
+                }
+                for argument in &new.arguments {
                     if let Some(expression) = argument_expression(argument) {
                         self.collect_expression(expression, owner, env);
                     }
@@ -2702,11 +2835,17 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         flow: &FunctionFlow<'db, 'ast>,
         env: &mut FlowEnv,
     ) -> CollectionTargets {
-        if let Some(expression) = flow.expression_body {
+        // Calls in the invoked body belong to `flow.function`, not to a
+        // `caller_override` active in an enclosing constructor/field body.
+        let saved_override = self.caller_override.take();
+        let result = if let Some(expression) = flow.expression_body {
             self.collect_expression(expression, flow.function, env);
-            return self.callable_return_targets_from_expression(expression, env, 0);
-        }
-        self.collect_invocation_statements(&flow.body.statements, flow.function, env)
+            self.callable_return_targets_from_expression(expression, env, 0)
+        } else {
+            self.collect_invocation_statements(&flow.body.statements, flow.function, env)
+        };
+        self.caller_override = saved_override;
+        result
     }
 
     fn collect_invocation_statements(
@@ -3503,12 +3642,19 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             }
             Expression::NewExpression(expression) => {
                 let name = callee_identifier(&expression.callee)?;
+                // A variable may hold a class flowed through it (`var a = f(); new a()`);
+                // resolve the binding to its class key, else use the name directly.
+                let key = env
+                    .class_bindings
+                    .get(name)
+                    .map(String::as_str)
+                    .unwrap_or(name);
                 let arguments = expression
                     .arguments
                     .iter()
                     .filter_map(argument_expression)
                     .collect::<Vec<_>>();
-                self.class_instance_targets(name, &arguments, env)
+                self.class_instance_targets(key, &arguments, env)
             }
             Expression::CallExpression(call) => self.object_targets_from_call(call, env),
             Expression::StaticMemberExpression(member) => {
@@ -4189,6 +4335,12 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 bind_param_pattern(pattern, &targets, &mut env);
             }
         }
+        // Calls inside this nested body belong to `callback`, not to any
+        // `caller_override` active in the enclosing constructor/field body (e.g.
+        // super5's `super.m()` inside an IIFE arrow is attributed to the arrow,
+        // not the class node). `current_super` is intentionally preserved: an
+        // arrow lexically captures `super` from its enclosing method.
+        let saved_override = self.caller_override.take();
         match expression {
             Expression::ArrowFunctionExpression(function) => {
                 if let Some(expression) = function.get_expression() {
@@ -4208,6 +4360,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             }
             _ => {}
         }
+        self.caller_override = saved_override;
     }
 
     fn promise_method_result_targets(
@@ -4781,6 +4934,9 @@ struct FlowEnv {
     bindings: BTreeMap<String, CollectionTargets>,
     bound_functions: BTreeMap<String, Vec<BoundFunctionTarget>>,
     objects: BTreeMap<String, ObjectTargets>,
+    /// Variable name -> class key in `classes`, for classes flowed through a
+    /// variable (e.g. `var a = makeClass()` then `new a()` / `a.staticM()`).
+    class_bindings: BTreeMap<String, String>,
     string_bindings: BTreeMap<String, String>,
     bool_bindings: BTreeMap<String, bool>,
     string_arrays: BTreeMap<String, Vec<String>>,
@@ -4956,6 +5112,34 @@ impl ObjectTargets {
         }
     }
 
+    /// Merge `other` on top of `self`, with `other`'s keys **replacing** (not
+    /// unioning) `self`'s. Models prototype-chain shadowing: a subclass member
+    /// overrides the inherited member of the same name (`x.m()` resolves to the
+    /// child's `m`, not both child's and parent's).
+    fn override_with(&mut self, other: Self) {
+        for (name, mut targets) in other.properties {
+            targets.sort();
+            targets.dedup();
+            self.properties.insert(name, targets);
+        }
+        for (name, mut targets) in other.getter_properties {
+            targets.sort();
+            targets.dedup();
+            self.getter_properties.insert(name, targets);
+        }
+        for (name, mut targets) in other.setter_properties {
+            targets.sort();
+            targets.dedup();
+            self.setter_properties.insert(name, targets);
+        }
+        for (name, targets) in other.object_properties {
+            self.object_properties.insert(name, targets);
+        }
+        for (name, targets) in other.collection_properties {
+            self.collection_properties.insert(name, targets);
+        }
+    }
+
     fn without_properties(&self, used: &[String]) -> Self {
         let used = used.iter().collect::<std::collections::BTreeSet<_>>();
         Self {
@@ -5053,6 +5237,9 @@ struct ClassTargets {
     instance_self_aliases: Vec<String>,
     static_self_aliases: Vec<String>,
     super_name: Option<String>,
+    /// The class node (constructor-callable) `FunctionFact`, used to emit the
+    /// `new v()` -> constructor edge when the class is flowed through a variable.
+    constructor: Option<FunctionId>,
 }
 
 impl ClassTargets {
@@ -5603,6 +5790,12 @@ fn expression_identifier<'a>(expression: &'a Expression<'a>) -> Option<&'a str> 
         }
         _ => None,
     }
+}
+
+/// Span-derived synthetic key for a class expression. Unique per source location,
+/// so it never collides with a class declaration's name in the `classes` map.
+fn class_expression_key(class: &Class<'_>) -> String {
+    format!("@class@{}:{}", class.span.start, class.span.end)
 }
 
 fn numeric_index(expression: &Expression<'_>) -> Option<usize> {
@@ -7841,6 +8034,115 @@ new B();
                 resolve_for(site)
             );
         }
+    }
+
+    #[test]
+    fn real_ts_pipeline_resolves_class_returned_from_function() {
+        // super4/super5 shape: an anonymous/named `class extends A` returned from a
+        // function, instantiated through a variable. The class-expression bodies are
+        // walked with `this`/`super` bound, and `new a()` / `x.m()` / `a.s()` resolve
+        // through the returned-class binding.
+        let source = r#"class A {
+    constructor() {
+        this.created = () => { console.log("created"); };
+    }
+    m() {
+        this.late = () => { console.log("late"); };
+    }
+    static s() {
+        console.log("A.s");
+    }
+}
+
+function make() {
+    return class B extends A {
+        m() {
+            super.m();
+        }
+        static s() {
+            super.s();
+        }
+    };
+}
+
+var a = make();
+var x = new a();
+x.m();
+a.s();
+x.created();
+x.late();
+"#;
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+
+        let resolve_for = |needle: &str| -> Vec<String> {
+            let site = site_id_for_span(source, &sites, needle);
+            targets
+                .iter()
+                .filter(|t| t.site == site)
+                .filter_map(|t| t.target_function)
+                .filter_map(|id| db.functions().iter().find(|f| f.id == id))
+                .map(|f| source[f.span.start_byte as usize..f.span.end_byte as usize].to_string())
+                .collect()
+        };
+        for (site, target) in [
+            ("super.m()", "this.late"),       // B.m -> A.m
+            ("super.s()", "\"A.s\""),         // B.s -> A.s
+            ("new a()", "class B extends A"), // new a() -> B constructor (class node)
+            ("x.m()", "super.m()"),           // x.m() -> B.m
+            ("a.s()", "super.s()"),           // a.s() -> B.s
+            ("x.created()", "\"created\""),   // inherited constructor assignment
+            ("x.late()", "\"late\""),         // flow-insensitive method assignment
+        ] {
+            assert!(
+                resolve_for(site).iter().any(|s| s.contains(target)),
+                "expected {site} to reach a target containing `{target}`; got {:?}",
+                resolve_for(site)
+            );
+        }
+    }
+
+    #[test]
+    fn real_ts_pipeline_attributes_function_calls_in_class_bodies() {
+        // A direct call to a top-level `function` declaration inside a class body
+        // resolves and is attributed (via `caller_override`) to the class node for
+        // constructor bodies, and to the method node for methods/static blocks.
+        let source = r#"function f1() {}
+
+class C {
+    constructor() {
+        f1();
+    }
+    static s() {
+        f1();
+    }
+}
+new C();
+C.s();
+"#;
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+
+        // Both `f1()` calls inside the class body resolve to `f1`.
+        let resolved: Vec<_> = targets
+            .iter()
+            .filter_map(|t| t.target_function)
+            .filter_map(|id| db.functions().iter().find(|f| f.id == id))
+            .filter(|f| f.span.start_byte == 0) // `function f1()` starts at byte 0
+            .collect();
+        assert!(
+            resolved.len() >= 2,
+            "expected both class-body f1() calls to resolve to f1; got {} resolutions",
+            resolved.len()
+        );
     }
 
     fn db_with_file(source: &str) -> AnalysisDb {

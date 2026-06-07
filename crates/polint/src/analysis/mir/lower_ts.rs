@@ -144,6 +144,10 @@ impl TsMirLowering {
                     right.name.as_str(),
                 ))
         });
+        // A class expression's methods can be collected via both the declaration
+        // path and the anonymous-callable walk; drop adjacent duplicates so each
+        // method is lowered once (a duplicate MIR body would duplicate call sites).
+        functions.dedup_by(|left, right| left.span == right.span && left.name == right.name);
 
         for function in functions {
             let span = span_from_oxc(file.id, file.source.as_ref(), function.span);
@@ -505,6 +509,16 @@ fn collect_anonymous_functions_from_class<'ast>(
     class: &'ast Class<'ast>,
     functions: &mut Vec<TsFunctionCandidate<'ast>>,
 ) {
+    // Lower the class's own methods/constructor (matched to the class-expression
+    // FunctionFacts emitted by the frontend) so their bodies get MIR call sites.
+    // For top-level class declarations these are also emitted via the declaration
+    // path; `collect_functions` dedups by (span, name).
+    let class_name = class
+        .id
+        .as_ref()
+        .map(|id| id.name.to_string())
+        .unwrap_or_else(|| anonymous_callable_name(class.span.start, class.span.end));
+    collect_class_functions(&class_name, class, functions);
     for element in &class.body.body {
         match element {
             ClassElement::MethodDefinition(method) => {
@@ -665,6 +679,9 @@ fn collect_anonymous_functions_from_expression<'ast>(
                     ),
                 }
             }
+        }
+        Expression::ClassExpression(class) => {
+            collect_anonymous_functions_from_class(class, functions);
         }
         _ => {}
     }

@@ -348,6 +348,75 @@ resolution; the full lib suite has no new regressions.
 Cumulative over baseline (iterations 35–40): F1 **57.48% → 68.94% (+11.5pp)**,
 precision **58.17% → 90.92%**.
 
+| 41 | Phase A — class-expression flow (returned/anonymous classes), prototype-override shadowing, nested-body caller attribution | 839 | 70 | 640 | 92.30% | 56.73% | 70.27% | 82656 ms | `b775342ae208c607` |
+
+Iteration 41 begins the roadmap's **Phase A — class/`super` completion**
+(`performance/2026-06-07-jelly-recall-roadmap.md`). The 68.94 checkpoint had
+super4 at **2/0/16** and super5 at **2/0/10**: a `class extends A` returned from a
+function, instantiated through a variable (`var a = make(); var x = new a()`), was
+invisible. Four sub-changes, each precision-neutral-or-better:
+
+- **A1 — frontend (`ts/adapter.rs`).** Emit constructor + method `FunctionFact`s
+  for class **expressions** (and nested class declarations), made idempotent by
+  class span so the existing top-level / `var x = class` paths do not duplicate
+  facts. Cache schema bumped `ts-facts-v7 → v8`. Benchmark-neutral on its own
+  (facts without flow; hash unchanged) — the enabling step.
+- **A2 — value-flow + MIR.** Register class expressions in the class table under a
+  span-derived key and walk their method/constructor/static bodies with
+  `this`/`super` bound (reusing iteration-40's machinery). MIR now lowers
+  class-expression method bodies (`collect_anonymous_functions_from_class` emits
+  method candidates; candidates deduped by `(span, name)`), so their call sites
+  exist for value-flow to attribute. Without the MIR half this moved nothing.
+- **A3 — returned-class flow.** `FlowEnv.class_bindings` maps a variable to the
+  class flowed into it (`class_key_from_expression` resolves a class expression, an
+  alias, or a call to a local function that returns a class). `new v()` resolves
+  through the binding to the instance and emits the constructor edge; `v.staticM()`
+  / `x.m()` resolve via the seeded static/instance objects. Instance `this.p = fn`
+  assignments are now harvested flow-insensitively from **all** instance methods,
+  not just the constructor (super5's `c.www()`, assigned in a never-called `m()`).
+- **Prototype-override shadowing + nested-body attribution (precision).**
+  `ObjectTargets::override_with` makes a subclass member **replace** the inherited
+  member of the same name when building instance/static targets, so `x.m()` →
+  child's `m` only (not child + parent). This removed FP across super.json
+  (16/**4**→16/**0**), super2 (10/**4**→10/**0**), classes.json (62/**4**→62/**0**)
+  and super4. And `caller_override` is now cleared when descending into a nested
+  function body (`collect_callback_value_flows` / `collect_function_flow_invocation`),
+  so super5's `super.m()` inside an IIFE arrow attributes to the **arrow** (Jelly's
+  node), not the class — `current_super` is preserved (arrows capture `super`
+  lexically).
+
+Gain: **+18 TP, −12 FP, −18 FN**. super4 **2/0/16 → 12/0/6**, super5
+**2/0/10 → 10/0/2**. Precision **rose** 90.92% → **92.30%** (the override fix), F1
+**68.94% → 70.27% (+1.34pp)**. A focused real-kernel regression
+(`real_ts_pipeline_resolves_class_returned_from_function`) covers the returned-class
+chain; the full `cargo test -p polint --lib` suite has no new regressions.
+
+| 42 | Seed top-level function declarations into the class-body walk | 841 | 70 | 638 | 92.32% | 56.86% | 70.38% | 83724 ms | `b8473ed84cf2699b` |
+
+Iteration 42 seeds top-level `function` declarations as callable bindings into the
+class-body walk's environment (they are otherwise absent from `env.bindings`, unlike
+`const f = () => …`). A direct `f1()` inside a constructor / static block / method now
+resolves and is attributed via `caller_override` to the class node (Jelly's
+attribution). Gain: **+2 TP, no FP** — `classes.json` **62/0/15 → 64/0/13**. The
+remaining 13 `classes.json` FN are *not* simple class-body calls: they are
+higher-order / prototype / return-flow cases (`x(f1)` where `x` is a parameter,
+`A.prototype.s2`, `d.s2()` through inheritance) — the "other"/object-return bucket,
+not Phase A. Regression test:
+`real_ts_pipeline_attributes_function_calls_in_class_bodies`.
+
+Cumulative Phase A (iterations 41–42): **821/82/658 → 841/70/638**, F1
+**68.94% → 70.38% (+1.44pp)**, precision **90.92% → 92.32%** (the override-shadowing
+fix removed FP in super/super2/classes/super4 while recall rose).
+
+Remaining Phase-A FN (next slices):
+
+- **super4 (6 FN):** field initializers (`w = super.m()`, `static q = super.s()`)
+  and the static block — each needs its own artificial-function node (frontend fact
+  + MIR body) before the super walk can attribute its call. Higher effort (3 layers)
+  for one fixture; deferred.
+- **classes.json (13 FN) / Phase C–E:** higher-order and prototype/return-flow calls
+  to functions inside class bodies.
+
 Remaining module-modeling work (next iterations):
 
 1. **Cross-file function-return summaries** — the dominant remaining `helloworld`

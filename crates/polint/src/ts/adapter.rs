@@ -29,9 +29,9 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 
-const TS_CACHE_SCHEMA: &str = "ts-facts-v7";
+const TS_CACHE_SCHEMA: &str = "ts-facts-v8";
 const TS_PROVIDER_ID: &str = "polint.ts.syntax";
-const TS_SYNTAX_LAYER_SCHEMA: &str = "ts-syntax-layer-v7";
+const TS_SYNTAX_LAYER_SCHEMA: &str = "ts-syntax-layer-v8";
 
 // Relationship resolution converts this non-string import expression sentinel to Dynamic.
 pub(crate) const DYNAMIC_IMPORT_SPECIFIER: &str = "<dynamic>";
@@ -1401,6 +1401,12 @@ fn extract_anonymous_callables_from_statement(
             }
         }
         Statement::ClassDeclaration(class) => {
+            // Nested class declarations (inside a function/block) are not visited by the
+            // top-level declaration path; emit their facts here. Idempotent for top-level
+            // classes already pushed via `push_ts_class`.
+            if let Some(name) = class.id.as_ref().map(|id| id.name.to_string()) {
+                push_ts_class(db, ctx.file, ctx.source, ctx.language, name, class, false);
+            }
             extract_anonymous_callables_from_class(db, ctx, class);
         }
         Statement::ReturnStatement(statement) => {
@@ -1611,6 +1617,14 @@ fn extract_anonymous_callables_from_expression(
             }
         }
         Expression::ClassExpression(class) => {
+            // Emit constructor + method FunctionFacts so value-flow can resolve calls
+            // inside a class expression (e.g. `return class extends A { m() { super.m() } }`).
+            let name = class
+                .id
+                .as_ref()
+                .map(|id| id.name.to_string())
+                .unwrap_or_else(|| anonymous_callable_name(class.span.start, class.span.end));
+            push_ts_class(db, ctx.file, ctx.source, ctx.language, name, class, false);
             extract_anonymous_callables_from_class(db, ctx, class);
         }
         Expression::CallExpression(call) => {
@@ -1880,6 +1894,17 @@ fn push_ts_class(
 ) {
     let is_component_like = is_component_like_name(&name);
     let span = span_from_oxc(file, source, class.span);
+    // Idempotent by class span: a class expression / nested class declaration reached
+    // via the anonymous-callable walk must not duplicate facts already emitted by the
+    // top-level declaration or `var x = class` declarator path (duplicate FunctionFacts
+    // would surface as duplicate graph nodes / false-positive edges).
+    if db.functions().iter().any(|function| {
+        function.file == file
+            && function.span.start_byte == span.start_byte
+            && function.span.end_byte == span.end_byte
+    }) {
+        return;
+    }
     db.push_ts_class(TsClassFact {
         file,
         name: name.clone(),
