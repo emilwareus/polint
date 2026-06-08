@@ -1567,6 +1567,31 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 .super_name = Some(super_name.to_string());
         }
 
+        // `C.prototype = { foo() {} }` (or a variable holding such an object):
+        // the object's members become C's instance methods, so `new C().foo()`
+        // resolves. (`C.prototype = new S()` is handled above as a super link.)
+        if let Some(class_name) = prototype_object_assignment_name(&assignment.left)
+            && !matches!(&assignment.right, Expression::NewExpression(_))
+            && let Some(object) = self.object_targets_from_expression(&assignment.right, env)
+        {
+            self.classes
+                .entry(class_name.to_string())
+                .or_default()
+                .instance_object
+                .merge(object);
+            return;
+        }
+
+        // `obj.__proto__ = proto` links `obj`'s prototype, so `obj` inherits the
+        // prototype's members (same effect as `Object.setPrototypeOf`).
+        if let Some(object_name) = proto_assignment_object_name(&assignment.left)
+            && let Some(proto) = self.object_targets_from_expression(&assignment.right, env)
+            && let Some(target) = env.objects.get_mut(object_name)
+        {
+            target.merge(proto);
+            return;
+        }
+
         if let Some(property) = this_assignment_property(&assignment.left) {
             for target in self
                 .callable_targets_from_expression(&assignment.right, env)
@@ -2693,6 +2718,26 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                     (env.objects.get_mut(target_name), descriptor)
                 {
                     copy_descriptor_to_property(target, property, &descriptor);
+                }
+            }
+            Some("Object.setPrototypeOf") => {
+                // `Object.setPrototypeOf(obj, proto)` makes `obj` inherit `proto`'s
+                // members, so `obj.m()` dispatches to the prototype.
+                let Some(target_name) = call
+                    .arguments
+                    .first()
+                    .and_then(argument_expression)
+                    .and_then(expression_identifier)
+                else {
+                    return;
+                };
+                let proto = call
+                    .arguments
+                    .get(1)
+                    .and_then(argument_expression)
+                    .and_then(|expression| self.object_targets_from_expression(expression, env));
+                if let (Some(target), Some(proto)) = (env.objects.get_mut(target_name), proto) {
+                    target.merge(proto);
                 }
             }
             Some("Object.defineProperties") => {
@@ -5431,9 +5476,14 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             {
                 // A property whose value references an object binding
                 // (`{ f: descr }` where `const descr = { value: fn }`) inlines
-                // that object's shape.
+                // that object's shape. `{ __proto__: Base }` instead links the
+                // prototype, so the base's members are inherited directly.
                 for name in names {
-                    targets.add_object_property(name, object.clone());
+                    if name == "__proto__" {
+                        targets.merge(object.clone());
+                    } else {
+                        targets.add_object_property(name, object.clone());
+                    }
                 }
             } else if let Some(env) = env {
                 // A property whose value is a reference to a callable (a `function`
@@ -6433,6 +6483,29 @@ fn prototype_member_assignment_name<'a>(
     }
     let constructor = expression_identifier(&object.object)?;
     Some((constructor, member.property.name.as_str()))
+}
+
+/// The object name in `obj.__proto__ = …` (a dynamic prototype link).
+fn proto_assignment_object_name<'a>(target: &'a AssignmentTarget<'a>) -> Option<&'a str> {
+    let AssignmentTarget::StaticMemberExpression(member) = target else {
+        return None;
+    };
+    if member.property.name != "__proto__" {
+        return None;
+    }
+    expression_identifier(&member.object)
+}
+
+/// The constructor name in `C.prototype = …` (assigning a whole object to the
+/// prototype, as opposed to `C.prototype.m = …` or `C.prototype = new S()`).
+fn prototype_object_assignment_name<'a>(target: &'a AssignmentTarget<'a>) -> Option<&'a str> {
+    let AssignmentTarget::StaticMemberExpression(member) = target else {
+        return None;
+    };
+    if member.property.name != "prototype" {
+        return None;
+    }
+    expression_identifier(&member.object)
 }
 
 fn prototype_assignment_super_name<'a>(
@@ -7912,6 +7985,36 @@ mod tests {
         assert!(
             resolved.contains(&(x_call, arrow3)),
             "tag return value flows to the binding; got {resolved:?}"
+        );
+    }
+
+    #[test]
+    fn real_ts_pipeline_resolves_prototype_and_dynamic_proto_links() {
+        // `C.prototype = { obj }`, `Object.setPrototypeOf`, and `{ __proto__: X }`
+        // all make the target inherit the prototype's members.
+        let source = "function C() {}\nC.prototype = { foo() { console.log(\"foo\"); } };\nconst v = new C();\nv.foo();\nconst base = { bar() { console.log(\"bar\"); } };\nconst o = {};\nObject.setPrototypeOf(o, base);\no.bar();\nconst p = { __proto__: base };\np.bar();\n";
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let foo = function_id_for_span(source, &db, "foo() { console.log(\"foo\"); }");
+        let bar = function_id_for_span(source, &db, "bar() { console.log(\"bar\"); }");
+
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let resolved = resolved_target_ids_by_site(targets);
+
+        assert!(
+            resolved.contains(&(site_id_for_span(source, &sites, "v.foo()"), foo)),
+            "new C().foo() should dispatch to C.prototype's method; got {resolved:?}"
+        );
+        assert!(
+            resolved.contains(&(site_id_for_span(source, &sites, "o.bar()"), bar)),
+            "Object.setPrototypeOf should link the prototype; got {resolved:?}"
+        );
+        assert!(
+            resolved.contains(&(site_id_for_span(source, &sites, "p.bar()"), bar)),
+            "{{ __proto__: base }} should inherit base's members; got {resolved:?}"
         );
     }
 

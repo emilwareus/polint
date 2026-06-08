@@ -701,6 +701,35 @@ subtlety of `Object.assign` over an `Object.create` proto.)
 Cumulative this session (iterations 41–48): **821/82/658 → 910/54/569**, F1
 **68.94% → 74.50% (+5.56pp)**, precision **90.92% → 94.40%**, **+89 TP / −28 FP**.
 
+| Iteration | Change | TP | FP | FN | Precision | Recall | F1 | Runtime | Hash |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|
+| 49 | Prototype OOP — `C.prototype = { … }` object assignment, plus dynamic prototype links (`Object.setPrototypeOf`, `obj.__proto__ = …`, `{ __proto__: Base }`) | 918 | 54 | 561 | 94.44% | 62.07% | 74.91% | 80677 ms | `5ba1885f29d9ba4c` |
+
+Iteration 49 adds classic prototype-based OOP — the most general remaining
+mechanism (ubiquitous in pre-class JS and library output). The existing handling
+covered `C.prototype.m = fn` and `C.prototype = new Super()` (a super link) but not:
+
+- **`C.prototype = { m() {} }`** — assigning an object literal to the prototype.
+  Added `prototype_object_assignment_name`: when the RHS resolves to an object (and
+  is not a `new` expression), its members merge into `C`'s instance object, so
+  `new C().m()` dispatches. (`prototypes.js` `0/2 → 2/0`.)
+- **Dynamic object prototype linking** — `Object.setPrototypeOf(obj, proto)`,
+  `obj.__proto__ = proto`, and `{ __proto__: Base }` in an object literal all make
+  the target inherit the prototype's members (merge `proto`'s shape into the
+  object). `{ __proto__: Base }` where `Base` is a class links the static object.
+
+Result: **910/54/569 → 918/54/561**, **+8 TP / 0 FP / −8 FN**, F1
+**74.50% → 74.91% (+0.41pp)**, precision **94.40% → 94.44%**. `prototypes.json`
+**0/2 → 2/0**, `prototypes3.json` **2/6 → 6/2**, plus +2 in other cases using these
+links. Regression test `real_ts_pipeline_resolves_prototype_and_dynamic_proto_links`.
+Full `cargo test -p polint --lib`: 2243 passed. Deferred (harder, separate infra):
+`Object.create(Object.getPrototypeOf(a))` (needs `getPrototypeOf`), and `super.X()`
+**inside** an object method whose prototype is set dynamically (needs object-method-
+body walking with `super` bound, as the class-body walk does).
+
+Cumulative this session (iterations 41–49): **821/82/658 → 918/54/561**, F1
+**68.94% → 74.91% (+5.97pp)**, precision **90.92% → 94.44%**, **+97 TP / −28 FP**.
+
 Remaining module-modeling work (next iterations):
 
 1. **Cross-file function-return summaries** — the dominant remaining `helloworld`
