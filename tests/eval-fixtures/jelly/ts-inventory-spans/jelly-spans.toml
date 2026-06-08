@@ -10,7 +10,10 @@ accessor-set = "src/forms.ts:26:3:28:4"
 class-static-block = "src/forms.ts:30:3:32:4"
 call = "src/forms.ts:8:10:8:30"
 new = "src/forms.ts:48:18:48:33"
-tagged-template = "src/forms.ts:49:3:49:31"
+# Jelly ends a tagged-template call span at the closing backtick (col 30), not
+# one past it; cross-checked against the upstream Jelly oracle for
+# tests/micro/templateliterals.js (`fun`…`` ends at its backtick, not the `;`).
+tagged-template = "src/forms.ts:49:3:49:30"
 optional-call = "src/forms.ts:50:3:50:22"
 dynamic-import-static = "src/forms.ts:51:3:51:21"
 dynamic-import-unresolved = "src/forms.ts:52:3:52:27"

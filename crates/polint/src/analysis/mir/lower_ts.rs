@@ -30,7 +30,10 @@ use crate::core::{
 };
 use crate::ts::{
     anonymous_callable_name, class_callable_name,
-    spans::{normalized_call_expression_span, normalized_new_expression_span},
+    spans::{
+        normalized_call_expression_span, normalized_new_expression_span,
+        normalized_tagged_template_span,
+    },
 };
 
 pub(crate) fn lower_ts_mir(db: &AnalysisDb) -> MirOutput {
@@ -605,6 +608,12 @@ fn collect_anonymous_functions_from_expression<'ast>(
         }
         Expression::ChainExpression(chain) => {
             collect_anonymous_functions_from_chain_element(&chain.expression, functions);
+        }
+        Expression::TaggedTemplateExpression(tagged) => {
+            collect_anonymous_functions_from_expression(&tagged.tag, true, functions);
+            for expression in &tagged.quasi.expressions {
+                collect_anonymous_functions_from_expression(expression, true, functions);
+            }
         }
         Expression::ParenthesizedExpression(expression) => {
             collect_anonymous_functions_from_expression(
@@ -1494,19 +1503,7 @@ impl<'source> FunctionLowering<'source> {
                 Some(self.temporary_shape(places, template.span))
             }
             Expression::TaggedTemplateExpression(tagged) => {
-                self.push_unsupported(
-                    operations,
-                    unsupported,
-                    tagged.span,
-                    "tagged template",
-                    Vec::new(),
-                    ConservativeAction::HavocAffectedPlaces,
-                );
-                self.lower_expression(&tagged.tag, places, operations, unsupported, false);
-                for expression in &tagged.quasi.expressions {
-                    self.lower_expression(expression, places, operations, unsupported, false);
-                }
-                Some(self.temporary_shape(places, tagged.span))
+                self.lower_tagged_template_expression(tagged, places, operations, unsupported)
             }
             Expression::SequenceExpression(sequence) => {
                 let mut last = None;
@@ -2296,6 +2293,61 @@ impl<'source> FunctionLowering<'source> {
             MirStatus::Partial,
         );
         Some(return_key)
+    }
+
+    /// A tagged template `tag`…${e1}${e2}`…`` desugars to a call
+    /// `tag(strings, e1, e2)`. Lowering it as a real call (rather than the prior
+    /// `unsupported` stub) gives it a call site so the call-graph resolves the
+    /// tag and the interpolation expressions flow to the tag's parameters
+    /// (offset by the implicit `strings` array at index 0).
+    fn lower_tagged_template_expression(
+        &mut self,
+        tagged: &oxc_ast::ast::TaggedTemplateExpression<'_>,
+        places: &mut PlaceTableBuilder,
+        operations: &mut Vec<OperationDraft>,
+        unsupported: &mut Vec<UnsupportedDraft>,
+    ) -> Option<PlaceShape> {
+        let span = normalized_tagged_template_span(tagged);
+        let site = call_site_for_span(span);
+        let return_key = self.insert_place(
+            places,
+            PlaceRoot::CallReturn { call: site },
+            Vec::new(),
+            PlaceStatus::Partial,
+        );
+        self.lower_expression(&tagged.tag, places, operations, unsupported, false);
+        let callee = callee_text(&tagged.tag).map_or_else(
+            || ValueDraft::Unknown {
+                evidence: "tagged template".to_string(),
+            },
+            |evidence| ValueDraft::Unknown { evidence },
+        );
+        // The strings array occupies argument slot 0; interpolations follow.
+        let mut arguments = vec![self.temporary_shape(places, span).key];
+        for expression in &tagged.quasi.expressions {
+            if let Some(shape) =
+                self.lower_expression(expression, places, operations, unsupported, false)
+            {
+                arguments.push(shape.key);
+            }
+        }
+        self.push_operation(
+            operations,
+            span,
+            OperationKindDraft::Call {
+                site,
+                callee,
+                arguments,
+                return_place_key: return_key.clone(),
+            },
+            MirStatus::Partial,
+        );
+        Some(PlaceShape {
+            root: PlaceRoot::CallReturn { call: site },
+            projections: Vec::new(),
+            status: PlaceStatus::Partial,
+            key: return_key,
+        })
     }
 
     fn lower_new_expression(
@@ -3511,11 +3563,28 @@ export function nested(a, b, tag) {
                 .iter()
                 .all(|argument_count| *argument_count == 1)
         );
-        assert!(output.unsupported.iter().any(|row| {
-            row.construct == "tagged template"
-                && row.is_complete()
-                && row.affected_domains.contains(&UnsupportedDomain::Mir)
-        }));
+        // A tagged template `tag`${helper(b)}`` now lowers to a real call
+        // `tag(strings, helper(b))` (two arguments: the implicit strings array
+        // plus the single interpolation) rather than an unsupported construct.
+        let tag_call_arguments =
+            output
+                .operations
+                .iter()
+                .find_map(|operation| match &operation.kind {
+                    MirOperationKind::Call {
+                        callee: MirValue::Unknown { evidence },
+                        arguments,
+                        ..
+                    } if evidence == "tag" => Some(arguments.len()),
+                    _ => None,
+                });
+        assert_eq!(tag_call_arguments, Some(2));
+        assert!(
+            !output
+                .unsupported
+                .iter()
+                .any(|row| row.construct == "tagged template")
+        );
     }
 
     #[test]
