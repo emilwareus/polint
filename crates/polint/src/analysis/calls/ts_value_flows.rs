@@ -1536,6 +1536,15 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             {
                 env.objects.insert(object_name.to_string(), statics);
             }
+            // A function declaration is also an object: `function f(){}; f.g = fn`
+            // attaches `g` to f, so `f.g()` resolves and `this` inside `f.g` is the
+            // f-object (Jelly tracks `this` to the function's allocation site).
+            if !env.objects.contains_key(object_name)
+                && self.function_declarations.contains_key(object_name)
+            {
+                env.objects
+                    .insert(object_name.to_string(), ObjectTargets::default());
+            }
 
             let setter_targets = env
                 .objects
@@ -3031,6 +3040,45 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         result
     }
 
+    /// Walk the body of an arrow/function expression that is being returned, with
+    /// the current `env` (so the closure's captured `this` resolves). Lets
+    /// `o.foo()` where `foo` returns `() => this.bar()` emit the arrow's
+    /// `this.bar()` -> `o.bar` edge once the arrow escapes.
+    fn collect_returned_closure_body(
+        &mut self,
+        argument: &'ast Expression<'ast>,
+        env: &mut FlowEnv,
+    ) {
+        let expression = match argument {
+            Expression::ParenthesizedExpression(inner) => &inner.expression,
+            other => other,
+        };
+        if !matches!(
+            expression,
+            Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_)
+        ) {
+            return;
+        }
+        let Some(fact) = self.function_for_expression(expression) else {
+            return;
+        };
+        let Some(flow) = self.function_flows_by_id.get(&fact.id).cloned() else {
+            return;
+        };
+        if self.invocation_depth > 16 {
+            return;
+        }
+        self.invocation_depth += 1;
+        if let Some(expression) = flow.expression_body {
+            self.collect_expression(expression, flow.function, env);
+        } else {
+            for statement in &flow.body.statements {
+                self.collect_statement(statement, flow.function, env);
+            }
+        }
+        self.invocation_depth -= 1;
+    }
+
     fn collect_invocation_statements(
         &mut self,
         statements: &'ast oxc_allocator::Vec<'ast, Statement<'ast>>,
@@ -3056,6 +3104,10 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             Statement::ReturnStatement(statement) => {
                 if let Some(argument) = &statement.argument {
                     self.collect_expression(argument, owner, env);
+                    // A returned arrow/function expression captures `this` lexically
+                    // from this (invoked) body; walk its body with the current `this`
+                    // so `return () => this.m()` emits the closure's `this.m()` call.
+                    self.collect_returned_closure_body(argument, env);
                     self.callable_return_targets_from_expression(argument, env, 0)
                 } else {
                     CollectionTargets::default()
@@ -3184,6 +3236,25 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
 
         if let Expression::StaticMemberExpression(member) = &call.callee {
             let method = member.property.name.as_str();
+            // Regular method call `recv.m()` whose body returns a value: invoke it
+            // with `this` bound to the receiver and propagate the return value
+            // (e.g. `x.p()` where `p` returns `this.q`).
+            if !matches!(method, "call" | "apply" | "bind")
+                && let Some(receiver) = self.object_targets_from_expression(&member.object, env)
+                && let Some(method_targets) = receiver.properties.get(method).cloned()
+            {
+                let result = self.callable_return_targets_from_function_ids(
+                    method_targets,
+                    self.argument_targets_from_call(call, env),
+                    self.object_arguments_from_call(call, env),
+                    receiver,
+                    CollectionTargets::default(),
+                    depth + 1,
+                );
+                if !result.is_empty() {
+                    return result;
+                }
+            }
             if matches!(method, "call" | "apply") {
                 let target_ids = self.function_target_ids_from_expression(&member.object, env);
                 let (this_object, this_callables, arguments, object_arguments) =
@@ -8458,6 +8529,60 @@ m2.m3();
             ("s2()", "\"s2\""),       // set destructuring, element 1
             ("m1()", "\"m1\""),       // object returned from a function
             ("m2.m3()", "\"m3\""),    // nested object returned from a function
+        ] {
+            assert!(
+                resolve_for(site).iter().any(|s| s.contains(target)),
+                "expected {site} to reach a target containing `{target}`; got {:?}",
+                resolve_for(site)
+            );
+        }
+    }
+
+    #[test]
+    fn real_ts_pipeline_resolves_this_flow() {
+        // Phase C this-flow: a method returning `this.member`, function-object
+        // `this` (`f.h = function(){ this.g() }`), and a returned arrow that
+        // captures `this` lexically.
+        let source = r#"var obj = {
+    p: function () { return this.q; },
+    q: function () { console.log("q"); }
+};
+var t = obj.p();
+t();
+
+function f() {}
+f.g = function () { console.log("g"); };
+f.h = function () { this.g(); };
+f.h();
+
+const o = {
+    foo() { return () => this.bar(); },
+    bar() { console.log("bar"); }
+};
+const l = o.foo();
+l();
+"#;
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+
+        let resolve_for = |needle: &str| -> Vec<String> {
+            let site = site_id_for_span(source, &sites, needle);
+            targets
+                .iter()
+                .filter(|t| t.site == site)
+                .filter_map(|t| t.target_function)
+                .filter_map(|id| db.functions().iter().find(|f| f.id == id))
+                .map(|f| source[f.span.start_byte as usize..f.span.end_byte as usize].to_string())
+                .collect()
+        };
+        for (site, target) in [
+            ("t()", "\"q\""),          // obj.p() returns this.q -> obj.q
+            ("this.g()", "\"g\""),     // function-object this: f.h's this is f
+            ("this.bar()", "\"bar\""), // returned arrow captures this = o
         ] {
             assert!(
                 resolve_for(site).iter().any(|s| s.contains(target)),

@@ -476,6 +476,37 @@ Remaining destructuring-family FN (smaller, harder tails):
 - `rest.json` (9 FP) / `spread.json`: a pre-existing rest/spread element-indexing
   precision bug (same call site resolving to the wrong argument index).
 
+| 44 | Phase C (part) — this-flow: method-returns-`this.x`, function-object `this`, returned-arrow `this`-capture | 871 | 70 | 608 | 92.56% | 58.89% | 71.98% | 82884 ms | `19ce4d6cb03687f0` |
+
+Iteration 44 is the this-flow half of the roadmap's Phase C (§3.4). Closes
+`tests/micro/this.json` (**4/0/10 → 14/0/0**), precision-neutral (no FP):
+
+- **Method returning `this.member`:** `callable_return_targets_from_call` now
+  invokes a regular `recv.m()` with `this` bound to the receiver and propagates the
+  return value, so `var t = x.p(); t()` resolves (`p` returns `this.q` → `x.q`).
+- **Function-object `this`:** a function declaration is also an object —
+  `function f(){}; f.g = fn; f.h = function(){ this.g() }` now seeds `env.objects[f]`
+  on member assignment, so `f.h()` resolves and `this` inside `f.h` is the f-object
+  (Jelly tracks `this` to the function's allocation site). `this.g()` → `f.g`.
+- **Returned-arrow `this`-capture:** `collect_returned_closure_body` walks a returned
+  arrow/function body with the enclosing (invoked) body's `this`, so
+  `o.foo()` where `foo` returns `() => this.bar()` emits the arrow's
+  `this.bar()` → `o.bar` once the arrow escapes.
+
+Gain over the Phase-B checkpoint: **859/70/620 → 871/70/608**, **+12 TP, 0 FP**, F1
+**71.35% → 71.98% (+0.63pp)**, precision **92.47% → 92.56%**. Regression test
+`real_ts_pipeline_resolves_this_flow`.
+
+Cumulative this session (iterations 41–44): **821/82/658 → 871/70/608**, F1
+**68.94% → 71.98% (+3.04pp)**, precision **90.92% → 92.56%**, **+50 TP / −12 FP**.
+
+Remaining this-flow FN (`tests/approx/this.json`, 16 — harder, deferred): computed
+`this`-keys (`this[name] = fn`, `this["f"+"oo"] = fn`) needing const/concat key
+resolution with env, function-as-constructor with computed writes, and
+constructor-return-override (`function Bar(){ return x } ; new Bar()` → the returned
+value). The other Phase-C lever — async/generator precision (`asyncawait` 11 FP,
+`generators` 6 FP) — is still open.
+
 Remaining module-modeling work (next iterations):
 
 1. **Cross-file function-return summaries** — the dominant remaining `helloworld`
