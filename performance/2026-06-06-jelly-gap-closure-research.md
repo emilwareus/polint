@@ -435,6 +435,47 @@ Remaining Phase-A FN (next slices):
 - **classes.json (13 FN) / Phase C–E:** higher-order and prototype/return-flow calls
   to functions inside class bodies.
 
+| 43 | Phase B — destructuring value-flow (nested/getter/default object patterns, set destructuring, function-returns-object) | 859 | 70 | 620 | 92.47% | 58.08% | 71.35% | 81125 ms | `6d49782afebd3f12` |
+
+Iteration 43 is the roadmap's **Phase B — destructuring**
+(`performance/2026-06-07-jelly-recall-roadmap.md` §3.3). Confined to the value-flow
+pattern binders plus one frontend fact addition; precision held (actually rose).
+Four slices, each measured:
+
+- **Object-pattern binder upgraded to a collector method**
+  (`collect_object_pattern_binding`): handles **nested object patterns**
+  (`{b: {c: y}}` → `y = src.b.c`), **getter-valued sources** (`{bar: y}` where `bar`
+  is a getter → `y` = getter return), and **default values used when the property is
+  absent** (`{d: y = () => {}}`; a present property's dead default is correctly
+  *not* bound, matching the reachability-pruned oracle). Frontend now emits
+  `FunctionFact`s for pattern-default arrows (cache schema `v8 → v9`).
+  `destructuring.json` **8/0/13 → 14/0/7**.
+- **Set/Array/Map destructuring** (`const [x, y] = new Set([...])`):
+  `collection_targets_from_expression` gained a `NewExpression` arm
+  (shared `collection_targets_from_new_expression` helper).
+  `destructuring.json` **14/0/7 → 18/0/3**.
+- **Function-returns-object** (`const {a, b} = make()`):
+  `object_targets_from_local_function_call` walks the callee body to build the
+  returned object's shape (read-only `object_targets_from_expression` cannot, since
+  the object is assembled across statements + computed writes). Gated to object
+  patterns so plain `const x = factory()` does not re-walk the callee (the ungated
+  form added 2 srcLoc FP for +2 TP — net wash; the gated form is +8 TP / 0 FP).
+  `deconstruction.json` **6/0/12 → 14/0/4**.
+
+Gain over the Phase-A checkpoint: **841/70/638 → 859/70/620**, **+18 TP, 0 FP**, F1
+**70.38% → 71.35% (+0.97pp)**, precision **92.32% → 92.47%**. Regression test
+`real_ts_pipeline_resolves_destructuring_forms`; full `cargo test -p polint --lib`
+passes.
+
+Remaining destructuring-family FN (smaller, harder tails):
+- `destructuring.json` (3): assignment-destructuring into members
+  (`({a: c.foo} = x)` setter, `[d.baz] = x`) — needs `AssignmentTarget`-pattern
+  handling + setter-with-precomputed-value.
+- `deconstruction.json` (4): `a[p] = fn; a.p()` in invoked `Rest`/`Spread` bodies —
+  needs module-level `const` propagation into invoked function scopes.
+- `rest.json` (9 FP) / `spread.json`: a pre-existing rest/spread element-indexing
+  precision bug (same call site resolving to the wrong argument index).
+
 Remaining module-modeling work (next iterations):
 
 1. **Cross-file function-return summaries** — the dominant remaining `helloworld`

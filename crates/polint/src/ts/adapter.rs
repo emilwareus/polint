@@ -29,9 +29,9 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 
-const TS_CACHE_SCHEMA: &str = "ts-facts-v8";
+const TS_CACHE_SCHEMA: &str = "ts-facts-v9";
 const TS_PROVIDER_ID: &str = "polint.ts.syntax";
-const TS_SYNTAX_LAYER_SCHEMA: &str = "ts-syntax-layer-v8";
+const TS_SYNTAX_LAYER_SCHEMA: &str = "ts-syntax-layer-v9";
 
 // Relationship resolution converts this non-string import expression sentinel to Dynamic.
 pub(crate) const DYNAMIC_IMPORT_SPECIFIER: &str = "<dynamic>";
@@ -1402,6 +1402,9 @@ fn extract_anonymous_callables_from_statement(
         }
         Statement::VariableDeclaration(variable) => {
             for declarator in &variable.declarations {
+                // Default values in a destructuring pattern (`{a = () => {}} = x`)
+                // are callables that flow to the bound name; emit their facts.
+                extract_anonymous_callables_from_binding_pattern(db, ctx, &declarator.id);
                 if let Some(init) = &declarator.init {
                     extract_anonymous_callables_from_expression(db, ctx, init, false);
                 }
@@ -1537,6 +1540,39 @@ fn extract_anonymous_callables_from_declaration(
             }
         }
         _ => {}
+    }
+}
+
+/// Walk a binding pattern for destructuring default values (`{a = expr}`,
+/// `[b = expr]`) and extract any anonymous callables they contain, so a default
+/// arrow/function flows to the bound name as a resolvable call target.
+fn extract_anonymous_callables_from_binding_pattern(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    pattern: &BindingPattern<'_>,
+) {
+    match pattern {
+        BindingPattern::BindingIdentifier(_) => {}
+        BindingPattern::ObjectPattern(object) => {
+            for property in &object.properties {
+                extract_anonymous_callables_from_binding_pattern(db, ctx, &property.value);
+            }
+            if let Some(rest) = &object.rest {
+                extract_anonymous_callables_from_binding_pattern(db, ctx, &rest.argument);
+            }
+        }
+        BindingPattern::ArrayPattern(array) => {
+            for element in array.elements.iter().flatten() {
+                extract_anonymous_callables_from_binding_pattern(db, ctx, element);
+            }
+            if let Some(rest) = &array.rest {
+                extract_anonymous_callables_from_binding_pattern(db, ctx, &rest.argument);
+            }
+        }
+        BindingPattern::AssignmentPattern(assignment) => {
+            extract_anonymous_callables_from_expression(db, ctx, &assignment.right, true);
+            extract_anonymous_callables_from_binding_pattern(db, ctx, &assignment.left);
+        }
     }
 }
 

@@ -1362,10 +1362,20 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             {
                 bind_collection_pattern(&declarator.id, &targets, env);
             }
-            if let Some(init) = &declarator.init
-                && let Some(targets) = self.object_targets_from_expression(init, env)
-            {
-                bind_object_pattern(&declarator.id, &targets, env);
+            if let Some(init) = &declarator.init {
+                let mut targets = self.object_targets_from_expression(init, env);
+                // Object destructuring from a call to a same-file function that
+                // returns an object (`const {a, b} = make()`) needs the returned
+                // object's shape, which `object_targets_from_expression` (read-only)
+                // cannot build; fall back to walking the callee body. Restricted to
+                // object patterns so plain `const x = factory()` does not re-walk
+                // the callee (it would re-emit its edges, occasionally over-resolved).
+                if targets.is_none() && matches!(&declarator.id, BindingPattern::ObjectPattern(_)) {
+                    targets = self.object_targets_from_local_function_call(init, env);
+                }
+                if let Some(targets) = targets {
+                    self.collect_object_pattern_binding(&declarator.id, &targets, env);
+                }
             }
             if let Some(name) = binding_identifier_name(&declarator.id)
                 && let Some(init) = &declarator.init
@@ -2734,6 +2744,119 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         (returned, merged_receiver)
     }
 
+    /// Bind an object-destructuring pattern against a resolved source object,
+    /// handling forms the free `bind_object_pattern` cannot (they need the
+    /// collector): nested object patterns (`{b: {c: y}}`), getter-valued sources
+    /// (`{bar: y}` where `bar` is a getter), and default values used when the
+    /// property is absent (`{d: y = () => {}}`).
+    fn collect_object_pattern_binding(
+        &mut self,
+        pattern: &'ast BindingPattern<'ast>,
+        source: &ObjectTargets,
+        env: &mut FlowEnv,
+    ) {
+        match pattern {
+            BindingPattern::BindingIdentifier(identifier) => {
+                env.objects
+                    .insert(identifier.name.to_string(), source.clone());
+            }
+            BindingPattern::ObjectPattern(object) => {
+                let mut used = Vec::new();
+                for property in &object.properties {
+                    let Some(name) = static_property_key(&property.key, property.computed) else {
+                        continue;
+                    };
+                    used.push(name.clone());
+                    self.collect_object_pattern_property(&property.value, source, &name, env);
+                }
+                if let Some(rest) = &object.rest {
+                    self.collect_object_pattern_binding(
+                        &rest.argument,
+                        &source.without_properties(&used),
+                        env,
+                    );
+                }
+            }
+            BindingPattern::AssignmentPattern(pattern) => {
+                self.collect_object_pattern_binding(&pattern.left, source, env);
+            }
+            _ => {}
+        }
+    }
+
+    fn collect_object_pattern_property(
+        &mut self,
+        value: &'ast BindingPattern<'ast>,
+        source: &ObjectTargets,
+        name: &str,
+        env: &mut FlowEnv,
+    ) {
+        // The pattern target (`value`), unwrapping a `= default` wrapper.
+        let target = match value {
+            BindingPattern::AssignmentPattern(pattern) => &pattern.left,
+            other => other,
+        };
+        let nested_object = source
+            .object_properties
+            .get(name)
+            .map(|nested| (**nested).clone());
+        let mut callables = source.properties.get(name).cloned().unwrap_or_default();
+        // Getter-valued source: a `get name()` resolves to its return value.
+        if let Some(getters) = source.getter_properties.get(name).cloned() {
+            let (returned, _) = self.collect_getter_return_targets(getters, source.clone(), 1);
+            callables.extend(returned.all_targets());
+        }
+        // Default value: used only when the property is absent from the source
+        // (Jelly's reachability-pruned oracle does not include a present property's
+        // dead default).
+        if callables.is_empty()
+            && nested_object.is_none()
+            && let BindingPattern::AssignmentPattern(pattern) = value
+        {
+            callables.extend(
+                self.callable_targets_from_expression(&pattern.right, env)
+                    .all_targets(),
+            );
+        }
+        callables.sort();
+        callables.dedup();
+
+        // Nested object pattern: recurse against the nested object's targets.
+        if let BindingPattern::ObjectPattern(_) = target
+            && let Some(nested) = nested_object
+        {
+            self.collect_object_pattern_binding(target, &nested, env);
+            return;
+        }
+        if let BindingPattern::BindingIdentifier(identifier) = target {
+            if let Some(nested) = &nested_object {
+                env.objects
+                    .insert(identifier.name.to_string(), nested.clone());
+            }
+            if !callables.is_empty() {
+                env.bindings.insert(
+                    identifier.name.to_string(),
+                    CollectionTargets {
+                        keys: Vec::new(),
+                        values: callables,
+                        object_values: Vec::new(),
+                    },
+                );
+            }
+            return;
+        }
+        // Array/other pattern: bind the collected callables positionally.
+        bind_collection_pattern(
+            target,
+            &CollectionTargets {
+                keys: Vec::new(),
+                values: callables,
+                object_values: Vec::new(),
+            },
+            env,
+        );
+    }
+
     fn collect_returned_callable_invocation(
         &mut self,
         object_name: Option<&str>,
@@ -3484,24 +3607,35 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 Some(self.array_literal_targets(array, Some(env)))
             }
             Expression::NewExpression(expression) => {
-                let name = callee_identifier(&expression.callee)?;
-                match name {
-                    "Array" | "Set" => expression
-                        .arguments
-                        .first()
-                        .and_then(argument_expression)
-                        .and_then(|argument| self.collection_targets_from_expression(argument, env))
-                        .or_else(|| Some(CollectionTargets::default())),
-                    "Map" => expression
-                        .arguments
-                        .first()
-                        .and_then(argument_expression)
-                        .map(|argument| self.map_entries_targets_from_expression(argument, env))
-                        .or_else(|| Some(CollectionTargets::default())),
-                    _ => None,
-                }
+                self.collection_targets_from_new_expression(expression, env)
             }
             Expression::CallExpression(call) => self.collection_targets_from_call(call, env),
+            _ => None,
+        }
+    }
+
+    /// Collection elements produced by `new Array(...)` / `new Set(...)` /
+    /// `new Map(...)`, so destructuring (`const [x, y] = new Set([...])`) and
+    /// `for-of` over a freshly-built collection resolve their elements.
+    fn collection_targets_from_new_expression(
+        &self,
+        expression: &'ast oxc_ast::ast::NewExpression<'ast>,
+        env: &FlowEnv,
+    ) -> Option<CollectionTargets> {
+        let name = callee_identifier(&expression.callee)?;
+        match name {
+            "Array" | "Set" => expression
+                .arguments
+                .first()
+                .and_then(argument_expression)
+                .and_then(|argument| self.collection_targets_from_expression(argument, env))
+                .or_else(|| Some(CollectionTargets::default())),
+            "Map" => expression
+                .arguments
+                .first()
+                .and_then(argument_expression)
+                .map(|argument| self.map_entries_targets_from_expression(argument, env))
+                .or_else(|| Some(CollectionTargets::default())),
             _ => None,
         }
     }
@@ -3580,6 +3714,9 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 Some(self.fulfilled_targets_from_expression(&expression.argument, env))
             }
             Expression::CallExpression(call) => self.collection_targets_from_call(call, env),
+            Expression::NewExpression(expression) => {
+                self.collection_targets_from_new_expression(expression, env)
+            }
             Expression::ParenthesizedExpression(expression) => {
                 self.collection_targets_from_expression(&expression.expression, env)
             }
@@ -3729,6 +3866,41 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             }
             _ => None,
         }
+    }
+
+    /// Object returned by a call to a same-file function declaration that builds
+    /// and returns an object (`function make() { const x = {...}; return x; }`),
+    /// for `const {a, b} = make()` destructuring. Walks the callee body to build
+    /// the returned object's shape — the read-only `object_targets_from_expression`
+    /// cannot, since the object is assembled across statements. Bounded by
+    /// `invocation_depth` (shared with the callable-return cycle).
+    fn object_targets_from_local_function_call(
+        &mut self,
+        init: &'ast Expression<'ast>,
+        env: &FlowEnv,
+    ) -> Option<ObjectTargets> {
+        let Expression::CallExpression(call) = init else {
+            return None;
+        };
+        let name = callee_identifier(&call.callee)?;
+        let flow = self.function_declarations.get(name).cloned()?;
+        if self.invocation_depth > 16 {
+            return None;
+        }
+        let arguments = self.argument_targets_from_call(call, env);
+        let object_arguments = self.object_arguments_from_call(call, env);
+        let mut callee_env = FlowEnv::default();
+        self.bind_invocation_arguments(&flow, &arguments, &object_arguments, &mut callee_env);
+        self.invocation_depth += 1;
+        let saved_override = self.caller_override.take();
+        for statement in &flow.body.statements {
+            self.collect_statement(statement, flow.function, &mut callee_env);
+        }
+        let result = returned_expression_from_statements(&flow.body.statements)
+            .and_then(|expression| self.object_targets_from_expression(expression, &callee_env));
+        self.caller_override = saved_override;
+        self.invocation_depth -= 1;
+        result
     }
 
     fn object_targets_from_call(
@@ -5447,42 +5619,6 @@ fn bind_collection_pattern(
         }
         BindingPattern::AssignmentPattern(pattern) => {
             bind_collection_pattern(&pattern.left, targets, env);
-        }
-        _ => {}
-    }
-}
-
-fn bind_object_pattern(pattern: &BindingPattern<'_>, targets: &ObjectTargets, env: &mut FlowEnv) {
-    match pattern {
-        BindingPattern::BindingIdentifier(identifier) => {
-            env.objects
-                .insert(identifier.name.to_string(), targets.clone());
-        }
-        BindingPattern::ObjectPattern(object) => {
-            let mut used = Vec::new();
-            for property in &object.properties {
-                let Some(name) = static_property_key(&property.key, property.computed) else {
-                    continue;
-                };
-                used.push(name.clone());
-                if let Some(values) = targets.properties.get(&name) {
-                    bind_collection_pattern(
-                        &property.value,
-                        &CollectionTargets {
-                            keys: Vec::new(),
-                            values: values.clone(),
-                            object_values: Vec::new(),
-                        },
-                        env,
-                    );
-                }
-            }
-            if let Some(rest) = &object.rest {
-                bind_object_pattern(&rest.argument, &targets.without_properties(&used), env);
-            }
-        }
-        BindingPattern::AssignmentPattern(pattern) => {
-            bind_object_pattern(&pattern.left, targets, env);
         }
         _ => {}
     }
@@ -8268,6 +8404,67 @@ x.cb();
             "this.cb = cb in a method must not bind to constructor args; got {:?}",
             targets_for(cb_call)
         );
+    }
+
+    #[test]
+    fn real_ts_pipeline_resolves_destructuring_forms() {
+        // Phase B: object destructuring with nested patterns, getter-valued
+        // sources, defaults used when the property is absent, set destructuring,
+        // and destructuring from a function that returns an object.
+        let source = r#"var src = {
+    a: () => { console.log("a"); },
+    b: { c: () => { console.log("c"); } },
+    get g() { return () => { console.log("g"); }; }
+};
+var { b: { c: nested }, g: getterVal, missing: dflt = () => { console.log("dflt"); } } = src;
+nested();
+getterVal();
+dflt();
+
+const [s1, s2] = new Set([() => { console.log("s1"); }, () => { console.log("s2"); }]);
+s1();
+s2();
+
+function make() {
+    const o = { m1: function () { console.log("m1"); }, m2: { m3: function () { console.log("m3"); } } };
+    return o;
+}
+const { m1, m2 } = make();
+m1();
+m2.m3();
+"#;
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+
+        let resolve_for = |needle: &str| -> Vec<String> {
+            let site = site_id_for_span(source, &sites, needle);
+            targets
+                .iter()
+                .filter(|t| t.site == site)
+                .filter_map(|t| t.target_function)
+                .filter_map(|id| db.functions().iter().find(|f| f.id == id))
+                .map(|f| source[f.span.start_byte as usize..f.span.end_byte as usize].to_string())
+                .collect()
+        };
+        for (site, target) in [
+            ("nested()", "\"c\""),    // nested object pattern b.c
+            ("getterVal()", "\"g\""), // getter-valued source
+            ("dflt()", "\"dflt\""),   // default used (property absent)
+            ("s1()", "\"s1\""),       // set destructuring, element 0
+            ("s2()", "\"s2\""),       // set destructuring, element 1
+            ("m1()", "\"m1\""),       // object returned from a function
+            ("m2.m3()", "\"m3\""),    // nested object returned from a function
+        ] {
+            assert!(
+                resolve_for(site).iter().any(|s| s.contains(target)),
+                "expected {site} to reach a target containing `{target}`; got {:?}",
+                resolve_for(site)
+            );
+        }
     }
 
     fn db_with_file(source: &str) -> AnalysisDb {
