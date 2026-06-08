@@ -1300,6 +1300,18 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                     self.collect_expression(argument, owner, env);
                 }
             }
+            Statement::ForInStatement(statement) => {
+                // `for (const k in obj) … obj[k]() …`: mark `k` as an iteration
+                // key so a computed access keyed on it ranges over all properties.
+                if let ForStatementLeft::VariableDeclaration(variable) = &statement.left {
+                    for declarator in &variable.declarations {
+                        if let Some(name) = binding_identifier_name(&declarator.id) {
+                            env.forin_keys.insert(name);
+                        }
+                    }
+                }
+                self.collect_statement(&statement.body, owner, env);
+            }
             _ => {}
         }
     }
@@ -2596,7 +2608,21 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         if let Expression::ComputedMemberExpression(member) = &call.callee {
             let object_name = expression_identifier(&member.object);
             if let Some(object) = self.object_targets_from_expression(&member.object, env) {
-                for property in self.computed_member_property_names(&member.expression, env) {
+                // A `for-in` key ranges over every own property, so `obj[k]()`
+                // dispatches to the union of the object's members.
+                let property_names = if expression_identifier(&member.expression)
+                    .is_some_and(|name| env.forin_keys.contains(name))
+                {
+                    object
+                        .properties
+                        .keys()
+                        .chain(object.getter_properties.keys())
+                        .cloned()
+                        .collect::<Vec<_>>()
+                } else {
+                    self.computed_member_property_names(&member.expression, env)
+                };
+                for property in property_names {
                     if let Some(targets) = object.properties.get(&property).cloned() {
                         self.emit_call_span_targets(
                             owner,
@@ -5849,6 +5875,10 @@ struct FlowEnv {
     iterator_sequences: BTreeMap<String, GeneratorSequence>,
     this_object: ObjectTargets,
     this_callables: CollectionTargets,
+    /// Loop variables bound by a `for (const k in obj)` head. A computed access
+    /// `obj[k]` keyed on such a variable ranges over every own property, so it
+    /// resolves to the union of the object's property values.
+    forin_keys: std::collections::BTreeSet<String>,
 }
 
 /// The ordered result sequence of a generator: each `yield` (with `yield*`
@@ -8021,6 +8051,30 @@ mod tests {
             resolved.contains(&(x_call, arrow3)),
             "tag return value flows to the binding; got {resolved:?}"
         );
+    }
+
+    #[test]
+    fn real_ts_pipeline_resolves_for_in_computed_member_calls() {
+        // `for (const k in obj) obj[k]()` dispatches to every property value.
+        let source = "const obj = {\n    a: () => console.log(\"a\"),\n    b: () => console.log(\"b\"),\n};\nfor (const name in obj)\n    obj[name]();\n";
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let a = function_id_for_span(source, &db, "() => console.log(\"a\")");
+        let b = function_id_for_span(source, &db, "() => console.log(\"b\")");
+
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let resolved = resolved_target_ids_by_site(targets);
+        let call = site_id_for_span(source, &sites, "obj[name]()");
+
+        for target in [a, b] {
+            assert!(
+                resolved.contains(&(call, target)),
+                "for-in computed call should reach every property value; got {resolved:?}"
+            );
+        }
     }
 
     #[test]

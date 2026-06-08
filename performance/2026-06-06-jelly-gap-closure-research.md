@@ -756,6 +756,30 @@ logical-expression receiver).
 Cumulative this session (iterations 41–50): **821/82/658 → 922/54/557**, F1
 **68.94% → 75.12% (+6.18pp)**, precision **90.92% → 94.47%**, **+101 TP / −28 FP**.
 
+| Iteration | Change | TP | FP | FN | Precision | Recall | F1 | Runtime | Hash |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|
+| 51 | `for-in` computed member calls — `for (const k in obj) obj[k]()` dispatches to every property value | 926 | 54 | 553 | 94.49% | 62.61% | 75.31% | 84123 ms | `5e2c2fb0a4959270` |
+
+Iteration 51 handles `for-in` loops, which `collect_statement` previously skipped
+entirely (the body was never walked, so `for-in.json` was **0-TP**). The loop head
+binds its variable into a new `env.forin_keys` set; a computed call `obj[k]()` keyed
+on such a variable ranges over every own property, so it resolves to the union of
+the object's property values (and getters). `for-in.json` **0/4 → 4/0**, fully
+localized, precision-neutral. Regression test
+`real_ts_pipeline_resolves_for_in_computed_member_calls`. Full
+`cargo test -p polint --lib`: 2245 passed.
+
+**Considered and rejected this iteration (quality over score):** `Object.getPrototypeOf(x)`
+≈ `x`'s shape would close `prototypes3.json`'s last 2 FN (`Object.create(getPrototypeOf(a))`),
+but it introduced a false positive — `b.foo()` after `Object.setPrototypeOf(b, {…})`
+**replaced** the prototype still saw the stale member, because the flattened object
+model merges rather than tracking a replaceable prototype slot (Jelly is
+flow-sensitive here). Reverted; it needs flow-sensitive prototype tracking to be
+FP-free, and a +2 TP / +1 FP trade is not worth shipping an over-approximation.
+
+Cumulative this session (iterations 41–51): **821/82/658 → 926/54/553**, F1
+**68.94% → 75.31% (+6.37pp)**, precision **90.92% → 94.49%**, **+105 TP / −28 FP**.
+
 Remaining module-modeling work (next iterations):
 
 1. **Cross-file function-return summaries** — the dominant remaining `helloworld`
