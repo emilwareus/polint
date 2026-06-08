@@ -2815,13 +2815,18 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             let (returned, _) = self.collect_getter_return_targets(getters, source.clone(), 1);
             callables.extend(returned.all_targets());
         }
-        // Default value: used only when the property is absent from the source
-        // (Jelly's reachability-pruned oracle does not include a present property's
-        // dead default).
-        if callables.is_empty()
-            && nested_object.is_none()
-            && let BindingPattern::AssignmentPattern(pattern) = value
-        {
+        // Default value: used only when the property KEY is absent from the source
+        // (JS uses the default iff the property is `undefined`, regardless of whether
+        // we could resolve a present value; keying on `callables.is_empty()` instead
+        // would bind the dead default for a present-but-unresolved property — a
+        // false positive). Jelly's reachability-pruned oracle excludes a present
+        // property's dead default.
+        let key_present = source.properties.contains_key(name)
+            || source.getter_properties.contains_key(name)
+            || source.setter_properties.contains_key(name)
+            || source.object_properties.contains_key(name)
+            || source.collection_properties.contains_key(name);
+        if !key_present && let BindingPattern::AssignmentPattern(pattern) = value {
             callables.extend(
                 self.callable_targets_from_expression(&pattern.right, env)
                     .all_targets(),
@@ -3040,10 +3045,12 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         result
     }
 
-    /// Walk the body of an arrow/function expression that is being returned, with
-    /// the current `env` (so the closure's captured `this` resolves). Lets
-    /// `o.foo()` where `foo` returns `() => this.bar()` emit the arrow's
-    /// `this.bar()` -> `o.bar` edge once the arrow escapes.
+    /// Walk the body of a returned **arrow** with the current `env` (so the arrow's
+    /// lexically captured `this` resolves). Lets `o.foo()` where `foo` returns
+    /// `() => this.bar()` emit the arrow's `this.bar()` -> `o.bar` edge once the
+    /// arrow escapes. Restricted to arrows: a returned `function` expression gets
+    /// its own `this` at call time, so capturing the enclosing `this` would be a
+    /// false positive.
     fn collect_returned_closure_body(
         &mut self,
         argument: &'ast Expression<'ast>,
@@ -3053,10 +3060,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             Expression::ParenthesizedExpression(inner) => &inner.expression,
             other => other,
         };
-        if !matches!(
-            expression,
-            Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_)
-        ) {
+        if !matches!(expression, Expression::ArrowFunctionExpression(_)) {
             return;
         }
         let Some(fact) = self.function_for_expression(expression) else {
@@ -3069,6 +3073,11 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             return;
         }
         self.invocation_depth += 1;
+        // Calls in the arrow body belong to the arrow, not to any `caller_override`
+        // active in an enclosing constructor/field body (consistency with the other
+        // nested-body walks); `current_super`/`this` are preserved (the arrow
+        // captures them lexically).
+        let saved_override = self.caller_override.take();
         if let Some(expression) = flow.expression_body {
             self.collect_expression(expression, flow.function, env);
         } else {
@@ -3076,6 +3085,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 self.collect_statement(statement, flow.function, env);
             }
         }
+        self.caller_override = saved_override;
         self.invocation_depth -= 1;
     }
 
@@ -8590,6 +8600,40 @@ l();
                 resolve_for(site)
             );
         }
+    }
+
+    #[test]
+    fn destructuring_default_not_applied_when_property_present_but_unresolved() {
+        // A destructuring default must be used only when the property KEY is absent,
+        // not whenever the value fails to resolve to a callable. Here `cb` is present
+        // (an opaque parameter), so the default `() => dflt()` must NOT bind to `cb`
+        // (that would be a false-positive edge to `dflt`).
+        let source = r#"function dflt() {}
+function build(opaque) {
+    var src = { cb: opaque };
+    var { cb = () => { dflt(); } } = src;
+    cb();
+}
+build(function () {});
+"#;
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let site = site_id_for_span(source, &sites, "cb()");
+        let resolved: Vec<String> = targets
+            .iter()
+            .filter(|t| t.site == site)
+            .filter_map(|t| t.target_function)
+            .filter_map(|id| db.functions().iter().find(|f| f.id == id))
+            .map(|f| source[f.span.start_byte as usize..f.span.end_byte as usize].to_string())
+            .collect();
+        assert!(
+            !resolved.iter().any(|s| s.contains("function dflt()")),
+            "present-but-unresolved `cb` must not bind the dead default; got {resolved:?}"
+        );
     }
 
     fn db_with_file(source: &str) -> AnalysisDb {

@@ -500,6 +500,22 @@ Gain over the Phase-B checkpoint: **859/70/620 → 871/70/608**, **+12 TP, 0 FP*
 Cumulative this session (iterations 41–44): **821/82/658 → 871/70/608**, F1
 **68.94% → 71.98% (+3.04pp)**, precision **90.92% → 92.56%**, **+50 TP / −12 FP**.
 
+**Post-review hardening (benchmark-neutral, `871/70/608` unchanged, hash
+`19ce4d6cb03687f0`).** A high-effort multi-agent review of the Phase B+C diff found
+two real-world false positives the corpus does not exercise; both fixed without
+changing the score: (1) the destructuring **default** is now applied only when the
+property KEY is absent from the source (was: whenever it failed to resolve to a
+callable), so `{ cb = () => dflt() }` over a present-but-unresolved `cb` no longer
+binds the dead default; (2) `collect_returned_closure_body` is restricted to
+**arrows** (a returned `function` expression has its own `this`, so capturing the
+enclosing `this` was wrong) and now clears `caller_override` while walking (parity
+with the other nested-body walks). Regression test
+`destructuring_default_not_applied_when_property_present_but_unresolved`. Known
+deferred limitations the review surfaced: the returned-arrow walk still over-emits
+for an arrow that is returned but never invoked (the deeper fix is to carry the
+captured `this` on the function value, like `BoundFunctionTarget`), and the three
+new body-walk entry points could funnel through one invocation primitive.
+
 Remaining this-flow FN (`tests/approx/this.json`, 16 — harder, deferred): computed
 `this`-keys (`this[name] = fn`, `this["f"+"oo"] = fn`) needing const/concat key
 resolution with env, function-as-constructor with computed writes, and
