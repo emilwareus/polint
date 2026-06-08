@@ -5,7 +5,7 @@ use oxc_allocator::Allocator;
 use oxc_ast::ast::{
     Argument, ArrayExpressionElement, AssignmentTarget, BinaryOperator, BindingPattern,
     CallExpression, Class, ClassElement, Declaration, ExportDefaultDeclarationKind, Expression,
-    ForStatementLeft, FunctionBody, ImportDeclarationSpecifier, MethodDefinition,
+    ForStatementLeft, FunctionBody, ImportDeclarationSpecifier, LogicalOperator, MethodDefinition,
     MethodDefinitionKind, ModuleExportName, ObjectProperty, ObjectPropertyKind, Program,
     PropertyKey, PropertyKind, Statement, VariableDeclaration, VariableDeclarator,
 };
@@ -4157,8 +4157,43 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             Expression::ParenthesizedExpression(expression) => {
                 self.object_targets_from_expression(&expression.expression, env)
             }
+            // `a || b` / `a ?? b`: a definite (truthy / non-null) `a` short-circuits
+            // to `a`, matching how `(o1 || o2).f()` resolves to `o1` only; fall back
+            // to `b` when `a` does not resolve. `a && b` is symmetric (`b` wins).
+            Expression::LogicalExpression(logical) => {
+                let (first, second) = match logical.operator {
+                    LogicalOperator::And => (&logical.right, &logical.left),
+                    LogicalOperator::Or | LogicalOperator::Coalesce => {
+                        (&logical.left, &logical.right)
+                    }
+                };
+                self.object_targets_from_expression(first, env)
+                    .or_else(|| self.object_targets_from_expression(second, env))
+            }
+            // `cond ? a : b` can take either branch, so the result is their union.
+            Expression::ConditionalExpression(conditional) => {
+                self.merged_object_targets([&conditional.consequent, &conditional.alternate], env)
+            }
             _ => None,
         }
+    }
+
+    /// Union the object shapes of several alternative expressions (the branches of
+    /// a logical/conditional expression). `None` only if no branch resolves.
+    fn merged_object_targets(
+        &self,
+        expressions: [&'ast Expression<'ast>; 2],
+        env: &FlowEnv,
+    ) -> Option<ObjectTargets> {
+        let mut merged = ObjectTargets::default();
+        let mut found = false;
+        for expression in expressions {
+            if let Some(object) = self.object_targets_from_expression(expression, env) {
+                merged.merge(object);
+                found = true;
+            }
+        }
+        found.then_some(merged)
     }
 
     /// Object returned by a call to a same-file function declaration that builds
@@ -7985,6 +8020,37 @@ mod tests {
         assert!(
             resolved.contains(&(x_call, arrow3)),
             "tag return value flows to the binding; got {resolved:?}"
+        );
+    }
+
+    #[test]
+    fn real_ts_pipeline_resolves_logical_and_conditional_receivers() {
+        // `a || b` short-circuits to the definite `a`; `cond ? a : b` is the union.
+        let source = "const o1 = { f() { console.log(\"f1\"); } };\nconst o2 = { f() { console.log(\"f2\"); } };\n(o1 || o2).f();\n(cond ? o1 : o2).f();\n";
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let f1 = function_id_for_span(source, &db, "f() { console.log(\"f1\"); }");
+        let f2 = function_id_for_span(source, &db, "f() { console.log(\"f2\"); }");
+
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let resolved = resolved_target_ids_by_site(targets);
+
+        let or_call = site_id_for_span(source, &sites, "(o1 || o2).f()");
+        assert!(
+            resolved.contains(&(or_call, f1)),
+            "(o1 || o2).f() should resolve to o1.f; got {resolved:?}"
+        );
+        assert!(
+            !resolved.contains(&(or_call, f2)),
+            "(o1 || o2) is definitely o1, so o2.f must not be a target; got {resolved:?}"
+        );
+        let cond_call = site_id_for_span(source, &sites, "(cond ? o1 : o2).f()");
+        assert!(
+            resolved.contains(&(cond_call, f1)) && resolved.contains(&(cond_call, f2)),
+            "a conditional receiver should resolve to both branches; got {resolved:?}"
         );
     }
 

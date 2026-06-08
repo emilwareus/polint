@@ -730,6 +730,32 @@ body walking with `super` bound, as the class-body walk does).
 Cumulative this session (iterations 41–49): **821/82/658 → 918/54/561**, F1
 **68.94% → 74.91% (+5.97pp)**, precision **90.92% → 94.44%**, **+97 TP / −28 FP**.
 
+| Iteration | Change | TP | FP | FN | Precision | Recall | F1 | Runtime | Hash |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|
+| 50 | Logical/conditional receivers — `(o1 \|\| o2).f()` resolves precisely (`\|\|`/`??` short-circuit to the definite left, `&&` to the right, `? :` is the union) | 922 | 54 | 557 | 94.47% | 62.34% | 75.12% | 86605 ms | `8d2f4d71a23bc4a2` |
+
+Iteration 50 resolves member access on a logical/conditional expression
+(`receiver-callee-mixup.json`, a **0-TP** bucket). `object_targets_from_expression`
+gained `LogicalExpression`/`ConditionalExpression` arms. A first pass naively unioned
+both operands and **added 2 FP** — Jelly is precise: `o1 || o2` with a definite
+(truthy) `o1` is `o1`, so `(o1 || o2).f()` is `o1.f` only, not both. Corrected to
+short-circuit semantics: `||`/`??` prefer the left operand (fall back to the right
+only when the left doesn't resolve), `&&` prefers the right, and only `cond ? a : b`
+takes the union (both branches reachable). This is correct JS semantics, not a
+score-fit — the union variant scored the same TP but produced wrong edges.
+
+Result: **918/54/561 → 922/54/557**, **+4 TP / 0 FP / −4 FN**, F1
+**74.91% → 75.12% (+0.21pp)**, precision-neutral. `receiver-callee-mixup.json`
+**0/8 → 4/4**. Regression test
+`real_ts_pipeline_resolves_logical_and_conditional_receivers` (asserts `o2.f` is
+**not** a target of `(o1 || o2).f()`). Full `cargo test -p polint --lib`: 2244
+passed. Deferred: `this.g()` dispatched **through** a logical receiver (the method
+body walk keys on a named receiver; the remaining 4 FN need it to accept a
+logical-expression receiver).
+
+Cumulative this session (iterations 41–50): **821/82/658 → 922/54/557**, F1
+**68.94% → 75.12% (+6.18pp)**, precision **90.92% → 94.47%**, **+101 TP / −28 FP**.
+
 Remaining module-modeling work (next iterations):
 
 1. **Cross-file function-return summaries** — the dominant remaining `helloworld`
