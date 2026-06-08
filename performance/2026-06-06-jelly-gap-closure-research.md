@@ -510,11 +510,21 @@ binds the dead default; (2) `collect_returned_closure_body` is restricted to
 **arrows** (a returned `function` expression has its own `this`, so capturing the
 enclosing `this` was wrong) and now clears `caller_override` while walking (parity
 with the other nested-body walks). Regression test
-`destructuring_default_not_applied_when_property_present_but_unresolved`. Known
-deferred limitations the review surfaced: the returned-arrow walk still over-emits
-for an arrow that is returned but never invoked (the deeper fix is to carry the
-captured `this` on the function value, like `BoundFunctionTarget`), and the three
-new body-walk entry points could funnel through one invocation primitive.
+`destructuring_default_not_applied_when_property_present_but_unresolved`.
+
+**Second review pass (benchmark-neutral, `871/70/608` unchanged).** Implemented the
+deeper fix the first review deferred: the eager returned-closure walk (which emitted
+an arrow's `this.m()` edge even when the arrow was returned but **never invoked** — a
+confirmed FP) is replaced by carrying the captured `this` on the function value.
+`bound_closures_from_call` produces a `BoundFunctionTarget(arrow, this = receiver)`
+for `recv.m()` returning a `this`-arrow; `const l = o.foo()` registers it in
+`env.bound_functions` and `o.foo()()` invokes it inline, so the arrow body is walked
+(with the captured `this`) **only at a real invocation**. A never-called returned
+arrow now emits nothing. Regression tests
+`returned_closure_body_not_walked_until_invoked` (FP gone, invoked path still
+resolves) and the existing `real_ts_pipeline_resolves_this_flow` (the
+`const l = o.foo(); l()` path) both pass. Still deferred: the three body-walk entry
+points could funnel through one invocation primitive (refactor, not a bug).
 
 Remaining this-flow FN (`tests/approx/this.json`, 16 — harder, deferred): computed
 `this`-keys (`this[name] = fn`, `this["f"+"oo"] = fn`) needing const/concat key

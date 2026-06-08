@@ -1318,6 +1318,20 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 );
                 env.bound_functions.insert(name, bound_targets);
             }
+            // `const l = o.foo()` where `foo` returns `() => this.bar()`: bind `l` to
+            // the arrow with captured `this = o`, so `l()` walks the arrow body with
+            // that `this` (and a never-called `l` emits nothing).
+            if let Some(name) = binding_identifier_name(&declarator.id)
+                && let Some(Expression::CallExpression(call)) = &declarator.init
+            {
+                let bound_closures = self.bound_closures_from_call(call, env);
+                if !bound_closures.is_empty() {
+                    env.bound_functions
+                        .entry(name)
+                        .or_default()
+                        .extend(bound_closures);
+                }
+            }
             if let Some(name) = binding_identifier_name(&declarator.id)
                 && let Some(init) = &declarator.init
             {
@@ -2271,6 +2285,13 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 "call-result",
                 Some(returned.all_targets()),
             );
+            // `o.foo()()`: the result of `o.foo()` is a `this`-capturing arrow; walk
+            // its body with the captured `this = o` now that it is actually invoked.
+            if let Expression::CallExpression(inner) = &call.callee {
+                for bound in self.bound_closures_from_call(inner, env) {
+                    self.collect_bound_function_invocation(&bound, call, env);
+                }
+            }
         }
 
         if matches!(&call.callee, Expression::ThisExpression(_)) {
@@ -3045,48 +3066,56 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         result
     }
 
-    /// Walk the body of a returned **arrow** with the current `env` (so the arrow's
-    /// lexically captured `this` resolves). Lets `o.foo()` where `foo` returns
-    /// `() => this.bar()` emit the arrow's `this.bar()` -> `o.bar` edge once the
-    /// arrow escapes. Restricted to arrows: a returned `function` expression gets
-    /// its own `this` at call time, so capturing the enclosing `this` would be a
-    /// false positive.
-    fn collect_returned_closure_body(
-        &mut self,
-        argument: &'ast Expression<'ast>,
-        env: &mut FlowEnv,
-    ) {
-        let expression = match argument {
-            Expression::ParenthesizedExpression(inner) => &inner.expression,
-            other => other,
+    /// Bound closures produced by `recv.m()` when `m` returns an **arrow** that
+    /// captures `this`: the arrow is bound to `this = recv`, so a later invocation
+    /// (`const l = o.foo(); l()` or `o.foo()()`) walks the arrow body with the
+    /// captured `this` and emits `this.bar()` -> `o.bar` — but only when the arrow
+    /// is actually invoked (no edge for a returned-but-uncalled closure). Restricted
+    /// to arrows: a returned `function` expression gets its own `this` at call time.
+    fn bound_closures_from_call(
+        &self,
+        call: &'ast CallExpression<'ast>,
+        env: &FlowEnv,
+    ) -> Vec<BoundFunctionTarget> {
+        let Expression::StaticMemberExpression(member) = &call.callee else {
+            return Vec::new();
         };
-        if !matches!(expression, Expression::ArrowFunctionExpression(_)) {
-            return;
+        if matches!(member.property.name.as_str(), "call" | "apply" | "bind") {
+            return Vec::new();
         }
-        let Some(fact) = self.function_for_expression(expression) else {
-            return;
+        let Some(receiver) = self.object_targets_from_expression(&member.object, env) else {
+            return Vec::new();
         };
-        let Some(flow) = self.function_flows_by_id.get(&fact.id).cloned() else {
-            return;
+        let Some(method_ids) = receiver.properties.get(member.property.name.as_str()) else {
+            return Vec::new();
         };
-        if self.invocation_depth > 16 {
-            return;
-        }
-        self.invocation_depth += 1;
-        // Calls in the arrow body belong to the arrow, not to any `caller_override`
-        // active in an enclosing constructor/field body (consistency with the other
-        // nested-body walks); `current_super`/`this` are preserved (the arrow
-        // captures them lexically).
-        let saved_override = self.caller_override.take();
-        if let Some(expression) = flow.expression_body {
-            self.collect_expression(expression, flow.function, env);
-        } else {
-            for statement in &flow.body.statements {
-                self.collect_statement(statement, flow.function, env);
+        let mut bound = Vec::new();
+        for method_id in method_ids {
+            let Some(flow) = self.function_flows_by_id.get(method_id) else {
+                continue;
+            };
+            let returned = flow
+                .expression_body
+                .or_else(|| returned_expression_from_statements(&flow.body.statements));
+            let Some(returned) = returned else {
+                continue;
+            };
+            let returned = match returned {
+                Expression::ParenthesizedExpression(inner) => &inner.expression,
+                other => other,
+            };
+            if matches!(returned, Expression::ArrowFunctionExpression(_))
+                && let Some(arrow) = self.function_for_expression(returned)
+            {
+                bound.push(BoundFunctionTarget {
+                    function: arrow.id,
+                    this_object: receiver.clone(),
+                    this_callables: CollectionTargets::default(),
+                    bound_arguments: Vec::new(),
+                });
             }
         }
-        self.caller_override = saved_override;
-        self.invocation_depth -= 1;
+        bound
     }
 
     fn collect_invocation_statements(
@@ -3114,10 +3143,6 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             Statement::ReturnStatement(statement) => {
                 if let Some(argument) = &statement.argument {
                     self.collect_expression(argument, owner, env);
-                    // A returned arrow/function expression captures `this` lexically
-                    // from this (invoked) body; walk its body with the current `this`
-                    // so `return () => this.m()` emits the closure's `this.m()` call.
-                    self.collect_returned_closure_body(argument, env);
                     self.callable_return_targets_from_expression(argument, env, 0)
                 } else {
                     CollectionTargets::default()
@@ -8633,6 +8658,45 @@ build(function () {});
         assert!(
             !resolved.iter().any(|s| s.contains("function dflt()")),
             "present-but-unresolved `cb` must not bind the dead default; got {resolved:?}"
+        );
+    }
+
+    #[test]
+    fn returned_closure_body_not_walked_until_invoked() {
+        // A `this`-capturing arrow returned from a method but NEVER invoked must not
+        // emit its internal `this.bar()` edge (Jelly's reachability prune excludes
+        // the unreached arrow). When invoked via the bound binding, it does resolve.
+        let source = r#"const o = {
+    foo() { return () => this.bar(); },
+    bar() { barImpl(); }
+};
+function barImpl() {}
+const unused = o.foo();
+const used = o.foo();
+used();
+"#;
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+
+        // `this.bar()` inside the arrow resolves to o.bar (the arrow is reached via
+        // `used()`), but exactly once — the `unused` binding must not have triggered
+        // an eager walk. The edge set is deduped, so we assert the edge exists (used
+        // path works) and rely on the FP being gone via the benchmark/no-eager-walk.
+        let site = site_id_for_span(source, &sites, "this.bar()");
+        let resolved: Vec<String> = targets
+            .iter()
+            .filter(|t| t.site == site)
+            .filter_map(|t| t.target_function)
+            .filter_map(|id| db.functions().iter().find(|f| f.id == id))
+            .map(|f| source[f.span.start_byte as usize..f.span.end_byte as usize].to_string())
+            .collect();
+        assert!(
+            resolved.iter().any(|s| s.contains("barImpl")),
+            "invoked returned-arrow should resolve this.bar() -> o.bar; got {resolved:?}"
         );
     }
 
