@@ -348,6 +348,191 @@ resolution; the full lib suite has no new regressions.
 Cumulative over baseline (iterations 35–40): F1 **57.48% → 68.94% (+11.5pp)**,
 precision **58.17% → 90.92%**.
 
+| 41 | Phase A — class-expression flow (returned/anonymous classes), prototype-override shadowing, nested-body caller attribution | 839 | 70 | 640 | 92.30% | 56.73% | 70.27% | 82656 ms | `b775342ae208c607` |
+
+Iteration 41 begins the roadmap's **Phase A — class/`super` completion**
+(`performance/2026-06-07-jelly-recall-roadmap.md`). The 68.94 checkpoint had
+super4 at **2/0/16** and super5 at **2/0/10**: a `class extends A` returned from a
+function, instantiated through a variable (`var a = make(); var x = new a()`), was
+invisible. Four sub-changes, each precision-neutral-or-better:
+
+- **A1 — frontend (`ts/adapter.rs`).** Emit constructor + method `FunctionFact`s
+  for class **expressions** (and nested class declarations), made idempotent by
+  class span so the existing top-level / `var x = class` paths do not duplicate
+  facts. Cache schema bumped `ts-facts-v7 → v8`. Benchmark-neutral on its own
+  (facts without flow; hash unchanged) — the enabling step.
+- **A2 — value-flow + MIR.** Register class expressions in the class table under a
+  span-derived key and walk their method/constructor/static bodies with
+  `this`/`super` bound (reusing iteration-40's machinery). MIR now lowers
+  class-expression method bodies (`collect_anonymous_functions_from_class` emits
+  method candidates; candidates deduped by `(span, name)`), so their call sites
+  exist for value-flow to attribute. Without the MIR half this moved nothing.
+- **A3 — returned-class flow.** `FlowEnv.class_bindings` maps a variable to the
+  class flowed into it (`class_key_from_expression` resolves a class expression, an
+  alias, or a call to a local function that returns a class). `new v()` resolves
+  through the binding to the instance and emits the constructor edge; `v.staticM()`
+  / `x.m()` resolve via the seeded static/instance objects. Instance `this.p = fn`
+  assignments are now harvested flow-insensitively from **all** instance methods,
+  not just the constructor (super5's `c.www()`, assigned in a never-called `m()`).
+- **Prototype-override shadowing + nested-body attribution (precision).**
+  `ObjectTargets::override_with` makes a subclass member **replace** the inherited
+  member of the same name when building instance/static targets, so `x.m()` →
+  child's `m` only (not child + parent). This removed FP across super.json
+  (16/**4**→16/**0**), super2 (10/**4**→10/**0**), classes.json (62/**4**→62/**0**)
+  and super4. And `caller_override` is now cleared when descending into a nested
+  function body (`collect_callback_value_flows` / `collect_function_flow_invocation`),
+  so super5's `super.m()` inside an IIFE arrow attributes to the **arrow** (Jelly's
+  node), not the class — `current_super` is preserved (arrows capture `super`
+  lexically).
+
+Gain: **+18 TP, −12 FP, −18 FN**. super4 **2/0/16 → 12/0/6**, super5
+**2/0/10 → 10/0/2**. Precision **rose** 90.92% → **92.30%** (the override fix), F1
+**68.94% → 70.27% (+1.34pp)**. A focused real-kernel regression
+(`real_ts_pipeline_resolves_class_returned_from_function`) covers the returned-class
+chain; the full `cargo test -p polint --lib` suite has no new regressions.
+
+| 42 | Seed top-level function declarations into the class-body walk | 841 | 70 | 638 | 92.32% | 56.86% | 70.38% | 83724 ms | `b8473ed84cf2699b` |
+
+Iteration 42 seeds top-level `function` declarations as callable bindings into the
+class-body walk's environment (they are otherwise absent from `env.bindings`, unlike
+`const f = () => …`). A direct `f1()` inside a constructor / static block / method now
+resolves and is attributed via `caller_override` to the class node (Jelly's
+attribution). Gain: **+2 TP, no FP** — `classes.json` **62/0/15 → 64/0/13**. The
+remaining 13 `classes.json` FN are *not* simple class-body calls: they are
+higher-order / prototype / return-flow cases (`x(f1)` where `x` is a parameter,
+`A.prototype.s2`, `d.s2()` through inheritance) — the "other"/object-return bucket,
+not Phase A. Regression test:
+`real_ts_pipeline_attributes_function_calls_in_class_bodies`.
+
+Cumulative Phase A (iterations 41–42): **821/82/658 → 841/70/638**, F1
+**68.94% → 70.38% (+1.44pp)**, precision **90.92% → 92.32%** (the override-shadowing
+fix removed FP in super/super2/classes/super4 while recall rose).
+
+**Post-review hardening (benchmark-neutral, `841/70/638` unchanged, hash
+`b8473ed84cf2699b`).** A high-effort multi-agent review of the Phase-A diff found
+precision/robustness issues that the benchmark corpus does not exercise; all fixed
+without changing the score: (1) `class_key_from_expression` and the
+function-return invocation cycle (`collect_function_flow_invocation`) were unbounded
+— a self-returning function (`function f(){ return (f()); }`) overflowed the stack;
+added depth bounds; (2) `this.p = param` harvested from a *method* body no longer
+registers a `ConstructorAssignment::Param` (it would mis-resolve against the
+`new C(arg)` arguments — a false-positive edge); (3) a method parameter now shadows
+the seeded top-level function bindings in the class-body walk; (4) `override_with`
+now shadows a name across all member kinds (a child data property shadows an inherited
+accessor) and delegates to `merge`; (5) class expressions in `?:`/`&&`/`||` positions
+are now registered; (6) the frontend idempotency guard scans the per-file class-fact
+set instead of all functions (O(C) not O(C·F)); plus shared `class_callable_name`
+helper (frontend/MIR name agreement) and `mem::take` instead of cloning the
+class-expression registry. Regression test:
+`class_body_resolution_does_not_overproduce_edges`.
+
+Remaining Phase-A FN (next slices):
+
+- **super4 (6 FN):** field initializers (`w = super.m()`, `static q = super.s()`)
+  and the static block — each needs its own artificial-function node (frontend fact
+  + MIR body) before the super walk can attribute its call. Higher effort (3 layers)
+  for one fixture; deferred.
+- **classes.json (13 FN) / Phase C–E:** higher-order and prototype/return-flow calls
+  to functions inside class bodies.
+
+| 43 | Phase B — destructuring value-flow (nested/getter/default object patterns, set destructuring, function-returns-object) | 859 | 70 | 620 | 92.47% | 58.08% | 71.35% | 81125 ms | `6d49782afebd3f12` |
+
+Iteration 43 is the roadmap's **Phase B — destructuring**
+(`performance/2026-06-07-jelly-recall-roadmap.md` §3.3). Confined to the value-flow
+pattern binders plus one frontend fact addition; precision held (actually rose).
+Four slices, each measured:
+
+- **Object-pattern binder upgraded to a collector method**
+  (`collect_object_pattern_binding`): handles **nested object patterns**
+  (`{b: {c: y}}` → `y = src.b.c`), **getter-valued sources** (`{bar: y}` where `bar`
+  is a getter → `y` = getter return), and **default values used when the property is
+  absent** (`{d: y = () => {}}`; a present property's dead default is correctly
+  *not* bound, matching the reachability-pruned oracle). Frontend now emits
+  `FunctionFact`s for pattern-default arrows (cache schema `v8 → v9`).
+  `destructuring.json` **8/0/13 → 14/0/7**.
+- **Set/Array/Map destructuring** (`const [x, y] = new Set([...])`):
+  `collection_targets_from_expression` gained a `NewExpression` arm
+  (shared `collection_targets_from_new_expression` helper).
+  `destructuring.json` **14/0/7 → 18/0/3**.
+- **Function-returns-object** (`const {a, b} = make()`):
+  `object_targets_from_local_function_call` walks the callee body to build the
+  returned object's shape (read-only `object_targets_from_expression` cannot, since
+  the object is assembled across statements + computed writes). Gated to object
+  patterns so plain `const x = factory()` does not re-walk the callee (the ungated
+  form added 2 srcLoc FP for +2 TP — net wash; the gated form is +8 TP / 0 FP).
+  `deconstruction.json` **6/0/12 → 14/0/4**.
+
+Gain over the Phase-A checkpoint: **841/70/638 → 859/70/620**, **+18 TP, 0 FP**, F1
+**70.38% → 71.35% (+0.97pp)**, precision **92.32% → 92.47%**. Regression test
+`real_ts_pipeline_resolves_destructuring_forms`; full `cargo test -p polint --lib`
+passes.
+
+Remaining destructuring-family FN (smaller, harder tails):
+- `destructuring.json` (3): assignment-destructuring into members
+  (`({a: c.foo} = x)` setter, `[d.baz] = x`) — needs `AssignmentTarget`-pattern
+  handling + setter-with-precomputed-value.
+- `deconstruction.json` (4): `a[p] = fn; a.p()` in invoked `Rest`/`Spread` bodies —
+  needs module-level `const` propagation into invoked function scopes.
+- `rest.json` (9 FP) / `spread.json`: a pre-existing rest/spread element-indexing
+  precision bug (same call site resolving to the wrong argument index).
+
+| 44 | Phase C (part) — this-flow: method-returns-`this.x`, function-object `this`, returned-arrow `this`-capture | 871 | 70 | 608 | 92.56% | 58.89% | 71.98% | 82884 ms | `19ce4d6cb03687f0` |
+
+Iteration 44 is the this-flow half of the roadmap's Phase C (§3.4). Closes
+`tests/micro/this.json` (**4/0/10 → 14/0/0**), precision-neutral (no FP):
+
+- **Method returning `this.member`:** `callable_return_targets_from_call` now
+  invokes a regular `recv.m()` with `this` bound to the receiver and propagates the
+  return value, so `var t = x.p(); t()` resolves (`p` returns `this.q` → `x.q`).
+- **Function-object `this`:** a function declaration is also an object —
+  `function f(){}; f.g = fn; f.h = function(){ this.g() }` now seeds `env.objects[f]`
+  on member assignment, so `f.h()` resolves and `this` inside `f.h` is the f-object
+  (Jelly tracks `this` to the function's allocation site). `this.g()` → `f.g`.
+- **Returned-arrow `this`-capture:** `collect_returned_closure_body` walks a returned
+  arrow/function body with the enclosing (invoked) body's `this`, so
+  `o.foo()` where `foo` returns `() => this.bar()` emits the arrow's
+  `this.bar()` → `o.bar` once the arrow escapes.
+
+Gain over the Phase-B checkpoint: **859/70/620 → 871/70/608**, **+12 TP, 0 FP**, F1
+**71.35% → 71.98% (+0.63pp)**, precision **92.47% → 92.56%**. Regression test
+`real_ts_pipeline_resolves_this_flow`.
+
+Cumulative this session (iterations 41–44): **821/82/658 → 871/70/608**, F1
+**68.94% → 71.98% (+3.04pp)**, precision **90.92% → 92.56%**, **+50 TP / −12 FP**.
+
+**Post-review hardening (benchmark-neutral, `871/70/608` unchanged, hash
+`19ce4d6cb03687f0`).** A high-effort multi-agent review of the Phase B+C diff found
+two real-world false positives the corpus does not exercise; both fixed without
+changing the score: (1) the destructuring **default** is now applied only when the
+property KEY is absent from the source (was: whenever it failed to resolve to a
+callable), so `{ cb = () => dflt() }` over a present-but-unresolved `cb` no longer
+binds the dead default; (2) `collect_returned_closure_body` is restricted to
+**arrows** (a returned `function` expression has its own `this`, so capturing the
+enclosing `this` was wrong) and now clears `caller_override` while walking (parity
+with the other nested-body walks). Regression test
+`destructuring_default_not_applied_when_property_present_but_unresolved`.
+
+**Second review pass (benchmark-neutral, `871/70/608` unchanged).** Implemented the
+deeper fix the first review deferred: the eager returned-closure walk (which emitted
+an arrow's `this.m()` edge even when the arrow was returned but **never invoked** — a
+confirmed FP) is replaced by carrying the captured `this` on the function value.
+`bound_closures_from_call` produces a `BoundFunctionTarget(arrow, this = receiver)`
+for `recv.m()` returning a `this`-arrow; `const l = o.foo()` registers it in
+`env.bound_functions` and `o.foo()()` invokes it inline, so the arrow body is walked
+(with the captured `this`) **only at a real invocation**. A never-called returned
+arrow now emits nothing. Regression tests
+`returned_closure_body_not_walked_until_invoked` (FP gone, invoked path still
+resolves) and the existing `real_ts_pipeline_resolves_this_flow` (the
+`const l = o.foo(); l()` path) both pass. Still deferred: the three body-walk entry
+points could funnel through one invocation primitive (refactor, not a bug).
+
+Remaining this-flow FN (`tests/approx/this.json`, 16 — harder, deferred): computed
+`this`-keys (`this[name] = fn`, `this["f"+"oo"] = fn`) needing const/concat key
+resolution with env, function-as-constructor with computed writes, and
+constructor-return-override (`function Bar(){ return x } ; new Bar()` → the returned
+value). The other Phase-C lever — async/generator precision (`asyncawait` 11 FP,
+`generators` 6 FP) — is still open.
+
 Remaining module-modeling work (next iterations):
 
 1. **Cross-file function-return summaries** — the dominant remaining `helloworld`

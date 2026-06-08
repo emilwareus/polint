@@ -29,9 +29,9 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 
-const TS_CACHE_SCHEMA: &str = "ts-facts-v7";
+const TS_CACHE_SCHEMA: &str = "ts-facts-v9";
 const TS_PROVIDER_ID: &str = "polint.ts.syntax";
-const TS_SYNTAX_LAYER_SCHEMA: &str = "ts-syntax-layer-v7";
+const TS_SYNTAX_LAYER_SCHEMA: &str = "ts-syntax-layer-v9";
 
 // Relationship resolution converts this non-string import expression sentinel to Dynamic.
 pub(crate) const DYNAMIC_IMPORT_SPECIFIER: &str = "<dynamic>";
@@ -39,6 +39,18 @@ const ANONYMOUS_CALLABLE_PREFIX: &str = "<polint:anonymous:";
 
 pub(crate) fn anonymous_callable_name(start: u32, end: u32) -> String {
     format!("{ANONYMOUS_CALLABLE_PREFIX}{start}:{end}>")
+}
+
+/// The callable name for a class: its own identifier if named, otherwise the
+/// anonymous-callable name derived from its span. Shared by the frontend
+/// (FunctionFact emission) and MIR lowering so their names always agree — if they
+/// diverge, class-expression method bodies stop matching their facts.
+pub(crate) fn class_callable_name(class: &Class<'_>) -> String {
+    class
+        .id
+        .as_ref()
+        .map(|id| id.name.to_string())
+        .unwrap_or_else(|| anonymous_callable_name(class.span.start, class.span.end))
 }
 
 pub(crate) fn is_anonymous_callable_name(value: &str) -> bool {
@@ -1390,6 +1402,9 @@ fn extract_anonymous_callables_from_statement(
         }
         Statement::VariableDeclaration(variable) => {
             for declarator in &variable.declarations {
+                // Default values in a destructuring pattern (`{a = () => {}} = x`)
+                // are callables that flow to the bound name; emit their facts.
+                extract_anonymous_callables_from_binding_pattern(db, ctx, &declarator.id);
                 if let Some(init) = &declarator.init {
                     extract_anonymous_callables_from_expression(db, ctx, init, false);
                 }
@@ -1401,6 +1416,12 @@ fn extract_anonymous_callables_from_statement(
             }
         }
         Statement::ClassDeclaration(class) => {
+            // Nested class declarations (inside a function/block) are not visited by the
+            // top-level declaration path; emit their facts here. Idempotent for top-level
+            // classes already pushed via `push_ts_class`.
+            if let Some(name) = class.id.as_ref().map(|id| id.name.to_string()) {
+                push_ts_class(db, ctx.file, ctx.source, ctx.language, name, class, false);
+            }
             extract_anonymous_callables_from_class(db, ctx, class);
         }
         Statement::ReturnStatement(statement) => {
@@ -1522,6 +1543,39 @@ fn extract_anonymous_callables_from_declaration(
     }
 }
 
+/// Walk a binding pattern for destructuring default values (`{a = expr}`,
+/// `[b = expr]`) and extract any anonymous callables they contain, so a default
+/// arrow/function flows to the bound name as a resolvable call target.
+fn extract_anonymous_callables_from_binding_pattern(
+    db: &mut AnalysisDb,
+    ctx: TsAstCtx<'_>,
+    pattern: &BindingPattern<'_>,
+) {
+    match pattern {
+        BindingPattern::BindingIdentifier(_) => {}
+        BindingPattern::ObjectPattern(object) => {
+            for property in &object.properties {
+                extract_anonymous_callables_from_binding_pattern(db, ctx, &property.value);
+            }
+            if let Some(rest) = &object.rest {
+                extract_anonymous_callables_from_binding_pattern(db, ctx, &rest.argument);
+            }
+        }
+        BindingPattern::ArrayPattern(array) => {
+            for element in array.elements.iter().flatten() {
+                extract_anonymous_callables_from_binding_pattern(db, ctx, element);
+            }
+            if let Some(rest) = &array.rest {
+                extract_anonymous_callables_from_binding_pattern(db, ctx, &rest.argument);
+            }
+        }
+        BindingPattern::AssignmentPattern(assignment) => {
+            extract_anonymous_callables_from_expression(db, ctx, &assignment.right, true);
+            extract_anonymous_callables_from_binding_pattern(db, ctx, &assignment.left);
+        }
+    }
+}
+
 fn extract_anonymous_callables_from_class(
     db: &mut AnalysisDb,
     ctx: TsAstCtx<'_>,
@@ -1611,6 +1665,17 @@ fn extract_anonymous_callables_from_expression(
             }
         }
         Expression::ClassExpression(class) => {
+            // Emit constructor + method FunctionFacts so value-flow can resolve calls
+            // inside a class expression (e.g. `return class extends A { m() { super.m() } }`).
+            push_ts_class(
+                db,
+                ctx.file,
+                ctx.source,
+                ctx.language,
+                class_callable_name(class),
+                class,
+                false,
+            );
             extract_anonymous_callables_from_class(db, ctx, class);
         }
         Expression::CallExpression(call) => {
@@ -1880,6 +1945,18 @@ fn push_ts_class(
 ) {
     let is_component_like = is_component_like_name(&name);
     let span = span_from_oxc(file, source, class.span);
+    // Idempotent by class span: a class expression / nested class declaration reached
+    // via the anonymous-callable walk must not duplicate facts already emitted by the
+    // top-level declaration or `var x = class` declarator path (duplicate FunctionFacts
+    // would surface as duplicate graph nodes / false-positive edges). Check the
+    // (per-file, much smaller) class-fact set rather than scanning every function.
+    if db.ts_classes().iter().any(|existing| {
+        existing.file == file
+            && existing.span.start_byte == span.start_byte
+            && existing.span.end_byte == span.end_byte
+    }) {
+        return;
+    }
     db.push_ts_class(TsClassFact {
         file,
         name: name.clone(),

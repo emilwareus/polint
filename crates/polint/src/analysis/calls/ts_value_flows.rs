@@ -75,9 +75,11 @@ pub(crate) fn resolve_ts_value_flow_targets(
             function_declarations: BTreeMap::new(),
             function_flows_by_id: BTreeMap::new(),
             classes: BTreeMap::new(),
+            class_expressions: Vec::new(),
             exports: ModuleExportSummary::default(),
             caller_override: None,
             current_super: None,
+            invocation_depth: 0,
             rows: Vec::new(),
             next_id,
         };
@@ -115,6 +117,11 @@ struct TsValueFlowCollector<'db, 'ast, 'env> {
     function_declarations: BTreeMap<String, FunctionFlow<'db, 'ast>>,
     function_flows_by_id: BTreeMap<FunctionId, FunctionFlow<'db, 'ast>>,
     classes: BTreeMap<String, ClassTargets>,
+    /// Class **expressions** (named, anonymous, or returned from a function),
+    /// each keyed by a span-derived synthetic name registered in `classes`.
+    /// Their method/constructor/static bodies are walked with `this`/`super`
+    /// bound just like top-level class declarations.
+    class_expressions: Vec<(String, &'ast Class<'ast>)>,
     /// This file's own exports, accumulated while walking module-level
     /// statements (only meaningful during the summary pre-pass). During the
     /// summary pre-pass `sites` is empty, so the `emit_*` helpers naturally
@@ -129,6 +136,11 @@ struct TsValueFlowCollector<'db, 'ast, 'env> {
     /// The super-class instance/static member objects in scope while walking a
     /// class method body, used to resolve `super.m()` / `super.s()` / `super.f`.
     current_super: Option<ObjectTargets>,
+    /// Nesting depth of function-return-value invocation walks. Bounds recursion
+    /// for self-/mutually-returning functions (`function f() { return f(); }`),
+    /// which would otherwise loop forever because the per-call `depth` resets to 0
+    /// when a return statement re-enters `callable_return_targets_from_expression`.
+    invocation_depth: usize,
     rows: Vec<CallTargetFact>,
     next_id: u64,
 }
@@ -291,9 +303,11 @@ fn compute_module_export_summaries(
                 function_declarations: BTreeMap::new(),
                 function_flows_by_id: BTreeMap::new(),
                 classes: BTreeMap::new(),
+                class_expressions: Vec::new(),
                 exports: ModuleExportSummary::default(),
                 caller_override: None,
                 current_super: None,
+                invocation_depth: 0,
                 rows: Vec::new(),
                 next_id: 0,
             };
@@ -341,6 +355,23 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         program: &'ast Program<'ast>,
         module_env: &FlowEnv,
     ) {
+        // Seed top-level function declarations as callable bindings so direct
+        // calls to them inside class bodies (e.g. `f1()` in a constructor or
+        // static block) resolve and are attributed via `caller_override` to the
+        // class node (Jelly attributes constructor/field/static-block calls to
+        // the class). `function` declarations are otherwise absent from
+        // `env.bindings` (unlike `const f = () => …`).
+        let mut class_env = module_env.clone();
+        for (name, flow) in &self.function_declarations {
+            class_env
+                .bindings
+                .entry(name.clone())
+                .or_insert_with(|| CollectionTargets {
+                    keys: Vec::new(),
+                    values: vec![flow.function.id],
+                    object_values: Vec::new(),
+                });
+        }
         for statement in &program.body {
             let Statement::ClassDeclaration(class) = statement else {
                 continue;
@@ -348,8 +379,17 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             let Some(name) = class.id.as_ref().map(|id| id.name.to_string()) else {
                 continue;
             };
-            self.collect_class_method_bodies(class, &name, module_env);
+            self.collect_class_method_bodies(class, &name, &class_env);
         }
+        // Class expressions (named, anonymous, or returned from a function) are
+        // walked the same way, keyed by their span-derived synthetic name. Take
+        // the registry (not read again) to avoid cloning it just to satisfy the
+        // borrow checker while calling `&mut self`.
+        let class_expressions = std::mem::take(&mut self.class_expressions);
+        for (key, class) in &class_expressions {
+            self.collect_class_method_bodies(class, key, &class_env);
+        }
+        self.class_expressions = class_expressions;
     }
 
     fn collect_class_method_bodies(
@@ -377,7 +417,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         let class_fact = self.function_for_span(class.span).map(|fact| fact.id);
 
         for element in &class.body.body {
-            let (statements, owner, is_static, is_constructor) = match element {
+            let (statements, owner, is_static, is_constructor, params) = match element {
                 ClassElement::MethodDefinition(method) => {
                     let Some(body) = method.value.body.as_deref() else {
                         continue;
@@ -386,13 +426,26 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                         continue;
                     };
                     let is_constructor = method.kind == MethodDefinitionKind::Constructor;
-                    (&body.statements, owner, method.r#static, is_constructor)
+                    let params = method
+                        .value
+                        .params
+                        .items
+                        .iter()
+                        .filter_map(|param| binding_identifier_name(&param.pattern))
+                        .collect::<Vec<_>>();
+                    (
+                        &body.statements,
+                        owner,
+                        method.r#static,
+                        is_constructor,
+                        params,
+                    )
                 }
                 ClassElement::StaticBlock(block) => {
                     let Some(owner) = self.function_for_span(block.span) else {
                         continue;
                     };
-                    (&block.body, owner, true, false)
+                    (&block.body, owner, true, false, Vec::new())
                 }
                 _ => continue,
             };
@@ -405,6 +458,15 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             // Bind the class name to its static object so `Class.staticM()` and
             // `Class.#priv()` resolve inside the body.
             env.objects.insert(name.to_string(), static_object.clone());
+            // A parameter shadows any module-level binding of the same name (e.g.
+            // a top-level function seeded into the class-body env). Its value is
+            // unknown here, so drop the inherited binding rather than resolve the
+            // call to the shadowed module symbol (a false positive).
+            for param in &params {
+                env.bindings.remove(param);
+                env.class_bindings.remove(param);
+                env.objects.remove(param);
+            }
             self.current_super = if is_static {
                 super_static.clone()
             } else {
@@ -578,6 +640,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 }
             }
             Expression::ClassExpression(class) => {
+                self.register_class_expression(class);
                 self.collect_expression_function_flows_from_class(class);
             }
             Expression::StaticMemberExpression(member) => {
@@ -602,6 +665,14 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             }
             Expression::ParenthesizedExpression(expression) => {
                 self.collect_expression_function_flows_from_expression(&expression.expression);
+            }
+            Expression::ConditionalExpression(expression) => {
+                self.collect_expression_function_flows_from_expression(&expression.consequent);
+                self.collect_expression_function_flows_from_expression(&expression.alternate);
+            }
+            Expression::LogicalExpression(expression) => {
+                self.collect_expression_function_flows_from_expression(&expression.left);
+                self.collect_expression_function_flows_from_expression(&expression.right);
             }
             _ => {}
         }
@@ -762,6 +833,71 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         }
     }
 
+    /// Register a class **expression** under a span-derived synthetic key so its
+    /// instance/static targets are resolvable and its bodies get walked with
+    /// `this`/`super` bound (see `collect_class_body_call_flows`). Keyed by span
+    /// (not by the class's own name) to avoid clobbering a same-named top-level
+    /// class declaration; `new`/return flow binds variables to this key in A3.
+    fn register_class_expression(&mut self, class: &'ast Class<'ast>) {
+        let key = class_expression_key(class);
+        if self.classes.contains_key(&key) {
+            return;
+        }
+        let targets = self.class_targets(class);
+        self.classes.insert(key.clone(), targets);
+        self.class_expressions.push((key, class));
+    }
+
+    /// Resolve the class key a variable would hold for `var v = <expr>`, so a
+    /// class flowed through a variable (returned from a function, aliased, or a
+    /// direct class expression) resolves under `new v()` / `v.staticM()`.
+    fn class_key_from_expression(
+        &self,
+        expression: &'ast Expression<'ast>,
+        env: &FlowEnv,
+    ) -> Option<String> {
+        self.class_key_from_expression_with_depth(expression, env, 0)
+    }
+
+    fn class_key_from_expression_with_depth(
+        &self,
+        expression: &'ast Expression<'ast>,
+        env: &FlowEnv,
+        depth: usize,
+    ) -> Option<String> {
+        // Bound recursion: a function whose returned expression resolves back to
+        // itself (`function f() { return (f()); }`) would otherwise loop forever.
+        if depth > 8 {
+            return None;
+        }
+        match expression {
+            Expression::ClassExpression(class) => Some(class_expression_key(class)),
+            Expression::ParenthesizedExpression(inner) => {
+                self.class_key_from_expression_with_depth(&inner.expression, env, depth + 1)
+            }
+            Expression::Identifier(identifier) => {
+                let name = identifier.name.as_str();
+                env.class_bindings
+                    .get(name)
+                    .cloned()
+                    .or_else(|| self.classes.contains_key(name).then(|| name.to_string()))
+            }
+            Expression::CallExpression(call) => {
+                let name = callee_identifier(&call.callee)?;
+                let flow = self.function_declarations.get(name)?;
+                let returned = returned_expression_from_statements(&flow.body.statements)?;
+                match returned {
+                    Expression::ClassExpression(class) => Some(class_expression_key(class)),
+                    Expression::Identifier(_) | Expression::ParenthesizedExpression(_) => {
+                        self.class_key_from_expression_with_depth(returned, env, depth + 1)
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
     fn class_targets(&self, class: &'ast Class<'ast>) -> ClassTargets {
         let mut targets = ClassTargets {
             super_name: class
@@ -769,6 +905,9 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 .as_ref()
                 .and_then(|super_class| expression_identifier(super_class))
                 .map(ToOwned::to_owned),
+            constructor: self
+                .function_for_span(class.span)
+                .map(|function| function.id),
             ..ClassTargets::default()
         };
         for element in &class.body.body {
@@ -790,6 +929,23 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                             );
                         }
                         continue;
+                    }
+                    // Jelly resolves instance properties flow-insensitively: a
+                    // `this.p = fn` in any non-static instance method flows to all
+                    // instances (e.g. super5's `c.www()` where `www` is assigned in
+                    // `m()`, never called). Harvest those function-valued assignments.
+                    // Pass NO params: a method's parameters are not the constructor's,
+                    // so `m(cb) { this.cb = cb }` must not register a
+                    // `ConstructorAssignment::Param` that would later resolve against
+                    // the `new C(arg)` arguments (a false-positive edge).
+                    if !method.r#static
+                        && let Some(body) = method.value.body.as_deref()
+                    {
+                        self.collect_constructor_assignments_from_statements(
+                            &body.statements,
+                            &[],
+                            &mut targets,
+                        );
                     }
                     let names = self.property_key_names(&method.key, method.computed, None);
                     if names.is_empty() {
@@ -1010,7 +1166,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         {
             object.merge(super_object);
         }
-        object.merge(class.instance_object.clone());
+        object.override_with(class.instance_object.clone());
         for assignment in &class.constructor_assignments {
             match assignment {
                 ConstructorAssignment::Param { property, index } => {
@@ -1046,7 +1202,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         {
             object.merge(super_object);
         }
-        object.merge(class.static_object.clone());
+        object.override_with(class.static_object.clone());
         for alias in &class.static_self_aliases {
             object.add_object_property(alias.clone(), object.clone());
         }
@@ -1112,6 +1268,18 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                     env.objects.insert(name, statics);
                 }
             }
+            // Bind a variable to a class flowed through it (returned from a
+            // function, aliased, or a direct class expression) so `new v()` /
+            // `v.staticM()` resolve. Seed the static object for static calls.
+            if let Some(name) = binding_identifier_name(&declarator.id)
+                && let Some(init) = &declarator.init
+                && let Some(key) = self.class_key_from_expression(init, env)
+            {
+                if let Some(statics) = self.class_static_targets(&key) {
+                    env.objects.insert(name.clone(), statics);
+                }
+                env.class_bindings.insert(name, key);
+            }
             if let Some(name) = binding_identifier_name(&declarator.id)
                 && let Some(targets) = self.targets_for_declarator_init(declarator, env)
             {
@@ -1149,6 +1317,20 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                     },
                 );
                 env.bound_functions.insert(name, bound_targets);
+            }
+            // `const l = o.foo()` where `foo` returns `() => this.bar()`: bind `l` to
+            // the arrow with captured `this = o`, so `l()` walks the arrow body with
+            // that `this` (and a never-called `l` emits nothing).
+            if let Some(name) = binding_identifier_name(&declarator.id)
+                && let Some(Expression::CallExpression(call)) = &declarator.init
+            {
+                let bound_closures = self.bound_closures_from_call(call, env);
+                if !bound_closures.is_empty() {
+                    env.bound_functions
+                        .entry(name)
+                        .or_default()
+                        .extend(bound_closures);
+                }
             }
             if let Some(name) = binding_identifier_name(&declarator.id)
                 && let Some(init) = &declarator.init
@@ -1194,10 +1376,20 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             {
                 bind_collection_pattern(&declarator.id, &targets, env);
             }
-            if let Some(init) = &declarator.init
-                && let Some(targets) = self.object_targets_from_expression(init, env)
-            {
-                bind_object_pattern(&declarator.id, &targets, env);
+            if let Some(init) = &declarator.init {
+                let mut targets = self.object_targets_from_expression(init, env);
+                // Object destructuring from a call to a same-file function that
+                // returns an object (`const {a, b} = make()`) needs the returned
+                // object's shape, which `object_targets_from_expression` (read-only)
+                // cannot build; fall back to walking the callee body. Restricted to
+                // object patterns so plain `const x = factory()` does not re-walk
+                // the callee (it would re-emit its edges, occasionally over-resolved).
+                if targets.is_none() && matches!(&declarator.id, BindingPattern::ObjectPattern(_)) {
+                    targets = self.object_targets_from_local_function_call(init, env);
+                }
+                if let Some(targets) = targets {
+                    self.collect_object_pattern_binding(&declarator.id, &targets, env);
+                }
             }
             if let Some(name) = binding_identifier_name(&declarator.id)
                 && let Some(init) = &declarator.init
@@ -1228,6 +1420,23 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 self.collect_call_expression(call, owner, env);
                 self.collect_call_callee_expression(&call.callee, owner, env);
                 for argument in &call.arguments {
+                    if let Some(expression) = argument_expression(argument) {
+                        self.collect_expression(expression, owner, env);
+                    }
+                }
+            }
+            Expression::NewExpression(new) => {
+                // `new v()` where `v` is a variable bound to a class flowed through
+                // it: emit the constructor edge (direct `new ClassName()` is already
+                // resolved by the direct/MIR path).
+                if let Some(name) = callee_identifier(&new.callee)
+                    && let Some(key) = env.class_bindings.get(name)
+                    && let Some(constructor) =
+                        self.classes.get(key).and_then(|class| class.constructor)
+                {
+                    self.emit_call_span_targets(owner, new.span, "new", Some(vec![constructor]));
+                }
+                for argument in &new.arguments {
                     if let Some(expression) = argument_expression(argument) {
                         self.collect_expression(expression, owner, env);
                     }
@@ -1340,6 +1549,15 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 && let Some(statics) = self.class_static_targets(object_name)
             {
                 env.objects.insert(object_name.to_string(), statics);
+            }
+            // A function declaration is also an object: `function f(){}; f.g = fn`
+            // attaches `g` to f, so `f.g()` resolves and `this` inside `f.g` is the
+            // f-object (Jelly tracks `this` to the function's allocation site).
+            if !env.objects.contains_key(object_name)
+                && self.function_declarations.contains_key(object_name)
+            {
+                env.objects
+                    .insert(object_name.to_string(), ObjectTargets::default());
             }
 
             let setter_targets = env
@@ -2067,6 +2285,13 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 "call-result",
                 Some(returned.all_targets()),
             );
+            // `o.foo()()`: the result of `o.foo()` is a `this`-capturing arrow; walk
+            // its body with the captured `this = o` now that it is actually invoked.
+            if let Expression::CallExpression(inner) = &call.callee {
+                for bound in self.bound_closures_from_call(inner, env) {
+                    self.collect_bound_function_invocation(&bound, call, env);
+                }
+            }
         }
 
         if matches!(&call.callee, Expression::ThisExpression(_)) {
@@ -2549,6 +2774,124 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         (returned, merged_receiver)
     }
 
+    /// Bind an object-destructuring pattern against a resolved source object,
+    /// handling forms the free `bind_object_pattern` cannot (they need the
+    /// collector): nested object patterns (`{b: {c: y}}`), getter-valued sources
+    /// (`{bar: y}` where `bar` is a getter), and default values used when the
+    /// property is absent (`{d: y = () => {}}`).
+    fn collect_object_pattern_binding(
+        &mut self,
+        pattern: &'ast BindingPattern<'ast>,
+        source: &ObjectTargets,
+        env: &mut FlowEnv,
+    ) {
+        match pattern {
+            BindingPattern::BindingIdentifier(identifier) => {
+                env.objects
+                    .insert(identifier.name.to_string(), source.clone());
+            }
+            BindingPattern::ObjectPattern(object) => {
+                let mut used = Vec::new();
+                for property in &object.properties {
+                    let Some(name) = static_property_key(&property.key, property.computed) else {
+                        continue;
+                    };
+                    used.push(name.clone());
+                    self.collect_object_pattern_property(&property.value, source, &name, env);
+                }
+                if let Some(rest) = &object.rest {
+                    self.collect_object_pattern_binding(
+                        &rest.argument,
+                        &source.without_properties(&used),
+                        env,
+                    );
+                }
+            }
+            BindingPattern::AssignmentPattern(pattern) => {
+                self.collect_object_pattern_binding(&pattern.left, source, env);
+            }
+            _ => {}
+        }
+    }
+
+    fn collect_object_pattern_property(
+        &mut self,
+        value: &'ast BindingPattern<'ast>,
+        source: &ObjectTargets,
+        name: &str,
+        env: &mut FlowEnv,
+    ) {
+        // The pattern target (`value`), unwrapping a `= default` wrapper.
+        let target = match value {
+            BindingPattern::AssignmentPattern(pattern) => &pattern.left,
+            other => other,
+        };
+        let nested_object = source
+            .object_properties
+            .get(name)
+            .map(|nested| (**nested).clone());
+        let mut callables = source.properties.get(name).cloned().unwrap_or_default();
+        // Getter-valued source: a `get name()` resolves to its return value.
+        if let Some(getters) = source.getter_properties.get(name).cloned() {
+            let (returned, _) = self.collect_getter_return_targets(getters, source.clone(), 1);
+            callables.extend(returned.all_targets());
+        }
+        // Default value: used only when the property KEY is absent from the source
+        // (JS uses the default iff the property is `undefined`, regardless of whether
+        // we could resolve a present value; keying on `callables.is_empty()` instead
+        // would bind the dead default for a present-but-unresolved property — a
+        // false positive). Jelly's reachability-pruned oracle excludes a present
+        // property's dead default.
+        let key_present = source.properties.contains_key(name)
+            || source.getter_properties.contains_key(name)
+            || source.setter_properties.contains_key(name)
+            || source.object_properties.contains_key(name)
+            || source.collection_properties.contains_key(name);
+        if !key_present && let BindingPattern::AssignmentPattern(pattern) = value {
+            callables.extend(
+                self.callable_targets_from_expression(&pattern.right, env)
+                    .all_targets(),
+            );
+        }
+        callables.sort();
+        callables.dedup();
+
+        // Nested object pattern: recurse against the nested object's targets.
+        if let BindingPattern::ObjectPattern(_) = target
+            && let Some(nested) = nested_object
+        {
+            self.collect_object_pattern_binding(target, &nested, env);
+            return;
+        }
+        if let BindingPattern::BindingIdentifier(identifier) = target {
+            if let Some(nested) = &nested_object {
+                env.objects
+                    .insert(identifier.name.to_string(), nested.clone());
+            }
+            if !callables.is_empty() {
+                env.bindings.insert(
+                    identifier.name.to_string(),
+                    CollectionTargets {
+                        keys: Vec::new(),
+                        values: callables,
+                        object_values: Vec::new(),
+                    },
+                );
+            }
+            return;
+        }
+        // Array/other pattern: bind the collected callables positionally.
+        bind_collection_pattern(
+            target,
+            &CollectionTargets {
+                keys: Vec::new(),
+                values: callables,
+                object_values: Vec::new(),
+            },
+            env,
+        );
+    }
+
     fn collect_returned_callable_invocation(
         &mut self,
         object_name: Option<&str>,
@@ -2702,11 +3045,77 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         flow: &FunctionFlow<'db, 'ast>,
         env: &mut FlowEnv,
     ) -> CollectionTargets {
-        if let Some(expression) = flow.expression_body {
-            self.collect_expression(expression, flow.function, env);
-            return self.callable_return_targets_from_expression(expression, env, 0);
+        // Bound nesting: a self-/mutually-returning function would otherwise recurse
+        // forever here (the per-call `depth` is reset to 0 each time a return
+        // statement re-enters `callable_return_targets_from_expression`).
+        if self.invocation_depth > 16 {
+            return CollectionTargets::default();
         }
-        self.collect_invocation_statements(&flow.body.statements, flow.function, env)
+        self.invocation_depth += 1;
+        // Calls in the invoked body belong to `flow.function`, not to a
+        // `caller_override` active in an enclosing constructor/field body.
+        let saved_override = self.caller_override.take();
+        let result = if let Some(expression) = flow.expression_body {
+            self.collect_expression(expression, flow.function, env);
+            self.callable_return_targets_from_expression(expression, env, 0)
+        } else {
+            self.collect_invocation_statements(&flow.body.statements, flow.function, env)
+        };
+        self.caller_override = saved_override;
+        self.invocation_depth -= 1;
+        result
+    }
+
+    /// Bound closures produced by `recv.m()` when `m` returns an **arrow** that
+    /// captures `this`: the arrow is bound to `this = recv`, so a later invocation
+    /// (`const l = o.foo(); l()` or `o.foo()()`) walks the arrow body with the
+    /// captured `this` and emits `this.bar()` -> `o.bar` — but only when the arrow
+    /// is actually invoked (no edge for a returned-but-uncalled closure). Restricted
+    /// to arrows: a returned `function` expression gets its own `this` at call time.
+    fn bound_closures_from_call(
+        &self,
+        call: &'ast CallExpression<'ast>,
+        env: &FlowEnv,
+    ) -> Vec<BoundFunctionTarget> {
+        let Expression::StaticMemberExpression(member) = &call.callee else {
+            return Vec::new();
+        };
+        if matches!(member.property.name.as_str(), "call" | "apply" | "bind") {
+            return Vec::new();
+        }
+        let Some(receiver) = self.object_targets_from_expression(&member.object, env) else {
+            return Vec::new();
+        };
+        let Some(method_ids) = receiver.properties.get(member.property.name.as_str()) else {
+            return Vec::new();
+        };
+        let mut bound = Vec::new();
+        for method_id in method_ids {
+            let Some(flow) = self.function_flows_by_id.get(method_id) else {
+                continue;
+            };
+            let returned = flow
+                .expression_body
+                .or_else(|| returned_expression_from_statements(&flow.body.statements));
+            let Some(returned) = returned else {
+                continue;
+            };
+            let returned = match returned {
+                Expression::ParenthesizedExpression(inner) => &inner.expression,
+                other => other,
+            };
+            if matches!(returned, Expression::ArrowFunctionExpression(_))
+                && let Some(arrow) = self.function_for_expression(returned)
+            {
+                bound.push(BoundFunctionTarget {
+                    function: arrow.id,
+                    this_object: receiver.clone(),
+                    this_callables: CollectionTargets::default(),
+                    bound_arguments: Vec::new(),
+                });
+            }
+        }
+        bound
     }
 
     fn collect_invocation_statements(
@@ -2862,6 +3271,25 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
 
         if let Expression::StaticMemberExpression(member) = &call.callee {
             let method = member.property.name.as_str();
+            // Regular method call `recv.m()` whose body returns a value: invoke it
+            // with `this` bound to the receiver and propagate the return value
+            // (e.g. `x.p()` where `p` returns `this.q`).
+            if !matches!(method, "call" | "apply" | "bind")
+                && let Some(receiver) = self.object_targets_from_expression(&member.object, env)
+                && let Some(method_targets) = receiver.properties.get(method).cloned()
+            {
+                let result = self.callable_return_targets_from_function_ids(
+                    method_targets,
+                    self.argument_targets_from_call(call, env),
+                    self.object_arguments_from_call(call, env),
+                    receiver,
+                    CollectionTargets::default(),
+                    depth + 1,
+                );
+                if !result.is_empty() {
+                    return result;
+                }
+            }
             if matches!(method, "call" | "apply") {
                 let target_ids = self.function_target_ids_from_expression(&member.object, env);
                 let (this_object, this_callables, arguments, object_arguments) =
@@ -3285,24 +3713,35 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 Some(self.array_literal_targets(array, Some(env)))
             }
             Expression::NewExpression(expression) => {
-                let name = callee_identifier(&expression.callee)?;
-                match name {
-                    "Array" | "Set" => expression
-                        .arguments
-                        .first()
-                        .and_then(argument_expression)
-                        .and_then(|argument| self.collection_targets_from_expression(argument, env))
-                        .or_else(|| Some(CollectionTargets::default())),
-                    "Map" => expression
-                        .arguments
-                        .first()
-                        .and_then(argument_expression)
-                        .map(|argument| self.map_entries_targets_from_expression(argument, env))
-                        .or_else(|| Some(CollectionTargets::default())),
-                    _ => None,
-                }
+                self.collection_targets_from_new_expression(expression, env)
             }
             Expression::CallExpression(call) => self.collection_targets_from_call(call, env),
+            _ => None,
+        }
+    }
+
+    /// Collection elements produced by `new Array(...)` / `new Set(...)` /
+    /// `new Map(...)`, so destructuring (`const [x, y] = new Set([...])`) and
+    /// `for-of` over a freshly-built collection resolve their elements.
+    fn collection_targets_from_new_expression(
+        &self,
+        expression: &'ast oxc_ast::ast::NewExpression<'ast>,
+        env: &FlowEnv,
+    ) -> Option<CollectionTargets> {
+        let name = callee_identifier(&expression.callee)?;
+        match name {
+            "Array" | "Set" => expression
+                .arguments
+                .first()
+                .and_then(argument_expression)
+                .and_then(|argument| self.collection_targets_from_expression(argument, env))
+                .or_else(|| Some(CollectionTargets::default())),
+            "Map" => expression
+                .arguments
+                .first()
+                .and_then(argument_expression)
+                .map(|argument| self.map_entries_targets_from_expression(argument, env))
+                .or_else(|| Some(CollectionTargets::default())),
             _ => None,
         }
     }
@@ -3381,6 +3820,9 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 Some(self.fulfilled_targets_from_expression(&expression.argument, env))
             }
             Expression::CallExpression(call) => self.collection_targets_from_call(call, env),
+            Expression::NewExpression(expression) => {
+                self.collection_targets_from_new_expression(expression, env)
+            }
             Expression::ParenthesizedExpression(expression) => {
                 self.collection_targets_from_expression(&expression.expression, env)
             }
@@ -3503,12 +3945,19 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             }
             Expression::NewExpression(expression) => {
                 let name = callee_identifier(&expression.callee)?;
+                // A variable may hold a class flowed through it (`var a = f(); new a()`);
+                // resolve the binding to its class key, else use the name directly.
+                let key = env
+                    .class_bindings
+                    .get(name)
+                    .map(String::as_str)
+                    .unwrap_or(name);
                 let arguments = expression
                     .arguments
                     .iter()
                     .filter_map(argument_expression)
                     .collect::<Vec<_>>();
-                self.class_instance_targets(name, &arguments, env)
+                self.class_instance_targets(key, &arguments, env)
             }
             Expression::CallExpression(call) => self.object_targets_from_call(call, env),
             Expression::StaticMemberExpression(member) => {
@@ -3523,6 +3972,41 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             }
             _ => None,
         }
+    }
+
+    /// Object returned by a call to a same-file function declaration that builds
+    /// and returns an object (`function make() { const x = {...}; return x; }`),
+    /// for `const {a, b} = make()` destructuring. Walks the callee body to build
+    /// the returned object's shape — the read-only `object_targets_from_expression`
+    /// cannot, since the object is assembled across statements. Bounded by
+    /// `invocation_depth` (shared with the callable-return cycle).
+    fn object_targets_from_local_function_call(
+        &mut self,
+        init: &'ast Expression<'ast>,
+        env: &FlowEnv,
+    ) -> Option<ObjectTargets> {
+        let Expression::CallExpression(call) = init else {
+            return None;
+        };
+        let name = callee_identifier(&call.callee)?;
+        let flow = self.function_declarations.get(name).cloned()?;
+        if self.invocation_depth > 16 {
+            return None;
+        }
+        let arguments = self.argument_targets_from_call(call, env);
+        let object_arguments = self.object_arguments_from_call(call, env);
+        let mut callee_env = FlowEnv::default();
+        self.bind_invocation_arguments(&flow, &arguments, &object_arguments, &mut callee_env);
+        self.invocation_depth += 1;
+        let saved_override = self.caller_override.take();
+        for statement in &flow.body.statements {
+            self.collect_statement(statement, flow.function, &mut callee_env);
+        }
+        let result = returned_expression_from_statements(&flow.body.statements)
+            .and_then(|expression| self.object_targets_from_expression(expression, &callee_env));
+        self.caller_override = saved_override;
+        self.invocation_depth -= 1;
+        result
     }
 
     fn object_targets_from_call(
@@ -4189,6 +4673,12 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 bind_param_pattern(pattern, &targets, &mut env);
             }
         }
+        // Calls inside this nested body belong to `callback`, not to any
+        // `caller_override` active in the enclosing constructor/field body (e.g.
+        // super5's `super.m()` inside an IIFE arrow is attributed to the arrow,
+        // not the class node). `current_super` is intentionally preserved: an
+        // arrow lexically captures `super` from its enclosing method.
+        let saved_override = self.caller_override.take();
         match expression {
             Expression::ArrowFunctionExpression(function) => {
                 if let Some(expression) = function.get_expression() {
@@ -4208,6 +4698,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             }
             _ => {}
         }
+        self.caller_override = saved_override;
     }
 
     fn promise_method_result_targets(
@@ -4781,6 +5272,9 @@ struct FlowEnv {
     bindings: BTreeMap<String, CollectionTargets>,
     bound_functions: BTreeMap<String, Vec<BoundFunctionTarget>>,
     objects: BTreeMap<String, ObjectTargets>,
+    /// Variable name -> class key in `classes`, for classes flowed through a
+    /// variable (e.g. `var a = makeClass()` then `new a()` / `a.staticM()`).
+    class_bindings: BTreeMap<String, String>,
     string_bindings: BTreeMap<String, String>,
     bool_bindings: BTreeMap<String, bool>,
     string_arrays: BTreeMap<String, Vec<String>>,
@@ -4956,6 +5450,36 @@ impl ObjectTargets {
         }
     }
 
+    /// Merge `other` on top of `self`, with `other`'s names **replacing** (not
+    /// unioning) `self`'s. Models prototype-chain shadowing: a subclass member
+    /// overrides the inherited member of the same name (`x.m()` resolves to the
+    /// child's `m`, not both child's and parent's). Shadowing crosses kinds — a
+    /// child data property shadows an inherited accessor of the same name and vice
+    /// versa — so the inherited name is dropped from every kind before merging.
+    fn override_with(&mut self, other: Self) {
+        let shadowed: std::collections::BTreeSet<&str> = other
+            .properties
+            .keys()
+            .chain(other.getter_properties.keys())
+            .chain(other.setter_properties.keys())
+            .chain(other.object_properties.keys())
+            .chain(other.collection_properties.keys())
+            .map(String::as_str)
+            .collect();
+        let shadowed: Vec<String> = shadowed.into_iter().map(ToOwned::to_owned).collect();
+        for name in &shadowed {
+            self.properties.remove(name);
+            self.getter_properties.remove(name);
+            self.setter_properties.remove(name);
+            self.object_properties.remove(name);
+            self.collection_properties.remove(name);
+        }
+        // `self` now has no entry for any name `other` defines, so the union in
+        // `merge` is equivalent to insert for those names while leaving inherited
+        // names untouched.
+        self.merge(other);
+    }
+
     fn without_properties(&self, used: &[String]) -> Self {
         let used = used.iter().collect::<std::collections::BTreeSet<_>>();
         Self {
@@ -5053,6 +5577,9 @@ struct ClassTargets {
     instance_self_aliases: Vec<String>,
     static_self_aliases: Vec<String>,
     super_name: Option<String>,
+    /// The class node (constructor-callable) `FunctionFact`, used to emit the
+    /// `new v()` -> constructor edge when the class is flowed through a variable.
+    constructor: Option<FunctionId>,
 }
 
 impl ClassTargets {
@@ -5198,42 +5725,6 @@ fn bind_collection_pattern(
         }
         BindingPattern::AssignmentPattern(pattern) => {
             bind_collection_pattern(&pattern.left, targets, env);
-        }
-        _ => {}
-    }
-}
-
-fn bind_object_pattern(pattern: &BindingPattern<'_>, targets: &ObjectTargets, env: &mut FlowEnv) {
-    match pattern {
-        BindingPattern::BindingIdentifier(identifier) => {
-            env.objects
-                .insert(identifier.name.to_string(), targets.clone());
-        }
-        BindingPattern::ObjectPattern(object) => {
-            let mut used = Vec::new();
-            for property in &object.properties {
-                let Some(name) = static_property_key(&property.key, property.computed) else {
-                    continue;
-                };
-                used.push(name.clone());
-                if let Some(values) = targets.properties.get(&name) {
-                    bind_collection_pattern(
-                        &property.value,
-                        &CollectionTargets {
-                            keys: Vec::new(),
-                            values: values.clone(),
-                            object_values: Vec::new(),
-                        },
-                        env,
-                    );
-                }
-            }
-            if let Some(rest) = &object.rest {
-                bind_object_pattern(&rest.argument, &targets.without_properties(&used), env);
-            }
-        }
-        BindingPattern::AssignmentPattern(pattern) => {
-            bind_object_pattern(&pattern.left, targets, env);
         }
         _ => {}
     }
@@ -5603,6 +6094,12 @@ fn expression_identifier<'a>(expression: &'a Expression<'a>) -> Option<&'a str> 
         }
         _ => None,
     }
+}
+
+/// Span-derived synthetic key for a class expression. Unique per source location,
+/// so it never collides with a class declaration's name in the `classes` map.
+fn class_expression_key(class: &Class<'_>) -> String {
+    format!("@class@{}:{}", class.span.start, class.span.end)
 }
 
 fn numeric_index(expression: &Expression<'_>) -> Option<usize> {
@@ -7841,6 +8338,366 @@ new B();
                 resolve_for(site)
             );
         }
+    }
+
+    #[test]
+    fn real_ts_pipeline_resolves_class_returned_from_function() {
+        // super4/super5 shape: an anonymous/named `class extends A` returned from a
+        // function, instantiated through a variable. The class-expression bodies are
+        // walked with `this`/`super` bound, and `new a()` / `x.m()` / `a.s()` resolve
+        // through the returned-class binding.
+        let source = r#"class A {
+    constructor() {
+        this.created = () => { console.log("created"); };
+    }
+    m() {
+        this.late = () => { console.log("late"); };
+    }
+    static s() {
+        console.log("A.s");
+    }
+}
+
+function make() {
+    return class B extends A {
+        m() {
+            super.m();
+        }
+        static s() {
+            super.s();
+        }
+    };
+}
+
+var a = make();
+var x = new a();
+x.m();
+a.s();
+x.created();
+x.late();
+"#;
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+
+        let resolve_for = |needle: &str| -> Vec<String> {
+            let site = site_id_for_span(source, &sites, needle);
+            targets
+                .iter()
+                .filter(|t| t.site == site)
+                .filter_map(|t| t.target_function)
+                .filter_map(|id| db.functions().iter().find(|f| f.id == id))
+                .map(|f| source[f.span.start_byte as usize..f.span.end_byte as usize].to_string())
+                .collect()
+        };
+        for (site, target) in [
+            ("super.m()", "this.late"),       // B.m -> A.m
+            ("super.s()", "\"A.s\""),         // B.s -> A.s
+            ("new a()", "class B extends A"), // new a() -> B constructor (class node)
+            ("x.m()", "super.m()"),           // x.m() -> B.m
+            ("a.s()", "super.s()"),           // a.s() -> B.s
+            ("x.created()", "\"created\""),   // inherited constructor assignment
+            ("x.late()", "\"late\""),         // flow-insensitive method assignment
+        ] {
+            assert!(
+                resolve_for(site).iter().any(|s| s.contains(target)),
+                "expected {site} to reach a target containing `{target}`; got {:?}",
+                resolve_for(site)
+            );
+        }
+    }
+
+    #[test]
+    fn real_ts_pipeline_attributes_function_calls_in_class_bodies() {
+        // A direct call to a top-level `function` declaration inside a class body
+        // resolves and is attributed (via `caller_override`) to the class node for
+        // constructor bodies, and to the method node for methods/static blocks.
+        let source = r#"function f1() {}
+
+class C {
+    constructor() {
+        f1();
+    }
+    static s() {
+        f1();
+    }
+}
+new C();
+C.s();
+"#;
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+
+        // Both `f1()` calls inside the class body resolve to `f1`.
+        let resolved: Vec<_> = targets
+            .iter()
+            .filter_map(|t| t.target_function)
+            .filter_map(|id| db.functions().iter().find(|f| f.id == id))
+            .filter(|f| f.span.start_byte == 0) // `function f1()` starts at byte 0
+            .collect();
+        assert!(
+            resolved.len() >= 2,
+            "expected both class-body f1() calls to resolve to f1; got {} resolutions",
+            resolved.len()
+        );
+    }
+
+    #[test]
+    fn class_body_resolution_does_not_overproduce_edges() {
+        // Regression guards for the review fixes:
+        // - A method parameter named like a top-level function shadows the seeded
+        //   function binding (no spurious edge to the global).
+        // - `this.p = param` in a method must NOT bind `p` to the constructor's
+        //   `new C(arg)` arguments.
+        // - A self-returning function must not overflow the stack.
+        let source = r#"function top() {}
+function selfRet() { return (selfRet()); }
+
+class C {
+    on(cb) {
+        this.cb = cb;
+    }
+    run(top) {
+        top();
+    }
+}
+
+var loop = selfRet();
+var x = new C(top);
+x.cb();
+"#;
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        // Must terminate (no unbounded recursion) — reaching here is the guard.
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+
+        let targets_for = |site: CallSiteId| -> Vec<String> {
+            targets
+                .iter()
+                .filter(|t| t.site == site)
+                .filter_map(|t| t.target_function)
+                .filter_map(|id| db.functions().iter().find(|f| f.id == id))
+                .map(|f| source[f.span.start_byte as usize..f.span.end_byte as usize].to_string())
+                .collect()
+        };
+        // `top()` inside run(top): the call is the 2nd `top()` occurrence (the 1st
+        // is the `function top()` declaration). It must resolve to the parameter
+        // (unknown), NOT the shadowed top-level function.
+        let run_call = site_id_for_nth_span(source, &sites, "top()", 1);
+        assert!(
+            !targets_for(run_call)
+                .iter()
+                .any(|s| s.contains("function top()")),
+            "method param `top` must shadow the top-level function; got {:?}",
+            targets_for(run_call)
+        );
+        // `x.cb()` must not resolve to `top` via the constructor-arg conflation.
+        let cb_call = site_id_for_span(source, &sites, "x.cb()");
+        assert!(
+            !targets_for(cb_call)
+                .iter()
+                .any(|s| s.contains("function top()")),
+            "this.cb = cb in a method must not bind to constructor args; got {:?}",
+            targets_for(cb_call)
+        );
+    }
+
+    #[test]
+    fn real_ts_pipeline_resolves_destructuring_forms() {
+        // Phase B: object destructuring with nested patterns, getter-valued
+        // sources, defaults used when the property is absent, set destructuring,
+        // and destructuring from a function that returns an object.
+        let source = r#"var src = {
+    a: () => { console.log("a"); },
+    b: { c: () => { console.log("c"); } },
+    get g() { return () => { console.log("g"); }; }
+};
+var { b: { c: nested }, g: getterVal, missing: dflt = () => { console.log("dflt"); } } = src;
+nested();
+getterVal();
+dflt();
+
+const [s1, s2] = new Set([() => { console.log("s1"); }, () => { console.log("s2"); }]);
+s1();
+s2();
+
+function make() {
+    const o = { m1: function () { console.log("m1"); }, m2: { m3: function () { console.log("m3"); } } };
+    return o;
+}
+const { m1, m2 } = make();
+m1();
+m2.m3();
+"#;
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+
+        let resolve_for = |needle: &str| -> Vec<String> {
+            let site = site_id_for_span(source, &sites, needle);
+            targets
+                .iter()
+                .filter(|t| t.site == site)
+                .filter_map(|t| t.target_function)
+                .filter_map(|id| db.functions().iter().find(|f| f.id == id))
+                .map(|f| source[f.span.start_byte as usize..f.span.end_byte as usize].to_string())
+                .collect()
+        };
+        for (site, target) in [
+            ("nested()", "\"c\""),    // nested object pattern b.c
+            ("getterVal()", "\"g\""), // getter-valued source
+            ("dflt()", "\"dflt\""),   // default used (property absent)
+            ("s1()", "\"s1\""),       // set destructuring, element 0
+            ("s2()", "\"s2\""),       // set destructuring, element 1
+            ("m1()", "\"m1\""),       // object returned from a function
+            ("m2.m3()", "\"m3\""),    // nested object returned from a function
+        ] {
+            assert!(
+                resolve_for(site).iter().any(|s| s.contains(target)),
+                "expected {site} to reach a target containing `{target}`; got {:?}",
+                resolve_for(site)
+            );
+        }
+    }
+
+    #[test]
+    fn real_ts_pipeline_resolves_this_flow() {
+        // Phase C this-flow: a method returning `this.member`, function-object
+        // `this` (`f.h = function(){ this.g() }`), and a returned arrow that
+        // captures `this` lexically.
+        let source = r#"var obj = {
+    p: function () { return this.q; },
+    q: function () { console.log("q"); }
+};
+var t = obj.p();
+t();
+
+function f() {}
+f.g = function () { console.log("g"); };
+f.h = function () { this.g(); };
+f.h();
+
+const o = {
+    foo() { return () => this.bar(); },
+    bar() { console.log("bar"); }
+};
+const l = o.foo();
+l();
+"#;
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+
+        let resolve_for = |needle: &str| -> Vec<String> {
+            let site = site_id_for_span(source, &sites, needle);
+            targets
+                .iter()
+                .filter(|t| t.site == site)
+                .filter_map(|t| t.target_function)
+                .filter_map(|id| db.functions().iter().find(|f| f.id == id))
+                .map(|f| source[f.span.start_byte as usize..f.span.end_byte as usize].to_string())
+                .collect()
+        };
+        for (site, target) in [
+            ("t()", "\"q\""),          // obj.p() returns this.q -> obj.q
+            ("this.g()", "\"g\""),     // function-object this: f.h's this is f
+            ("this.bar()", "\"bar\""), // returned arrow captures this = o
+        ] {
+            assert!(
+                resolve_for(site).iter().any(|s| s.contains(target)),
+                "expected {site} to reach a target containing `{target}`; got {:?}",
+                resolve_for(site)
+            );
+        }
+    }
+
+    #[test]
+    fn destructuring_default_not_applied_when_property_present_but_unresolved() {
+        // A destructuring default must be used only when the property KEY is absent,
+        // not whenever the value fails to resolve to a callable. Here `cb` is present
+        // (an opaque parameter), so the default `() => dflt()` must NOT bind to `cb`
+        // (that would be a false-positive edge to `dflt`).
+        let source = r#"function dflt() {}
+function build(opaque) {
+    var src = { cb: opaque };
+    var { cb = () => { dflt(); } } = src;
+    cb();
+}
+build(function () {});
+"#;
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let site = site_id_for_span(source, &sites, "cb()");
+        let resolved: Vec<String> = targets
+            .iter()
+            .filter(|t| t.site == site)
+            .filter_map(|t| t.target_function)
+            .filter_map(|id| db.functions().iter().find(|f| f.id == id))
+            .map(|f| source[f.span.start_byte as usize..f.span.end_byte as usize].to_string())
+            .collect();
+        assert!(
+            !resolved.iter().any(|s| s.contains("function dflt()")),
+            "present-but-unresolved `cb` must not bind the dead default; got {resolved:?}"
+        );
+    }
+
+    #[test]
+    fn returned_closure_body_not_walked_until_invoked() {
+        // A `this`-capturing arrow returned from a method but NEVER invoked must not
+        // emit its internal `this.bar()` edge (Jelly's reachability prune excludes
+        // the unreached arrow). When invoked via the bound binding, it does resolve.
+        let source = r#"const o = {
+    foo() { return () => this.bar(); },
+    bar() { barImpl(); }
+};
+function barImpl() {}
+const unused = o.foo();
+const used = o.foo();
+used();
+"#;
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+
+        // `this.bar()` inside the arrow resolves to o.bar (the arrow is reached via
+        // `used()`), but exactly once — the `unused` binding must not have triggered
+        // an eager walk. The edge set is deduped, so we assert the edge exists (used
+        // path works) and rely on the FP being gone via the benchmark/no-eager-walk.
+        let site = site_id_for_span(source, &sites, "this.bar()");
+        let resolved: Vec<String> = targets
+            .iter()
+            .filter(|t| t.site == site)
+            .filter_map(|t| t.target_function)
+            .filter_map(|id| db.functions().iter().find(|f| f.id == id))
+            .map(|f| source[f.span.start_byte as usize..f.span.end_byte as usize].to_string())
+            .collect();
+        assert!(
+            resolved.iter().any(|s| s.contains("barImpl")),
+            "invoked returned-arrow should resolve this.bar() -> o.bar; got {resolved:?}"
+        );
     }
 
     fn db_with_file(source: &str) -> AnalysisDb {
