@@ -5,7 +5,7 @@ use oxc_allocator::Allocator;
 use oxc_ast::ast::{
     Argument, ArrayExpressionElement, AssignmentTarget, BinaryOperator, BindingPattern,
     CallExpression, Class, ClassElement, Declaration, ExportDefaultDeclarationKind, Expression,
-    ForStatementLeft, FunctionBody, ImportDeclarationSpecifier, MethodDefinition,
+    ForStatementLeft, FunctionBody, ImportDeclarationSpecifier, LogicalOperator, MethodDefinition,
     MethodDefinitionKind, ModuleExportName, ObjectProperty, ObjectPropertyKind, Program,
     PropertyKey, PropertyKind, Statement, VariableDeclaration, VariableDeclarator,
 };
@@ -80,6 +80,8 @@ pub(crate) fn resolve_ts_value_flow_targets(
             caller_override: None,
             current_super: None,
             invocation_depth: 0,
+            iterator_next_ordinals: BTreeMap::new(),
+            iterator_next_starts: BTreeMap::new(),
             rows: Vec::new(),
             next_id,
         };
@@ -141,6 +143,15 @@ struct TsValueFlowCollector<'db, 'ast, 'env> {
     /// which would otherwise loop forever because the per-call `depth` resets to 0
     /// when a return statement re-enters `callable_return_targets_from_expression`.
     invocation_depth: usize,
+    /// Program-global positional index of every `receiver.next()` call: maps the
+    /// `.next()` call's `span.start` to its 0-based ordinal among `.next()` calls
+    /// on the same receiver name (in source order). Used to sequence generator
+    /// `.next()` results positionally instead of lumping every yield onto every
+    /// `.next()`.
+    iterator_next_ordinals: BTreeMap<u32, usize>,
+    /// Sorted `.next()` call `span.start`s per receiver name, so a `for-of` over
+    /// an iterator can skip the yields already consumed by preceding `.next()`s.
+    iterator_next_starts: BTreeMap<String, Vec<u32>>,
     rows: Vec<CallTargetFact>,
     next_id: u64,
 }
@@ -308,6 +319,8 @@ fn compute_module_export_summaries(
                 caller_override: None,
                 current_super: None,
                 invocation_depth: 0,
+                iterator_next_ordinals: BTreeMap::new(),
+                iterator_next_starts: BTreeMap::new(),
                 rows: Vec::new(),
                 next_id: 0,
             };
@@ -326,6 +339,7 @@ fn compute_module_export_summaries(
 
 impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
     fn collect_program(&mut self, program: &'ast Program<'ast>) {
+        self.index_iterator_next_calls(program);
         self.collect_expression_function_flows(program);
         self.collect_function_declarations(program);
         self.collect_class_declarations(program);
@@ -344,6 +358,42 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         // Resolve intra-method calls (`this.foo()`, `super.m()`, `this.#bar()`)
         // with `this`/`super` bound, after the module env is fully populated.
         self.collect_class_body_call_flows(program, &env);
+    }
+
+    /// Program-global pre-scan assigning each `receiver.next()` call a 0-based
+    /// ordinal among `.next()` calls on the same receiver name (by source
+    /// position). Order-independent: spans are collected in any traversal order
+    /// then sorted, so the ordinal is purely a function of source layout. Drives
+    /// sequence-sensitive generator resolution (the k-th `.next()` → k-th yield).
+    fn index_iterator_next_calls(&mut self, program: &'ast Program<'ast>) {
+        let mut by_name: BTreeMap<String, Vec<u32>> = BTreeMap::new();
+        for statement in &program.body {
+            index_next_calls_in_statement(statement, &mut by_name);
+        }
+        for (name, mut starts) in by_name {
+            starts.sort_unstable();
+            starts.dedup();
+            for (ordinal, start) in starts.iter().enumerate() {
+                self.iterator_next_ordinals.insert(*start, ordinal);
+            }
+            self.iterator_next_starts.insert(name, starts);
+        }
+    }
+
+    /// The ordinal of a `receiver.next()` call (its position among `.next()`
+    /// calls on the same receiver), or `None` if it was not indexed.
+    fn next_call_ordinal(&self, call: &CallExpression<'ast>) -> Option<usize> {
+        self.iterator_next_ordinals.get(&call.span.start).copied()
+    }
+
+    /// How many `.next()` calls on `name` occur lexically before `before` —
+    /// the number of yields a `for-of`/`for-await` over that iterator has
+    /// already consumed.
+    fn next_calls_consumed_before(&self, name: &str, before: u32) -> usize {
+        self.iterator_next_starts
+            .get(name)
+            .map(|starts| starts.iter().filter(|start| **start < before).count())
+            .unwrap_or(0)
     }
 
     /// Walk each class method and constructor body for call resolution with
@@ -1223,7 +1273,8 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 self.collect_expression(&statement.expression, owner, env);
             }
             Statement::ForOfStatement(statement) => {
-                let iterable_targets = self.targets_for_iterable(&statement.right, env);
+                let iterable_targets =
+                    self.targets_for_iterable(&statement.right, env, statement.span.start);
                 self.collect_for_of_bindings(
                     &statement.left,
                     &iterable_targets,
@@ -1248,6 +1299,18 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 if let Some(argument) = &statement.argument {
                     self.collect_expression(argument, owner, env);
                 }
+            }
+            Statement::ForInStatement(statement) => {
+                // `for (const k in obj) … obj[k]() …`: mark `k` as an iteration
+                // key so a computed access keyed on it ranges over all properties.
+                if let ForStatementLeft::VariableDeclaration(variable) = &statement.left {
+                    for declarator in &variable.declarations {
+                        if let Some(name) = binding_identifier_name(&declarator.id) {
+                            env.forin_keys.insert(name);
+                        }
+                    }
+                }
+                self.collect_statement(&statement.body, owner, env);
             }
             _ => {}
         }
@@ -1367,9 +1430,21 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             }
             if let Some(name) = binding_identifier_name(&declarator.id)
                 && let Some(init) = &declarator.init
+                && let Some(sequence) = self.async_generator_sequence_targets(init, env)
+            {
+                env.generator_sequences.insert(name, sequence);
+            }
+            if let Some(name) = binding_identifier_name(&declarator.id)
+                && let Some(init) = &declarator.init
                 && let Some(targets) = self.generator_iterator_targets(init, env)
             {
                 env.async_iterators.insert(name, targets);
+            }
+            if let Some(name) = binding_identifier_name(&declarator.id)
+                && let Some(init) = &declarator.init
+                && let Some(sequence) = self.generator_iterator_sequence(init, env)
+            {
+                env.iterator_sequences.insert(name, sequence);
             }
             if let Some(init) = &declarator.init
                 && let Some(targets) = self.collection_targets_from_expression(init, env)
@@ -1445,6 +1520,9 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             Expression::AwaitExpression(expression) => {
                 self.collect_expression(&expression.argument, owner, env);
             }
+            Expression::TaggedTemplateExpression(tagged) => {
+                self.collect_tagged_template_expression(tagged, owner, env);
+            }
             Expression::AssignmentExpression(assignment) => {
                 self.collect_assignment_value_flow(assignment, env);
                 if let Some(collection_name) = collection_assignment_target_name(&assignment.left)
@@ -1499,6 +1577,31 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 .entry(class_name.to_string())
                 .or_default()
                 .super_name = Some(super_name.to_string());
+        }
+
+        // `C.prototype = { foo() {} }` (or a variable holding such an object):
+        // the object's members become C's instance methods, so `new C().foo()`
+        // resolves. (`C.prototype = new S()` is handled above as a super link.)
+        if let Some(class_name) = prototype_object_assignment_name(&assignment.left)
+            && !matches!(&assignment.right, Expression::NewExpression(_))
+            && let Some(object) = self.object_targets_from_expression(&assignment.right, env)
+        {
+            self.classes
+                .entry(class_name.to_string())
+                .or_default()
+                .instance_object
+                .merge(object);
+            return;
+        }
+
+        // `obj.__proto__ = proto` links `obj`'s prototype, so `obj` inherits the
+        // prototype's members (same effect as `Object.setPrototypeOf`).
+        if let Some(object_name) = proto_assignment_object_name(&assignment.left)
+            && let Some(proto) = self.object_targets_from_expression(&assignment.right, env)
+            && let Some(target) = env.objects.get_mut(object_name)
+        {
+            target.merge(proto);
+            return;
         }
 
         if let Some(property) = this_assignment_property(&assignment.left) {
@@ -2505,7 +2608,21 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         if let Expression::ComputedMemberExpression(member) = &call.callee {
             let object_name = expression_identifier(&member.object);
             if let Some(object) = self.object_targets_from_expression(&member.object, env) {
-                for property in self.computed_member_property_names(&member.expression, env) {
+                // A `for-in` key ranges over every own property, so `obj[k]()`
+                // dispatches to the union of the object's members.
+                let property_names = if expression_identifier(&member.expression)
+                    .is_some_and(|name| env.forin_keys.contains(name))
+                {
+                    object
+                        .properties
+                        .keys()
+                        .chain(object.getter_properties.keys())
+                        .cloned()
+                        .collect::<Vec<_>>()
+                } else {
+                    self.computed_member_property_names(&member.expression, env)
+                };
+                for property in property_names {
                     if let Some(targets) = object.properties.get(&property).cloned() {
                         self.emit_call_span_targets(
                             owner,
@@ -2626,7 +2743,27 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 if let (Some(target), Some(descriptor)) =
                     (env.objects.get_mut(target_name), descriptor)
                 {
-                    copy_descriptor_value_to_property(target, property, &descriptor);
+                    copy_descriptor_to_property(target, property, &descriptor);
+                }
+            }
+            Some("Object.setPrototypeOf") => {
+                // `Object.setPrototypeOf(obj, proto)` makes `obj` inherit `proto`'s
+                // members, so `obj.m()` dispatches to the prototype.
+                let Some(target_name) = call
+                    .arguments
+                    .first()
+                    .and_then(argument_expression)
+                    .and_then(expression_identifier)
+                else {
+                    return;
+                };
+                let proto = call
+                    .arguments
+                    .get(1)
+                    .and_then(argument_expression)
+                    .and_then(|expression| self.object_targets_from_expression(expression, env));
+                if let (Some(target), Some(proto)) = (env.objects.get_mut(target_name), proto) {
+                    target.merge(proto);
                 }
             }
             Some("Object.defineProperties") => {
@@ -2646,7 +2783,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 if let (Some(target), Some(descriptors)) =
                     (env.objects.get_mut(target_name), descriptors)
                 {
-                    target.merge(descriptors);
+                    apply_descriptor_map(target, &descriptors);
                 }
             }
             _ => {}
@@ -2688,6 +2825,64 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         let mut callee_env = FlowEnv::default();
         self.bind_invocation_arguments(flow, &arguments, &object_arguments, &mut callee_env);
         self.collect_function_flow_invocation(flow, &mut callee_env);
+    }
+
+    /// Resolve a tagged template `tag`…${e1}${e2}`…``. The call edge itself comes
+    /// from the MIR call site; here we flow the interpolations into the tag's
+    /// parameters (`tag(strings, e1, e2)`, so `e_i` → param `i + 1`) and walk the
+    /// tag body so its uses of those parameters resolve.
+    fn collect_tagged_template_expression(
+        &mut self,
+        tagged: &'ast oxc_ast::ast::TaggedTemplateExpression<'ast>,
+        owner: &'db FunctionFact,
+        env: &mut FlowEnv,
+    ) {
+        self.collect_expression(&tagged.tag, owner, env);
+        for expression in &tagged.quasi.expressions {
+            self.collect_expression(expression, owner, env);
+        }
+        if let Expression::Identifier(identifier) = &tagged.tag
+            && let Some(flow) = self
+                .function_declarations
+                .get(identifier.name.as_str())
+                .cloned()
+        {
+            self.collect_tagged_template_parameter_flows(&flow, tagged, env);
+        }
+    }
+
+    fn collect_tagged_template_parameter_flows(
+        &mut self,
+        flow: &FunctionFlow<'db, 'ast>,
+        tagged: &'ast oxc_ast::ast::TaggedTemplateExpression<'ast>,
+        env: &FlowEnv,
+    ) {
+        // Argument slot 0 is the implicit `strings` array; interpolations follow.
+        let mut arguments = vec![CollectionTargets::default()];
+        let mut object_arguments: Vec<Option<ObjectTargets>> = vec![None];
+        for expression in &tagged.quasi.expressions {
+            arguments.push(
+                self.targets_from_argument_expression(expression, env)
+                    .unwrap_or_default(),
+            );
+            object_arguments.push(self.object_targets_from_expression(expression, env));
+        }
+        let mut callee_env = FlowEnv::default();
+        self.bind_invocation_arguments(flow, &arguments, &object_arguments, &mut callee_env);
+        self.collect_function_flow_invocation(flow, &mut callee_env);
+    }
+
+    /// The callable values a tagged template evaluates to — the tag function's
+    /// return value — so `const x = tag`…``; x()` resolves.
+    fn tagged_template_return_targets(
+        &self,
+        tagged: &'ast oxc_ast::ast::TaggedTemplateExpression<'ast>,
+        env: &FlowEnv,
+    ) -> Option<CollectionTargets> {
+        let name = expression_identifier(&tagged.tag)?;
+        let flow = self.function_declarations.get(name)?;
+        let returned = returned_expression_from_statements(&flow.body.statements)?;
+        Some(self.callable_targets_from_expression(returned, env))
     }
 
     fn collect_receiver_side_effects(
@@ -3716,6 +3911,9 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 self.collection_targets_from_new_expression(expression, env)
             }
             Expression::CallExpression(call) => self.collection_targets_from_call(call, env),
+            Expression::TaggedTemplateExpression(tagged) => {
+                self.tagged_template_return_targets(tagged, env)
+            }
             _ => None,
         }
     }
@@ -3750,15 +3948,30 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         &self,
         expression: &'ast Expression<'ast>,
         env: &FlowEnv,
+        loop_start: u32,
     ) -> CollectionTargets {
         match expression {
-            Expression::Identifier(identifier) => env
-                .async_iterators
-                .get(identifier.name.as_str())
-                .or_else(|| env.bindings.get(identifier.name.as_str()))
-                .cloned()
-                .unwrap_or_default(),
+            Expression::Identifier(identifier) => {
+                // `for-of` over a named iterator yields the values not yet
+                // consumed by preceding `.next()` calls, and never the `return`
+                // value (which is `{done: true}`, outside the iteration).
+                if let Some(sequence) = env.iterator_sequences.get(identifier.name.as_str()) {
+                    let offset =
+                        self.next_calls_consumed_before(identifier.name.as_str(), loop_start);
+                    return sequence.iterated(offset);
+                }
+                env.async_iterators
+                    .get(identifier.name.as_str())
+                    .or_else(|| env.bindings.get(identifier.name.as_str()))
+                    .cloned()
+                    .unwrap_or_default()
+            }
             Expression::CallExpression(call) => {
+                // A fresh iterator (`for await (const q of gen())`) iterates all
+                // yields from the start, excluding the `return` value.
+                if let Some(sequence) = self.generator_sequence_from_call(call, env, 0) {
+                    return sequence.iterated(0);
+                }
                 if let Some(name) = callee_identifier(&call.callee)
                     && let Some(targets) = env.async_generators.get(name)
                 {
@@ -3970,8 +4183,43 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             Expression::ParenthesizedExpression(expression) => {
                 self.object_targets_from_expression(&expression.expression, env)
             }
+            // `a || b` / `a ?? b`: a definite (truthy / non-null) `a` short-circuits
+            // to `a`, matching how `(o1 || o2).f()` resolves to `o1` only; fall back
+            // to `b` when `a` does not resolve. `a && b` is symmetric (`b` wins).
+            Expression::LogicalExpression(logical) => {
+                let (first, second) = match logical.operator {
+                    LogicalOperator::And => (&logical.right, &logical.left),
+                    LogicalOperator::Or | LogicalOperator::Coalesce => {
+                        (&logical.left, &logical.right)
+                    }
+                };
+                self.object_targets_from_expression(first, env)
+                    .or_else(|| self.object_targets_from_expression(second, env))
+            }
+            // `cond ? a : b` can take either branch, so the result is their union.
+            Expression::ConditionalExpression(conditional) => {
+                self.merged_object_targets([&conditional.consequent, &conditional.alternate], env)
+            }
             _ => None,
         }
+    }
+
+    /// Union the object shapes of several alternative expressions (the branches of
+    /// a logical/conditional expression). `None` only if no branch resolves.
+    fn merged_object_targets(
+        &self,
+        expressions: [&'ast Expression<'ast>; 2],
+        env: &FlowEnv,
+    ) -> Option<ObjectTargets> {
+        let mut merged = ObjectTargets::default();
+        let mut found = false;
+        for expression in expressions {
+            if let Some(object) = self.object_targets_from_expression(expression, env) {
+                merged.merge(object);
+                found = true;
+            }
+        }
+        found.then_some(merged)
     }
 
     /// Object returned by a call to a same-file function declaration that builds
@@ -4023,7 +4271,42 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             return self.object_targets_from_expression(inner, env);
         }
         match callee_text(&call.callee).as_deref() {
-            Some("Object.create") => return Some(ObjectTargets::default()),
+            Some("Object.assign") => {
+                // `Object.assign(target, ...sources)` returns the target with every
+                // source's own properties copied in, so `const o = Object.assign({},
+                // a, b)` resolves `o`'s members. (The in-place mutation of a *named*
+                // target is handled separately in `collect_native_object_call`.)
+                let mut merged = ObjectTargets::default();
+                for argument in call.arguments.iter().filter_map(argument_expression) {
+                    if let Some(object) = self.object_targets_from_expression(argument, env) {
+                        merged.merge(object);
+                    }
+                }
+                return Some(merged);
+            }
+            Some("Object.create") => {
+                // `Object.create(proto, descriptors)`: inherit the prototype's
+                // properties (first argument), then apply the optional descriptor
+                // map (second argument, same shape as `defineProperties`).
+                let mut target = ObjectTargets::default();
+                if let Some(proto) = call
+                    .arguments
+                    .first()
+                    .and_then(argument_expression)
+                    .and_then(|expression| self.object_targets_from_expression(expression, env))
+                {
+                    target.merge(proto);
+                }
+                if let Some(descriptors) = call
+                    .arguments
+                    .get(1)
+                    .and_then(argument_expression)
+                    .and_then(|expression| self.object_targets_from_expression(expression, env))
+                {
+                    apply_descriptor_map(&mut target, &descriptors);
+                }
+                return Some(target);
+            }
             Some("Object.getOwnPropertyDescriptor") => {
                 let source = call
                     .arguments
@@ -4042,15 +4325,23 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                     .arguments
                     .first()
                     .and_then(argument_expression)
-                    .and_then(|expression| self.object_targets_from_expression(expression, env));
+                    .and_then(|expression| self.object_targets_from_expression(expression, env))
+                    .map(|source| descriptors_for_object(&source));
             }
             _ => {}
         }
 
-        if let Some((iterator_name, "next")) = static_member_call(&call.callee)
-            && let Some(values) = env.async_iterators.get(iterator_name)
-        {
-            return Some(iterator_result_object(values));
+        if let Some((iterator_name, "next")) = static_member_call(&call.callee) {
+            // Sequence-sensitive: the k-th `.next()` delivers the k-th yield (or
+            // the `return` value at the terminal step), not every yield at once.
+            if let Some(sequence) = env.iterator_sequences.get(iterator_name)
+                && let Some(ordinal) = self.next_call_ordinal(call)
+            {
+                return Some(iterator_result_object(&sequence.result_at(ordinal)));
+            }
+            if let Some(values) = env.async_iterators.get(iterator_name) {
+                return Some(iterator_result_object(values));
+            }
         }
 
         let Expression::StaticMemberExpression(member) = &call.callee else {
@@ -4138,17 +4429,28 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         {
             return Some(targets.clone());
         }
-        if let Some((iterator_name, "next")) = static_member_call(&call.callee)
-            && let Some(values) = env.async_iterators.get(iterator_name)
-        {
-            return Some(PromiseTargets {
-                fulfilled: CollectionTargets {
-                    keys: Vec::new(),
-                    values: Vec::new(),
-                    object_values: vec![iterator_result_object(values)],
-                },
-                rejected: CollectionTargets::default(),
-            });
+        if let Some((iterator_name, "next")) = static_member_call(&call.callee) {
+            // Async generator `.next()` returns a promise of the sequenced result
+            // object; resolve the k-th `.next()` to the k-th yielded value.
+            let result = if let Some(sequence) = env.iterator_sequences.get(iterator_name)
+                && let Some(ordinal) = self.next_call_ordinal(call)
+            {
+                Some(iterator_result_object(&sequence.result_at(ordinal)))
+            } else {
+                env.async_iterators
+                    .get(iterator_name)
+                    .map(iterator_result_object)
+            };
+            if let Some(result) = result {
+                return Some(PromiseTargets {
+                    fulfilled: CollectionTargets {
+                        keys: Vec::new(),
+                        values: Vec::new(),
+                        object_values: vec![result],
+                    },
+                    rejected: CollectionTargets::default(),
+                });
+            }
         }
 
         match callee_text(&call.callee).as_deref() {
@@ -4451,6 +4753,247 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 self.yield_targets_from_expression(&expression.expression, env)
             }
             _ => CollectionTargets::default(),
+        }
+    }
+
+    // --- Sequence-sensitive generator model (one ordered step per yield) ---
+
+    fn async_generator_sequence_targets(
+        &self,
+        expression: &'ast Expression<'ast>,
+        env: &FlowEnv,
+    ) -> Option<GeneratorSequence> {
+        match expression {
+            Expression::FunctionExpression(function) if function.r#async && function.generator => {
+                function
+                    .body
+                    .as_deref()
+                    .map(|body| self.yield_sequence_from_statements(&body.statements, env, 0))
+            }
+            Expression::ParenthesizedExpression(expression) => {
+                self.async_generator_sequence_targets(&expression.expression, env)
+            }
+            _ => None,
+        }
+    }
+
+    fn generator_iterator_sequence(
+        &self,
+        expression: &'ast Expression<'ast>,
+        env: &FlowEnv,
+    ) -> Option<GeneratorSequence> {
+        match expression {
+            Expression::CallExpression(call) => self.generator_sequence_from_call(call, env, 0),
+            Expression::ParenthesizedExpression(expression) => {
+                self.generator_iterator_sequence(&expression.expression, env)
+            }
+            _ => None,
+        }
+    }
+
+    fn generator_sequence_from_call(
+        &self,
+        call: &'ast CallExpression<'ast>,
+        env: &FlowEnv,
+        depth: usize,
+    ) -> Option<GeneratorSequence> {
+        if depth > 8 {
+            return None;
+        }
+        if let Some(name) = callee_identifier(&call.callee) {
+            if let Some(seq) = env.generator_sequences.get(name) {
+                return Some(seq.clone());
+            }
+            if let Some(flow) = self.function_declarations.get(name)
+                && flow.generator
+            {
+                return Some(self.generator_sequence_from_flow(flow, env, depth + 1));
+            }
+        }
+        if let Expression::StaticMemberExpression(member) = &call.callee
+            && let Some(object) = self.object_targets_from_expression(&member.object, env)
+            && let Some(function_ids) = object.properties.get(member.property.name.as_str())
+        {
+            let mut seq = GeneratorSequence::default();
+            let mut found = false;
+            for function_id in function_ids {
+                if let Some(flow) = self.function_flows_by_id.get(function_id)
+                    && flow.generator
+                {
+                    seq.merge(self.generator_sequence_from_flow(flow, env, depth + 1));
+                    found = true;
+                }
+            }
+            if found {
+                return Some(seq);
+            }
+        }
+        None
+    }
+
+    fn generator_sequence_from_flow(
+        &self,
+        flow: &FunctionFlow<'db, 'ast>,
+        env: &FlowEnv,
+        depth: usize,
+    ) -> GeneratorSequence {
+        if depth > 8 {
+            return GeneratorSequence::default();
+        }
+        self.yield_sequence_from_statements(&flow.body.statements, env, depth)
+    }
+
+    fn yield_sequence_from_statements(
+        &self,
+        statements: &'ast oxc_allocator::Vec<'ast, Statement<'ast>>,
+        env: &FlowEnv,
+        depth: usize,
+    ) -> GeneratorSequence {
+        let mut seq = GeneratorSequence::default();
+        for statement in statements {
+            self.collect_yield_sequence_from_statement(statement, env, depth, &mut seq);
+        }
+        seq
+    }
+
+    fn collect_yield_sequence_from_statement(
+        &self,
+        statement: &'ast Statement<'ast>,
+        env: &FlowEnv,
+        depth: usize,
+        seq: &mut GeneratorSequence,
+    ) {
+        match statement {
+            Statement::ExpressionStatement(statement) => {
+                self.collect_yield_sequence_from_expression(&statement.expression, env, depth, seq);
+            }
+            Statement::VariableDeclaration(variable) => {
+                for declarator in &variable.declarations {
+                    if let Some(init) = &declarator.init {
+                        self.collect_yield_sequence_from_expression(init, env, depth, seq);
+                    }
+                }
+            }
+            Statement::ReturnStatement(statement) => {
+                if let Some(argument) = &statement.argument {
+                    seq.ret
+                        .extend(self.callable_targets_from_expression(argument, env));
+                }
+            }
+            Statement::BlockStatement(block) => {
+                for inner in &block.body {
+                    self.collect_yield_sequence_from_statement(inner, env, depth, seq);
+                }
+            }
+            Statement::IfStatement(statement) => {
+                self.collect_yield_sequence_from_statement(&statement.consequent, env, depth, seq);
+                if let Some(alternate) = &statement.alternate {
+                    self.collect_yield_sequence_from_statement(alternate, env, depth, seq);
+                }
+            }
+            Statement::ForOfStatement(statement) => {
+                self.collect_yield_sequence_from_statement(&statement.body, env, depth, seq);
+            }
+            Statement::ForInStatement(statement) => {
+                self.collect_yield_sequence_from_statement(&statement.body, env, depth, seq);
+            }
+            Statement::ForStatement(statement) => {
+                self.collect_yield_sequence_from_statement(&statement.body, env, depth, seq);
+            }
+            Statement::WhileStatement(statement) => {
+                self.collect_yield_sequence_from_statement(&statement.body, env, depth, seq);
+            }
+            Statement::DoWhileStatement(statement) => {
+                self.collect_yield_sequence_from_statement(&statement.body, env, depth, seq);
+            }
+            _ => {}
+        }
+    }
+
+    fn collect_yield_sequence_from_expression(
+        &self,
+        expression: &'ast Expression<'ast>,
+        env: &FlowEnv,
+        depth: usize,
+        seq: &mut GeneratorSequence,
+    ) {
+        match expression {
+            Expression::YieldExpression(yield_expression) => {
+                let Some(argument) = &yield_expression.argument else {
+                    // `yield;` occupies a position but produces no callable value.
+                    seq.steps.push(CollectionTargets::default());
+                    return;
+                };
+                if yield_expression.delegate {
+                    self.append_yield_star_steps(argument, env, depth, seq);
+                } else {
+                    seq.steps
+                        .push(self.callable_targets_from_expression(argument, env));
+                }
+            }
+            Expression::AssignmentExpression(assignment) => {
+                self.collect_yield_sequence_from_expression(&assignment.right, env, depth, seq);
+            }
+            Expression::SequenceExpression(sequence) => {
+                for inner in &sequence.expressions {
+                    self.collect_yield_sequence_from_expression(inner, env, depth, seq);
+                }
+            }
+            Expression::ParenthesizedExpression(inner) => {
+                self.collect_yield_sequence_from_expression(&inner.expression, env, depth, seq);
+            }
+            Expression::AwaitExpression(inner) => {
+                self.collect_yield_sequence_from_expression(&inner.argument, env, depth, seq);
+            }
+            _ => {}
+        }
+    }
+
+    /// `yield* X` splices X's elements into the sequence as successive steps:
+    /// an array literal contributes one step per element, a delegated generator
+    /// its own steps, so `.next()` ordinals line up with the flattened order.
+    fn append_yield_star_steps(
+        &self,
+        argument: &'ast Expression<'ast>,
+        env: &FlowEnv,
+        depth: usize,
+        seq: &mut GeneratorSequence,
+    ) {
+        match argument {
+            Expression::ArrayExpression(array) => {
+                for element in &array.elements {
+                    if let Some(inner) = array_element_expression(element) {
+                        seq.steps
+                            .push(self.callable_targets_from_expression(inner, env));
+                    }
+                }
+            }
+            Expression::CallExpression(call) => {
+                if let Some(delegated) = self.generator_sequence_from_call(call, env, depth + 1) {
+                    seq.steps.extend(delegated.steps);
+                } else if let Some(collection) =
+                    self.collection_targets_from_expression(argument, env)
+                {
+                    seq.steps.push(collection);
+                }
+            }
+            Expression::Identifier(identifier) => {
+                if let Some(delegated) = env.iterator_sequences.get(identifier.name.as_str()) {
+                    seq.steps.extend(delegated.steps.iter().cloned());
+                } else if let Some(collection) =
+                    self.collection_targets_from_expression(argument, env)
+                {
+                    seq.steps.push(collection);
+                }
+            }
+            Expression::ParenthesizedExpression(inner) => {
+                self.append_yield_star_steps(&inner.expression, env, depth, seq);
+            }
+            _ => {
+                if let Some(collection) = self.collection_targets_from_expression(argument, env) {
+                    seq.steps.push(collection);
+                }
+            }
         }
     }
 
@@ -4793,8 +5336,23 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 object_values: Vec::new(),
             };
         }
-        self.collection_targets_from_expression(expression, env)
-            .unwrap_or_default()
+        if let Some(collection) = self.collection_targets_from_expression(expression, env) {
+            return collection;
+        }
+        // A bare reference to a top-level `function` declaration used as a value
+        // (`{ value: f1 }`, `obj.x = f1`) resolves to that function, unless a
+        // local binding of the same name shadows it.
+        if let Expression::Identifier(identifier) = expression
+            && !env.bindings.contains_key(identifier.name.as_str())
+            && let Some(flow) = self.function_declarations.get(identifier.name.as_str())
+        {
+            return CollectionTargets {
+                keys: Vec::new(),
+                values: vec![flow.function.id],
+                object_values: Vec::new(),
+            };
+        }
+        CollectionTargets::default()
     }
 
     fn fulfilled_targets_from_expression(
@@ -4972,6 +5530,31 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             {
                 for name in names {
                     targets.add_object_property(name, env.this_object.clone());
+                }
+            } else if let Some(env) = env
+                && let Expression::Identifier(_) = &property.value
+                && let Some(object) = self.object_targets_from_expression(&property.value, env)
+            {
+                // A property whose value references an object binding
+                // (`{ f: descr }` where `const descr = { value: fn }`) inlines
+                // that object's shape. `{ __proto__: Base }` instead links the
+                // prototype, so the base's members are inherited directly.
+                for name in names {
+                    if name == "__proto__" {
+                        targets.merge(object.clone());
+                    } else {
+                        targets.add_object_property(name, object.clone());
+                    }
+                }
+            } else if let Some(env) = env {
+                // A property whose value is a reference to a callable (a `function`
+                // declaration or a bound callable variable), e.g. a descriptor's
+                // `{ value: f1 }`, binds the property to that function.
+                let callables = self.callable_targets_from_expression(&property.value, env);
+                for name in names {
+                    for id in &callables.values {
+                        targets.add_property_target(name.clone(), *id);
+                    }
                 }
             }
         }
@@ -5282,8 +5865,67 @@ struct FlowEnv {
     async_functions: BTreeMap<String, PromiseTargets>,
     async_generators: BTreeMap<String, CollectionTargets>,
     async_iterators: BTreeMap<String, CollectionTargets>,
+    /// Ordered yield/return sequence of a generator **function** bound to a name
+    /// (`function* g(){…}` / `const g = async function*(){…}`), used to resolve
+    /// the k-th `.next()` on an instance of it to the k-th yielded value.
+    generator_sequences: BTreeMap<String, GeneratorSequence>,
+    /// Ordered yield/return sequence of an **iterator instance** bound to a name
+    /// (`const it = g()`), so `it.next()` is sequenced positionally and `for-of`
+    /// over `it` iterates the yields without the `return` value.
+    iterator_sequences: BTreeMap<String, GeneratorSequence>,
     this_object: ObjectTargets,
     this_callables: CollectionTargets,
+    /// Loop variables bound by a `for (const k in obj)` head. A computed access
+    /// `obj[k]` keyed on such a variable ranges over every own property, so it
+    /// resolves to the union of the object's property values.
+    forin_keys: std::collections::BTreeSet<String>,
+}
+
+/// The ordered result sequence of a generator: each `yield` (with `yield*`
+/// flattened to one slot per delegated value) is a step, and the `return` value
+/// is delivered only by the terminal `.next()` (and excluded from `for-of`).
+/// Jelly models generators sequence-sensitively — the first `.next()` yields the
+/// first value, the next `.next()` the second, etc. — so resolving every
+/// `.next()` to every yield (the flow-insensitive lump) over-approximates.
+#[derive(Clone, Debug, Default)]
+struct GeneratorSequence {
+    steps: Vec<CollectionTargets>,
+    ret: CollectionTargets,
+}
+
+impl GeneratorSequence {
+    /// The result delivered by the `ordinal`-th `.next()` (0-based): the matching
+    /// yield, or the `return` value at the terminal step (one past the yields).
+    fn result_at(&self, ordinal: usize) -> CollectionTargets {
+        match ordinal.cmp(&self.steps.len()) {
+            std::cmp::Ordering::Less => self.steps[ordinal].clone(),
+            std::cmp::Ordering::Equal => self.ret.clone(),
+            std::cmp::Ordering::Greater => CollectionTargets::default(),
+        }
+    }
+
+    /// The values produced by iterating (`for-of` / `for-await`) from `offset`
+    /// onward — the remaining yields, never the `return` value.
+    fn iterated(&self, offset: usize) -> CollectionTargets {
+        let mut targets = CollectionTargets::default();
+        for step in self.steps.iter().skip(offset) {
+            targets.extend(step.clone());
+        }
+        targets
+    }
+
+    /// Positionally union another sequence's steps (and return value) into this
+    /// one, for a `.next()` whose receiver could be one of several generators.
+    fn merge(&mut self, other: GeneratorSequence) {
+        for (index, step) in other.steps.into_iter().enumerate() {
+            if index < self.steps.len() {
+                self.steps[index].extend(step);
+            } else {
+                self.steps.push(step);
+            }
+        }
+        self.ret.extend(other.ret);
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -5551,6 +6193,35 @@ fn descriptor_for_property(source: &ObjectTargets, property: &str) -> ObjectTarg
     descriptor
 }
 
+/// The full property-descriptor map of an object (`Object.getOwnPropertyDescriptors`):
+/// each property becomes `{ value }` (or `{ get }` / `{ set }` for accessors), so
+/// feeding the result back through `defineProperties`/`create` round-trips.
+fn descriptors_for_object(source: &ObjectTargets) -> ObjectTargets {
+    let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    names.extend(source.properties.keys().cloned());
+    names.extend(source.object_properties.keys().cloned());
+    names.extend(source.collection_properties.keys().cloned());
+    names.extend(source.getter_properties.keys().cloned());
+    names.extend(source.setter_properties.keys().cloned());
+
+    let mut descriptors = ObjectTargets::default();
+    for name in names {
+        let mut descriptor = descriptor_for_property(source, &name);
+        if let Some(getters) = source.getter_properties.get(&name) {
+            for getter in getters {
+                descriptor.add_property_target("get".to_string(), *getter);
+            }
+        }
+        if let Some(setters) = source.setter_properties.get(&name) {
+            for setter in setters {
+                descriptor.add_property_target("set".to_string(), *setter);
+            }
+        }
+        descriptors.add_object_property(name, descriptor);
+    }
+    descriptors
+}
+
 fn copy_descriptor_value_to_property(
     target: &mut ObjectTargets,
     property: String,
@@ -5566,6 +6237,35 @@ fn copy_descriptor_value_to_property(
     }
     if let Some(targets) = descriptor.collection_properties.get("value") {
         target.add_collection_property(property, targets.clone());
+    }
+}
+
+/// Apply a single property descriptor (`{ value }`, `{ get }`, or `{ set }`) to
+/// `target[property]`, mapping the descriptor's accessor functions to the
+/// object's getter/setter slots so `obj.prop` / `obj.prop = x` resolve.
+fn copy_descriptor_to_property(
+    target: &mut ObjectTargets,
+    property: String,
+    descriptor: &ObjectTargets,
+) {
+    copy_descriptor_value_to_property(target, property.clone(), descriptor);
+    if let Some(getters) = descriptor.properties.get("get") {
+        for getter in getters {
+            target.add_getter_target(property.clone(), *getter);
+        }
+    }
+    if let Some(setters) = descriptor.properties.get("set") {
+        for setter in setters {
+            target.add_setter_target(property.clone(), *setter);
+        }
+    }
+}
+
+/// Apply a property-descriptor map (`{ f: { value }, foo: { get } }`, the second
+/// argument of `Object.defineProperties` / `Object.create`) to `target`.
+fn apply_descriptor_map(target: &mut ObjectTargets, descriptors: &ObjectTargets) {
+    for (name, descriptor) in &descriptors.object_properties {
+        copy_descriptor_to_property(target, name.clone(), descriptor);
     }
 }
 
@@ -5848,6 +6548,29 @@ fn prototype_member_assignment_name<'a>(
     }
     let constructor = expression_identifier(&object.object)?;
     Some((constructor, member.property.name.as_str()))
+}
+
+/// The object name in `obj.__proto__ = …` (a dynamic prototype link).
+fn proto_assignment_object_name<'a>(target: &'a AssignmentTarget<'a>) -> Option<&'a str> {
+    let AssignmentTarget::StaticMemberExpression(member) = target else {
+        return None;
+    };
+    if member.property.name != "__proto__" {
+        return None;
+    }
+    expression_identifier(&member.object)
+}
+
+/// The constructor name in `C.prototype = …` (assigning a whole object to the
+/// prototype, as opposed to `C.prototype.m = …` or `C.prototype = new S()`).
+fn prototype_object_assignment_name<'a>(target: &'a AssignmentTarget<'a>) -> Option<&'a str> {
+    let AssignmentTarget::StaticMemberExpression(member) = target else {
+        return None;
+    };
+    if member.property.name != "prototype" {
+        return None;
+    }
+    expression_identifier(&member.object)
 }
 
 fn prototype_assignment_super_name<'a>(
@@ -6134,6 +6857,239 @@ fn static_member_call<'a>(expression: &'a Expression<'a>) -> Option<(&'a str, &'
             static_member_call(&expression.expression)
         }
         _ => None,
+    }
+}
+
+/// Record every `receiver.next()` call's `span.start` under its receiver name,
+/// recursing through nested statements and function bodies. Traversal order is
+/// irrelevant — the caller sorts by span to derive ordinals.
+fn index_next_calls_in_statement(statement: &Statement<'_>, out: &mut BTreeMap<String, Vec<u32>>) {
+    match statement {
+        Statement::ExpressionStatement(statement) => {
+            index_next_calls_in_expression(&statement.expression, out);
+        }
+        Statement::VariableDeclaration(variable) => {
+            for declarator in &variable.declarations {
+                if let Some(init) = &declarator.init {
+                    index_next_calls_in_expression(init, out);
+                }
+            }
+        }
+        Statement::ReturnStatement(statement) => {
+            if let Some(argument) = &statement.argument {
+                index_next_calls_in_expression(argument, out);
+            }
+        }
+        Statement::IfStatement(statement) => {
+            index_next_calls_in_expression(&statement.test, out);
+            index_next_calls_in_statement(&statement.consequent, out);
+            if let Some(alternate) = &statement.alternate {
+                index_next_calls_in_statement(alternate, out);
+            }
+        }
+        Statement::BlockStatement(block) => {
+            for statement in &block.body {
+                index_next_calls_in_statement(statement, out);
+            }
+        }
+        Statement::ForOfStatement(statement) => {
+            index_next_calls_in_expression(&statement.right, out);
+            index_next_calls_in_statement(&statement.body, out);
+        }
+        Statement::ForInStatement(statement) => {
+            index_next_calls_in_expression(&statement.right, out);
+            index_next_calls_in_statement(&statement.body, out);
+        }
+        Statement::ForStatement(statement) => {
+            if let Some(test) = &statement.test {
+                index_next_calls_in_expression(test, out);
+            }
+            if let Some(update) = &statement.update {
+                index_next_calls_in_expression(update, out);
+            }
+            index_next_calls_in_statement(&statement.body, out);
+        }
+        Statement::WhileStatement(statement) => {
+            index_next_calls_in_expression(&statement.test, out);
+            index_next_calls_in_statement(&statement.body, out);
+        }
+        Statement::DoWhileStatement(statement) => {
+            index_next_calls_in_statement(&statement.body, out);
+            index_next_calls_in_expression(&statement.test, out);
+        }
+        Statement::TryStatement(statement) => {
+            for inner in &statement.block.body {
+                index_next_calls_in_statement(inner, out);
+            }
+            if let Some(handler) = &statement.handler {
+                for inner in &handler.body.body {
+                    index_next_calls_in_statement(inner, out);
+                }
+            }
+            if let Some(finalizer) = &statement.finalizer {
+                for inner in &finalizer.body {
+                    index_next_calls_in_statement(inner, out);
+                }
+            }
+        }
+        Statement::SwitchStatement(statement) => {
+            index_next_calls_in_expression(&statement.discriminant, out);
+            for case in &statement.cases {
+                if let Some(test) = &case.test {
+                    index_next_calls_in_expression(test, out);
+                }
+                for inner in &case.consequent {
+                    index_next_calls_in_statement(inner, out);
+                }
+            }
+        }
+        Statement::FunctionDeclaration(function) => {
+            if let Some(body) = &function.body {
+                for inner in &body.statements {
+                    index_next_calls_in_statement(inner, out);
+                }
+            }
+        }
+        Statement::ClassDeclaration(class) => {
+            index_next_calls_in_class(class, out);
+        }
+        _ => {}
+    }
+}
+
+fn index_next_calls_in_class(class: &Class<'_>, out: &mut BTreeMap<String, Vec<u32>>) {
+    for element in &class.body.body {
+        match element {
+            ClassElement::MethodDefinition(method) => {
+                if let Some(body) = method.value.body.as_deref() {
+                    for inner in &body.statements {
+                        index_next_calls_in_statement(inner, out);
+                    }
+                }
+            }
+            ClassElement::StaticBlock(block) => {
+                for inner in &block.body {
+                    index_next_calls_in_statement(inner, out);
+                }
+            }
+            ClassElement::PropertyDefinition(property) => {
+                if let Some(value) = &property.value {
+                    index_next_calls_in_expression(value, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn index_next_calls_in_expression(
+    expression: &Expression<'_>,
+    out: &mut BTreeMap<String, Vec<u32>>,
+) {
+    match expression {
+        Expression::CallExpression(call) => {
+            if let Some((name, "next")) = static_member_call(&call.callee) {
+                out.entry(name.to_string())
+                    .or_default()
+                    .push(call.span.start);
+            }
+            index_next_calls_in_expression(&call.callee, out);
+            for argument in &call.arguments {
+                if let Some(inner) = argument_expression(argument) {
+                    index_next_calls_in_expression(inner, out);
+                }
+            }
+        }
+        Expression::NewExpression(new) => {
+            index_next_calls_in_expression(&new.callee, out);
+            for argument in &new.arguments {
+                if let Some(inner) = argument_expression(argument) {
+                    index_next_calls_in_expression(inner, out);
+                }
+            }
+        }
+        Expression::StaticMemberExpression(member) => {
+            index_next_calls_in_expression(&member.object, out);
+        }
+        Expression::ComputedMemberExpression(member) => {
+            index_next_calls_in_expression(&member.object, out);
+            index_next_calls_in_expression(&member.expression, out);
+        }
+        Expression::PrivateFieldExpression(member) => {
+            index_next_calls_in_expression(&member.object, out);
+        }
+        Expression::ParenthesizedExpression(inner) => {
+            index_next_calls_in_expression(&inner.expression, out);
+        }
+        Expression::AwaitExpression(inner) => {
+            index_next_calls_in_expression(&inner.argument, out);
+        }
+        Expression::UnaryExpression(inner) => {
+            index_next_calls_in_expression(&inner.argument, out);
+        }
+        Expression::YieldExpression(inner) => {
+            if let Some(argument) = &inner.argument {
+                index_next_calls_in_expression(argument, out);
+            }
+        }
+        Expression::SequenceExpression(sequence) => {
+            for inner in &sequence.expressions {
+                index_next_calls_in_expression(inner, out);
+            }
+        }
+        Expression::AssignmentExpression(assignment) => {
+            index_next_calls_in_expression(&assignment.right, out);
+        }
+        Expression::ConditionalExpression(conditional) => {
+            index_next_calls_in_expression(&conditional.test, out);
+            index_next_calls_in_expression(&conditional.consequent, out);
+            index_next_calls_in_expression(&conditional.alternate, out);
+        }
+        Expression::LogicalExpression(logical) => {
+            index_next_calls_in_expression(&logical.left, out);
+            index_next_calls_in_expression(&logical.right, out);
+        }
+        Expression::BinaryExpression(binary) => {
+            index_next_calls_in_expression(&binary.left, out);
+            index_next_calls_in_expression(&binary.right, out);
+        }
+        Expression::ArrowFunctionExpression(function) => {
+            for inner in &function.body.statements {
+                index_next_calls_in_statement(inner, out);
+            }
+        }
+        Expression::FunctionExpression(function) => {
+            if let Some(body) = &function.body {
+                for inner in &body.statements {
+                    index_next_calls_in_statement(inner, out);
+                }
+            }
+        }
+        Expression::ObjectExpression(object) => {
+            for property in &object.properties {
+                match property {
+                    ObjectPropertyKind::ObjectProperty(property) => {
+                        index_next_calls_in_expression(&property.value, out);
+                    }
+                    ObjectPropertyKind::SpreadProperty(spread) => {
+                        index_next_calls_in_expression(&spread.argument, out);
+                    }
+                }
+            }
+        }
+        Expression::ArrayExpression(array) => {
+            for element in &array.elements {
+                if let Some(inner) = array_element_expression(element) {
+                    index_next_calls_in_expression(inner, out);
+                }
+            }
+        }
+        Expression::TemplateLiteral(template) => {
+            for inner in &template.expressions {
+                index_next_calls_in_expression(inner, out);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -7015,16 +7971,31 @@ mod tests {
         let gen5_first_next_value = site_id_for_nth_span(source, &sites, "u.next().value()", 0);
         let gen5_second_next_value = site_id_for_nth_span(source, &sites, "u.next().value()", 1);
 
-        for target in [yielded1, yielded2, yielded3, yielded4] {
+        // Sequence-sensitive: `v1 = x.next()` consumes the first yield, so the
+        // `for-of` that follows iterates only the remaining yields (2, 3, 4) and
+        // never the (here empty) return value. Lumping the first yield onto the
+        // loop — or any later yield onto `v1` — is the over-approximation Jelly
+        // does not make.
+        for target in [yielded2, yielded3, yielded4] {
             assert!(
                 resolved.contains(&(loop_value, target)),
-                "expected for-of generator value {target:?}; got {resolved:?}"
+                "expected for-of to iterate remaining yield {target:?}; got {resolved:?}"
             );
         }
+        assert!(
+            !resolved.contains(&(loop_value, yielded1)),
+            "for-of must not re-yield the value already consumed by x.next(); got {resolved:?}"
+        );
         assert!(
             resolved.contains(&(first_next_value, yielded1)),
             "expected first generator next value; got {resolved:?}"
         );
+        for target in [yielded2, yielded3, yielded4] {
+            assert!(
+                !resolved.contains(&(first_next_value, target)),
+                "first x.next() must resolve only to the first yield, not {target:?}; got {resolved:?}"
+            );
+        }
         assert!(
             resolved.contains(&(array_next_value, array_value)),
             "expected array iterator next value; got {resolved:?}"
@@ -7033,13 +8004,187 @@ mod tests {
             resolved.contains(&(return_next_value, returned6)),
             "expected generator return value through next().value; got {resolved:?}"
         );
-        for site in [gen5_first_next_value, gen5_second_next_value] {
-            for target in [yielded8, returned9] {
-                assert!(
-                    resolved.contains(&(site, target)),
-                    "expected gen5 next value {target:?}; got {resolved:?}"
-                );
-            }
+        // gen5 yields 8 then returns 9: the first `.next()` delivers the yield,
+        // the second (terminal) `.next()` delivers the return value — not both.
+        assert!(
+            resolved.contains(&(gen5_first_next_value, yielded8))
+                && !resolved.contains(&(gen5_first_next_value, returned9)),
+            "first gen5 next() must be the yield (8) only; got {resolved:?}"
+        );
+        assert!(
+            resolved.contains(&(gen5_second_next_value, returned9))
+                && !resolved.contains(&(gen5_second_next_value, yielded8)),
+            "second gen5 next() must be the return (9) only; got {resolved:?}"
+        );
+    }
+
+    #[test]
+    fn real_ts_pipeline_resolves_tagged_template_calls() {
+        // `tag`…${e1}${e2}`` desugars to `tag(strings, e1, e2)`: the
+        // interpolations flow to the tag's parameters (offset by the implicit
+        // strings array) and the tag's return flows to the binding.
+        let source = "function tag(strings, p1, p2) {\n    p1();\n    p2();\n    return () => {console.log(\"3\")};\n}\nconst x = tag`a${() => {console.log(\"1\")}}b${() => {console.log(\"2\")}}c`;\nx();\n";
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let arrow1 = function_id_for_span(source, &db, "() => {console.log(\"1\")}");
+        let arrow2 = function_id_for_span(source, &db, "() => {console.log(\"2\")}");
+        let arrow3 = function_id_for_span(source, &db, "() => {console.log(\"3\")}");
+
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let resolved = resolved_target_ids_by_site(targets);
+        let p1_call = site_id_for_span(source, &sites, "p1()");
+        let p2_call = site_id_for_span(source, &sites, "p2()");
+        let x_call = site_id_for_span(source, &sites, "x()");
+
+        assert!(
+            resolved.contains(&(p1_call, arrow1)),
+            "first interpolation flows to param p1; got {resolved:?}"
+        );
+        assert!(
+            resolved.contains(&(p2_call, arrow2)),
+            "second interpolation flows to param p2; got {resolved:?}"
+        );
+        assert!(
+            resolved.contains(&(x_call, arrow3)),
+            "tag return value flows to the binding; got {resolved:?}"
+        );
+    }
+
+    #[test]
+    fn real_ts_pipeline_resolves_for_in_computed_member_calls() {
+        // `for (const k in obj) obj[k]()` dispatches to every property value.
+        let source = "const obj = {\n    a: () => console.log(\"a\"),\n    b: () => console.log(\"b\"),\n};\nfor (const name in obj)\n    obj[name]();\n";
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let a = function_id_for_span(source, &db, "() => console.log(\"a\")");
+        let b = function_id_for_span(source, &db, "() => console.log(\"b\")");
+
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let resolved = resolved_target_ids_by_site(targets);
+        let call = site_id_for_span(source, &sites, "obj[name]()");
+
+        for target in [a, b] {
+            assert!(
+                resolved.contains(&(call, target)),
+                "for-in computed call should reach every property value; got {resolved:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn real_ts_pipeline_resolves_logical_and_conditional_receivers() {
+        // `a || b` short-circuits to the definite `a`; `cond ? a : b` is the union.
+        let source = "const o1 = { f() { console.log(\"f1\"); } };\nconst o2 = { f() { console.log(\"f2\"); } };\n(o1 || o2).f();\n(cond ? o1 : o2).f();\n";
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let f1 = function_id_for_span(source, &db, "f() { console.log(\"f1\"); }");
+        let f2 = function_id_for_span(source, &db, "f() { console.log(\"f2\"); }");
+
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let resolved = resolved_target_ids_by_site(targets);
+
+        let or_call = site_id_for_span(source, &sites, "(o1 || o2).f()");
+        assert!(
+            resolved.contains(&(or_call, f1)),
+            "(o1 || o2).f() should resolve to o1.f; got {resolved:?}"
+        );
+        assert!(
+            !resolved.contains(&(or_call, f2)),
+            "(o1 || o2) is definitely o1, so o2.f must not be a target; got {resolved:?}"
+        );
+        let cond_call = site_id_for_span(source, &sites, "(cond ? o1 : o2).f()");
+        assert!(
+            resolved.contains(&(cond_call, f1)) && resolved.contains(&(cond_call, f2)),
+            "a conditional receiver should resolve to both branches; got {resolved:?}"
+        );
+    }
+
+    #[test]
+    fn real_ts_pipeline_resolves_prototype_and_dynamic_proto_links() {
+        // `C.prototype = { obj }`, `Object.setPrototypeOf`, and `{ __proto__: X }`
+        // all make the target inherit the prototype's members.
+        let source = "function C() {}\nC.prototype = { foo() { console.log(\"foo\"); } };\nconst v = new C();\nv.foo();\nconst base = { bar() { console.log(\"bar\"); } };\nconst o = {};\nObject.setPrototypeOf(o, base);\no.bar();\nconst p = { __proto__: base };\np.bar();\n";
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let foo = function_id_for_span(source, &db, "foo() { console.log(\"foo\"); }");
+        let bar = function_id_for_span(source, &db, "bar() { console.log(\"bar\"); }");
+
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let resolved = resolved_target_ids_by_site(targets);
+
+        assert!(
+            resolved.contains(&(site_id_for_span(source, &sites, "v.foo()"), foo)),
+            "new C().foo() should dispatch to C.prototype's method; got {resolved:?}"
+        );
+        assert!(
+            resolved.contains(&(site_id_for_span(source, &sites, "o.bar()"), bar)),
+            "Object.setPrototypeOf should link the prototype; got {resolved:?}"
+        );
+        assert!(
+            resolved.contains(&(site_id_for_span(source, &sites, "p.bar()"), bar)),
+            "{{ __proto__: base }} should inherit base's members; got {resolved:?}"
+        );
+    }
+
+    #[test]
+    fn real_ts_pipeline_resolves_object_assign_merge_result() {
+        // `const o = Object.assign({}, a, b)` binds `o` to the merged object, so
+        // members copied from any source resolve.
+        let source = "const o = Object.assign({}, {\n    foo() { console.log(\"foo\"); },\n}, {\n    bar() { console.log(\"bar\"); },\n});\no.foo();\no.bar();\n";
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let foo = function_id_for_span(source, &db, "foo() { console.log(\"foo\"); }");
+        let bar = function_id_for_span(source, &db, "bar() { console.log(\"bar\"); }");
+
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let resolved = resolved_target_ids_by_site(targets);
+
+        assert!(
+            resolved.contains(&(site_id_for_span(source, &sites, "o.foo()"), foo)),
+            "o.foo() should resolve to the first source's method; got {resolved:?}"
+        );
+        assert!(
+            resolved.contains(&(site_id_for_span(source, &sites, "o.bar()"), bar)),
+            "o.bar() should resolve to the second source's method; got {resolved:?}"
+        );
+    }
+
+    #[test]
+    fn real_ts_pipeline_resolves_property_descriptor_flows() {
+        // `{ value: f1 }` referencing a function declaration, `Object.create`
+        // prototype inheritance, and a descriptor bound to a variable.
+        let source = "function f1() {}\nconst obj = {};\nObject.defineProperty(obj, \"a\", { value: f1 });\nobj.a();\nconst proto = Object.create(null, { b: { value: f1 } });\nconst o = Object.create(proto);\no.b();\nconst descr = { value: f1 };\nconst obj2 = {};\nObject.defineProperties(obj2, { c: descr });\nobj2.c();\n";
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let f1 = function_id_for_span(source, &db, "function f1() {}");
+
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let resolved = resolved_target_ids_by_site(targets);
+
+        for call in ["obj.a()", "o.b()", "obj2.c()"] {
+            let site = site_id_for_span(source, &sites, call);
+            assert!(
+                resolved.contains(&(site, f1)),
+                "expected {call} to resolve to f1 via descriptor; got {resolved:?}"
+            );
         }
     }
 
@@ -8080,14 +9225,20 @@ obj.right();
         let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
         let target_ids_by_site = resolved_target_ids_by_site(targets);
 
+        // Sequence-sensitive: the only `f8.next()` is the first step, so its
+        // promised result is the yielded value, not the return value; and
+        // `for await` over a fresh `f7()` iterates the yields, never the return.
         assert_eq!(
             target_ids_by_site,
-            vec![
-                (CallSiteId(0), yielded),
-                (CallSiteId(0), returned),
-                (CallSiteId(1), yielded),
-                (CallSiteId(1), returned),
-            ]
+            vec![(CallSiteId(0), yielded), (CallSiteId(1), yielded)]
+        );
+        assert!(
+            !target_ids_by_site.contains(&(CallSiteId(0), returned)),
+            "first async-generator next() must not deliver the return value"
+        );
+        assert!(
+            !target_ids_by_site.contains(&(CallSiteId(1), returned)),
+            "for-await must not iterate the generator's return value"
         );
     }
 

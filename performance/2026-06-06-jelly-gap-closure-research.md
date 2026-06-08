@@ -531,7 +531,254 @@ Remaining this-flow FN (`tests/approx/this.json`, 16 — harder, deferred): comp
 resolution with env, function-as-constructor with computed writes, and
 constructor-return-override (`function Bar(){ return x } ; new Bar()` → the returned
 value). The other Phase-C lever — async/generator precision (`asyncawait` 11 FP,
-`generators` 6 FP) — is still open.
+`generators` 6 FP) — is closed in iteration 45.
+
+| Iteration | Change | TP | FP | FN | Precision | Recall | F1 | Runtime | Hash |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|
+| 45 | Phase C (rest) — sequence-sensitive generators (k-th `.next()` → k-th yield; `return` only at terminal `.next()`; `for-of`/`for-await` exclude `return`) | 875 | 54 | 604 | 94.19% | 59.16% | 72.68% | 83048 ms | `253845a52414c5b8` |
+
+Iteration 45 closes the async/generator-precision lever (roadmap §3.5), the only
+remaining notable false-positive cluster. The flow-insensitive iterator model (iter
+32) lumped **every** yielded value onto **every** `.next()` and onto `for-of`,
+whereas Jelly is sequence-sensitive: the first `.next()` delivers the first yield,
+the second the second, the `return` value is delivered **only** by the terminal
+`.next()` (`{done:true}`) and is **never** iterated by `for-of`/`for-await`.
+
+Mechanism (`crates/polint/src/analysis/calls/ts_value_flows.rs`):
+
+- A new `GeneratorSequence { steps: Vec<CollectionTargets>, ret }` records one
+  ordered step per `yield` (with `yield*` flattened — array literal → one step per
+  element, delegated generator → its steps spliced in) and the `return` separately.
+  Built for iterator instances (`env.iterator_sequences`) and generator functions
+  bound to a name (`env.generator_sequences`), mirroring the flat
+  `async_iterators`/`async_generators` (kept for the untouched `yield*` paths).
+- A program-global pre-scan (`index_iterator_next_calls`) assigns each
+  `receiver.next()` call a 0-based ordinal among `.next()` calls on the same
+  receiver (by sorted source position — order-independent). `.next()#k` resolves to
+  `steps[k]`, or `ret` at the terminal step `k == steps.len()`. `for-of` over a
+  named iterator skips the yields already consumed by preceding `.next()`s
+  (`next_calls_consumed_before`) and never includes `ret`.
+
+Result: **871/70/608 → 875/54/604**, **+4 TP / −16 FP / −4 FN**, F1
+**71.98% → 72.68% (+0.70pp)**, precision **92.56% → 94.19% (+1.63pp)**, recall
+**58.89% → 59.16%** — a precision-and-recall double win, fully localized to the two
+target cases (every suite-delta edge is in them, nothing else moved):
+
+- `generators.json` **40/6/10 → 44/0/6**: sequencing removes the 6 cross-product
+  FPs (`v1.value()`/for-of split, `gen5` yield-vs-return) **and** the `yield*`-step
+  splicing recovers `gen9`'s delegated yields (`i1.next()#0→12`, `#1→13`), +4 TP.
+- `asyncawait.json` **19/11/10 → 19/1/10**: −10 FP across `f6`/`f8` (first
+  `.next()` = yield, terminal = return) and `for await` (yields only). The lone
+  remaining FP is the async-IIFE call-span mismatch (`(async function(){…}())`
+  attributed to `1:2:57:2` vs Jelly's `1:1:57:5`) — a parenthesized-callee
+  normalization issue, not sequencing.
+
+Regression tests updated to assert the diagonal instead of the cross-product:
+`real_ts_pipeline_resolves_sync_generator_next_and_for_of_values` (for-of excludes
+the consumed yield; `gen5` first=yield-only, second=return-only) and
+`jelly_gap_async_generator_next_and_for_await_values` (first async `.next()` = yield,
+`for await` excludes the return). Full `cargo test -p polint --lib`: 2240 passed.
+
+Cumulative this session (iterations 41–45): **821/82/658 → 875/54/604**, F1
+**68.94% → 72.68% (+3.74pp)**, precision **90.92% → 94.19%**, **+54 TP / −28 FP**.
+
+Remaining async/generator FN (deferred — separate mechanisms, not sequencing):
+`gen4`'s `.next(arg)` value flowing **into** the generator (`const q = yield; q()`),
+`gen9`'s `t()`/terminal-`return` from a `yield*`-delegated return value, and the
+async-IIFE call-span normalization (the 1 residual `asyncawait` FP).
+
+| Iteration | Change | TP | FP | FN | Precision | Recall | F1 | Runtime | Hash |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|
+| 46 | Tagged template literals — desugar `` tag`…${e}…` `` to `tag(strings, e)` across frontend + MIR + value-flow | 883 | 54 | 596 | 94.24% | 59.70% | 73.09% | 84978 ms | `d2e89e792e3a7603` |
+
+Iteration 46 adds tagged template literals, the largest coherent **0-TP** bucket
+(`templateliterals.json`, 8 FN, nothing resolved → near-zero regression risk). A
+tagged template `` tag`a${e1}b${e2}c` `` is semantically the call
+`tag(strings, e1, e2)`: the interpolations are arguments (offset by the implicit
+`strings` array at index 0), and `const x = tag`…`` binds `x` to the tag's return.
+This is the three-layer pattern (frontend + MIR + value-flow) — a value-flow change
+alone moves nothing, so all three layers landed together:
+
+1. **Frontend** (`crates/polint/src/ts/adapter.rs`): the prior walker never
+   descended into a tagged template, so the interpolation arrows had **no
+   `FunctionFact`s** and could never be call targets. Added a
+   `TaggedTemplateExpression` arm to `extract_anonymous_callables_from_expression`
+   (walk the tag + each quasi expression); bumped `TS_CACHE_SCHEMA` v9 → v10.
+2. **MIR** (`lower_ts.rs`): tagged templates were lowered as **`unsupported`**
+   (no call site → value-flow `emit_*` cannot fire). Replaced with a real
+   `Call { callee: tag, arguments: [strings, e1, e2] }` so the direct/MIR resolver
+   emits the call edge, and added the quasi arrows to the anonymous-function
+   candidate collector.
+3. **Value-flow** (`ts_value_flows.rs`): `collect_tagged_template_expression`
+   binds the interpolations to the tag's parameters (slot 0 = `strings`) and walks
+   the tag body so `p_i()` resolves; `tagged_template_return_targets` flows the
+   tag's return to the `const x = tag`…`` binding so `x()` resolves.
+
+Also fixed a **call-site span** bug surfaced once the edges resolved: oxc's
+tagged-template `span.end` is exclusive (one past the closing backtick), but Jelly
+ends the span **at** the backtick. Added `normalized_tagged_template_span`
+(trim one trailing byte), used by both the call-site inventory and MIR lowering,
+and corrected the `ts-inventory-spans` fixture oracle (`49:3:49:31` → `49:3:49:30`),
+cross-checked against the upstream Jelly oracle for `templateliterals.js`
+(`` fun`…` `` ends at col 82, the backtick, not col 83, the `;`).
+
+Result: **875/54/604 → 883/54/596**, **+8 TP / 0 FP / −8 FN**, F1
+**72.68% → 73.09% (+0.41pp)**, precision **94.19% → 94.24%**, recall
+**58.89% → 59.70%** — fully localized to `templateliterals.json`
+(**0/8 → 8/8 TP**), zero collateral. Regression test
+`real_ts_pipeline_resolves_tagged_template_calls` (param + return flow). Full
+`cargo test -p polint --lib`: 2240 passed.
+
+Cumulative this session (iterations 41–46): **821/82/658 → 883/54/596**, F1
+**68.94% → 73.09% (+4.15pp)**, precision **90.92% → 94.24%**, **+62 TP / −28 FP**.
+
+| Iteration | Change | TP | FP | FN | Precision | Recall | F1 | Runtime | Hash |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|
+| 47 | Property descriptors — `Object.defineProperty/defineProperties/create/getOwnPropertyDescriptors` with `value`/`get`/`set`, prototype inheritance, function-decl & object-var descriptor values | 904 | 54 | 575 | 94.36% | 61.12% | 74.19% | 83387 ms | `b986e191543115ff` |
+
+Iteration 47 completes the property-descriptor family, the next coherent
+non-`helloworld` bucket (`defineProperty.json` 6/2/9, plus the **0-TP**
+`defineProperties.json` 0/0/3 and `create.json` 0/0/4). The existing
+`defineProperty` handling copied only a literal-inline descriptor's `value`; the
+gaps were:
+
+- **Descriptor value is a reference, not an inline function.** `{ value: f1 }`
+  with `f1` a top-level `function` declaration resolved to nothing —
+  `object_literal_targets` only handled inline functions/nested objects/collections.
+  Added (a) `callable_targets_from_expression` resolving a bare identifier to a
+  same-name `function` declaration (unless shadowed by a local binding), and (b)
+  object-literal property values that reference a callable or an object binding
+  (`{ c: descr }` where `const descr = { value: fn }`).
+- **`defineProperties` merged the descriptor *objects*** (so `obj.f` became the
+  object `{ value: fn }`) instead of unwrapping each descriptor. New
+  `apply_descriptor_map` / `copy_descriptor_to_property` unwrap `value` **and** map
+  `get`/`set` to the object's accessor slots; used by `defineProperty`,
+  `defineProperties`, and `Object.create`.
+- **`Object.create` ignored both arguments.** Now inherits the prototype's
+  properties (first arg) and applies the descriptor map (second arg), so
+  `Object.create(proto)` prototype chains (`create.js`) and
+  `Object.create(null, {…})` (`defineProperty.js`) resolve.
+- **`getOwnPropertyDescriptors` was modeled as identity** (returned the plain
+  object), which the new unwrapping `defineProperties` could no longer consume.
+  `descriptors_for_object` now wraps each property as `{ value }` / `{ get }` /
+  `{ set }`, so `defineProperties(x, getOwnPropertyDescriptors(y))` round-trips.
+
+Result: **883/54/596 → 904/54/575**, **+21 TP / 0 FP / −21 FN**, F1
+**73.09% → 74.19% (+1.10pp)**, precision **94.24% → 94.36%**, recall
+**58.89%-basis → 61.12%**. `defineProperty.json` **6/2/9 → 15/2/0**,
+`defineProperties.json` **0/3 → 3/0**, `create.json` **0/4 → 4/0** (all three
+descriptor fixtures fully resolved); the remaining ~5 TP are other cases that
+reference `function` declarations as values. The 2 residual `defineProperty.json`
+FPs are a getter/`this`-flow over-approximation, not descriptor-shape. Regression
+test `real_ts_pipeline_resolves_property_descriptor_flows`. Full
+`cargo test -p polint --lib`: 2241 passed.
+
+Cumulative this session (iterations 41–47): **821/82/658 → 904/54/575**, F1
+**68.94% → 74.19% (+5.25pp)**, precision **90.92% → 94.36%**, **+83 TP / −28 FP**.
+
+| Iteration | Change | TP | FP | FN | Precision | Recall | F1 | Runtime | Hash |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|
+| 48 | `Object.assign(target, ...sources)` returns the merged object so `const o = Object.assign({}, a, b)` resolves `o`'s members | 910 | 54 | 569 | 94.40% | 61.53% | 74.50% | 92861 ms | `a5031189a8a16661` |
+
+Iteration 48 closes `assign1.json` (the **0-TP** bucket `0/0/6 → 6/0/0`). The
+in-place mutation form `Object.assign(namedVar, …)` was already modeled (it mutates
+`env.objects[namedVar]`), but the **value-returning** form — `const o =
+Object.assign({}, a, b)` with an object-literal target — produced nothing because
+`object_targets_from_call` had no `Object.assign` arm. Added one: it merges every
+argument's object shape (target + sources) and returns it, so the binding resolves.
+The mutation path still handles the named-target case; the two do not conflict
+(the literal-target form has no name to mutate).
+
+Result: **904/54/575 → 910/54/569**, **+6 TP / 0 FP / −6 FN**, F1
+**74.19% → 74.50% (+0.31pp)**, precision **94.36% → 94.40%**. Regression test
+`real_ts_pipeline_resolves_object_assign_merge_result`. Full
+`cargo test -p polint --lib`: 2242 passed. **This is also a `helloworld`
+prerequisite** — §3.1's `mixin`/`Object.assign` dynamic property-copy onto `app` is
+the same merge — so it advances Phase D, not just the micro bucket. (`assign2.json`'s
+2 FN are deferred: a getter/setter chain plus the own-vs-inherited-property
+subtlety of `Object.assign` over an `Object.create` proto.)
+
+Cumulative this session (iterations 41–48): **821/82/658 → 910/54/569**, F1
+**68.94% → 74.50% (+5.56pp)**, precision **90.92% → 94.40%**, **+89 TP / −28 FP**.
+
+| Iteration | Change | TP | FP | FN | Precision | Recall | F1 | Runtime | Hash |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|
+| 49 | Prototype OOP — `C.prototype = { … }` object assignment, plus dynamic prototype links (`Object.setPrototypeOf`, `obj.__proto__ = …`, `{ __proto__: Base }`) | 918 | 54 | 561 | 94.44% | 62.07% | 74.91% | 80677 ms | `5ba1885f29d9ba4c` |
+
+Iteration 49 adds classic prototype-based OOP — the most general remaining
+mechanism (ubiquitous in pre-class JS and library output). The existing handling
+covered `C.prototype.m = fn` and `C.prototype = new Super()` (a super link) but not:
+
+- **`C.prototype = { m() {} }`** — assigning an object literal to the prototype.
+  Added `prototype_object_assignment_name`: when the RHS resolves to an object (and
+  is not a `new` expression), its members merge into `C`'s instance object, so
+  `new C().m()` dispatches. (`prototypes.js` `0/2 → 2/0`.)
+- **Dynamic object prototype linking** — `Object.setPrototypeOf(obj, proto)`,
+  `obj.__proto__ = proto`, and `{ __proto__: Base }` in an object literal all make
+  the target inherit the prototype's members (merge `proto`'s shape into the
+  object). `{ __proto__: Base }` where `Base` is a class links the static object.
+
+Result: **910/54/569 → 918/54/561**, **+8 TP / 0 FP / −8 FN**, F1
+**74.50% → 74.91% (+0.41pp)**, precision **94.40% → 94.44%**. `prototypes.json`
+**0/2 → 2/0**, `prototypes3.json` **2/6 → 6/2**, plus +2 in other cases using these
+links. Regression test `real_ts_pipeline_resolves_prototype_and_dynamic_proto_links`.
+Full `cargo test -p polint --lib`: 2243 passed. Deferred (harder, separate infra):
+`Object.create(Object.getPrototypeOf(a))` (needs `getPrototypeOf`), and `super.X()`
+**inside** an object method whose prototype is set dynamically (needs object-method-
+body walking with `super` bound, as the class-body walk does).
+
+Cumulative this session (iterations 41–49): **821/82/658 → 918/54/561**, F1
+**68.94% → 74.91% (+5.97pp)**, precision **90.92% → 94.44%**, **+97 TP / −28 FP**.
+
+| Iteration | Change | TP | FP | FN | Precision | Recall | F1 | Runtime | Hash |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|
+| 50 | Logical/conditional receivers — `(o1 \|\| o2).f()` resolves precisely (`\|\|`/`??` short-circuit to the definite left, `&&` to the right, `? :` is the union) | 922 | 54 | 557 | 94.47% | 62.34% | 75.12% | 86605 ms | `8d2f4d71a23bc4a2` |
+
+Iteration 50 resolves member access on a logical/conditional expression
+(`receiver-callee-mixup.json`, a **0-TP** bucket). `object_targets_from_expression`
+gained `LogicalExpression`/`ConditionalExpression` arms. A first pass naively unioned
+both operands and **added 2 FP** — Jelly is precise: `o1 || o2` with a definite
+(truthy) `o1` is `o1`, so `(o1 || o2).f()` is `o1.f` only, not both. Corrected to
+short-circuit semantics: `||`/`??` prefer the left operand (fall back to the right
+only when the left doesn't resolve), `&&` prefers the right, and only `cond ? a : b`
+takes the union (both branches reachable). This is correct JS semantics, not a
+score-fit — the union variant scored the same TP but produced wrong edges.
+
+Result: **918/54/561 → 922/54/557**, **+4 TP / 0 FP / −4 FN**, F1
+**74.91% → 75.12% (+0.21pp)**, precision-neutral. `receiver-callee-mixup.json`
+**0/8 → 4/4**. Regression test
+`real_ts_pipeline_resolves_logical_and_conditional_receivers` (asserts `o2.f` is
+**not** a target of `(o1 || o2).f()`). Full `cargo test -p polint --lib`: 2244
+passed. Deferred: `this.g()` dispatched **through** a logical receiver (the method
+body walk keys on a named receiver; the remaining 4 FN need it to accept a
+logical-expression receiver).
+
+Cumulative this session (iterations 41–50): **821/82/658 → 922/54/557**, F1
+**68.94% → 75.12% (+6.18pp)**, precision **90.92% → 94.47%**, **+101 TP / −28 FP**.
+
+| Iteration | Change | TP | FP | FN | Precision | Recall | F1 | Runtime | Hash |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|
+| 51 | `for-in` computed member calls — `for (const k in obj) obj[k]()` dispatches to every property value | 926 | 54 | 553 | 94.49% | 62.61% | 75.31% | 84123 ms | `5e2c2fb0a4959270` |
+
+Iteration 51 handles `for-in` loops, which `collect_statement` previously skipped
+entirely (the body was never walked, so `for-in.json` was **0-TP**). The loop head
+binds its variable into a new `env.forin_keys` set; a computed call `obj[k]()` keyed
+on such a variable ranges over every own property, so it resolves to the union of
+the object's property values (and getters). `for-in.json` **0/4 → 4/0**, fully
+localized, precision-neutral. Regression test
+`real_ts_pipeline_resolves_for_in_computed_member_calls`. Full
+`cargo test -p polint --lib`: 2245 passed.
+
+**Considered and rejected this iteration (quality over score):** `Object.getPrototypeOf(x)`
+≈ `x`'s shape would close `prototypes3.json`'s last 2 FN (`Object.create(getPrototypeOf(a))`),
+but it introduced a false positive — `b.foo()` after `Object.setPrototypeOf(b, {…})`
+**replaced** the prototype still saw the stale member, because the flattened object
+model merges rather than tracking a replaceable prototype slot (Jelly is
+flow-sensitive here). Reverted; it needs flow-sensitive prototype tracking to be
+FP-free, and a +2 TP / +1 FP trade is not worth shipping an over-approximation.
+
+Cumulative this session (iterations 41–51): **821/82/658 → 926/54/553**, F1
+**68.94% → 75.31% (+6.37pp)**, precision **90.92% → 94.49%**, **+105 TP / −28 FP**.
 
 Remaining module-modeling work (next iterations):
 

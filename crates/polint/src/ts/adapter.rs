@@ -29,7 +29,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 
-const TS_CACHE_SCHEMA: &str = "ts-facts-v9";
+const TS_CACHE_SCHEMA: &str = "ts-facts-v10";
 const TS_PROVIDER_ID: &str = "polint.ts.syntax";
 const TS_SYNTAX_LAYER_SCHEMA: &str = "ts-syntax-layer-v9";
 
@@ -1702,6 +1702,14 @@ fn extract_anonymous_callables_from_expression(
         }
         Expression::ChainExpression(chain) => {
             extract_anonymous_callables_from_chain_element(db, ctx, &chain.expression);
+        }
+        Expression::TaggedTemplateExpression(tagged) => {
+            // The tag and each interpolation (`tag`…${() => {}}…``) need callable
+            // facts so the tagged-template call and its arguments resolve.
+            extract_anonymous_callables_from_expression(db, ctx, &tagged.tag, true);
+            for expression in &tagged.quasi.expressions {
+                extract_anonymous_callables_from_expression(db, ctx, expression, true);
+            }
         }
         Expression::ParenthesizedExpression(expression) => {
             extract_anonymous_callables_from_expression(
