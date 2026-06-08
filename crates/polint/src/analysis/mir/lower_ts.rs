@@ -29,7 +29,7 @@ use crate::core::{
     is_synthetic_ts_js_module_function,
 };
 use crate::ts::{
-    anonymous_callable_name,
+    anonymous_callable_name, class_callable_name,
     spans::{normalized_call_expression_span, normalized_new_expression_span},
 };
 
@@ -512,12 +512,9 @@ fn collect_anonymous_functions_from_class<'ast>(
     // Lower the class's own methods/constructor (matched to the class-expression
     // FunctionFacts emitted by the frontend) so their bodies get MIR call sites.
     // For top-level class declarations these are also emitted via the declaration
-    // path; `collect_functions` dedups by (span, name).
-    let class_name = class
-        .id
-        .as_ref()
-        .map(|id| id.name.to_string())
-        .unwrap_or_else(|| anonymous_callable_name(class.span.start, class.span.end));
+    // path; `collect_functions` dedups by (span, name). `class_callable_name` is
+    // shared with the frontend so the names always agree.
+    let class_name = class_callable_name(class);
     collect_class_functions(&class_name, class, functions);
     for element in &class.body.body {
         match element {

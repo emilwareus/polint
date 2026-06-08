@@ -408,6 +408,24 @@ Cumulative Phase A (iterations 41–42): **821/82/658 → 841/70/638**, F1
 **68.94% → 70.38% (+1.44pp)**, precision **90.92% → 92.32%** (the override-shadowing
 fix removed FP in super/super2/classes/super4 while recall rose).
 
+**Post-review hardening (benchmark-neutral, `841/70/638` unchanged, hash
+`b8473ed84cf2699b`).** A high-effort multi-agent review of the Phase-A diff found
+precision/robustness issues that the benchmark corpus does not exercise; all fixed
+without changing the score: (1) `class_key_from_expression` and the
+function-return invocation cycle (`collect_function_flow_invocation`) were unbounded
+— a self-returning function (`function f(){ return (f()); }`) overflowed the stack;
+added depth bounds; (2) `this.p = param` harvested from a *method* body no longer
+registers a `ConstructorAssignment::Param` (it would mis-resolve against the
+`new C(arg)` arguments — a false-positive edge); (3) a method parameter now shadows
+the seeded top-level function bindings in the class-body walk; (4) `override_with`
+now shadows a name across all member kinds (a child data property shadows an inherited
+accessor) and delegates to `merge`; (5) class expressions in `?:`/`&&`/`||` positions
+are now registered; (6) the frontend idempotency guard scans the per-file class-fact
+set instead of all functions (O(C) not O(C·F)); plus shared `class_callable_name`
+helper (frontend/MIR name agreement) and `mem::take` instead of cloning the
+class-expression registry. Regression test:
+`class_body_resolution_does_not_overproduce_edges`.
+
 Remaining Phase-A FN (next slices):
 
 - **super4 (6 FN):** field initializers (`w = super.m()`, `static q = super.s()`)
