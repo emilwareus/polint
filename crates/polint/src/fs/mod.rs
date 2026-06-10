@@ -16,7 +16,22 @@ pub(crate) enum FsError {
     StripPrefix { path: PathBuf },
 }
 
+#[cfg(test)]
 pub(crate) fn discover_files(config: &LoadedConfig) -> Result<Vec<DiscoveredFile>> {
+    discover_files_scoped(config, None)
+}
+
+/// Discover files, optionally narrowed to an extra `scope` glob set.
+///
+/// `scope` is applied on top of the workspace include/exclude. The kernel passes
+/// the union of enabled rules' file scopes when no whole-repo capability is
+/// requested, so a syntactic rule set never loads (or parses) files that no rule
+/// could ever match. When `scope` is `None` the behavior is identical to the
+/// plain workspace discovery.
+pub(crate) fn discover_files_scoped(
+    config: &LoadedConfig,
+    scope: Option<&GlobSet>,
+) -> Result<Vec<DiscoveredFile>> {
     let include = config.include_set()?;
     let exclude = config.exclude_set()?;
     let mut files = Vec::new();
@@ -44,6 +59,11 @@ pub(crate) fn discover_files(config: &LoadedConfig) -> Result<Vec<DiscoveredFile
         }
         let relative = relative_path(&config.root, path)?;
         if !should_include_relative_path(&include, &exclude, &relative) {
+            continue;
+        }
+        if let Some(scope) = scope
+            && !matches_any(scope, &relative)
+        {
             continue;
         }
         files.push(DiscoveredFile {
@@ -76,19 +96,36 @@ impl LoadSourcesTimings {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn load_analysis_files(config: &LoadedConfig) -> Result<AnalysisDb> {
     Ok(load_analysis_files_with_timings(config)?.0)
 }
 
+/// Load files narrowed to an extra `scope` glob set (see [`discover_files_scoped`]).
+pub(crate) fn load_analysis_files_scoped(
+    config: &LoadedConfig,
+    scope: Option<&GlobSet>,
+) -> Result<AnalysisDb> {
+    Ok(load_analysis_files_with_timings_scoped(config, scope)?.0)
+}
+
 /// Same as in-module `load_analysis_files`, plus per-subphase timings (for profiling).
+#[cfg(any(test, feature = "bench"))]
 #[allow(unreachable_pub)]
 pub fn load_analysis_files_with_timings(
     config: &LoadedConfig,
 ) -> Result<(AnalysisDb, LoadSourcesTimings)> {
+    load_analysis_files_with_timings_scoped(config, None)
+}
+
+fn load_analysis_files_with_timings_scoped(
+    config: &LoadedConfig,
+    scope: Option<&GlobSet>,
+) -> Result<(AnalysisDb, LoadSourcesTimings)> {
     let mut timings = LoadSourcesTimings::default();
 
     let t0 = Instant::now();
-    let discovered = discover_files(config)?;
+    let discovered = discover_files_scoped(config, scope)?;
     timings.discover = t0.elapsed();
 
     let t1 = Instant::now();

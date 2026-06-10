@@ -34,7 +34,34 @@
 //! ```
 
 use crate::core::RuleOptions;
-use globset::Glob;
+use globset::{Glob, GlobMatcher};
+use std::collections::HashMap;
+use std::sync::{OnceLock, RwLock};
+
+/// Process-wide memo of compiled glob matchers, keyed by pattern text.
+///
+/// Rules call [`file_in_scope`] once per fact row (every file, function, and
+/// literal they inspect), and glob compilation is regex-construction-expensive.
+/// Without the memo a metrics rule over a few thousand files recompiles the same
+/// handful of config patterns hundreds of thousands of times — seconds of pure
+/// overhead per `polint check`. The cache is bounded by the number of distinct
+/// patterns in `.polint.toml`, and `GlobMatcher` clones are cheap (the inner
+/// regex is reference-counted). Invalid patterns memoize as `None` so the
+/// substring fallback below stays cheap too.
+fn cached_matcher(pattern: &str) -> Option<GlobMatcher> {
+    static CACHE: OnceLock<RwLock<HashMap<String, Option<GlobMatcher>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| RwLock::new(HashMap::new()));
+    if let Ok(read) = cache.read()
+        && let Some(cached) = read.get(pattern)
+    {
+        return cached.clone();
+    }
+    let compiled = Glob::new(pattern).ok().map(|glob| glob.compile_matcher());
+    if let Ok(mut write) = cache.write() {
+        write.insert(pattern.to_string(), compiled.clone());
+    }
+    compiled
+}
 
 /// Match `value` against a single glob `pattern`.
 ///
@@ -44,12 +71,9 @@ use globset::Glob;
 /// `./` behave identically.
 #[must_use]
 pub fn glob_matches(pattern: &str, value: &str) -> bool {
-    match Glob::new(pattern) {
-        Ok(glob) => {
-            let matcher = glob.compile_matcher();
-            matcher.is_match(value) || matcher.is_match(format!("./{value}"))
-        }
-        Err(_) => value.contains(pattern.trim_matches('*')),
+    match cached_matcher(pattern) {
+        Some(matcher) => matcher.is_match(value) || matcher.is_match(format!("./{value}")),
+        None => value.contains(pattern.trim_matches('*')),
     }
 }
 

@@ -121,6 +121,11 @@ enum FailOn {
 }
 
 pub fn run_cli(rules: Vec<Rule>) -> ExitCode {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_writer(std::io::stderr)
+        .try_init()
+        .ok();
     match run(rules) {
         Ok(code) => ExitCode::from(code),
         Err(error) => {

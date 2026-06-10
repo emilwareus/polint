@@ -18,7 +18,7 @@ use crate::diagnostics::{
     apply_report_filters, build_ai_friendly_report, diagnostics_from_public_json_report,
     limit_report_diagnostics, render_ai_friendly_stdout, render_with_sarif_help,
 };
-use crate::fs::load_analysis_files;
+use crate::fs::load_analysis_files_scoped;
 use crate::ignores::{apply_ignores, filter_report, render_ignore_report_human};
 use crate::rule_manifest::InspectRuleReport;
 use crate::rule_test::{RuleTestOptions, render_rule_test_human, run_rule_tests};
@@ -2196,12 +2196,17 @@ fn collect_ignore_report(root: &Path, args: &IgnoresArgs) -> Result<crate::ignor
     }
 
     let config = load_config_for_check(root, &args.paths)?;
-    selected_rule_patterns(&config, args.profile.as_deref())?;
-    let db = load_analysis_files(&config)?;
+    let enabled = selected_rule_patterns(&config, args.profile.as_deref())?;
     let mut diagnostics = Vec::new();
     for manifest in &local_rule_hosts {
         diagnostics.extend(run_local_rule_host(root, manifest, &check_args, false)?);
     }
+    // Same scope narrowing as `check_local_rule_hosts`: the db only feeds
+    // ignore-directive scanning, which is limited to the configured rule scopes
+    // plus any files diagnostics actually landed in.
+    let rule_scope = config_rule_scope_globset(&config, enabled.as_ref());
+    let mut db = load_analysis_files_scoped(&config, rule_scope.as_ref())?;
+    backfill_diagnostic_files(&mut db, &diagnostics, root);
     Ok(apply_ignores(&db, diagnostics, &config.config.ignores).report)
 }
 
@@ -2427,12 +2432,15 @@ fn collect_diagnostics_for_baseline(
         apply_ignores(&db, diagnostics, &loaded.config.ignores).diagnostics
     } else {
         let config = load_config_for_check(root, paths)?;
-        selected_rule_patterns(&config, profile)?;
-        let loaded_db = load_analysis_files(&config)?;
+        let enabled = selected_rule_patterns(&config, profile)?;
         let mut diagnostics = Vec::new();
         for manifest in &local_rule_hosts {
             diagnostics.extend(run_local_rule_host(root, manifest, &check_args, false)?);
         }
+        // Same scope narrowing as `check_local_rule_hosts`.
+        let rule_scope = config_rule_scope_globset(&config, enabled.as_ref());
+        let mut loaded_db = load_analysis_files_scoped(&config, rule_scope.as_ref())?;
+        backfill_diagnostic_files(&mut loaded_db, &diagnostics, root);
         apply_ignores(&loaded_db, diagnostics, &config.config.ignores).diagnostics
     };
     diagnostics = apply_report_filters(diagnostics, None);
@@ -2529,9 +2537,74 @@ fn discover_local_rule_hosts(root: &Path) -> Result<Vec<PathBuf>> {
     Ok(manifests.into_iter().collect())
 }
 
+/// Union of the configured rules' `files` scopes (optionally filtered to the
+/// enabled profile patterns) as a glob set, or `None` when narrowing is unsafe:
+/// no configured rules, or any enabled rule entry without a `files` scope (which
+/// matches every file). `None` falls back to full workspace loading.
+///
+/// This mirrors `AnalysisKernel::rule_scope_globset`, but reads scopes from
+/// `.polint.toml` instead of the in-process plan, because the outer CLI never
+/// registers the repo-local rules itself — they live in the rule-host subprocess.
+fn config_rule_scope_globset(
+    config: &LoadedConfig,
+    enabled: Option<&BTreeSet<String>>,
+) -> Option<globset::GlobSet> {
+    let entries = config
+        .config
+        .rules
+        .config
+        .iter()
+        .filter(|entry| {
+            enabled.is_none_or(|patterns| {
+                patterns
+                    .iter()
+                    .any(|pattern| rule_id_matches(pattern, &entry.id))
+            })
+        })
+        .collect::<Vec<_>>();
+    if entries.is_empty() {
+        return None;
+    }
+    let mut patterns = Vec::new();
+    for entry in &entries {
+        if entry.files.is_empty() {
+            return None;
+        }
+        patterns.extend(entry.files.iter().cloned());
+    }
+    crate::config::build_glob_set(&patterns).ok()
+}
+
+/// Ensures every diagnostic's file is present in `db` so ignore-comment
+/// directives in those files still apply when the db was loaded with a narrowed
+/// scope (e.g. a rule registered in the host without a `[[rules.config]]` entry
+/// can emit outside the configured scopes).
+fn backfill_diagnostic_files(
+    db: &mut AnalysisDb,
+    diagnostics: &[crate::diagnostics::Diagnostic],
+    root: &Path,
+) {
+    let known = db
+        .files()
+        .iter()
+        .map(|file| file.relative_path.clone())
+        .collect::<BTreeSet<_>>();
+    let missing = diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.file.clone())
+        .filter(|file| !file.is_empty() && !known.contains(file))
+        .collect::<BTreeSet<_>>();
+    for relative_path in missing {
+        let path = root.join(&relative_path);
+        if let Ok(source) = fs::read_to_string(&path) {
+            db.add_file(path, relative_path, source);
+        }
+    }
+}
+
 fn check_local_rule_hosts(root: &Path, args: &CheckArgs, manifests: &[PathBuf]) -> Result<u8> {
     let config = load_config_for_check(root, &args.paths)?;
-    selected_rule_patterns(&config, args.profile.as_deref())?;
+    let enabled = selected_rule_patterns(&config, args.profile.as_deref())?;
 
     let child_applies_ignores =
         args.ignore_comments && manifests.len() == 1 && !should_render_check_stats(args);
@@ -2547,14 +2620,24 @@ fn check_local_rule_hosts(root: &Path, args: &CheckArgs, manifests: &[PathBuf]) 
 
     let mut db = None;
     let mut ignore_report = None;
+    // The outer db only feeds ignore-comment application and `--stat`
+    // rendering, so load just the configured rule scopes instead of the whole
+    // workspace — on large monorepos this is the difference between reading
+    // a few thousand in-scope files and every file in the repo. Any diagnostic
+    // outside those scopes gets its file backfilled so its ignore directives
+    // still apply.
+    let rule_scope = config_rule_scope_globset(&config, enabled.as_ref());
     if args.ignore_comments && !child_applies_ignores {
-        let loaded_db = load_analysis_files(&config)?;
+        let mut loaded_db = load_analysis_files_scoped(&config, rule_scope.as_ref())?;
+        backfill_diagnostic_files(&mut loaded_db, &diagnostics, root);
         let ignore_application = apply_ignores(&loaded_db, diagnostics, &config.config.ignores);
         diagnostics = ignore_application.diagnostics;
         ignore_report = Some(ignore_application.report);
         db = Some(loaded_db);
     } else if should_render_check_stats(args) {
-        db = Some(load_analysis_files(&config)?);
+        let mut loaded_db = load_analysis_files_scoped(&config, rule_scope.as_ref())?;
+        backfill_diagnostic_files(&mut loaded_db, &diagnostics, root);
+        db = Some(loaded_db);
     }
     diagnostics = apply_report_filters(diagnostics, args.only_rule.as_deref());
     let baseline = apply_baseline(root, args, diagnostics)?;
