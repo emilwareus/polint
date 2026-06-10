@@ -282,6 +282,25 @@ impl AnalysisPlan {
         Self::finish(rules, capabilities, Vec::new())
     }
 
+    /// A plan that requests enough capabilities to exercise the whole analysis
+    /// pipeline (module/symbol graphs + the interprocedural/semantic stages + the
+    /// metric stages). Use this in tests and eval fixtures that assert on deep
+    /// facts (call graph, points-to, reachability, semantic graph, RTA, …) so the
+    /// kernel's `run_semantic_pipeline` gate stays enabled. Mirrors what a rule
+    /// requesting a graph capability would trigger in production.
+    #[cfg(test)]
+    pub(crate) fn full_pipeline_for_test() -> Self {
+        Self::from_capability_names_for_test(&[
+            "resolved_imports",
+            "module_graph",
+            "symbols",
+            "references",
+            "file_metrics",
+            "function_metrics",
+            "complexity_metrics",
+        ])
+    }
+
     #[cfg(test)]
     pub(crate) fn from_capability_names_for_test(names: &[&str]) -> Self {
         let rules = vec![PlannedRule {

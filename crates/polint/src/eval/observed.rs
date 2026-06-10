@@ -385,7 +385,7 @@ pub(crate) fn observe_kernel_fixture_repo_for_test(
     repo_root: &Path,
     cache_enabled: bool,
 ) -> anyhow::Result<Vec<ObservedItem>> {
-    let plan = AnalysisPlan::empty();
+    let plan = AnalysisPlan::full_pipeline_for_test();
     observe_kernel_fixture_repo_with_plan_for_test(fixture, repo_root, cache_enabled, &plan)
 }
 
@@ -445,7 +445,7 @@ pub(crate) fn observe_kernel_fixture_repo_with_plan_for_test(
 pub(crate) fn run_kernel_for_repo_for_test(
     repo_root: &Path,
 ) -> anyhow::Result<crate::analysis_kernel::KernelOutput> {
-    let plan = AnalysisPlan::empty();
+    let plan = AnalysisPlan::full_pipeline_for_test();
     run_kernel_for_repo_with_plan_for_test(repo_root, &plan)
 }
 

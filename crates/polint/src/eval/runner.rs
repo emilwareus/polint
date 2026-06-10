@@ -312,7 +312,10 @@ fn run_polint_for_prepared_case<A: BenchmarkAdapter>(
     let config_digest = crate::cache::keys::config_hash(&loaded);
     let rule_digest = crate::cache::keys::rule_hash(&[], None, &std::collections::BTreeMap::new());
     let cache = crate::cache::Cache::default_for_repo(&prepared.workspace_root, false);
-    let plan = crate::analysis_plan::AnalysisPlan::empty();
+    // Benchmark/eval cases assert on deep facts (identity records, call graph,
+    // reachability), so request the full pipeline rather than an empty plan, which
+    // the kernel's capability gate would otherwise skip.
+    let plan = crate::analysis_plan::AnalysisPlan::full_pipeline_for_test();
     let output =
         crate::analysis_kernel::AnalysisKernel::run(crate::analysis_kernel::KernelInput {
             loaded: &loaded,

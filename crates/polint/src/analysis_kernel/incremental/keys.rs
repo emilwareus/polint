@@ -748,6 +748,18 @@ impl LayerKey {
         )
     }
 
+    /// Combines many digests into one stable digest (a hash of their values).
+    /// Used to keep layer keys compact when a provider depends on a large,
+    /// per-file/per-function input set whose fine-grained invalidation is already
+    /// expressed as dependency edges.
+    fn combine_digests_into(kind: DigestKind, label: &str, digests: &[Digest]) -> Digest {
+        let parts = digests
+            .iter()
+            .map(|digest| digest.value.as_str())
+            .collect::<Vec<_>>();
+        Digest::from_parts(kind, label, &parts)
+    }
+
     pub(crate) fn metrics_layer_key(
         manifest: &ProviderManifest,
         source_text_digests: Vec<Digest>,
@@ -761,10 +773,30 @@ impl LayerKey {
             "metrics layer keys require the metrics provider manifest"
         );
 
-        let mut input_digests =
-            Vec::with_capacity(source_text_digests.len() + function_fact_digests.len());
-        input_digests.extend(source_text_digests);
-        input_digests.extend(function_fact_digests);
+        // Fold the per-file and per-function digests into two combined digests
+        // instead of storing all of them (one per file + one per function) in the
+        // key. Fine-grained, per-input incremental invalidation is driven by the
+        // dependency EDGES emitted in `metrics::metrics_layer_dependency_edges`
+        // (one `to` node per file/function), not by the key's `input_digests`.
+        // Embedding every digest in the key as well made the key O(files+functions)
+        // in size, and because `CacheNode::Layer(key)` is cloned into the `from`
+        // field of every dependency edge, dependency-edge construction became
+        // O(files * (files+functions)) in time and memory — tens of GB and minutes
+        // on large repos. The combined digests still change whenever any source or
+        // function digest changes, so the key identity and the coarse
+        // `input_digests != input_digests` change check stay correct.
+        let input_digests = vec![
+            Self::combine_digests_into(
+                DigestKind::SourceText,
+                "metrics_source_text_combined",
+                &source_text_digests,
+            ),
+            Self::combine_digests_into(
+                DigestKind::ProviderParameters,
+                "metrics_function_fact_combined",
+                &function_fact_digests,
+            ),
+        ];
 
         Self::new(
             LayerKind::Metrics,

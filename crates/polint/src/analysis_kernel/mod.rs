@@ -22,6 +22,27 @@ pub(crate) use provider::{
     CachePolicy, LanguageScope, PrecisionCeiling, ProviderManifest, SchemaVersion,
 };
 
+/// Capabilities whose facts are produced by the interprocedural/semantic provider
+/// pipeline (everything downstream of the module and symbol graphs:
+/// `module_topology`, `semantic_mir`, `cfg`, `calls`, `go.semantic`, `identity`,
+/// `abstract_domains`, summaries, `entrypoints`, `reachability`, `extensions`,
+/// `type_value_alias`, `semantic_graph`, `solver`, `refined_calls`, `data_flow`,
+/// and `evidence`).
+///
+/// No public SDK fact view reads any fact this pipeline emits — the `Cfg`,
+/// `CallGraph`, and `DataFlow` views are reserved/unsupported. So when no enabled
+/// rule requests one of these graph capabilities, the whole pipeline is dead work:
+/// it builds MIR, CFGs, call graphs, points-to and a whole-repo solver state that
+/// nothing consumes. Gating on it lets a syntactic rule set (metrics, imports,
+/// string literals, Go tests) skip the pipeline entirely and avoid its very large
+/// peak-memory cost.
+///
+/// The set mirrors [`module_graph`](crate::module_graph)'s own trigger list so the
+/// invariant "the semantic pipeline runs only when the module/symbol graphs that
+/// feed it also ran" holds by construction.
+const SEMANTIC_PIPELINE_TRIGGER_CAPABILITIES: &[&str] =
+    &["resolved_imports", "module_graph", "symbols", "references"];
+
 pub(crate) struct AnalysisKernel;
 
 pub(crate) struct KernelInput<'a> {
@@ -53,7 +74,66 @@ impl AnalysisKernel {
     }
 
     pub(crate) fn run(input: KernelInput<'_>) -> anyhow::Result<KernelOutput> {
-        let mut db = crate::fs::load_analysis_files(input.loaded)?;
+        // Gate the interprocedural/semantic pipeline on whether any enabled rule
+        // actually requests a graph capability. Syntactic rule sets skip it wholesale,
+        // which is the dominant memory and CPU cost on large repos. See
+        // `SEMANTIC_PIPELINE_TRIGGER_CAPABILITIES`.
+        let run_semantic_pipeline = input
+            .plan
+            .requests_any_capability(SEMANTIC_PIPELINE_TRIGGER_CAPABILITIES);
+
+        // When the semantic pipeline is skipped, the only consumers of a file are the
+        // rules scoped to it (and the syntactic providers feeding those rules). A file
+        // matched by no enabled rule's `files` scope cannot produce any diagnostic, so
+        // we never read or parse it. When the semantic pipeline runs, cross-file
+        // resolution needs the full workspace, so we keep the unscoped discovery.
+        let rule_scope = if run_semantic_pipeline {
+            None
+        } else {
+            Self::rule_scope_globset(input.plan)
+        };
+        tracing::info!(
+            target: "polint::kernel",
+            run_semantic_pipeline,
+            rule_scoped = rule_scope.is_some(),
+            "analysis kernel pipeline gate"
+        );
+
+        let mut db = crate::fs::load_analysis_files_scoped(input.loaded, rule_scope.as_ref())?;
+        // Source-load summary: the corpus actually read into memory is the dominant
+        // memory cost on large repos, so log its size/shape when info tracing is on.
+        // Guarded by `enabled!` so it costs nothing in normal (un-instrumented) runs.
+        if tracing::enabled!(target: "polint::kernel", tracing::Level::INFO) {
+            let files = db.files();
+            let total_bytes: usize = files.iter().map(|f| f.source.len()).sum();
+            let (mut go, mut ts, mut go_bytes, mut ts_bytes) = (0usize, 0usize, 0usize, 0usize);
+            for f in files.iter() {
+                match f.language {
+                    crate::core::Language::Go => {
+                        go += 1;
+                        go_bytes += f.source.len();
+                    }
+                    crate::core::Language::TypeScript
+                    | crate::core::Language::Tsx
+                    | crate::core::Language::JavaScript
+                    | crate::core::Language::Jsx => {
+                        ts += 1;
+                        ts_bytes += f.source.len();
+                    }
+                    _ => {}
+                }
+            }
+            tracing::info!(
+                target: "polint::kernel",
+                files = files.len(),
+                total_mb = total_bytes / 1_048_576,
+                go,
+                go_mb = go_bytes / 1_048_576,
+                ts,
+                ts_mb = ts_bytes / 1_048_576,
+                "phase: source files loaded"
+            );
+        }
         let input_snapshot = incremental::InputSnapshot::from_run_inputs(
             input.loaded,
             &db,
@@ -80,6 +160,7 @@ impl AnalysisKernel {
             input.parallel,
         );
         let go_output_digest = go_output.output_digest.clone();
+        tracing::info!(target: "polint::kernel", "phase: go.syntax done");
         diagnostics.extend(go_output.diagnostics);
         provider_outputs.push(Self::provider_output_for_with_optional_digest(
             "polint.go.syntax",
@@ -97,6 +178,7 @@ impl AnalysisKernel {
             input.parallel,
         );
         let ts_output_digest = ts_output.output_digest.clone();
+        tracing::info!(target: "polint::kernel", "phase: ts.syntax done");
         diagnostics.extend(ts_output.diagnostics);
         provider_outputs.push(Self::provider_output_for_with_optional_digest(
             "polint.ts.syntax",
@@ -171,14 +253,18 @@ impl AnalysisKernel {
                 "polint.symbol_graph",
             )
         });
-        let module_topology = crate::module_graph::derive_module_topology_with_cache_stats(
-            &mut db,
-            input.cache,
-            &input_snapshot,
-            Self::provider_manifest("polint.module_topology"),
-            module_dependency_output_digest,
-            symbol_dependency_output_digest.clone(),
-        );
+        let module_topology = if run_semantic_pipeline {
+            crate::module_graph::derive_module_topology_with_cache_stats(
+                &mut db,
+                input.cache,
+                &input_snapshot,
+                Self::provider_manifest("polint.module_topology"),
+                module_dependency_output_digest,
+                symbol_dependency_output_digest.clone(),
+            )
+        } else {
+            Default::default()
+        };
         let polint_module_topology_cache_stats = module_topology.cache_stats.clone();
         let module_topology_output_digest = module_topology.output_digest.clone();
         diagnostics.extend(module_topology.diagnostics);
@@ -196,17 +282,21 @@ impl AnalysisKernel {
                     "polint.module_topology",
                 )
             });
-        let semantic_mir = crate::analysis::provider::derive_semantic_mir_with_cache_stats(
-            &mut db,
-            &input_snapshot,
-            Self::provider_manifest("polint.semantic_mir"),
-            module_topology_dependency_output_digest.clone(),
-            symbol_dependency_output_digest.clone(),
-            vec![
-                go_dependency_output_digest.clone(),
-                ts_dependency_output_digest.clone(),
-            ],
-        );
+        let semantic_mir = if run_semantic_pipeline {
+            crate::analysis::provider::derive_semantic_mir_with_cache_stats(
+                &mut db,
+                &input_snapshot,
+                Self::provider_manifest("polint.semantic_mir"),
+                module_topology_dependency_output_digest.clone(),
+                symbol_dependency_output_digest.clone(),
+                vec![
+                    go_dependency_output_digest.clone(),
+                    ts_dependency_output_digest.clone(),
+                ],
+            )
+        } else {
+            Default::default()
+        };
         let polint_semantic_mir_cache_stats = semantic_mir.cache_stats.clone();
         let semantic_mir_output_digest = semantic_mir.output_digest.clone();
         diagnostics.extend(semantic_mir.diagnostics);
@@ -224,16 +314,20 @@ impl AnalysisKernel {
                     "polint.semantic_mir",
                 )
             });
-        let cfg = crate::analysis::cfg::provider::derive_cfg_with_cache_stats(
-            &mut db,
-            &input_snapshot,
-            Self::provider_manifest("polint.cfg"),
-            semantic_mir_dependency_output_digest.clone(),
-            vec![
-                go_dependency_output_digest.clone(),
-                ts_dependency_output_digest.clone(),
-            ],
-        );
+        let cfg = if run_semantic_pipeline {
+            crate::analysis::cfg::provider::derive_cfg_with_cache_stats(
+                &mut db,
+                &input_snapshot,
+                Self::provider_manifest("polint.cfg"),
+                semantic_mir_dependency_output_digest.clone(),
+                vec![
+                    go_dependency_output_digest.clone(),
+                    ts_dependency_output_digest.clone(),
+                ],
+            )
+        } else {
+            Default::default()
+        };
         let polint_cfg_cache_stats = cfg.cache_stats.clone();
         let cfg_output_digest = cfg.output_digest.clone();
         diagnostics.extend(cfg.diagnostics);
@@ -247,19 +341,23 @@ impl AnalysisKernel {
         let cfg_dependency_output_digest = cfg_output_digest.unwrap_or_else(|| {
             incremental::Digest::absent(incremental::DigestKind::ProviderOutput, "polint.cfg")
         });
-        let calls = crate::analysis::calls::provider::derive_calls_with_cache_stats(
-            &mut db,
-            &input_snapshot,
-            Self::provider_manifest("polint.calls"),
-            semantic_mir_dependency_output_digest.clone(),
-            cfg_dependency_output_digest.clone(),
-            symbol_dependency_output_digest.clone(),
-            module_topology_dependency_output_digest.clone(),
-            vec![
-                go_dependency_output_digest.clone(),
-                ts_dependency_output_digest.clone(),
-            ],
-        );
+        let calls = if run_semantic_pipeline {
+            crate::analysis::calls::provider::derive_calls_with_cache_stats(
+                &mut db,
+                &input_snapshot,
+                Self::provider_manifest("polint.calls"),
+                semantic_mir_dependency_output_digest.clone(),
+                cfg_dependency_output_digest.clone(),
+                symbol_dependency_output_digest.clone(),
+                module_topology_dependency_output_digest.clone(),
+                vec![
+                    go_dependency_output_digest.clone(),
+                    ts_dependency_output_digest.clone(),
+                ],
+            )
+        } else {
+            Default::default()
+        };
         let polint_calls_cache_stats = calls.cache_stats.clone();
         let calls_output_digest = calls.output_digest.clone();
         diagnostics.extend(calls.diagnostics);
@@ -274,13 +372,17 @@ impl AnalysisKernel {
             incremental::Digest::absent(incremental::DigestKind::ProviderOutput, "polint.calls")
         });
 
-        let go_semantic = crate::go::semantic::provider::derive_go_semantic_with_cache_stats(
-            &mut db,
-            input.loaded,
-            &input_snapshot,
-            Self::provider_manifest("polint.go.semantic"),
-            go_dependency_output_digest.clone(),
-        );
+        let go_semantic = if run_semantic_pipeline {
+            crate::go::semantic::provider::derive_go_semantic_with_cache_stats(
+                &mut db,
+                input.loaded,
+                &input_snapshot,
+                Self::provider_manifest("polint.go.semantic"),
+                go_dependency_output_digest.clone(),
+            )
+        } else {
+            Default::default()
+        };
         let polint_go_semantic_cache_stats = go_semantic.cache_stats.clone();
         let go_semantic_output_digest = go_semantic.output_digest.clone();
         diagnostics.extend(go_semantic.diagnostics);
@@ -297,13 +399,17 @@ impl AnalysisKernel {
             )
         });
 
-        let identity = crate::analysis::identity::provider::derive_identity_with_cache_stats(
-            &mut db,
-            &input_snapshot,
-            Self::provider_manifest("polint.identity"),
-            calls_dependency_output_digest.clone(),
-            go_semantic_dependency_output_digest.clone(),
-        );
+        let identity = if run_semantic_pipeline {
+            crate::analysis::identity::provider::derive_identity_with_cache_stats(
+                &mut db,
+                &input_snapshot,
+                Self::provider_manifest("polint.identity"),
+                calls_dependency_output_digest.clone(),
+                go_semantic_dependency_output_digest.clone(),
+            )
+        } else {
+            Default::default()
+        };
         let polint_identity_cache_stats = identity.cache_stats.clone();
         let identity_output_digest = identity.output_digest;
         diagnostics.extend(identity.diagnostics);
@@ -317,7 +423,7 @@ impl AnalysisKernel {
             incremental::Digest::absent(incremental::DigestKind::ProviderOutput, "polint.identity")
         });
 
-        let abstract_domains =
+        let abstract_domains = if run_semantic_pipeline {
             crate::analysis::domains::provider::derive_abstract_domains_with_cache_stats(
                 &mut db,
                 &input_snapshot,
@@ -331,7 +437,10 @@ impl AnalysisKernel {
                     go_dependency_output_digest.clone(),
                     ts_dependency_output_digest.clone(),
                 ],
-            );
+            )
+        } else {
+            Default::default()
+        };
         let polint_abstract_domains_cache_stats = abstract_domains.cache_stats.clone();
         let abstract_domains_output_digest = abstract_domains.output_digest;
         diagnostics.extend(abstract_domains.diagnostics);
@@ -354,7 +463,7 @@ impl AnalysisKernel {
         let entrypoints_calls_digest = calls_dependency_output_digest.clone();
         let entrypoints_symbol_digest = symbol_dependency_output_digest.clone();
         let entrypoints_topology_digest = module_topology_dependency_output_digest.clone();
-        let direct_summaries =
+        let direct_summaries = if run_semantic_pipeline {
             crate::analysis::summaries::provider::derive_direct_summaries_with_cache_stats(
                 &mut db,
                 &input_snapshot,
@@ -369,19 +478,26 @@ impl AnalysisKernel {
                     go_dependency_output_digest.clone(),
                     ts_dependency_output_digest.clone(),
                 ],
-            );
+            )
+        } else {
+            Default::default()
+        };
         let polint_direct_summaries_cache_stats = direct_summaries.cache_stats.clone();
         diagnostics.extend(direct_summaries.diagnostics);
 
         // SCC closure: interprocedural summary improvement over SCCs.
         // Runs after direct summaries so callee summaries are available.
-        let scc_closure = crate::analysis::summaries::provider::run_scc_closure_with_cache(
-            &mut db,
-            input.cache,
-            input.config_digest,
-            input.rule_digest,
-            input.plan.digest(),
-        );
+        let scc_closure = if run_semantic_pipeline {
+            crate::analysis::summaries::provider::run_scc_closure_with_cache(
+                &mut db,
+                input.cache,
+                input.config_digest,
+                input.rule_digest,
+                input.plan.digest(),
+            )
+        } else {
+            Default::default()
+        };
         #[cfg(test)]
         let scc_closure_debug = scc_closure.debug_snapshot;
         diagnostics.extend(scc_closure.diagnostics);
@@ -413,7 +529,7 @@ impl AnalysisKernel {
             Some(direct_summaries_output_digest.clone()),
         ));
 
-        let entrypoints =
+        let entrypoints = if run_semantic_pipeline {
             crate::analysis::entrypoints::provider::derive_entrypoints_with_cache_stats(
                 &mut db,
                 &input_snapshot,
@@ -427,7 +543,10 @@ impl AnalysisKernel {
                     go_dependency_output_digest.clone(),
                     ts_dependency_output_digest.clone(),
                 ],
-            );
+            )
+        } else {
+            Default::default()
+        };
         let polint_entrypoints_cache_stats = entrypoints.cache_stats.clone();
         let entrypoints_output_digest = entrypoints.output_digest.clone();
         diagnostics.extend(entrypoints.diagnostics);
@@ -448,7 +567,7 @@ impl AnalysisKernel {
 
         // polint.reachability runs immediately after polint.entrypoints (D-19),
         // consuming the calls/entrypoints/identity/symbol/topology output digests.
-        let reachability =
+        let reachability = if run_semantic_pipeline {
             crate::analysis::reachability::provider::derive_reachability_with_cache_stats(
                 &mut db,
                 &input_snapshot,
@@ -459,7 +578,10 @@ impl AnalysisKernel {
                 identity_dependency_output_digest.clone(),
                 entrypoints_symbol_digest.clone(),
                 entrypoints_topology_digest.clone(),
-            );
+            )
+        } else {
+            Default::default()
+        };
         let polint_reachability_cache_stats = reachability.cache_stats.clone();
         let reachability_output_digest = reachability.output_digest;
         diagnostics.extend(reachability.diagnostics);
@@ -479,13 +601,16 @@ impl AnalysisKernel {
             reachability_output_digest,
         ));
 
-        let extensions =
+        let extensions = if run_semantic_pipeline {
             crate::analysis::extensions::provider::derive_extension_provider_outputs_with_cache_stats(
                 &mut db,
                 &input.loaded.root,
                 &input_snapshot,
                 Self::provider_manifest("polint.extensions"),
-            );
+            )
+        } else {
+            Default::default()
+        };
         let polint_extensions_cache_stats = extensions.cache_stats.clone();
         let extensions_output_digest = extensions.output_digest.clone();
         diagnostics.extend(extensions.diagnostics);
@@ -502,7 +627,7 @@ impl AnalysisKernel {
             )
         });
 
-        let type_value_alias =
+        let type_value_alias = if run_semantic_pipeline {
             crate::analysis::types::provider::derive_type_value_alias_with_cache_stats(
                 &mut db,
                 &input_snapshot,
@@ -520,7 +645,10 @@ impl AnalysisKernel {
                     go_dependency_output_digest.clone(),
                     ts_dependency_output_digest.clone(),
                 ],
-            );
+            )
+        } else {
+            Default::default()
+        };
         let polint_type_value_alias_cache_stats = type_value_alias.cache_stats.clone();
         let type_value_alias_output_digest = type_value_alias.output_digest.clone();
         diagnostics.extend(type_value_alias.diagnostics);
@@ -558,7 +686,7 @@ impl AnalysisKernel {
         // graph from already-stored facts plus repo-local adaptation models, and folds
         // every consumed upstream provider output digest into its own output digest
         // (D-17).
-        let semantic_graph =
+        let semantic_graph = if run_semantic_pipeline {
             crate::analysis::semantic_graph::provider::derive_semantic_graph_with_cache_stats(
                 &mut db,
                 input.loaded,
@@ -577,7 +705,10 @@ impl AnalysisKernel {
                 ts_dependency_output_digest.clone(),
                 entrypoints_semantic_mir_digest.clone(),
                 go_semantic_dependency_output_digest.clone(),
-            );
+            )
+        } else {
+            Default::default()
+        };
         let polint_semantic_graph_cache_stats = semantic_graph.cache_stats.clone();
         let semantic_graph_output_digest = semantic_graph.output_digest.clone();
         diagnostics.extend(semantic_graph.diagnostics);
@@ -609,15 +740,19 @@ impl AnalysisKernel {
         // upstream change invalidates the solver cache" was false). Auto-enrolls in the
         // Phase 43 determinism gate (D-14). Thread the per-language solver config into
         // SolverBudget (D-10/D-11).
-        let solver = crate::analysis::solver::provider::derive_solver_with_cache_stats(
-            &mut db,
-            &input_snapshot,
-            Self::provider_manifest("polint.solver"),
-            solver_budget,
-            semantic_graph_dependency_output_digest,
-            type_value_alias_dependency_output_digest.clone(),
-            go_semantic_dependency_output_digest,
-        );
+        let solver = if run_semantic_pipeline {
+            crate::analysis::solver::provider::derive_solver_with_cache_stats(
+                &mut db,
+                &input_snapshot,
+                Self::provider_manifest("polint.solver"),
+                solver_budget,
+                semantic_graph_dependency_output_digest,
+                type_value_alias_dependency_output_digest.clone(),
+                go_semantic_dependency_output_digest,
+            )
+        } else {
+            Default::default()
+        };
         let polint_solver_cache_stats = solver.cache_stats.clone();
         let solver_output_digest = solver.output_digest.clone();
         diagnostics.extend(solver.diagnostics);
@@ -631,7 +766,7 @@ impl AnalysisKernel {
             incremental::Digest::absent(incremental::DigestKind::ProviderOutput, "polint.solver")
         });
 
-        let refined_calls =
+        let refined_calls = if run_semantic_pipeline {
             crate::analysis::refined_calls::provider::derive_refined_calls_with_cache_stats(
                 &mut db,
                 &input_snapshot,
@@ -642,7 +777,10 @@ impl AnalysisKernel {
                 type_value_alias_dependency_output_digest.clone(),
                 extensions_dependency_output_digest.clone(),
                 solver_dependency_output_digest,
-            );
+            )
+        } else {
+            Default::default()
+        };
         let polint_refined_calls_cache_stats = refined_calls.cache_stats.clone();
         let refined_calls_output_digest = refined_calls.output_digest.clone();
         diagnostics.extend(refined_calls.diagnostics);
@@ -660,19 +798,23 @@ impl AnalysisKernel {
                     "polint.refined_calls",
                 )
             });
-        let data_flow = crate::analysis::data_flow::provider::derive_data_flow_with_cache_stats(
-            &mut db,
-            &input_snapshot,
-            Self::provider_manifest("polint.data_flow"),
-            entrypoints_semantic_mir_digest.clone(),
-            entrypoints_cfg_digest.clone(),
-            entrypoints_calls_digest.clone(),
-            refined_calls_dependency_output_digest.clone(),
-            direct_summaries_dependency_output_digest.clone(),
-            type_value_alias_dependency_output_digest.clone(),
-            entrypoints_dependency_output_digest.clone(),
-            extensions_dependency_output_digest.clone(),
-        );
+        let data_flow = if run_semantic_pipeline {
+            crate::analysis::data_flow::provider::derive_data_flow_with_cache_stats(
+                &mut db,
+                &input_snapshot,
+                Self::provider_manifest("polint.data_flow"),
+                entrypoints_semantic_mir_digest.clone(),
+                entrypoints_cfg_digest.clone(),
+                entrypoints_calls_digest.clone(),
+                refined_calls_dependency_output_digest.clone(),
+                direct_summaries_dependency_output_digest.clone(),
+                type_value_alias_dependency_output_digest.clone(),
+                entrypoints_dependency_output_digest.clone(),
+                extensions_dependency_output_digest.clone(),
+            )
+        } else {
+            Default::default()
+        };
         let polint_data_flow_cache_stats = data_flow.cache_stats.clone();
         let data_flow_output_digest = data_flow.output_digest.clone();
         diagnostics.extend(data_flow.diagnostics);
@@ -686,20 +828,24 @@ impl AnalysisKernel {
         let data_flow_dependency_output_digest = data_flow_output_digest.unwrap_or_else(|| {
             incremental::Digest::absent(incremental::DigestKind::ProviderOutput, "polint.data_flow")
         });
-        let evidence = crate::analysis::evidence::provider::derive_evidence_with_cache_stats(
-            &mut db,
-            &input_snapshot,
-            Self::provider_manifest("polint.evidence"),
-            entrypoints_semantic_mir_digest,
-            entrypoints_cfg_digest,
-            entrypoints_calls_digest,
-            refined_calls_dependency_output_digest,
-            direct_summaries_dependency_output_digest,
-            type_value_alias_dependency_output_digest,
-            entrypoints_dependency_output_digest,
-            extensions_dependency_output_digest,
-            data_flow_dependency_output_digest,
-        );
+        let evidence = if run_semantic_pipeline {
+            crate::analysis::evidence::provider::derive_evidence_with_cache_stats(
+                &mut db,
+                &input_snapshot,
+                Self::provider_manifest("polint.evidence"),
+                entrypoints_semantic_mir_digest,
+                entrypoints_cfg_digest,
+                entrypoints_calls_digest,
+                refined_calls_dependency_output_digest,
+                direct_summaries_dependency_output_digest,
+                type_value_alias_dependency_output_digest,
+                entrypoints_dependency_output_digest,
+                extensions_dependency_output_digest,
+                data_flow_dependency_output_digest,
+            )
+        } else {
+            Default::default()
+        };
         let polint_evidence_cache_stats = evidence.cache_stats.clone();
         let evidence_output_digest = evidence.output_digest;
         diagnostics.extend(evidence.diagnostics);
@@ -727,6 +873,7 @@ impl AnalysisKernel {
             polint_metrics_cache_stats,
             metrics_output_digest,
         ));
+        tracing::info!(target: "polint::kernel", "phase: metrics + derived done");
         let validation_diagnostics =
             validation::validate_fact_metadata(&db, Self::provider_manifests());
         diagnostics.extend(validation_diagnostics);
@@ -813,6 +960,25 @@ impl AnalysisKernel {
             incremental::provider_output_from_manifest(manifest, output_digest, cache_stats);
         meta.validation = validation.to_string();
         meta
+    }
+
+    /// Union of every enabled rule's `files` scope, as a glob set, or `None` when the
+    /// set cannot safely narrow discovery — i.e. there are no rules, or some rule has
+    /// an empty `files` scope (which matches every file). Returning `None` falls back
+    /// to full workspace discovery.
+    fn rule_scope_globset(plan: &AnalysisPlan) -> Option<globset::GlobSet> {
+        let rules = plan.rules();
+        if rules.is_empty() {
+            return None;
+        }
+        let mut patterns = Vec::new();
+        for rule in rules {
+            if rule.files.is_empty() {
+                return None;
+            }
+            patterns.extend(rule.files.iter().cloned());
+        }
+        crate::config::build_glob_set(&patterns).ok()
     }
 
     fn provider_manifest(provider_id: &str) -> &'static ProviderManifest {
@@ -1607,8 +1773,13 @@ mod tests {
             assert!(!row.output_digest.value.is_empty());
         }
 
+        // With an empty plan no rule requests a graph capability, so the
+        // interprocedural/semantic pipeline (semantic_mir and everything
+        // downstream) is gated off and never recomputes. Its provider row is still
+        // emitted with a deterministic empty-summary output digest. See
+        // `SEMANTIC_PIPELINE_TRIGGER_CAPABILITIES`.
         let semantic_mir = provider_output(&output, "polint.semantic_mir");
-        assert_eq!(semantic_mir.cache_stats.recomputes, 1);
+        assert_eq!(semantic_mir.cache_stats.recomputes, 0);
         assert!(!semantic_mir.output_digest.value.is_empty());
     }
 

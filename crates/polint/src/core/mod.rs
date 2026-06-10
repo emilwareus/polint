@@ -7309,7 +7309,14 @@ pub(crate) fn run_rules_with_capability_support(
             rule_options,
             capability_support.clone(),
         );
+        let started = std::time::Instant::now();
         let result = catch_unwind(AssertUnwindSafe(|| rule.run(db, &mut ctx)));
+        tracing::info!(
+            target: "polint::rules",
+            rule = %meta.id,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "rule finished"
+        );
         match result {
             Ok(Ok(())) => ctx.into_diagnostics(),
             Ok(Err(error)) => vec![internal_rule_error(db, &meta, error.to_string())],
