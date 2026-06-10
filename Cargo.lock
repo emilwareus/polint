@@ -1101,7 +1101,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "polint"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1135,7 +1135,7 @@ dependencies = [
 
 [[package]]
 name = "polint-bench"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "anyhow",
  "polint",
@@ -1143,112 +1143,112 @@ dependencies = [
 
 [[package]]
 name = "polint-example-basic-rule"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "polint",
 ]
 
 [[package]]
 name = "polint-example-code-quality-metrics-rule"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "polint",
 ]
 
 [[package]]
 name = "polint-example-comment-ignores-rule"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "polint",
 ]
 
 [[package]]
 name = "polint-example-config-denied-literal-rule"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "polint",
 ]
 
 [[package]]
 name = "polint-example-custom-go-rule"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "polint",
 ]
 
 [[package]]
 name = "polint-example-custom-ts-rule"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "polint",
 ]
 
 [[package]]
 name = "polint-example-go-branch-obligations-rule"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "polint",
 ]
 
 [[package]]
 name = "polint-example-go-complexity-rule"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "polint",
 ]
 
 [[package]]
 name = "polint-example-go-import-boundaries-rule"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "polint",
 ]
 
 [[package]]
 name = "polint-example-go-sensitive-writes-rule"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "polint",
 ]
 
 [[package]]
 name = "polint-example-go-test-quality-rule"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "polint",
 ]
 
 [[package]]
 name = "polint-example-multiple-rules"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "polint",
 ]
 
 [[package]]
 name = "polint-example-ts-complexity-rule"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "polint",
 ]
 
 [[package]]
 name = "polint-example-ts-design-tokens-rule"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "polint",
 ]
 
 [[package]]
 name = "polint-example-ts-no-raw-api-calls-rule"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "polint",
 ]
 
 [[package]]
 name = "polint-macros"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "proc-macro2",
  "quote",
