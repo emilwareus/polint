@@ -42,6 +42,12 @@ pub(crate) fn resolve_ts_value_flow_targets(
     let resolution_map = module_resolution_map(db);
     let module_summaries =
         compute_module_export_summaries(db, &functions_by_file_start, &resolution_map);
+    let function_returns = compute_function_return_summaries(
+        db,
+        &functions_by_file_start,
+        &resolution_map,
+        &module_summaries,
+    );
 
     for file in db
         .files()
@@ -72,12 +78,15 @@ pub(crate) fn resolve_ts_value_flow_targets(
             functions_by_start: &functions_by_file_start,
             resolution_map: &resolution_map,
             module_summaries: &module_summaries,
+            function_returns: &function_returns,
             function_declarations: BTreeMap::new(),
             function_flows_by_id: BTreeMap::new(),
             classes: BTreeMap::new(),
             class_expressions: Vec::new(),
             exports: ModuleExportSummary::default(),
+            export_aliases: std::collections::BTreeSet::new(),
             caller_override: None,
+            this_method_walk: false,
             current_super: None,
             invocation_depth: 0,
             iterator_next_ordinals: BTreeMap::new(),
@@ -116,6 +125,12 @@ struct TsValueFlowCollector<'db, 'ast, 'env> {
     /// Converged per-file CommonJS/ESM export summaries used to seed
     /// `require(...)` / `import` results into the current file's value flow.
     module_summaries: &'env BTreeMap<FileId, ModuleExportSummary>,
+    /// Per-function return-value summaries (the object/callable shape a function
+    /// returns), keyed by `FunctionId`, computed across all files. Lets a call to
+    /// a function defined in another file seed its result — e.g. `express()`
+    /// returns the `app` object that `createApplication` builds via `mixin`.
+    /// Empty during the summary pre-passes; populated for the main resolution pass.
+    function_returns: &'env BTreeMap<FunctionId, ModuleExportSummary>,
     function_declarations: BTreeMap<String, FunctionFlow<'db, 'ast>>,
     function_flows_by_id: BTreeMap<FunctionId, FunctionFlow<'db, 'ast>>,
     classes: BTreeMap<String, ClassTargets>,
@@ -129,12 +144,22 @@ struct TsValueFlowCollector<'db, 'ast, 'env> {
     /// summary pre-pass `sites` is empty, so the `emit_*` helpers naturally
     /// produce no rows and only `exports` is harvested.
     exports: ModuleExportSummary,
+    /// Local variable names aliasing the module's export object
+    /// (`var app = exports = module.exports = {}`). Property writes to these
+    /// (`app.listen = fn`, `app[method] = fn`) build the export object, so after
+    /// the module body walk their `env.objects` entry is folded into `exports`.
+    export_aliases: std::collections::BTreeSet<String>,
     /// When set, emitted edges use this function as the caller instead of the
     /// call site's enclosing function. Jelly attributes constructor-body (and
     /// field-initializer) calls to the class node, not the `constructor()` node,
     /// so the class-body walk sets this to the class function fact while walking
     /// the constructor.
     caller_override: Option<FunctionId>,
+    /// True while walking export-object method bodies speculatively with `this`
+    /// bound (`collect_export_object_method_flows`). Edges emitted then are tagged
+    /// `ThisMethodFlow` instead of `FunctionTokenFlow` so the demand-driven
+    /// reachability filter does not seed the (possibly dead) method as a root.
+    this_method_walk: bool,
     /// The super-class instance/static member objects in scope while walking a
     /// class method body, used to resolve `super.m()` / `super.s()` / `super.f`.
     current_super: Option<ObjectTargets>,
@@ -200,7 +225,7 @@ enum ParamPattern {
 /// the file set with a Node-style resolver. This intentionally does NOT rely on
 /// the kernel module-graph layer (`resolved_imports`), which is only populated
 /// when a rule requests it — the benchmark/value-flow path must work standalone.
-fn module_resolution_map(db: &AnalysisDb) -> BTreeMap<(FileId, String), FileId> {
+pub(crate) fn module_resolution_map(db: &AnalysisDb) -> BTreeMap<(FileId, String), FileId> {
     let imports = db.imports();
     if imports.is_empty() {
         return BTreeMap::new();
@@ -283,6 +308,8 @@ fn compute_module_export_summaries(
         // summary fixpoint to feed; skip the (expensive) pre-pass entirely.
         return summaries;
     }
+    // Function-return seeding is not active while building export summaries.
+    let empty_returns: BTreeMap<FunctionId, ModuleExportSummary> = BTreeMap::new();
     for _round in 0..MAX_MODULE_SUMMARY_ROUNDS {
         let mut next: BTreeMap<FileId, ModuleExportSummary> = BTreeMap::new();
         for file in db
@@ -311,12 +338,15 @@ fn compute_module_export_summaries(
                 functions_by_start: functions_by_file_start,
                 resolution_map,
                 module_summaries: &summaries,
+                function_returns: &empty_returns,
                 function_declarations: BTreeMap::new(),
                 function_flows_by_id: BTreeMap::new(),
                 classes: BTreeMap::new(),
                 class_expressions: Vec::new(),
                 exports: ModuleExportSummary::default(),
+                export_aliases: std::collections::BTreeSet::new(),
                 caller_override: None,
+                this_method_walk: false,
                 current_super: None,
                 invocation_depth: 0,
                 iterator_next_ordinals: BTreeMap::new(),
@@ -337,8 +367,220 @@ fn compute_module_export_summaries(
     summaries
 }
 
+/// Compute each function's return-value summary (object/callable shape it
+/// returns), keyed by `FunctionId`, against the converged module summaries. A
+/// single pass suffices for the chains we model (`express()` →
+/// `createApplication` → returns the `mixin`-assembled `app`); return chains
+/// across summarized functions are not threaded (the map is empty while
+/// computing). Skipped entirely when no cross-module imports resolve.
+fn compute_function_return_summaries(
+    db: &AnalysisDb,
+    functions_by_file_start: &BTreeMap<(FileId, u32), Vec<&FunctionFact>>,
+    resolution_map: &BTreeMap<(FileId, String), FileId>,
+    module_summaries: &BTreeMap<FileId, ModuleExportSummary>,
+) -> BTreeMap<FunctionId, ModuleExportSummary> {
+    let mut returns: BTreeMap<FunctionId, ModuleExportSummary> = BTreeMap::new();
+    if resolution_map.is_empty() {
+        return returns;
+    }
+    let empty_returns = BTreeMap::new();
+    for file in db
+        .files()
+        .iter()
+        .filter(|file| file.language.is_ts_family())
+    {
+        let Some(module) = module_function(db, file) else {
+            continue;
+        };
+        let allocator = Allocator::default();
+        let parsed = Parser::new(
+            &allocator,
+            file.source.as_ref(),
+            SourceType::from_path(&file.path).unwrap_or_default(),
+        )
+        .parse();
+        if parsed.panicked && parsed.program.body.is_empty() {
+            continue;
+        }
+        let mut collector = TsValueFlowCollector {
+            db,
+            file,
+            module,
+            sites: &[],
+            functions_by_start: functions_by_file_start,
+            resolution_map,
+            module_summaries,
+            function_returns: &empty_returns,
+            function_declarations: BTreeMap::new(),
+            function_flows_by_id: BTreeMap::new(),
+            classes: BTreeMap::new(),
+            class_expressions: Vec::new(),
+            exports: ModuleExportSummary::default(),
+            export_aliases: std::collections::BTreeSet::new(),
+            caller_override: None,
+            this_method_walk: false,
+            current_super: None,
+            invocation_depth: 0,
+            iterator_next_ordinals: BTreeMap::new(),
+            iterator_next_starts: BTreeMap::new(),
+            rows: Vec::new(),
+            next_id: 0,
+        };
+        collector.collect_return_summaries(&parsed.program, &mut returns);
+    }
+    returns
+}
+
 impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
     fn collect_program(&mut self, program: &'ast Program<'ast>) {
+        let env = self.build_module_env(program);
+        // Resolve intra-method calls (`this.foo()`, `super.m()`, `this.#bar()`)
+        // with `this`/`super` bound, after the module env is fully populated.
+        self.collect_class_body_call_flows(program, &env);
+        // Methods attached to the module's export object (`app.use = function(){
+        // … this.lazyrouter() … }`) dispatch `this` to that object. Walk their
+        // bodies with `this` bound, so the framework's internal `this.X()` calls
+        // resolve once the object's entry methods become reachable (Express).
+        self.collect_export_object_method_flows(&env);
+        // Prototype-based OOP (`IPv4.prototype.toString = function(){ … this.x() …
+        // }`) is the same shape for function-constructor classes that the class-body
+        // walk does not cover. Walk those instance-method bodies with `this` bound.
+        self.collect_prototype_method_this_flows(program, &env);
+    }
+
+    /// Walk the bodies of functions attached to an export-alias object with `this`
+    /// bound to that object. `application.js` defines `app.use`, `app.listen`, the
+    /// verb handler, etc. as `app.X = function(){ … this.lazyrouter() … }`; those
+    /// `this.Y()` calls resolve only with `this` = the (fully built) `app` object.
+    /// Attribution stays with each method (no `caller_override`), and the method
+    /// is reachable through the entry chain (`app.get`/`app.listen`), so the
+    /// resolved edges are no longer pruned. Mirrors `collect_class_body_call_flows`
+    /// for plain object methods.
+    fn collect_export_object_method_flows(&mut self, env: &FlowEnv) {
+        // Tag every edge from this speculative walk `ThisMethodFlow` so the
+        // reachability filter does not root the (possibly dead) method on it.
+        let saved_this_walk = self.this_method_walk;
+        self.this_method_walk = true;
+        let aliases: Vec<String> = self.export_aliases.iter().cloned().collect();
+        for alias in aliases {
+            let Some(object) = env.objects.get(&alias).cloned() else {
+                continue;
+            };
+            // Every callable attached to the object (explicit properties + the
+            // dynamic verb wildcard) is a candidate method body.
+            let mut method_ids: Vec<FunctionId> = object
+                .properties
+                .values()
+                .flatten()
+                .copied()
+                .chain(object.wildcard.iter().copied())
+                .collect();
+            method_ids.sort();
+            method_ids.dedup();
+            for method_id in method_ids {
+                self.walk_method_body_with_this(method_id, &object, env);
+            }
+        }
+        self.this_method_walk = saved_this_walk;
+    }
+
+    /// Walk the bodies of prototype methods of function-constructor classes
+    /// (`function IPv4(){}; IPv4.prototype.toString = function(){ … this.x() … }`)
+    /// with `this` bound to the instance object. This is the class-body walk for
+    /// classes built the pre-`class` way — those entries in `self.classes` have no
+    /// `Class` AST node, so `collect_class_body_call_flows` skips them. Edges are
+    /// `ThisMethodFlow` (don't seed reachability roots); a method un-prunes only
+    /// when reached through the real call graph. Ubiquitous in npm dependencies
+    /// (`ipaddr.js`, `depd`, express's routers).
+    fn collect_prototype_method_this_flows(
+        &mut self,
+        program: &'ast Program<'ast>,
+        module_env: &FlowEnv,
+    ) {
+        // Class keys already walked with `this` bound as real `class` declarations
+        // or expressions — skip them to avoid double-walking.
+        let mut walked: std::collections::BTreeSet<String> = self
+            .class_expressions
+            .iter()
+            .map(|(key, _)| key.clone())
+            .collect();
+        for statement in &program.body {
+            if let Statement::ClassDeclaration(class) = statement
+                && let Some(id) = class.id.as_ref()
+            {
+                walked.insert(id.name.to_string());
+            }
+        }
+        let keys: Vec<String> = self
+            .classes
+            .keys()
+            .filter(|key| !walked.contains(*key))
+            .cloned()
+            .collect();
+        let saved_this_walk = self.this_method_walk;
+        self.this_method_walk = true;
+        for key in keys {
+            let Some(instance) = self.class_instance_targets(&key, &[], module_env) else {
+                continue;
+            };
+            let mut method_ids: Vec<FunctionId> = instance
+                .properties
+                .values()
+                .flatten()
+                .copied()
+                .chain(instance.wildcard.iter().copied())
+                .collect();
+            method_ids.sort();
+            method_ids.dedup();
+            for method_id in method_ids {
+                self.walk_method_body_with_this(method_id, &instance, module_env);
+            }
+        }
+        self.this_method_walk = saved_this_walk;
+    }
+
+    /// Walk one method body with `this` bound to `this_object` (caller stays the
+    /// method). Shared by the export-object and prototype-method `this`-walks.
+    fn walk_method_body_with_this(
+        &mut self,
+        method_id: FunctionId,
+        this_object: &ObjectTargets,
+        module_env: &FlowEnv,
+    ) {
+        let Some(flow) = self.function_flows_by_id.get(&method_id).cloned() else {
+            return;
+        };
+        let mut method_env = module_env.clone();
+        method_env.this_object = this_object.clone();
+        // The method's parameters shadow any module binding of the same name;
+        // their values are unknown, so drop the inherited binding.
+        for param in &flow.params {
+            if let ParamPattern::Binding(name) = param {
+                method_env.bindings.remove(name);
+                method_env.objects.remove(name);
+            }
+        }
+        for statement in &flow.body.statements {
+            self.collect_statement(statement, flow.function, &mut method_env);
+        }
+    }
+
+    /// `ThisMethodFlow` while walking export-object method bodies speculatively,
+    /// else `FunctionTokenFlow`. See `this_method_walk`.
+    fn value_flow_algorithm(&self) -> CallAlgorithm {
+        if self.this_method_walk {
+            CallAlgorithm::ThisMethodFlow
+        } else {
+            CallAlgorithm::FunctionTokenFlow
+        }
+    }
+
+    /// Index inventories, declarations, and class tables, then walk the module
+    /// body to build the top-level `FlowEnv`. Returns the populated env so both
+    /// the main resolution pass (which then walks class bodies) and the
+    /// return-summary pre-pass (which then evaluates each function's return) can
+    /// reuse the identical setup.
+    fn build_module_env(&mut self, program: &'ast Program<'ast>) -> FlowEnv {
         self.index_iterator_next_calls(program);
         self.collect_expression_function_flows(program);
         self.collect_function_declarations(program);
@@ -355,9 +597,64 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             self.collect_esm_export(statement, &mut env);
             self.collect_statement(statement, self.module, &mut env);
         }
-        // Resolve intra-method calls (`this.foo()`, `super.m()`, `this.#bar()`)
-        // with `this`/`super` bound, after the module env is fully populated.
-        self.collect_class_body_call_flows(program, &env);
+        // An export-alias object (`var app = exports = module.exports = {}` then
+        // `app.X = fn` / `app[m] = fn`) is the module's export shape. Fold it in
+        // after the body walk so its property and wildcard members are visible to
+        // requiring modules (Express's `application.js` builds `proto` this way).
+        for name in &self.export_aliases {
+            if let Some(object) = env.objects.get(name) {
+                self.exports.object.merge(object.clone());
+            }
+        }
+        env
+    }
+
+    /// Per-function return-value summaries for this file, evaluated against the
+    /// module env (so `proto = require('./application')` and the `mixin` helper
+    /// resolve). Keyed by `FunctionId` for cross-file seeding: `express()` in one
+    /// file then resolves to the `app` object `createApplication` returns.
+    fn collect_return_summaries(
+        &mut self,
+        program: &'ast Program<'ast>,
+        returns: &mut BTreeMap<FunctionId, ModuleExportSummary>,
+    ) {
+        let env = self.build_module_env(program);
+        let flows: Vec<FunctionFlow<'db, 'ast>> =
+            self.function_declarations.values().cloned().collect();
+        for flow in flows {
+            let summary = self.function_return_summary(&flow, &env);
+            if !summary.is_empty() {
+                returns.insert(flow.function.id, summary);
+            }
+        }
+    }
+
+    /// Walk `flow`'s body with the module env as parent, then read the returned
+    /// expression's object/callable shape. Bounded by `invocation_depth`.
+    fn function_return_summary(
+        &mut self,
+        flow: &FunctionFlow<'db, 'ast>,
+        module_env: &FlowEnv,
+    ) -> ModuleExportSummary {
+        if self.invocation_depth > 16 {
+            return ModuleExportSummary::default();
+        }
+        let mut env = module_env.clone();
+        self.invocation_depth += 1;
+        let saved_override = self.caller_override.take();
+        for statement in &flow.body.statements {
+            self.collect_statement(statement, flow.function, &mut env);
+        }
+        let returned = returned_expression_from_statements(&flow.body.statements);
+        let object = returned
+            .and_then(|expression| self.object_targets_from_expression(expression, &env))
+            .unwrap_or_default();
+        let callables = returned
+            .map(|expression| self.callable_targets_from_expression(expression, &env))
+            .unwrap_or_default();
+        self.caller_override = saved_override;
+        self.invocation_depth -= 1;
+        ModuleExportSummary { object, callables }
     }
 
     /// Program-global pre-scan assigning each `receiver.next()` call a 0-based
@@ -1111,21 +1408,30 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
     ) {
         match expression {
             Expression::AssignmentExpression(assignment) => {
-                let Some(property) = this_assignment_property(&assignment.left) else {
+                // Static `this.X` plus computed `this["f" + "oo"]` (literal/concat
+                // key, resolved without env since this is a structural pre-scan).
+                let properties = this_assignment_static_or_concat_keys(&assignment.left);
+                if properties.is_empty() {
                     return;
-                };
+                }
                 if let Some(function) = self.function_for_expression(&assignment.right) {
-                    targets
-                        .instance_object
-                        .add_property_target(property, function.id);
+                    for property in properties {
+                        targets
+                            .instance_object
+                            .add_property_target(property, function.id);
+                    }
                     return;
                 }
                 if let Some(index) = param_index_for_expression(&assignment.right, params) {
-                    targets
-                        .constructor_assignments
-                        .push(ConstructorAssignment::Param { property, index });
+                    for property in properties {
+                        targets
+                            .constructor_assignments
+                            .push(ConstructorAssignment::Param { property, index });
+                    }
                 } else if matches!(&assignment.right, Expression::ThisExpression(_)) {
-                    targets.instance_self_aliases.push(property);
+                    for property in properties {
+                        targets.instance_self_aliases.push(property);
+                    }
                 }
             }
             Expression::SequenceExpression(sequence) => {
@@ -1323,6 +1629,24 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         env: &mut FlowEnv,
     ) {
         for declarator in &variable.declarations {
+            // `var app = exports = module.exports = {}` aliases the export object;
+            // later `app.X = fn` / `app[k] = fn` writes build the exports. Seed an
+            // empty object so those member writes land (member assignment requires
+            // the receiver to already be in `env.objects`).
+            if let Some(name) = binding_identifier_name(&declarator.id)
+                && let Some(init) = &declarator.init
+                && expression_aliases_exports(init)
+            {
+                self.export_aliases.insert(name.clone());
+                env.objects.entry(name).or_default();
+            }
+            // `var mixin = require('merge-descriptors')`: a property-copy helper.
+            if let Some(name) = binding_identifier_name(&declarator.id)
+                && let Some(Expression::CallExpression(call)) = &declarator.init
+                && self.is_merge_descriptors_require(call)
+            {
+                env.merge_helpers.insert(name);
+            }
             if let Some(name) = binding_identifier_name(&declarator.id)
                 && let Some(Expression::ClassExpression(class)) = &declarator.init
             {
@@ -1560,6 +1884,43 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                     self.collect_expression(expression, owner, env);
                 }
             }
+            // Calls buried inside operator/template/member positions still need to
+            // resolve — e.g. mocha's `assert.ok(typeof mylib.plus(4,2) === 'number')`
+            // hides the call under `typeof … === …`. Descend into every
+            // sub-expression so the nested call is reached.
+            Expression::BinaryExpression(binary) => {
+                self.collect_expression(&binary.left, owner, env);
+                self.collect_expression(&binary.right, owner, env);
+            }
+            Expression::LogicalExpression(logical) => {
+                self.collect_expression(&logical.left, owner, env);
+                self.collect_expression(&logical.right, owner, env);
+            }
+            Expression::UnaryExpression(unary) => {
+                self.collect_expression(&unary.argument, owner, env);
+            }
+            Expression::ConditionalExpression(conditional) => {
+                self.collect_expression(&conditional.test, owner, env);
+                self.collect_expression(&conditional.consequent, owner, env);
+                self.collect_expression(&conditional.alternate, owner, env);
+            }
+            Expression::TemplateLiteral(template) => {
+                for expression in &template.expressions {
+                    self.collect_expression(expression, owner, env);
+                }
+            }
+            Expression::StaticMemberExpression(member) => {
+                self.collect_expression(&member.object, owner, env);
+            }
+            Expression::ComputedMemberExpression(member) => {
+                self.collect_expression(&member.object, owner, env);
+                self.collect_expression(&member.expression, owner, env);
+            }
+            Expression::YieldExpression(expression) => {
+                if let Some(argument) = &expression.argument {
+                    self.collect_expression(argument, owner, env);
+                }
+            }
             _ => {}
         }
     }
@@ -1604,17 +1965,20 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             return;
         }
 
-        if let Some(property) = this_assignment_property(&assignment.left) {
-            for target in self
+        let this_properties = self.this_assignment_property_names(&assignment.left, env);
+        if !this_properties.is_empty() {
+            let targets = self
                 .callable_targets_from_expression(&assignment.right, env)
-                .all_targets()
-            {
-                env.this_object
-                    .add_property_target(property.clone(), target);
-            }
-            if let Some(nested_object) = self.object_targets_from_expression(&assignment.right, env)
-            {
-                env.this_object.add_object_property(property, nested_object);
+                .all_targets();
+            let nested_object = self.object_targets_from_expression(&assignment.right, env);
+            for property in this_properties {
+                for target in &targets {
+                    env.this_object
+                        .add_property_target(property.clone(), *target);
+                }
+                if let Some(nested_object) = nested_object.clone() {
+                    env.this_object.add_object_property(property, nested_object);
+                }
             }
             return;
         }
@@ -1624,9 +1988,11 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             let targets = self
                 .callable_targets_from_expression(&assignment.right, env)
                 .all_targets();
-            if !targets.is_empty()
-                && let Some(class) = self.classes.get_mut(class_name)
-            {
+            if !targets.is_empty() {
+                // A function-constructor (`function IPv4(){}`) is not yet in the
+                // class table; the first `IPv4.prototype.m = fn` creates it, so
+                // classic prototype OOP registers its instance methods.
+                let class = self.classes.entry(class_name.to_string()).or_default();
                 for target in targets {
                     class
                         .instance_object
@@ -2364,6 +2730,9 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
     ) {
         self.collect_inline_callee_value_flows(call, env);
         self.collect_native_object_call(call, env);
+        self.collect_foreach_computed_write(call, env);
+        self.collect_merge_helper_call(call, env);
+        self.collect_test_framework_callbacks(call, env);
 
         if let Some((source, method)) = self.promise_method_source(call, env) {
             self.collect_promise_handler_flows(call, method, &source, env);
@@ -2493,8 +2862,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             let targets = env
                 .objects
                 .get(object_name)
-                .and_then(|object| object.properties.get(property))
-                .cloned();
+                .and_then(|object| object.resolve_call_property(property));
             if let Some(targets) = targets {
                 self.emit_member_targets(owner, property, call.span, Some(targets.clone()));
                 self.collect_receiver_side_effects(object_name, &targets, call, env);
@@ -2527,10 +2895,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         }
         if let Expression::StaticMemberExpression(member) = &call.callee
             && let Some(object) = self.object_targets_from_expression(&member.object, env)
-            && let Some(targets) = object
-                .properties
-                .get(member.property.name.as_str())
-                .cloned()
+            && let Some(targets) = object.resolve_call_property(member.property.name.as_str())
         {
             self.emit_call_span_targets(
                 owner,
@@ -2687,6 +3052,191 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                     Some(source.value_at(index).all_targets()),
                 );
             }
+        }
+    }
+
+    /// `coll.forEach(function(k){ obj[k] = fn })` (or arrow) — the verb-attach
+    /// idiom Express uses: `methods.forEach(m => { app[m] = handler })`. The
+    /// computed key `k` is the callback's element parameter, so the write
+    /// attaches `fn` to *every* property of `obj`. Record it on `obj`'s wildcard
+    /// lane (the write-side dual of the iter-51 for-in computed read), so a later
+    /// `obj.get()` / `obj.post()` resolves to the one handler. Gated to a target
+    /// keyed exactly on the callback's first parameter to avoid generalizing.
+    fn collect_foreach_computed_write(&self, call: &'ast CallExpression<'ast>, env: &mut FlowEnv) {
+        // Method name only — the receiver may be any expression (an array
+        // literal `["get","post"]`, a required `methods` binding, …), so match the
+        // callee shape directly rather than via `static_member_call` (which
+        // requires an identifier receiver).
+        let Expression::StaticMemberExpression(callee) = &call.callee else {
+            return;
+        };
+        if !matches!(callee.property.name.as_str(), "forEach" | "map") {
+            return;
+        }
+        let Some(callback) = call.arguments.first().and_then(argument_expression) else {
+            return;
+        };
+        let (first_param, statements) = match callback {
+            Expression::FunctionExpression(function) => {
+                let Some(body) = function.body.as_deref() else {
+                    return;
+                };
+                (function.params.items.first(), &body.statements)
+            }
+            Expression::ArrowFunctionExpression(function) => {
+                (function.params.items.first(), &function.body.statements)
+            }
+            _ => return,
+        };
+        let Some(key_param) = first_param.and_then(|param| binding_identifier_name(&param.pattern))
+        else {
+            return;
+        };
+        for statement in statements {
+            let Statement::ExpressionStatement(statement) = statement else {
+                continue;
+            };
+            let Expression::AssignmentExpression(assignment) = &statement.expression else {
+                continue;
+            };
+            let AssignmentTarget::ComputedMemberExpression(member) = &assignment.left else {
+                continue;
+            };
+            let Some(object_name) = expression_identifier(&member.object) else {
+                continue;
+            };
+            // The computed key must be exactly the callback's element parameter.
+            if expression_identifier(&member.expression) != Some(key_param.as_str()) {
+                continue;
+            }
+            let targets = self
+                .callable_targets_from_expression(&assignment.right, env)
+                .all_targets();
+            if targets.is_empty() {
+                continue;
+            }
+            let object = env.objects.entry(object_name.to_string()).or_default();
+            for target in targets {
+                object.add_wildcard_target(target);
+            }
+        }
+    }
+
+    /// Is this `require('merge-descriptors')` (possibly through a CommonJS interop
+    /// wrapper)? Its result is the property-copy helper Express binds as `mixin`.
+    fn is_merge_descriptors_require(&self, call: &'ast CallExpression<'ast>) -> bool {
+        if self.require_specifier(call) == Some("merge-descriptors") {
+            return true;
+        }
+        if let Some(Expression::CallExpression(inner)) = self.commonjs_interop_argument(call) {
+            return self.require_specifier(inner) == Some("merge-descriptors");
+        }
+        false
+    }
+
+    /// `mixin(dst, src, …)` where `mixin` is a `merge-descriptors` helper: copy
+    /// every own property of each source onto `dst` in place (creating `dst`'s
+    /// object entry if the variable holds a function, as `createApplication`'s
+    /// `var app = function(){…}` does). This is the same merge as the named-target
+    /// `Object.assign`, behind a required helper.
+    fn collect_merge_helper_call(&mut self, call: &'ast CallExpression<'ast>, env: &mut FlowEnv) {
+        let Some(name) = callee_identifier(&call.callee) else {
+            return;
+        };
+        if !env.merge_helpers.contains(name) {
+            return;
+        }
+        let Some(target_name) = call
+            .arguments
+            .first()
+            .and_then(argument_expression)
+            .and_then(expression_identifier)
+        else {
+            return;
+        };
+        let mut merged = ObjectTargets::default();
+        for source in call
+            .arguments
+            .iter()
+            .skip(1)
+            .filter_map(argument_expression)
+        {
+            if let Some(targets) = self.object_targets_from_expression(source, env) {
+                merged.merge(targets);
+            }
+        }
+        if merged.is_empty() {
+            return;
+        }
+        env.objects
+            .entry(target_name.to_string())
+            .or_default()
+            .merge(merged);
+    }
+
+    /// BDD test globals (`describe`/`it`/`before*`/`after*`, …) invoke their
+    /// function argument — like a promise handler, the framework calls the
+    /// callback even though there is no syntactic call. Walk each function-argument
+    /// body as an invoked callback so its inner calls resolve and the callback
+    /// becomes reachable (a `FunctionTokenFlow` caller). Mocha's `test.js`/
+    /// `test-with-hook.js` are otherwise 0-TP — every edge lives inside an
+    /// `it(...)`/`describe(...)` callback.
+    fn collect_test_framework_callbacks(
+        &mut self,
+        call: &'ast CallExpression<'ast>,
+        env: &mut FlowEnv,
+    ) {
+        let callee = match &call.callee {
+            // Plain `describe(...)` / `it(...)`.
+            Expression::Identifier(identifier) => identifier.name.as_str(),
+            // `describe.only(...)` / `it.skip(...)` etc.
+            Expression::StaticMemberExpression(member) => {
+                let Some(base) = expression_identifier(&member.object) else {
+                    return;
+                };
+                base
+            }
+            _ => return,
+        };
+        if !is_test_framework_global(callee) {
+            return;
+        }
+        for argument in &call.arguments {
+            let Some(expression) = argument_expression(argument) else {
+                continue;
+            };
+            if matches!(
+                expression,
+                Expression::FunctionExpression(_) | Expression::ArrowFunctionExpression(_)
+            ) && let Some(callback) = self.function_for_expression(expression)
+            {
+                self.collect_callback_value_flows(callback, expression, Vec::new(), env);
+            }
+        }
+    }
+
+    /// Property name(s) written by `this.X = …` (static) or `this[k] = …`
+    /// (computed) where `k` resolves to a constant string (`this[name]` with
+    /// `const name = "bar"`, or `this["f" + "oo"]`). Resolves the computed key via
+    /// `computed_member_property_names` (const bindings + string concatenation),
+    /// so a later `instance.bar()` / `instance.foo()` dispatches to the value.
+    fn this_assignment_property_names(
+        &self,
+        target: &'ast AssignmentTarget<'ast>,
+        env: &FlowEnv,
+    ) -> Vec<String> {
+        match target {
+            AssignmentTarget::StaticMemberExpression(member)
+                if matches!(&member.object, Expression::ThisExpression(_)) =>
+            {
+                vec![member.property.name.to_string()]
+            }
+            AssignmentTarget::ComputedMemberExpression(member)
+                if matches!(&member.object, Expression::ThisExpression(_)) =>
+            {
+                self.computed_member_property_names(&member.expression, env)
+            }
+            _ => Vec::new(),
         }
     }
 
@@ -4057,6 +4607,62 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         self.module_summaries.get(target)
     }
 
+    /// The merged return-value summary of the function(s) this call resolves to,
+    /// looked up cross-file by `FunctionId`. `None` if the callee resolves to no
+    /// summarized function (the common case — most calls are not factory calls).
+    fn return_summary_for_call(
+        &self,
+        call: &'ast CallExpression<'ast>,
+        env: &FlowEnv,
+    ) -> Option<ModuleExportSummary> {
+        if self.function_returns.is_empty() {
+            return None;
+        }
+        let callees = self.callee_function_ids(&call.callee, env);
+        let mut merged = ModuleExportSummary::default();
+        let mut found = false;
+        for callee in callees {
+            if let Some(summary) = self.function_returns.get(&callee) {
+                merged.object.merge(summary.object.clone());
+                merged.callables.extend(summary.callables.clone());
+                found = true;
+            }
+        }
+        found.then_some(merged)
+    }
+
+    /// The `FunctionId`s a callee expression resolves to: a bound identifier
+    /// (`express` → the required `createApplication`), a local function
+    /// declaration, or a resolved member (`lib.make`).
+    fn callee_function_ids(
+        &self,
+        callee: &'ast Expression<'ast>,
+        env: &FlowEnv,
+    ) -> Vec<FunctionId> {
+        match callee {
+            Expression::Identifier(identifier) => {
+                let name = identifier.name.as_str();
+                let mut ids = env
+                    .bindings
+                    .get(name)
+                    .map(CollectionTargets::all_targets)
+                    .unwrap_or_default();
+                if let Some(flow) = self.function_declarations.get(name) {
+                    ids.push(flow.function.id);
+                }
+                ids
+            }
+            Expression::StaticMemberExpression(member) => self
+                .object_targets_from_expression(&member.object, env)
+                .and_then(|object| object.resolve_call_property(member.property.name.as_str()))
+                .unwrap_or_default(),
+            Expression::ParenthesizedExpression(inner) => {
+                self.callee_function_ids(&inner.expression, env)
+            }
+            _ => Vec::new(),
+        }
+    }
+
     /// TypeScript/Babel emit interop wrappers around `require(...)` that pass the
     /// module value through (`__importDefault`, `__importStar`,
     /// `_interopRequireDefault`, `_interopRequireWildcard`). For call-graph
@@ -4104,6 +4710,11 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         }
         if let Some(inner) = self.commonjs_interop_argument(call) {
             return self.collection_targets_from_expression(inner, env);
+        }
+        if let Some(summary) = self.return_summary_for_call(call, env)
+            && !summary.callables.is_empty()
+        {
+            return Some(summary.callables);
         }
         if callee_text(&call.callee).as_deref() == Some("Array.from") {
             self.array_from_targets(call, env)
@@ -4269,6 +4880,14 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         }
         if let Some(inner) = self.commonjs_interop_argument(call) {
             return self.object_targets_from_expression(inner, env);
+        }
+        // A call to a function summarized elsewhere (`const app = express()`):
+        // seed the object shape that function returns (the `app` object that
+        // `createApplication` assembles via `mixin`).
+        if let Some(object) = self.return_summary_for_call(call, env)
+            && !object.object.is_empty()
+        {
+            return Some(object.object);
         }
         match callee_text(&call.callee).as_deref() {
             Some("Object.assign") => {
@@ -5659,7 +6278,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                     target_function: Some(*target),
                     target_symbol: None,
                     edge_kind: CallEdgeKind::FunctionValue,
-                    algorithm: CallAlgorithm::FunctionTokenFlow,
+                    algorithm: self.value_flow_algorithm(),
                     status: CallTargetStatus::Resolved,
                     reason: None,
                     provenance: CallProvenance::Model,
@@ -5703,7 +6322,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                     target_function: Some(*target),
                     target_symbol: None,
                     edge_kind: CallEdgeKind::FunctionValue,
-                    algorithm: CallAlgorithm::FunctionTokenFlow,
+                    algorithm: self.value_flow_algorithm(),
                     status: CallTargetStatus::Resolved,
                     reason: None,
                     provenance: CallProvenance::Model,
@@ -5740,7 +6359,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                     target_function: Some(*target),
                     target_symbol: None,
                     edge_kind: CallEdgeKind::FunctionValue,
-                    algorithm: CallAlgorithm::FunctionTokenFlow,
+                    algorithm: self.value_flow_algorithm(),
                     status: CallTargetStatus::Resolved,
                     reason: None,
                     provenance: CallProvenance::Model,
@@ -5785,7 +6404,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 target_function: Some(*target),
                 target_symbol: None,
                 edge_kind: CallEdgeKind::FunctionValue,
-                algorithm: CallAlgorithm::FunctionTokenFlow,
+                algorithm: self.value_flow_algorithm(),
                 status: CallTargetStatus::Resolved,
                 reason: None,
                 provenance: CallProvenance::Model,
@@ -5879,6 +6498,11 @@ struct FlowEnv {
     /// `obj[k]` keyed on such a variable ranges over every own property, so it
     /// resolves to the union of the object's property values.
     forin_keys: std::collections::BTreeSet<String>,
+    /// Variable names bound to a `merge-descriptors`-style property-copy helper
+    /// (`var mixin = require('merge-descriptors')`). A call `mixin(dst, src, …)`
+    /// copies every own property of each source onto `dst` in place (like the
+    /// named-target `Object.assign`), which is how Express assembles `app`.
+    merge_helpers: std::collections::BTreeSet<String>,
 }
 
 /// The ordered result sequence of a generator: each `yield` (with `yield*`
@@ -6025,6 +6649,13 @@ struct ObjectTargets {
     setter_properties: BTreeMap<String, Vec<FunctionId>>,
     object_properties: BTreeMap<String, Box<ObjectTargets>>,
     collection_properties: BTreeMap<String, CollectionTargets>,
+    /// Callable values reachable through a **dynamic** (computed, non-constant)
+    /// property write keyed on a loop/iteration variable, e.g.
+    /// `methods.forEach(m => { app[m] = fn })`. A read of a property with no
+    /// explicit entry falls back to this lane (the write side of the for-in
+    /// computed-read dual). Express attaches its HTTP-verb methods this way, so
+    /// `app.get`/`app.post`/… all resolve to the one verb function here.
+    wildcard: Vec<FunctionId>,
 }
 
 impl ObjectTargets {
@@ -6034,6 +6665,26 @@ impl ObjectTargets {
             && self.setter_properties.is_empty()
             && self.object_properties.is_empty()
             && self.collection_properties.is_empty()
+            && self.wildcard.is_empty()
+    }
+
+    fn add_wildcard_target(&mut self, target: FunctionId) {
+        self.wildcard.push(target);
+        self.wildcard.sort();
+        self.wildcard.dedup();
+    }
+
+    /// Resolve a property read for a method call: the explicit entry if present,
+    /// otherwise the dynamic `wildcard` lane (a property attached through a
+    /// computed write over an iteration variable). Explicit entries do **not**
+    /// union the wildcard — only genuinely-absent names fall through — so a
+    /// statically-defined method (`app.listen`) is not polluted by the verb
+    /// wildcard.
+    fn resolve_call_property(&self, name: &str) -> Option<Vec<FunctionId>> {
+        if let Some(targets) = self.properties.get(name) {
+            return Some(targets.clone());
+        }
+        (!self.wildcard.is_empty()).then(|| self.wildcard.clone())
     }
 
     fn add_property_target(&mut self, name: String, target: FunctionId) {
@@ -6090,6 +6741,9 @@ impl ObjectTargets {
         for (name, targets) in other.collection_properties {
             self.collection_properties.entry(name).or_insert(targets);
         }
+        self.wildcard.extend(other.wildcard);
+        self.wildcard.sort();
+        self.wildcard.dedup();
     }
 
     /// Merge `other` on top of `self`, with `other`'s names **replacing** (not
@@ -6155,6 +6809,7 @@ impl ObjectTargets {
                 .filter(|(name, _)| !used.contains(name))
                 .map(|(name, targets)| (name.clone(), targets.clone()))
                 .collect(),
+            wildcard: self.wildcard.clone(),
         }
     }
 }
@@ -6369,6 +7024,40 @@ enum ExportAssignmentTarget {
     Property(String),
 }
 
+/// Does this expression evaluate to the module's export object? Recognizes
+/// `exports`, `module.exports`, and assignment chains that write to one of them
+/// (`exports = module.exports = {}`), so `var app = exports = module.exports = {}`
+/// registers `app` as an export alias.
+fn expression_aliases_exports(expression: &Expression<'_>) -> bool {
+    match expression {
+        Expression::Identifier(identifier) => identifier.name.as_str() == "exports",
+        Expression::StaticMemberExpression(member) => {
+            expression_identifier(&member.object) == Some("module")
+                && member.property.name.as_str() == "exports"
+        }
+        Expression::ParenthesizedExpression(inner) => expression_aliases_exports(&inner.expression),
+        Expression::AssignmentExpression(assignment) => {
+            assignment_target_is_exports(&assignment.left)
+                || expression_aliases_exports(&assignment.right)
+        }
+        _ => false,
+    }
+}
+
+/// Is this assignment target `exports` or `module.exports` (the whole export
+/// object, not a property of it)?
+fn assignment_target_is_exports(target: &AssignmentTarget<'_>) -> bool {
+    match target {
+        AssignmentTarget::AssignmentTargetIdentifier(identifier) => {
+            identifier.name.as_str() == "exports"
+        }
+        _ => matches!(
+            export_assignment_target(target),
+            Some(ExportAssignmentTarget::WholeExports)
+        ),
+    }
+}
+
 fn export_assignment_target(target: &AssignmentTarget<'_>) -> Option<ExportAssignmentTarget> {
     let AssignmentTarget::StaticMemberExpression(member) = target else {
         return None;
@@ -6523,6 +7212,44 @@ fn collection_assignment_target_name<'a>(target: &'a AssignmentTarget<'a>) -> Op
     }
 }
 
+/// Property name(s) of a `this.X = …` (static) or `this["f" + "oo"] = …`
+/// (computed literal/concatenation key) assignment, resolved **without** an env
+/// (pure string literals and `+` concatenation only) for use in the structural
+/// constructor pre-scan. `this[name]` with a variable key resolves nothing here.
+fn this_assignment_static_or_concat_keys(target: &AssignmentTarget<'_>) -> Vec<String> {
+    match target {
+        AssignmentTarget::StaticMemberExpression(member)
+            if matches!(&member.object, Expression::ThisExpression(_)) =>
+        {
+            vec![member.property.name.to_string()]
+        }
+        AssignmentTarget::ComputedMemberExpression(member)
+            if matches!(&member.object, Expression::ThisExpression(_)) =>
+        {
+            const_string_without_env(&member.expression)
+                .into_iter()
+                .collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Resolve a pure string-literal / `+`-concatenation expression to its value,
+/// with no environment (`"a"`, `"f" + "oo"`, `("p" + "1")`). Returns `None` for
+/// anything needing a binding lookup.
+fn const_string_without_env(expression: &Expression<'_>) -> Option<String> {
+    match expression {
+        Expression::StringLiteral(literal) => Some(literal.value.to_string()),
+        Expression::ParenthesizedExpression(inner) => const_string_without_env(&inner.expression),
+        Expression::BinaryExpression(binary) if binary.operator == BinaryOperator::Addition => {
+            let left = const_string_without_env(&binary.left)?;
+            let right = const_string_without_env(&binary.right)?;
+            Some(left + &right)
+        }
+        _ => None,
+    }
+}
+
 fn this_assignment_property(target: &AssignmentTarget<'_>) -> Option<String> {
     match target {
         AssignmentTarget::StaticMemberExpression(member)
@@ -6532,6 +7259,34 @@ fn this_assignment_property(target: &AssignmentTarget<'_>) -> Option<String> {
         }
         _ => None,
     }
+}
+
+/// BDD/TDD test-runner globals (Mocha/Jasmine/Jest) that invoke their function
+/// argument. Used to walk those callbacks as host-invoked (reachable) bodies.
+fn is_test_framework_global(name: &str) -> bool {
+    matches!(
+        name,
+        "describe"
+            | "it"
+            | "before"
+            | "after"
+            | "beforeEach"
+            | "afterEach"
+            | "beforeAll"
+            | "afterAll"
+            | "context"
+            | "specify"
+            | "suite"
+            | "test"
+            | "suiteSetup"
+            | "suiteTeardown"
+            | "setup"
+            | "teardown"
+            | "xdescribe"
+            | "xit"
+            | "fdescribe"
+            | "fit"
+    )
 }
 
 fn prototype_member_assignment_name<'a>(
@@ -8161,6 +8916,212 @@ mod tests {
         assert!(
             resolved.contains(&(site_id_for_span(source, &sites, "o.bar()"), bar)),
             "o.bar() should resolve to the second source's method; got {resolved:?}"
+        );
+    }
+
+    #[test]
+    fn real_ts_pipeline_resolves_foreach_computed_write_wildcard() {
+        // `coll.forEach(m => { app[m] = fn })` attaches `fn` to every property of
+        // `app` (a wildcard), so a later `app.get()` resolves to the one handler —
+        // the Express verb-attach idiom. A statically-defined method is not
+        // polluted by the wildcard.
+        let source = "const app = {};\napp.set = function set() { console.log(\"set\"); };\n[\"get\", \"post\"].forEach(function (method) {\n    app[method] = function handler(path) { console.log(path); };\n});\napp.get(\"/\");\napp.set(\"x\");\n";
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let handler =
+            function_id_for_span(source, &db, "function handler(path) { console.log(path); }");
+        let set = function_id_for_span(source, &db, "function set() { console.log(\"set\"); }");
+
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let resolved = resolved_target_ids_by_site(targets);
+
+        let get_call = site_id_for_span(source, &sites, "app.get(\"/\")");
+        assert!(
+            resolved.contains(&(get_call, handler)),
+            "app.get() should resolve to the wildcard verb handler; got {resolved:?}"
+        );
+        let set_call = site_id_for_span(source, &sites, "app.set(\"x\")");
+        assert!(
+            resolved.contains(&(set_call, set)),
+            "app.set() should resolve to its explicit method; got {resolved:?}"
+        );
+        assert!(
+            !resolved.contains(&(set_call, handler)),
+            "an explicit method must not be polluted by the verb wildcard; got {resolved:?}"
+        );
+    }
+
+    #[test]
+    fn real_ts_pipeline_resolves_computed_this_key_writes() {
+        // `this["p" + "1"] = fn` in a class constructor writes `this.p1`, so
+        // `new D().p1()` dispatches to it (the `approx/this.js` shape).
+        let source = "class D {\n    constructor() {\n        this[\"p\" + \"1\"] = function p1() { console.log(\"p1\"); };\n    }\n}\nnew D().p1();\n";
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let p1 = function_id_for_span(source, &db, "function p1() { console.log(\"p1\"); }");
+
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let resolved = resolved_target_ids_by_site(targets);
+
+        assert!(
+            resolved.contains(&(site_id_for_span(source, &sites, "new D().p1()"), p1)),
+            "new D().p1() should resolve through the computed this-key write; got {resolved:?}"
+        );
+    }
+
+    #[test]
+    fn real_ts_pipeline_resolves_test_framework_callbacks() {
+        // `describe`/`it` invoke their callback, so a call inside the (nested) `it`
+        // body resolves (the mocha `test.js` shape, otherwise 0-TP).
+        let source = "const leaf = () => { console.log(\"leaf\"); };\ndescribe(\"suite\", function () {\n    it(\"works\", function () {\n        leaf();\n    });\n});\n";
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let leaf = function_id_for_span(source, &db, "() => { console.log(\"leaf\"); }");
+
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let resolved = resolved_target_ids_by_site(targets);
+
+        assert!(
+            resolved.contains(&(site_id_for_span(source, &sites, "leaf()"), leaf)),
+            "a call inside a nested it() callback should resolve once the callback is invoked; got {resolved:?}"
+        );
+    }
+
+    #[test]
+    fn real_ts_pipeline_resolves_prototype_method_this() {
+        // Function-constructor OOP: a prototype method's `this.other()` resolves to
+        // the sibling prototype method (`ipaddr.js` shape, e.g.
+        // `IPv4.prototype.toNormalizedString = function(){ return this.toString() }`).
+        let source = "function IPv4() {}\nIPv4.prototype.toString = function toStr() { console.log(\"ts\"); };\nIPv4.prototype.toNormalizedString = function toNorm() {\n    return this.toString();\n};\nconst a = new IPv4();\na.toNormalizedString();\n";
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let to_str = function_id_for_span(source, &db, "function toStr() { console.log(\"ts\"); }");
+
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let resolved = resolved_target_ids_by_site(targets);
+
+        assert!(
+            resolved.contains(&(site_id_for_span(source, &sites, "this.toString()"), to_str)),
+            "this.toString() in a prototype method should resolve to the sibling prototype method; got {resolved:?}"
+        );
+    }
+
+    #[test]
+    fn real_ts_pipeline_resolves_export_object_method_this() {
+        // Methods on the export object dispatch `this` to that object, so
+        // `app.use = function(){ this.helper() }` resolves `this.helper()` to
+        // `app.helper` — the Express `application.js` shape (`this.lazyrouter()`).
+        let source = "var app = exports = module.exports = {};\napp.helper = function helper() { console.log(\"helper\"); };\napp.use = function use() {\n    this.helper();\n};\n";
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let helper = function_id_for_span(
+            source,
+            &db,
+            "function helper() { console.log(\"helper\"); }",
+        );
+
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let resolved = resolved_target_ids_by_site(targets);
+
+        assert!(
+            resolved.contains(&(site_id_for_span(source, &sites, "this.helper()"), helper)),
+            "this.helper() in an export-object method should resolve to app.helper; got {resolved:?}"
+        );
+    }
+
+    #[test]
+    fn real_ts_pipeline_resolves_cross_file_mixin_factory_chain() {
+        // The Express object-model chain in miniature: a factory builds an object
+        // with `mixin(app, proto)` (merge-descriptors property copy), returns it,
+        // and a caller in another file calls a copied method. `proto` carries both
+        // an explicit method and a `forEach`-attached wildcard verb.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let proto_src = "var proto = exports = module.exports = {};\nproto.handle = function handle() { console.log(\"handle\"); };\n[\"get\", \"post\"].forEach(function (method) {\n    proto[method] = function verb(path) { console.log(path); };\n});\n";
+        let factory_src = "var mixin = require('merge-descriptors');\nvar proto = require('./proto');\nfunction createApplication() {\n    var app = function () {};\n    mixin(app, proto, false);\n    return app;\n}\nmodule.exports = createApplication;\n";
+        let main_src = "var express = require('./factory');\nvar app = express();\napp.handle();\napp.get(\"/\");\n";
+        std::fs::write(dir.path().join("proto.js"), proto_src).expect("write proto");
+        std::fs::write(dir.path().join("factory.js"), factory_src).expect("write factory");
+        std::fs::write(dir.path().join("main.js"), main_src).expect("write main");
+
+        let mut db = AnalysisDb::new();
+        for (name, src) in [
+            ("proto.js", proto_src),
+            ("factory.js", factory_src),
+            ("main.js", main_src),
+        ] {
+            let path = dir.path().join(name);
+            db.add_file(
+                path.clone(),
+                path.to_string_lossy().to_string(),
+                src.to_string(),
+            );
+        }
+        crate::ts::analyze(&mut db);
+        let handle = function_id_for_span(
+            proto_src,
+            &db,
+            "function handle() { console.log(\"handle\"); }",
+        );
+        let verb =
+            function_id_for_span(proto_src, &db, "function verb(path) { console.log(path); }");
+
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let resolved = resolved_target_ids_by_site(targets);
+
+        let handle_call = site_id_for_span(main_src, &sites, "app.handle()");
+        let get_call = site_id_for_span(main_src, &sites, "app.get(\"/\")");
+        assert!(
+            resolved.contains(&(handle_call, handle)),
+            "app.handle() should resolve to proto.handle via mixin + return summary; got {resolved:?}"
+        );
+        assert!(
+            resolved.contains(&(get_call, verb)),
+            "app.get() should resolve to the forEach wildcard verb via the chain; got {resolved:?}"
+        );
+    }
+
+    #[test]
+    fn real_ts_pipeline_export_alias_seeds_member_writes() {
+        // `var app = exports = module.exports = {}` aliases the export object, so
+        // `app.listen = fn` is a property write that resolves `app.listen()`
+        // (without the alias, `env.objects["app"]` would not exist and the write
+        // would be dropped).
+        let source = "var app = exports = module.exports = {};\napp.listen = function listen() { console.log(\"listen\"); };\napp.listen();\n";
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let listen = function_id_for_span(
+            source,
+            &db,
+            "function listen() { console.log(\"listen\"); }",
+        );
+
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let resolved = resolved_target_ids_by_site(targets);
+
+        assert!(
+            resolved.contains(&(site_id_for_span(source, &sites, "app.listen()"), listen)),
+            "app.listen() should resolve through the export-alias object; got {resolved:?}"
         );
     }
 
