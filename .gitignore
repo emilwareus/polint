@@ -29,3 +29,6 @@ _scaffold_smoke_*/
 
 # Third-party research checkouts; keep source snapshots local, not vendored.
 research/*/repos/
+
+# Transient harness runtime state (scheduled-tasks lock), not source.
+.claude/scheduled_tasks.lock

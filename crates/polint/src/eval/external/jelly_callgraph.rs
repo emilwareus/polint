@@ -502,6 +502,237 @@ mod tests {
     }
 
     #[test]
+    fn points_to_heap_generalizes_and_stays_precise_on_novel_code() {
+        // Overfitting / soundness guard: NOVEL shapes not in the Jelly suite, with
+        // both recall (should resolve) and PRECISION (must NOT resolve / must not
+        // cross-contaminate) assertions. Catches the heap silently over-resolving
+        // on out-of-distribution code.
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let src = concat!(
+            "function leafA() { console.log('A'); }\n", // 1
+            "function leafB() { console.log('B'); }\n", // 2
+            "function unknownInput() {}\n",             // 3 (a real fn, but reached via unknown)
+            // field sensitivity: two distinct objects, same property name.
+            "const a = { run: leafA };\n", // 5
+            "const b = { run: leafB };\n", // 6
+            "a.run();\n",                  // 7  -> leafA ONLY
+            "b.run();\n",                  // 8  -> leafB ONLY
+            // novel closure-returning-closure depth (different from client1).
+            "function wrap(f) { return function () { return function () { f(); }; }; }\n", // 10
+            "wrap(leafA)()();\n", // 11 -> leafA
+            // precision negative: callee from an unmodeled global -> resolves to nothing.
+            "const ext = someGlobalThing();\n", // 13
+            "ext.method();\n",                  // 14 -> NOTHING
+            // precision negative: a genuinely unknowable computed key (from an
+            // unmodeled source) -> no field resolution.
+            "const holder = { x: leafA };\n", // 16
+            "const k = someGlobalThing();\n", // 17
+            "holder[k]();\n",                 // 18 -> NOTHING (key unknown)
+        );
+        std::fs::write(root.join("m.js"), src).unwrap();
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        let fid = |needle: &str| {
+            db.functions()
+                .iter()
+                .filter(|f| {
+                    db.file(f.span.file).is_some_and(|file| {
+                        file.source[f.span.start_byte as usize..f.span.end_byte as usize]
+                            .contains(needle)
+                    })
+                })
+                .min_by_key(|f| f.span.end_byte - f.span.start_byte)
+                .map(|f| f.id)
+        };
+        let site_text = |id: crate::analysis::ids::CallSiteId| {
+            db.call_sites().iter().find(|s| s.id == id).and_then(|s| {
+                db.file(s.span.file).map(|file| {
+                    file.source[s.span.start_byte as usize..s.span.end_byte as usize].to_string()
+                })
+            })
+        };
+        // All resolved (site-text, target-fid) pairs across BOTH edge sources.
+        let edges: std::collections::BTreeSet<(String, crate::core::FunctionId)> = db
+            .call_targets()
+            .iter()
+            .filter_map(|t| Some((site_text(t.site)?, t.target_function?)))
+            .chain(
+                db.refined_call_edges()
+                    .iter()
+                    .filter_map(|e| Some((site_text(e.site)?, e.target_function?))),
+            )
+            .collect();
+        let resolves = |site: &str, target: crate::core::FunctionId| {
+            edges.iter().any(|(s, t)| s.trim() == site && *t == target)
+        };
+        let (la, lb) = (fid("leafA").unwrap(), fid("leafB").unwrap());
+
+        // RECALL on novel shapes.
+        assert!(resolves("a.run()", la), "a.run() -> leafA");
+        assert!(resolves("b.run()", lb), "b.run() -> leafB");
+        // The captured param `f` is invoked inside the doubly-nested closure
+        // (reached via `wrap(leafA)()()`): `f()` must resolve to the passed leafA.
+        assert!(
+            resolves("f()", la),
+            "captured f() in the nested closure should reach leafA"
+        );
+
+        // PRECISION: field sensitivity must not cross-contaminate.
+        assert!(
+            !resolves("a.run()", lb),
+            "a.run() must NOT reach leafB (field sensitivity)"
+        );
+        assert!(
+            !resolves("b.run()", la),
+            "b.run() must NOT reach leafA (field sensitivity)"
+        );
+
+        // PRECISION: unmodeled global and non-constant key resolve to NOTHING.
+        let ext_targets = edges
+            .iter()
+            .filter(|(s, _)| s.trim() == "ext.method()")
+            .count();
+        assert_eq!(
+            ext_targets, 0,
+            "ext.method() on an unknown value must resolve to nothing"
+        );
+        // The non-const computed key must not dispatch to holder.x (leafA).
+        assert!(
+            !edges.iter().any(|(s, t)| s.contains("holder[") && *t == la),
+            "non-constant computed key must not resolve to holder.x"
+        );
+    }
+
+    #[test]
+    fn points_to_heap_survives_adversarially_deep_nesting() {
+        // Crash guard (C1): the harvester walks every JS/TS file in an arbitrary
+        // repo, so deeply nested / generated input must not recurse the AST walk to
+        // a stack overflow. `MAX_HARVEST_DEPTH` bounds the harvester's `expr` /
+        // `const_key` recursion to a constant number of frames regardless of input
+        // depth (it bails to an empty cell past the ceiling — sound, no edges).
+        //
+        // Run on an ample stack: the upstream oxc recursive-descent parser needs
+        // stack proportional to nesting depth (a pre-existing, kernel-wide limit on
+        // the default 2 MB test-thread stack), so we give the worker a generous
+        // stack the way real analysis would. The point being tested is that the
+        // *harvester* adds only bounded stack on top of that — the run completes
+        // and still yields a usable db instead of aborting the process.
+        let result = std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(|| {
+                let dir = tempdir().unwrap();
+                let root = dir.path();
+                let depth = 2_000;
+                // Single file (so parsing stays on this generous-stack thread; the
+                // kernel fans multi-file parsing onto a small-stack worker pool).
+                // The clean, resolvable call comes FIRST so it is harvested before
+                // the pathological tail; then deep parens (expr recursion) and a
+                // 2000-operand constant concatenation key (const_key recursion)
+                // exercise the `MAX_HARVEST_DEPTH` guards without aborting.
+                let mut src = String::from("function leaf() {}\nconst f = leaf;\nf();\n");
+                src.push_str(&format!(
+                    "const x = {}leaf{};\n",
+                    "(".repeat(depth),
+                    ")".repeat(depth)
+                ));
+                let concat = std::iter::repeat_n("\"a\"", depth)
+                    .collect::<Vec<_>>()
+                    .join(" + ");
+                src.push_str(&format!("const obj = {{}};\nobj[{concat}];\n"));
+                std::fs::write(root.join("m.js"), src).unwrap();
+
+                // The core assertion is that this returns at all (no stack
+                // overflow / abort). The kernel must also still produce a usable
+                // db rather than crashing — `leaf` is extracted even though oxc
+                // flags the pathologically deep tail and skips its value-flow.
+                let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+                let db = &output.db;
+                let leaf_analyzed = db.functions().iter().any(|f| {
+                    db.file(f.span.file).is_some_and(|file| {
+                        file.source[f.span.start_byte as usize..f.span.end_byte as usize]
+                            .contains("leaf")
+                    })
+                });
+                assert!(
+                    leaf_analyzed,
+                    "the kernel should still analyze the file's functions"
+                );
+            })
+            .unwrap()
+            .join();
+        assert!(
+            result.is_ok(),
+            "deep-nesting analysis must not panic or overflow"
+        );
+    }
+
+    #[test]
+    fn points_to_heap_resolves_dynamic_property_and_cross_file_chains() {
+        // End-to-end gate for the value-token heap (`js_points_to`): an instance
+        // dynamic constant-key property call, and a cross-file factory-returns-object
+        // chain, both of which the per-syntax recognizers miss. Resolved edges land
+        // in `call_targets` (the heap is additive); the points-to edges are labeled
+        // `CallAlgorithm::PointsTo`.
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("lib.js"),
+            "function leaf() { console.log(\"leaf\"); }\nmodule.exports.make = function () { return { run: leaf }; };\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("main.js"),
+            "const lib = require('./lib');\nconst o = lib.make();\nconst f = o.run;\nf();\nfunction Foo() {}\nconst g = function gg() { console.log(\"g\"); };\nconst p2 = \"p2\";\nconst inst = new Foo();\ninst[p2] = g;\ninst.p2();\n",
+        )
+        .unwrap();
+
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        let target_src = |t: &crate::analysis::calls::facts::CallTargetFact| -> String {
+            t.target_function
+                .and_then(|f| db.functions().iter().find(|x| x.id == f))
+                .and_then(|x| {
+                    db.file(x.span.file).map(|file| {
+                        file.source[x.span.start_byte as usize..x.span.end_byte as usize]
+                            .to_string()
+                    })
+                })
+                .unwrap_or_default()
+        };
+        let site_src = |t: &crate::analysis::calls::facts::CallTargetFact| -> String {
+            db.call_sites()
+                .iter()
+                .find(|s| s.id == t.site)
+                .and_then(|s| {
+                    db.file(s.span.file).map(|file| {
+                        file.source[s.span.start_byte as usize..s.span.end_byte as usize]
+                            .to_string()
+                    })
+                })
+                .unwrap_or_default()
+        };
+        let resolves = |site_needle: &str, target_needle: &str| {
+            db.call_targets()
+                .iter()
+                .any(|t| site_src(t).contains(site_needle) && target_src(t).contains(target_needle))
+        };
+        // The instance dynamic-key call resolves only through the points-to heap.
+        assert!(
+            db.call_targets().iter().any(|t| t.algorithm
+                == crate::analysis::calls::facts::CallAlgorithm::PointsTo
+                && site_src(t).contains("inst.p2()")
+                && target_src(t).contains("gg")),
+            "inst.p2() should resolve to g via a PointsTo edge"
+        );
+        // The cross-file factory-returns-object chain resolves end to end.
+        assert!(
+            resolves("f()", "function leaf"),
+            "cross-file `const f = lib.make().run; f()` should resolve to leaf"
+        );
+    }
+
+    #[test]
     fn reachability_prunes_dead_code_but_keeps_invoked_callbacks() {
         let dir = tempdir().unwrap();
         let root = dir.path();

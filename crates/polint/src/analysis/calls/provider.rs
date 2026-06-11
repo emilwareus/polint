@@ -40,6 +40,13 @@ pub(crate) fn derive_calls_with_cache_stats(
         &sites,
         targets.len() as u64,
     ));
+    targets.extend(
+        crate::analysis::calls::js_points_to::resolve_js_points_to_targets(
+            db,
+            &sites,
+            targets.len() as u64,
+        ),
+    );
     let resolved_sites = targets
         .iter()
         .filter(|target| target.status == crate::analysis::calls::facts::CallTargetStatus::Resolved)

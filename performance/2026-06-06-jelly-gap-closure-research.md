@@ -780,6 +780,256 @@ FP-free, and a +2 TP / +1 FP trade is not worth shipping an over-approximation.
 Cumulative this session (iterations 41–51): **821/82/658 → 926/54/553**, F1
 **68.94% → 75.31% (+6.37pp)**, precision **90.92% → 94.49%**, **+105 TP / −28 FP**.
 
+| Iteration | Change | TP | FP | FN | Precision | Recall | F1 | Runtime | Hash |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|
+| 52 | Phase A — Express object-model chain: export-alias property writes + `forEach` computed-key **write** (wildcard) + `mixin`/`merge-descriptors` property copy + cross-file function-return summaries | 930 | 54 | 549 | 94.51% | 62.88% | 75.52% | 94516 ms | `4c128ef33924b396` |
+
+Iteration 52 is the roadmap's **Phase A** (`2026-06-08-jelly-remaining-bucket-research.md`
+§2.2), done as the prescribed *gated* push: the cross-file return-summary map that was
+reverted twice (alone it moved nothing) is reintroduced **paired** with the three
+mechanisms it needs, each gated by a focused fixture before the full helloworld case is
+the bar. Four interlocking slices:
+
+- **A1 — export-alias property writes.** `var app = exports = module.exports = {}`
+  registers `app` as an export alias and seeds `env.objects["app"]` so subsequent
+  `app.listen = fn` member writes land; after the module walk the alias object is folded
+  into the module's export summary. (`application.js` builds `proto` this way.) Gate:
+  `real_ts_pipeline_export_alias_seeds_member_writes`.
+- **A2 — `forEach` computed-key write (wildcard).** `methods.forEach(m => { app[m] = fn })`
+  attaches `fn` to a new `ObjectTargets::wildcard` lane (the write-side dual of iter-51's
+  for-in read); a property read with no explicit entry falls back to it, so
+  `app.get`/`app.post` resolve to the one verb handler while a statically-defined method
+  (`app.listen`) is **not** polluted. Gate:
+  `real_ts_pipeline_resolves_foreach_computed_write_wildcard`.
+- **A3a — `mixin`/`merge-descriptors`.** `var mixin = require('merge-descriptors')` binds a
+  property-copy helper (`env.merge_helpers`); `mixin(app, proto, false)` merges `proto`'s
+  shape into `app` in place (reusing the iter-48 merge), creating `app`'s object entry for
+  the function-valued `var app = function(){…}`.
+- **A3b — cross-file function-return summaries.** A `FunctionId -> {object, callables}` map
+  (`compute_function_return_summaries`) evaluates each function's returned expression
+  against its module env (so `proto`/`mixin` resolve), so `express()` →
+  `createApplication` seeds the `mixin`-assembled `app`. Gate (full chain):
+  `real_ts_pipeline_resolves_cross_file_mixin_factory_chain`.
+
+Result: **926/54/549 → 930/54/549**, **+4 TP / 0 FP / −4 FN**, precision **94.49% →
+94.51%** (held), F1 **75.31% → 75.52% (+0.21pp)**, fully localized to `helloworld`
+(**50/6/292 → 54/6/288**). The entry chain is now fully resolved: `express()` →
+`createApplication`, **`app.get(...)` → the verb function** (`application.js:473`), and
+**`app.listen(...)` → `app.listen`** (`application.js:616`) — each as both call2fun and
+fun2fun. Full `cargo test -p polint --lib`: 2249 passed.
+
+**Why +4 and not the estimated +60–80.** The §2.3 double-leverage (~70 pruned edges in
+`application.js`/`response.js`/`request.js` un-pruning once reachable) did **not** trigger:
+those edges live in the express method bodies (`this.lazyrouter()`, `this._router.route()`,
+`http.createServer(this)`), which need `this` bound to the `app` object inside each
+framework method before they resolve and become reachable. That is a `this`-through-
+framework-method mechanism (Phase C-adjacent), not the entry chain — the next slice. The
+lone remaining app.js FN, `res.send(...)` → `response.js`, likewise needs the response
+object's prototype flowed into the route handler's `res` parameter (Express's internal
+`app.response = Object.create(res, …)` wiring), which the entry chain does not supply.
+The four mechanisms are kept because the gated combination moved the benchmark with
+precision held (the iter-37 guardrail is satisfied — this is paired infrastructure that
+contributes, not carried un-paired infrastructure). The double-leverage is iteration 53.
+
+| Iteration | Change | TP | FP | FN | Precision | Recall | F1 | Runtime | Hash |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|
+| 53 | Phase A double-leverage — walk export-object method bodies with `this` bound (`this.lazyrouter()` etc.), tagged `ThisMethodFlow` so the reachability filter does not root dead framework methods | 949 | 54 | 530 | 94.62% | 64.16% | 76.47% | 90671 ms | `58670263b8b6bbe9` |
+
+Iteration 53 captures the §2.3 double-leverage that iteration 52 set up: the ~70 edges
+inside `application.js`/`response.js`/`request.js` that polint resolves but pruned as
+unreachable. They live in the express object-methods (`app.use = function(){ …
+this.lazyrouter() … }`), whose `this.Y()` calls resolve only with `this` bound to the
+`app` object. `collect_export_object_method_flows` walks every callable attached to an
+export-alias object (explicit properties + the verb wildcard) with `this` = that object,
+mirroring the class-body walk for plain object methods.
+
+**The precision trap and its fix (`ThisMethodFlow`).** Walking those bodies naively scored
+**977/102/502** — **+47 TP but +48 FP**, precision **0.905** (below the 0.94 guardrail). Root
+cause: the iter-39 reachability filter seeds *every* `FunctionTokenFlow` caller as a root
+(the proxy for "a body the value flow executed"), but the speculative walk executes method
+bodies that are **not** actually invoked (`app.use`, `app.engine`, … never called in
+helloworld), so dead methods became spurious roots and their edges survived as FP. Fix: a
+new `CallAlgorithm::ThisMethodFlow` tags edges from the speculative walk; they still enter
+the reachability adjacency (so a method reached through the *real* chain —
+`app.get` → verb fn → `this.lazyrouter()` → … — un-prunes) but do **not** seed roots, so a
+dead method stays pruned.
+
+Result: **930/54/549 → 949/54/530**, **+19 TP / 0 FP / −19 FN**, precision **94.51% →
+94.62%** (held), F1 **75.52% → 76.47% (+0.95pp)**, fully localized to `helloworld`
+(**54/6/288 → 73/6/269** — FP unchanged at 6). The +19 are the framework methods polint can
+legitimately connect to the entry; the ~28 further edges the naive version reached required
+the spurious dead-method roots (Jelly reaches them, but polint cannot yet connect them
+through its resolved graph — they need Router-instance typing and deeper `this`-property
+flow). Gate tests `real_ts_pipeline_resolves_export_object_method_this` and the existing
+`reachability_prunes_dead_code_but_keeps_invoked_callbacks` (promise handlers still seed
+roots; `ThisMethodFlow` does not). Full `cargo test -p polint --lib`: 2250 passed.
+
+Cumulative Phase A (iterations 52–53): **926/54/553 → 949/54/530**, **+23 TP / 0 FP /
+−23 FN**, F1 **75.31% → 76.47% (+1.16pp)**, precision **94.49% → 94.62%** (held), entirely in
+`helloworld` (**50/6/292 → 73/6/269**). The Express entry chain and its reachable internal
+method graph now resolve; remaining `helloworld` FN are the dependency-internal long tail
+(§2.1: `depd`/`debug`/`ipaddr.js`), `res.send` (needs the response prototype flowed into the
+route handler's `res` param), and the Router-instance method calls.
+
+| Iteration | Change | TP | FP | FN | Precision | Recall | F1 | Runtime | Hash |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|
+| 54 | Prototype-method `this`-flow — register function-constructor classes on first `C.prototype.m = fn`, then walk prototype-method bodies with `this` bound (`ThisMethodFlow`) | 957 | 54 | 522 | 94.66% | 64.71% | 76.87% | 88912 ms | `b15ee3912cb8345a` |
+
+Iteration 54 extends the iter-53 `this`-walk to classic prototype-based OOP (`§2.1`'s
+`ipaddr.js`, `depd`, express's routers): `IPv4.prototype.toString = function(){ …
+this.x() … }`. Two parts:
+
+- **Register function-constructor classes.** `C.prototype.m = fn` previously updated the
+  class table only via `self.classes.get_mut(class_name)` — so a bare `function C(){}`
+  constructor (not a `class`) was never in the table and its prototype methods were dropped
+  entirely. Changed to `entry(class_name).or_default()`, so the first prototype-member
+  assignment creates the class. This alone lets `new C().m()` resolve for pre-`class` OOP.
+- **Walk prototype-method bodies with `this`.** `collect_prototype_method_this_flows` walks
+  the instance-method bodies of every class-table entry **not** already handled by the
+  class-body walk (i.e. function-constructor classes), with `this` bound to the instance
+  object — the shared `walk_method_body_with_this` helper, reusing iter-53's `ThisMethodFlow`
+  so dead methods stay pruned. Mirrors `collect_class_body_call_flows` for the prototype world.
+
+Result: **949/54/530 → 957/54/522**, **+8 TP / 0 FP / −8 FN**, precision **94.62% → 94.66%**
+(held), F1 **76.47% → 76.87% (+0.40pp)**. Unlike iters 52–53 this is **not** helloworld-only:
+**+4 in `helloworld`** (73→77, `ipaddr.js`/dependency prototype methods) and **+4 in the
+non-helloworld micro tail** (257 from 261 — the prototype fix generalizes). Gate test
+`real_ts_pipeline_resolves_prototype_method_this`; the existing
+`real_ts_pipeline_resolves_prototype_and_dynamic_proto_links` still passes. Full
+`cargo test -p polint --lib`: 2251 passed.
+
+Cumulative Phase A (iterations 52–54): **926/54/553 → 957/54/522**, **+31 TP / 0 FP /
+−31 FN**, F1 **75.31% → 76.87% (+1.56pp)**, precision **94.49% → 94.66%** (held).
+
+| Iteration | Change | TP | FP | FN | Precision | Recall | F1 | Runtime | Hash |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|
+| 55 | Test-framework callback model (`describe`/`it`/… invoke their callback) + `collect_expression` traversal completeness (descend into binary/unary/logical/conditional/template/member positions) | 961 | 54 | 518 | 94.68% | 64.98% | 77.06% | 102240 ms | `0902247d33eb7f9d` |
+
+Iteration 55 closes the mocha framework bucket (§3 "Framework object models"). Two coupled
+parts — the model alone moved nothing until the traversal gap was fixed:
+
+- **Test-framework callback model.** `describe`/`it`/`before*`/`after*`/`context`/`specify`/
+  `suite`/`test`/… invoke their function argument like a host (the promise-handler pattern of
+  iter 39). `collect_test_framework_callbacks` walks each function-argument body via
+  `collect_callback_value_flows` (normal `FunctionTokenFlow`, so the callback becomes a
+  reachability root) — nested `describe`→`it`→body resolves by recursion.
+- **`collect_expression` traversal completeness.** The model resolved nothing at first because
+  mocha's edges hide under operators: `assert.ok(typeof mylib.plus(4,2) === 'number')`. The
+  value-flow walk never descended into `BinaryExpression`/`UnaryExpression`/`LogicalExpression`/
+  `ConditionalExpression`/`TemplateLiteral`/member positions, so the buried `mylib.plus(…)` call
+  was never reached. Added those arms (a general fix, not mocha-specific).
+
+Result: **957/54/522 → 961/54/518**, **+4 TP / 0 FP / −4 FN**, precision **94.66% → 94.68%**
+(held), F1 **76.87% → 77.06% (+0.19pp)**. `tests/mochatest/test.json` **0/6 → 4/2** (the 2
+residual FN are the higher-order `apply(f){f()}` cross-file param flow — `mylib.apply(mylib.plus)`
+→ `f` → `plus`). `test-with-hook.json` (routes through a `pirates` require-hook) did not move.
+Gate test `real_ts_pipeline_resolves_test_framework_callbacks`. Full
+`cargo test -p polint --lib`: 2251 passed.
+
+Cumulative this push (iterations 52–55): **926/54/553 → 961/54/518**, **+35 TP / 0 FP /
+−35 FN**, F1 **75.31% → 77.06% (+1.75pp)**, precision **94.49% → 94.68%** (held).
+
+| Iteration | Change | TP | FP | FN | Precision | Recall | F1 | Runtime | Hash |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|
+| 56 | Computed `this`-key writes — `this["f" + "oo"] = fn` / `this[name] = fn` (const/concat key) resolve to a named property in class methods + the constructor pre-scan | 965 | 54 | 514 | 94.70% | 65.25% | 77.26% | 105380 ms | `ac96ff95f35df4da` |
+
+Iteration 56 resolves computed `this`-key writes with a constant key (`approx/this.json`):
+`this["p" + "1"] = fn` in a class constructor / `this["f" + "oo"] = fn` in a method write a
+named property, so `new D().p1()` / `a.foo()` dispatch. Two sites updated: the live
+assignment handler (`this_assignment_property_names`, env-aware — resolves const bindings and
+concatenation via `computed_member_property_names`) and the structural constructor pre-scan
+that builds the instance shape (`this_assignment_static_or_concat_keys`, env-free literal/concat
+resolver, since the pre-scan runs without an env).
+
+Result: **961/54/518 → 965/54/514**, **+4 TP / 0 FP / −4 FN**, precision **94.68% → 94.70%**
+(held), F1 **77.06% → 77.26% (+0.20pp)**. `approx/this.json` **16/16 → 20/12**. The 12 residual
+FN need function-as-constructor `this`-harvesting (`function Foo(){ this[name]=fn }`,
+`new Foo().bar()`) and constructor-return-override (`function Bar(){ return fn }; new Bar()()`)
+— separate mechanisms. Gate test `real_ts_pipeline_resolves_computed_this_key_writes`.
+
+Cumulative this push (iterations 52–56): **926/54/553 → 965/54/514**, **+39 TP / 0 FP /
+−39 FN**, F1 **75.31% → 77.26% (+1.95pp)**, precision **94.49% → 94.70%** (held).
+
+## Phase D — the value-token heap (`js_points_to`), iterations 57+
+
+After the two no-op reverts ending iteration 56 confirmed the recognizer seam is mined
+out, the architectural endgame began: a small Andersen-style (inclusion-based) points-to
+fixpoint, built greenfield and AST-based, emitting edges into `call_targets` beside the
+recognizers (additive, deduped, labeled `CallAlgorithm::PointsTo` so it never seeds
+reachability roots). Design + plan: `performance/2026-06-11-js-points-to-heap-plan.md`.
+
+The Phase-0 spike corrected the plan's architecture: the kernel's `semantic_graph` builder
+*does* run under the empty plan but is lossy exactly where precision is needed (it lumps
+constant computed keys into a single `computed_bucket`, mis-attributes the base, and
+under-models function-objects/instances), so the existing semantic-graph solver resolves
+NONE of the failing shapes. Greenfield AST harvest → `call_targets` it is.
+`crates/polint/src/analysis/calls/js_points_to/{solver,harvest,provider}.rs`.
+
+| Iteration | Change | TP | FP | FN | Precision | Recall | F1 | Hash |
+|---|---|---:|---:|---:|---:|---:|---:|---|
+| 57 | Value-token heap v1 (single-file): function/object/instance tokens, field-sensitive property cells, calls + returns + higher-order param flow, dynamic constant-key reads/writes | 974 | 57 | 505 | 94.47% | 65.86% | 77.61% | `33d6f6b0144b040d` |
+| 57a | Skip getters/setters (accessor invocation, not a plain property) — removes the accessor false positives | 974 | 55 | 505 | 94.66% | 65.86% | 77.67% | `106fcb5af2d22911` |
+| 58 | Modules — `require`/`module.exports`/`exports` wired through a per-file exports-object cell (reusing the recognizers' `oxc_resolver` map); cross-file property flow | 989 | 55 | 490 | 94.73% | 66.87% | 78.40% | `3c991d1e836e4dcc` |
+| 59 | Emit call-result / curried callees (`f(a)(b)`, computed callees) by EXACT-span site match instead of rejecting them — the harvest already resolved them; the provider was dropping every non-identifier/member callee | 1060 | 56 | 419 | 94.98% | 71.67% | 81.70% | `ef9524e6da2fc82e` |
+| 60 | Harvest completeness — `cond ? a : b`, `a \|\| b` / `a && b` / `a ?? b` (branch union), and `obj["a"+"b"]` constant-concat keys | 1066 | 57 | 413 | 94.92% | 72.08% | 81.94% | `9fbb0ee5b304650c` |
+| 61 | Statement completeness — walk `try`/`catch`/`finally`, `switch` cases, labeled and do-while bodies (calls inside them were invisible) | 1070 | 57 | 409 | 94.94% | 72.35% | 82.12% | `9071b773d5e8250f` |
+| 62 | Emit computed-member calls (`x[prop]()`) by EXACT span — resolved via the const key, but the site callee carries the syntactic key so a `Member(resolved)` hint never matched | 1078 | 57 | 401 | 94.98% | 72.89% | 82.48% | `f31714363ae57264` |
+
+Iteration 57 is the heap's first real benchmark contribution: **+9 TP / +1 FP** over the
+recognizer baseline (after 57a's accessor fix), precision **94.70% → 94.66%** (held), F1
+**77.26% → 77.67%**. It resolves the value-flow-depth and dynamic-property shapes the
+recognizers miss — e.g. `inst[p2] = g; inst.p2()` (instance dynamic const-key) resolves via
+a `PointsTo` edge. The solver core (`solver.rs`) is unit-tested on hand-built constraints
+for every shape (function-object dyn key, instance dyn key, object-return depth, higher-order
+param flow, budget honesty, determinism); the harvest (`harvest.rs`) walks the oxc AST into
+those constraints; the provider (`provider.rs`) maps resolved `(call, function)` edges back to
+`CallSiteFact`s by span + callee hint. Full `cargo test -p polint --lib`: 2260 passed, 0
+regressions from adding the edge source to the calls provider.
+
+Iteration 58 (modules) is the heap's biggest single jump and the proof of the cross-file
+thesis: **+15 TP / 0 FP**, precision **94.66% → 94.73%** (UP), F1 **77.67% → 78.40%**.
+`require`/`module.exports`/`exports` flow through one exports-object cell per file (reusing
+the recognizers' `oxc_resolver` map), so a module's exported shape is just more constraints —
+`const lib = require('./x'); lib.make().run()` resolves cross-file by token flow.
+`helloworld` moved **77 → 86 TP** (the dependency tail beginning to resolve), and the
+cross-file fixtures moved with it (`client-this` 3→7, `client9` closed, `simple` 30→31).
+
+Iteration 59 is the heap's breakthrough — a one-line emission fix worth **+71 TP / +1 FP**.
+The harvest was already resolving the call-result / curried / computed-callee shapes
+(`f(a)(b)`, `(0, lib.foo)()`, `arr[i]()`), but the provider only emitted edges whose site
+callee was a plain `Identifier`/`Member`; everything else (a large class) was silently
+dropped. Matching those by EXACT call-expression span (uniquely the outer call) emits them:
+**989/55/490 → 1060/56/419**, F1 **78.40% → 81.70% (+3.30pp)**, precision **94.73% → 94.98%**
+(UP). `client1` (curried closure) closes fully; the gain is broad across the suite.
+
+**Cumulative heap (iterations 57–62): 965/54/514 → 1078/57/401, +113 TP / +3 FP**, F1
+**77.26% → 82.48% (+5.22pp)**, precision **94.70% → 94.98%** (UP) — the step change the heap
+was built for. Iteration 59 (curried/exact-span emission) was the single biggest jump
+(+71); 60–61 are harvest/statement completeness (calls hidden in operators, ternaries,
+try/catch); 62 emits computed-member calls (`x[prop]()`) by exact span (+8). A recurring,
+high-yield pattern emerged: **the harvest often RESOLVES a call the provider then drops**
+because the call site's callee shape (curried/computed) doesn't match a name hint — emitting
+those by exact span is cheap and large. Two attempts were reverted on the keep-or-revert rule:
+object inheritance for `mixin` (−3 TP, reachability shift) and the index-insensitive array
+model (+1 TP / +10 FP — the blur over-approximates). Solver prototype chain (`Construct`/`link_prototype`, unit-tested)
+and object destructuring are in place but currently benchmark-neutral (local classes and
+destructuring are recognizer-covered); they are foundation for cross-file class support.
+
+**Reverted (kept the discipline):** object inheritance for `mixin`/`Object.assign`
+(`InheritObject`) — it targeted helloworld's internal `this.set()`/`this._router.route()`
+chain (the §2.3 double-leverage) but regressed −3 TP (a reachability/resolution shift,
+budget-independent), so it was reverted. The helloworld internal chain remains the largest
+single bucket (≈190 FN) and the hardest: it needs `mixin` modeling + `this`-binding through
+the framework methods + Router-instance typing to interlock without losing edges.
+End-to-end gate test `points_to_heap_resolves_dynamic_property_and_cross_file_chains` asserts
+both an instance dynamic-key `PointsTo` edge and the cross-file factory-returns-object chain;
+the solver core has 7 unit tests over hand-built constraints. Full `cargo test -p polint
+--lib`: green, zero regressions from adding the edge source.
+
+Next harvest phases: prototype chain in the solver (unlocks cross-file class instantiation,
+`client2`–`client5`), closure/curried-return precision (`client1`, `srcLoc`), accessors,
+and native callback/`call`-`apply`-`bind`/`Object.assign` models.
+
 Remaining module-modeling work (next iterations):
 
 1. **Cross-file function-return summaries** — the dominant remaining `helloworld`

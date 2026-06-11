@@ -2,6 +2,7 @@ pub(crate) mod cache_key;
 pub(crate) mod direct;
 pub(crate) mod extract;
 pub(crate) mod facts;
+pub(crate) mod js_points_to;
 pub(crate) mod provider;
 pub(crate) mod store;
 pub(crate) mod ts_value_flows;
