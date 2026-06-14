@@ -32,3 +32,6 @@ research/*/repos/
 
 # Transient harness runtime state (scheduled-tasks lock), not source.
 .claude/scheduled_tasks.lock
+
+# GSD plugin auto-checkpoint handoff, regenerated on tool use; not source.
+.planning/HANDOFF.json
