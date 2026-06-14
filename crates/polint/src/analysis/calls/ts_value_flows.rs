@@ -8760,6 +8760,52 @@ mod tests {
     }
 
     #[test]
+    fn nested_shadowed_function_declarations_get_distinct_facts_and_correct_attribution() {
+        // `function f(){ function f(){ inner(); } }` — the inner and outer `f`
+        // shadow by name, but must be DISTINCT FunctionFacts (different spans),
+        // and a call inside the inner body must be attributed to the INNER
+        // (tightest-containing) `f`, not the outer one. Guards the
+        // nested-emission + `matching_function` (span-containment, first-match)
+        // interaction against same-name shadowing: it relies on the enclosing
+        // function being emitted before the nested one, so lock that in.
+        let source = "function f() {\n    function f() {\n        inner();\n    }\n}\n";
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+
+        let mut f_facts: Vec<_> = db
+            .functions()
+            .iter()
+            .filter(|function| function.name == "f")
+            .collect();
+        assert_eq!(
+            f_facts.len(),
+            2,
+            "outer and inner `f` must be distinct facts; got spans {:?}",
+            f_facts
+                .iter()
+                .map(|f| (f.span.start_byte, f.span.end_byte))
+                .collect::<Vec<_>>()
+        );
+        // The tightest-span `f` is the inner one.
+        f_facts.sort_by_key(|f| f.span.end_byte - f.span.start_byte);
+        let inner_f = f_facts[0].id;
+
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let inner_call = site_id_for_span(source, &sites, "inner()");
+        let caller = sites
+            .iter()
+            .find(|site| site.id == inner_call)
+            .map(|site| site.caller);
+        assert_eq!(
+            caller,
+            Some(inner_f),
+            "inner() must be attributed to the inner (tightest) `f`, not the outer"
+        );
+    }
+
+    #[test]
     fn bind_call_site_emits_no_call_edge_but_bound_value_resolves() {
         // `.bind()` is an allocation, not a call: Function.prototype.bind returns
         // a NEW bound function without invoking the original. There must be no

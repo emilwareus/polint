@@ -2054,7 +2054,7 @@ fn push_ts_class(
                 },
                 TsFunctionSpec {
                     name: format!("{name}.{method_name}"),
-                    span: class_method_function_span(method),
+                    span: class_method_function_span(method, source),
                     is_exported,
                     cyclomatic_complexity: ts_cyclomatic_complexity(&method.value),
                     calls: function_body_calls(method.value.body.as_deref()),
@@ -2127,21 +2127,40 @@ fn extract_anonymous_callables_from_object_property(
     extract_anonymous_callables_from_expression(db, ctx, &property.value, true);
 }
 
-fn class_method_function_span(method: &MethodDefinition<'_>) -> oxc_span::Span {
+fn class_method_function_span(method: &MethodDefinition<'_>, source: &str) -> oxc_span::Span {
     if method.r#static && method.kind == MethodDefinitionKind::Method {
         // Drop the `static` modifier but keep the whole key syntax. For a
         // computed key (`static ["x"]() {}`) Jelly's function span starts at the
-        // `[` bracket, not the inner key expression, so step back one byte to
-        // include it (the bracket immediately precedes the key). A plain key
-        // (`static foo()`) already starts at the identifier.
+        // `[` bracket, not the inner key expression. Scan back over any
+        // whitespace to the `[` (so `static [ "x" ]() {}` is handled too), falling
+        // back to the key start. A plain key (`static foo()`) already starts at
+        // the identifier.
+        let key_start = method.key.span().start;
         let start = if method.computed {
-            method.key.span().start.saturating_sub(1)
+            computed_key_bracket_start(source, key_start).unwrap_or(key_start)
         } else {
-            method.key.span().start
+            key_start
         };
         return oxc_span::Span::new(start, method.span.end);
     }
     method.span
+}
+
+/// Byte offset of the `[` opening a computed key whose inner expression starts at
+/// `key_start`, scanning back over whitespace. `None` if the preceding
+/// non-whitespace byte is not `[` (defensive — leaves the span at the key).
+fn computed_key_bracket_start(source: &str, key_start: u32) -> Option<u32> {
+    let bytes = source.as_bytes();
+    let mut index = (key_start as usize).min(bytes.len());
+    while index > 0 {
+        index -= 1;
+        match bytes[index] {
+            b'[' => return Some(index as u32),
+            b' ' | b'\t' | b'\r' | b'\n' => continue,
+            _ => return None,
+        }
+    }
+    None
 }
 
 fn expression_calls(expression: &Expression<'_>) -> Vec<String> {
