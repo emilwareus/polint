@@ -25,6 +25,20 @@ pub(crate) fn resolve_direct_call_targets(
         if has_unsupported_call_evidence(db, site) {
             continue;
         }
+        // A method call on a built-in global namespace (`Object.create()`,
+        // `Array.from()`, `Promise.resolve()`, ...) is a native call; it must
+        // never resolve to a same-named user function by property name. Both the
+        // `reference_for_site` member-by-name path and the `lexical_function_for_site`
+        // fallback would otherwise emit e.g. `Object.create()` -> local
+        // `function create` (a false positive). Suppress every by-name fallback
+        // for such sites — there is no sound user-function resolution for them.
+        if matches!(
+            site.kind,
+            CallSyntaxKind::StaticMember | CallSyntaxKind::Member
+        ) && receiver_is_builtin_global(db, site)
+        {
+            continue;
+        }
         let Some(reference) = index.reference_for_site(site) else {
             if let Some(target_function) = index.lexical_function_for_site(site) {
                 rows.push(CallTargetFact {
@@ -235,6 +249,56 @@ impl<'db> DirectIndex<'db> {
             None
         }
     }
+}
+
+/// Built-in global namespace objects whose member calls are native and must
+/// never bind to a same-named user function. Receivers like `Object`/`Array`
+/// are read straight from the call-site source (the member callee carries no
+/// base identifier in `CallCallee::Member`).
+const BUILTIN_GLOBAL_RECEIVERS: &[&str] = &[
+    "Object",
+    "Array",
+    "Math",
+    "JSON",
+    "Number",
+    "String",
+    "Boolean",
+    "Symbol",
+    "Reflect",
+    "Promise",
+    "Date",
+    "RegExp",
+    "Map",
+    "Set",
+    "WeakMap",
+    "WeakSet",
+    "Proxy",
+    "BigInt",
+    "Function",
+    "Error",
+    "Buffer",
+    "Intl",
+    "console",
+    "globalThis",
+];
+
+/// Is the receiver of this member call a built-in global namespace? Reads the
+/// leading identifier of the call-site source slice (the part before the first
+/// `.`), which for a member call is the receiver expression.
+fn receiver_is_builtin_global(db: &AnalysisDb, site: &CallSiteFact) -> bool {
+    let Some(file) = db.files().iter().find(|file| file.id == site.file) else {
+        return false;
+    };
+    let start = site.span.start_byte as usize;
+    let end = site.span.end_byte as usize;
+    let Some(slice) = file.source.get(start..end) else {
+        return false;
+    };
+    let receiver: String = slice
+        .chars()
+        .take_while(|ch| ch.is_alphanumeric() || *ch == '_' || *ch == '$')
+        .collect();
+    BUILTIN_GLOBAL_RECEIVERS.contains(&receiver.as_str())
 }
 
 fn functions_by_name(functions: &[FunctionFact]) -> BTreeMap<String, Vec<&FunctionFact>> {

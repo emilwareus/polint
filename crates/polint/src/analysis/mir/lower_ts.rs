@@ -425,11 +425,23 @@ fn collect_anonymous_functions_from_statement<'ast>(
         Statement::VariableDeclaration(variable) => {
             for declarator in &variable.declarations {
                 if let Some(init) = &declarator.init {
-                    collect_anonymous_functions_from_expression(init, false, functions);
+                    // `include_self = true` mirrors the frontend: a nested
+                    // `const x = function(){}` init function gets its own MIR body
+                    // + call sites. Deduped by (span, name) with the top-level
+                    // `collect_variable_function` emission.
+                    collect_anonymous_functions_from_expression(init, true, functions);
                 }
             }
         }
         Statement::FunctionDeclaration(function) => {
+            // Nested function declaration: register it as a candidate so its body
+            // gets its own MirBody + Call operations (call sites are derived only
+            // from MIR Call ops). This matches the frontend's nested-function
+            // FunctionFact emission; without it the fact would exist but its body
+            // would carry no call sites. Deduped by (span, name) by the caller.
+            if let Some(name) = function.id.as_ref().map(|id| id.name.to_string()) {
+                collect_function(name, function.span, function, functions);
+            }
             if let Some(body) = function.body.as_deref() {
                 collect_anonymous_functions_from_body(body, functions);
             }

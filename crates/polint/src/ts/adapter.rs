@@ -29,9 +29,9 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 
-const TS_CACHE_SCHEMA: &str = "ts-facts-v10";
+const TS_CACHE_SCHEMA: &str = "ts-facts-v13";
 const TS_PROVIDER_ID: &str = "polint.ts.syntax";
-const TS_SYNTAX_LAYER_SCHEMA: &str = "ts-syntax-layer-v9";
+const TS_SYNTAX_LAYER_SCHEMA: &str = "ts-syntax-layer-v11";
 
 // Relationship resolution converts this non-string import expression sentinel to Dynamic.
 pub(crate) const DYNAMIC_IMPORT_SPECIFIER: &str = "<dynamic>";
@@ -1406,11 +1406,41 @@ fn extract_anonymous_callables_from_statement(
                 // are callables that flow to the bound name; emit their facts.
                 extract_anonymous_callables_from_binding_pattern(db, ctx, &declarator.id);
                 if let Some(init) = &declarator.init {
-                    extract_anonymous_callables_from_expression(db, ctx, init, false);
+                    // `include_self = true`: emit the init function/arrow itself
+                    // (`const x = function baz(){}` inside a body), not just its
+                    // body. At top level this declarator was already emitted under
+                    // its variable name by `extract_variable_declarator` (which
+                    // runs first), so the (file, span) dedup guard keeps that and
+                    // drops this; only NESTED var-init functions — which have no
+                    // other emission path — are newly materialized as targets.
+                    extract_anonymous_callables_from_expression(db, ctx, init, true);
                 }
             }
         }
         Statement::FunctionDeclaration(function) => {
+            // Nested function declarations (inside a function/block body) are not
+            // visited by the top-level declaration path; emit their facts here so a
+            // call can resolve TO them. Without a FunctionFact there is no
+            // FunctionId, so neither the recognizer nor the points-to heap (which
+            // maps value tokens -> FunctionId by span) can emit an edge to a nested
+            // function — the dominant call-graph recall gap. Idempotent via
+            // `push_ts_function`'s (file, span) guard. Mirrors the nested-class arm.
+            if let Some(name) = function.id.as_ref().map(|id| id.name.to_string()) {
+                let is_component_like =
+                    is_component_like_name(&name) || function_returns_jsx(function);
+                push_ts_function(
+                    db,
+                    ctx,
+                    TsFunctionSpec {
+                        name,
+                        span: function.span,
+                        is_exported: false,
+                        cyclomatic_complexity: ts_cyclomatic_complexity(function),
+                        calls: function_body_calls(function.body.as_deref()),
+                        is_component_like,
+                    },
+                );
+            }
             if let Some(body) = function.body.as_deref() {
                 extract_anonymous_callables_from_function_body(db, ctx, body);
             }
@@ -1917,6 +1947,18 @@ fn push_ts_function(
     spec.calls.sort();
     spec.calls.dedup();
     let span = span_from_oxc(ctx.file, ctx.source, spec.span);
+    // Idempotent by (file, span): a function reached via body recursion (nested
+    // declarations) must not duplicate a fact already emitted at a top-level
+    // position (call argument, array element, …). `push_function` does no dedup,
+    // so duplicate same-span FunctionFacts would make span-keyed resolution
+    // (`function_for_span`) order-dependent. Mirrors `push_ts_class`'s guard.
+    if let Some(existing) = db.functions().iter().find(|function| {
+        function.file == ctx.file
+            && function.span.start_byte == span.start_byte
+            && function.span.end_byte == span.end_byte
+    }) {
+        return existing.id;
+    }
     let function_id = db.push_function(FunctionFact {
         id: FunctionId(0),
         file: ctx.file,
@@ -2087,7 +2129,17 @@ fn extract_anonymous_callables_from_object_property(
 
 fn class_method_function_span(method: &MethodDefinition<'_>) -> oxc_span::Span {
     if method.r#static && method.kind == MethodDefinitionKind::Method {
-        return oxc_span::Span::new(method.key.span().start, method.span.end);
+        // Drop the `static` modifier but keep the whole key syntax. For a
+        // computed key (`static ["x"]() {}`) Jelly's function span starts at the
+        // `[` bracket, not the inner key expression, so step back one byte to
+        // include it (the bracket immediately precedes the key). A plain key
+        // (`static foo()`) already starts at the identifier.
+        let start = if method.computed {
+            method.key.span().start.saturating_sub(1)
+        } else {
+            method.key.span().start
+        };
+        return oxc_span::Span::new(start, method.span.end);
     }
     method.span
 }
