@@ -40,9 +40,30 @@ pub(crate) enum Token {
     /// A function value. The payload is an opaque function identity the harvest
     /// assigns (in practice a `FunctionId`'s inner value).
     Function(u64),
-    /// A heap allocation (object / array literal, `new` instance, …), keyed by an
-    /// opaque allocation-site identity.
+    /// A heap allocation (object / `new` instance, …), keyed by an opaque
+    /// allocation-site identity.
     Object(u64),
+    /// An array allocation, keyed by an opaque allocation-site identity. Mirrors
+    /// Jelly's `ArrayToken`: numeric-index property cells (`t."0"`, `t."1"`, …) are
+    /// kept distinct, plus a `%ARRAY_UNKNOWN` cell (push / dynamic-index writes /
+    /// spread) and a `%ARRAY_ALL` summary cell (⋃ of every index cell + UNKNOWN).
+    /// A read of a numeric index also reads UNKNOWN (specific∪unknown); a dynamic
+    /// read reads ALL. The routing lives in [`Solver::process`].
+    Array(u64),
+}
+
+/// Property cell holding values stored at unknown / dynamic array indices
+/// (`arr.push(v)`, `arr[dyn] = v`, spread). Jelly's `%ARRAY_UNKNOWN`.
+pub(crate) const ARRAY_UNKNOWN: &str = "%ARRAY_UNKNOWN";
+/// Summary property cell: the union of every numeric-index cell and
+/// `%ARRAY_UNKNOWN`. Read by dynamic index reads and `pop`/`shift`/`at`/iteration.
+/// Jelly's `%ARRAY_ALL`.
+pub(crate) const ARRAY_ALL: &str = "%ARRAY_ALL";
+
+/// A field name that denotes a (non-negative integer) array index, matching
+/// Jelly's `isArrayIndex` (`/^\d+$/`).
+pub(crate) fn is_array_index(field: &str) -> bool {
+    !field.is_empty() && field.bytes().all(|b| b.is_ascii_digit())
 }
 
 /// Dense handle for a [`Token`].
@@ -408,6 +429,7 @@ impl<'p> Solver<'p> {
         for to in succ {
             self.push(to, token);
         }
+        let is_array = matches!(self.token_by_id[token.0 as usize], Token::Array(_));
         // 2. Field loads on this base: prop(token, field) ⊆ into, plus the same
         //    field on every prototype this token inherits (the prototype chain).
         let loads: Vec<(String, CellId)> = self.loads[cell.0 as usize].clone();
@@ -421,6 +443,13 @@ impl<'p> Solver<'p> {
         for (field, src) in stores {
             let pc = self.prop_cell(token, &field);
             self.add_subset(src, pc);
+            // Array `%ARRAY_ALL` maintenance: every numeric-index cell and the
+            // unknown cell flow into the summary cell read by dynamic reads /
+            // `pop` / iteration.
+            if is_array && (is_array_index(&field) || field == ARRAY_UNKNOWN) {
+                let all = self.prop_cell(token, ARRAY_ALL);
+                self.add_subset(pc, all);
+            }
         }
         // 4. Calls with this cell as callee.
         let call_idxs: Vec<usize> = self.calls[cell.0 as usize].clone();

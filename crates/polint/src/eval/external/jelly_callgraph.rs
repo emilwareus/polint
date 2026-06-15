@@ -733,6 +733,96 @@ mod tests {
     }
 
     #[test]
+    fn points_to_heap_resolves_array_element_flow() {
+        // Gate for the heap's array model (`js_points_to`): index-sensitive element
+        // cells (`arr[const]` reads exactly its index), iteration callbacks
+        // (`forEach`/`map`) binding the parameter to every element, `push` joining
+        // the element set, and `for…of` binding the loop variable. All resolve
+        // through the points-to heap (`CallAlgorithm::PointsTo`).
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        // The *indirect* index form (`const y = arr[i]; y()`) is where the
+        // recognizer's index-insensitive smear fails — the heap's index-sensitive
+        // cells resolve it precisely. Iteration callbacks and `for…of` genuinely
+        // visit every element, so binding to the summary stays precise.
+        std::fs::write(
+            root.join("arr.js"),
+            "function a0() { console.log(\"a0\"); }\n\
+             function a1() { console.log(\"a1\"); }\n\
+             function pushed() { console.log(\"pushed\"); }\n\
+             function looped() { console.log(\"looped\"); }\n\
+             const xs = [a0, a1];\n\
+             const y0 = xs[0];\n\
+             y0();\n\
+             xs.push(pushed);\n\
+             xs.forEach(f => f());\n\
+             const ys = [looped];\n\
+             for (const g of ys) g();\n",
+        )
+        .unwrap();
+
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        let target_src = |t: &crate::analysis::calls::facts::CallTargetFact| -> String {
+            t.target_function
+                .and_then(|f| db.functions().iter().find(|x| x.id == f))
+                .and_then(|x| {
+                    db.file(x.span.file).map(|file| {
+                        file.source[x.span.start_byte as usize..x.span.end_byte as usize]
+                            .to_string()
+                    })
+                })
+                .unwrap_or_default()
+        };
+        let site_src = |t: &crate::analysis::calls::facts::CallTargetFact| -> String {
+            db.call_sites()
+                .iter()
+                .find(|s| s.id == t.site)
+                .and_then(|s| {
+                    db.file(s.span.file).map(|file| {
+                        file.source[s.span.start_byte as usize..s.span.end_byte as usize]
+                            .to_string()
+                    })
+                })
+                .unwrap_or_default()
+        };
+        // A points-to (heap) edge: site contains `site_needle`, target contains
+        // `target_needle`, algorithm is PointsTo.
+        let heap_resolves = |site_needle: &str, target_needle: &str| {
+            db.call_targets().iter().any(|t| {
+                t.algorithm == crate::analysis::calls::facts::CallAlgorithm::PointsTo
+                    && site_src(t).contains(site_needle)
+                    && target_src(t).contains(target_needle)
+            })
+        };
+        // Index-sensitive read: y0 = xs[0] → a0, and it stays precise — it never
+        // sees the *other* specific index a1.
+        assert!(
+            heap_resolves("y0()", "function a0"),
+            "the heap should resolve y0 = xs[0] to a0"
+        );
+        assert!(
+            !heap_resolves("y0()", "function a1"),
+            "the heap must keep xs[0] precise — no smear to the index-1 element a1"
+        );
+        // `xs.forEach(f => f())`: the callback parameter is bound to every element
+        // (both literal indices and the pushed value).
+        assert!(
+            heap_resolves("f()", "function a0") && heap_resolves("f()", "function a1"),
+            "forEach should bind the callback parameter to the literal elements"
+        );
+        assert!(
+            heap_resolves("f()", "pushed"),
+            "forEach should also see the pushed element (it joins %ARRAY_ALL)"
+        );
+        // `for (const g of ys) g()`: the loop variable is bound to the elements.
+        assert!(
+            heap_resolves("g()", "looped"),
+            "for…of should bind the loop variable to the array elements"
+        );
+    }
+
+    #[test]
     fn reachability_prunes_dead_code_but_keeps_invoked_callbacks() {
         let dir = tempdir().unwrap();
         let root = dir.path();
