@@ -263,12 +263,19 @@ fn probe_crate_compiles_against_prelude_only() {
         manifest.display()
     );
 
+    // NOTE: intentionally NOT `--locked`. This gate only proves the probe still
+    // compiles against `polint::sdk::prelude::*`; pinning the probe's transitive
+    // dep versions is not its job. The probe's Cargo.lock pins `polint` by version,
+    // but release bumps update the workspace lock without touching the excluded
+    // probe lock, so `--locked` would abort with "cannot update the lock file" on
+    // every release. Letting cargo refresh the stale version entry in-memory keeps
+    // the gate robust. (The OUTER `cargo test --locked` in CI still validates the
+    // workspace lock.)
     let output = Command::new(env!("CARGO"))
         .args([
             "build",
             "--manifest-path",
             manifest.to_str().expect("utf-8 manifest path"),
-            "--locked",
             "--message-format=short",
         ])
         .output()
