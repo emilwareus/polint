@@ -3697,14 +3697,21 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         if target_ids.is_empty() {
             return None;
         }
+        if method == "bind" {
+            // `.bind()` is an allocation, not a call: `Function.prototype.bind`
+            // returns a NEW bound function without invoking the original. The
+            // bound value flows to its binding via
+            // `bound_function_targets_from_bind_call`, and the eventual `f()`
+            // resolves there. Emitting a call edge at the `.bind()` site itself
+            // is a false positive (Jelly models bind as alloc), so return None
+            // and let `collect_call_expression` emit nothing here.
+            return None;
+        }
         let targets = CollectionTargets {
             keys: Vec::new(),
             values: target_ids.clone(),
             object_values: Vec::new(),
         };
-        if method == "bind" {
-            return Some(targets);
-        }
 
         let (this_object, this_callables, arguments, object_arguments) =
             self.native_call_receiver_and_arguments(call, method, env);
@@ -5091,11 +5098,29 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                     .map(|argument| self.callable_targets_from_expression(argument, env))
                     .unwrap_or_default(),
             }),
-            Some("Promise.all") | Some("Promise.any") | Some("Promise.race") => call
+            Some("Promise.all") => call
                 .arguments
                 .first()
                 .and_then(argument_expression)
                 .map(|argument| self.aggregate_promise_targets(argument, env)),
+            Some("Promise.any") | Some("Promise.race") => call
+                .arguments
+                .first()
+                .and_then(argument_expression)
+                .map(|argument| {
+                    // `Promise.any` rejects with an `AggregateError`, never an
+                    // input promise's rejection value; and Jelly does not flow
+                    // input rejections into `Promise.race`'s reject handler
+                    // either (only the settled fulfillment value is observable).
+                    // Keep the aggregated fulfillment targets but drop the
+                    // rejections so `.then(_, onRejected)` / `.catch` emit no
+                    // false edge to an input's reject callback. (`Promise.all`
+                    // does reject with the first input rejection, so it keeps
+                    // them above.)
+                    let mut targets = self.aggregate_promise_targets(argument, env);
+                    targets.rejected = CollectionTargets::default();
+                    targets
+                }),
             Some("Promise.allSettled") => call
                 .arguments
                 .first()
@@ -7375,7 +7400,18 @@ fn callback_targets_for_parameter(
     collection: &CollectionTargets,
 ) -> Vec<FunctionId> {
     match method {
-        "forEach" if index <= 1 => collection.values.clone(),
+        "forEach" if index == 0 => collection.values.clone(),
+        "forEach" if index == 1 => {
+            // `Map.forEach` is `(value, key, map)`: the 2nd parameter is the key,
+            // so bind it to the collection's keys. Arrays (2nd param is a numeric
+            // index) and Sets (`(value, value, set)`) have no distinct keys, so
+            // fall back to the values for them.
+            if collection.keys.is_empty() {
+                collection.values.clone()
+            } else {
+                collection.keys.clone()
+            }
+        }
         "reduce" | "reduceRight" if index == 1 => collection.values.clone(),
         _ if index == 0 => collection.values.clone(),
         _ => Vec::new(),
@@ -8559,6 +8595,79 @@ mod tests {
     }
 
     #[test]
+    fn map_foreach_binds_second_param_to_keys_not_values() {
+        // `Map.forEach` is `(value, key, map)`: the value param resolves to the
+        // map's values and the key param to its keys. Binding the key param to
+        // values (the array/Set fallback) is a false positive.
+        let source = "const m = new Map();\nm.set(() => { console.log(\"k\"); }, () => { console.log(\"v\"); });\nm.forEach((value, key) => {\n    value();\n    key();\n});\n";
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let key_fn = function_id_for_span(source, &db, "() => { console.log(\"k\"); }");
+        let value_fn = function_id_for_span(source, &db, "() => { console.log(\"v\"); }");
+
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let resolved = resolved_target_ids_by_site(targets);
+        let value_site = site_id_for_span(source, &sites, "value()");
+        let key_site = site_id_for_span(source, &sites, "key()");
+
+        assert!(
+            resolved.contains(&(value_site, value_fn)),
+            "value() (1st forEach param) must resolve to the map's value; got {resolved:?}"
+        );
+        assert!(
+            resolved.contains(&(key_site, key_fn)),
+            "key() (2nd forEach param) must resolve to the map's key; got {resolved:?}"
+        );
+        assert!(
+            !resolved.contains(&(key_site, value_fn)),
+            "key() must NOT resolve to the map's value (the FP we removed); got {resolved:?}"
+        );
+    }
+
+    #[test]
+    fn promise_any_and_race_do_not_flow_input_rejections() {
+        // `Promise.any` rejects with an AggregateError (never an input's reject
+        // value) and Jelly does not flow input rejections into `Promise.race`'s
+        // reject handler either — so `ra()`/`rb()` must NOT resolve to `bad`.
+        // Fulfillment still flows (`va()`/`vb()` -> `ok`), and `Promise.all`'s
+        // catch keeps the first input rejection (`rc()` -> `bad`).
+        let source = "const p = new Promise((resolve, reject) => {\n    resolve(() => { console.log(\"ok\"); });\n    reject(() => { console.log(\"bad\"); });\n});\nPromise.any([p]).then(va => { va(); }, ra => { ra(); });\nPromise.race([p]).then(vb => { vb(); }, rb => { rb(); });\nPromise.all([p]).catch(rc => { rc(); });\n";
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let ok = function_id_for_span(source, &db, "() => { console.log(\"ok\"); }");
+        let bad = function_id_for_span(source, &db, "() => { console.log(\"bad\"); }");
+
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let resolved = resolved_target_ids_by_site(targets);
+
+        for fulfill in ["va()", "vb()"] {
+            let site = site_id_for_span(source, &sites, fulfill);
+            assert!(
+                resolved.contains(&(site, ok)),
+                "expected {fulfill} (any/race fulfillment) to resolve `ok`; got {resolved:?}"
+            );
+        }
+        for reject in ["ra()", "rb()"] {
+            let site = site_id_for_span(source, &sites, reject);
+            assert!(
+                !resolved.contains(&(site, bad)),
+                "{reject} (any/race reject) must NOT resolve an input rejection; got {resolved:?}"
+            );
+        }
+        let all_catch = site_id_for_span(source, &sites, "rc()");
+        assert!(
+            resolved.contains(&(all_catch, bad)),
+            "Promise.all().catch rc() must keep the first input rejection; got {resolved:?}"
+        );
+    }
+
+    #[test]
     fn real_ts_pipeline_resolves_promise_executor_values_inside_for_of_switch() {
         let source = "const p2 = new Promise((resolve, reject) => {\n    resolve(() => { console.log(\"p2resolve\"); });\n});\nfor (const round of [1,2,3,4]) {\n    const p1 = new Promise((resolve, reject) => {\n        switch (round) {\n            case 1:\n                resolve(() => { console.log(\"resolve1\"); });\n                break;\n            case 2:\n                reject(() => { console.log(\"reject2\"); });\n                break;\n            case 3:\n                throw () => { console.log(\"throw30\"); };\n            case 4:\n                resolve(p2);\n                break;\n        }\n    });\n    p1.then(a => {\n        a();\n    }, b => {\n        b();\n    });\n}\n";
         let mut db = db_with_file(source);
@@ -8613,6 +8722,150 @@ mod tests {
         assert!(
             resolved.contains(&(outer_site, member)),
             "expected returned this-member callable to resolve at outer call; got {resolved:?}"
+        );
+    }
+
+    #[test]
+    fn nested_function_declaration_is_emitted_as_a_fact_with_lowered_body() {
+        // A function declared inside another function's body must be emitted as a
+        // FunctionFact AND have its body lowered (call sites) so a call can
+        // resolve TO it — the dominant call-graph recall gap. Without this a
+        // nested function has no FunctionId and neither the recognizer nor the
+        // points-to heap can emit an edge to it.
+        let source =
+            "function outer() {\n    function inner() { sideEffect(); }\n    return inner;\n}\n";
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let inner = db
+            .functions()
+            .iter()
+            .find(|function| function.name == "inner")
+            .map(|function| function.id);
+        assert!(
+            inner.is_some(),
+            "nested function `inner` must be emitted as a FunctionFact; got {:?}",
+            db.functions()
+                .iter()
+                .map(|function| &function.name)
+                .collect::<Vec<_>>()
+        );
+        // Its body is lowered: the `sideEffect()` call site is attributed to it.
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        assert!(
+            sites.iter().any(|site| Some(site.caller) == inner),
+            "the nested function body must be lowered with its own call sites"
+        );
+    }
+
+    #[test]
+    fn nested_shadowed_function_declarations_get_distinct_facts_and_correct_attribution() {
+        // `function f(){ function f(){ inner(); } }` — the inner and outer `f`
+        // shadow by name, but must be DISTINCT FunctionFacts (different spans),
+        // and a call inside the inner body must be attributed to the INNER
+        // (tightest-containing) `f`, not the outer one. Guards the
+        // nested-emission + `matching_function` (span-containment, first-match)
+        // interaction against same-name shadowing: it relies on the enclosing
+        // function being emitted before the nested one, so lock that in.
+        let source = "function f() {\n    function f() {\n        inner();\n    }\n}\n";
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+
+        let mut f_facts: Vec<_> = db
+            .functions()
+            .iter()
+            .filter(|function| function.name == "f")
+            .collect();
+        assert_eq!(
+            f_facts.len(),
+            2,
+            "outer and inner `f` must be distinct facts; got spans {:?}",
+            f_facts
+                .iter()
+                .map(|f| (f.span.start_byte, f.span.end_byte))
+                .collect::<Vec<_>>()
+        );
+        // The tightest-span `f` is the inner one.
+        f_facts.sort_by_key(|f| f.span.end_byte - f.span.start_byte);
+        let inner_f = f_facts[0].id;
+
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let inner_call = site_id_for_span(source, &sites, "inner()");
+        let caller = sites
+            .iter()
+            .find(|site| site.id == inner_call)
+            .map(|site| site.caller);
+        assert_eq!(
+            caller,
+            Some(inner_f),
+            "inner() must be attributed to the inner (tightest) `f`, not the outer"
+        );
+    }
+
+    #[test]
+    fn bind_call_site_emits_no_call_edge_but_bound_value_resolves() {
+        // `.bind()` is an allocation, not a call: Function.prototype.bind returns
+        // a NEW bound function without invoking the original. There must be no
+        // call edge at the `.bind()` site itself (Jelly models bind as alloc, so
+        // an edge there is a false positive), yet the bound function still flows
+        // to its binding so the later `f()` resolves to the original.
+        let source = "const f = function () { console.log(\"x\"); }.bind({});\nf();\n";
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = resolve_ts_value_flow_targets(&db, &sites, 0);
+        let resolved = resolved_target_ids_by_site(targets);
+        let original = function_id_for_span(source, &db, "function () { console.log(\"x\"); }");
+        let bind_site = site_id_for_span(
+            source,
+            &sites,
+            "function () { console.log(\"x\"); }.bind({})",
+        );
+        let f_site = site_id_for_span(source, &sites, "f()");
+
+        assert!(
+            !resolved.contains(&(bind_site, original)),
+            "`.bind()` site must not emit a call edge to the original function; got {resolved:?}"
+        );
+        assert!(
+            resolved.contains(&(f_site, original)),
+            "bound `f()` must still resolve to the original function; got {resolved:?}"
+        );
+    }
+
+    #[test]
+    fn builtin_global_member_call_does_not_resolve_to_local_function() {
+        // A method call on a built-in global namespace (`Object.create(...)`) is
+        // a native call; it must not bind to a same-named local `function create`
+        // by property-name collision (a precision false positive). The real
+        // identifier call `create()` must still resolve.
+        let source = "function create() { return {}; }\nconst o = Object.create(null);\nconst made = create();\n";
+        let mut db = db_with_file(source);
+        crate::ts::analyze(&mut db);
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir).expect("semantic MIR stores");
+        let sites = crate::analysis::calls::extract::extract_call_sites(&db);
+        let targets = crate::analysis::calls::direct::resolve_direct_call_targets(&db, &sites);
+        let resolved = resolved_target_ids_by_site(targets);
+        let create_fn = function_id_for_span(source, &db, "function create() { return {}; }");
+        let object_create_site = site_id_for_span(source, &sites, "Object.create(null)");
+
+        assert!(
+            !resolved.contains(&(object_create_site, create_fn)),
+            "Object.create() must not resolve to local `function create`; got {resolved:?}"
+        );
+        // The real identifier call `create()` still resolves to the local
+        // function (the guard only suppresses the built-in-global member site).
+        assert!(
+            resolved
+                .iter()
+                .any(|(site, function)| *function == create_fn && *site != object_create_site),
+            "the real create() call must still resolve to the local function; got {resolved:?}"
         );
     }
 
