@@ -942,10 +942,11 @@ impl<'a> Harvester<'a> {
 
     fn new_value(&mut self, new: &oxc_ast::ast::NewExpression<'_>) -> CellId {
         let object = Token::Object(self.alloc_site(new.span));
-        let cell = self.program.fresh_cell();
+        // `this` inside the constructor is the fresh object only.
+        let instance = self.program.fresh_cell();
         self.program.add(Constraint::Alloc {
             token: object,
-            into: cell,
+            into: instance,
         });
         // Run the constructor with `this` = the new object so `this.x = …` lands.
         let callee = self.expr(&new.callee);
@@ -960,7 +961,18 @@ impl<'a> Harvester<'a> {
             .iter()
             .map(|argument| self.argument(argument))
             .collect();
-        let throwaway = self.program.fresh_cell();
+        // The value of `new C()` is the fresh instance UNLESS the constructor returns
+        // an object, in which case that object replaces it (JS `new` semantics). We
+        // model the union: the result cell receives the fresh instance plus the
+        // constructor's return summary, wired by the `Call` below (return → result).
+        // For constructors that return nothing / a primitive, the return summary is
+        // empty and the instance is unchanged. `this` inside the constructor stays the
+        // fresh instance only (never the return value).
+        let result = self.program.fresh_cell();
+        self.program.add(Constraint::Subset {
+            from: instance,
+            to: result,
+        });
         let site = CallId(self.calls.len() as u64);
         let hint = match &new.callee {
             Expression::Identifier(identifier) => CalleeHint::Ident(identifier.name.to_string()),
@@ -975,11 +987,11 @@ impl<'a> Harvester<'a> {
         self.program.add(Constraint::Call {
             callee,
             args,
-            this_arg: Some(cell),
-            result: throwaway,
+            this_arg: Some(instance),
+            result,
             site,
         });
-        cell
+        result
     }
 
     fn assignment(&mut self, assignment: &oxc_ast::ast::AssignmentExpression<'_>) {
