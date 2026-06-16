@@ -151,14 +151,22 @@ impl BenchmarkAdapter for JellyCallgraphAdapter {
         // handlers, which have no incoming call edge), propagated through resolved
         // calls. See `jelly_reachable_caller_spans`.
         let reachable_caller_spans = jelly_reachable_caller_spans(&output.db);
+        // Diagnostic escape hatch: `POLINT_JELLY_NO_PRUNE=1` disables the
+        // reachability filter so every resolved edge is observed. Diffing an FN set
+        // against the pruned run partitions the misses into "computed-but-pruned"
+        // (resolved by a provider, dropped here) vs "unresolved" (no provider finds
+        // it). NOT part of scoring — for FN decomposition only.
+        let no_prune = std::env::var_os("POLINT_JELLY_NO_PRUNE").is_some();
         let mut items = Vec::new();
         let mut seen_graph_edges = BTreeSet::new();
         for edge in crate::eval::observed::graph_edges_from_kernel_output(output) {
-            if !reachable_caller_spans.contains(&(
-                edge.caller_span.file,
-                edge.caller_span.start_byte,
-                edge.caller_span.end_byte,
-            )) {
+            if !no_prune
+                && !reachable_caller_spans.contains(&(
+                    edge.caller_span.file,
+                    edge.caller_span.start_byte,
+                    edge.caller_span.end_byte,
+                ))
+            {
                 continue;
             }
             let Some(call_site) = render_span(&edge.site_span) else {
@@ -819,6 +827,67 @@ mod tests {
         assert!(
             heap_resolves("g()", "looped"),
             "for…of should bind the loop variable to the array elements"
+        );
+    }
+
+    #[test]
+    fn points_to_heap_resolves_object_coercion_identity() {
+        // `Object(x)` returns `x` itself for an object argument, so a property
+        // written through the coerced alias is visible on the original (and vice
+        // versa). Resolves through the points-to heap.
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("oc.js"),
+            "function g() { console.log(\"g\"); }\n\
+             const o1 = {};\n\
+             const o2 = Object(o1);\n\
+             o2.g = g;\n\
+             o1.g();\n\
+             o2.g();\n",
+        )
+        .unwrap();
+
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        let target_src = |t: &crate::analysis::calls::facts::CallTargetFact| -> String {
+            t.target_function
+                .and_then(|f| db.functions().iter().find(|x| x.id == f))
+                .and_then(|x| {
+                    db.file(x.span.file).map(|file| {
+                        file.source[x.span.start_byte as usize..x.span.end_byte as usize]
+                            .to_string()
+                    })
+                })
+                .unwrap_or_default()
+        };
+        let site_src = |t: &crate::analysis::calls::facts::CallTargetFact| -> String {
+            db.call_sites()
+                .iter()
+                .find(|s| s.id == t.site)
+                .and_then(|s| {
+                    db.file(s.span.file).map(|file| {
+                        file.source[s.span.start_byte as usize..s.span.end_byte as usize]
+                            .to_string()
+                    })
+                })
+                .unwrap_or_default()
+        };
+        let heap_resolves = |site_needle: &str, target_needle: &str| {
+            db.call_targets().iter().any(|t| {
+                t.algorithm == crate::analysis::calls::facts::CallAlgorithm::PointsTo
+                    && site_src(t).contains(site_needle)
+                    && target_src(t).contains(target_needle)
+            })
+        };
+        // The write through the `Object(o1)` alias is visible on both names.
+        assert!(
+            heap_resolves("o2.g()", "function g"),
+            "o2.g() should resolve to g (written directly on the alias)"
+        );
+        assert!(
+            heap_resolves("o1.g()", "function g"),
+            "o1.g() should resolve to g (Object(o1) aliases o1, so o2.g = g lands on o1)"
         );
     }
 

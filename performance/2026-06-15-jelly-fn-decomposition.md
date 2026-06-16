@@ -86,3 +86,32 @@ edge resolves but heap edges are non-roots, and the native forEach→cb edge is 
 suppressed to avoid an FP not in the dynamic oracle → no root seeds the body); spread-into-args
 & object-spread index copy (spread.js q[0]/q2) are smeary/unmodeled. Set/Map for-of already TP
 via the recognizer.
+
+## FN PRUNING DIAGNOSTIC (2026-06-15) — `POLINT_JELLY_NO_PRUNE=1`
+
+Added an env-gated bypass of the reachability filter (`normalize_kernel_output`,
+`eval/external/jelly_callgraph.rs`). A no-prune run flips every *computed-but-pruned* FN to TP,
+so diffing the FN sets partitions the misses. At 1152/47/327:
+- **no-prune: 1246/1125/233** → **94 FN are computed-but-pruned** (un-prune ceiling),
+  **233 are unresolved** (resolution ceiling). The +1078 FP is why pruning exists.
+
+**Computed-but-pruned (94 = 51 c2f + 43 mirrors):** helloworld 78, arrays5 7, promises2 4,
+arrays4 4, super5 1. helloworld's 78 unlock via **express-chain RESOLUTION** of a few entry
+links (`app.init`→`defaultConfiguration`, res/req prototype dispatch); once a link resolves,
+reachability propagates and un-prunes the subtree. The 16 tail are genuinely-invoked native/
+host callbacks needing **root-seeding** (risky — the iter-53 +48-FP class).
+
+**Unresolved (231 = 132 c2f + 99 mirrors):** helloworld 32 (depth) + ~100 fragmented tail
+(spread 8, classes 6, super 5, srcLoc 5, obj2 4, rest 4, more1 4, super4 3, generators 3,
+promises2 3, dynamic 3, … each a bespoke per-mechanism model). No single big clean bucket.
+
+**Conclusion:** the F1 ceiling lives in helloworld (110 FN: 78 pruning-gated behind a few
+express links + 32 depth) — a dedicated multi-iteration project with benchmark-only feedback.
+The tail is fragmented per-mechanism.
+
+## RESULT 2 (2026-06-15): `Object()` identity native → 1157/47/322
+
+`Object(x)` returns `x` for an object argument; modeled in the heap as result ⊇ x's tokens (so
+`o2 = Object(o1); o2.g = g; o1.g()` resolves) + a fresh wrapper token (primitive args / writes
+on the result). **+5 TP, 0 new FP, FN 327→322. F1 86.03%→86.25% (+0.22pp)**, precision 96.10%.
+Gate test `points_to_heap_resolves_object_coercion_identity`.

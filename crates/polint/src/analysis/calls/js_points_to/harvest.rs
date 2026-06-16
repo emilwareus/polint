@@ -538,8 +538,42 @@ impl<'a> Harvester<'a> {
         Some(self.module_exports_cell(target))
     }
 
+    /// `Object(x)` returns `x` itself when `x` is an object, else a fresh wrapper
+    /// object. Model both: the result holds `x`'s tokens (identity — so
+    /// `o2 = Object(o1); o2.g = g; o1.g()` resolves) plus a fresh object token (so a
+    /// primitive argument and writes onto the result still have a base). Bare
+    /// `Object(...)` only; `Object.assign(...)` is a member call handled elsewhere.
+    fn object_coercion_target(
+        &mut self,
+        call: &oxc_ast::ast::CallExpression<'_>,
+    ) -> Option<CellId> {
+        let Expression::Identifier(identifier) = &call.callee else {
+            return None;
+        };
+        if identifier.name != "Object" {
+            return None;
+        }
+        let result = self.program.fresh_cell();
+        let token = Token::Object(self.alloc_site(call.span));
+        self.program.add(Constraint::Alloc {
+            token,
+            into: result,
+        });
+        if let Some(arg) = call.arguments.first().and_then(|a| a.as_expression()) {
+            let arg_cell = self.expr(arg);
+            self.program.add(Constraint::Subset {
+                from: arg_cell,
+                to: result,
+            });
+        }
+        Some(result)
+    }
+
     fn call_value(&mut self, call: &oxc_ast::ast::CallExpression<'_>) -> CellId {
         if let Some(target) = self.require_target(call) {
+            return target;
+        }
+        if let Some(target) = self.object_coercion_target(call) {
             return target;
         }
         // `this` for a member call is the receiver object.
