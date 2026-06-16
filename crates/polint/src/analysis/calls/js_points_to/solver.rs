@@ -116,6 +116,12 @@ pub(crate) enum Constraint {
     /// token inherits P's properties — so `new C().m()` resolves even cross-file
     /// (`new lib.X()`), where a harvest-time name lookup cannot reach the class.
     Construct { callee: CellId, instance: Token },
+    /// `Object.assign(object, proto)` / `mixin(object, proto)` (merge-descriptors):
+    /// every property of `proto`'s objects is copied onto `object`'s objects. Modeled
+    /// as prototype inheritance (a read of `object.p` falls back to `proto.p`), which
+    /// resolves member CALLS identically and reuses the `Construct` inheritance
+    /// machinery. For each token `to ∈ object` and `tp ∈ proto`, `to` inherits `tp`.
+    Inherit { object: CellId, proto: CellId },
 }
 
 /// Per-function cells known at harvest time (a function's parameters, `this`, and
@@ -244,6 +250,11 @@ struct Solver<'p> {
     /// Deferred `Construct`s keyed by callee cell (index into `construct_instances`).
     constructs: Vec<Vec<usize>>,
     construct_instances: Vec<TokenId>,
+    /// Deferred `Inherit`s keyed by both the `object` cell and the `proto` cell
+    /// (index into `inherit_specs`), so a token reaching either side links the pair.
+    inherit_by_object: Vec<Vec<usize>>,
+    inherit_by_proto: Vec<Vec<usize>>,
+    inherit_specs: Vec<(CellId, CellId)>,
     /// Prototype inheritance: `object token -> [prototype tokens]`. A field load on
     /// an object also reads its prototypes' properties.
     inherits: BTreeMap<TokenId, Vec<TokenId>>,
@@ -288,6 +299,9 @@ impl<'p> Solver<'p> {
             call_specs: Vec::new(),
             constructs: vec![Vec::new(); n],
             construct_instances: Vec::new(),
+            inherit_by_object: vec![Vec::new(); n],
+            inherit_by_proto: vec![Vec::new(); n],
+            inherit_specs: Vec::new(),
             inherits: BTreeMap::new(),
             loads_on_token: BTreeMap::new(),
             prop_cells: BTreeMap::new(),
@@ -349,6 +363,12 @@ impl<'p> Solver<'p> {
                     self.construct_instances.push(token_id(*instance));
                     self.constructs[callee.0 as usize].push(idx);
                 }
+                Constraint::Inherit { object, proto } => {
+                    let idx = self.inherit_specs.len();
+                    self.inherit_specs.push((*object, *proto));
+                    self.inherit_by_object[object.0 as usize].push(idx);
+                    self.inherit_by_proto[proto.0 as usize].push(idx);
+                }
             }
         }
     }
@@ -378,6 +398,8 @@ impl<'p> Solver<'p> {
         self.stores.push(Vec::new());
         self.calls.push(Vec::new());
         self.constructs.push(Vec::new());
+        self.inherit_by_object.push(Vec::new());
+        self.inherit_by_proto.push(Vec::new());
         self.prop_cells.insert((token, field.to_string()), id);
         id
     }
@@ -475,6 +497,26 @@ impl<'p> Solver<'p> {
             for idx in construct_idxs {
                 let instance = self.construct_instances[idx];
                 self.link_prototype(instance, proto_id);
+            }
+        }
+        // 6. `Inherit` (mixin / Object.assign): this token reached an `object` or
+        //    `proto` cell — link it against every token currently on the other side
+        //    so `object.p` reads `proto.p`. Both sides fire as tokens arrive, so all
+        //    (object token, proto token) pairs get linked.
+        let as_object: Vec<usize> = self.inherit_by_object[cell.0 as usize].clone();
+        for idx in as_object {
+            let (_, proto_cell) = self.inherit_specs[idx];
+            let protos: Vec<TokenId> = self.sets[proto_cell.0 as usize].iter().copied().collect();
+            for proto in protos {
+                self.link_prototype(token, proto);
+            }
+        }
+        let as_proto: Vec<usize> = self.inherit_by_proto[cell.0 as usize].clone();
+        for idx in as_proto {
+            let (object_cell, _) = self.inherit_specs[idx];
+            let objects: Vec<TokenId> = self.sets[object_cell.0 as usize].iter().copied().collect();
+            for object in objects {
+                self.link_prototype(object, token);
             }
         }
     }

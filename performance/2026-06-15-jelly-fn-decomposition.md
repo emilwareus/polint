@@ -115,3 +115,35 @@ The tail is fragmented per-mechanism.
 `o2 = Object(o1); o2.g = g; o1.g()` resolves) + a fresh wrapper token (primitive args / writes
 on the result). **+5 TP, 0 new FP, FN 327→322. F1 86.03%→86.25% (+0.22pp)**, precision 96.10%.
 Gate test `points_to_heap_resolves_object_coercion_identity`.
+
+## STEP 1 DONE — reachability-frontier diagnostic → ranked bridges
+
+Built `/tmp/frontier.py` over the pruned + no-prune JSONs: oracle `fun2fun` = real call graph,
+no-prune observed = resolved graph, pruned observed callers = reachable set. A **bridge** =
+oracle edge `R(reachable) → U(unreachable)` not yet resolved; ranked by the resolved-closure it
+un-prunes. Result (5 bridges, all express):
+
+| impact | closure | R (reachable) | U (pruned) |
+|---:|---:|---|---|
+| 5 | 15 | `createApplication` (express.js:37) | `app.init` (application.js:57) |
+| 3 | 6 | `app[method]` (application.js:473) | `Route.prototype[method]` (route.js:193) |
+| 3 | 7 | `app.lazyrouter` (application.js:137) | `proto.use` (router/index.js:434) |
+| 0 | 1 | `app[method]` | `proto.route` (router/index.js:497) |
+| 0 | 3 | `app.lazyrouter` | `proto` (router/index.js:43) |
+
+## RESULT 3 (2026-06-15): mixin keystone → 1177/49/302
+
+Bridge #1: `mixin(app, proto)` (merge-descriptors) merges `proto`'s methods onto `app`, so
+`app.init()` resolves and reachability propagates into the 15-function `defaultConfiguration`
+subtree. Modeled in the heap as **prototype inheritance** (`Constraint::Inherit`, reusing
+`link_prototype`): `Object.assign(t, …s)` / `mixin(t, s)` (a `require('merge-descriptors')`
+binding) link `t` to inherit each source. The chained-export aliasing
+(`var app = exports = module.exports = {}`) already flows in the heap, so `proto.init` was
+reachable once the inherit linked it.
+
+**1157/47/322 → 1177/49/302: +20 TP, +2 FP, FN −20. F1 86.25%→87.02% (+0.77pp)** — the
+session's biggest single move. Precision 96.10%→96.00% (held at the floor). The +2 FP is
+collateral: un-pruning `defaultConfiguration` exposed a pre-existing recognizer wildcard smear
+(`this.on('mount', …)` → `app[method]`), not a new heap edge. Gate test
+`points_to_heap_resolves_mixin_merged_method`. Bridges #2/#3 (Route/router method dispatch)
+remain — candidate next increments.

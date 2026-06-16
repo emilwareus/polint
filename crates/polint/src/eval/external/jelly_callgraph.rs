@@ -831,6 +831,71 @@ mod tests {
     }
 
     #[test]
+    fn points_to_heap_resolves_mixin_merged_method() {
+        // The express keystone: `mixin(app, proto)` (merge-descriptors) copies
+        // proto's methods onto app, so `app.init()` resolves to the merged-in
+        // function. Modeled as inheritance in the heap. Mirrors
+        // `createApplication` → `app.init` in express/lib.
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        // application.js: methods assigned on the chained-export alias object.
+        std::fs::write(
+            root.join("application.js"),
+            "var app = exports = module.exports = {};\n\
+             app.init = function init() { console.log(\"init\"); };\n",
+        )
+        .unwrap();
+        // express.js: mixin the proto onto a fresh app function, then call init.
+        std::fs::write(
+            root.join("express.js"),
+            "var mixin = require('merge-descriptors');\n\
+             var proto = require('./application');\n\
+             function createApplication() {\n\
+               var app = function () {};\n\
+               mixin(app, proto, false);\n\
+               app.init();\n\
+               return app;\n\
+             }\n\
+             createApplication();\n",
+        )
+        .unwrap();
+
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        let target_src = |t: &crate::analysis::calls::facts::CallTargetFact| -> String {
+            t.target_function
+                .and_then(|f| db.functions().iter().find(|x| x.id == f))
+                .and_then(|x| {
+                    db.file(x.span.file).map(|file| {
+                        file.source[x.span.start_byte as usize..x.span.end_byte as usize]
+                            .to_string()
+                    })
+                })
+                .unwrap_or_default()
+        };
+        let site_src = |t: &crate::analysis::calls::facts::CallTargetFact| -> String {
+            db.call_sites()
+                .iter()
+                .find(|s| s.id == t.site)
+                .and_then(|s| {
+                    db.file(s.span.file).map(|file| {
+                        file.source[s.span.start_byte as usize..s.span.end_byte as usize]
+                            .to_string()
+                    })
+                })
+                .unwrap_or_default()
+        };
+        assert!(
+            db.call_targets().iter().any(|t| {
+                t.algorithm == crate::analysis::calls::facts::CallAlgorithm::PointsTo
+                    && site_src(t).contains("app.init()")
+                    && target_src(t).contains("function init")
+            }),
+            "app.init() should resolve to the mixed-in init via inheritance"
+        );
+    }
+
+    #[test]
     fn points_to_heap_resolves_object_coercion_identity() {
         // `Object(x)` returns `x` itself for an object argument, so a property
         // written through the coerced alias is visible on the original (and vice

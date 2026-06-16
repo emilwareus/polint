@@ -75,6 +75,9 @@ pub(crate) struct Harvester<'a> {
     /// Constant string bindings (`const k = "qwe"`), per current resolution — used
     /// to resolve a computed member key `obj[k]` to a static field.
     string_consts: BTreeMap<String, String>,
+    /// Names bound to a property-merge helper (`require('merge-descriptors')`), so a
+    /// `mixin(dest, src)` call models `dest` inheriting `src`'s properties.
+    merge_helper_names: std::collections::BTreeSet<String>,
     fn_stack: Vec<FnFrame>,
     file: FileId,
     /// `(importer file, specifier) -> resolved target file`, for `require`/`import`.
@@ -97,6 +100,7 @@ impl<'a> Harvester<'a> {
             function_id_by_span,
             scopes: Vec::new(),
             string_consts: BTreeMap::new(),
+            merge_helper_names: std::collections::BTreeSet::new(),
             fn_stack: Vec::new(),
             file: FileId(0),
             resolution_map,
@@ -297,6 +301,13 @@ impl<'a> Harvester<'a> {
             && let Some(Expression::StringLiteral(literal)) = &declarator.init
         {
             self.string_consts.insert(name, literal.value.to_string());
+        }
+        // Record a property-merge helper binding: `var mixin = require('merge-descriptors')`.
+        if let Some(name) = binding_name(&declarator.id)
+            && let Some(Expression::CallExpression(call)) = &declarator.init
+            && is_merge_helper_require(call)
+        {
+            self.merge_helper_names.insert(name);
         }
         // Always evaluate the initializer (it may contain calls), then bind the
         // pattern — a plain name, or object destructuring `const {a, b} = init`.
@@ -643,7 +654,48 @@ impl<'a> Harvester<'a> {
         if let Some((method, recv)) = array_native {
             self.array_native_call(&method, recv, &args, result, call.span);
         }
+        self.maybe_inherit_call(call, &args, result);
         result
+    }
+
+    /// `Object.assign(target, ...sources)` and `mixin(target, src)` (a
+    /// `merge-descriptors` binding) copy each source's properties onto `target` and
+    /// return `target`. Model the copy as prototype inheritance (`target` inherits
+    /// each source) so a later `target.method()` resolves to the merged-in method —
+    /// this is the express keystone (`mixin(app, proto); app.init()`).
+    fn maybe_inherit_call(
+        &mut self,
+        call: &oxc_ast::ast::CallExpression<'_>,
+        args: &[CellId],
+        result: CellId,
+    ) {
+        let is_merge = match &call.callee {
+            Expression::Identifier(identifier) => {
+                self.merge_helper_names.contains(identifier.name.as_str())
+            }
+            Expression::StaticMemberExpression(member) => {
+                expression_identifier(&member.object) == Some("Object")
+                    && member.property.name == "assign"
+            }
+            _ => false,
+        };
+        if !is_merge {
+            return;
+        }
+        let Some((target, sources)) = args.split_first() else {
+            return;
+        };
+        for source in sources {
+            self.program.add(Constraint::Inherit {
+                object: *target,
+                proto: *source,
+            });
+        }
+        // The merge returns its target object.
+        self.program.add(Constraint::Subset {
+            from: *target,
+            to: result,
+        });
     }
 
     /// Apply Jelly's array native transfer functions for `recv.method(args)`.
@@ -1178,6 +1230,22 @@ fn prototype_token(constructor: FunctionId) -> Token {
         "FunctionId must fit below bit 62 to avoid clobbering the prototype tag"
     );
     Token::Object((1u64 << 62) | constructor.0)
+}
+
+/// Is this call `require('merge-descriptors')` (or another known property-merge
+/// helper)? Such a binding, when called as `mixin(dest, src)`, merges `src`'s
+/// properties into `dest` (modeled as inheritance).
+fn is_merge_helper_require(call: &oxc_ast::ast::CallExpression<'_>) -> bool {
+    let Expression::Identifier(identifier) = &call.callee else {
+        return false;
+    };
+    if identifier.name != "require" {
+        return false;
+    }
+    matches!(
+        call.arguments.first(),
+        Some(Argument::StringLiteral(spec)) if spec.value == "merge-descriptors"
+    )
 }
 
 fn expression_identifier<'a>(expression: &'a Expression<'_>) -> Option<&'a str> {
