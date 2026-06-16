@@ -40,9 +40,38 @@ pub(crate) enum Token {
     /// A function value. The payload is an opaque function identity the harvest
     /// assigns (in practice a `FunctionId`'s inner value).
     Function(u64),
-    /// A heap allocation (object / array literal, `new` instance, …), keyed by an
-    /// opaque allocation-site identity.
+    /// A heap allocation (object / `new` instance, …), keyed by an opaque
+    /// allocation-site identity.
     Object(u64),
+    /// An array allocation, keyed by an opaque allocation-site identity. Numeric-
+    /// index property cells (`t."0"`, `t."1"`, …) are kept distinct, plus a
+    /// `%ARRAY_UNKNOWN` cell (push / dynamic-index writes / spread) and a
+    /// `%ARRAY_ALL` summary cell.
+    ///
+    /// Only the WRITE/summary side is routed in [`Solver::process`]: every
+    /// numeric-index store and every `%ARRAY_UNKNOWN` store also flows into
+    /// `%ARRAY_ALL`. The READ side is deliberately NOT smeared — an `arr[i]` read
+    /// resolves only its specific index cell (the harvest emits a plain
+    /// `FieldLoad`), because the benchmark oracle is dynamic and a specific∪unknown
+    /// union over-approximates the single runtime index (it cost net precision and
+    /// was reverted). `%ARRAY_ALL` is consumed only by genuine ITERATORS the harvest
+    /// wires explicitly — `for…of` loop variables and `forEach`/`map`/`reduce`
+    /// callbacks — which visit every element and so stay precise.
+    Array(u64),
+}
+
+/// Property cell holding values stored at unknown / dynamic array indices
+/// (`arr.push(v)`, `arr[dyn] = v`, spread). Jelly's `%ARRAY_UNKNOWN`.
+pub(crate) const ARRAY_UNKNOWN: &str = "%ARRAY_UNKNOWN";
+/// Summary property cell: the union of every numeric-index cell and
+/// `%ARRAY_UNKNOWN`. Read only by genuine iterators (`for…of`, `forEach`/`map`/
+/// `reduce` callbacks) that the harvest wires explicitly. Jelly's `%ARRAY_ALL`.
+pub(crate) const ARRAY_ALL: &str = "%ARRAY_ALL";
+
+/// A field name that denotes a (non-negative integer) array index, matching
+/// Jelly's `isArrayIndex` (`/^\d+$/`).
+pub(crate) fn is_array_index(field: &str) -> bool {
+    !field.is_empty() && field.bytes().all(|b| b.is_ascii_digit())
 }
 
 /// Dense handle for a [`Token`].
@@ -95,6 +124,12 @@ pub(crate) enum Constraint {
     /// token inherits P's properties — so `new C().m()` resolves even cross-file
     /// (`new lib.X()`), where a harvest-time name lookup cannot reach the class.
     Construct { callee: CellId, instance: Token },
+    /// `Object.assign(object, proto)` / `mixin(object, proto)` (merge-descriptors):
+    /// every property of `proto`'s objects is copied onto `object`'s objects. Modeled
+    /// as prototype inheritance (a read of `object.p` falls back to `proto.p`), which
+    /// resolves member CALLS identically and reuses the `Construct` inheritance
+    /// machinery. For each token `to ∈ object` and `tp ∈ proto`, `to` inherits `tp`.
+    Inherit { object: CellId, proto: CellId },
 }
 
 /// Per-function cells known at harvest time (a function's parameters, `this`, and
@@ -223,6 +258,11 @@ struct Solver<'p> {
     /// Deferred `Construct`s keyed by callee cell (index into `construct_instances`).
     constructs: Vec<Vec<usize>>,
     construct_instances: Vec<TokenId>,
+    /// Deferred `Inherit`s keyed by both the `object` cell and the `proto` cell
+    /// (index into `inherit_specs`), so a token reaching either side links the pair.
+    inherit_by_object: Vec<Vec<usize>>,
+    inherit_by_proto: Vec<Vec<usize>>,
+    inherit_specs: Vec<(CellId, CellId)>,
     /// Prototype inheritance: `object token -> [prototype tokens]`. A field load on
     /// an object also reads its prototypes' properties.
     inherits: BTreeMap<TokenId, Vec<TokenId>>,
@@ -267,6 +307,9 @@ impl<'p> Solver<'p> {
             call_specs: Vec::new(),
             constructs: vec![Vec::new(); n],
             construct_instances: Vec::new(),
+            inherit_by_object: vec![Vec::new(); n],
+            inherit_by_proto: vec![Vec::new(); n],
+            inherit_specs: Vec::new(),
             inherits: BTreeMap::new(),
             loads_on_token: BTreeMap::new(),
             prop_cells: BTreeMap::new(),
@@ -328,6 +371,12 @@ impl<'p> Solver<'p> {
                     self.construct_instances.push(token_id(*instance));
                     self.constructs[callee.0 as usize].push(idx);
                 }
+                Constraint::Inherit { object, proto } => {
+                    let idx = self.inherit_specs.len();
+                    self.inherit_specs.push((*object, *proto));
+                    self.inherit_by_object[object.0 as usize].push(idx);
+                    self.inherit_by_proto[proto.0 as usize].push(idx);
+                }
             }
         }
     }
@@ -357,6 +406,8 @@ impl<'p> Solver<'p> {
         self.stores.push(Vec::new());
         self.calls.push(Vec::new());
         self.constructs.push(Vec::new());
+        self.inherit_by_object.push(Vec::new());
+        self.inherit_by_proto.push(Vec::new());
         self.prop_cells.insert((token, field.to_string()), id);
         id
     }
@@ -408,6 +459,7 @@ impl<'p> Solver<'p> {
         for to in succ {
             self.push(to, token);
         }
+        let is_array = matches!(self.token_by_id[token.0 as usize], Token::Array(_));
         // 2. Field loads on this base: prop(token, field) ⊆ into, plus the same
         //    field on every prototype this token inherits (the prototype chain).
         let loads: Vec<(String, CellId)> = self.loads[cell.0 as usize].clone();
@@ -421,6 +473,13 @@ impl<'p> Solver<'p> {
         for (field, src) in stores {
             let pc = self.prop_cell(token, &field);
             self.add_subset(src, pc);
+            // Array `%ARRAY_ALL` maintenance: every numeric-index cell and the
+            // unknown cell flow into the summary cell read by dynamic reads /
+            // `pop` / iteration.
+            if is_array && (is_array_index(&field) || field == ARRAY_UNKNOWN) {
+                let all = self.prop_cell(token, ARRAY_ALL);
+                self.add_subset(pc, all);
+            }
         }
         // 4. Calls with this cell as callee.
         let call_idxs: Vec<usize> = self.calls[cell.0 as usize].clone();
@@ -446,6 +505,26 @@ impl<'p> Solver<'p> {
             for idx in construct_idxs {
                 let instance = self.construct_instances[idx];
                 self.link_prototype(instance, proto_id);
+            }
+        }
+        // 6. `Inherit` (mixin / Object.assign): this token reached an `object` or
+        //    `proto` cell — link it against every token currently on the other side
+        //    so `object.p` reads `proto.p`. Both sides fire as tokens arrive, so all
+        //    (object token, proto token) pairs get linked.
+        let as_object: Vec<usize> = self.inherit_by_object[cell.0 as usize].clone();
+        for idx in as_object {
+            let (_, proto_cell) = self.inherit_specs[idx];
+            let protos: Vec<TokenId> = self.sets[proto_cell.0 as usize].iter().copied().collect();
+            for proto in protos {
+                self.link_prototype(token, proto);
+            }
+        }
+        let as_proto: Vec<usize> = self.inherit_by_proto[cell.0 as usize].clone();
+        for idx in as_proto {
+            let (object_cell, _) = self.inherit_specs[idx];
+            let objects: Vec<TokenId> = self.sets[object_cell.0 as usize].iter().copied().collect();
+            for object in objects {
+                self.link_prototype(object, token);
             }
         }
     }

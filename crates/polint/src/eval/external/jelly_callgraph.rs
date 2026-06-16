@@ -151,14 +151,22 @@ impl BenchmarkAdapter for JellyCallgraphAdapter {
         // handlers, which have no incoming call edge), propagated through resolved
         // calls. See `jelly_reachable_caller_spans`.
         let reachable_caller_spans = jelly_reachable_caller_spans(&output.db);
+        // Diagnostic escape hatch: `POLINT_JELLY_NO_PRUNE=1` disables the
+        // reachability filter so every resolved edge is observed. Diffing an FN set
+        // against the pruned run partitions the misses into "computed-but-pruned"
+        // (resolved by a provider, dropped here) vs "unresolved" (no provider finds
+        // it). NOT part of scoring — for FN decomposition only.
+        let no_prune = std::env::var_os("POLINT_JELLY_NO_PRUNE").is_some();
         let mut items = Vec::new();
         let mut seen_graph_edges = BTreeSet::new();
         for edge in crate::eval::observed::graph_edges_from_kernel_output(output) {
-            if !reachable_caller_spans.contains(&(
-                edge.caller_span.file,
-                edge.caller_span.start_byte,
-                edge.caller_span.end_byte,
-            )) {
+            if !no_prune
+                && !reachable_caller_spans.contains(&(
+                    edge.caller_span.file,
+                    edge.caller_span.start_byte,
+                    edge.caller_span.end_byte,
+                ))
+            {
                 continue;
             }
             let Some(call_site) = render_span(&edge.site_span) else {
@@ -492,6 +500,51 @@ mod tests {
         TsCallsiteInventoryKind, TsFunctionInventoryKind, TsInventoryStatus,
     };
 
+    // ---- shared helpers for the points-to heap edge-resolution tests ---------
+
+    /// Source text of a resolved call edge's target function (empty if unresolved).
+    fn target_src(db: &AnalysisDb, t: &crate::analysis::calls::facts::CallTargetFact) -> String {
+        t.target_function
+            .and_then(|f| db.functions().iter().find(|x| x.id == f))
+            .and_then(|x| {
+                db.file(x.span.file).map(|file| {
+                    file.source[x.span.start_byte as usize..x.span.end_byte as usize].to_string()
+                })
+            })
+            .unwrap_or_default()
+    }
+
+    /// Source text of a resolved call edge's call site (empty if missing).
+    fn site_src(db: &AnalysisDb, t: &crate::analysis::calls::facts::CallTargetFact) -> String {
+        db.call_sites()
+            .iter()
+            .find(|s| s.id == t.site)
+            .and_then(|s| {
+                db.file(s.span.file).map(|file| {
+                    file.source[s.span.start_byte as usize..s.span.end_byte as usize].to_string()
+                })
+            })
+            .unwrap_or_default()
+    }
+
+    /// Does any resolved edge (by any algorithm) connect a site to a target, matched
+    /// by source-text substrings?
+    fn any_resolves(db: &AnalysisDb, site_needle: &str, target_needle: &str) -> bool {
+        db.call_targets().iter().any(|t| {
+            site_src(db, t).contains(site_needle) && target_src(db, t).contains(target_needle)
+        })
+    }
+
+    /// Like [`any_resolves`] but only counts points-to heap edges
+    /// (`CallAlgorithm::PointsTo`).
+    fn heap_resolves(db: &AnalysisDb, site_needle: &str, target_needle: &str) -> bool {
+        db.call_targets().iter().any(|t| {
+            t.algorithm == crate::analysis::calls::facts::CallAlgorithm::PointsTo
+                && site_src(db, t).contains(site_needle)
+                && target_src(db, t).contains(target_needle)
+        })
+    }
+
     #[test]
     fn absent_clone_skips_gracefully() {
         let missing = tempdir().unwrap().path().join("missing");
@@ -689,46 +742,194 @@ mod tests {
 
         let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
         let db = &output.db;
-        let target_src = |t: &crate::analysis::calls::facts::CallTargetFact| -> String {
-            t.target_function
-                .and_then(|f| db.functions().iter().find(|x| x.id == f))
-                .and_then(|x| {
-                    db.file(x.span.file).map(|file| {
-                        file.source[x.span.start_byte as usize..x.span.end_byte as usize]
-                            .to_string()
-                    })
-                })
-                .unwrap_or_default()
-        };
-        let site_src = |t: &crate::analysis::calls::facts::CallTargetFact| -> String {
-            db.call_sites()
-                .iter()
-                .find(|s| s.id == t.site)
-                .and_then(|s| {
-                    db.file(s.span.file).map(|file| {
-                        file.source[s.span.start_byte as usize..s.span.end_byte as usize]
-                            .to_string()
-                    })
-                })
-                .unwrap_or_default()
-        };
-        let resolves = |site_needle: &str, target_needle: &str| {
-            db.call_targets()
-                .iter()
-                .any(|t| site_src(t).contains(site_needle) && target_src(t).contains(target_needle))
-        };
         // The instance dynamic-key call resolves only through the points-to heap.
         assert!(
-            db.call_targets().iter().any(|t| t.algorithm
-                == crate::analysis::calls::facts::CallAlgorithm::PointsTo
-                && site_src(t).contains("inst.p2()")
-                && target_src(t).contains("gg")),
+            heap_resolves(db, "inst.p2()", "gg"),
             "inst.p2() should resolve to g via a PointsTo edge"
         );
         // The cross-file factory-returns-object chain resolves end to end.
         assert!(
-            resolves("f()", "function leaf"),
+            any_resolves(db, "f()", "function leaf"),
             "cross-file `const f = lib.make().run; f()` should resolve to leaf"
+        );
+    }
+
+    #[test]
+    fn points_to_heap_resolves_array_element_flow() {
+        // Gate for the heap's array model (`js_points_to`): index-sensitive element
+        // cells (`arr[const]` reads exactly its index), iteration callbacks
+        // (`forEach`/`map`) binding the parameter to every element, `push` joining
+        // the element set, and `for…of` binding the loop variable. All resolve
+        // through the points-to heap (`CallAlgorithm::PointsTo`).
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        // The *indirect* index form (`const y = arr[i]; y()`) is where the
+        // recognizer's index-insensitive smear fails — the heap's index-sensitive
+        // cells resolve it precisely. Iteration callbacks and `for…of` genuinely
+        // visit every element, so binding to the summary stays precise.
+        std::fs::write(
+            root.join("arr.js"),
+            "function a0() { console.log(\"a0\"); }\n\
+             function a1() { console.log(\"a1\"); }\n\
+             function pushed() { console.log(\"pushed\"); }\n\
+             function looped() { console.log(\"looped\"); }\n\
+             const xs = [a0, a1];\n\
+             const y0 = xs[0];\n\
+             y0();\n\
+             xs.push(pushed);\n\
+             xs.forEach(f => f());\n\
+             const ys = [looped];\n\
+             for (const g of ys) g();\n",
+        )
+        .unwrap();
+
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        // Index-sensitive read: y0 = xs[0] → a0, and it stays precise — it never
+        // sees the *other* specific index a1.
+        assert!(
+            heap_resolves(db, "y0()", "function a0"),
+            "the heap should resolve y0 = xs[0] to a0"
+        );
+        assert!(
+            !heap_resolves(db, "y0()", "function a1"),
+            "the heap must keep xs[0] precise — no smear to the index-1 element a1"
+        );
+        // `xs.forEach(f => f())`: the callback parameter is bound to every element
+        // (both literal indices and the pushed value).
+        assert!(
+            heap_resolves(db, "f()", "function a0") && heap_resolves(db, "f()", "function a1"),
+            "forEach should bind the callback parameter to the literal elements"
+        );
+        assert!(
+            heap_resolves(db, "f()", "pushed"),
+            "forEach should also see the pushed element (it joins %ARRAY_ALL)"
+        );
+        // `for (const g of ys) g()`: the loop variable is bound to the elements.
+        assert!(
+            heap_resolves(db, "g()", "looped"),
+            "for…of should bind the loop variable to the array elements"
+        );
+    }
+
+    #[test]
+    fn points_to_heap_resolves_mixin_merged_method() {
+        // The express keystone: `mixin(app, proto)` (merge-descriptors) copies
+        // proto's methods onto app, so `app.init()` resolves to the merged-in
+        // function. Modeled as inheritance in the heap. Mirrors
+        // `createApplication` → `app.init` in express/lib.
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        // application.js: methods assigned on the chained-export alias object.
+        std::fs::write(
+            root.join("application.js"),
+            "var app = exports = module.exports = {};\n\
+             app.init = function init() { console.log(\"init\"); };\n",
+        )
+        .unwrap();
+        // express.js: mixin the proto onto a fresh app function, then call init.
+        std::fs::write(
+            root.join("express.js"),
+            "var mixin = require('merge-descriptors');\n\
+             var proto = require('./application');\n\
+             function createApplication() {\n\
+               var app = function () {};\n\
+               mixin(app, proto, false);\n\
+               app.init();\n\
+               return app;\n\
+             }\n\
+             createApplication();\n",
+        )
+        .unwrap();
+
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        assert!(
+            heap_resolves(db, "app.init()", "function init"),
+            "app.init() should resolve to the mixed-in init via inheritance"
+        );
+    }
+
+    #[test]
+    fn points_to_heap_resolves_object_assign_merge() {
+        // `Object.assign(target, src)` merges src's methods onto target (modeled as
+        // inheritance), so `target.m()` resolves. Guards against the regression where
+        // evaluating the `Object` receiver lazily bound the name and disabled the
+        // merge for the genuine global.
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("assign.js"),
+            "function m() { console.log(\"m\"); }\n\
+             const proto = {};\n\
+             proto.m = m;\n\
+             const t = {};\n\
+             Object.assign(t, proto);\n\
+             t.m();\n",
+        )
+        .unwrap();
+
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        assert!(
+            heap_resolves(db, "t.m()", "function m"),
+            "Object.assign(t, proto) should merge proto.m onto t so t.m() resolves"
+        );
+    }
+
+    #[test]
+    fn points_to_heap_resolves_object_coercion_identity() {
+        // `Object(x)` returns `x` itself for an object argument, so a property
+        // written through the coerced alias is visible on the original (and vice
+        // versa). Resolves through the points-to heap.
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("oc.js"),
+            "function g() { console.log(\"g\"); }\n\
+             const o1 = {};\n\
+             const o2 = Object(o1);\n\
+             o2.g = g;\n\
+             o1.g();\n\
+             o2.g();\n",
+        )
+        .unwrap();
+
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        // The write through the `Object(o1)` alias is visible on both names.
+        assert!(
+            heap_resolves(db, "o2.g()", "function g"),
+            "o2.g() should resolve to g (written directly on the alias)"
+        );
+        assert!(
+            heap_resolves(db, "o1.g()", "function g"),
+            "o1.g() should resolve to g (Object(o1) aliases o1, so o2.g = g lands on o1)"
+        );
+    }
+
+    #[test]
+    fn points_to_heap_object_coercion_respects_shadowing() {
+        // A user binding that shadows the global `Object` must NOT be modeled as the
+        // native coercion: the call resolves through the normal path to the user
+        // function, whose body is walked (so the argument flows to its parameter).
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("shadow.js"),
+            "function Object(cb) { cb(); }\n\
+             function handler() { console.log(\"handler\"); }\n\
+             Object(handler);\n",
+        )
+        .unwrap();
+
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        // The shadowed Object went through the real call path: its body was walked
+        // and the argument bound to its parameter, so `cb()` resolves to handler.
+        assert!(
+            heap_resolves(db, "cb()", "function handler"),
+            "a user function shadowing `Object` must be called normally (cb -> handler)"
         );
     }
 
