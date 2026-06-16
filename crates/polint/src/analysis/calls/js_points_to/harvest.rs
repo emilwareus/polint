@@ -73,11 +73,25 @@ pub(crate) struct Harvester<'a> {
     function_id_by_span: &'a BTreeMap<(FileId, u32, u32), FunctionId>,
     scopes: Vec<Scope>,
     /// Constant string bindings (`const k = "qwe"`), per current resolution — used
-    /// to resolve a computed member key `obj[k]` to a static field.
+    /// to resolve a computed member key `obj[k]` to a static field. Reset per file
+    /// (see `harvest_file`) so a constant in one file cannot resolve a key in another.
     string_consts: BTreeMap<String, String>,
-    /// Names bound to a property-merge helper (`require('merge-descriptors')`), so a
-    /// `mixin(dest, src)` call models `dest` inheriting `src`'s properties.
-    merge_helper_names: std::collections::BTreeSet<String>,
+    /// Names the user EXPLICITLY declares in the current file (var/let/const,
+    /// function and class declarations, parameters). Used to tell a genuine global
+    /// builtin (`Object`) from a user binding that shadows it — unlike scope
+    /// membership, this is not polluted by `lookup` lazily minting a global
+    /// reference. Reset per file; flat (a declaration in any scope suppresses the
+    /// builtin model everywhere in the file — conservative). NOT tracked: imports,
+    /// destructuring-pattern names, and catch bindings — shadowing a global builtin
+    /// through those is pathological, and the only cost is a precision over-
+    /// approximation (a spurious merge/coercion edge), never an unsound result.
+    declared_names: std::collections::BTreeSet<String>,
+    /// Binding *cells* bound to a property-merge helper (`require('merge-descriptors')`),
+    /// so a `mixin(dest, src)` call models `dest` inheriting `src`'s properties.
+    /// Keyed by cell (not name) so it is naturally scope- and file-correct: a
+    /// shadowing local `mixin` resolves to a different cell, and a later file's
+    /// `mixin` resolves through a fresh scope to a fresh cell.
+    merge_helper_cells: std::collections::BTreeSet<CellId>,
     fn_stack: Vec<FnFrame>,
     file: FileId,
     /// `(importer file, specifier) -> resolved target file`, for `require`/`import`.
@@ -100,7 +114,8 @@ impl<'a> Harvester<'a> {
             function_id_by_span,
             scopes: Vec::new(),
             string_consts: BTreeMap::new(),
-            merge_helper_names: std::collections::BTreeSet::new(),
+            declared_names: std::collections::BTreeSet::new(),
+            merge_helper_cells: std::collections::BTreeSet::new(),
             fn_stack: Vec::new(),
             file: FileId(0),
             resolution_map,
@@ -127,6 +142,11 @@ impl<'a> Harvester<'a> {
     /// Harvest one file's module-level program into the shared constraint set.
     pub(crate) fn harvest_file(&mut self, file: FileId, program: &Program<'_>) {
         self.file = file;
+        // Per-file state: a constant string or a builtin-shadowing declaration in one
+        // file must not bleed into another. (`merge_helper_cells` is keyed by cell,
+        // which is already file-local via the fresh scope, so it needs no reset.)
+        self.string_consts.clear();
+        self.declared_names.clear();
         self.scopes.push(Scope::new());
         self.hoist(&program.body);
         for statement in &program.body {
@@ -165,6 +185,7 @@ impl<'a> Harvester<'a> {
             {
                 let cell = self.program.fresh_cell();
                 self.bind(id.name.as_str(), cell);
+                self.declared_names.insert(id.name.to_string());
             }
         }
     }
@@ -191,6 +212,7 @@ impl<'a> Harvester<'a> {
                 let Some(id) = function.id.as_ref() else {
                     return;
                 };
+                self.declared_names.insert(id.name.to_string());
                 let name_cell = self.lookup(id.name.as_str());
                 if let Some(fcell) =
                     self.function_value(function.span, &function.params, function.body.as_deref())
@@ -203,6 +225,7 @@ impl<'a> Harvester<'a> {
             }
             Statement::ClassDeclaration(class) => {
                 if let Some(id) = class.id.as_ref() {
+                    self.declared_names.insert(id.name.to_string());
                     let name_cell = self.lookup(id.name.as_str());
                     let ccell = self.class_value(class, Some(id.name.as_str()));
                     self.program.add(Constraint::Subset {
@@ -296,6 +319,10 @@ impl<'a> Harvester<'a> {
     }
 
     fn declarator(&mut self, declarator: &VariableDeclarator<'_>) {
+        // Note the explicit declaration (so a `const Object = …` shadows the builtin).
+        if let Some(name) = binding_name(&declarator.id) {
+            self.declared_names.insert(name);
+        }
         // Record a constant string binding for computed-key resolution.
         if let Some(name) = binding_name(&declarator.id)
             && let Some(Expression::StringLiteral(literal)) = &declarator.init
@@ -303,11 +330,14 @@ impl<'a> Harvester<'a> {
             self.string_consts.insert(name, literal.value.to_string());
         }
         // Record a property-merge helper binding: `var mixin = require('merge-descriptors')`.
+        // Keyed by the binding's cell so it follows lexical scope (a shadowing local
+        // of the same name resolves to a different cell and is not treated as a merge).
         if let Some(name) = binding_name(&declarator.id)
             && let Some(Expression::CallExpression(call)) = &declarator.init
             && is_merge_helper_require(call)
         {
-            self.merge_helper_names.insert(name);
+            let cell = self.lookup(&name);
+            self.merge_helper_cells.insert(cell);
         }
         // Always evaluate the initializer (it may contain calls), then bind the
         // pattern — a plain name, or object destructuring `const {a, b} = init`.
@@ -550,10 +580,13 @@ impl<'a> Harvester<'a> {
     }
 
     /// `Object(x)` returns `x` itself when `x` is an object, else a fresh wrapper
-    /// object. Model both: the result holds `x`'s tokens (identity — so
-    /// `o2 = Object(o1); o2.g = g; o1.g()` resolves) plus a fresh object token (so a
-    /// primitive argument and writes onto the result still have a base). Bare
-    /// `Object(...)` only; `Object.assign(...)` is a member call handled elsewhere.
+    /// object. The result holds `x`'s tokens (identity — so
+    /// `o2 = Object(o1); o2.g = g; o1.g()` resolves); a fresh wrapper token is added
+    /// only when there is no object argument to be identical to (no args, or a
+    /// primitive literal), so the common object-argument case carries no phantom
+    /// token. Only fires for the genuine global `Object` — a user binding that
+    /// shadows `Object` falls through to the normal call path. Bare `Object(...)`
+    /// only; `Object.assign(...)` is a member call handled in `maybe_inherit_call`.
     fn object_coercion_target(
         &mut self,
         call: &oxc_ast::ast::CallExpression<'_>,
@@ -561,19 +594,30 @@ impl<'a> Harvester<'a> {
         let Expression::Identifier(identifier) = &call.callee else {
             return None;
         };
-        if identifier.name != "Object" {
+        if identifier.name != "Object" || self.declared_names.contains("Object") {
             return None;
         }
+        // Evaluate ALL arguments so nested calls / side effects in any position are
+        // still harvested (the normal call path walks every argument); only the first
+        // determines the coercion result.
+        let arg_cells: Vec<CellId> = call
+            .arguments
+            .iter()
+            .map(|argument| self.argument(argument))
+            .collect();
         let result = self.program.fresh_cell();
-        let token = Token::Object(self.alloc_site(call.span));
-        self.program.add(Constraint::Alloc {
-            token,
-            into: result,
-        });
-        if let Some(arg) = call.arguments.first().and_then(|a| a.as_expression()) {
-            let arg_cell = self.expr(arg);
+        let first = call.arguments.first().and_then(|a| a.as_expression());
+        // Wrapper object only when there is no object argument to alias.
+        if first.is_none_or(is_primitive_literal) {
+            let token = Token::Object(self.alloc_site(call.span));
+            self.program.add(Constraint::Alloc {
+                token,
+                into: result,
+            });
+        }
+        if let Some(arg_cell) = arg_cells.first() {
             self.program.add(Constraint::Subset {
-                from: arg_cell,
+                from: *arg_cell,
                 to: result,
             });
         }
@@ -644,17 +688,19 @@ impl<'a> Harvester<'a> {
             end: call.span.end,
             hint,
         });
-        self.program.add(Constraint::Call {
-            callee: callee_cell,
-            args: args.clone(),
-            this_arg,
-            result,
-            site,
-        });
+        // The native-model passes borrow `args`; run them first so the `Call`
+        // constraint can take `args` by value (constraints are order-independent).
         if let Some((method, recv)) = array_native {
             self.array_native_call(&method, recv, &args, result, call.span);
         }
         self.maybe_inherit_call(call, &args, result);
+        self.program.add(Constraint::Call {
+            callee: callee_cell,
+            args,
+            this_arg,
+            result,
+            site,
+        });
         result
     }
 
@@ -671,11 +717,13 @@ impl<'a> Harvester<'a> {
     ) {
         let is_merge = match &call.callee {
             Expression::Identifier(identifier) => {
-                self.merge_helper_names.contains(identifier.name.as_str())
+                let cell = self.lookup(identifier.name.as_str());
+                self.merge_helper_cells.contains(&cell)
             }
             Expression::StaticMemberExpression(member) => {
                 expression_identifier(&member.object) == Some("Object")
                     && member.property.name == "assign"
+                    && !self.declared_names.contains("Object")
             }
             _ => false,
         };
@@ -699,15 +747,21 @@ impl<'a> Harvester<'a> {
     }
 
     /// Apply Jelly's array native transfer functions for `recv.method(args)`.
-    /// These are additive and no-ops for non-array receivers (they only touch the
-    /// `%ARRAY_UNKNOWN` / `%ARRAY_ALL` cells, which only array consumers read), so a
-    /// user object with a same-named method keeps its real call edge unaffected.
+    /// Additive: the real call edge (from the enclosing `Call` constraint) is always
+    /// kept, so a user object with a same-named method is unaffected for plain member
+    /// access. The transfer is emitted unconditionally because `recv`'s type is only
+    /// known at solve time; on a non-array receiver the element reads
+    /// (`FieldLoad %ARRAY_ALL`) are empty, so callback parameters bind to nothing —
+    /// harmless. The residual over-approximation on a non-array with a same-named
+    /// method is that `map`/`flatMap` add an (edge-less) array token to the result
+    /// and `reduce` flows its init/seed into the result; bounded, and the kind of
+    /// native over-approximation Jelly also makes. Index reads (`arr[i]`) and
+    /// `pop`/`at` are deliberately NOT modeled — picking one element from the union
+    /// over-approximates the single runtime index and costs precision.
     ///
     /// Only *iterating* consumers (callbacks) read the array summary: every element
     /// is genuinely passed to the callback across the loop, so binding the callback
-    /// parameter to `%ARRAY_ALL` stays precise against the dynamic oracle. Index
-    /// reads (`arr[i]`) and `pop`/`at` are deliberately NOT modeled — picking one
-    /// element from the union over-approximates and costs precision.
+    /// parameter to `%ARRAY_ALL` stays precise against the dynamic oracle.
     fn array_native_call(
         &mut self,
         method: &str,
@@ -970,11 +1024,7 @@ impl<'a> Harvester<'a> {
                     // Dynamic index write `arr[i] = v` (non-constant key): the value
                     // lands in the array's `%ARRAY_UNKNOWN` cell. A no-op for
                     // non-array objects (nothing reads their `%ARRAY_UNKNOWN`).
-                    self.program.add(Constraint::FieldStore {
-                        base,
-                        field: ARRAY_UNKNOWN.to_string(),
-                        src: value,
-                    });
+                    self.array_store_unknown(base, value);
                 }
             }
             // Other targets (destructuring patterns, etc.) are not yet modeled.
@@ -1044,6 +1094,7 @@ impl<'a> Harvester<'a> {
         for param in &params.items {
             let cell = self.program.fresh_cell();
             if let Some(name) = binding_name(&param.pattern) {
+                self.declared_names.insert(name.clone());
                 scope.insert(name, cell);
             }
             param_cells.push(cell);
@@ -1230,6 +1281,20 @@ fn prototype_token(constructor: FunctionId) -> Token {
         "FunctionId must fit below bit 62 to avoid clobbering the prototype tag"
     );
     Token::Object((1u64 << 62) | constructor.0)
+}
+
+/// Is this expression a primitive literal (string / number / boolean / null /
+/// bigint)? Used by `Object(x)` to decide whether a fresh wrapper object is needed
+/// (a primitive has no object token to be identical to).
+fn is_primitive_literal(expression: &Expression<'_>) -> bool {
+    matches!(
+        expression,
+        Expression::StringLiteral(_)
+            | Expression::NumericLiteral(_)
+            | Expression::BooleanLiteral(_)
+            | Expression::NullLiteral(_)
+            | Expression::BigIntLiteral(_)
+    )
 }
 
 /// Is this call `require('merge-descriptors')` (or another known property-merge

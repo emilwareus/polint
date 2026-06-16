@@ -500,6 +500,51 @@ mod tests {
         TsCallsiteInventoryKind, TsFunctionInventoryKind, TsInventoryStatus,
     };
 
+    // ---- shared helpers for the points-to heap edge-resolution tests ---------
+
+    /// Source text of a resolved call edge's target function (empty if unresolved).
+    fn target_src(db: &AnalysisDb, t: &crate::analysis::calls::facts::CallTargetFact) -> String {
+        t.target_function
+            .and_then(|f| db.functions().iter().find(|x| x.id == f))
+            .and_then(|x| {
+                db.file(x.span.file).map(|file| {
+                    file.source[x.span.start_byte as usize..x.span.end_byte as usize].to_string()
+                })
+            })
+            .unwrap_or_default()
+    }
+
+    /// Source text of a resolved call edge's call site (empty if missing).
+    fn site_src(db: &AnalysisDb, t: &crate::analysis::calls::facts::CallTargetFact) -> String {
+        db.call_sites()
+            .iter()
+            .find(|s| s.id == t.site)
+            .and_then(|s| {
+                db.file(s.span.file).map(|file| {
+                    file.source[s.span.start_byte as usize..s.span.end_byte as usize].to_string()
+                })
+            })
+            .unwrap_or_default()
+    }
+
+    /// Does any resolved edge (by any algorithm) connect a site to a target, matched
+    /// by source-text substrings?
+    fn any_resolves(db: &AnalysisDb, site_needle: &str, target_needle: &str) -> bool {
+        db.call_targets().iter().any(|t| {
+            site_src(db, t).contains(site_needle) && target_src(db, t).contains(target_needle)
+        })
+    }
+
+    /// Like [`any_resolves`] but only counts points-to heap edges
+    /// (`CallAlgorithm::PointsTo`).
+    fn heap_resolves(db: &AnalysisDb, site_needle: &str, target_needle: &str) -> bool {
+        db.call_targets().iter().any(|t| {
+            t.algorithm == crate::analysis::calls::facts::CallAlgorithm::PointsTo
+                && site_src(db, t).contains(site_needle)
+                && target_src(db, t).contains(target_needle)
+        })
+    }
+
     #[test]
     fn absent_clone_skips_gracefully() {
         let missing = tempdir().unwrap().path().join("missing");
@@ -697,45 +742,14 @@ mod tests {
 
         let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
         let db = &output.db;
-        let target_src = |t: &crate::analysis::calls::facts::CallTargetFact| -> String {
-            t.target_function
-                .and_then(|f| db.functions().iter().find(|x| x.id == f))
-                .and_then(|x| {
-                    db.file(x.span.file).map(|file| {
-                        file.source[x.span.start_byte as usize..x.span.end_byte as usize]
-                            .to_string()
-                    })
-                })
-                .unwrap_or_default()
-        };
-        let site_src = |t: &crate::analysis::calls::facts::CallTargetFact| -> String {
-            db.call_sites()
-                .iter()
-                .find(|s| s.id == t.site)
-                .and_then(|s| {
-                    db.file(s.span.file).map(|file| {
-                        file.source[s.span.start_byte as usize..s.span.end_byte as usize]
-                            .to_string()
-                    })
-                })
-                .unwrap_or_default()
-        };
-        let resolves = |site_needle: &str, target_needle: &str| {
-            db.call_targets()
-                .iter()
-                .any(|t| site_src(t).contains(site_needle) && target_src(t).contains(target_needle))
-        };
         // The instance dynamic-key call resolves only through the points-to heap.
         assert!(
-            db.call_targets().iter().any(|t| t.algorithm
-                == crate::analysis::calls::facts::CallAlgorithm::PointsTo
-                && site_src(t).contains("inst.p2()")
-                && target_src(t).contains("gg")),
+            heap_resolves(db, "inst.p2()", "gg"),
             "inst.p2() should resolve to g via a PointsTo edge"
         );
         // The cross-file factory-returns-object chain resolves end to end.
         assert!(
-            resolves("f()", "function leaf"),
+            any_resolves(db, "f()", "function leaf"),
             "cross-file `const f = lib.make().run; f()` should resolve to leaf"
         );
     }
@@ -771,61 +785,29 @@ mod tests {
 
         let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
         let db = &output.db;
-        let target_src = |t: &crate::analysis::calls::facts::CallTargetFact| -> String {
-            t.target_function
-                .and_then(|f| db.functions().iter().find(|x| x.id == f))
-                .and_then(|x| {
-                    db.file(x.span.file).map(|file| {
-                        file.source[x.span.start_byte as usize..x.span.end_byte as usize]
-                            .to_string()
-                    })
-                })
-                .unwrap_or_default()
-        };
-        let site_src = |t: &crate::analysis::calls::facts::CallTargetFact| -> String {
-            db.call_sites()
-                .iter()
-                .find(|s| s.id == t.site)
-                .and_then(|s| {
-                    db.file(s.span.file).map(|file| {
-                        file.source[s.span.start_byte as usize..s.span.end_byte as usize]
-                            .to_string()
-                    })
-                })
-                .unwrap_or_default()
-        };
-        // A points-to (heap) edge: site contains `site_needle`, target contains
-        // `target_needle`, algorithm is PointsTo.
-        let heap_resolves = |site_needle: &str, target_needle: &str| {
-            db.call_targets().iter().any(|t| {
-                t.algorithm == crate::analysis::calls::facts::CallAlgorithm::PointsTo
-                    && site_src(t).contains(site_needle)
-                    && target_src(t).contains(target_needle)
-            })
-        };
         // Index-sensitive read: y0 = xs[0] → a0, and it stays precise — it never
         // sees the *other* specific index a1.
         assert!(
-            heap_resolves("y0()", "function a0"),
+            heap_resolves(db, "y0()", "function a0"),
             "the heap should resolve y0 = xs[0] to a0"
         );
         assert!(
-            !heap_resolves("y0()", "function a1"),
+            !heap_resolves(db, "y0()", "function a1"),
             "the heap must keep xs[0] precise — no smear to the index-1 element a1"
         );
         // `xs.forEach(f => f())`: the callback parameter is bound to every element
         // (both literal indices and the pushed value).
         assert!(
-            heap_resolves("f()", "function a0") && heap_resolves("f()", "function a1"),
+            heap_resolves(db, "f()", "function a0") && heap_resolves(db, "f()", "function a1"),
             "forEach should bind the callback parameter to the literal elements"
         );
         assert!(
-            heap_resolves("f()", "pushed"),
+            heap_resolves(db, "f()", "pushed"),
             "forEach should also see the pushed element (it joins %ARRAY_ALL)"
         );
         // `for (const g of ys) g()`: the loop variable is bound to the elements.
         assert!(
-            heap_resolves("g()", "looped"),
+            heap_resolves(db, "g()", "looped"),
             "for…of should bind the loop variable to the array elements"
         );
     }
@@ -862,36 +844,36 @@ mod tests {
 
         let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
         let db = &output.db;
-        let target_src = |t: &crate::analysis::calls::facts::CallTargetFact| -> String {
-            t.target_function
-                .and_then(|f| db.functions().iter().find(|x| x.id == f))
-                .and_then(|x| {
-                    db.file(x.span.file).map(|file| {
-                        file.source[x.span.start_byte as usize..x.span.end_byte as usize]
-                            .to_string()
-                    })
-                })
-                .unwrap_or_default()
-        };
-        let site_src = |t: &crate::analysis::calls::facts::CallTargetFact| -> String {
-            db.call_sites()
-                .iter()
-                .find(|s| s.id == t.site)
-                .and_then(|s| {
-                    db.file(s.span.file).map(|file| {
-                        file.source[s.span.start_byte as usize..s.span.end_byte as usize]
-                            .to_string()
-                    })
-                })
-                .unwrap_or_default()
-        };
         assert!(
-            db.call_targets().iter().any(|t| {
-                t.algorithm == crate::analysis::calls::facts::CallAlgorithm::PointsTo
-                    && site_src(t).contains("app.init()")
-                    && target_src(t).contains("function init")
-            }),
+            heap_resolves(db, "app.init()", "function init"),
             "app.init() should resolve to the mixed-in init via inheritance"
+        );
+    }
+
+    #[test]
+    fn points_to_heap_resolves_object_assign_merge() {
+        // `Object.assign(target, src)` merges src's methods onto target (modeled as
+        // inheritance), so `target.m()` resolves. Guards against the regression where
+        // evaluating the `Object` receiver lazily bound the name and disabled the
+        // merge for the genuine global.
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("assign.js"),
+            "function m() { console.log(\"m\"); }\n\
+             const proto = {};\n\
+             proto.m = m;\n\
+             const t = {};\n\
+             Object.assign(t, proto);\n\
+             t.m();\n",
+        )
+        .unwrap();
+
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        assert!(
+            heap_resolves(db, "t.m()", "function m"),
+            "Object.assign(t, proto) should merge proto.m onto t so t.m() resolves"
         );
     }
 
@@ -915,44 +897,39 @@ mod tests {
 
         let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
         let db = &output.db;
-        let target_src = |t: &crate::analysis::calls::facts::CallTargetFact| -> String {
-            t.target_function
-                .and_then(|f| db.functions().iter().find(|x| x.id == f))
-                .and_then(|x| {
-                    db.file(x.span.file).map(|file| {
-                        file.source[x.span.start_byte as usize..x.span.end_byte as usize]
-                            .to_string()
-                    })
-                })
-                .unwrap_or_default()
-        };
-        let site_src = |t: &crate::analysis::calls::facts::CallTargetFact| -> String {
-            db.call_sites()
-                .iter()
-                .find(|s| s.id == t.site)
-                .and_then(|s| {
-                    db.file(s.span.file).map(|file| {
-                        file.source[s.span.start_byte as usize..s.span.end_byte as usize]
-                            .to_string()
-                    })
-                })
-                .unwrap_or_default()
-        };
-        let heap_resolves = |site_needle: &str, target_needle: &str| {
-            db.call_targets().iter().any(|t| {
-                t.algorithm == crate::analysis::calls::facts::CallAlgorithm::PointsTo
-                    && site_src(t).contains(site_needle)
-                    && target_src(t).contains(target_needle)
-            })
-        };
         // The write through the `Object(o1)` alias is visible on both names.
         assert!(
-            heap_resolves("o2.g()", "function g"),
+            heap_resolves(db, "o2.g()", "function g"),
             "o2.g() should resolve to g (written directly on the alias)"
         );
         assert!(
-            heap_resolves("o1.g()", "function g"),
+            heap_resolves(db, "o1.g()", "function g"),
             "o1.g() should resolve to g (Object(o1) aliases o1, so o2.g = g lands on o1)"
+        );
+    }
+
+    #[test]
+    fn points_to_heap_object_coercion_respects_shadowing() {
+        // A user binding that shadows the global `Object` must NOT be modeled as the
+        // native coercion: the call resolves through the normal path to the user
+        // function, whose body is walked (so the argument flows to its parameter).
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("shadow.js"),
+            "function Object(cb) { cb(); }\n\
+             function handler() { console.log(\"handler\"); }\n\
+             Object(handler);\n",
+        )
+        .unwrap();
+
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        // The shadowed Object went through the real call path: its body was walked
+        // and the argument bound to its parameter, so `cb()` resolves to handler.
+        assert!(
+            heap_resolves(db, "cb()", "function handler"),
+            "a user function shadowing `Object` must be called normally (cb -> handler)"
         );
     }
 

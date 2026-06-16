@@ -43,12 +43,20 @@ pub(crate) enum Token {
     /// A heap allocation (object / `new` instance, …), keyed by an opaque
     /// allocation-site identity.
     Object(u64),
-    /// An array allocation, keyed by an opaque allocation-site identity. Mirrors
-    /// Jelly's `ArrayToken`: numeric-index property cells (`t."0"`, `t."1"`, …) are
-    /// kept distinct, plus a `%ARRAY_UNKNOWN` cell (push / dynamic-index writes /
-    /// spread) and a `%ARRAY_ALL` summary cell (⋃ of every index cell + UNKNOWN).
-    /// A read of a numeric index also reads UNKNOWN (specific∪unknown); a dynamic
-    /// read reads ALL. The routing lives in [`Solver::process`].
+    /// An array allocation, keyed by an opaque allocation-site identity. Numeric-
+    /// index property cells (`t."0"`, `t."1"`, …) are kept distinct, plus a
+    /// `%ARRAY_UNKNOWN` cell (push / dynamic-index writes / spread) and a
+    /// `%ARRAY_ALL` summary cell.
+    ///
+    /// Only the WRITE/summary side is routed in [`Solver::process`]: every
+    /// numeric-index store and every `%ARRAY_UNKNOWN` store also flows into
+    /// `%ARRAY_ALL`. The READ side is deliberately NOT smeared — an `arr[i]` read
+    /// resolves only its specific index cell (the harvest emits a plain
+    /// `FieldLoad`), because the benchmark oracle is dynamic and a specific∪unknown
+    /// union over-approximates the single runtime index (it cost net precision and
+    /// was reverted). `%ARRAY_ALL` is consumed only by genuine ITERATORS the harvest
+    /// wires explicitly — `for…of` loop variables and `forEach`/`map`/`reduce`
+    /// callbacks — which visit every element and so stay precise.
     Array(u64),
 }
 
@@ -56,8 +64,8 @@ pub(crate) enum Token {
 /// (`arr.push(v)`, `arr[dyn] = v`, spread). Jelly's `%ARRAY_UNKNOWN`.
 pub(crate) const ARRAY_UNKNOWN: &str = "%ARRAY_UNKNOWN";
 /// Summary property cell: the union of every numeric-index cell and
-/// `%ARRAY_UNKNOWN`. Read by dynamic index reads and `pop`/`shift`/`at`/iteration.
-/// Jelly's `%ARRAY_ALL`.
+/// `%ARRAY_UNKNOWN`. Read only by genuine iterators (`for…of`, `forEach`/`map`/
+/// `reduce` callbacks) that the harvest wires explicitly. Jelly's `%ARRAY_ALL`.
 pub(crate) const ARRAY_ALL: &str = "%ARRAY_ALL";
 
 /// A field name that denotes a (non-negative integer) array index, matching
