@@ -764,6 +764,35 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         let class_fact = self.function_for_span(class.span).map(|fact| fact.id);
 
         for element in &class.body.body {
+            // A field initializer (`x = <expr>`) is its own function: walk the
+            // initializer expression with `this`/`super` bound so calls in it
+            // (`f1()`, `super.m()`) resolve and attribute to the field-init
+            // function. Its body is an expression, not statements, so it is handled
+            // separately from the statement-bodied elements below.
+            if let ClassElement::PropertyDefinition(property) = element {
+                if let Some(value) = &property.value {
+                    // Key→property-end span (includes trailing `;`), matching the
+                    // frontend FunctionFact + MIR body so `function_for_span` resolves.
+                    let span = oxc_span::Span::new(property.key.span().start, property.span.end);
+                    if let Some(owner) = self.function_for_span(span) {
+                        let mut env = module_env.clone();
+                        env.this_object = if property.r#static {
+                            static_object.clone()
+                        } else {
+                            instance.clone()
+                        };
+                        env.objects.insert(name.to_string(), static_object.clone());
+                        self.current_super = if property.r#static {
+                            super_static.clone()
+                        } else {
+                            super_instance.clone()
+                        };
+                        self.collect_expression(value, owner, &mut env);
+                        self.current_super = None;
+                    }
+                }
+                continue;
+            }
             let (statements, owner, is_static, is_constructor, params) = match element {
                 ClassElement::MethodDefinition(method) => {
                     let Some(body) = method.value.body.as_deref() else {

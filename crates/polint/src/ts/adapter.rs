@@ -29,7 +29,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 
-const TS_CACHE_SCHEMA: &str = "ts-facts-v14";
+const TS_CACHE_SCHEMA: &str = "ts-facts-v15";
 const TS_PROVIDER_ID: &str = "polint.ts.syntax";
 const TS_SYNTAX_LAYER_SCHEMA: &str = "ts-syntax-layer-v11";
 
@@ -2088,9 +2088,46 @@ fn push_ts_class(
                     },
                 );
             }
+            // A class field initializer (`x = <expr>`) is its own function in
+            // Jelly's model — calls in the initializer are attributed to it. Emit a
+            // span-named FunctionFact (key→property end, the same one MIR uses) so
+            // the lowered initializer's call sites have an owner and the value-flow
+            // can walk it with `this`/`super` bound.
+            ClassElement::PropertyDefinition(property) => {
+                let Some(value) = &property.value else {
+                    continue;
+                };
+                // Start at the key (after any `static`), end at the property's end
+                // (includes the trailing `;`) to match Jelly's field-init span.
+                let span = oxc_span::Span::new(property.key.span().start, property.span.end);
+                push_ts_function(
+                    db,
+                    TsAstCtx {
+                        file,
+                        source,
+                        language,
+                    },
+                    TsFunctionSpec {
+                        name: anonymous_callable_name(span.start, span.end),
+                        span,
+                        is_exported: false,
+                        cyclomatic_complexity: 1,
+                        calls: function_expression_calls(value),
+                        is_component_like: false,
+                    },
+                );
+            }
             _ => {}
         }
     }
+}
+
+fn function_expression_calls(expression: &Expression<'_>) -> Vec<String> {
+    let mut calls = Vec::new();
+    collect_calls_from_expression(expression, &mut calls);
+    calls.sort();
+    calls.dedup();
+    calls
 }
 
 fn static_block_calls(block: &oxc_ast::ast::StaticBlock<'_>) -> Vec<String> {

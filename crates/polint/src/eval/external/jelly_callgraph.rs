@@ -697,6 +697,43 @@ mod tests {
     }
 
     #[test]
+    fn class_field_initializer_calls_resolve() {
+        // A class field initializer (`x = <expr>`) is its own function in Jelly's
+        // model: calls in the initializer are attributed to it. Before this fix the
+        // initializer was never lowered, so a call inside it got no call site.
+        // Covers both a direct call buried in a sequence (static) and a `super` call
+        // (instance) — the two field-init shapes in the Jelly suite (classes/super4).
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("fields.js"),
+            "function helper() { console.log(\"helper\"); }\n\
+             class A {\n\
+             \x20   m() { console.log(\"A.m\"); }\n\
+             }\n\
+             class B extends A {\n\
+             \x20   static prop = (helper(), function() {});\n\
+             \x20   w = super.m();\n\
+             }\n\
+             new B();\n",
+        )
+        .unwrap();
+
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        // `helper()` inside the static field initializer's sequence resolves.
+        assert!(
+            any_resolves(db, "helper()", "function helper"),
+            "helper() in a static field initializer should resolve"
+        );
+        // `super.m()` inside an instance field initializer resolves to A.m.
+        assert!(
+            any_resolves(db, "super.m()", "console.log(\"A.m\")"),
+            "super.m() in an instance field initializer should resolve to A.m"
+        );
+    }
+
+    #[test]
     fn points_to_heap_survives_adversarially_deep_nesting() {
         // Crash guard (C1): the harvester walks every JS/TS file in an arbitrary
         // repo, so deeply nested / generated input must not recurse the AST walk to
