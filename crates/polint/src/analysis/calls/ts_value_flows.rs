@@ -3061,8 +3061,22 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 owner,
                 member.property.name.as_str(),
                 call.span,
-                Some(targets),
+                Some(targets.clone()),
             );
+            // Walk the resolved super method's body with `this` = the current
+            // receiver, so a `this.x()` inside it dispatches against the calling
+            // object. (super3: `q2.m2(){ super.m1() }` → `q1.m1(){ this.m3() }`,
+            // where `this` is `q2`, resolving `this.m3()` → `q2.m3`.)
+            let this_object = env.this_object.clone();
+            if !this_object.is_empty() {
+                for target in &targets {
+                    if let Some(flow) = self.function_flows_by_id.get(target).cloned() {
+                        let mut callee_env = env.clone();
+                        callee_env.this_object = this_object.clone();
+                        self.collect_function_flow_invocation(&flow, &mut callee_env);
+                    }
+                }
+            }
         }
 
         // Private member calls: `this.#foo()`, `Class.#baz()`. The callee is a

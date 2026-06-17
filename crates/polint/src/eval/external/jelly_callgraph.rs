@@ -696,6 +696,33 @@ mod tests {
     }
 
     #[test]
+    fn super_method_body_this_resolves() {
+        // When `super.m1()` resolves, the super method's body is walked with `this`
+        // bound to the calling receiver, so a `this.x()` inside it dispatches
+        // against that object. (super3: `q2.m2(){ super.m1() }` →
+        // `q1.m1(){ this.m3() }` with `this` = q2 → `this.m3()` → q2.m3.)
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("sm.js"),
+            "var q1 = { m1() { this.m3(); } };\n\
+             var q2 = {\n\
+             \x20   m2() { super.m1(); },\n\
+             \x20   m3() { console.log(\"q2.m3\"); },\n\
+             };\n\
+             Object.setPrototypeOf(q2, q1);\n\
+             q2.m2();\n",
+        )
+        .unwrap();
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        assert!(
+            any_resolves(db, "this.m3()", "console.log(\"q2.m3\")"),
+            "this.m3() in the super method should resolve to the receiver's m3"
+        );
+    }
+
+    #[test]
     fn static_field_sequence_value_resolves() {
         // A field initialized to a comma-sequence takes its last operand as the
         // value, so `static p = (helper(), function(){})` makes `C.p` the trailing
