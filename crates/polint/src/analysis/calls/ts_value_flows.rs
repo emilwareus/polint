@@ -717,6 +717,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                     keys: Vec::new(),
                     values: vec![flow.function.id],
                     object_values: Vec::new(),
+                    ..Default::default()
                 });
         }
         // Name -> class declaration AST, so a subclass's `super(arg)` can find the
@@ -1906,6 +1907,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                         keys: Vec::new(),
                         values: bound_targets.iter().map(|target| target.function).collect(),
                         object_values: Vec::new(),
+                        ..Default::default()
                     },
                 );
                 env.bound_functions.insert(name, bound_targets);
@@ -1942,6 +1944,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                         keys: Vec::new(),
                         values: vec![function.id],
                         object_values: Vec::new(),
+                        ..Default::default()
                     },
                 );
             }
@@ -2055,10 +2058,28 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             Expression::AssignmentExpression(assignment) => {
                 self.collect_assignment_value_flow(assignment, env);
                 if let Some(collection_name) = collection_assignment_target_name(&assignment.left)
-                    && let Some(targets) = env.bindings.get_mut(collection_name)
                     && let Some(function) = self.function_for_expression(&assignment.right)
+                    && let Some(targets) = env.bindings.get_mut(collection_name)
                 {
-                    targets.values.push(function.id);
+                    // A constant index write that extends the array by one
+                    // (`arr[arr.length] = fn`) keeps a precise numeric cell, so
+                    // rest-destructuring and `arr[i]` reads still resolve it. Any
+                    // other computed write — a non-constant key (`arr[k] = fn`) or an
+                    // out-of-range / overwriting index — has no precise position, so
+                    // it joins the dynamic bucket: `for…of` sees it but a specific
+                    // index read and `pop` stay precise (see the `dynamic` field). A
+                    // static-member write (`coll.prop = fn`) keeps its value lane.
+                    match &assignment.left {
+                        AssignmentTarget::ComputedMemberExpression(member) => {
+                            match numeric_index(&member.expression) {
+                                Some(index) if index == targets.values.len() => {
+                                    targets.values.push(function.id);
+                                }
+                                _ => targets.push_dynamic(vec![function.id]),
+                            }
+                        }
+                        _ => targets.values.push(function.id),
+                    }
                 }
                 self.collect_expression(&assignment.right, owner, env);
             }
@@ -2429,6 +2450,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                     keys: Vec::new(),
                     values: callables,
                     object_values: Vec::new(),
+                    ..Default::default()
                 },
             );
         }
@@ -3008,7 +3030,28 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         }
 
         if let Some((collection_name, method)) = static_member_call(&call.callee) {
-            if matches!(method, "push" | "add") {
+            // `arr.push(v)` / `arr.unshift(v)` append at a non-specific index, so the
+            // value joins the `%ARRAY_UNKNOWN` bucket — `pop`/`for…of` see it, but a
+            // specific-index read (`arr[1]`) stays precise. `Set.add(v)`, by contrast,
+            // is the set's element store read back by `.values()`/`for…of`, so it
+            // keeps flowing into `values`.
+            if matches!(method, "push" | "unshift") {
+                let additions = call
+                    .arguments
+                    .iter()
+                    .filter_map(argument_expression)
+                    .filter_map(|expression| self.targets_from_argument_expression(expression, env))
+                    .collect::<Vec<_>>();
+                if let Some(targets) = env.bindings.get_mut(collection_name) {
+                    for argument_targets in additions {
+                        targets.push_unknown(argument_targets.all_targets());
+                        targets
+                            .unknown_objects
+                            .extend(argument_targets.object_values);
+                    }
+                }
+            }
+            if method == "add" {
                 let additions = call
                     .arguments
                     .iter()
@@ -3865,6 +3908,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                         keys: Vec::new(),
                         values: callables,
                         object_values: Vec::new(),
+                        ..Default::default()
                     },
                 );
             }
@@ -3877,6 +3921,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 keys: Vec::new(),
                 values: callables,
                 object_values: Vec::new(),
+                ..Default::default()
             },
             env,
         );
@@ -3956,6 +4001,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             keys: Vec::new(),
             values: target_ids.clone(),
             object_values: Vec::new(),
+            ..Default::default()
         };
 
         let (this_object, this_callables, arguments, object_arguments) =
@@ -4354,6 +4400,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                     keys: Vec::new(),
                     values: self.function_target_ids_from_expression(&member.object, env),
                     object_values: Vec::new(),
+                    ..Default::default()
                 };
             }
         }
@@ -4645,6 +4692,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 keys: Vec::new(),
                 values: vec![function.id],
                 object_values: Vec::new(),
+                ..Default::default()
             });
         }
         if let Some(name) = expression_identifier(expression)
@@ -4654,6 +4702,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 keys: Vec::new(),
                 values: vec![flow.function.id],
                 object_values: Vec::new(),
+                ..Default::default()
             });
         }
         self.collection_targets_from_expression(expression, env)
@@ -4836,14 +4885,16 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 {
                     match method {
                         "values" => CollectionTargets {
-                            keys: Vec::new(),
                             values: source.values.clone(),
                             object_values: source.object_values.clone(),
+                            unknown: source.unknown.clone(),
+                            unknown_objects: source.unknown_objects.clone(),
+                            dynamic: source.dynamic.clone(),
+                            ..Default::default()
                         },
                         "keys" => CollectionTargets {
-                            keys: Vec::new(),
                             values: source.keys_or_values(),
-                            object_values: Vec::new(),
+                            ..Default::default()
                         },
                         "entries" => source.clone(),
                         _ => CollectionTargets::default(),
@@ -5025,24 +5076,48 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             let source = env.bindings.get(collection_name)?;
             match method {
                 "concat" => Some(self.concat_targets(source, call, env)),
+                // Whole-array transforms preserve the element shape: numeric cells
+                // stay index-ordered and the `%ARRAY_UNKNOWN` bucket carries through
+                // so a downstream `for…of` / callback over the result still sees the
+                // dynamically-appended elements.
                 "values" | "slice" | "splice" | "filter" | "map" | "flatMap" | "flat" => {
                     Some(CollectionTargets {
-                        keys: Vec::new(),
                         values: source.values.clone(),
                         object_values: source.object_values.clone(),
+                        unknown: source.unknown.clone(),
+                        unknown_objects: source.unknown_objects.clone(),
+                        dynamic: source.dynamic.clone(),
+                        ..Default::default()
                     })
                 }
                 "keys" => Some(CollectionTargets {
-                    keys: Vec::new(),
                     values: source.keys_or_values(),
-                    object_values: Vec::new(),
+                    ..Default::default()
                 }),
                 "entries" => Some(source.clone()),
-                "pop" | "at" | "find" => Some(CollectionTargets {
-                    keys: Vec::new(),
-                    values: source.values.clone(),
-                    object_values: source.object_values.clone(),
+                // `pop`/`shift`/`find` return a dynamically-selected element, which
+                // matches Jelly's `%ARRAY_UNKNOWN` read (the appended bucket), NOT
+                // every numeric cell.
+                "pop" | "shift" | "find" => Some(CollectionTargets {
+                    values: source.unknown.clone(),
+                    object_values: source.unknown_objects.clone(),
+                    ..Default::default()
                 }),
+                // `arr.at(i)` is a specific-index read: a constant index resolves to
+                // exactly that numeric cell (`value_at`), so `arr.at(0)` does not
+                // smear across every element. A non-constant index falls back to the
+                // whole element set.
+                "at" => Some(
+                    call.arguments
+                        .first()
+                        .and_then(argument_expression)
+                        .and_then(numeric_index)
+                        .map(|index| source.value_at(index))
+                        .unwrap_or_else(|| CollectionTargets {
+                            values: source.elements(),
+                            ..Default::default()
+                        }),
+                ),
                 _ => None,
             }
         } else {
@@ -5367,6 +5442,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                         keys: Vec::new(),
                         values: Vec::new(),
                         object_values: vec![result],
+                        ..Default::default()
                     },
                     rejected: CollectionTargets::default(),
                 });
@@ -5558,14 +5634,16 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         {
             return match method {
                 "values" => Some(CollectionTargets {
-                    keys: Vec::new(),
                     values: source.values.clone(),
                     object_values: source.object_values.clone(),
+                    unknown: source.unknown.clone(),
+                    unknown_objects: source.unknown_objects.clone(),
+                    dynamic: source.dynamic.clone(),
+                    ..Default::default()
                 }),
                 "keys" => Some(CollectionTargets {
-                    keys: Vec::new(),
                     values: source.keys_or_values(),
-                    object_values: Vec::new(),
+                    ..Default::default()
                 }),
                 "entries" => Some(source.clone()),
                 _ => None,
@@ -6251,6 +6329,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 keys: Vec::new(),
                 values: vec![function.id],
                 object_values: Vec::new(),
+                ..Default::default()
             };
         }
         if let Expression::StaticMemberExpression(member) = expression
@@ -6261,6 +6340,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 keys: Vec::new(),
                 values: targets.clone(),
                 object_values: Vec::new(),
+                ..Default::default()
             };
         }
         if let Expression::ComputedMemberExpression(member) = expression
@@ -6272,6 +6352,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 keys: Vec::new(),
                 values: targets.clone(),
                 object_values: Vec::new(),
+                ..Default::default()
             };
         }
         if let Some(collection) = self.collection_targets_from_expression(expression, env) {
@@ -6288,6 +6369,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 keys: Vec::new(),
                 values: vec![flow.function.id],
                 object_values: Vec::new(),
+                ..Default::default()
             };
         }
         CollectionTargets::default()
@@ -6406,9 +6488,12 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         env: &FlowEnv,
     ) -> CollectionTargets {
         let mut targets = CollectionTargets {
-            keys: Vec::new(),
             values: source.values.clone(),
             object_values: source.object_values.clone(),
+            unknown: source.unknown.clone(),
+            unknown_objects: source.unknown_objects.clone(),
+            dynamic: source.dynamic.clone(),
+            ..Default::default()
         };
         for argument in call.arguments.iter().filter_map(argument_expression) {
             if let Some(collection) = self.collection_targets_from_expression(argument, env) {
@@ -6899,8 +6984,28 @@ struct BoundFunctionTarget {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct CollectionTargets {
     keys: Vec<FunctionId>,
+    /// Index-ordered array element cells (numeric indices). `value_at(i)` reads
+    /// `values[i]`, so the insertion order MUST be preserved in array contexts
+    /// (use [`append_ordered`], not the sorting [`extend`]) for specific-index and
+    /// out-of-bounds reads to stay precise. Mirrors the points-to heap's
+    /// numeric-index cells.
     values: Vec<FunctionId>,
     object_values: Vec<ObjectTargets>,
+    /// The LIFO-appended slice of Jelly's `%ARRAY_UNKNOWN`: `push`/`unshift`/spread
+    /// elements. Read by `pop`/`shift`/`find` (which dynamically returns an appended
+    /// element) and unioned into [`all_targets`]/[`elements`] (so `for…of` /
+    /// `forEach` callbacks still see them), but NEVER by `value_at` (a specific-index
+    /// read stays precise — unioning the unknown cell into index reads
+    /// over-approximates the single runtime element and adds FPs fast).
+    unknown: Vec<FunctionId>,
+    unknown_objects: Vec<ObjectTargets>,
+    /// Callables written at an arbitrary / dynamic index (`arr[i] = fn`,
+    /// `arr[k] = fn`). Like `unknown` these have no specific index, so they feed
+    /// iteration ([`all_targets`]/[`elements`], for `for…of`/`forEach` recall) but
+    /// are NOT returned by `pop`/`shift` — the dynamic oracle pops the LIFO-pushed
+    /// element, not an element placed at some other index (`arrays.js` `x[42]=`,
+    /// `x[x]=` must not surface from `x.pop()`).
+    dynamic: Vec<FunctionId>,
 }
 
 impl CollectionTargets {
@@ -6908,10 +7013,17 @@ impl CollectionTargets {
         self.keys.extend(other.keys);
         self.values.extend(other.values);
         self.object_values.extend(other.object_values);
+        self.unknown.extend(other.unknown);
+        self.unknown_objects.extend(other.unknown_objects);
+        self.dynamic.extend(other.dynamic);
         self.keys.sort();
         self.keys.dedup();
         self.values.sort();
         self.values.dedup();
+        self.unknown.sort();
+        self.unknown.dedup();
+        self.dynamic.sort();
+        self.dynamic.dedup();
     }
 
     fn append_ordered(&mut self, other: Self) {
@@ -6926,15 +7038,62 @@ impl CollectionTargets {
             }
         }
         self.object_values.extend(other.object_values);
+        for value in other.unknown {
+            if !self.unknown.contains(&value) {
+                self.unknown.push(value);
+            }
+        }
+        self.unknown_objects.extend(other.unknown_objects);
+        for value in other.dynamic {
+            if !self.dynamic.contains(&value) {
+                self.dynamic.push(value);
+            }
+        }
+    }
+
+    /// Record callables appended at the array's end (`push`/`unshift`/spread) into
+    /// the pop-readable `%ARRAY_UNKNOWN` bucket.
+    fn push_unknown(&mut self, targets: Vec<FunctionId>) {
+        self.unknown.extend(targets);
+        self.unknown.sort();
+        self.unknown.dedup();
+    }
+
+    /// Record callables written at an arbitrary / dynamic index (`arr[i] = fn`).
+    /// These feed iteration but not `pop`/`shift` (see the `dynamic` field).
+    fn push_dynamic(&mut self, targets: Vec<FunctionId>) {
+        self.dynamic.extend(targets);
+        self.dynamic.sort();
+        self.dynamic.dedup();
     }
 
     fn is_empty(&self) -> bool {
-        self.keys.is_empty() && self.values.is_empty() && self.object_values.is_empty()
+        self.keys.is_empty()
+            && self.values.is_empty()
+            && self.object_values.is_empty()
+            && self.unknown.is_empty()
+            && self.unknown_objects.is_empty()
+            && self.dynamic.is_empty()
     }
 
     fn all_targets(&self) -> Vec<FunctionId> {
         let mut targets = self.values.clone();
         targets.extend(self.keys.iter().copied());
+        targets.extend(self.unknown.iter().copied());
+        targets.extend(self.dynamic.iter().copied());
+        targets.sort();
+        targets.dedup();
+        targets
+    }
+
+    /// The array's element callables: numeric-index cells plus the appended
+    /// (`%ARRAY_UNKNOWN`) and dynamic-index-write buckets, but NOT map keys. Used to
+    /// bind `for…of` / `forEach`/`map`/`reduce` callback element parameters, which
+    /// genuinely visit every element including the dynamically-stored ones.
+    fn elements(&self) -> Vec<FunctionId> {
+        let mut targets = self.values.clone();
+        targets.extend(self.unknown.iter().copied());
+        targets.extend(self.dynamic.iter().copied());
         targets.sort();
         targets.dedup();
         targets
@@ -6950,17 +7109,17 @@ impl CollectionTargets {
 
     fn value_at(&self, index: usize) -> Self {
         Self {
-            keys: Vec::new(),
             values: self.values.get(index).copied().into_iter().collect(),
             object_values: self.object_values.get(index).cloned().into_iter().collect(),
+            ..Default::default()
         }
     }
 
     fn values_from(&self, index: usize) -> Self {
         Self {
-            keys: Vec::new(),
             values: self.values.iter().skip(index).copied().collect(),
             object_values: self.object_values.iter().skip(index).cloned().collect(),
+            ..Default::default()
         }
     }
 
@@ -6974,7 +7133,23 @@ impl CollectionTargets {
 
     fn argument_list(&self) -> Vec<Self> {
         let len = self.values.len().max(self.object_values.len());
-        (0..len).map(|index| self.value_at(index)).collect()
+        let mut args: Vec<Self> = (0..len).map(|index| self.value_at(index)).collect();
+        // Appended (`push`/spread) and dynamic-index-write elements have no specific
+        // index, so when an array is spread as call arguments (`f.apply(t, arr)`)
+        // append them as one further positional argument — otherwise a
+        // `const a = []; a.push(f); bar.apply(t, a)` spread would bind no argument.
+        let mut spread = self.unknown.clone();
+        spread.extend(self.dynamic.iter().copied());
+        spread.sort();
+        spread.dedup();
+        if !spread.is_empty() || !self.unknown_objects.is_empty() {
+            args.push(Self {
+                values: spread,
+                object_values: self.unknown_objects.clone(),
+                ..Default::default()
+            });
+        }
+        args
     }
 }
 
@@ -7539,6 +7714,7 @@ fn bind_param_object_pattern(pattern: &ParamPattern, targets: &ObjectTargets, en
                             keys: Vec::new(),
                             values: values.clone(),
                             object_values: Vec::new(),
+                            ..Default::default()
                         },
                         env,
                     );
@@ -7771,20 +7947,20 @@ fn callback_targets_for_parameter(
     collection: &CollectionTargets,
 ) -> Vec<FunctionId> {
     match method {
-        "forEach" if index == 0 => collection.values.clone(),
+        "forEach" if index == 0 => collection.elements(),
         "forEach" if index == 1 => {
             // `Map.forEach` is `(value, key, map)`: the 2nd parameter is the key,
             // so bind it to the collection's keys. Arrays (2nd param is a numeric
             // index) and Sets (`(value, value, set)`) have no distinct keys, so
-            // fall back to the values for them.
+            // fall back to the elements for them.
             if collection.keys.is_empty() {
-                collection.values.clone()
+                collection.elements()
             } else {
                 collection.keys.clone()
             }
         }
-        "reduce" | "reduceRight" if index == 1 => collection.values.clone(),
-        _ if index == 0 => collection.values.clone(),
+        "reduce" | "reduceRight" if index == 1 => collection.elements(),
+        _ if index == 0 => collection.elements(),
         _ => Vec::new(),
     }
 }

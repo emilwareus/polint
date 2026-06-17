@@ -1130,6 +1130,67 @@ mod tests {
     }
 
     #[test]
+    fn value_flow_array_model_pop_and_index_stay_precise() {
+        // Gate for the value-flow array model (`ts_value_flows` `CollectionTargets`),
+        // mirroring `arrays.js`/`iterators.js`. The defect this guards against is the
+        // old `%ALL`-smear where `pop`/`at` returned *every* element and a dynamic
+        // index write polluted the value lane:
+        //   * `arr.pop()` returns the appended (`push`) bucket only — NOT the literal
+        //     numeric cells, and NOT a value written at an arbitrary index;
+        //   * `arr.at(const)` reads exactly that numeric cell (no smear).
+        // These resolve through the value flow (`CallAlgorithm::FunctionTokenFlow`).
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("arr.js"),
+            "var arr = [\n\
+             \x20 function lit0() { return 0; },\n\
+             \x20 function lit1() { return 1; }\n\
+             ];\n\
+             arr[7] = function dynwrite() { return 3; };\n\
+             arr.push(function appended() { return 2; });\n\
+             var p = arr.pop();\n\
+             p();\n\
+             var picked = arr.at(0);\n\
+             picked();\n",
+        )
+        .unwrap();
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        use crate::analysis::calls::facts::CallAlgorithm;
+        let value_flow_resolves = |site: &str, tgt: &str| {
+            db.call_targets().iter().any(|t| {
+                t.algorithm == CallAlgorithm::FunctionTokenFlow
+                    && site_src(db, t).contains(site)
+                    && target_src(db, t).contains(tgt)
+            })
+        };
+        // `pop` reads the appended bucket only.
+        assert!(
+            value_flow_resolves("p()", "function appended"),
+            "arr.pop() should resolve to the pushed (appended) element"
+        );
+        assert!(
+            !value_flow_resolves("p()", "function lit0")
+                && !value_flow_resolves("p()", "function lit1"),
+            "arr.pop() must NOT smear to the literal numeric cells"
+        );
+        assert!(
+            !value_flow_resolves("p()", "function dynwrite"),
+            "arr.pop() must NOT surface an element written at an arbitrary index"
+        );
+        // `at(0)` is a specific-index read.
+        assert!(
+            value_flow_resolves("picked()", "function lit0"),
+            "arr.at(0) should resolve to the index-0 element"
+        );
+        assert!(
+            !value_flow_resolves("picked()", "function lit1"),
+            "arr.at(0) must stay precise — no smear to the index-1 element"
+        );
+    }
+
+    #[test]
     fn points_to_heap_resolves_mixin_merged_method() {
         // The express keystone: `mixin(app, proto)` (merge-descriptors) copies
         // proto's methods onto app, so `app.init()` resolves to the merged-in
