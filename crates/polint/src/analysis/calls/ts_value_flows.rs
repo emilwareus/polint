@@ -719,6 +719,19 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                     object_values: Vec::new(),
                 });
         }
+        // Name -> class declaration AST, so a subclass's `super(arg)` can find the
+        // superclass constructor to flow its arguments into.
+        let class_asts: BTreeMap<String, &'ast Class<'ast>> = program
+            .body
+            .iter()
+            .filter_map(|statement| match statement {
+                Statement::ClassDeclaration(class) => class
+                    .id
+                    .as_ref()
+                    .map(|id| (id.name.to_string(), class.as_ref())),
+                _ => None,
+            })
+            .collect();
         for statement in &program.body {
             let Statement::ClassDeclaration(class) = statement else {
                 continue;
@@ -726,7 +739,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             let Some(name) = class.id.as_ref().map(|id| id.name.to_string()) else {
                 continue;
             };
-            self.collect_class_method_bodies(class, &name, &class_env);
+            self.collect_class_method_bodies(class, &name, &class_env, &class_asts);
         }
         // Class expressions (named, anonymous, or returned from a function) are
         // walked the same way, keyed by their span-derived synthetic name. Take
@@ -734,7 +747,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         // borrow checker while calling `&mut self`.
         let class_expressions = std::mem::take(&mut self.class_expressions);
         for (key, class) in &class_expressions {
-            self.collect_class_method_bodies(class, key, &class_env);
+            self.collect_class_method_bodies(class, key, &class_env, &class_asts);
         }
         self.class_expressions = class_expressions;
     }
@@ -744,6 +757,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         class: &'ast Class<'ast>,
         name: &str,
         module_env: &FlowEnv,
+        class_asts: &BTreeMap<String, &'ast Class<'ast>>,
     ) {
         let instance = self
             .class_instance_targets(name, &[], module_env)
@@ -855,7 +869,69 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             }
             self.caller_override = None;
             self.current_super = None;
+            // `super(arg)` flows the subclass's arguments into the superclass
+            // constructor's parameters, so a param invoked there (`x()` in
+            // `class A { constructor(x){ x() } }`) resolves to the passed value.
+            if is_constructor {
+                self.collect_super_constructor_arg_flows(
+                    super_name.as_deref(),
+                    statements,
+                    super_instance.as_ref(),
+                    module_env,
+                    &env,
+                    class_asts,
+                );
+            }
         }
+    }
+
+    /// Flow a `super(arg, …)` call's arguments into the superclass constructor's
+    /// parameters and walk that constructor body, so an invoked parameter resolves
+    /// to the passed value. Calls are attributed to the superclass node (Jelly
+    /// attributes constructor-body calls to the class). Only literal/already-bound
+    /// arguments resolve (e.g. `super(() => {})`); a `super(param)` whose value
+    /// comes from the subclass's own unbound constructor param stays unresolved.
+    fn collect_super_constructor_arg_flows(
+        &mut self,
+        super_name: Option<&str>,
+        constructor_statements: &'ast [Statement<'ast>],
+        super_instance: Option<&ObjectTargets>,
+        module_env: &FlowEnv,
+        caller_env: &FlowEnv,
+        class_asts: &BTreeMap<String, &'ast Class<'ast>>,
+    ) {
+        let Some(super_name) = super_name else {
+            return;
+        };
+        let Some(super_call) = find_super_call(constructor_statements) else {
+            return;
+        };
+        let Some(super_class) = class_asts.get(super_name) else {
+            return;
+        };
+        let Some(super_ctor) = constructor_method(super_class) else {
+            return;
+        };
+        let Some(super_ctor_fact) = self.function_for_class_method(super_ctor) else {
+            return;
+        };
+        let Some(super_flow) = self.function_flows_by_id.get(&super_ctor_fact.id).cloned() else {
+            return;
+        };
+        let super_node = self.classes.get(super_name).and_then(|c| c.constructor);
+        let mut super_env = module_env.clone();
+        if let Some(instance) = super_instance {
+            super_env.this_object = instance.clone();
+        }
+        self.bind_call_arguments_to_flow(&super_flow, super_call, caller_env, &mut super_env);
+        let saved_override = self.caller_override.take();
+        let saved_super = self.current_super.take();
+        self.caller_override = super_node;
+        for statement in &super_flow.body.statements {
+            self.collect_statement(statement, super_flow.function, &mut super_env);
+        }
+        self.caller_override = saved_override;
+        self.current_super = saved_super;
     }
 
     fn collect_expression_function_flows(&mut self, program: &'ast Program<'ast>) {
@@ -7396,6 +7472,31 @@ fn prototype_member_assignment_name<'a>(
 }
 
 /// The object name in `obj.__proto__ = …` (a dynamic prototype link).
+/// The first `super(...)` call among a constructor's top-level statements.
+fn find_super_call<'a>(statements: &'a [Statement<'a>]) -> Option<&'a CallExpression<'a>> {
+    statements.iter().find_map(|statement| {
+        let Statement::ExpressionStatement(expression) = statement else {
+            return None;
+        };
+        let Expression::CallExpression(call) = &expression.expression else {
+            return None;
+        };
+        matches!(&call.callee, Expression::Super(_)).then(|| call.as_ref())
+    })
+}
+
+/// The `constructor` method of a class, if it declares one explicitly.
+fn constructor_method<'a>(class: &'a Class<'a>) -> Option<&'a MethodDefinition<'a>> {
+    class.body.body.iter().find_map(|element| match element {
+        ClassElement::MethodDefinition(method)
+            if method.kind == MethodDefinitionKind::Constructor =>
+        {
+            Some(method.as_ref())
+        }
+        _ => None,
+    })
+}
+
 /// The property name in `super.X` (a static member access on `super`), used to
 /// resolve a `static g = super.X` field alias against the superclass's members.
 fn super_member_property<'a>(value: &'a Expression<'a>) -> Option<&'a str> {

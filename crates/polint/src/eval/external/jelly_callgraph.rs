@@ -696,6 +696,34 @@ mod tests {
     }
 
     #[test]
+    fn super_constructor_argument_flows() {
+        // `super(arg)` flows the subclass's argument into the superclass
+        // constructor's parameter, so a parameter invoked in the superclass
+        // constructor resolves to the passed value. (super.js: `class A
+        // { constructor(x){ x() } } class B extends A { constructor(){ super(()=>…) } }`
+        // → `x()` resolves to the passed arrow.)
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("sc.js"),
+            "class A {\n\
+             \x20   constructor(x) { x(); }\n\
+             }\n\
+             class B extends A {\n\
+             \x20   constructor() { super(() => { console.log(\"cb\"); }); }\n\
+             }\n\
+             new B();\n",
+        )
+        .unwrap();
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        assert!(
+            any_resolves(db, "x()", "console.log(\"cb\")"),
+            "x() in the superclass constructor should resolve to the arrow passed via super()"
+        );
+    }
+
+    #[test]
     fn class_static_field_super_alias_resolves() {
         // `static g = super.f` aliases a static field to the superclass's static
         // member, so `Sub.g()` dispatches to it. (super.js: `static g = super.f;
