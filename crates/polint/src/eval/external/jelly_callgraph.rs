@@ -658,6 +658,45 @@ mod tests {
     }
 
     #[test]
+    fn class_static_block_calls_resolve() {
+        // A class static block (`static { … }`) executes at class-definition time
+        // and is its own function in Jelly's model. Before this fix it was never
+        // lowered, so direct calls inside it (`super.f()`, top-level `helper()`)
+        // got no call site and never resolved. Now the block is emitted as a
+        // span-named FunctionFact + MIR body, so its `super`/direct calls resolve.
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("statics.js"),
+            "function helper() { console.log(\"helper\"); }\n\
+             class A {\n\
+             \x20   static f = () => { console.log(\"A.f\"); };\n\
+             }\n\
+             class B extends A {\n\
+             \x20   static {\n\
+             \x20       super.f();\n\
+             \x20       helper();\n\
+             \x20   }\n\
+             }\n\
+             new B();\n",
+        )
+        .unwrap();
+
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        // `super.f()` inside B's static block resolves to A's static `f` arrow.
+        assert!(
+            any_resolves(db, "super.f()", "console.log(\"A.f\")"),
+            "super.f() in a static block should resolve to A's static f"
+        );
+        // A direct call to a top-level helper inside the static block resolves too.
+        assert!(
+            any_resolves(db, "helper()", "function helper"),
+            "helper() in a static block should resolve to the top-level helper"
+        );
+    }
+
+    #[test]
     fn points_to_heap_survives_adversarially_deep_nesting() {
         // Crash guard (C1): the harvester walks every JS/TS file in an arbitrary
         // repo, so deeply nested / generated input must not recurse the AST walk to

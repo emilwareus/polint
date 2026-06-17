@@ -29,7 +29,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 
-const TS_CACHE_SCHEMA: &str = "ts-facts-v13";
+const TS_CACHE_SCHEMA: &str = "ts-facts-v14";
 const TS_PROVIDER_ID: &str = "polint.ts.syntax";
 const TS_SYNTAX_LAYER_SCHEMA: &str = "ts-syntax-layer-v11";
 
@@ -2042,27 +2042,65 @@ fn push_ts_class(
     }
 
     for element in &class.body.body {
-        if let ClassElement::MethodDefinition(method) = element
-            && let Some(method_name) = method_name(method)
-        {
-            push_ts_function(
-                db,
-                TsAstCtx {
-                    file,
-                    source,
-                    language,
-                },
-                TsFunctionSpec {
-                    name: format!("{name}.{method_name}"),
-                    span: class_method_function_span(method, source),
-                    is_exported,
-                    cyclomatic_complexity: ts_cyclomatic_complexity(&method.value),
-                    calls: function_body_calls(method.value.body.as_deref()),
-                    is_component_like: false,
-                },
-            );
+        match element {
+            ClassElement::MethodDefinition(method) => {
+                let Some(method_name) = method_name(method) else {
+                    continue;
+                };
+                push_ts_function(
+                    db,
+                    TsAstCtx {
+                        file,
+                        source,
+                        language,
+                    },
+                    TsFunctionSpec {
+                        name: format!("{name}.{method_name}"),
+                        span: class_method_function_span(method, source),
+                        is_exported,
+                        cyclomatic_complexity: ts_cyclomatic_complexity(&method.value),
+                        calls: function_body_calls(method.value.body.as_deref()),
+                        is_component_like: false,
+                    },
+                );
+            }
+            // A class static block (`static { … }`) is its own function in Jelly's
+            // model — it runs at class-definition time and its direct calls
+            // (`super.f()`, top-level helpers) are attributed to it. Emit a
+            // span-named FunctionFact so the MIR static-block body (named the same
+            // way) links to it and the value-flow `super`/`this` resolver finds an
+            // owner for the block's call sites.
+            ClassElement::StaticBlock(block) => {
+                push_ts_function(
+                    db,
+                    TsAstCtx {
+                        file,
+                        source,
+                        language,
+                    },
+                    TsFunctionSpec {
+                        name: anonymous_callable_name(block.span.start, block.span.end),
+                        span: block.span,
+                        is_exported: false,
+                        cyclomatic_complexity: 1,
+                        calls: static_block_calls(block),
+                        is_component_like: false,
+                    },
+                );
+            }
+            _ => {}
         }
     }
+}
+
+fn static_block_calls(block: &oxc_ast::ast::StaticBlock<'_>) -> Vec<String> {
+    let mut calls = Vec::new();
+    for statement in &block.body {
+        collect_calls_from_statement(statement, &mut calls);
+    }
+    calls.sort();
+    calls.dedup();
+    calls
 }
 
 fn method_name(method: &MethodDefinition<'_>) -> Option<String> {

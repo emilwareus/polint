@@ -173,7 +173,7 @@ impl TsMirLowering {
                 );
             }
             function_lowering.lower_parameters(&function.parameters, &mut self.places);
-            function_lowering.lower_body(
+            function_lowering.lower_statements(
                 function.body,
                 &mut self.places,
                 &mut self.operations,
@@ -251,7 +251,11 @@ struct TsFunctionCandidate<'ast> {
     name: String,
     span: oxc_span::Span,
     parameters: Vec<String>,
-    body: &'ast FunctionBody<'ast>,
+    /// The candidate body as a statement list. Function/arrow bodies pass
+    /// `&body.statements`; class static blocks pass `&block.body` directly (a
+    /// static block is not a `FunctionBody`, but is lowered the same way the
+    /// module body is — see `lower_statements`).
+    body: &'ast [Statement<'ast>],
     r#async: bool,
     span_for_unsupported: oxc_span::Span,
 }
@@ -351,7 +355,7 @@ fn collect_variable_function<'ast>(
                 name: name.name.to_string(),
                 span: function.span,
                 parameters: parameter_names(&function.params),
-                body: &function.body,
+                body: &function.body.statements,
                 r#async: function.r#async,
                 span_for_unsupported: function.span,
             });
@@ -362,7 +366,7 @@ fn collect_variable_function<'ast>(
                     name: name.name.to_string(),
                     span: function.span,
                     parameters: parameter_names(&function.params),
-                    body,
+                    body: &body.statements,
                     r#async: function.r#async,
                     span_for_unsupported: function.span,
                 });
@@ -383,7 +387,7 @@ fn collect_function<'ast>(
             name,
             span,
             parameters: parameter_names(&function.params),
-            body,
+            body: &body.statements,
             r#async: function.r#async,
             span_for_unsupported: function.span,
         });
@@ -396,15 +400,33 @@ fn collect_class_functions<'ast>(
     functions: &mut Vec<TsFunctionCandidate<'ast>>,
 ) {
     for element in &class.body.body {
-        if let ClassElement::MethodDefinition(method) = element
-            && let Some(method_name) = method_name(method)
-        {
-            collect_function(
-                format!("{class_name}.{method_name}"),
-                method.span,
-                &method.value,
-                functions,
-            );
+        match element {
+            ClassElement::MethodDefinition(method) => {
+                if let Some(method_name) = method_name(method) {
+                    collect_function(
+                        format!("{class_name}.{method_name}"),
+                        method.span,
+                        &method.value,
+                        functions,
+                    );
+                }
+            }
+            // A class static block (`static { … }`) executes at class-definition
+            // time and is its own function in Jelly's model. Lower its statement
+            // list as a body (named by span, matching the frontend FunctionFact)
+            // so direct calls inside it — `super.f()`, top-level `f1()` — get call
+            // sites attributed to the static-block function.
+            ClassElement::StaticBlock(block) => {
+                functions.push(TsFunctionCandidate {
+                    name: anonymous_callable_name(block.span.start, block.span.end),
+                    span: block.span,
+                    parameters: Vec::new(),
+                    body: &block.body,
+                    r#async: false,
+                    span_for_unsupported: block.span,
+                });
+            }
+            _ => {}
         }
     }
 }
@@ -574,7 +596,7 @@ fn collect_anonymous_functions_from_expression<'ast>(
                     name: anonymous_callable_name(function.span.start, function.span.end),
                     span: function.span,
                     parameters: parameter_names(&function.params),
-                    body: &function.body,
+                    body: &function.body.statements,
                     r#async: function.r#async,
                     span_for_unsupported: function.span,
                 });
@@ -587,7 +609,7 @@ fn collect_anonymous_functions_from_expression<'ast>(
                     name: anonymous_callable_name(function.span.start, function.span.end),
                     span: function.span,
                     parameters: parameter_names(&function.params),
-                    body,
+                    body: &body.statements,
                     r#async: function.r#async,
                     span_for_unsupported: function.span,
                 });
@@ -745,7 +767,7 @@ fn collect_anonymous_functions_from_argument<'ast>(
                 name: anonymous_callable_name(function.span.start, function.span.end),
                 span: function.span,
                 parameters: parameter_names(&function.params),
-                body: &function.body,
+                body: &function.body.statements,
                 r#async: function.r#async,
                 span_for_unsupported: function.span,
             });
@@ -757,7 +779,7 @@ fn collect_anonymous_functions_from_argument<'ast>(
                     name: anonymous_callable_name(function.span.start, function.span.end),
                     span: function.span,
                     parameters: parameter_names(&function.params),
-                    body,
+                    body: &body.statements,
                     r#async: function.r#async,
                     span_for_unsupported: function.span,
                 });
@@ -862,16 +884,6 @@ impl<'source> FunctionLowering<'source> {
             self.parameters.insert(name.clone(), root.clone());
             self.insert_place(places, root, Vec::new(), PlaceStatus::Resolved);
         }
-    }
-
-    fn lower_body(
-        &mut self,
-        body: &FunctionBody<'_>,
-        places: &mut PlaceTableBuilder,
-        operations: &mut Vec<OperationDraft>,
-        unsupported: &mut Vec<UnsupportedDraft>,
-    ) {
-        self.lower_statements(&body.statements, places, operations, unsupported);
     }
 
     fn lower_statements(

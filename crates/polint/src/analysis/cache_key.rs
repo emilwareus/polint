@@ -140,7 +140,7 @@ pub(crate) fn semantic_mir_provider_parameter_digest() -> Digest {
             "unsupported_semantics",
             "go_lowering",
             "ts_js_lowering",
-            "semantic-mir-facts-2",
+            "semantic-mir-facts-3",
         ],
     )
 }
@@ -163,7 +163,7 @@ mod semantic_mir_layer_key {
                     "unsupported_semantics",
                     "go_lowering",
                     "ts_js_lowering",
-                    "semantic-mir-facts-2",
+                    "semantic-mir-facts-3",
                 ],
             )
         );
