@@ -3037,8 +3037,23 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 owner,
                 member.property.name.as_str(),
                 call.span,
-                Some(targets),
+                Some(targets.clone()),
             );
+            // Walk the resolved method's body with `this` = the resolved receiver
+            // when the receiver is a compound expression (`(o1 || o2).f()`). The
+            // plain-identifier receiver path is already covered by
+            // `collect_receiver_side_effects`, so restrict to non-identifier
+            // receivers to avoid double-walking. (receiver-callee-mixup: `this.g()`
+            // inside `f` dispatches to the union of o1/o2's `g`.)
+            if expression_identifier(&member.object).is_none() && !object.is_empty() {
+                for target in &targets {
+                    if let Some(flow) = self.function_flows_by_id.get(target).cloned() {
+                        let mut callee_env = env.clone();
+                        callee_env.this_object = object.clone();
+                        self.collect_function_flow_invocation(&flow, &mut callee_env);
+                    }
+                }
+            }
         }
 
         // `super.m()` / `super.s()`: resolve against the super-class member

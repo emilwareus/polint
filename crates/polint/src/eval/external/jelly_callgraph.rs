@@ -696,6 +696,32 @@ mod tests {
     }
 
     #[test]
+    fn compound_receiver_method_this_resolves() {
+        // `(o1 || o2).f()` resolves `f` against the union of o1/o2, and the method
+        // body is walked with `this` = that union, so `this.g()` inside dispatches
+        // to both g's. (receiver-callee-mixup.js.)
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("rc.js"),
+            "const o1 = { f() { this.g(); }, g() { console.log(\"foo\"); } };\n\
+             const o2 = { f() { this.g(); }, g() { console.log(\"bar\"); } };\n\
+             (o1 || o2).f();\n\
+             (o2 || o1).f();\n",
+        )
+        .unwrap();
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        // `(o1 || o2)` short-circuits to o1 and `(o2 || o1)` to o2; each method body
+        // is walked with `this` = its receiver, so `this.g()` reaches both g's.
+        assert!(
+            any_resolves(db, "this.g()", "console.log(\"foo\")")
+                && any_resolves(db, "this.g()", "console.log(\"bar\")"),
+            "this.g() should resolve to both o1.g and o2.g across the two compound calls"
+        );
+    }
+
+    #[test]
     fn super_method_body_this_resolves() {
         // When `super.m1()` resolves, the super method's body is walked with `this`
         // bound to the calling receiver, so a `this.x()` inside it dispatches
