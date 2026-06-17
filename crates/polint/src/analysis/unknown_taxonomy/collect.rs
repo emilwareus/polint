@@ -690,6 +690,7 @@ mod tests {
         let file = db.add_file("a.ts".into(), "a.ts".to_string(), "call();".to_string());
         db.replace_call_facts(CallOutput {
             sites: vec![CallSiteFact {
+                in_throw: false,
                 id: CallSiteId(0),
                 language: Language::TypeScript,
                 file,

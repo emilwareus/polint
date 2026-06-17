@@ -265,6 +265,7 @@ mod tests {
         kind: CallSyntaxKind,
     ) -> CallSiteFact {
         CallSiteFact {
+            in_throw: false,
             id: CallSiteId(site),
             language,
             file,

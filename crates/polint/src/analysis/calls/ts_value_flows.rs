@@ -717,8 +717,22 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                     keys: Vec::new(),
                     values: vec![flow.function.id],
                     object_values: Vec::new(),
+                    ..Default::default()
                 });
         }
+        // Name -> class declaration AST, so a subclass's `super(arg)` can find the
+        // superclass constructor to flow its arguments into.
+        let class_asts: BTreeMap<String, &'ast Class<'ast>> = program
+            .body
+            .iter()
+            .filter_map(|statement| match statement {
+                Statement::ClassDeclaration(class) => class
+                    .id
+                    .as_ref()
+                    .map(|id| (id.name.to_string(), class.as_ref())),
+                _ => None,
+            })
+            .collect();
         for statement in &program.body {
             let Statement::ClassDeclaration(class) = statement else {
                 continue;
@@ -726,7 +740,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             let Some(name) = class.id.as_ref().map(|id| id.name.to_string()) else {
                 continue;
             };
-            self.collect_class_method_bodies(class, &name, &class_env);
+            self.collect_class_method_bodies(class, &name, &class_env, &class_asts);
         }
         // Class expressions (named, anonymous, or returned from a function) are
         // walked the same way, keyed by their span-derived synthetic name. Take
@@ -734,7 +748,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         // borrow checker while calling `&mut self`.
         let class_expressions = std::mem::take(&mut self.class_expressions);
         for (key, class) in &class_expressions {
-            self.collect_class_method_bodies(class, key, &class_env);
+            self.collect_class_method_bodies(class, key, &class_env, &class_asts);
         }
         self.class_expressions = class_expressions;
     }
@@ -744,6 +758,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         class: &'ast Class<'ast>,
         name: &str,
         module_env: &FlowEnv,
+        class_asts: &BTreeMap<String, &'ast Class<'ast>>,
     ) {
         let instance = self
             .class_instance_targets(name, &[], module_env)
@@ -764,6 +779,35 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         let class_fact = self.function_for_span(class.span).map(|fact| fact.id);
 
         for element in &class.body.body {
+            // A field initializer (`x = <expr>`) is its own function: walk the
+            // initializer expression with `this`/`super` bound so calls in it
+            // (`f1()`, `super.m()`) resolve and attribute to the field-init
+            // function. Its body is an expression, not statements, so it is handled
+            // separately from the statement-bodied elements below.
+            if let ClassElement::PropertyDefinition(property) = element {
+                if let Some(value) = &property.value {
+                    // Key→property-end span (includes trailing `;`), matching the
+                    // frontend FunctionFact + MIR body so `function_for_span` resolves.
+                    let span = oxc_span::Span::new(property.key.span().start, property.span.end);
+                    if let Some(owner) = self.function_for_span(span) {
+                        let mut env = module_env.clone();
+                        env.this_object = if property.r#static {
+                            static_object.clone()
+                        } else {
+                            instance.clone()
+                        };
+                        env.objects.insert(name.to_string(), static_object.clone());
+                        self.current_super = if property.r#static {
+                            super_static.clone()
+                        } else {
+                            super_instance.clone()
+                        };
+                        self.collect_expression(value, owner, &mut env);
+                        self.current_super = None;
+                    }
+                }
+                continue;
+            }
             let (statements, owner, is_static, is_constructor, params) = match element {
                 ClassElement::MethodDefinition(method) => {
                     let Some(body) = method.value.body.as_deref() else {
@@ -826,7 +870,69 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             }
             self.caller_override = None;
             self.current_super = None;
+            // `super(arg)` flows the subclass's arguments into the superclass
+            // constructor's parameters, so a param invoked there (`x()` in
+            // `class A { constructor(x){ x() } }`) resolves to the passed value.
+            if is_constructor {
+                self.collect_super_constructor_arg_flows(
+                    super_name.as_deref(),
+                    statements,
+                    super_instance.as_ref(),
+                    module_env,
+                    &env,
+                    class_asts,
+                );
+            }
         }
+    }
+
+    /// Flow a `super(arg, …)` call's arguments into the superclass constructor's
+    /// parameters and walk that constructor body, so an invoked parameter resolves
+    /// to the passed value. Calls are attributed to the superclass node (Jelly
+    /// attributes constructor-body calls to the class). Only literal/already-bound
+    /// arguments resolve (e.g. `super(() => {})`); a `super(param)` whose value
+    /// comes from the subclass's own unbound constructor param stays unresolved.
+    fn collect_super_constructor_arg_flows(
+        &mut self,
+        super_name: Option<&str>,
+        constructor_statements: &'ast [Statement<'ast>],
+        super_instance: Option<&ObjectTargets>,
+        module_env: &FlowEnv,
+        caller_env: &FlowEnv,
+        class_asts: &BTreeMap<String, &'ast Class<'ast>>,
+    ) {
+        let Some(super_name) = super_name else {
+            return;
+        };
+        let Some(super_call) = find_super_call(constructor_statements) else {
+            return;
+        };
+        let Some(super_class) = class_asts.get(super_name) else {
+            return;
+        };
+        let Some(super_ctor) = constructor_method(super_class) else {
+            return;
+        };
+        let Some(super_ctor_fact) = self.function_for_class_method(super_ctor) else {
+            return;
+        };
+        let Some(super_flow) = self.function_flows_by_id.get(&super_ctor_fact.id).cloned() else {
+            return;
+        };
+        let super_node = self.classes.get(super_name).and_then(|c| c.constructor);
+        let mut super_env = module_env.clone();
+        if let Some(instance) = super_instance {
+            super_env.this_object = instance.clone();
+        }
+        self.bind_call_arguments_to_flow(&super_flow, super_call, caller_env, &mut super_env);
+        let saved_override = self.caller_override.take();
+        let saved_super = self.current_super.take();
+        self.caller_override = super_node;
+        for statement in &super_flow.body.statements {
+            self.collect_statement(statement, super_flow.function, &mut super_env);
+        }
+        self.caller_override = saved_override;
+        self.current_super = saved_super;
     }
 
     fn collect_expression_function_flows(&mut self, program: &'ast Program<'ast>) {
@@ -1326,6 +1432,21 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                     if names.is_empty() {
                         continue;
                     };
+                    // `static g = super.f` aliases the field to the superclass's static
+                    // member `f`, so `Sub.g()` dispatches to it. Resolve against the
+                    // superclass's static targets here (before the mutable borrow of
+                    // `targets` below). (super.js: `static g = super.f; B.g();`.)
+                    let super_aliased: Option<Vec<FunctionId>> = property
+                        .value
+                        .as_ref()
+                        .filter(|_| property.r#static)
+                        .and_then(super_member_property)
+                        .and_then(|prop| {
+                            targets.super_name.as_ref().and_then(|super_name| {
+                                self.class_static_targets(super_name)
+                                    .and_then(|st| st.properties.get(prop).cloned())
+                            })
+                        });
                     let object = if property.r#static {
                         &mut targets.static_object
                     } else {
@@ -1337,11 +1458,20 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                         &mut targets.instance_self_aliases
                     };
                     if let Some(value) = &property.value {
+                        // The value of `(f1(), function(){})` is its last sub-expression;
+                        // unwrap parens/sequences so a field initialized to a comma-
+                        // sequence resolves to the trailing function. (classes.js:
+                        // `static staticProperty = (f1(), function(){}); C6.staticProperty()`.)
+                        let resolved = field_value_expression(value);
                         for name in names {
-                            if let Some(function) = self.function_for_expression(value) {
+                            if let Some(function) = self.function_for_expression(resolved) {
                                 object.add_property_target(name, function.id);
                             } else if matches!(value, Expression::ThisExpression(_)) {
                                 self_aliases.push(name);
+                            } else if let Some(super_targets) = &super_aliased {
+                                for target in super_targets {
+                                    object.add_property_target(name.clone(), *target);
+                                }
                             }
                         }
                     }
@@ -1565,6 +1695,72 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         Some(object)
     }
 
+    /// Statically decide an `if` test that depends only on a known-absent
+    /// parameter (`FlowEnv::absent`): `Some(true)`/`Some(false)` selects the live
+    /// arm, `None` means undecidable (walk both arms — unchanged behavior). Kept
+    /// to provably-safe shapes: `undefined` is nullish, falsy, and yields `false`
+    /// for every relational comparison (NaN semantics).
+    fn decide_branch(&self, test: &Expression<'ast>, env: &FlowEnv) -> Option<bool> {
+        use oxc_ast::ast::UnaryOperator;
+        let is_absent = |e: &Expression<'ast>| matches!(e, Expression::Identifier(id) if env.absent.contains(id.name.as_str()));
+        let is_nullish = |e: &Expression<'ast>| {
+            matches!(e, Expression::NullLiteral(_))
+                || matches!(e, Expression::Identifier(id) if id.name == "undefined")
+        };
+        match test {
+            Expression::ParenthesizedExpression(p) => self.decide_branch(&p.expression, env),
+            // `!x` with x undefined -> true; bare `if (x)` with x undefined -> false.
+            Expression::UnaryExpression(u)
+                if u.operator == UnaryOperator::LogicalNot && is_absent(&u.argument) =>
+            {
+                Some(true)
+            }
+            Expression::Identifier(id) if env.absent.contains(id.name.as_str()) => Some(false),
+            Expression::BinaryExpression(b) => {
+                // `typeof x === 'undefined'` / `!== 'undefined'`.
+                if let Expression::UnaryExpression(u) = &b.left
+                    && u.operator == UnaryOperator::Typeof
+                    && is_absent(&u.argument)
+                    && let Expression::StringLiteral(s) = &b.right
+                {
+                    let undef = s.value == "undefined";
+                    return match b.operator {
+                        BinaryOperator::Equality | BinaryOperator::StrictEquality => Some(undef),
+                        BinaryOperator::Inequality | BinaryOperator::StrictInequality => {
+                            Some(!undef)
+                        }
+                        _ => None,
+                    };
+                }
+                let abs = is_absent(&b.left) || is_absent(&b.right);
+                let nullish_cmp = (is_absent(&b.left) && is_nullish(&b.right))
+                    || (is_absent(&b.right) && is_nullish(&b.left));
+                if nullish_cmp {
+                    // `x == null` / `x === undefined` -> true; `!=` / `!==` -> false.
+                    match b.operator {
+                        BinaryOperator::Equality | BinaryOperator::StrictEquality => Some(true),
+                        BinaryOperator::Inequality | BinaryOperator::StrictInequality => {
+                            Some(false)
+                        }
+                        _ => None,
+                    }
+                } else if abs {
+                    // Relational comparison with `undefined` is always false (NaN).
+                    match b.operator {
+                        BinaryOperator::GreaterThan
+                        | BinaryOperator::GreaterEqualThan
+                        | BinaryOperator::LessThan
+                        | BinaryOperator::LessEqualThan => Some(false),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
     fn collect_statement(
         &mut self,
         statement: &'ast Statement<'ast>,
@@ -1596,9 +1792,19 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             }
             Statement::IfStatement(statement) => {
                 self.collect_expression(&statement.test, owner, env);
-                self.collect_statement(&statement.consequent, owner, env);
-                if let Some(alternate) = &statement.alternate {
-                    self.collect_statement(alternate, owner, env);
+                match self.decide_branch(&statement.test, env) {
+                    Some(true) => self.collect_statement(&statement.consequent, owner, env),
+                    Some(false) => {
+                        if let Some(alternate) = &statement.alternate {
+                            self.collect_statement(alternate, owner, env);
+                        }
+                    }
+                    None => {
+                        self.collect_statement(&statement.consequent, owner, env);
+                        if let Some(alternate) = &statement.alternate {
+                            self.collect_statement(alternate, owner, env);
+                        }
+                    }
                 }
             }
             Statement::ReturnStatement(statement) => {
@@ -1701,6 +1907,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                         keys: Vec::new(),
                         values: bound_targets.iter().map(|target| target.function).collect(),
                         object_values: Vec::new(),
+                        ..Default::default()
                     },
                 );
                 env.bound_functions.insert(name, bound_targets);
@@ -1737,6 +1944,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                         keys: Vec::new(),
                         values: vec![function.id],
                         object_values: Vec::new(),
+                        ..Default::default()
                     },
                 );
             }
@@ -1850,10 +2058,28 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             Expression::AssignmentExpression(assignment) => {
                 self.collect_assignment_value_flow(assignment, env);
                 if let Some(collection_name) = collection_assignment_target_name(&assignment.left)
-                    && let Some(targets) = env.bindings.get_mut(collection_name)
                     && let Some(function) = self.function_for_expression(&assignment.right)
+                    && let Some(targets) = env.bindings.get_mut(collection_name)
                 {
-                    targets.values.push(function.id);
+                    // A constant index write that extends the array by one
+                    // (`arr[arr.length] = fn`) keeps a precise numeric cell, so
+                    // rest-destructuring and `arr[i]` reads still resolve it. Any
+                    // other computed write — a non-constant key (`arr[k] = fn`) or an
+                    // out-of-range / overwriting index — has no precise position, so
+                    // it joins the dynamic bucket: `for…of` sees it but a specific
+                    // index read and `pop` stay precise (see the `dynamic` field). A
+                    // static-member write (`coll.prop = fn`) keeps its value lane.
+                    match &assignment.left {
+                        AssignmentTarget::ComputedMemberExpression(member) => {
+                            match numeric_index(&member.expression) {
+                                Some(index) if index == targets.values.len() => {
+                                    targets.values.push(function.id);
+                                }
+                                _ => targets.push_dynamic(vec![function.id]),
+                            }
+                        }
+                        _ => targets.values.push(function.id),
+                    }
                 }
                 self.collect_expression(&assignment.right, owner, env);
             }
@@ -1961,7 +2187,8 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             && let Some(proto) = self.object_targets_from_expression(&assignment.right, env)
             && let Some(target) = env.objects.get_mut(object_name)
         {
-            target.merge(proto);
+            target.merge(proto.clone());
+            env.object_prototypes.insert(object_name.to_string(), proto);
             return;
         }
 
@@ -2223,6 +2450,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                     keys: Vec::new(),
                     values: callables,
                     object_values: Vec::new(),
+                    ..Default::default()
                 },
             );
         }
@@ -2802,7 +3030,28 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         }
 
         if let Some((collection_name, method)) = static_member_call(&call.callee) {
-            if matches!(method, "push" | "add") {
+            // `arr.push(v)` / `arr.unshift(v)` append at a non-specific index, so the
+            // value joins the `%ARRAY_UNKNOWN` bucket — `pop`/`for…of` see it, but a
+            // specific-index read (`arr[1]`) stays precise. `Set.add(v)`, by contrast,
+            // is the set's element store read back by `.values()`/`for…of`, so it
+            // keeps flowing into `values`.
+            if matches!(method, "push" | "unshift") {
+                let additions = call
+                    .arguments
+                    .iter()
+                    .filter_map(argument_expression)
+                    .filter_map(|expression| self.targets_from_argument_expression(expression, env))
+                    .collect::<Vec<_>>();
+                if let Some(targets) = env.bindings.get_mut(collection_name) {
+                    for argument_targets in additions {
+                        targets.push_unknown(argument_targets.all_targets());
+                        targets
+                            .unknown_objects
+                            .extend(argument_targets.object_values);
+                    }
+                }
+            }
+            if method == "add" {
                 let additions = call
                     .arguments
                     .iter()
@@ -2907,8 +3156,23 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 owner,
                 member.property.name.as_str(),
                 call.span,
-                Some(targets),
+                Some(targets.clone()),
             );
+            // Walk the resolved method's body with `this` = the resolved receiver
+            // when the receiver is a compound expression (`(o1 || o2).f()`). The
+            // plain-identifier receiver path is already covered by
+            // `collect_receiver_side_effects`, so restrict to non-identifier
+            // receivers to avoid double-walking. (receiver-callee-mixup: `this.g()`
+            // inside `f` dispatches to the union of o1/o2's `g`.)
+            if expression_identifier(&member.object).is_none() && !object.is_empty() {
+                for target in &targets {
+                    if let Some(flow) = self.function_flows_by_id.get(target).cloned() {
+                        let mut callee_env = env.clone();
+                        callee_env.this_object = object.clone();
+                        self.collect_function_flow_invocation(&flow, &mut callee_env);
+                    }
+                }
+            }
         }
 
         // `super.m()` / `super.s()`: resolve against the super-class member
@@ -2931,8 +3195,22 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 owner,
                 member.property.name.as_str(),
                 call.span,
-                Some(targets),
+                Some(targets.clone()),
             );
+            // Walk the resolved super method's body with `this` = the current
+            // receiver, so a `this.x()` inside it dispatches against the calling
+            // object. (super3: `q2.m2(){ super.m1() }` → `q1.m1(){ this.m3() }`,
+            // where `this` is `q2`, resolving `this.m3()` → `q2.m3`.)
+            let this_object = env.this_object.clone();
+            if !this_object.is_empty() {
+                for target in &targets {
+                    if let Some(flow) = self.function_flows_by_id.get(target).cloned() {
+                        let mut callee_env = env.clone();
+                        callee_env.this_object = this_object.clone();
+                        self.collect_function_flow_invocation(&flow, &mut callee_env);
+                    }
+                }
+            }
         }
 
         // Private member calls: `this.#foo()`, `Class.#baz()`. The callee is a
@@ -3313,7 +3591,8 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                     .and_then(argument_expression)
                     .and_then(|expression| self.object_targets_from_expression(expression, env));
                 if let (Some(target), Some(proto)) = (env.objects.get_mut(target_name), proto) {
-                    target.merge(proto);
+                    target.merge(proto.clone());
+                    env.object_prototypes.insert(target_name.to_string(), proto);
                 }
             }
             Some("Object.defineProperties") => {
@@ -3445,6 +3724,13 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         let Some(receiver) = env.objects.get(object_name).cloned() else {
             return;
         };
+        // `super.m()` inside an object-literal method resolves against the object's
+        // prototype. Bind `current_super` to the recorded prototype ONLY for objects
+        // given one via `Object.setPrototypeOf` / `__proto__` — not every receiver —
+        // so `super` in unrelated object methods stays unresolved (no false edges).
+        // (super.js / super3.js `q2.m2(){ super.m1() }` → q1.m1.)
+        let saved_super = self.current_super.take();
+        let object_super = env.object_prototypes.get(object_name).cloned();
         let mut merged_receiver = receiver.clone();
         for target in targets {
             let Some(flow) = self.function_flows_by_id.get(target).cloned() else {
@@ -3452,12 +3738,14 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             };
             let mut callee_env = env.clone();
             callee_env.this_object = receiver.clone();
+            self.current_super = object_super.clone();
             self.bind_call_arguments_to_flow(&flow, call, env, &mut callee_env);
             for statement in &flow.body.statements {
                 self.collect_statement(statement, flow.function, &mut callee_env);
             }
             merged_receiver.merge(callee_env.this_object);
         }
+        self.current_super = saved_super;
         env.objects.insert(object_name.to_string(), merged_receiver);
     }
 
@@ -3620,6 +3908,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                         keys: Vec::new(),
                         values: callables,
                         object_values: Vec::new(),
+                        ..Default::default()
                     },
                 );
             }
@@ -3632,6 +3921,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 keys: Vec::new(),
                 values: callables,
                 object_values: Vec::new(),
+                ..Default::default()
             },
             env,
         );
@@ -3711,6 +4001,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             keys: Vec::new(),
             values: target_ids.clone(),
             object_values: Vec::new(),
+            ..Default::default()
         };
 
         let (this_object, this_callables, arguments, object_arguments) =
@@ -3775,12 +4066,21 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             .bindings
             .insert("arguments".to_string(), all_arguments);
 
+        let arg_count = arguments.len().max(object_arguments.len());
         for (index, pattern) in flow.params.iter().enumerate() {
             if let Some(targets) = arguments.get(index) {
                 bind_param_pattern(pattern, targets, callee_env);
             }
             if let Some(Some(targets)) = object_arguments.get(index) {
                 bind_param_object_pattern(pattern, targets, callee_env);
+            }
+            // A trailing parameter with no corresponding positional argument is
+            // `undefined` for this invocation. Record it so `decide_branch` can
+            // fold a null/undefined guard on it (see `FlowEnv::absent`).
+            if index >= arg_count
+                && let ParamPattern::Binding(name) = pattern
+            {
+                callee_env.absent.insert(name.clone());
             }
         }
         if let Some(rest) = &flow.rest {
@@ -3877,6 +4177,33 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         env: &mut FlowEnv,
     ) -> CollectionTargets {
         for statement in statements {
+            // Absence-folded guard with an early return: `if (depth == null) { return … }`
+            // followed by `return flattenWithDepth(…)`. When the param is known-absent
+            // the guard's live arm is taken; if it terminates (return/throw), the rest
+            // of the block is dead and must not be walked (so `flattenWithDepth` is
+            // never reached). The plain `collect_invocation_statement` only stops on a
+            // non-empty *return target*, which misses guards whose live arm returns a
+            // non-callable (an array), so handle the termination here.
+            if let Statement::IfStatement(if_stmt) = statement
+                && let Some(branch) = self.decide_branch(&if_stmt.test, env)
+            {
+                self.collect_expression(&if_stmt.test, owner, env);
+                let live = if branch {
+                    Some(&if_stmt.consequent)
+                } else {
+                    if_stmt.alternate.as_ref()
+                };
+                if let Some(live_stmt) = live {
+                    let returned = self.collect_invocation_statement(live_stmt, owner, env);
+                    if !returned.is_empty() {
+                        return returned;
+                    }
+                    if branch_terminates(live_stmt) {
+                        return CollectionTargets::default();
+                    }
+                }
+                continue;
+            }
             let returned = self.collect_invocation_statement(statement, owner, env);
             if !returned.is_empty() {
                 return returned;
@@ -3905,12 +4232,25 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             }
             Statement::IfStatement(statement) => {
                 self.collect_expression(&statement.test, owner, env);
-                let mut targets =
-                    self.collect_invocation_statement(&statement.consequent, owner, env);
-                if let Some(alternate) = &statement.alternate {
-                    targets.extend(self.collect_invocation_statement(alternate, owner, env));
+                match self.decide_branch(&statement.test, env) {
+                    Some(true) => {
+                        self.collect_invocation_statement(&statement.consequent, owner, env)
+                    }
+                    Some(false) => statement
+                        .alternate
+                        .as_ref()
+                        .map(|alternate| self.collect_invocation_statement(alternate, owner, env))
+                        .unwrap_or_default(),
+                    None => {
+                        let mut targets =
+                            self.collect_invocation_statement(&statement.consequent, owner, env);
+                        if let Some(alternate) = &statement.alternate {
+                            targets
+                                .extend(self.collect_invocation_statement(alternate, owner, env));
+                        }
+                        targets
+                    }
                 }
-                targets
             }
             _ => {
                 self.collect_statement(statement, owner, env);
@@ -4060,6 +4400,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                     keys: Vec::new(),
                     values: self.function_target_ids_from_expression(&member.object, env),
                     object_values: Vec::new(),
+                    ..Default::default()
                 };
             }
         }
@@ -4351,6 +4692,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 keys: Vec::new(),
                 values: vec![function.id],
                 object_values: Vec::new(),
+                ..Default::default()
             });
         }
         if let Some(name) = expression_identifier(expression)
@@ -4360,6 +4702,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 keys: Vec::new(),
                 values: vec![flow.function.id],
                 object_values: Vec::new(),
+                ..Default::default()
             });
         }
         self.collection_targets_from_expression(expression, env)
@@ -4542,14 +4885,16 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 {
                     match method {
                         "values" => CollectionTargets {
-                            keys: Vec::new(),
                             values: source.values.clone(),
                             object_values: source.object_values.clone(),
+                            unknown: source.unknown.clone(),
+                            unknown_objects: source.unknown_objects.clone(),
+                            dynamic: source.dynamic.clone(),
+                            ..Default::default()
                         },
                         "keys" => CollectionTargets {
-                            keys: Vec::new(),
                             values: source.keys_or_values(),
-                            object_values: Vec::new(),
+                            ..Default::default()
                         },
                         "entries" => source.clone(),
                         _ => CollectionTargets::default(),
@@ -4731,24 +5076,48 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             let source = env.bindings.get(collection_name)?;
             match method {
                 "concat" => Some(self.concat_targets(source, call, env)),
+                // Whole-array transforms preserve the element shape: numeric cells
+                // stay index-ordered and the `%ARRAY_UNKNOWN` bucket carries through
+                // so a downstream `for…of` / callback over the result still sees the
+                // dynamically-appended elements.
                 "values" | "slice" | "splice" | "filter" | "map" | "flatMap" | "flat" => {
                     Some(CollectionTargets {
-                        keys: Vec::new(),
                         values: source.values.clone(),
                         object_values: source.object_values.clone(),
+                        unknown: source.unknown.clone(),
+                        unknown_objects: source.unknown_objects.clone(),
+                        dynamic: source.dynamic.clone(),
+                        ..Default::default()
                     })
                 }
                 "keys" => Some(CollectionTargets {
-                    keys: Vec::new(),
                     values: source.keys_or_values(),
-                    object_values: Vec::new(),
+                    ..Default::default()
                 }),
                 "entries" => Some(source.clone()),
-                "pop" | "at" | "find" => Some(CollectionTargets {
-                    keys: Vec::new(),
-                    values: source.values.clone(),
-                    object_values: source.object_values.clone(),
+                // `pop`/`shift`/`find` return a dynamically-selected element, which
+                // matches Jelly's `%ARRAY_UNKNOWN` read (the appended bucket), NOT
+                // every numeric cell.
+                "pop" | "shift" | "find" => Some(CollectionTargets {
+                    values: source.unknown.clone(),
+                    object_values: source.unknown_objects.clone(),
+                    ..Default::default()
                 }),
+                // `arr.at(i)` is a specific-index read: a constant index resolves to
+                // exactly that numeric cell (`value_at`), so `arr.at(0)` does not
+                // smear across every element. A non-constant index falls back to the
+                // whole element set.
+                "at" => Some(
+                    call.arguments
+                        .first()
+                        .and_then(argument_expression)
+                        .and_then(numeric_index)
+                        .map(|index| source.value_at(index))
+                        .unwrap_or_else(|| CollectionTargets {
+                            values: source.elements(),
+                            ..Default::default()
+                        }),
+                ),
                 _ => None,
             }
         } else {
@@ -5073,6 +5442,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                         keys: Vec::new(),
                         values: Vec::new(),
                         object_values: vec![result],
+                        ..Default::default()
                     },
                     rejected: CollectionTargets::default(),
                 });
@@ -5264,14 +5634,16 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         {
             return match method {
                 "values" => Some(CollectionTargets {
-                    keys: Vec::new(),
                     values: source.values.clone(),
                     object_values: source.object_values.clone(),
+                    unknown: source.unknown.clone(),
+                    unknown_objects: source.unknown_objects.clone(),
+                    dynamic: source.dynamic.clone(),
+                    ..Default::default()
                 }),
                 "keys" => Some(CollectionTargets {
-                    keys: Vec::new(),
                     values: source.keys_or_values(),
-                    object_values: Vec::new(),
+                    ..Default::default()
                 }),
                 "entries" => Some(source.clone()),
                 _ => None,
@@ -5957,6 +6329,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 keys: Vec::new(),
                 values: vec![function.id],
                 object_values: Vec::new(),
+                ..Default::default()
             };
         }
         if let Expression::StaticMemberExpression(member) = expression
@@ -5967,6 +6340,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 keys: Vec::new(),
                 values: targets.clone(),
                 object_values: Vec::new(),
+                ..Default::default()
             };
         }
         if let Expression::ComputedMemberExpression(member) = expression
@@ -5978,6 +6352,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 keys: Vec::new(),
                 values: targets.clone(),
                 object_values: Vec::new(),
+                ..Default::default()
             };
         }
         if let Some(collection) = self.collection_targets_from_expression(expression, env) {
@@ -5994,6 +6369,7 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                 keys: Vec::new(),
                 values: vec![flow.function.id],
                 object_values: Vec::new(),
+                ..Default::default()
             };
         }
         CollectionTargets::default()
@@ -6112,9 +6488,12 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         env: &FlowEnv,
     ) -> CollectionTargets {
         let mut targets = CollectionTargets {
-            keys: Vec::new(),
             values: source.values.clone(),
             object_values: source.object_values.clone(),
+            unknown: source.unknown.clone(),
+            unknown_objects: source.unknown_objects.clone(),
+            dynamic: source.dynamic.clone(),
+            ..Default::default()
         };
         for argument in call.arguments.iter().filter_map(argument_expression) {
             if let Some(collection) = self.collection_targets_from_expression(argument, env) {
@@ -6287,7 +6666,8 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             return;
         }
         for site in self.sites.iter().copied().filter(|site| {
-            site.caller == owner.id
+            !site.in_throw
+                && site.caller == owner.id
                 && site.span.start_byte >= span.start
                 && site.span.end_byte <= span.end
                 && matches!(
@@ -6328,7 +6708,8 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             return;
         }
         for site in self.sites.iter().copied().filter(|site| {
-            site.caller == owner.id
+            !site.in_throw
+                && site.caller == owner.id
                 && site.span.start_byte >= span.start
                 && site.span.end_byte <= span.end
                 && matches!(
@@ -6372,7 +6753,8 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             return;
         }
         for site in self.sites.iter().copied().filter(|site| {
-            site.caller == owner.id
+            !site.in_throw
+                && site.caller == owner.id
                 && site.span.start_byte == span.start
                 && site.span.end_byte == span.end
         }) {
@@ -6413,7 +6795,8 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             .iter()
             .copied()
             .filter(|site| {
-                site.caller == owner.id
+                !site.in_throw
+                    && site.caller == owner.id
                     && site.span.start_byte <= span.start
                     && site.span.end_byte >= span.end
             })
@@ -6528,6 +6911,19 @@ struct FlowEnv {
     /// copies every own property of each source onto `dst` in place (like the
     /// named-target `Object.assign`), which is how Express assembles `app`.
     merge_helpers: std::collections::BTreeSet<String>,
+    /// Explicit prototype object of a named object, recorded when
+    /// `Object.setPrototypeOf(o, p)` / `o.__proto__ = p` is seen. Used to bind
+    /// `super` while walking `o`'s own methods (object-literal `super.m()`).
+    /// Kept separate from the prototype's members being merged into `o` (which
+    /// drives direct `o.m()` dispatch) so `super` resolves to the proto only.
+    object_prototypes: BTreeMap<String, ObjectTargets>,
+    /// Parameter names that are KNOWN to be `undefined` in this invocation because
+    /// the resolved call passed fewer positional arguments than the function
+    /// declares (a syntactic arg-count shortfall — never inferred from value
+    /// analysis). Lets `decide_branch` fold a guard like `if (depth == null)` to its
+    /// live arm, so the dead arm's calls are never walked (demand-driven pruning of
+    /// `array-flatten`'s `flattenWithDepth` recursion under express's no-`depth` call).
+    absent: std::collections::BTreeSet<String>,
 }
 
 /// The ordered result sequence of a generator: each `yield` (with `yield*`
@@ -6588,8 +6984,28 @@ struct BoundFunctionTarget {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct CollectionTargets {
     keys: Vec<FunctionId>,
+    /// Index-ordered array element cells (numeric indices). `value_at(i)` reads
+    /// `values[i]`, so the insertion order MUST be preserved in array contexts
+    /// (use [`append_ordered`], not the sorting [`extend`]) for specific-index and
+    /// out-of-bounds reads to stay precise. Mirrors the points-to heap's
+    /// numeric-index cells.
     values: Vec<FunctionId>,
     object_values: Vec<ObjectTargets>,
+    /// The LIFO-appended slice of Jelly's `%ARRAY_UNKNOWN`: `push`/`unshift`/spread
+    /// elements. Read by `pop`/`shift`/`find` (which dynamically returns an appended
+    /// element) and unioned into [`all_targets`]/[`elements`] (so `for…of` /
+    /// `forEach` callbacks still see them), but NEVER by `value_at` (a specific-index
+    /// read stays precise — unioning the unknown cell into index reads
+    /// over-approximates the single runtime element and adds FPs fast).
+    unknown: Vec<FunctionId>,
+    unknown_objects: Vec<ObjectTargets>,
+    /// Callables written at an arbitrary / dynamic index (`arr[i] = fn`,
+    /// `arr[k] = fn`). Like `unknown` these have no specific index, so they feed
+    /// iteration ([`all_targets`]/[`elements`], for `for…of`/`forEach` recall) but
+    /// are NOT returned by `pop`/`shift` — the dynamic oracle pops the LIFO-pushed
+    /// element, not an element placed at some other index (`arrays.js` `x[42]=`,
+    /// `x[x]=` must not surface from `x.pop()`).
+    dynamic: Vec<FunctionId>,
 }
 
 impl CollectionTargets {
@@ -6597,10 +7013,17 @@ impl CollectionTargets {
         self.keys.extend(other.keys);
         self.values.extend(other.values);
         self.object_values.extend(other.object_values);
+        self.unknown.extend(other.unknown);
+        self.unknown_objects.extend(other.unknown_objects);
+        self.dynamic.extend(other.dynamic);
         self.keys.sort();
         self.keys.dedup();
         self.values.sort();
         self.values.dedup();
+        self.unknown.sort();
+        self.unknown.dedup();
+        self.dynamic.sort();
+        self.dynamic.dedup();
     }
 
     fn append_ordered(&mut self, other: Self) {
@@ -6615,15 +7038,62 @@ impl CollectionTargets {
             }
         }
         self.object_values.extend(other.object_values);
+        for value in other.unknown {
+            if !self.unknown.contains(&value) {
+                self.unknown.push(value);
+            }
+        }
+        self.unknown_objects.extend(other.unknown_objects);
+        for value in other.dynamic {
+            if !self.dynamic.contains(&value) {
+                self.dynamic.push(value);
+            }
+        }
+    }
+
+    /// Record callables appended at the array's end (`push`/`unshift`/spread) into
+    /// the pop-readable `%ARRAY_UNKNOWN` bucket.
+    fn push_unknown(&mut self, targets: Vec<FunctionId>) {
+        self.unknown.extend(targets);
+        self.unknown.sort();
+        self.unknown.dedup();
+    }
+
+    /// Record callables written at an arbitrary / dynamic index (`arr[i] = fn`).
+    /// These feed iteration but not `pop`/`shift` (see the `dynamic` field).
+    fn push_dynamic(&mut self, targets: Vec<FunctionId>) {
+        self.dynamic.extend(targets);
+        self.dynamic.sort();
+        self.dynamic.dedup();
     }
 
     fn is_empty(&self) -> bool {
-        self.keys.is_empty() && self.values.is_empty() && self.object_values.is_empty()
+        self.keys.is_empty()
+            && self.values.is_empty()
+            && self.object_values.is_empty()
+            && self.unknown.is_empty()
+            && self.unknown_objects.is_empty()
+            && self.dynamic.is_empty()
     }
 
     fn all_targets(&self) -> Vec<FunctionId> {
         let mut targets = self.values.clone();
         targets.extend(self.keys.iter().copied());
+        targets.extend(self.unknown.iter().copied());
+        targets.extend(self.dynamic.iter().copied());
+        targets.sort();
+        targets.dedup();
+        targets
+    }
+
+    /// The array's element callables: numeric-index cells plus the appended
+    /// (`%ARRAY_UNKNOWN`) and dynamic-index-write buckets, but NOT map keys. Used to
+    /// bind `for…of` / `forEach`/`map`/`reduce` callback element parameters, which
+    /// genuinely visit every element including the dynamically-stored ones.
+    fn elements(&self) -> Vec<FunctionId> {
+        let mut targets = self.values.clone();
+        targets.extend(self.unknown.iter().copied());
+        targets.extend(self.dynamic.iter().copied());
         targets.sort();
         targets.dedup();
         targets
@@ -6639,17 +7109,17 @@ impl CollectionTargets {
 
     fn value_at(&self, index: usize) -> Self {
         Self {
-            keys: Vec::new(),
             values: self.values.get(index).copied().into_iter().collect(),
             object_values: self.object_values.get(index).cloned().into_iter().collect(),
+            ..Default::default()
         }
     }
 
     fn values_from(&self, index: usize) -> Self {
         Self {
-            keys: Vec::new(),
             values: self.values.iter().skip(index).copied().collect(),
             object_values: self.object_values.iter().skip(index).cloned().collect(),
+            ..Default::default()
         }
     }
 
@@ -6663,7 +7133,23 @@ impl CollectionTargets {
 
     fn argument_list(&self) -> Vec<Self> {
         let len = self.values.len().max(self.object_values.len());
-        (0..len).map(|index| self.value_at(index)).collect()
+        let mut args: Vec<Self> = (0..len).map(|index| self.value_at(index)).collect();
+        // Appended (`push`/spread) and dynamic-index-write elements have no specific
+        // index, so when an array is spread as call arguments (`f.apply(t, arr)`)
+        // append them as one further positional argument — otherwise a
+        // `const a = []; a.push(f); bar.apply(t, a)` spread would bind no argument.
+        let mut spread = self.unknown.clone();
+        spread.extend(self.dynamic.iter().copied());
+        spread.sort();
+        spread.dedup();
+        if !spread.is_empty() || !self.unknown_objects.is_empty() {
+            args.push(Self {
+                values: spread,
+                object_values: self.unknown_objects.clone(),
+                ..Default::default()
+            });
+        }
+        args
     }
 }
 
@@ -7144,6 +7630,18 @@ fn bind_collection_pattern(
     }
 }
 
+/// Whether control definitely leaves the enclosing block at `statement`
+/// (`return`/`throw`, or a block whose last statement does), so statements after
+/// it are unreachable. Used to prune the tail after an absence-folded early-return
+/// guard (`if (depth == null) { return … }`).
+fn branch_terminates(statement: &Statement<'_>) -> bool {
+    match statement {
+        Statement::ReturnStatement(_) | Statement::ThrowStatement(_) => true,
+        Statement::BlockStatement(block) => block.body.last().is_some_and(branch_terminates),
+        _ => false,
+    }
+}
+
 fn param_pattern_from_binding(pattern: &BindingPattern<'_>) -> ParamPattern {
     match pattern {
         BindingPattern::BindingIdentifier(identifier) => {
@@ -7216,6 +7714,7 @@ fn bind_param_object_pattern(pattern: &ParamPattern, targets: &ObjectTargets, en
                             keys: Vec::new(),
                             values: values.clone(),
                             object_values: Vec::new(),
+                            ..Default::default()
                         },
                         env,
                     );
@@ -7331,6 +7830,54 @@ fn prototype_member_assignment_name<'a>(
 }
 
 /// The object name in `obj.__proto__ = …` (a dynamic prototype link).
+/// The expression a parenthesized/comma-sequence evaluates to: unwrap parens and
+/// take the last operand of a sequence (`(a(), fn)` → `fn`). Used to resolve a
+/// class field initialized to such an expression to its trailing function value.
+fn field_value_expression<'a>(value: &'a Expression<'a>) -> &'a Expression<'a> {
+    match value {
+        Expression::ParenthesizedExpression(paren) => field_value_expression(&paren.expression),
+        Expression::SequenceExpression(sequence) => sequence
+            .expressions
+            .last()
+            .map_or(value, field_value_expression),
+        _ => value,
+    }
+}
+
+/// The first `super(...)` call among a constructor's top-level statements.
+fn find_super_call<'a>(statements: &'a [Statement<'a>]) -> Option<&'a CallExpression<'a>> {
+    statements.iter().find_map(|statement| {
+        let Statement::ExpressionStatement(expression) = statement else {
+            return None;
+        };
+        let Expression::CallExpression(call) = &expression.expression else {
+            return None;
+        };
+        matches!(&call.callee, Expression::Super(_)).then(|| call.as_ref())
+    })
+}
+
+/// The `constructor` method of a class, if it declares one explicitly.
+fn constructor_method<'a>(class: &'a Class<'a>) -> Option<&'a MethodDefinition<'a>> {
+    class.body.body.iter().find_map(|element| match element {
+        ClassElement::MethodDefinition(method)
+            if method.kind == MethodDefinitionKind::Constructor =>
+        {
+            Some(method.as_ref())
+        }
+        _ => None,
+    })
+}
+
+/// The property name in `super.X` (a static member access on `super`), used to
+/// resolve a `static g = super.X` field alias against the superclass's members.
+fn super_member_property<'a>(value: &'a Expression<'a>) -> Option<&'a str> {
+    let Expression::StaticMemberExpression(member) = value else {
+        return None;
+    };
+    matches!(&member.object, Expression::Super(_)).then(|| member.property.name.as_str())
+}
+
 fn proto_assignment_object_name<'a>(target: &'a AssignmentTarget<'a>) -> Option<&'a str> {
     let AssignmentTarget::StaticMemberExpression(member) = target else {
         return None;
@@ -7400,20 +7947,20 @@ fn callback_targets_for_parameter(
     collection: &CollectionTargets,
 ) -> Vec<FunctionId> {
     match method {
-        "forEach" if index == 0 => collection.values.clone(),
+        "forEach" if index == 0 => collection.elements(),
         "forEach" if index == 1 => {
             // `Map.forEach` is `(value, key, map)`: the 2nd parameter is the key,
             // so bind it to the collection's keys. Arrays (2nd param is a numeric
             // index) and Sets (`(value, value, set)`) have no distinct keys, so
-            // fall back to the values for them.
+            // fall back to the elements for them.
             if collection.keys.is_empty() {
-                collection.values.clone()
+                collection.elements()
             } else {
                 collection.keys.clone()
             }
         }
-        "reduce" | "reduceRight" if index == 1 => collection.values.clone(),
-        _ if index == 0 => collection.values.clone(),
+        "reduce" | "reduceRight" if index == 1 => collection.elements(),
+        _ if index == 0 => collection.elements(),
         _ => Vec::new(),
     }
 }
@@ -11109,6 +11656,7 @@ used();
         id: u64,
     ) -> CallSiteFact {
         CallSiteFact {
+            in_throw: false,
             id: CallSiteId(id),
             language: Language::JavaScript,
             file,
@@ -11141,6 +11689,7 @@ used();
         id: u64,
     ) -> CallSiteFact {
         CallSiteFact {
+            in_throw: false,
             id: CallSiteId(id),
             language: Language::JavaScript,
             file,
@@ -11172,6 +11721,7 @@ used();
         id: u64,
     ) -> CallSiteFact {
         CallSiteFact {
+            in_throw: false,
             id: CallSiteId(id),
             language: Language::JavaScript,
             file,

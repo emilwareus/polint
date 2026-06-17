@@ -1772,6 +1772,7 @@ mod tests {
         });
 
         let site = CallSiteFact {
+            in_throw: false,
             id: CallSiteId(0),
             language: Language::Go,
             file,
@@ -1854,6 +1855,7 @@ mod tests {
     ) {
         db.replace_call_facts(CallOutput {
             sites: vec![CallSiteFact {
+                in_throw: false,
                 id: CallSiteId(0),
                 language: Language::TypeScript,
                 file: callsite.file,
@@ -2635,6 +2637,7 @@ function run() {
             });
             db.replace_call_facts(CallOutput {
                 sites: vec![CallSiteFact {
+                    in_throw: false,
                     id: CallSiteId(0),
                     language: Language::Go,
                     file,

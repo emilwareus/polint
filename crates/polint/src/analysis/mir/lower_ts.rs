@@ -173,12 +173,23 @@ impl TsMirLowering {
                 );
             }
             function_lowering.lower_parameters(&function.parameters, &mut self.places);
-            function_lowering.lower_body(
-                function.body,
-                &mut self.places,
-                &mut self.operations,
-                &mut self.unsupported,
-            );
+            match function.body {
+                CandidateBody::Statements(statements) => function_lowering.lower_statements(
+                    statements,
+                    &mut self.places,
+                    &mut self.operations,
+                    &mut self.unsupported,
+                ),
+                CandidateBody::Expression(expression) => {
+                    function_lowering.lower_expression(
+                        expression,
+                        &mut self.places,
+                        &mut self.operations,
+                        &mut self.unsupported,
+                        false,
+                    );
+                }
+            }
         }
     }
 
@@ -251,9 +262,20 @@ struct TsFunctionCandidate<'ast> {
     name: String,
     span: oxc_span::Span,
     parameters: Vec<String>,
-    body: &'ast FunctionBody<'ast>,
+    body: CandidateBody<'ast>,
     r#async: bool,
     span_for_unsupported: oxc_span::Span,
+}
+
+/// What a [`TsFunctionCandidate`] lowers. Function/arrow bodies and class static
+/// blocks are statement lists; class field initializers (`x = <expr>`) are a
+/// single expression, lowered the same way an expression statement would be so
+/// calls buried in the initializer (`f1()` in `x = (f1(), …)`, `super.m()` in
+/// `x = super.m()`) get call sites attributed to the field-initializer function.
+#[derive(Debug)]
+enum CandidateBody<'ast> {
+    Statements(&'ast [Statement<'ast>]),
+    Expression(&'ast Expression<'ast>),
 }
 
 fn collect_functions<'ast>(
@@ -351,7 +373,7 @@ fn collect_variable_function<'ast>(
                 name: name.name.to_string(),
                 span: function.span,
                 parameters: parameter_names(&function.params),
-                body: &function.body,
+                body: CandidateBody::Statements(&function.body.statements),
                 r#async: function.r#async,
                 span_for_unsupported: function.span,
             });
@@ -362,7 +384,7 @@ fn collect_variable_function<'ast>(
                     name: name.name.to_string(),
                     span: function.span,
                     parameters: parameter_names(&function.params),
-                    body,
+                    body: CandidateBody::Statements(&body.statements),
                     r#async: function.r#async,
                     span_for_unsupported: function.span,
                 });
@@ -383,7 +405,7 @@ fn collect_function<'ast>(
             name,
             span,
             parameters: parameter_names(&function.params),
-            body,
+            body: CandidateBody::Statements(&body.statements),
             r#async: function.r#async,
             span_for_unsupported: function.span,
         });
@@ -396,17 +418,64 @@ fn collect_class_functions<'ast>(
     functions: &mut Vec<TsFunctionCandidate<'ast>>,
 ) {
     for element in &class.body.body {
-        if let ClassElement::MethodDefinition(method) = element
-            && let Some(method_name) = method_name(method)
-        {
-            collect_function(
-                format!("{class_name}.{method_name}"),
-                method.span,
-                &method.value,
-                functions,
-            );
+        match element {
+            ClassElement::MethodDefinition(method) => {
+                if let Some(method_name) = method_name(method) {
+                    collect_function(
+                        format!("{class_name}.{method_name}"),
+                        method.span,
+                        &method.value,
+                        functions,
+                    );
+                }
+            }
+            // A class static block (`static { … }`) executes at class-definition
+            // time and is its own function in Jelly's model. Lower its statement
+            // list as a body (named by span, matching the frontend FunctionFact)
+            // so direct calls inside it — `super.f()`, top-level `f1()` — get call
+            // sites attributed to the static-block function.
+            ClassElement::StaticBlock(block) => {
+                functions.push(TsFunctionCandidate {
+                    name: anonymous_callable_name(block.span.start, block.span.end),
+                    span: block.span,
+                    parameters: Vec::new(),
+                    body: CandidateBody::Statements(&block.body),
+                    r#async: false,
+                    span_for_unsupported: block.span,
+                });
+            }
+            // A class field initializer (`x = <expr>`) is its own function in
+            // Jelly's model: calls in the initializer (`f1()` in `x = (f1(), …)`,
+            // `super.m()` in `x = super.m()`) are attributed to it. Lower the
+            // initializer expression so those calls get call sites; the value-flow
+            // walks the same initializer with `this`/`super` bound.
+            ClassElement::PropertyDefinition(property) => {
+                if let Some(value) = &property.value {
+                    let span = property_init_function_span(property);
+                    functions.push(TsFunctionCandidate {
+                        name: anonymous_callable_name(span.start, span.end),
+                        span,
+                        parameters: Vec::new(),
+                        body: CandidateBody::Expression(value),
+                        r#async: false,
+                        span_for_unsupported: span,
+                    });
+                }
+            }
+            _ => {}
         }
     }
+}
+
+/// The span Jelly assigns to a class field-initializer function: from the
+/// property key (after any `static` modifier) through the initializer value.
+/// Shared by the frontend FunctionFact emission and MIR lowering so the
+/// span-keyed fact and the MIR body always agree (and align with Jelly's oracle).
+fn property_init_function_span(property: &oxc_ast::ast::PropertyDefinition<'_>) -> oxc_span::Span {
+    // Start after any `static` modifier (at the key), end at the property
+    // definition's end — which includes the trailing `;`, matching Jelly's
+    // field-initializer function span (so the fun2fun mirror edge matches).
+    oxc_span::Span::new(property.key.span().start, property.span.end)
 }
 
 fn collect_anonymous_functions_from_statement<'ast>(
@@ -574,7 +643,7 @@ fn collect_anonymous_functions_from_expression<'ast>(
                     name: anonymous_callable_name(function.span.start, function.span.end),
                     span: function.span,
                     parameters: parameter_names(&function.params),
-                    body: &function.body,
+                    body: CandidateBody::Statements(&function.body.statements),
                     r#async: function.r#async,
                     span_for_unsupported: function.span,
                 });
@@ -587,7 +656,7 @@ fn collect_anonymous_functions_from_expression<'ast>(
                     name: anonymous_callable_name(function.span.start, function.span.end),
                     span: function.span,
                     parameters: parameter_names(&function.params),
-                    body,
+                    body: CandidateBody::Statements(&body.statements),
                     r#async: function.r#async,
                     span_for_unsupported: function.span,
                 });
@@ -662,6 +731,28 @@ fn collect_anonymous_functions_from_expression<'ast>(
         Expression::ObjectExpression(object) => {
             for property in &object.properties {
                 match property {
+                    // A shorthand method (`{ m() { … } }`) is emitted by the frontend
+                    // at the PROPERTY span (anonymous_callable_name over property.span),
+                    // but its `value` FunctionExpression span starts at `(` — so the
+                    // generic FunctionExpression arm would mint a candidate at a span
+                    // that no FunctionFact matches, and the method body would never be
+                    // lowered (no call sites for `super.m()`, `this.x()`, direct calls
+                    // inside it). Lower it at the property span to match the fact.
+                    ObjectPropertyKind::ObjectProperty(property)
+                        if property.method
+                            && let Expression::FunctionExpression(function) = &property.value
+                            && let Some(body) = function.body.as_deref() =>
+                    {
+                        functions.push(TsFunctionCandidate {
+                            name: anonymous_callable_name(property.span.start, property.span.end),
+                            span: property.span,
+                            parameters: parameter_names(&function.params),
+                            body: CandidateBody::Statements(&body.statements),
+                            r#async: function.r#async,
+                            span_for_unsupported: function.span,
+                        });
+                        collect_anonymous_functions_from_body(body, functions);
+                    }
                     ObjectPropertyKind::ObjectProperty(property) => {
                         collect_anonymous_functions_from_expression(
                             &property.value,
@@ -745,7 +836,7 @@ fn collect_anonymous_functions_from_argument<'ast>(
                 name: anonymous_callable_name(function.span.start, function.span.end),
                 span: function.span,
                 parameters: parameter_names(&function.params),
-                body: &function.body,
+                body: CandidateBody::Statements(&function.body.statements),
                 r#async: function.r#async,
                 span_for_unsupported: function.span,
             });
@@ -757,7 +848,7 @@ fn collect_anonymous_functions_from_argument<'ast>(
                     name: anonymous_callable_name(function.span.start, function.span.end),
                     span: function.span,
                     parameters: parameter_names(&function.params),
-                    body,
+                    body: CandidateBody::Statements(&body.statements),
                     r#async: function.r#async,
                     span_for_unsupported: function.span,
                 });
@@ -862,16 +953,6 @@ impl<'source> FunctionLowering<'source> {
             self.parameters.insert(name.clone(), root.clone());
             self.insert_place(places, root, Vec::new(), PlaceStatus::Resolved);
         }
-    }
-
-    fn lower_body(
-        &mut self,
-        body: &FunctionBody<'_>,
-        places: &mut PlaceTableBuilder,
-        operations: &mut Vec<OperationDraft>,
-        unsupported: &mut Vec<UnsupportedDraft>,
-    ) {
-        self.lower_statements(&body.statements, places, operations, unsupported);
     }
 
     fn lower_statements(

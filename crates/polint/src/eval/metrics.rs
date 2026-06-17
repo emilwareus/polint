@@ -1008,6 +1008,7 @@ mod tests {
             calls: Vec::new(),
         });
         let site = CallSiteFact {
+            in_throw: false,
             id: CallSiteId(0),
             language: Language::Go,
             file,

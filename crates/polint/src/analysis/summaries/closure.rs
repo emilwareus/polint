@@ -851,6 +851,7 @@ mod tests {
 
     fn call_site(id: u64, caller: u64) -> CallSiteFact {
         CallSiteFact {
+            in_throw: false,
             id: CallSiteId(id),
             language: Language::TypeScript,
             file: FileId(1),

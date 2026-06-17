@@ -555,6 +555,7 @@ mod tests {
 
     fn go_call_site() -> CallSiteFact {
         CallSiteFact {
+            in_throw: false,
             id: CallSiteId(0),
             language: Language::Go,
             file: FileId(0),

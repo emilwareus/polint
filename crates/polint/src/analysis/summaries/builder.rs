@@ -1077,6 +1077,7 @@ mod tests {
         // Add call output with unresolved calls
         let _ = db.replace_call_facts(CallOutput {
             sites: vec![CallSiteFact {
+                in_throw: false,
                 id: CallSiteId(1),
                 language: Language::TypeScript,
                 file: FileId(1),
@@ -1691,6 +1692,7 @@ mod tests {
         // Add unresolved call facts
         let _ = db.replace_call_facts(CallOutput {
             sites: vec![CallSiteFact {
+                in_throw: false,
                 id: CallSiteId(1),
                 language: Language::Go,
                 file: FileId(1),

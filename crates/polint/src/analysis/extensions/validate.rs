@@ -512,6 +512,7 @@ mod tests {
         .expect("semantic MIR fixture should be valid");
         db.replace_call_facts(CallOutput {
             sites: vec![CallSiteFact {
+                in_throw: false,
                 id: CallSiteId(0),
                 language: Language::TypeScript,
                 file,

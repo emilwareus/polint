@@ -600,6 +600,7 @@ mod tests {
 
     fn ts_call_site() -> CallSiteFact {
         CallSiteFact {
+            in_throw: false,
             id: CallSiteId(0),
             language: Language::TypeScript,
             file: FileId(0),

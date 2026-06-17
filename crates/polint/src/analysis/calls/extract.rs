@@ -53,6 +53,27 @@ pub(crate) fn extract_call_sites(db: &AnalysisDb) -> Vec<CallSiteFact> {
         },
     );
 
+    // Spans of `throw` statements, per file — a call site whose span is contained
+    // in one is lexically inside a `throw` argument (error path). The TS/JS MIR
+    // lowering records a `throw` unsupported-semantic fact spanning the whole throw
+    // statement, so containment marks `f()` in `throw new E(... f() ...)`.
+    let mut throw_spans: BTreeMap<FileId, Vec<(u32, u32)>> = BTreeMap::new();
+    for fact in db.unsupported_semantics() {
+        if fact.construct == "throw" {
+            throw_spans
+                .entry(fact.file)
+                .or_default()
+                .push((fact.span.start_byte, fact.span.end_byte));
+        }
+    }
+    let is_in_throw = |file: FileId, span: &Span| -> bool {
+        throw_spans.get(&file).is_some_and(|spans| {
+            spans
+                .iter()
+                .any(|(start, end)| *start <= span.start_byte && span.end_byte <= *end)
+        })
+    };
+
     let mut same_span_ordinals = BTreeMap::new();
     let mut sites = Vec::with_capacity(call_operations.len());
     for (body, operation) in call_operations {
@@ -90,6 +111,7 @@ pub(crate) fn extract_call_sites(db: &AnalysisDb) -> Vec<CallSiteFact> {
             result: Some(*return_place),
             status: CallTargetStatus::Unresolved,
             precision: CallPrecision::Conservative,
+            in_throw: is_in_throw(body.file, &operation.span),
             stable_key: call_site_stable_key(
                 db,
                 body,

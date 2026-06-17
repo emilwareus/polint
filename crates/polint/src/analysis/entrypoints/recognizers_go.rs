@@ -1067,6 +1067,7 @@ mod tests {
         line: u32,
     ) -> CallSiteFact {
         CallSiteFact {
+            in_throw: false,
             id: CallSiteId(id),
             language: Language::Go,
             file,

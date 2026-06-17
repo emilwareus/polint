@@ -658,6 +658,323 @@ mod tests {
     }
 
     #[test]
+    fn object_literal_super_resolves() {
+        // `super.m()` inside an object-literal method resolves against the object's
+        // prototype, set via `Object.setPrototypeOf(o, p)` or `o.__proto__ = p`.
+        // Two prior gaps: (1) object shorthand-method bodies were never lowered (the
+        // MIR candidate span didn't match the property-span FunctionFact), so
+        // `super.m1()` got no call site; (2) the value-flow didn't bind `super` for
+        // object methods. A negative case guards against over-resolving `super` in
+        // an object with no prototype.
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("o.js"),
+            "var q1 = { m1() { console.log(\"q1.m1\"); } };\n\
+             var q2 = { m2() { super.m1(); } };\n\
+             Object.setPrototypeOf(q2, q1);\n\
+             q2.m2();\n\
+             var q3 = { m3() { super.m1(); } };\n\
+             q3.__proto__ = q1;\n\
+             q3.m3();\n\
+             var lone = { z() { super.nope(); } };\n\
+             lone.z();\n",
+        )
+        .unwrap();
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        // setPrototypeOf path: q2.m2's super.m1() → q1.m1.
+        assert!(
+            any_resolves(db, "super.m1()", "console.log(\"q1.m1\")"),
+            "super.m1() in an object method should resolve to the prototype's m1"
+        );
+        // PRECISION: an object with no prototype must NOT resolve super.nope().
+        assert!(
+            !any_resolves(db, "super.nope()", "z()"),
+            "super in a prototype-less object must not resolve to the object itself"
+        );
+    }
+
+    #[test]
+    fn compound_receiver_method_this_resolves() {
+        // `(o1 || o2).f()` resolves `f` against the union of o1/o2, and the method
+        // body is walked with `this` = that union, so `this.g()` inside dispatches
+        // to both g's. (receiver-callee-mixup.js.)
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("rc.js"),
+            "const o1 = { f() { this.g(); }, g() { console.log(\"foo\"); } };\n\
+             const o2 = { f() { this.g(); }, g() { console.log(\"bar\"); } };\n\
+             (o1 || o2).f();\n\
+             (o2 || o1).f();\n",
+        )
+        .unwrap();
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        // `(o1 || o2)` short-circuits to o1 and `(o2 || o1)` to o2; each method body
+        // is walked with `this` = its receiver, so `this.g()` reaches both g's.
+        assert!(
+            any_resolves(db, "this.g()", "console.log(\"foo\")")
+                && any_resolves(db, "this.g()", "console.log(\"bar\")"),
+            "this.g() should resolve to both o1.g and o2.g across the two compound calls"
+        );
+    }
+
+    #[test]
+    fn super_method_body_this_resolves() {
+        // When `super.m1()` resolves, the super method's body is walked with `this`
+        // bound to the calling receiver, so a `this.x()` inside it dispatches
+        // against that object. (super3: `q2.m2(){ super.m1() }` →
+        // `q1.m1(){ this.m3() }` with `this` = q2 → `this.m3()` → q2.m3.)
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("sm.js"),
+            "var q1 = { m1() { this.m3(); } };\n\
+             var q2 = {\n\
+             \x20   m2() { super.m1(); },\n\
+             \x20   m3() { console.log(\"q2.m3\"); },\n\
+             };\n\
+             Object.setPrototypeOf(q2, q1);\n\
+             q2.m2();\n",
+        )
+        .unwrap();
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        assert!(
+            any_resolves(db, "this.m3()", "console.log(\"q2.m3\")"),
+            "this.m3() in the super method should resolve to the receiver's m3"
+        );
+    }
+
+    #[test]
+    fn static_field_sequence_value_resolves() {
+        // A field initialized to a comma-sequence takes its last operand as the
+        // value, so `static p = (helper(), function(){})` makes `C.p` the trailing
+        // function. (classes.js: `static staticProperty = (f1(), function(){});
+        // C6.staticProperty()`.)
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("seq.js"),
+            "function helper() {}\n\
+             class C {\n\
+             \x20   static p = (helper(), function() { console.log(\"v\"); });\n\
+             }\n\
+             C.p();\n",
+        )
+        .unwrap();
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        assert!(
+            any_resolves(db, "C.p()", "console.log(\"v\")"),
+            "C.p() should resolve to the trailing function of the sequence initializer"
+        );
+    }
+
+    #[test]
+    fn super_constructor_argument_flows() {
+        // `super(arg)` flows the subclass's argument into the superclass
+        // constructor's parameter, so a parameter invoked in the superclass
+        // constructor resolves to the passed value. (super.js: `class A
+        // { constructor(x){ x() } } class B extends A { constructor(){ super(()=>…) } }`
+        // → `x()` resolves to the passed arrow.)
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("sc.js"),
+            "class A {\n\
+             \x20   constructor(x) { x(); }\n\
+             }\n\
+             class B extends A {\n\
+             \x20   constructor() { super(() => { console.log(\"cb\"); }); }\n\
+             }\n\
+             new B();\n",
+        )
+        .unwrap();
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        assert!(
+            any_resolves(db, "x()", "console.log(\"cb\")"),
+            "x() in the superclass constructor should resolve to the arrow passed via super()"
+        );
+    }
+
+    #[test]
+    fn class_static_field_super_alias_resolves() {
+        // `static g = super.f` aliases a static field to the superclass's static
+        // member, so `Sub.g()` dispatches to it. (super.js: `static g = super.f;
+        // B.g();` → A's static f arrow.)
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("alias.js"),
+            "class A {\n\
+             \x20   static f = () => { console.log(\"A.f\"); };\n\
+             }\n\
+             class B extends A {\n\
+             \x20   static g = super.f;\n\
+             }\n\
+             B.g();\n",
+        )
+        .unwrap();
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        assert!(
+            any_resolves(db, "B.g()", "console.log(\"A.f\")"),
+            "B.g() should resolve to A's static f via the super.f field alias"
+        );
+    }
+
+    #[test]
+    fn class_static_block_calls_resolve() {
+        // A class static block (`static { … }`) executes at class-definition time
+        // and is its own function in Jelly's model. Before this fix it was never
+        // lowered, so direct calls inside it (`super.f()`, top-level `helper()`)
+        // got no call site and never resolved. Now the block is emitted as a
+        // span-named FunctionFact + MIR body, so its `super`/direct calls resolve.
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("statics.js"),
+            "function helper() { console.log(\"helper\"); }\n\
+             class A {\n\
+             \x20   static f = () => { console.log(\"A.f\"); };\n\
+             }\n\
+             class B extends A {\n\
+             \x20   static {\n\
+             \x20       super.f();\n\
+             \x20       helper();\n\
+             \x20   }\n\
+             }\n\
+             new B();\n",
+        )
+        .unwrap();
+
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        // `super.f()` inside B's static block resolves to A's static `f` arrow.
+        assert!(
+            any_resolves(db, "super.f()", "console.log(\"A.f\")"),
+            "super.f() in a static block should resolve to A's static f"
+        );
+        // A direct call to a top-level helper inside the static block resolves too.
+        assert!(
+            any_resolves(db, "helper()", "function helper"),
+            "helper() in a static block should resolve to the top-level helper"
+        );
+    }
+
+    #[test]
+    fn class_field_initializer_calls_resolve() {
+        // A class field initializer (`x = <expr>`) is its own function in Jelly's
+        // model: calls in the initializer are attributed to it. Before this fix the
+        // initializer was never lowered, so a call inside it got no call site.
+        // Covers both a direct call buried in a sequence (static) and a `super` call
+        // (instance) — the two field-init shapes in the Jelly suite (classes/super4).
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("fields.js"),
+            "function helper() { console.log(\"helper\"); }\n\
+             class A {\n\
+             \x20   m() { console.log(\"A.m\"); }\n\
+             }\n\
+             class B extends A {\n\
+             \x20   static prop = (helper(), function() {});\n\
+             \x20   w = super.m();\n\
+             }\n\
+             new B();\n",
+        )
+        .unwrap();
+
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        // `helper()` inside the static field initializer's sequence resolves.
+        assert!(
+            any_resolves(db, "helper()", "function helper"),
+            "helper() in a static field initializer should resolve"
+        );
+        // `super.m()` inside an instance field initializer resolves to A.m.
+        assert!(
+            any_resolves(db, "super.m()", "console.log(\"A.m\")"),
+            "super.m() in an instance field initializer should resolve to A.m"
+        );
+    }
+
+    #[test]
+    fn throw_argument_calls_are_suppressed() {
+        // A call lexically inside a `throw` argument sits on an error path the
+        // demand-driven oracle does not exercise; resolving it produces false edges
+        // (e.g. express's `gettype(fn)` in a middleware type-check throw). Such a
+        // call must NOT resolve, while an identical call on the normal path does.
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("t.js"),
+            "function throwhelper() {}\n\
+             function normalhelper() {}\n\
+             function f(x) {\n\
+             \x20   if (!x) { throw new Error(\"bad \" + throwhelper()); }\n\
+             \x20   normalhelper();\n\
+             }\n\
+             f(1);\n",
+        )
+        .unwrap();
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        assert!(
+            any_resolves(db, "normalhelper()", "function normalhelper"),
+            "a call on the normal path must still resolve"
+        );
+        assert!(
+            !any_resolves(db, "throwhelper()", "function throwhelper"),
+            "a call inside a throw argument must be suppressed"
+        );
+    }
+
+    #[test]
+    fn absent_param_dead_branch_is_folded() {
+        // array-flatten shape: a wrapper called without its `depth` arg takes the
+        // `depth == null` branch; the `else` early-returns past dead code. With the
+        // param known-absent the value flow folds the guard and never WALKS the dead
+        // branch, so it emits NO value-flow (FunctionTokenFlow) edge there — while
+        // the live branch does. (The points-to heap is flow-insensitive and may
+        // still resolve the dead call; the fold operates at the value-flow layer.)
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("fl.js"),
+            "function wrap(depth) {\n\
+             \x20   var o = { live: () => { return 1; }, dead: () => { return 2; } };\n\
+             \x20   if (depth == null) { o.live(); return; }\n\
+             \x20   o.dead();\n\
+             }\n\
+             wrap();\n",
+        )
+        .unwrap();
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        use crate::analysis::calls::facts::CallAlgorithm;
+        let value_flow_resolves = |site: &str, tgt: &str| {
+            db.call_targets().iter().any(|t| {
+                t.algorithm == CallAlgorithm::FunctionTokenFlow
+                    && site_src(db, t).contains(site)
+                    && target_src(db, t).contains(tgt)
+            })
+        };
+        assert!(
+            value_flow_resolves("o.live()", "return 1"),
+            "the live `depth == null` branch must resolve via value-flow"
+        );
+        assert!(
+            !value_flow_resolves("o.dead()", "return 2"),
+            "the dead `else` branch must be folded away (no value-flow walk)"
+        );
+    }
+
+    #[test]
     fn points_to_heap_survives_adversarially_deep_nesting() {
         // Crash guard (C1): the harvester walks every JS/TS file in an arbitrary
         // repo, so deeply nested / generated input must not recurse the AST walk to
@@ -809,6 +1126,67 @@ mod tests {
         assert!(
             heap_resolves(db, "g()", "looped"),
             "for…of should bind the loop variable to the array elements"
+        );
+    }
+
+    #[test]
+    fn value_flow_array_model_pop_and_index_stay_precise() {
+        // Gate for the value-flow array model (`ts_value_flows` `CollectionTargets`),
+        // mirroring `arrays.js`/`iterators.js`. The defect this guards against is the
+        // old `%ALL`-smear where `pop`/`at` returned *every* element and a dynamic
+        // index write polluted the value lane:
+        //   * `arr.pop()` returns the appended (`push`) bucket only — NOT the literal
+        //     numeric cells, and NOT a value written at an arbitrary index;
+        //   * `arr.at(const)` reads exactly that numeric cell (no smear).
+        // These resolve through the value flow (`CallAlgorithm::FunctionTokenFlow`).
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("arr.js"),
+            "var arr = [\n\
+             \x20 function lit0() { return 0; },\n\
+             \x20 function lit1() { return 1; }\n\
+             ];\n\
+             arr[7] = function dynwrite() { return 3; };\n\
+             arr.push(function appended() { return 2; });\n\
+             var p = arr.pop();\n\
+             p();\n\
+             var picked = arr.at(0);\n\
+             picked();\n",
+        )
+        .unwrap();
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        use crate::analysis::calls::facts::CallAlgorithm;
+        let value_flow_resolves = |site: &str, tgt: &str| {
+            db.call_targets().iter().any(|t| {
+                t.algorithm == CallAlgorithm::FunctionTokenFlow
+                    && site_src(db, t).contains(site)
+                    && target_src(db, t).contains(tgt)
+            })
+        };
+        // `pop` reads the appended bucket only.
+        assert!(
+            value_flow_resolves("p()", "function appended"),
+            "arr.pop() should resolve to the pushed (appended) element"
+        );
+        assert!(
+            !value_flow_resolves("p()", "function lit0")
+                && !value_flow_resolves("p()", "function lit1"),
+            "arr.pop() must NOT smear to the literal numeric cells"
+        );
+        assert!(
+            !value_flow_resolves("p()", "function dynwrite"),
+            "arr.pop() must NOT surface an element written at an arbitrary index"
+        );
+        // `at(0)` is a specific-index read.
+        assert!(
+            value_flow_resolves("picked()", "function lit0"),
+            "arr.at(0) should resolve to the index-0 element"
+        );
+        assert!(
+            !value_flow_resolves("picked()", "function lit1"),
+            "arr.at(0) must stay precise — no smear to the index-1 element"
         );
     }
 
