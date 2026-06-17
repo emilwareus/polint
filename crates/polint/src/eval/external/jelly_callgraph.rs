@@ -696,6 +696,32 @@ mod tests {
     }
 
     #[test]
+    fn class_static_field_super_alias_resolves() {
+        // `static g = super.f` aliases a static field to the superclass's static
+        // member, so `Sub.g()` dispatches to it. (super.js: `static g = super.f;
+        // B.g();` → A's static f arrow.)
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("alias.js"),
+            "class A {\n\
+             \x20   static f = () => { console.log(\"A.f\"); };\n\
+             }\n\
+             class B extends A {\n\
+             \x20   static g = super.f;\n\
+             }\n\
+             B.g();\n",
+        )
+        .unwrap();
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        assert!(
+            any_resolves(db, "B.g()", "console.log(\"A.f\")"),
+            "B.g() should resolve to A's static f via the super.f field alias"
+        );
+    }
+
+    #[test]
     fn class_static_block_calls_resolve() {
         // A class static block (`static { … }`) executes at class-definition time
         // and is its own function in Jelly's model. Before this fix it was never

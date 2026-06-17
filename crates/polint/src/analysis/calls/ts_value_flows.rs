@@ -1355,6 +1355,21 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                     if names.is_empty() {
                         continue;
                     };
+                    // `static g = super.f` aliases the field to the superclass's static
+                    // member `f`, so `Sub.g()` dispatches to it. Resolve against the
+                    // superclass's static targets here (before the mutable borrow of
+                    // `targets` below). (super.js: `static g = super.f; B.g();`.)
+                    let super_aliased: Option<Vec<FunctionId>> = property
+                        .value
+                        .as_ref()
+                        .filter(|_| property.r#static)
+                        .and_then(super_member_property)
+                        .and_then(|prop| {
+                            targets.super_name.as_ref().and_then(|super_name| {
+                                self.class_static_targets(super_name)
+                                    .and_then(|st| st.properties.get(prop).cloned())
+                            })
+                        });
                     let object = if property.r#static {
                         &mut targets.static_object
                     } else {
@@ -1371,6 +1386,10 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                                 object.add_property_target(name, function.id);
                             } else if matches!(value, Expression::ThisExpression(_)) {
                                 self_aliases.push(name);
+                            } else if let Some(super_targets) = &super_aliased {
+                                for target in super_targets {
+                                    object.add_property_target(name.clone(), *target);
+                                }
                             }
                         }
                     }
@@ -7377,6 +7396,15 @@ fn prototype_member_assignment_name<'a>(
 }
 
 /// The object name in `obj.__proto__ = …` (a dynamic prototype link).
+/// The property name in `super.X` (a static member access on `super`), used to
+/// resolve a `static g = super.X` field alias against the superclass's members.
+fn super_member_property<'a>(value: &'a Expression<'a>) -> Option<&'a str> {
+    let Expression::StaticMemberExpression(member) = value else {
+        return None;
+    };
+    matches!(&member.object, Expression::Super(_)).then(|| member.property.name.as_str())
+}
+
 fn proto_assignment_object_name<'a>(target: &'a AssignmentTarget<'a>) -> Option<&'a str> {
     let AssignmentTarget::StaticMemberExpression(member) = target else {
         return None;
