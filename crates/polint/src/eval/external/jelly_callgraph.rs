@@ -934,6 +934,59 @@ mod tests {
     }
 
     #[test]
+    fn this_method_call_site_carries_member_callee() {
+        // A `this.m()` call lowers to a callee with the `this.m` evidence, which is a
+        // `Member` callee (its base `this` is lower-case, so it is NOT a by-name
+        // `StaticMember`). This lets a resolved `this`-method edge line up with the
+        // call site instead of falling back to the bare `"call"` evidence that no
+        // resolved edge could match. Here the export-object method `outer` calls
+        // `this.inner()`, which the value flow walks with `this` bound to `obj`.
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("m.js"),
+            "var obj = {};\n\
+             obj.outer = function outer() { this.inner(); };\n\
+             obj.inner = function inner() { leaf(); };\n\
+             function leaf() {}\n\
+             obj.outer();\n",
+        )
+        .unwrap();
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        assert!(
+            any_resolves(db, "this.inner()", "function inner"),
+            "this.inner() should resolve to obj.inner now that the site carries a Member callee"
+        );
+    }
+
+    #[test]
+    fn points_to_heap_resolves_constructor_return_override() {
+        // A constructor that returns an object overrides the fresh instance (JS `new`
+        // semantics). `new Bar()` yields the inner `baz` the constructor returns, so
+        // `b()` resolves to `baz`.
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("ctor.js"),
+            "function Bar() {\n\
+            \x20 const x = function baz() { leaf(); };\n\
+            \x20 return x;\n\
+             }\n\
+             function leaf() {}\n\
+             const b = new Bar();\n\
+             b();\n",
+        )
+        .unwrap();
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        assert!(
+            heap_resolves(db, "b()", "function baz"),
+            "new Bar() should yield the returned baz so b() resolves to it"
+        );
+    }
+
+    #[test]
     fn reachability_prunes_dead_code_but_keeps_invoked_callbacks() {
         let dir = tempdir().unwrap();
         let root = dir.path();

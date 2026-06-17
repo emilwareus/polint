@@ -2938,6 +2938,15 @@ fn expression_text(expression: &Expression<'_>) -> Option<String> {
 fn callee_text(expression: &Expression<'_>) -> Option<String> {
     match expression {
         Expression::Identifier(identifier) => Some(identifier.name.to_string()),
+        // `this` as a callee base: `this.m()` yields evidence `this.m`. Its base
+        // segment `this` is lower-case, so `is_static_member_evidence` classifies it
+        // as a `Member` (not `StaticMember`) callee — the direct resolver does NOT
+        // name-match `Member`-kind callees (`lexical_callee_name` requires
+        // `StaticMember`), so this adds no spurious by-name edges. The value-flow
+        // this-method resolvers (and the points-to heap) DO produce precise `this.m`
+        // edges, which now line up with a `Member` call site instead of falling back
+        // to the bare `"call"` evidence that no resolved edge could match.
+        Expression::ThisExpression(_) => Some("this".to_string()),
         Expression::StaticMemberExpression(member) => {
             let object = callee_text(&member.object)?;
             Some(format!("{}.{}", object, member.property.name))
