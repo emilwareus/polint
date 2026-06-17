@@ -935,6 +935,46 @@ mod tests {
     }
 
     #[test]
+    fn absent_param_dead_branch_is_folded() {
+        // array-flatten shape: a wrapper called without its `depth` arg takes the
+        // `depth == null` branch; the `else` early-returns past dead code. With the
+        // param known-absent the value flow folds the guard and never WALKS the dead
+        // branch, so it emits NO value-flow (FunctionTokenFlow) edge there — while
+        // the live branch does. (The points-to heap is flow-insensitive and may
+        // still resolve the dead call; the fold operates at the value-flow layer.)
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("fl.js"),
+            "function wrap(depth) {\n\
+             \x20   var o = { live: () => { return 1; }, dead: () => { return 2; } };\n\
+             \x20   if (depth == null) { o.live(); return; }\n\
+             \x20   o.dead();\n\
+             }\n\
+             wrap();\n",
+        )
+        .unwrap();
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        use crate::analysis::calls::facts::CallAlgorithm;
+        let value_flow_resolves = |site: &str, tgt: &str| {
+            db.call_targets().iter().any(|t| {
+                t.algorithm == CallAlgorithm::FunctionTokenFlow
+                    && site_src(db, t).contains(site)
+                    && target_src(db, t).contains(tgt)
+            })
+        };
+        assert!(
+            value_flow_resolves("o.live()", "return 1"),
+            "the live `depth == null` branch must resolve via value-flow"
+        );
+        assert!(
+            !value_flow_resolves("o.dead()", "return 2"),
+            "the dead `else` branch must be folded away (no value-flow walk)"
+        );
+    }
+
+    #[test]
     fn points_to_heap_survives_adversarially_deep_nesting() {
         // Crash guard (C1): the harvester walks every JS/TS file in an arbitrary
         // repo, so deeply nested / generated input must not recurse the AST walk to

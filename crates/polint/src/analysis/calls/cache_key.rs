@@ -6,6 +6,7 @@ pub(crate) fn calls_provider_parameter_digest() -> Digest {
         "calls_provider_parameters",
         &[
             "calls-facts-2",
+            "ts-absence-fold-1",
             "ts-super-ctor-args-3",
             "call_sites",
             "call_targets",
@@ -35,6 +36,7 @@ mod calls_provider_parameters {
                 "calls_provider_parameters",
                 &[
                     "calls-facts-2",
+                    "ts-absence-fold-1",
                     "ts-super-ctor-args-3",
                     "call_sites",
                     "call_targets",

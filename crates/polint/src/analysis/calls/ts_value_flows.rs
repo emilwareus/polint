@@ -1694,6 +1694,72 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         Some(object)
     }
 
+    /// Statically decide an `if` test that depends only on a known-absent
+    /// parameter (`FlowEnv::absent`): `Some(true)`/`Some(false)` selects the live
+    /// arm, `None` means undecidable (walk both arms — unchanged behavior). Kept
+    /// to provably-safe shapes: `undefined` is nullish, falsy, and yields `false`
+    /// for every relational comparison (NaN semantics).
+    fn decide_branch(&self, test: &Expression<'ast>, env: &FlowEnv) -> Option<bool> {
+        use oxc_ast::ast::UnaryOperator;
+        let is_absent = |e: &Expression<'ast>| matches!(e, Expression::Identifier(id) if env.absent.contains(id.name.as_str()));
+        let is_nullish = |e: &Expression<'ast>| {
+            matches!(e, Expression::NullLiteral(_))
+                || matches!(e, Expression::Identifier(id) if id.name == "undefined")
+        };
+        match test {
+            Expression::ParenthesizedExpression(p) => self.decide_branch(&p.expression, env),
+            // `!x` with x undefined -> true; bare `if (x)` with x undefined -> false.
+            Expression::UnaryExpression(u)
+                if u.operator == UnaryOperator::LogicalNot && is_absent(&u.argument) =>
+            {
+                Some(true)
+            }
+            Expression::Identifier(id) if env.absent.contains(id.name.as_str()) => Some(false),
+            Expression::BinaryExpression(b) => {
+                // `typeof x === 'undefined'` / `!== 'undefined'`.
+                if let Expression::UnaryExpression(u) = &b.left
+                    && u.operator == UnaryOperator::Typeof
+                    && is_absent(&u.argument)
+                    && let Expression::StringLiteral(s) = &b.right
+                {
+                    let undef = s.value == "undefined";
+                    return match b.operator {
+                        BinaryOperator::Equality | BinaryOperator::StrictEquality => Some(undef),
+                        BinaryOperator::Inequality | BinaryOperator::StrictInequality => {
+                            Some(!undef)
+                        }
+                        _ => None,
+                    };
+                }
+                let abs = is_absent(&b.left) || is_absent(&b.right);
+                let nullish_cmp = (is_absent(&b.left) && is_nullish(&b.right))
+                    || (is_absent(&b.right) && is_nullish(&b.left));
+                if nullish_cmp {
+                    // `x == null` / `x === undefined` -> true; `!=` / `!==` -> false.
+                    match b.operator {
+                        BinaryOperator::Equality | BinaryOperator::StrictEquality => Some(true),
+                        BinaryOperator::Inequality | BinaryOperator::StrictInequality => {
+                            Some(false)
+                        }
+                        _ => None,
+                    }
+                } else if abs {
+                    // Relational comparison with `undefined` is always false (NaN).
+                    match b.operator {
+                        BinaryOperator::GreaterThan
+                        | BinaryOperator::GreaterEqualThan
+                        | BinaryOperator::LessThan
+                        | BinaryOperator::LessEqualThan => Some(false),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
     fn collect_statement(
         &mut self,
         statement: &'ast Statement<'ast>,
@@ -1725,9 +1791,19 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             }
             Statement::IfStatement(statement) => {
                 self.collect_expression(&statement.test, owner, env);
-                self.collect_statement(&statement.consequent, owner, env);
-                if let Some(alternate) = &statement.alternate {
-                    self.collect_statement(alternate, owner, env);
+                match self.decide_branch(&statement.test, env) {
+                    Some(true) => self.collect_statement(&statement.consequent, owner, env),
+                    Some(false) => {
+                        if let Some(alternate) = &statement.alternate {
+                            self.collect_statement(alternate, owner, env);
+                        }
+                    }
+                    None => {
+                        self.collect_statement(&statement.consequent, owner, env);
+                        if let Some(alternate) = &statement.alternate {
+                            self.collect_statement(alternate, owner, env);
+                        }
+                    }
                 }
             }
             Statement::ReturnStatement(statement) => {
@@ -3944,12 +4020,21 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             .bindings
             .insert("arguments".to_string(), all_arguments);
 
+        let arg_count = arguments.len().max(object_arguments.len());
         for (index, pattern) in flow.params.iter().enumerate() {
             if let Some(targets) = arguments.get(index) {
                 bind_param_pattern(pattern, targets, callee_env);
             }
             if let Some(Some(targets)) = object_arguments.get(index) {
                 bind_param_object_pattern(pattern, targets, callee_env);
+            }
+            // A trailing parameter with no corresponding positional argument is
+            // `undefined` for this invocation. Record it so `decide_branch` can
+            // fold a null/undefined guard on it (see `FlowEnv::absent`).
+            if index >= arg_count
+                && let ParamPattern::Binding(name) = pattern
+            {
+                callee_env.absent.insert(name.clone());
             }
         }
         if let Some(rest) = &flow.rest {
@@ -4046,6 +4131,33 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         env: &mut FlowEnv,
     ) -> CollectionTargets {
         for statement in statements {
+            // Absence-folded guard with an early return: `if (depth == null) { return … }`
+            // followed by `return flattenWithDepth(…)`. When the param is known-absent
+            // the guard's live arm is taken; if it terminates (return/throw), the rest
+            // of the block is dead and must not be walked (so `flattenWithDepth` is
+            // never reached). The plain `collect_invocation_statement` only stops on a
+            // non-empty *return target*, which misses guards whose live arm returns a
+            // non-callable (an array), so handle the termination here.
+            if let Statement::IfStatement(if_stmt) = statement
+                && let Some(branch) = self.decide_branch(&if_stmt.test, env)
+            {
+                self.collect_expression(&if_stmt.test, owner, env);
+                let live = if branch {
+                    Some(&if_stmt.consequent)
+                } else {
+                    if_stmt.alternate.as_ref()
+                };
+                if let Some(live_stmt) = live {
+                    let returned = self.collect_invocation_statement(live_stmt, owner, env);
+                    if !returned.is_empty() {
+                        return returned;
+                    }
+                    if branch_terminates(live_stmt) {
+                        return CollectionTargets::default();
+                    }
+                }
+                continue;
+            }
             let returned = self.collect_invocation_statement(statement, owner, env);
             if !returned.is_empty() {
                 return returned;
@@ -4074,12 +4186,25 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             }
             Statement::IfStatement(statement) => {
                 self.collect_expression(&statement.test, owner, env);
-                let mut targets =
-                    self.collect_invocation_statement(&statement.consequent, owner, env);
-                if let Some(alternate) = &statement.alternate {
-                    targets.extend(self.collect_invocation_statement(alternate, owner, env));
+                match self.decide_branch(&statement.test, env) {
+                    Some(true) => {
+                        self.collect_invocation_statement(&statement.consequent, owner, env)
+                    }
+                    Some(false) => statement
+                        .alternate
+                        .as_ref()
+                        .map(|alternate| self.collect_invocation_statement(alternate, owner, env))
+                        .unwrap_or_default(),
+                    None => {
+                        let mut targets =
+                            self.collect_invocation_statement(&statement.consequent, owner, env);
+                        if let Some(alternate) = &statement.alternate {
+                            targets
+                                .extend(self.collect_invocation_statement(alternate, owner, env));
+                        }
+                        targets
+                    }
                 }
-                targets
             }
             _ => {
                 self.collect_statement(statement, owner, env);
@@ -6707,6 +6832,13 @@ struct FlowEnv {
     /// Kept separate from the prototype's members being merged into `o` (which
     /// drives direct `o.m()` dispatch) so `super` resolves to the proto only.
     object_prototypes: BTreeMap<String, ObjectTargets>,
+    /// Parameter names that are KNOWN to be `undefined` in this invocation because
+    /// the resolved call passed fewer positional arguments than the function
+    /// declares (a syntactic arg-count shortfall — never inferred from value
+    /// analysis). Lets `decide_branch` fold a guard like `if (depth == null)` to its
+    /// live arm, so the dead arm's calls are never walked (demand-driven pruning of
+    /// `array-flatten`'s `flattenWithDepth` recursion under express's no-`depth` call).
+    absent: std::collections::BTreeSet<String>,
 }
 
 /// The ordered result sequence of a generator: each `yield` (with `yield*`
@@ -7320,6 +7452,18 @@ fn bind_collection_pattern(
             bind_collection_pattern(&pattern.left, targets, env);
         }
         _ => {}
+    }
+}
+
+/// Whether control definitely leaves the enclosing block at `statement`
+/// (`return`/`throw`, or a block whose last statement does), so statements after
+/// it are unreachable. Used to prune the tail after an absence-folded early-return
+/// guard (`if (depth == null) { return … }`).
+fn branch_terminates(statement: &Statement<'_>) -> bool {
+    match statement {
+        Statement::ReturnStatement(_) | Statement::ThrowStatement(_) => true,
+        Statement::BlockStatement(block) => block.body.last().is_some_and(branch_terminates),
+        _ => false,
     }
 }
 
