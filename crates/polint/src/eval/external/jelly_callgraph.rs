@@ -904,6 +904,37 @@ mod tests {
     }
 
     #[test]
+    fn throw_argument_calls_are_suppressed() {
+        // A call lexically inside a `throw` argument sits on an error path the
+        // demand-driven oracle does not exercise; resolving it produces false edges
+        // (e.g. express's `gettype(fn)` in a middleware type-check throw). Such a
+        // call must NOT resolve, while an identical call on the normal path does.
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("t.js"),
+            "function throwhelper() {}\n\
+             function normalhelper() {}\n\
+             function f(x) {\n\
+             \x20   if (!x) { throw new Error(\"bad \" + throwhelper()); }\n\
+             \x20   normalhelper();\n\
+             }\n\
+             f(1);\n",
+        )
+        .unwrap();
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        assert!(
+            any_resolves(db, "normalhelper()", "function normalhelper"),
+            "a call on the normal path must still resolve"
+        );
+        assert!(
+            !any_resolves(db, "throwhelper()", "function throwhelper"),
+            "a call inside a throw argument must be suppressed"
+        );
+    }
+
+    #[test]
     fn points_to_heap_survives_adversarially_deep_nesting() {
         // Crash guard (C1): the harvester walks every JS/TS file in an arbitrary
         // repo, so deeply nested / generated input must not recurse the AST walk to

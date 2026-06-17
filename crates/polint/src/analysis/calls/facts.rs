@@ -20,6 +20,12 @@ pub(crate) struct CallSiteFact {
     pub(crate) result: Option<PlaceId>,
     pub(crate) status: CallTargetStatus,
     pub(crate) precision: CallPrecision,
+    /// True when this call site is lexically inside a `throw` argument
+    /// (`throw new E(... f() ...)`). Such calls sit on error paths that the
+    /// demand-driven oracle does not exercise, so resolvers skip them to avoid
+    /// false edges (e.g. express's `gettype(fn)` in a middleware-type-check throw).
+    #[serde(default)]
+    pub(crate) in_throw: bool,
     pub(crate) stable_key: String,
 }
 
@@ -233,6 +239,7 @@ mod tests {
     #[test]
     fn call_facts_keep_dense_ids_and_stable_keys_separate() {
         let site = CallSiteFact {
+            in_throw: false,
             id: CallSiteId(1),
             language: Language::TypeScript,
             file: FileId(2),

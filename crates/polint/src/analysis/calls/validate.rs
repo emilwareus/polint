@@ -637,6 +637,7 @@ mod tests {
 
     fn site(id: u64, stable_key: &str) -> CallSiteFact {
         CallSiteFact {
+            in_throw: false,
             id: CallSiteId(id),
             language: Language::TypeScript,
             file: FileId(0),

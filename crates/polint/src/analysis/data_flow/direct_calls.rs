@@ -1171,6 +1171,7 @@ mod tests {
 
     fn call_site(receiver: Option<PlaceId>) -> CallSiteFact {
         CallSiteFact {
+            in_throw: false,
             id: CallSiteId(2),
             language: Language::TypeScript,
             file: FileId(1),

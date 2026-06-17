@@ -25,6 +25,12 @@ pub(crate) fn resolve_direct_call_targets(
         if has_unsupported_call_evidence(db, site) {
             continue;
         }
+        // A call lexically inside a `throw` argument sits on an error path the
+        // demand-driven oracle does not exercise; resolving it produces false
+        // edges (e.g. express `Router.use` -> `gettype` in a type-check throw).
+        if site.in_throw {
+            continue;
+        }
         // A method call on a built-in global namespace (`Object.create()`,
         // `Array.from()`, `Promise.resolve()`, ...) is a native call; it must
         // never resolve to a same-named user function by property name. Both the
@@ -825,6 +831,7 @@ mod tests {
             line: u32,
         ) -> CallSiteFact {
             CallSiteFact {
+                in_throw: false,
                 id: CallSiteId(id),
                 language: Language::TypeScript,
                 file: self.file,
@@ -1004,6 +1011,7 @@ mod non_direct_cases {
         kind: CallSyntaxKind,
     ) -> CallSiteFact {
         CallSiteFact {
+            in_throw: false,
             id: CallSiteId(id),
             language,
             file,

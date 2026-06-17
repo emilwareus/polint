@@ -1180,6 +1180,7 @@ mod tests {
         use crate::analysis::calls::facts::{CallCallee, CallPrecision, CallSyntaxKind};
         use crate::analysis::ids::{CallSiteId, MirBodyId, MirOpId};
         crate::analysis::calls::facts::CallSiteFact {
+            in_throw: false,
             id: CallSiteId(id),
             language: Language::Go,
             file: FileId(1),

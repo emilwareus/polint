@@ -7721,6 +7721,7 @@ mod tests {
         };
 
         CallSiteFact {
+            in_throw: false,
             id: CallSiteId(id),
             language: Language::TypeScript,
             file,

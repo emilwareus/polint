@@ -99,6 +99,11 @@ pub(crate) fn resolve_js_points_to_targets(
             if site.span.start_byte < record.start || site.span.end_byte > record.end {
                 continue;
             }
+            // Calls inside a `throw` argument are on error paths the oracle does
+            // not exercise — skip them (mirrors the direct/value-flow resolvers).
+            if site.in_throw {
+                continue;
+            }
             // Identifier/member callees match by name within the span; a
             // call-result/computed callee (`f(a)(b)`, `x[k]()`) has no usable name
             // hint, so match the site whose span is EXACTLY the call expression's

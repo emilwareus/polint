@@ -6456,7 +6456,8 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             return;
         }
         for site in self.sites.iter().copied().filter(|site| {
-            site.caller == owner.id
+            !site.in_throw
+                && site.caller == owner.id
                 && site.span.start_byte >= span.start
                 && site.span.end_byte <= span.end
                 && matches!(
@@ -6497,7 +6498,8 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             return;
         }
         for site in self.sites.iter().copied().filter(|site| {
-            site.caller == owner.id
+            !site.in_throw
+                && site.caller == owner.id
                 && site.span.start_byte >= span.start
                 && site.span.end_byte <= span.end
                 && matches!(
@@ -6541,7 +6543,8 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             return;
         }
         for site in self.sites.iter().copied().filter(|site| {
-            site.caller == owner.id
+            !site.in_throw
+                && site.caller == owner.id
                 && site.span.start_byte == span.start
                 && site.span.end_byte == span.end
         }) {
@@ -6582,7 +6585,8 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             .iter()
             .copied()
             .filter(|site| {
-                site.caller == owner.id
+                !site.in_throw
+                    && site.caller == owner.id
                     && site.span.start_byte <= span.start
                     && site.span.end_byte >= span.end
             })
@@ -11332,6 +11336,7 @@ used();
         id: u64,
     ) -> CallSiteFact {
         CallSiteFact {
+            in_throw: false,
             id: CallSiteId(id),
             language: Language::JavaScript,
             file,
@@ -11364,6 +11369,7 @@ used();
         id: u64,
     ) -> CallSiteFact {
         CallSiteFact {
+            in_throw: false,
             id: CallSiteId(id),
             language: Language::JavaScript,
             file,
@@ -11395,6 +11401,7 @@ used();
         id: u64,
     ) -> CallSiteFact {
         CallSiteFact {
+            in_throw: false,
             id: CallSiteId(id),
             language: Language::JavaScript,
             file,

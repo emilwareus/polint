@@ -656,6 +656,7 @@ mod calls_provider {
         use crate::analysis::ids::{CallSiteId, CallTargetId, MirBodyId, MirOpId, PlaceId};
 
         let site = CallSiteFact {
+            in_throw: false,
             id: CallSiteId(id_offset),
             language: Language::TypeScript,
             file: FileId(1),

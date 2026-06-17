@@ -744,6 +744,7 @@ mod solver_projection_tests {
         db.push_function(ts_function(FunctionId(1), file, "callee", Vec::new()));
         db.replace_call_facts(CallOutput {
             sites: vec![CallSiteFact {
+                in_throw: false,
                 id: CallSiteId(0),
                 language: Language::TypeScript,
                 file,
@@ -835,6 +836,7 @@ mod solver_projection_tests {
         db.push_function(go_function(FunctionId(1), file, "callee", Vec::new()));
         db.replace_call_facts(CallOutput {
             sites: vec![CallSiteFact {
+                in_throw: false,
                 id: CallSiteId(0),
                 language: Language::Go,
                 file,
@@ -1013,6 +1015,7 @@ mod solver_projection_tests {
         db.replace_call_facts(CallOutput {
             sites: vec![
                 CallSiteFact {
+                    in_throw: false,
                     id: CallSiteId(0),
                     language: Language::Go,
                     file,
@@ -1034,6 +1037,7 @@ mod solver_projection_tests {
                     stable_key: "z-correct-callsite".to_string(),
                 },
                 CallSiteFact {
+                    in_throw: false,
                     id: CallSiteId(1),
                     language: Language::Go,
                     file,
