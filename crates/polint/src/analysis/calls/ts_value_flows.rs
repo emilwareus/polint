@@ -1457,8 +1457,13 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                         &mut targets.instance_self_aliases
                     };
                     if let Some(value) = &property.value {
+                        // The value of `(f1(), function(){})` is its last sub-expression;
+                        // unwrap parens/sequences so a field initialized to a comma-
+                        // sequence resolves to the trailing function. (classes.js:
+                        // `static staticProperty = (f1(), function(){}); C6.staticProperty()`.)
+                        let resolved = field_value_expression(value);
                         for name in names {
-                            if let Some(function) = self.function_for_expression(value) {
+                            if let Some(function) = self.function_for_expression(resolved) {
                                 object.add_property_target(name, function.id);
                             } else if matches!(value, Expression::ThisExpression(_)) {
                                 self_aliases.push(name);
@@ -7472,6 +7477,20 @@ fn prototype_member_assignment_name<'a>(
 }
 
 /// The object name in `obj.__proto__ = …` (a dynamic prototype link).
+/// The expression a parenthesized/comma-sequence evaluates to: unwrap parens and
+/// take the last operand of a sequence (`(a(), fn)` → `fn`). Used to resolve a
+/// class field initialized to such an expression to its trailing function value.
+fn field_value_expression<'a>(value: &'a Expression<'a>) -> &'a Expression<'a> {
+    match value {
+        Expression::ParenthesizedExpression(paren) => field_value_expression(&paren.expression),
+        Expression::SequenceExpression(sequence) => sequence
+            .expressions
+            .last()
+            .map_or(value, field_value_expression),
+        _ => value,
+    }
+}
+
 /// The first `super(...)` call among a constructor's top-level statements.
 fn find_super_call<'a>(statements: &'a [Statement<'a>]) -> Option<&'a CallExpression<'a>> {
     statements.iter().find_map(|statement| {

@@ -696,6 +696,31 @@ mod tests {
     }
 
     #[test]
+    fn static_field_sequence_value_resolves() {
+        // A field initialized to a comma-sequence takes its last operand as the
+        // value, so `static p = (helper(), function(){})` makes `C.p` the trailing
+        // function. (classes.js: `static staticProperty = (f1(), function(){});
+        // C6.staticProperty()`.)
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("seq.js"),
+            "function helper() {}\n\
+             class C {\n\
+             \x20   static p = (helper(), function() { console.log(\"v\"); });\n\
+             }\n\
+             C.p();\n",
+        )
+        .unwrap();
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        assert!(
+            any_resolves(db, "C.p()", "console.log(\"v\")"),
+            "C.p() should resolve to the trailing function of the sequence initializer"
+        );
+    }
+
+    #[test]
     fn super_constructor_argument_flows() {
         // `super(arg)` flows the subclass's argument into the superclass
         // constructor's parameter, so a parameter invoked in the superclass
