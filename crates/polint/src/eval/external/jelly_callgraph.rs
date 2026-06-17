@@ -658,6 +658,44 @@ mod tests {
     }
 
     #[test]
+    fn object_literal_super_resolves() {
+        // `super.m()` inside an object-literal method resolves against the object's
+        // prototype, set via `Object.setPrototypeOf(o, p)` or `o.__proto__ = p`.
+        // Two prior gaps: (1) object shorthand-method bodies were never lowered (the
+        // MIR candidate span didn't match the property-span FunctionFact), so
+        // `super.m1()` got no call site; (2) the value-flow didn't bind `super` for
+        // object methods. A negative case guards against over-resolving `super` in
+        // an object with no prototype.
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("o.js"),
+            "var q1 = { m1() { console.log(\"q1.m1\"); } };\n\
+             var q2 = { m2() { super.m1(); } };\n\
+             Object.setPrototypeOf(q2, q1);\n\
+             q2.m2();\n\
+             var q3 = { m3() { super.m1(); } };\n\
+             q3.__proto__ = q1;\n\
+             q3.m3();\n\
+             var lone = { z() { super.nope(); } };\n\
+             lone.z();\n",
+        )
+        .unwrap();
+        let output = crate::eval::observed::run_kernel_for_repo_for_test(root).unwrap();
+        let db = &output.db;
+        // setPrototypeOf path: q2.m2's super.m1() → q1.m1.
+        assert!(
+            any_resolves(db, "super.m1()", "console.log(\"q1.m1\")"),
+            "super.m1() in an object method should resolve to the prototype's m1"
+        );
+        // PRECISION: an object with no prototype must NOT resolve super.nope().
+        assert!(
+            !any_resolves(db, "super.nope()", "z()"),
+            "super in a prototype-less object must not resolve to the object itself"
+        );
+    }
+
+    #[test]
     fn class_static_block_calls_resolve() {
         // A class static block (`static { … }`) executes at class-definition time
         // and is its own function in Jelly's model. Before this fix it was never

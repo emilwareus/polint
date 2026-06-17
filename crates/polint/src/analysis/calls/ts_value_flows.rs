@@ -1990,7 +1990,8 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             && let Some(proto) = self.object_targets_from_expression(&assignment.right, env)
             && let Some(target) = env.objects.get_mut(object_name)
         {
-            target.merge(proto);
+            target.merge(proto.clone());
+            env.object_prototypes.insert(object_name.to_string(), proto);
             return;
         }
 
@@ -3342,7 +3343,8 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
                     .and_then(argument_expression)
                     .and_then(|expression| self.object_targets_from_expression(expression, env));
                 if let (Some(target), Some(proto)) = (env.objects.get_mut(target_name), proto) {
-                    target.merge(proto);
+                    target.merge(proto.clone());
+                    env.object_prototypes.insert(target_name.to_string(), proto);
                 }
             }
             Some("Object.defineProperties") => {
@@ -3474,6 +3476,13 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
         let Some(receiver) = env.objects.get(object_name).cloned() else {
             return;
         };
+        // `super.m()` inside an object-literal method resolves against the object's
+        // prototype. Bind `current_super` to the recorded prototype ONLY for objects
+        // given one via `Object.setPrototypeOf` / `__proto__` — not every receiver —
+        // so `super` in unrelated object methods stays unresolved (no false edges).
+        // (super.js / super3.js `q2.m2(){ super.m1() }` → q1.m1.)
+        let saved_super = self.current_super.take();
+        let object_super = env.object_prototypes.get(object_name).cloned();
         let mut merged_receiver = receiver.clone();
         for target in targets {
             let Some(flow) = self.function_flows_by_id.get(target).cloned() else {
@@ -3481,12 +3490,14 @@ impl<'db, 'ast, 'env> TsValueFlowCollector<'db, 'ast, 'env> {
             };
             let mut callee_env = env.clone();
             callee_env.this_object = receiver.clone();
+            self.current_super = object_super.clone();
             self.bind_call_arguments_to_flow(&flow, call, env, &mut callee_env);
             for statement in &flow.body.statements {
                 self.collect_statement(statement, flow.function, &mut callee_env);
             }
             merged_receiver.merge(callee_env.this_object);
         }
+        self.current_super = saved_super;
         env.objects.insert(object_name.to_string(), merged_receiver);
     }
 
@@ -6557,6 +6568,12 @@ struct FlowEnv {
     /// copies every own property of each source onto `dst` in place (like the
     /// named-target `Object.assign`), which is how Express assembles `app`.
     merge_helpers: std::collections::BTreeSet<String>,
+    /// Explicit prototype object of a named object, recorded when
+    /// `Object.setPrototypeOf(o, p)` / `o.__proto__ = p` is seen. Used to bind
+    /// `super` while walking `o`'s own methods (object-literal `super.m()`).
+    /// Kept separate from the prototype's members being merged into `o` (which
+    /// drives direct `o.m()` dispatch) so `super` resolves to the proto only.
+    object_prototypes: BTreeMap<String, ObjectTargets>,
 }
 
 /// The ordered result sequence of a generator: each `yield` (with `yield*`

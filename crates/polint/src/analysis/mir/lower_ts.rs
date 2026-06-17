@@ -731,6 +731,28 @@ fn collect_anonymous_functions_from_expression<'ast>(
         Expression::ObjectExpression(object) => {
             for property in &object.properties {
                 match property {
+                    // A shorthand method (`{ m() { … } }`) is emitted by the frontend
+                    // at the PROPERTY span (anonymous_callable_name over property.span),
+                    // but its `value` FunctionExpression span starts at `(` — so the
+                    // generic FunctionExpression arm would mint a candidate at a span
+                    // that no FunctionFact matches, and the method body would never be
+                    // lowered (no call sites for `super.m()`, `this.x()`, direct calls
+                    // inside it). Lower it at the property span to match the fact.
+                    ObjectPropertyKind::ObjectProperty(property)
+                        if property.method
+                            && let Expression::FunctionExpression(function) = &property.value
+                            && let Some(body) = function.body.as_deref() =>
+                    {
+                        functions.push(TsFunctionCandidate {
+                            name: anonymous_callable_name(property.span.start, property.span.end),
+                            span: property.span,
+                            parameters: parameter_names(&function.params),
+                            body: CandidateBody::Statements(&body.statements),
+                            r#async: function.r#async,
+                            span_for_unsupported: function.span,
+                        });
+                        collect_anonymous_functions_from_body(body, functions);
+                    }
                     ObjectPropertyKind::ObjectProperty(property) => {
                         collect_anonymous_functions_from_expression(
                             &property.value,

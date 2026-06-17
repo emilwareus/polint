@@ -6,6 +6,7 @@ pub(crate) fn calls_provider_parameter_digest() -> Digest {
         "calls_provider_parameters",
         &[
             "calls-facts-1",
+            "ts-objlit-super-1",
             "call_sites",
             "call_targets",
             "unresolved_calls",
@@ -34,6 +35,7 @@ mod calls_provider_parameters {
                 "calls_provider_parameters",
                 &[
                     "calls-facts-1",
+                    "ts-objlit-super-1",
                     "call_sites",
                     "call_targets",
                     "unresolved_calls",
