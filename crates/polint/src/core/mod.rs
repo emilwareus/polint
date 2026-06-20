@@ -6812,9 +6812,9 @@ pub struct Capabilities {
     pub symbols: bool,
     /// Needs symbol reference facts; this also requires symbol identities.
     pub references: bool,
-    /// Preview policy-level semantic events. Fails closed until event-query facts are supported.
+    /// Preview policy-level semantic events. Call-event matching is provider-backed.
     pub events: bool,
-    /// Preview policy-level call queries. Fails closed until call-query facts are supported.
+    /// Preview policy-level call queries. Bounded reachable-call checks are provider-backed.
     pub calls: bool,
     /// Preview policy-level control-flow queries. Fails closed until guard/lifecycle facts are supported.
     pub control_flow: bool,

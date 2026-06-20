@@ -1002,7 +1002,7 @@ pub(crate) fn rule(
         "preview rule body must not run while preview capabilities are unsupported: {json:#?}"
     );
     let capability_diagnostics = diagnostics_for_rule(&json, "polint/capability");
-    for capability in ["events", "calls", "control_flow", "dataflow"] {
+    for capability in ["control_flow", "dataflow"] {
         assert!(
             capability_diagnostics.iter().any(|diagnostic| {
                 diagnostic_has_evidence(diagnostic, "rule", "local/phase55-preview")
@@ -1010,6 +1010,15 @@ pub(crate) fn rule(
                     && diagnostic_has_evidence(diagnostic, "status", "unsupported")
             }),
             "expected unsupported {capability} capability diagnostic: {json:#?}"
+        );
+    }
+    for capability in ["events", "calls"] {
+        assert!(
+            capability_diagnostics.iter().all(|diagnostic| {
+                !diagnostic_has_evidence(diagnostic, "rule", "local/phase55-preview")
+                    || !diagnostic_has_evidence(diagnostic, "capability", capability)
+            }),
+            "events/calls should be supported in Phase 56: {json:#?}"
         );
     }
 
@@ -1057,6 +1066,122 @@ pub(crate) fn rule(
             "preview fact view metadata should include {view_type}/{capability}: {rule:#?}"
         );
     }
+}
+
+#[test]
+fn phase56_events_and_calls_rule_reports_json() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_file(
+        &temp.path().join("go.mod"),
+        "module example.com/policyquery\n\ngo 1.22\n",
+    );
+    write_phase41_rule_pack(
+        temp.path(),
+        r#"use std::process::ExitCode;
+use polint::runner;
+mod rule;
+fn main() -> ExitCode { runner::run_cli(vec![rule::rule()]) }
+"#,
+        r#"use polint::sdk::prelude::*;
+
+#[polint::rule(id = "local/phase56-events-calls", description = "Phase 56 events and calls", severity = "error")]
+pub(crate) fn rule(
+    ctx: &mut RuleCtx<'_>,
+    events: Events<'_>,
+    calls: Calls<'_>,
+) -> RuleResult {
+    for violation in events.matching(EventPattern::call("dangerous")) {
+        ctx.report(violation.diagnostic(
+            ctx.rule_id(),
+            "dangerous call event matched",
+        ));
+    }
+
+    let mut query = ReachQuery::new(EventPattern::call("dangerous"));
+    query.roots = vec![EventPattern::call("main")];
+    query.max_depth = 4;
+    query.max_paths = 4;
+    query.minimum_precision = PolicyPrecision::Conservative;
+    query.minimum_confidence = PolicyConfidence::Low;
+
+    for violation in calls.forbidden_reachable(query) {
+        ctx.report(violation.diagnostic(
+            ctx.rule_id(),
+            "dangerous call is reachable from main",
+        ));
+    }
+
+    Ok(())
+}
+"#,
+    );
+    write_file(
+        &temp.path().join("src/main.go"),
+        r#"package main
+
+func main() {
+	handler()
+}
+
+func handler() {
+	dangerous()
+}
+
+func dangerous() {}
+"#,
+    );
+
+    let json = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["check", "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+
+    let diagnostics = diagnostics_for_rule(&json, "local/phase56-events-calls");
+    assert_eq!(
+        diagnostics.len(),
+        2,
+        "expected event and reach diagnostics: {json:#?}"
+    );
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["message"] == "dangerous call event matched"
+                && diagnostic_has_evidence(diagnostic, "target", "dangerous")
+                && diagnostic_has_evidence(diagnostic, "policy_precision", "heuristic")
+        }),
+        "missing event diagnostic evidence: {json:#?}"
+    );
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["message"] == "dangerous call is reachable from main"
+                && diagnostic_has_evidence(diagnostic, "root", "main")
+                && diagnostic_has_evidence(diagnostic, "target", "dangerous")
+                && diagnostic_has_evidence(diagnostic, "confidence", "high")
+        }),
+        "missing reachable-call diagnostic evidence: {json:#?}"
+    );
+    assert!(
+        diagnostics_for_rule(&json, "polint/capability")
+            .iter()
+            .all(|diagnostic| {
+                !diagnostic_has_evidence(diagnostic, "capability", "events")
+                    && !diagnostic_has_evidence(diagnostic, "capability", "calls")
+            }),
+        "events/calls should execute without capability diagnostics: {json:#?}"
+    );
 }
 
 #[test]
@@ -2749,7 +2874,6 @@ fn direct_calls_internals_stay_private() {
     }
     assert_direct_calls_public_surfaces_are_private();
     assert_direct_calls_cli_help_is_private();
-    assert!(!repo_root().join("docs/facts/calls.md").exists());
     assert!(!repo_root().join("docs/facts/call-graph.md").exists());
 
     let source = fs::read_to_string(temp.path().join(".polint/rules/src/main.rs")).unwrap();

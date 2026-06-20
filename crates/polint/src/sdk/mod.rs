@@ -53,7 +53,8 @@ pub mod prelude {
     };
     pub use crate::sdk::policy::{
         BarrierPattern, EventPattern, FlowQuery, GuardPattern, GuardQuery, LifecycleQuery,
-        PolicyPrecision, PolicyStatus, PolicyViolation, ReachQuery, SinkPattern, SourcePattern,
+        PolicyConfidence, PolicyPrecision, PolicyStatus, PolicyViolation, ReachQuery, SinkPattern,
+        SourcePattern,
     };
     pub use crate::sdk::scope::{file_in_scope, file_matches_globs, glob_matches};
 }

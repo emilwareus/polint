@@ -683,16 +683,16 @@ fn support_for(capability: &str) -> CapabilityAccumulator {
             Some("docs/facts/capability-plans.md".to_string()),
         ),
         "events" => (
-            CapabilitySupportStatus::Unsupported,
-            Some("Preview event policy queries are reserved until event facts have docs, tests, and provider-backed behavior.".to_string()),
+            CapabilitySupportStatus::Supported,
             None,
-            Some("docs/facts/events.md".to_string()),
+            None,
+            None,
         ),
         "calls" => (
-            CapabilitySupportStatus::Unsupported,
-            Some("Preview call policy queries are reserved until call-query facts have docs, tests, and provider-backed behavior.".to_string()),
+            CapabilitySupportStatus::Supported,
             None,
-            Some("docs/facts/calls.md".to_string()),
+            None,
+            None,
         ),
         "control_flow" => (
             CapabilitySupportStatus::Unsupported,
@@ -1128,7 +1128,7 @@ mod tests {
     }
 
     #[test]
-    fn preview_policy_capabilities_remain_fail_closed() {
+    fn policy_capabilities_report_phase_support_boundaries() {
         let plan = AnalysisPlan::from_capability_names_for_test(&[
             "events",
             "calls",
@@ -1148,11 +1148,7 @@ mod tests {
                 })
                 .collect::<Vec<_>>(),
             vec![
-                (
-                    "calls",
-                    CapabilitySupportStatus::Unsupported,
-                    Some("docs/facts/calls.md")
-                ),
+                ("calls", CapabilitySupportStatus::Supported, None),
                 (
                     "control_flow",
                     CapabilitySupportStatus::Unsupported,
@@ -1163,16 +1159,12 @@ mod tests {
                     CapabilitySupportStatus::Unsupported,
                     Some("docs/facts/data-flow.md")
                 ),
-                (
-                    "events",
-                    CapabilitySupportStatus::Unsupported,
-                    Some("docs/facts/events.md")
-                ),
+                ("events", CapabilitySupportStatus::Supported, None),
             ]
         );
 
         let diagnostics = plan.diagnostics();
-        for capability in ["events", "calls", "control_flow", "dataflow"] {
+        for capability in ["control_flow", "dataflow"] {
             assert!(
                 diagnostics.iter().any(|diagnostic| {
                     diagnostic.rule_id == "polint/capability"
@@ -1181,6 +1173,16 @@ mod tests {
                         })
                 }),
                 "missing fail-closed diagnostic for {capability}: {diagnostics:#?}"
+            );
+        }
+        for capability in ["events", "calls"] {
+            assert!(
+                diagnostics.iter().all(|diagnostic| {
+                    !diagnostic.evidence.iter().any(|evidence| {
+                        evidence.label == "capability" && evidence.value == capability
+                    })
+                }),
+                "supported capability {capability} should not emit diagnostics: {diagnostics:#?}"
             );
         }
     }

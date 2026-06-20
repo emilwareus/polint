@@ -20,7 +20,7 @@ Phase numbering continues from v1.3's last phase 54. v1.4 promotes a narrow poli
 ## Phases (v1.4)
 
 - [x] **Phase 55: SDK Query Vocabulary and Preview Contract** - Define preview views, query structs, pattern structs, capability derivation, and the "one public way" API contract. Completed 2026-06-20.
-- [ ] **Phase 56: Events and Calls Query Surface** - Implement `Events<'_>` and `Calls<'_>` policy queries over v1.3 refined calls, reachability roots, and unknown taxonomy.
+- [x] **Phase 56: Events and Calls Query Surface** - Implement `Events<'_>` and `Calls<'_>` policy queries over v1.3 refined calls, reachability roots, and unknown taxonomy. Completed 2026-06-20.
 - [ ] **Phase 57: Control-Flow Guard and Lifecycle Queries** - Implement `ControlFlow<'_>` guard and cleanup policies without exposing raw CFG/dominance graphs.
 - [ ] **Phase 58: Data-Flow Source/Sink/Barrier Queries** - Promote `DataFlow<'_>` preview methods for forbidden flows and required barriers over bounded private path search.
 - [ ] **Phase 59: Violation Evidence, Unknowns, and Cache Semantics** - Normalize violation results, diagnostic evidence, deterministic ordering, cache keys, and user-visible unknown/budget behavior.
@@ -59,10 +59,10 @@ Phase numbering continues from v1.3's last phase 54. v1.4 promotes a narrow poli
 **Requirements:** CALL-01, CALL-02, CALL-03, CALL-04
 
 **Success Criteria:**
-1. `Events<'_>::matching(EventPattern)` returns deterministic semantic event matches for calls, writes, trust-boundary roots, and lifecycle events without leaking raw AST/MIR/graph IDs.
+1. `Events<'_>::matching(EventPattern)` returns deterministic semantic call-event matches without leaking raw AST/MIR/graph IDs; non-call event patterns remain deterministic preview no-results until backed facts land.
 2. `Calls<'_>::forbidden_reachable(ReachQuery)` returns violations for raw APIs reachable from selected roots with root, path, callsite, target, precision, and unknown evidence.
-3. `ReachQuery` supports root pattern, target pattern, package/module scope, tests inclusion, max depth, max paths, and minimum precision/confidence fields.
-4. Fixtures cover raw reachable admin APIs, framework route roots, CLI roots, tests excluded/included, unresolved calls, and budget-exceeded paths.
+3. `ReachQuery` supports root pattern, target pattern, tests inclusion, max depth, max paths, and minimum precision/confidence fields; package/module scoping is deferred rather than exposed as a competing API.
+4. Fixtures cover reachable forbidden calls, selected roots, tests excluded/included, unresolved calls, budget-exceeded paths, and external temp-repo rule usage.
 5. Existing v1.3 precision floors and refined-call contracts remain intact.
 
 **Example policies unlocked:**
@@ -193,7 +193,7 @@ for violation in flow.forbidden(query) {
 | Phase | Name | Plans Complete | Status | Completed |
 |-------|------|----------------|--------|-----------|
 | 55 | SDK Query Vocabulary and Preview Contract | 3/3 | Complete | 2026-06-20 |
-| 56 | Events and Calls Query Surface | 0/0 | Planned | - |
+| 56 | Events and Calls Query Surface | 3/3 | Complete | 2026-06-20 |
 | 57 | Control-Flow Guard and Lifecycle Queries | 0/0 | Planned | - |
 | 58 | Data-Flow Source/Sink/Barrier Queries | 0/0 | Planned | - |
 | 59 | Violation Evidence, Unknowns, and Cache Semantics | 0/0 | Planned | - |
@@ -218,18 +218,18 @@ for violation in flow.forbidden(query) {
 
 ## Next Up
 
-**Phase 56: Events and Calls Query Surface** - implement event matching and reachable-call policy queries over the Phase 55 preview vocabulary.
+**Phase 57: Control-Flow Guard and Lifecycle Queries** - implement guard and cleanup policy queries over private CFG/dominance facts without exposing raw control-flow internals.
 
 Suggested command:
 
 ```bash
-/gsd-discuss-phase 56 /Users/emilwareus/conductor/workspaces/exlint/louisville-v1
+/gsd-discuss-phase 57 /Users/emilwareus/conductor/workspaces/exlint/louisville-v1
 ```
 
 For a direct implementation plan:
 
 ```bash
-/gsd-plan-phase 56 /Users/emilwareus/conductor/workspaces/exlint/louisville-v1
+/gsd-plan-phase 57 /Users/emilwareus/conductor/workspaces/exlint/louisville-v1
 ```
 
 ---

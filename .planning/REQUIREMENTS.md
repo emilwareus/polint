@@ -60,10 +60,10 @@ Requirements for the v1.4 milestone. Each maps to exactly one roadmap phase.
 
 ### Events and Calls
 
-- [ ] **CALL-01**: `Events<'_>` can match semantic events through `EventPattern` without exposing raw AST, MIR, CFG, solver, or graph node IDs.
-- [ ] **CALL-02**: `Calls<'_>` supports `forbidden_reachable(ReachQuery)` for policies such as "no raw API reachable from request handlers" and returns deterministic violations with root, callsite, target, precision, and unknown/budget evidence.
-- [ ] **CALL-03**: Reach queries can constrain roots, packages/modules, target patterns, trust-boundary roots, tests inclusion, max depth, max paths, and minimum precision/confidence.
-- [ ] **CALL-04**: Call-query behavior is backed by the v1.3 refined-call projection and unknown taxonomy, preserving precision floors and surfacing unresolved or budget-exceeded edges honestly.
+- [x] **CALL-01**: `Events<'_>` can match semantic call events through `EventPattern::call` without exposing raw AST, MIR, CFG, solver, or graph node IDs. Non-call event families remain preview vocabulary until later phases promote backed facts.
+- [x] **CALL-02**: `Calls<'_>` supports `forbidden_reachable(ReachQuery)` for policies such as "no raw API reachable from request handlers" and returns deterministic violations with root, callsite, target, precision, and unknown/budget evidence.
+- [x] **CALL-03**: Reach queries can constrain roots, target patterns, tests inclusion, max depth, max paths, minimum precision, and minimum confidence. Package/module scoping remains intentionally deferred instead of adding a second public query style.
+- [x] **CALL-04**: Call-query behavior is backed by the v1.3 refined-call projection and unknown taxonomy, preserving precision floors and surfacing unresolved or budget-exceeded edges honestly.
 
 ### Control-Flow Policies
 
@@ -153,10 +153,10 @@ Which phases cover which requirements.
 | API-04 | Phase 55 | Complete |
 | API-05 | Phase 55 | Complete |
 | API-06 | Phase 55 | Complete |
-| CALL-01 | Phase 56 | Planned |
-| CALL-02 | Phase 56 | Planned |
-| CALL-03 | Phase 56 | Planned |
-| CALL-04 | Phase 56 | Planned |
+| CALL-01 | Phase 56 | Complete |
+| CALL-02 | Phase 56 | Complete |
+| CALL-03 | Phase 56 | Complete |
+| CALL-04 | Phase 56 | Complete |
 | CTRL-01 | Phase 57 | Planned |
 | CTRL-02 | Phase 57 | Planned |
 | CTRL-03 | Phase 57 | Planned |

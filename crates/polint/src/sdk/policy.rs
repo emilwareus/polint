@@ -39,6 +39,17 @@ pub enum PolicyPrecision {
     Unknown,
 }
 
+/// Confidence level attached to a policy-query result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolicyConfidence {
+    /// High-confidence evidence from resolved or validated facts.
+    High,
+    /// Medium-confidence evidence from setup-aware or conservative facts.
+    Medium,
+    /// Low-confidence evidence from heuristic or unknown facts.
+    Low,
+}
+
 /// Preview violation returned by policy-query views.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PolicyViolation {
@@ -50,6 +61,30 @@ pub struct PolicyViolation {
 }
 
 impl PolicyViolation {
+    pub(crate) fn new(
+        file: impl Into<String>,
+        range: TextRange,
+        status: PolicyStatus,
+        precision: PolicyPrecision,
+        evidence: Vec<(String, String)>,
+    ) -> Self {
+        Self {
+            file: file.into(),
+            range,
+            status,
+            precision,
+            evidence,
+        }
+    }
+
+    pub(crate) fn set_status(&mut self, status: PolicyStatus) {
+        self.status = status;
+    }
+
+    pub(crate) fn push_evidence(&mut self, label: impl Into<String>, value: impl Into<String>) {
+        self.evidence.push((label.into(), value.into()));
+    }
+
     /// Returns the result status.
     pub fn status(&self) -> PolicyStatus {
         self.status
@@ -88,6 +123,8 @@ pub struct ReachQuery {
     pub max_paths: usize,
     /// Minimum acceptable precision.
     pub minimum_precision: PolicyPrecision,
+    /// Minimum acceptable confidence.
+    pub minimum_confidence: PolicyConfidence,
 }
 
 impl ReachQuery {
@@ -100,6 +137,7 @@ impl ReachQuery {
             max_depth: 20,
             max_paths: 20,
             minimum_precision: PolicyPrecision::Conservative,
+            minimum_confidence: PolicyConfidence::Low,
         }
     }
 }
@@ -217,6 +255,14 @@ impl EventPattern {
             values: vec![field.into()],
         }
     }
+
+    pub(crate) fn kind(&self) -> EventPatternKind {
+        self.kind
+    }
+
+    pub(crate) fn values(&self) -> &[String] {
+        &self.values
+    }
 }
 
 /// Pattern for data-flow sources.
@@ -324,7 +370,7 @@ impl BarrierPattern {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EventPatternKind {
+pub(crate) enum EventPatternKind {
     Call,
     WriteField,
 }

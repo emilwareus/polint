@@ -40,8 +40,14 @@ pub(crate) use provider::{
 /// The set mirrors [`module_graph`](crate::module_graph)'s own trigger list so the
 /// invariant "the semantic pipeline runs only when the module/symbol graphs that
 /// feed it also ran" holds by construction.
-const SEMANTIC_PIPELINE_TRIGGER_CAPABILITIES: &[&str] =
-    &["resolved_imports", "module_graph", "symbols", "references"];
+const SEMANTIC_PIPELINE_TRIGGER_CAPABILITIES: &[&str] = &[
+    "resolved_imports",
+    "module_graph",
+    "symbols",
+    "references",
+    "events",
+    "calls",
+];
 
 pub(crate) struct AnalysisKernel;
 

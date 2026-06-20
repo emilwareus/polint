@@ -1,11 +1,11 @@
 # Events Facts
 
-`Events<'_>` is a Phase 55 preview SDK view for matching semantic events.
-Requesting it derives the `events` capability.
+`Events<'_>` is a preview SDK view for matching semantic policy events.
+Requesting it derives the supported `events` capability.
 
-Phase 55 only exposes vocabulary. `polint check` reports `polint/capability` for
-`events` and does not execute the requesting rule until Phase 56 provides
-provider-backed event facts.
+Phase 56 backs call-event matching with existing call and refined-call facts.
+The API remains preview because additional event families, such as field writes
+and lifecycle events, will be promoted in later phases.
 
 ```rust
 #[polint::rule(id = "local/no-raw-dangerous-call", description = "Dangerous calls", severity = "error")]
@@ -20,11 +20,16 @@ pub(crate) fn no_raw_dangerous_call(ctx: &mut RuleCtx<'_>, events: Events<'_>) -
 
 ## Pattern Vocabulary
 
-- `EventPattern::call("target")` matches one exact canonical call target.
-- `EventPattern::write_field("field")` matches one exact canonical field or
-  property write.
+- `EventPattern::call("target")` matches one exact call target string. Phase 56
+  checks existing canonical labels such as symbol qualified names, symbol names,
+  function names, synthetic targets, and syntactic callee labels.
+- `EventPattern::write_field("field")` is preview vocabulary. It currently
+  returns no provider-backed matches until write-event facts are promoted.
 
-Phase 55 intentionally starts with exact strings and explicit lists. It does not
-include regex matching, AST-node selectors, closure filters, raw graph traversal,
-or parser-specific IDs. Broader matching primitives should be added later only
-when they have one clear spelling and documented precision.
+Results are returned as `PolicyViolation`s with diagnostic status, precision,
+and evidence. They do not expose raw AST, MIR, CFG, solver, call-graph node, or
+provider IDs.
+
+Matching intentionally starts with exact strings and explicit lists. It does not
+include regex matching, closure filters, raw graph traversal, or parser-specific
+selectors.

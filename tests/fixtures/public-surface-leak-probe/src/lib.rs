@@ -227,6 +227,9 @@ mod allowlist_witness {
     fn _assert_polinttoolinfo() -> ::core::marker::PhantomData<PolintToolInfo> {
         ::core::marker::PhantomData
     }
+    fn _assert_policyconfidence() -> ::core::marker::PhantomData<PolicyConfidence> {
+        ::core::marker::PhantomData
+    }
     fn _assert_policyprecision() -> ::core::marker::PhantomData<PolicyPrecision> {
         ::core::marker::PhantomData
     }

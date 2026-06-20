@@ -149,6 +149,7 @@ const ALLOWED_PRELUDE: &[&str] = &[
     "GuardPattern",
     "GuardQuery",
     "LifecycleQuery",
+    "PolicyConfidence",
     "PolicyPrecision",
     "PolicyStatus",
     "PolicyViolation",
@@ -470,10 +471,10 @@ fn allowlist_has_no_duplicates_and_expected_count() {
         ALLOWED_PRELUDE.len(),
         "ALLOWED_PRELUDE contains duplicate entries"
     );
-    // Locked count derived from sdk/mod.rs at Phase 55 Plan 03 landing.
+    // Locked count derived from sdk/mod.rs after the Phase 56 PolicyConfidence promotion.
     assert_eq!(
         ALLOWED_PRELUDE.len(),
-        112,
+        113,
         "ALLOWED_PRELUDE count changed — update this assertion ONLY alongside a sanctioned \
          API promotion record"
     );
