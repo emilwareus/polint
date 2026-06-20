@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.4
 milestone_name: Policy Query Surface
 status: executing
-last_updated: "2026-06-20T17:22:45.443Z"
-last_activity: 2026-06-20 -- Phase 59 complete; Phase 60 is next
+last_updated: "2026-06-20T17:26:33.646Z"
+last_activity: 2026-06-20 -- Phase 60 plans created; implementation starting
 progress:
   total_phases: 8
   completed_phases: 5
-  total_plans: 15
+  total_plans: 18
   completed_plans: 15
   percent: 63
 ---
@@ -42,9 +42,9 @@ See: `.planning/PROJECT.md` (updated 2026-06-20)
 ## Current Position
 
 Phase: 60 - Flagship Rule Templates and Agent Ergonomics
-Plan: Not planned yet
-Status: Planned
-Last activity: 2026-06-20 -- Phase 59 complete; Phase 60 is next
+Plan: 60-01
+Status: In Progress
+Last activity: 2026-06-20 -- Phase 60 plans created; implementation starting
 
 ### Active Milestone Phase Progress
 
@@ -55,7 +55,7 @@ Last activity: 2026-06-20 -- Phase 59 complete; Phase 60 is next
 | 57 | Complete | Control-flow guard and lifecycle queries complete for same-function call-event guard and cleanup policies; write events, exact exit proof, and bounded interprocedural search deferred honestly |
 | 58 | Complete | Data-flow forbidden-flow queries complete for HTTP request trust-boundary sources, secret-like names, exact call sinks, logger sinks, call barriers, unknown/budget evidence, and external rule validation |
 | 59 | Complete | Normalized policy evidence header, query digests, deterministic sorting/deduplication, cap-filtered policy unknowns, cache-version digest inputs, docs, skills, and verification complete |
-| 60 | Planned | Flagship rule templates and agent ergonomics |
+| 60 | In Progress | Plans created for the `new-rule --template` selector, flagship policy template bodies, generated fixture coverage, docs, README, skill text, and closeout |
 | 61 | Planned | Public docs and external SDK validation |
 | 62 | Planned | Promotion gate, boundary proof, and closeout |
 
