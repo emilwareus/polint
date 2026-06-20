@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.4
 milestone_name: Policy Query Surface
 status: executing
-last_updated: "2026-06-20T16:49:54.000Z"
-last_activity: 2026-06-20 -- Phase 58 complete; Phase 59 ready to start
+last_updated: "2026-06-20T16:52:53.722Z"
+last_activity: 2026-06-20 -- Phase 59 plans created; execution starting
 progress:
   total_phases: 8
   completed_phases: 4
-  total_plans: 12
+  total_plans: 15
   completed_plans: 12
   percent: 50
 ---
@@ -42,9 +42,9 @@ See: `.planning/PROJECT.md` (updated 2026-06-20)
 ## Current Position
 
 Phase: 59 - Violation Evidence, Unknowns, and Cache Semantics
-Plan: —
-Status: Planned
-Last activity: 2026-06-20 -- Phase 58 complete; Phase 59 ready to start
+Plan: 59-01
+Status: In Progress
+Last activity: 2026-06-20 -- Phase 59 plans created; execution starting
 
 ### Active Milestone Phase Progress
 
@@ -54,7 +54,7 @@ Last activity: 2026-06-20 -- Phase 58 complete; Phase 59 ready to start
 | 56 | Complete | Events and calls query surface complete; call-event matching and reachable-call policies are provider-backed, with non-call events/package scopes deferred honestly |
 | 57 | Complete | Control-flow guard and lifecycle queries complete for same-function call-event guard and cleanup policies; write events, exact exit proof, and bounded interprocedural search deferred honestly |
 | 58 | Complete | Data-flow forbidden-flow queries complete for HTTP request trust-boundary sources, secret-like names, exact call sinks, logger sinks, call barriers, unknown/budget evidence, and external rule validation |
-| 59 | Planned | Violation evidence, unknowns, and cache semantics |
+| 59 | In Progress | Plans created for normalized policy evidence, cap-filtered policy unknowns, cache semantics, determinism, docs, and closeout |
 | 60 | Planned | Flagship rule templates and agent ergonomics |
 | 61 | Planned | Public docs and external SDK validation |
 | 62 | Planned | Promotion gate, boundary proof, and closeout |

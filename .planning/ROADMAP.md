@@ -196,7 +196,7 @@ for violation in flow.forbidden(query) {
 | 56 | Events and Calls Query Surface | 3/3 | Complete | 2026-06-20 |
 | 57 | Control-Flow Guard and Lifecycle Queries | 3/3 | Complete | 2026-06-20 |
 | 58 | Data-Flow Source/Sink/Barrier Queries | 3/3 | Complete | 2026-06-20 |
-| 59 | Violation Evidence, Unknowns, and Cache Semantics | 0/0 | Planned | - |
+| 59 | Violation Evidence, Unknowns, and Cache Semantics | 0/3 | In Progress | - |
 | 60 | Flagship Rule Templates and Agent Ergonomics | 0/0 | Planned | - |
 | 61 | Public Docs and External SDK Validation | 0/0 | Planned | - |
 | 62 | Promotion Gate, Boundary Proof, and Closeout | 0/0 | Planned | - |
@@ -218,7 +218,7 @@ for violation in flow.forbidden(query) {
 
 ## Next Up
 
-**Phase 59: Violation Evidence, Unknowns, and Cache Semantics** - normalize violation results, diagnostic evidence, deterministic ordering, cache keys, and user-visible unknown/budget behavior.
+**Phase 59: Violation Evidence, Unknowns, and Cache Semantics** - execute the planned evidence, unknowns, cache, and determinism work.
 
 Suggested command:
 
