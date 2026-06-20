@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.4
 milestone_name: Policy Query Surface
 status: executing
-last_updated: "2026-06-20T17:50:14.667Z"
-last_activity: 2026-06-20 -- Phase 61 complete; Phase 62 is next
+last_updated: "2026-06-20T17:52:45.923Z"
+last_activity: 2026-06-20 -- Phase 62 plans created; final gate starting
 progress:
   total_phases: 8
   completed_phases: 7
-  total_plans: 21
+  total_plans: 24
   completed_plans: 21
   percent: 88
 ---
@@ -42,9 +42,9 @@ See: `.planning/PROJECT.md` (updated 2026-06-20)
 ## Current Position
 
 Phase: 62 - Promotion Gate, Boundary Proof, and Closeout
-Plan: Not planned yet
-Status: Planned
-Last activity: 2026-06-20 -- Phase 61 complete; Phase 62 is next
+Plan: 62-01
+Status: In Progress
+Last activity: 2026-06-20 -- Phase 62 plans created; final gate starting
 
 ### Active Milestone Phase Progress
 
@@ -57,7 +57,7 @@ Last activity: 2026-06-20 -- Phase 61 complete; Phase 62 is next
 | 59 | Complete | Normalized policy evidence header, query digests, deterministic sorting/deduplication, cap-filtered policy unknowns, cache-version digest inputs, docs, skills, and verification complete |
 | 60 | Complete | `polint new-rule --template` selector, ten flagship policy template bodies, generated positive/negative fixtures, README/docs/skill updates, and focused verification complete |
 | 61 | Complete | Consolidated policy-query docs, cross-links, docs coverage test, external SDK matrix test, and verification complete |
-| 62 | Planned | Promotion gate, boundary proof, and closeout |
+| 62 | In Progress | Plans created for boundary proof, deterministic flagship-template regression, full local verification, milestone audit, and closeout |
 
 ### Open repo-admin action (T-42-04-10)
 

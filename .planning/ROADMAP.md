@@ -199,7 +199,7 @@ for violation in flow.forbidden(query) {
 | 59 | Violation Evidence, Unknowns, and Cache Semantics | 3/3 | Complete | 2026-06-20 |
 | 60 | Flagship Rule Templates and Agent Ergonomics | 3/3 | Complete | 2026-06-20 |
 | 61 | Public Docs and External SDK Validation | 3/3 | Complete | 2026-06-20 |
-| 62 | Promotion Gate, Boundary Proof, and Closeout | 0/0 | Planned | - |
+| 62 | Promotion Gate, Boundary Proof, and Closeout | 0/3 | In Progress | - |
 
 ## Parallel-Eligible Phases
 
