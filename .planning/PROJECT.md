@@ -56,6 +56,11 @@ Archived milestone records:
 
 ## Current Milestone: v1.4 Policy Query Surface
 
+v1.4 completed locally on 2026-06-20. Phase 62 recorded the milestone audit,
+public-boundary proof, deterministic flagship-template gate, and final local
+verification. The preview policy-query surface is ready for review before
+remote sharing or archival.
+
 **Goal:** Expose the private graph, control-flow, and data-flow engine through a small, clear rule-authoring SDK for repo-specific policy queries without exposing raw solver or graph internals.
 
 **Target features:**

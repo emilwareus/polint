@@ -6,11 +6,11 @@
 - [x] **v1.1 Capability Fulfillment** - capability planning, resolved imports/module graph, and symbol/reference foundations for Go and TS/JS.
 - [x] **v1.2 Static Analysis Engine Implementation** - private, validated, cache-aware, agent-extensible analysis engine substrate; 22 phases and 136 plans shipped 2026-05-27. Archive: [v1.2 roadmap](milestones/v1.2-ROADMAP.md).
 - [x] **v1.3 Graph Engine Precision** - shared semantic graph, reachability/root semantics, Go RTA, JS/TS token/object models, adaptation, unknown taxonomy, budgets, and benchmark promotion gates. Archive: [v1.3 roadmap](milestones/v1.3-ROADMAP.md).
-- [ ] 🚧 **v1.4 Policy Query Surface** - preview SDK views and typed query objects for realistic repo-local policies over calls, control flow, and data flow.
+- [x] **v1.4 Policy Query Surface** - preview SDK views and typed query objects for realistic repo-local policies over calls, control flow, and data flow. Completed 2026-06-20.
 
 ## Current Status
 
-**Milestone:** v1.4 Policy Query Surface (active)
+**Milestone:** v1.4 Policy Query Surface (complete)
 **Phases planned:** 8 (Phase 55 - Phase 62)
 **Requirements coverage:** 33/33 mapped
 **Granularity:** fine
@@ -26,7 +26,7 @@ Phase numbering continues from v1.3's last phase 54. v1.4 promotes a narrow poli
 - [x] **Phase 59: Violation Evidence, Unknowns, and Cache Semantics** - Normalize violation results, diagnostic evidence, deterministic ordering, cache keys, and user-visible unknown/budget behavior. Completed 2026-06-20.
 - [x] **Phase 60: Flagship Rule Templates and Agent Ergonomics** - Generate realistic policy templates and update README/examples/skill text around the same query-object syntax. Completed 2026-06-20.
 - [x] **Phase 61: Public Docs and External SDK Validation** - Document every preview view/query and prove external repo-local rule usage through temp-repo tests. Completed 2026-06-20.
-- [ ] **Phase 62: Promotion Gate, Boundary Proof, and Closeout** - Enforce public-surface leak gates, full regression, deterministic checks, and milestone exit verification.
+- [x] **Phase 62: Promotion Gate, Boundary Proof, and Closeout** - Enforce public-surface leak gates, full regression, deterministic checks, and milestone exit verification. Completed 2026-06-20.
 
 ## Phase Details
 
@@ -199,7 +199,7 @@ for violation in flow.forbidden(query) {
 | 59 | Violation Evidence, Unknowns, and Cache Semantics | 3/3 | Complete | 2026-06-20 |
 | 60 | Flagship Rule Templates and Agent Ergonomics | 3/3 | Complete | 2026-06-20 |
 | 61 | Public Docs and External SDK Validation | 3/3 | Complete | 2026-06-20 |
-| 62 | Promotion Gate, Boundary Proof, and Closeout | 0/3 | In Progress | - |
+| 62 | Promotion Gate, Boundary Proof, and Closeout | 3/3 | Complete | 2026-06-20 |
 
 ## Parallel-Eligible Phases
 
@@ -218,19 +218,10 @@ for violation in flow.forbidden(query) {
 
 ## Next Up
 
-**Phase 62: Promotion Gate, Boundary Proof, and Closeout** - enforce public-surface leak gates, full regression, deterministic checks, and milestone exit verification.
-
-Suggested command:
-
-```bash
-/gsd-discuss-phase 62 /Users/emilwareus/conductor/workspaces/exlint/louisville-v1
-```
-
-For a direct implementation plan:
-
-```bash
-/gsd-plan-phase 62 /Users/emilwareus/conductor/workspaces/exlint/louisville-v1
-```
+v1.4 local implementation is complete. Before remote sharing, review the local
+commit stack and decide whether to archive the milestone with
+`/gsd-complete-milestone` or start the next milestone from the v1.5 follow-ups
+recorded in Phase 62's milestone audit.
 
 ---
 *Roadmap created: 2026-06-20*
