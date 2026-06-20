@@ -67,10 +67,10 @@ Requirements for the v1.4 milestone. Each maps to exactly one roadmap phase.
 
 ### Control-Flow Policies
 
-- [ ] **CTRL-01**: `ControlFlow<'_>` supports `missing_guard(GuardQuery)` for policies such as auth-before-sensitive-write, validation-before-money-move, and allowlist-before-dangerous-call.
-- [ ] **CTRL-02**: `ControlFlow<'_>` supports `missing_cleanup(LifecycleQuery)` for policies such as transaction rollback/commit, file close, lock unlock, span end, and resource release on success and error exits.
-- [ ] **CTRL-03**: Guard and lifecycle queries can express same-function and bounded-interprocedural checks without exposing dominance/postdominance graphs directly.
-- [ ] **CTRL-04**: Control-flow results include precise event spans, guard/cleanup candidates, uncovered paths, conservative unknowns, and budget status in diagnostic evidence.
+- [x] **CTRL-01**: `ControlFlow<'_>` supports same-function call-event `missing_guard(GuardQuery)` for policies such as validation-before-money-move and allowlist-before-dangerous-call. Field/property write events remain preview vocabulary until backed write-event facts land.
+- [x] **CTRL-02**: `ControlFlow<'_>` supports same-function call-event `missing_cleanup(LifecycleQuery)` for policies such as transaction begin followed by rollback/cleanup. Exact resource identity and every-exit cleanup proof remain deferred.
+- [x] **CTRL-03**: Guard and lifecycle queries expose one typed public API for same-function checks without exposing dominance/postdominance graphs directly. Bounded interprocedural execution remains deferred behind the existing `max_depth` shape.
+- [x] **CTRL-04**: Control-flow results include event spans, guard/cleanup candidates, same-function uncovered path evidence, conservative status/precision, and budget status in diagnostic evidence.
 
 ### Data-Flow Policies
 
@@ -157,10 +157,10 @@ Which phases cover which requirements.
 | CALL-02 | Phase 56 | Complete |
 | CALL-03 | Phase 56 | Complete |
 | CALL-04 | Phase 56 | Complete |
-| CTRL-01 | Phase 57 | Planned |
-| CTRL-02 | Phase 57 | Planned |
-| CTRL-03 | Phase 57 | Planned |
-| CTRL-04 | Phase 57 | Planned |
+| CTRL-01 | Phase 57 | Complete |
+| CTRL-02 | Phase 57 | Complete |
+| CTRL-03 | Phase 57 | Complete |
+| CTRL-04 | Phase 57 | Complete |
 | FLOW-01 | Phase 58 | Planned |
 | FLOW-02 | Phase 58 | Planned |
 | FLOW-03 | Phase 58 | Planned |

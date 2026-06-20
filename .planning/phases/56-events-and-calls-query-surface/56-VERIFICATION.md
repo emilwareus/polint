@@ -41,4 +41,4 @@ Passed. Phase 56 now backs `Events<'_>::matching(EventPattern::call(...))` and `
 
 - `EventPattern::write_field` has no backed results in Phase 56.
 - Package/module scope filters are not exposed yet.
-- `ControlFlow<'_>` and `DataFlow<'_>` remain fail-closed for Phases 57 and 58.
+- After Phase 56, `ControlFlow<'_>` and `DataFlow<'_>` remained fail-closed until their later provider-backed phases.

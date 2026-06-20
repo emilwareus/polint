@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.4
 milestone_name: Policy Query Surface
 status: executing
-last_updated: "2026-06-20T15:38:50.000Z"
-last_activity: 2026-06-20 -- Phase 56 complete; Phase 57 next
+last_updated: "2026-06-20T16:01:14.000Z"
+last_activity: 2026-06-20 -- Phase 57 complete; Phase 58 next
 progress:
   total_phases: 8
-  completed_phases: 2
-  total_plans: 6
-  completed_plans: 6
-  percent: 25
+  completed_phases: 3
+  total_plans: 9
+  completed_plans: 9
+  percent: 38
 ---
 
 # State: polint
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-06-20)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 57 Control-Flow Guard and Lifecycle Queries
+**Current focus:** Phase 58 Data-Flow Source/Sink/Barrier Queries
 
 ## Current Status
 
@@ -41,10 +41,10 @@ See: `.planning/PROJECT.md` (updated 2026-06-20)
 
 ## Current Position
 
-Phase: 57 - Control-Flow Guard and Lifecycle Queries
+Phase: 58 - Data-Flow Source/Sink/Barrier Queries
 Plan: —
 Status: Planned
-Last activity: 2026-06-20 -- Phase 56 complete; Phase 57 next
+Last activity: 2026-06-20 -- Phase 57 complete; Phase 58 next
 
 ### Active Milestone Phase Progress
 
@@ -52,7 +52,7 @@ Last activity: 2026-06-20 -- Phase 56 complete; Phase 57 next
 |-------|--------|-------|
 | 55 | Complete | SDK query vocabulary and preview contract complete; preview compile/manifest/capability/docs/leak-gate behavior verified |
 | 56 | Complete | Events and calls query surface complete; call-event matching and reachable-call policies are provider-backed, with non-call events/package scopes deferred honestly |
-| 57 | Planned | Control-flow guard and lifecycle queries |
+| 57 | Complete | Control-flow guard and lifecycle queries complete for same-function call-event guard and cleanup policies; write events, exact exit proof, and bounded interprocedural search deferred honestly |
 | 58 | Planned | Data-flow source/sink/barrier queries |
 | 59 | Planned | Violation evidence, unknowns, and cache semantics |
 | 60 | Planned | Flagship rule templates and agent ergonomics |
@@ -634,9 +634,9 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 
 ## Next Action
 
-Continue autonomous v1.4 work with Phase 57: Control-Flow Guard and Lifecycle Queries. Do not push local commits unless explicitly instructed; CI is intentionally avoided during autonomous local commits.
+Continue autonomous v1.4 work with Phase 58: Data-Flow Source/Sink/Barrier Queries. Do not push local commits unless explicitly instructed; CI is intentionally avoided during autonomous local commits.
 
 ## Operator Next Steps
 
-- Discuss/plan/execute Phase 57 using the Phase 56 event/call query surface as context.
-- Preserve the Phase 56 boundary: `Events<'_>` and `Calls<'_>` are provider-backed; `ControlFlow<'_>` and `DataFlow<'_>` remain fail-closed until their phases land.
+- Discuss/plan/execute Phase 58 using the Phase 56 event/call query surface and Phase 57 same-function control-flow query surface as context.
+- Preserve the current boundary: `Events<'_>`, `Calls<'_>`, and `ControlFlow<'_>` are provider-backed; `DataFlow<'_>` remains fail-closed until Phase 58 lands.

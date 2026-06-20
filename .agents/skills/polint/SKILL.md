@@ -55,9 +55,10 @@ Prefer typed fact views in the rule signature:
 - `StringLiterals<'_>` and `JsxAttributes<'_>` for TS/JS literal and JSX rules.
 - `GoTests<'_>` and `BranchObligations<'_>` for Go branch/test policies.
 - Preview policy query views `Events<'_>` and `Calls<'_>` are provider-backed
-  for Phase 56 call-event and reachable-call policies. `ControlFlow<'_>` and
-  `DataFlow<'_>` still fail closed with `polint/capability` until their
-  provider-backed query behavior lands.
+  for Phase 56 call-event and reachable-call policies. `ControlFlow<'_>` is
+  provider-backed for Phase 57 same-function call-event guard and cleanup
+  policies. `DataFlow<'_>` still fails closed with `polint/capability` until
+  bounded source/sink/barrier behavior lands.
 
 Keep `RuleCtx` narrow: diagnostics, options/settings, path helpers, and
 capability/setup metadata. Do not import `polint::core`, parser adapters,

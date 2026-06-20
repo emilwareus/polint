@@ -58,16 +58,17 @@ Phase 55 intentionally adds a preview policy-query vocabulary while preserving
 the v1.4 API design contract: rule authors request typed views, construct one
 plain query object with `Query::new(required...)`, set explicit option fields,
 call one view method, and report `PolicyViolation` diagnostics. The preview
-names compile and appear in rule manifests, but `polint check` fails closed with
-`polint/capability` until provider-backed query behavior lands in Phases 56-59.
+names compile and appear in rule manifests. Unsupported preview families fail
+closed with `polint/capability` until provider-backed query behavior lands.
 Phase 56 promotes `Events<'_>` and `Calls<'_>` to provider-backed preview
-behavior while keeping raw graph internals private.
+behavior. Phase 57 promotes `ControlFlow<'_>` for same-function call-event guard
+and cleanup checks. Raw graph internals remain private.
 
 | Surface | Disposition | Required gates and notes |
 |---|---|---|
 | `Events<'_>` | preview | Public policy view under `polint::sdk::facts`; derives supported `events`; documented in `docs/facts/events.md`; Phase 56 backs call-event matching with provider facts. |
 | `Calls<'_>` | preview | Public policy view under `polint::sdk::facts`; derives supported `calls`; documented in `docs/facts/calls.md`; Phase 56 backs bounded reachable-call queries with provider facts. |
-| `ControlFlow<'_>` | preview | Public policy view under `polint::sdk::facts`; derives `control_flow`; documented in `docs/facts/control-flow.md`; fail-closed until Phase 57 guard/lifecycle facts exist. |
+| `ControlFlow<'_>` | preview | Public policy view under `polint::sdk::facts`; derives supported `control_flow`; documented in `docs/facts/control-flow.md`; Phase 57 backs same-function call-event guard and cleanup queries with provider facts. |
 | `DataFlow<'_>` | preview | Promoted as a policy-level view, not a raw data-flow graph; derives `dataflow`; documented in `docs/facts/data-flow.md`; fail-closed until Phase 58 source/sink/barrier behavior exists. |
 | Query structs | preview | `ReachQuery`, `GuardQuery`, `LifecycleQuery`, and `FlowQuery` live under `polint::sdk::policy` and are re-exported by the prelude. Required inputs use `new(...)`; optional knobs are named fields. |
 | Pattern structs | preview | `EventPattern`, `SourcePattern`, `SinkPattern`, `GuardPattern`, and `BarrierPattern` live under `polint::sdk::policy` and are re-exported by the prelude. Phase 55 starts with exact strings and explicit lists. |

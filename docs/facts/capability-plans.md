@@ -29,19 +29,22 @@ Current rule-author fact views include:
 references still cause polint to derive the `symbols` capability needed to bind
 resolved `ReferenceFact::target` values.
 
-## Phase 55 Preview Facts
+## Policy Query Preview Facts
 
-Phase 55 adds a small policy-query vocabulary to the public SDK:
+v1.4 adds a small policy-query vocabulary to the public SDK:
 
 - `Events<'_>` derives capability `events`
 - `Calls<'_>` derives capability `calls`
 - `ControlFlow<'_>` derives capability `control_flow`
 - `DataFlow<'_>` derives capability `dataflow`
 
-These capabilities are preview and fail closed in Phase 55. A rule can compile,
-appear in `polint inspect rule --format json`, and show derived fact views, but
-`polint check` reports `polint/capability` and does not execute the rule until
-the corresponding provider-backed behavior lands in later phases.
+`Events<'_>`, `Calls<'_>`, and `ControlFlow<'_>` are preview but
+provider-backed for their documented scopes: call-event matching,
+reachable-call checks, and same-function call-event guard/cleanup checks.
+`DataFlow<'_>` remains fail-closed until bounded source/sink/barrier behavior
+lands. A rule can compile, appear in `polint inspect rule --format json`, and
+show derived fact views, but unsupported preview capabilities produce
+`polint/capability` diagnostics and prevent that rule from running.
 
 ```rust
 #[polint::rule(id = "local/no-secret-logs", description = "Secret logs", severity = "error")]

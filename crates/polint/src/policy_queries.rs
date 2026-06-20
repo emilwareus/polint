@@ -1,11 +1,11 @@
 use crate::analysis::calls::facts::{CallCallee, CallPrecision, CallSiteFact, CallTargetStatus};
-use crate::analysis::ids::CallSiteId;
+use crate::analysis::ids::{CallSiteId, MirBodyId, MirOpId};
 use crate::analysis::reachability::facts::{ReachabilityRootFact, RootKind};
 use crate::analysis::refined_calls::facts::{RefinedCallConfidence, RefinedCallEdgeFact};
 use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId};
 use crate::sdk::policy::{
-    EventPattern, EventPatternKind, PolicyConfidence, PolicyPrecision, PolicyStatus,
-    PolicyViolation, ReachQuery,
+    EventPattern, EventPatternKind, GuardPattern, GuardPatternKind, GuardQuery, LifecycleQuery,
+    PolicyConfidence, PolicyPrecision, PolicyStatus, PolicyViolation, ReachQuery,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -18,6 +18,14 @@ pub(crate) fn matching_events(db: &AnalysisDb, query: EventPattern) -> Vec<Polic
 
 pub(crate) fn forbidden_reachable(db: &AnalysisDb, query: ReachQuery) -> Vec<PolicyViolation> {
     forbidden_reachable_calls(db, &query)
+}
+
+pub(crate) fn missing_guards(db: &AnalysisDb, query: GuardQuery) -> Vec<PolicyViolation> {
+    missing_guard_calls(db, &query)
+}
+
+pub(crate) fn missing_cleanup(db: &AnalysisDb, query: LifecycleQuery) -> Vec<PolicyViolation> {
+    missing_cleanup_calls(db, &query)
 }
 
 fn matching_call_events(db: &AnalysisDb, pattern: &EventPattern) -> Vec<PolicyViolation> {
@@ -142,6 +150,108 @@ fn forbidden_reachable_calls(db: &AnalysisDb, query: &ReachQuery) -> Vec<PolicyV
     results
 }
 
+fn missing_guard_calls(db: &AnalysisDb, query: &GuardQuery) -> Vec<PolicyViolation> {
+    if query.max_depth == 0
+        || query.max_paths == 0
+        || query.event.kind() != EventPatternKind::Call
+        || query.guard.kind() != GuardPatternKind::CallAny
+    {
+        return Vec::new();
+    }
+
+    let events = ordered_control_call_events(db, query.minimum_precision);
+    let by_function = control_events_by_function(&events);
+    let mut results = Vec::new();
+    let mut truncated = false;
+
+    'functions: for function_events in by_function.values() {
+        for (index, event) in function_events.iter().enumerate() {
+            if !event_matches_pattern(event, &query.event) {
+                continue;
+            }
+            let has_guard = function_events[..index]
+                .iter()
+                .any(|candidate| guard_matches_event(candidate, &query.guard));
+            if has_guard {
+                continue;
+            }
+            if results.len() >= query.max_paths {
+                truncated = true;
+                break 'functions;
+            }
+            results.push(control_violation(
+                db,
+                event,
+                vec![
+                    ("policy", "missing_guard".to_string()),
+                    ("required_guard", query.guard.values().join(",")),
+                    ("uncovered_path", format!("entry -> {}", event.target_label)),
+                    ("requested_max_depth", query.max_depth.to_string()),
+                ],
+            ));
+        }
+    }
+
+    if truncated && let Some(last) = results.pop() {
+        results.push(last.with_budget_exceeded("control_flow_query_budget"));
+    }
+
+    results
+}
+
+fn missing_cleanup_calls(db: &AnalysisDb, query: &LifecycleQuery) -> Vec<PolicyViolation> {
+    if query.max_depth == 0
+        || query.max_paths == 0
+        || query.start.kind() != EventPatternKind::Call
+        || query.cleanup.kind() != EventPatternKind::Call
+    {
+        return Vec::new();
+    }
+
+    let events = ordered_control_call_events(db, query.minimum_precision);
+    let by_function = control_events_by_function(&events);
+    let mut results = Vec::new();
+    let mut truncated = false;
+
+    'functions: for function_events in by_function.values() {
+        for (index, event) in function_events.iter().enumerate() {
+            if !event_matches_pattern(event, &query.start) {
+                continue;
+            }
+            let has_cleanup = function_events[index + 1..]
+                .iter()
+                .any(|candidate| event_matches_pattern(candidate, &query.cleanup));
+            if has_cleanup {
+                continue;
+            }
+            if results.len() >= query.max_paths {
+                truncated = true;
+                break 'functions;
+            }
+            results.push(control_violation(
+                db,
+                event,
+                vec![
+                    ("policy", "missing_cleanup".to_string()),
+                    ("required_cleanup", query.cleanup.values().join(",")),
+                    ("uncovered_path", format!("{} -> exit", event.target_label)),
+                    (
+                        "require_error_cleanup",
+                        query.require_error_cleanup.to_string(),
+                    ),
+                    ("requested_max_depth", query.max_depth.to_string()),
+                ],
+            ));
+        }
+    }
+
+    if truncated && let Some(last) = results.pop() {
+        results.push(last.with_budget_exceeded("control_flow_query_budget"));
+    }
+
+    results
+}
+
 #[derive(Debug, Clone)]
 struct SearchState {
     function: FunctionId,
@@ -149,8 +259,240 @@ struct SearchState {
     path: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+struct ControlCallEvent {
+    function: FunctionId,
+    file: String,
+    range: crate::diagnostics::TextRange,
+    target_label: String,
+    candidates: Vec<String>,
+    order: ControlOrder,
+    order_source: &'static str,
+    status: CallTargetStatus,
+    precision: CallPrecision,
+    confidence: Option<RefinedCallConfidence>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct ControlOrder {
+    line: u32,
+    col: u32,
+    byte: u32,
+    operation_ordinal: u32,
+    stable_key: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CfgOrder {
+    operation_ordinal: u32,
+}
+
 fn call_sites_by_id(db: &AnalysisDb) -> BTreeMap<CallSiteId, &CallSiteFact> {
     db.call_sites().iter().map(|site| (site.id, site)).collect()
+}
+
+fn ordered_control_call_events(
+    db: &AnalysisDb,
+    minimum_precision: PolicyPrecision,
+) -> Vec<ControlCallEvent> {
+    let site_by_id = call_sites_by_id(db);
+    let cfg_orders = cfg_orders_by_operation(db);
+    let mut events = Vec::new();
+
+    if !db.refined_call_edges().is_empty() {
+        for edge in db.refined_call_edges() {
+            if !precision_meets(edge.precision, minimum_precision) {
+                continue;
+            }
+            if let Some(event) = control_event_for_edge(db, edge, &site_by_id, &cfg_orders) {
+                events.push(event);
+            }
+        }
+    } else {
+        for site in db.call_sites() {
+            if precision_rank(policy_precision_from_call_precision(site.precision))
+                < precision_rank(minimum_precision)
+            {
+                continue;
+            }
+            events.push(control_event_for_site(db, site, &cfg_orders));
+        }
+    }
+
+    events.sort_by(|left, right| {
+        (
+            left.function,
+            &left.order,
+            left.target_label.as_str(),
+            left.file.as_str(),
+        )
+            .cmp(&(
+                right.function,
+                &right.order,
+                right.target_label.as_str(),
+                right.file.as_str(),
+            ))
+    });
+    events
+}
+
+fn cfg_orders_by_operation(db: &AnalysisDb) -> BTreeMap<(MirBodyId, MirOpId), CfgOrder> {
+    let mut orders = BTreeMap::new();
+    for node in db.cfg_nodes() {
+        if let Some(operation) = node.operation {
+            let key = (node.body, operation);
+            orders
+                .entry(key)
+                .and_modify(|existing: &mut CfgOrder| {
+                    existing.operation_ordinal =
+                        existing.operation_ordinal.min(node.operation_ordinal);
+                })
+                .or_insert(CfgOrder {
+                    operation_ordinal: node.operation_ordinal,
+                });
+        }
+    }
+    orders
+}
+
+fn control_event_for_edge(
+    db: &AnalysisDb,
+    edge: &RefinedCallEdgeFact,
+    site_by_id: &BTreeMap<CallSiteId, &CallSiteFact>,
+    cfg_orders: &BTreeMap<(MirBodyId, MirOpId), CfgOrder>,
+) -> Option<ControlCallEvent> {
+    let site = site_by_id.get(&edge.site)?;
+    let mut candidates = call_edge_candidates(db, edge, site_by_id);
+    if candidates.is_empty() {
+        candidates.push(call_site_label(site));
+    }
+    let target_label = best_call_target_label(db, edge, site_by_id);
+    Some(ControlCallEvent {
+        function: edge.caller,
+        file: db.path_for(site.file),
+        range: site.span.diagnostic_range(),
+        target_label,
+        candidates,
+        order: control_order(site, cfg_orders),
+        order_source: control_order_source(site, cfg_orders),
+        status: edge.status,
+        precision: edge.precision,
+        confidence: Some(edge.confidence),
+    })
+}
+
+fn control_event_for_site(
+    db: &AnalysisDb,
+    site: &CallSiteFact,
+    cfg_orders: &BTreeMap<(MirBodyId, MirOpId), CfgOrder>,
+) -> ControlCallEvent {
+    let label = call_site_label(site);
+    ControlCallEvent {
+        function: site.caller,
+        file: db.path_for(site.file),
+        range: site.span.diagnostic_range(),
+        target_label: label.clone(),
+        candidates: vec![label],
+        order: control_order(site, cfg_orders),
+        order_source: control_order_source(site, cfg_orders),
+        status: site.status,
+        precision: site.precision,
+        confidence: None,
+    }
+}
+
+fn control_order(
+    site: &CallSiteFact,
+    cfg_orders: &BTreeMap<(MirBodyId, MirOpId), CfgOrder>,
+) -> ControlOrder {
+    let cfg_order = cfg_orders.get(&(site.body, site.operation));
+    ControlOrder {
+        line: site.span.start_line,
+        col: site.span.start_col,
+        byte: site.span.start_byte,
+        operation_ordinal: cfg_order
+            .map(|order| order.operation_ordinal)
+            .unwrap_or(u32::MAX),
+        stable_key: site.stable_key.clone(),
+    }
+}
+
+fn control_order_source(
+    site: &CallSiteFact,
+    cfg_orders: &BTreeMap<(MirBodyId, MirOpId), CfgOrder>,
+) -> &'static str {
+    if cfg_orders.contains_key(&(site.body, site.operation)) {
+        "cfg_operation_order"
+    } else {
+        "source_span"
+    }
+}
+
+fn control_events_by_function(
+    events: &[ControlCallEvent],
+) -> BTreeMap<FunctionId, Vec<&ControlCallEvent>> {
+    let mut by_function = BTreeMap::<FunctionId, Vec<&ControlCallEvent>>::new();
+    for event in events {
+        by_function.entry(event.function).or_default().push(event);
+    }
+    by_function
+}
+
+fn event_matches_pattern(event: &ControlCallEvent, pattern: &EventPattern) -> bool {
+    if pattern.kind() != EventPatternKind::Call {
+        return false;
+    }
+    pattern
+        .values()
+        .iter()
+        .any(|value| event.candidates.iter().any(|candidate| candidate == value))
+}
+
+fn guard_matches_event(event: &ControlCallEvent, guard: &GuardPattern) -> bool {
+    match guard.kind() {
+        GuardPatternKind::CallAny => guard
+            .values()
+            .iter()
+            .any(|value| event.candidates.iter().any(|candidate| candidate == value)),
+    }
+}
+
+fn control_violation(
+    db: &AnalysisDb,
+    event: &ControlCallEvent,
+    mut evidence: Vec<(&'static str, String)>,
+) -> PolicyViolation {
+    evidence.extend([
+        ("target", event.target_label.clone()),
+        (
+            "function",
+            function_by_id(db, event.function)
+                .map(|function| function.name.clone())
+                .unwrap_or_else(|| "<unknown-function>".to_string()),
+        ),
+        ("control_scope", "same_function".to_string()),
+        ("supported_depth", "1".to_string()),
+        ("order_source", event.order_source.to_string()),
+        ("call_status", call_status_label(event.status).to_string()),
+        (
+            "call_precision",
+            call_precision_label(event.precision).to_string(),
+        ),
+    ]);
+    if let Some(confidence) = event.confidence {
+        evidence.push(("confidence", confidence_label(confidence).to_string()));
+    }
+
+    PolicyViolation::new(
+        event.file.clone(),
+        event.range,
+        PolicyStatus::Heuristic,
+        PolicyPrecision::Conservative,
+        evidence
+            .into_iter()
+            .map(|(label, value)| (label.to_string(), value))
+            .collect(),
+    )
 }
 
 fn refined_adjacency<'a>(
@@ -598,6 +940,104 @@ mod tests {
         );
     }
 
+    #[test]
+    fn control_flow_missing_guard_reports_call_without_prior_guard() {
+        let db = policy_query_db_with_call_sequence(&["dangerous", "authorize"]);
+        let query = GuardQuery::new(
+            EventPattern::call("dangerous"),
+            GuardPattern::call_any(["authorize"]),
+        );
+
+        let violations = missing_guards(&db, query);
+
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].status(), PolicyStatus::Heuristic);
+        assert_eq!(violations[0].precision(), PolicyPrecision::Conservative);
+        let diagnostic = violations[0].diagnostic("local/test", "missing guard");
+        assert!(
+            diagnostic
+                .evidence
+                .iter()
+                .any(|evidence| evidence.label == "policy" && evidence.value == "missing_guard")
+        );
+        assert!(diagnostic.evidence.iter().any(|evidence| {
+            evidence.label == "required_guard" && evidence.value == "authorize"
+        }));
+    }
+
+    #[test]
+    fn control_flow_missing_guard_ignores_prior_guard() {
+        let db = policy_query_db_with_call_sequence(&["authorize", "dangerous"]);
+        let query = GuardQuery::new(
+            EventPattern::call("dangerous"),
+            GuardPattern::call_any(["authorize"]),
+        );
+
+        assert!(missing_guards(&db, query).is_empty());
+    }
+
+    #[test]
+    fn control_flow_missing_guard_ignores_write_field_until_backed() {
+        let db = policy_query_db_with_call_sequence(&["dangerous"]);
+        let query = GuardQuery::new(
+            EventPattern::write_field("account.balance"),
+            GuardPattern::call_any(["authorize"]),
+        );
+
+        assert!(missing_guards(&db, query).is_empty());
+    }
+
+    #[test]
+    fn control_flow_missing_guard_marks_budget_when_path_cap_truncates() {
+        let db = policy_query_db_with_two_matching_targets();
+        let mut query = GuardQuery::new(
+            EventPattern::call("dangerous"),
+            GuardPattern::call_any(["authorize"]),
+        );
+        query.max_paths = 1;
+
+        let violations = missing_guards(&db, query);
+
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].status(), PolicyStatus::BudgetExceeded);
+        let diagnostic = violations[0].diagnostic("local/test", "missing guard");
+        assert!(diagnostic.evidence.iter().any(|evidence| {
+            evidence.label == "budget" && evidence.value == "control_flow_query_budget"
+        }));
+    }
+
+    #[test]
+    fn control_flow_missing_cleanup_reports_start_without_later_cleanup() {
+        let db = policy_query_db_with_call_sequence(&["Begin", "work"]);
+        let query =
+            LifecycleQuery::new(EventPattern::call("Begin"), EventPattern::call("Rollback"));
+
+        let violations = missing_cleanup(&db, query);
+
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].status(), PolicyStatus::Heuristic);
+        assert_eq!(violations[0].precision(), PolicyPrecision::Conservative);
+        let diagnostic = violations[0].diagnostic("local/test", "missing cleanup");
+        assert!(
+            diagnostic
+                .evidence
+                .iter()
+                .any(|evidence| evidence.label == "policy" && evidence.value == "missing_cleanup")
+        );
+        assert!(diagnostic.evidence.iter().any(|evidence| {
+            evidence.label == "required_cleanup" && evidence.value == "Rollback"
+        }));
+    }
+
+    #[test]
+    fn control_flow_missing_cleanup_ignores_later_cleanup() {
+        let db = policy_query_db_with_call_sequence(&["Begin", "work", "Rollback"]);
+        let query =
+            LifecycleQuery::new(EventPattern::call("Begin"), EventPattern::call("Rollback"));
+
+        assert!(missing_cleanup(&db, query).is_empty());
+    }
+
     fn policy_query_db(test_root: bool) -> AnalysisDb {
         let mut db = AnalysisDb::new();
         let file = db.add_file(
@@ -775,6 +1215,39 @@ mod tests {
             marks: Vec::new(),
         })
         .expect("valid reachability facts");
+        db
+    }
+
+    fn policy_query_db_with_call_sequence(callees: &[&str]) -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/main.go"),
+            "src/main.go".to_string(),
+            "package main\nfunc handler() {}\n".to_string(),
+        );
+        let handler = push_test_function(&mut db, file, "handler", 1, false);
+        let mut sites = Vec::new();
+        let mut targets = Vec::new();
+        let mut edges = Vec::new();
+
+        for (index, callee) in callees.iter().enumerate() {
+            let id = index as u64;
+            let callee_function =
+                push_test_function(&mut db, file, callee, index as u32 + 10, false);
+            let site = call_site(id, file, handler, callee);
+            targets.push(call_target(id, site.id, handler, callee_function));
+            edges.push(refined_edge(id, site.id, handler, callee_function, callee));
+            sites.push(site);
+        }
+
+        db.replace_call_facts(CallOutput {
+            sites,
+            targets,
+            unresolved: Vec::new(),
+        })
+        .expect("valid call facts");
+        db.replace_refined_call_facts(RefinedCallOutput { edges })
+            .expect("valid refined call facts");
         db
     }
 

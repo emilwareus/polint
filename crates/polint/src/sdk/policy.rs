@@ -338,6 +338,14 @@ impl GuardPattern {
             values: collect_strings(targets),
         }
     }
+
+    pub(crate) fn kind(&self) -> GuardPatternKind {
+        self.kind
+    }
+
+    pub(crate) fn values(&self) -> &[String] {
+        &self.values
+    }
 }
 
 /// Pattern for data-flow barriers or sanitizers.
@@ -388,7 +396,7 @@ enum SinkPatternKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GuardPatternKind {
+pub(crate) enum GuardPatternKind {
     CallAny,
 }
 

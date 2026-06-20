@@ -21,7 +21,7 @@ Phase numbering continues from v1.3's last phase 54. v1.4 promotes a narrow poli
 
 - [x] **Phase 55: SDK Query Vocabulary and Preview Contract** - Define preview views, query structs, pattern structs, capability derivation, and the "one public way" API contract. Completed 2026-06-20.
 - [x] **Phase 56: Events and Calls Query Surface** - Implement `Events<'_>` and `Calls<'_>` policy queries over v1.3 refined calls, reachability roots, and unknown taxonomy. Completed 2026-06-20.
-- [ ] **Phase 57: Control-Flow Guard and Lifecycle Queries** - Implement `ControlFlow<'_>` guard and cleanup policies without exposing raw CFG/dominance graphs.
+- [x] **Phase 57: Control-Flow Guard and Lifecycle Queries** - Implement `ControlFlow<'_>` guard and cleanup policies without exposing raw CFG/dominance graphs. Completed 2026-06-20.
 - [ ] **Phase 58: Data-Flow Source/Sink/Barrier Queries** - Promote `DataFlow<'_>` preview methods for forbidden flows and required barriers over bounded private path search.
 - [ ] **Phase 59: Violation Evidence, Unknowns, and Cache Semantics** - Normalize violation results, diagnostic evidence, deterministic ordering, cache keys, and user-visible unknown/budget behavior.
 - [ ] **Phase 60: Flagship Rule Templates and Agent Ergonomics** - Generate realistic policy templates and update README/examples/skill text around the same query-object syntax.
@@ -72,23 +72,23 @@ Phase numbering continues from v1.3's last phase 54. v1.4 promotes a narrow poli
 
 ### Phase 57: Control-Flow Guard and Lifecycle Queries
 
-**Goal:** Let rules express "this event requires a guard" and "this acquired resource requires cleanup" policies over private CFG/dominance facts.
+**Goal:** Let rules express "this call event requires a prior guard" and "this call-acquired resource requires later cleanup" policies without exposing raw CFG facts.
 
-**Depends on:** Phase 55; Phase 56 event patterns; private CFG, dominance, postdominance, summaries, evidence.
+**Depends on:** Phase 55; Phase 56 event patterns; private call/refined-call facts; private CFG operation order.
 
 **Requirements:** CTRL-01, CTRL-02, CTRL-03, CTRL-04
 
 **Success Criteria:**
-1. `ControlFlow<'_>::missing_guard(GuardQuery)` finds missing auth/validation/allowlist guards before sensitive events.
-2. `ControlFlow<'_>::missing_cleanup(LifecycleQuery)` finds missing rollback/commit/close/unlock/end cleanup on success and error exits.
-3. Query options support same-function and bounded-interprocedural modes without exposing raw CFG nodes or dominance graphs.
-4. Violations include event spans, guard/cleanup candidates, uncovered path evidence, conservative unknowns, and budget status.
-5. Fixtures cover auth-before-write, validation-before-money-move, transaction rollback, file close, lock unlock, and tracing span end.
+1. `ControlFlow<'_>::missing_guard(GuardQuery)` finds missing same-function auth/validation/allowlist guard calls before sensitive call events.
+2. `ControlFlow<'_>::missing_cleanup(LifecycleQuery)` finds missing same-function cleanup calls after acquire/start call events.
+3. Query options preserve one clear public API while Phase 57 honestly limits execution to same-function call-event checks; bounded interprocedural search remains deferred.
+4. Violations include event spans, guard/cleanup candidates, same-function uncovered path evidence, conservative status/precision, and budget status.
+5. Fixtures cover auth/allowlist-before-dangerous-call and transaction-begin cleanup through an external temp-repo rule using only `polint::sdk::prelude::*`.
 
 **Example policies unlocked:**
-- Balance or permission writes require an authorization guard.
-- Money movement requires validation before persistence.
-- Transactions opened with `Begin` must commit or rollback on every exit path.
+- Dangerous calls require an authorization or allowlist guard earlier in the same function.
+- Money movement calls require validation earlier in the same function.
+- Transactions opened with `Begin` require a later `Rollback` or cleanup call in the same function.
 
 ### Phase 58: Data-Flow Source/Sink/Barrier Queries
 
@@ -218,12 +218,12 @@ for violation in flow.forbidden(query) {
 
 ## Next Up
 
-**Phase 57: Control-Flow Guard and Lifecycle Queries** - implement guard and cleanup policy queries over private CFG/dominance facts without exposing raw control-flow internals.
+**Phase 58: Data-Flow Source/Sink/Barrier Queries** - promote `DataFlow<'_>` preview methods for forbidden flows and required barriers over bounded private path search.
 
 Suggested command:
 
 ```bash
-/gsd-discuss-phase 57 /Users/emilwareus/conductor/workspaces/exlint/louisville-v1
+/gsd-discuss-phase 58 /Users/emilwareus/conductor/workspaces/exlint/louisville-v1
 ```
 
 For a direct implementation plan:

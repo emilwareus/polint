@@ -999,26 +999,25 @@ pub(crate) fn rule(
 
     assert!(
         diagnostics_for_rule(&json, "local/phase55-preview").is_empty(),
-        "preview rule body must not run while preview capabilities are unsupported: {json:#?}"
+        "preview rule body must not run while dataflow remains unsupported: {json:#?}"
     );
     let capability_diagnostics = diagnostics_for_rule(&json, "polint/capability");
-    for capability in ["control_flow", "dataflow"] {
-        assert!(
-            capability_diagnostics.iter().any(|diagnostic| {
-                diagnostic_has_evidence(diagnostic, "rule", "local/phase55-preview")
-                    && diagnostic_has_evidence(diagnostic, "capability", capability)
-                    && diagnostic_has_evidence(diagnostic, "status", "unsupported")
-            }),
-            "expected unsupported {capability} capability diagnostic: {json:#?}"
-        );
-    }
-    for capability in ["events", "calls"] {
+    let capability = "dataflow";
+    assert!(
+        capability_diagnostics.iter().any(|diagnostic| {
+            diagnostic_has_evidence(diagnostic, "rule", "local/phase55-preview")
+                && diagnostic_has_evidence(diagnostic, "capability", capability)
+                && diagnostic_has_evidence(diagnostic, "status", "unsupported")
+        }),
+        "expected unsupported {capability} capability diagnostic: {json:#?}"
+    );
+    for capability in ["events", "calls", "control_flow"] {
         assert!(
             capability_diagnostics.iter().all(|diagnostic| {
                 !diagnostic_has_evidence(diagnostic, "rule", "local/phase55-preview")
                     || !diagnostic_has_evidence(diagnostic, "capability", capability)
             }),
-            "events/calls should be supported in Phase 56: {json:#?}"
+            "events/calls/control_flow should be supported by Phase 57: {json:#?}"
         );
     }
 
@@ -1181,6 +1180,132 @@ func dangerous() {}
                     && !diagnostic_has_evidence(diagnostic, "capability", "calls")
             }),
         "events/calls should execute without capability diagnostics: {json:#?}"
+    );
+}
+
+#[test]
+fn phase57_control_flow_rule_reports_json() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_file(
+        &temp.path().join("go.mod"),
+        "module example.com/controlflowquery\n\ngo 1.22\n",
+    );
+    write_phase41_rule_pack(
+        temp.path(),
+        r#"use std::process::ExitCode;
+use polint::runner;
+mod rule;
+fn main() -> ExitCode { runner::run_cli(vec![rule::rule()]) }
+"#,
+        r#"use polint::sdk::prelude::*;
+
+#[polint::rule(id = "local/phase57-control-flow", description = "Phase 57 control-flow", severity = "error")]
+pub(crate) fn rule(ctx: &mut RuleCtx<'_>, control: ControlFlow<'_>) -> RuleResult {
+    let mut guard = GuardQuery::new(
+        EventPattern::call("dangerous"),
+        GuardPattern::call_any(["authorize"]),
+    );
+    guard.max_paths = 4;
+
+    for violation in control.missing_guard(guard) {
+        ctx.report(violation.diagnostic(
+            ctx.rule_id(),
+            "dangerous call requires authorization first",
+        ));
+    }
+
+    let mut cleanup = LifecycleQuery::new(
+        EventPattern::call("Begin"),
+        EventPattern::call("Rollback"),
+    );
+    cleanup.max_paths = 4;
+
+    for violation in control.missing_cleanup(cleanup) {
+        ctx.report(violation.diagnostic(
+            ctx.rule_id(),
+            "transaction begin requires cleanup",
+        ));
+    }
+
+    Ok(())
+}
+"#,
+    );
+    write_file(
+        &temp.path().join("src/main.go"),
+        r#"package main
+
+func main() {
+	handler()
+}
+
+func handler() {
+	dangerous()
+	authorize()
+	tx := Begin()
+	_ = tx
+}
+
+type Tx struct{}
+
+func dangerous() {}
+func authorize() {}
+func Begin() *Tx { return &Tx{} }
+func Rollback() {}
+"#,
+    );
+
+    let json = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["check", "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+
+    let diagnostics = diagnostics_for_rule(&json, "local/phase57-control-flow");
+    assert_eq!(
+        diagnostics.len(),
+        2,
+        "expected guard and cleanup diagnostics: {json:#?}"
+    );
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["message"] == "dangerous call requires authorization first"
+                && diagnostic_has_evidence(diagnostic, "policy", "missing_guard")
+                && diagnostic_has_evidence(diagnostic, "required_guard", "authorize")
+                && diagnostic_has_evidence(diagnostic, "control_scope", "same_function")
+                && diagnostic_has_evidence(diagnostic, "policy_precision", "conservative")
+        }),
+        "missing guard diagnostic evidence: {json:#?}"
+    );
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["message"] == "transaction begin requires cleanup"
+                && diagnostic_has_evidence(diagnostic, "policy", "missing_cleanup")
+                && diagnostic_has_evidence(diagnostic, "required_cleanup", "Rollback")
+                && diagnostic_has_evidence(diagnostic, "control_scope", "same_function")
+        }),
+        "missing cleanup diagnostic evidence: {json:#?}"
+    );
+    assert!(
+        diagnostics_for_rule(&json, "polint/capability")
+            .iter()
+            .all(|diagnostic| {
+                !diagnostic_has_evidence(diagnostic, "capability", "control_flow")
+            }),
+        "control_flow should execute without capability diagnostics: {json:#?}"
     );
 }
 

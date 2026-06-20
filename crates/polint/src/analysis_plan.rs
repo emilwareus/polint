@@ -695,10 +695,10 @@ fn support_for(capability: &str) -> CapabilityAccumulator {
             None,
         ),
         "control_flow" => (
-            CapabilitySupportStatus::Unsupported,
-            Some("Preview control-flow policy queries are reserved until guard and lifecycle facts have docs, tests, and provider-backed behavior.".to_string()),
+            CapabilitySupportStatus::Supported,
             None,
-            Some("docs/facts/control-flow.md".to_string()),
+            None,
+            None,
         ),
         "cfg" | "call_graph" | "coverage_facts" => (
             CapabilitySupportStatus::Unsupported,
@@ -1149,11 +1149,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 ("calls", CapabilitySupportStatus::Supported, None),
-                (
-                    "control_flow",
-                    CapabilitySupportStatus::Unsupported,
-                    Some("docs/facts/control-flow.md")
-                ),
+                ("control_flow", CapabilitySupportStatus::Supported, None),
                 (
                     "dataflow",
                     CapabilitySupportStatus::Unsupported,
@@ -1164,18 +1160,17 @@ mod tests {
         );
 
         let diagnostics = plan.diagnostics();
-        for capability in ["control_flow", "dataflow"] {
-            assert!(
-                diagnostics.iter().any(|diagnostic| {
-                    diagnostic.rule_id == "polint/capability"
-                        && diagnostic.evidence.iter().any(|evidence| {
-                            evidence.label == "capability" && evidence.value == capability
-                        })
-                }),
-                "missing fail-closed diagnostic for {capability}: {diagnostics:#?}"
-            );
-        }
-        for capability in ["events", "calls"] {
+        let capability = "dataflow";
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic.rule_id == "polint/capability"
+                    && diagnostic.evidence.iter().any(|evidence| {
+                        evidence.label == "capability" && evidence.value == capability
+                    })
+            }),
+            "missing fail-closed diagnostic for {capability}: {diagnostics:#?}"
+        );
+        for capability in ["events", "calls", "control_flow"] {
             assert!(
                 diagnostics.iter().all(|diagnostic| {
                     !diagnostic.evidence.iter().any(|evidence| {

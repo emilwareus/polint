@@ -877,29 +877,29 @@ impl<'a> Calls<'a> {
     }
 }
 
-/// Preview control-flow policy view. Requesting this view maps to fail-closed `control_flow`.
+/// Preview control-flow policy view. Requesting this view maps to provider-backed `control_flow`.
 #[derive(Clone, Copy)]
 pub struct ControlFlow<'a> {
-    _db: &'a AnalysisDb,
+    db: &'a AnalysisDb,
 }
 
 impl<'a> ControlFlow<'a> {
     /// Finds events missing a required guard.
     ///
-    /// This method is preview vocabulary only in Phase 55. Rules requesting
-    /// `ControlFlow<'_>` fail closed before execution until Phase 57 provides
-    /// real guard-query facts.
-    pub fn missing_guard(self, _query: GuardQuery) -> Vec<PolicyViolation> {
-        preview_query_unavailable("ControlFlow::missing_guard")
+    /// Phase 57 supports same-function call-event guard checks over private
+    /// call/refined-call facts and CFG operation order where available. Other
+    /// event families remain preview vocabulary until backed facts land.
+    pub fn missing_guard(self, query: GuardQuery) -> Vec<PolicyViolation> {
+        crate::policy_queries::missing_guards(self.db, query)
     }
 
     /// Finds lifecycle starts missing required cleanup.
     ///
-    /// This method is preview vocabulary only in Phase 55. Rules requesting
-    /// `ControlFlow<'_>` fail closed before execution until Phase 57 provides
-    /// real lifecycle-query facts.
-    pub fn missing_cleanup(self, _query: LifecycleQuery) -> Vec<PolicyViolation> {
-        preview_query_unavailable("ControlFlow::missing_cleanup")
+    /// Phase 57 supports same-function call-event lifecycle checks over private
+    /// call/refined-call facts and CFG operation order where available. Exact
+    /// error-exit and interprocedural resource proof remains deferred.
+    pub fn missing_cleanup(self, query: LifecycleQuery) -> Vec<PolicyViolation> {
+        crate::policy_queries::missing_cleanup(self.db, query)
     }
 }
 
@@ -990,7 +990,7 @@ impl_fact_view!(Cfg, _db);
 impl_fact_view!(CallGraph, _db);
 impl_fact_view!(Events);
 impl_fact_view!(Calls);
-impl_fact_view!(ControlFlow, _db);
+impl_fact_view!(ControlFlow);
 impl_fact_view!(DataFlow, _db);
 impl_fact_view!(TestSuiteMetrics, _db);
 
