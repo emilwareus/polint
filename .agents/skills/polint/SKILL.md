@@ -54,12 +54,15 @@ Prefer typed fact views in the rule signature:
   reusable quality signals.
 - `StringLiterals<'_>` and `JsxAttributes<'_>` for TS/JS literal and JSX rules.
 - `GoTests<'_>` and `BranchObligations<'_>` for Go branch/test policies.
+- Preview policy query views `Events<'_>`, `Calls<'_>`, `ControlFlow<'_>`,
+  and `DataFlow<'_>` compile through the SDK prelude, but fail closed with
+  `polint/capability` until their provider-backed query behavior lands.
 
 Keep `RuleCtx` narrow: diagnostics, options/settings, path helpers, and
 capability/setup metadata. Do not import `polint::core`, parser adapters,
 `AnalysisDb`, provider modules, or eval/debug internals from repo-local rules.
 
-Reserved advanced views such as `Cfg<'_>`, `CallGraph<'_>`, `DataFlow<'_>`,
+Reserved advanced views such as raw `Cfg<'_>`, raw `CallGraph<'_>`,
 `Evidence<'_>`, model packs, provider extensions, and `polint eval` are not
 stable rule-authoring APIs unless a future public docs page and temp-repo test
 explicitly promote them.

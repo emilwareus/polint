@@ -126,11 +126,22 @@ fn facts_list_json_is_stable_and_public_only() {
             && view["sampling"] == true
             && view["unknowns"] == false
     }));
-    assert!(
+    let stability_for = |capability: &str| {
         views
             .iter()
-            .any(|view| { view["capability"] == "dataflow" && view["stability"] == "reserved" })
-    );
+            .find(|view| view["capability"] == capability)
+            .unwrap_or_else(|| panic!("missing facts list view for {capability}: {views:#?}"))
+            ["stability"]
+            .as_str()
+            .unwrap_or_else(|| panic!("missing stability for {capability}: {views:#?}"))
+            .to_string()
+    };
+    for capability in ["events", "calls", "control_flow", "dataflow"] {
+        assert_eq!(stability_for(capability), "preview");
+    }
+    for capability in ["cfg", "call_graph"] {
+        assert_eq!(stability_for(capability), "reserved");
+    }
 
     for marker in [
         "polint.data_flow",
@@ -902,6 +913,148 @@ pub(crate) fn rule(ctx: &mut RuleCtx<'_>, symbols: Symbols<'_>, references: Refe
             .success(),
     );
     assert_eq!(diagnostics_for_rule(&json, "local/symbol-helper").len(), 1);
+}
+
+#[test]
+fn phase55_preview_rule_syntax_compiles_and_fails_closed() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_phase41_rule_pack(
+        temp.path(),
+        r#"use std::process::ExitCode;
+use polint::runner;
+mod rule;
+fn main() -> ExitCode { runner::run_cli(vec![rule::rule()]) }
+"#,
+        r#"use polint::sdk::prelude::*;
+
+#[polint::rule(id = "local/phase55-preview", description = "Phase 55 preview syntax", severity = "warn")]
+pub(crate) fn rule(
+    ctx: &mut RuleCtx<'_>,
+    events: Events<'_>,
+    calls: Calls<'_>,
+    control: ControlFlow<'_>,
+    flow: DataFlow<'_>,
+) -> RuleResult {
+    let mut flow_query = FlowQuery::new(
+        SourcePattern::secret_like(["token", "password", "apiKey"]),
+        SinkPattern::logger(),
+    );
+    flow_query.barriers = BarrierPattern::call_any(["redact", "mask_secret"]);
+    flow_query.max_paths = 20;
+
+    for violation in flow.forbidden(flow_query) {
+        ctx.report(violation.diagnostic(
+            ctx.rule_id(),
+            "secret-like value reaches logging without redaction",
+        ));
+    }
+
+    let _ = events.matching(EventPattern::call("handler"));
+    let _ = calls.forbidden_reachable(ReachQuery::new(EventPattern::call("dangerous_exec")));
+    let _ = control.missing_guard(GuardQuery::new(
+        EventPattern::write_field("account.balance"),
+        GuardPattern::call_any(["authorize", "require_admin"]),
+    ));
+    let _ = control.missing_cleanup(LifecycleQuery::new(
+        EventPattern::call("begin_transaction"),
+        EventPattern::call("rollback"),
+    ));
+
+    ctx.warn(
+        &Span::point(FileId(0), 1, 1),
+        "phase55 preview rule body executed",
+    );
+    Ok(())
+}
+"#,
+    );
+    write_file(
+        &temp.path().join("src/app.ts"),
+        r#"export function handler(token: string) {
+  console.log(token);
+}
+"#,
+    );
+
+    let json = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["check", "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+
+    assert!(
+        diagnostics_for_rule(&json, "local/phase55-preview").is_empty(),
+        "preview rule body must not run while preview capabilities are unsupported: {json:#?}"
+    );
+    let capability_diagnostics = diagnostics_for_rule(&json, "polint/capability");
+    for capability in ["events", "calls", "control_flow", "dataflow"] {
+        assert!(
+            capability_diagnostics.iter().any(|diagnostic| {
+                diagnostic_has_evidence(diagnostic, "rule", "local/phase55-preview")
+                    && diagnostic_has_evidence(diagnostic, "capability", capability)
+                    && diagnostic_has_evidence(diagnostic, "status", "unsupported")
+            }),
+            "expected unsupported {capability} capability diagnostic: {json:#?}"
+        );
+    }
+
+    let manifest = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["inspect", "rule", "--format", "json"])
+            .assert()
+            .success(),
+    );
+    let rule = manifest["rules"]
+        .as_array()
+        .and_then(|rules| {
+            rules
+                .iter()
+                .find(|rule| rule["rule_id"] == "local/phase55-preview")
+        })
+        .unwrap_or_else(|| panic!("missing preview rule manifest row: {manifest:#?}"));
+    let capabilities = rule["capabilities"]
+        .as_array()
+        .unwrap_or_else(|| panic!("rule capabilities should be an array: {rule:#?}"));
+    let capability_names = capabilities
+        .iter()
+        .map(|capability| capability["name"].as_str().unwrap_or_default())
+        .collect::<BTreeSet<_>>();
+    for capability in ["events", "calls", "control_flow", "dataflow"] {
+        assert!(
+            capability_names.contains(capability),
+            "preview rule manifest should include {capability}: {rule:#?}"
+        );
+    }
+    let fact_views = rule["fact_views"]
+        .as_array()
+        .unwrap_or_else(|| panic!("rule fact_views should be an array: {rule:#?}"));
+    for (view_type, capability) in [
+        ("Events", "events"),
+        ("Calls", "calls"),
+        ("ControlFlow", "control_flow"),
+        ("DataFlow", "dataflow"),
+    ] {
+        assert!(
+            fact_views
+                .iter()
+                .any(|view| view["view_type"] == view_type && view["capability"] == capability),
+            "preview fact view metadata should include {view_type}/{capability}: {rule:#?}"
+        );
+    }
 }
 
 #[test]
@@ -8315,6 +8468,47 @@ mod capability_planning {
             "call_graph"
         ));
         assert!(diagnostic_has_evidence(diagnostic, "status", "unsupported"));
+    }
+
+    #[test]
+    fn reserved_cfg_and_call_graph_remain_unsupported() {
+        let cfg_temp = tempfile::tempdir().unwrap();
+        write_plan_capability_rule_repo(cfg_temp.path());
+        let cfg_json = stdout_json(
+            polint_cmd()
+                .current_dir(cfg_temp.path())
+                .args(["check", "--format", "json", "--fail-on", "none"])
+                .assert()
+                .success(),
+        );
+        assert!(
+            diagnostics_for_rule(&cfg_json, "polint/capability")
+                .iter()
+                .any(
+                    |diagnostic| diagnostic_has_evidence(diagnostic, "capability", "cfg")
+                        && diagnostic_has_evidence(diagnostic, "status", "unsupported")
+                ),
+            "Cfg<'_> should stay a reserved raw capability: {cfg_json:#?}"
+        );
+
+        let call_temp = tempfile::tempdir().unwrap();
+        write_call_graph_capability_rule_repo(call_temp.path());
+        let call_json = stdout_json(
+            polint_cmd()
+                .current_dir(call_temp.path())
+                .args(["check", "--format", "json", "--fail-on", "none"])
+                .assert()
+                .success(),
+        );
+        assert!(
+            diagnostics_for_rule(&call_json, "polint/capability")
+                .iter()
+                .any(
+                    |diagnostic| diagnostic_has_evidence(diagnostic, "capability", "call_graph")
+                        && diagnostic_has_evidence(diagnostic, "status", "unsupported")
+                ),
+            "CallGraph<'_> should stay a reserved raw capability: {call_json:#?}"
+        );
     }
 
     #[test]
