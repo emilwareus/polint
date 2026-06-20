@@ -3,6 +3,10 @@
 `ControlFlow<'_>` is a preview SDK view for guard and lifecycle policies.
 Requesting it derives the supported `control_flow` capability.
 
+See [policy-queries.md](policy-queries.md) for the shared query-object style,
+evidence header, precision/status vocabulary, unknown semantics, and template
+starter workflow.
+
 Phase 57 backs same-function call-event guard and lifecycle queries with the
 existing call/refined-call facts and CFG operation order where available. The
 API remains preview because exact interprocedural path proof, write-field

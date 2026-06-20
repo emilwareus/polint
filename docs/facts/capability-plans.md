@@ -33,6 +33,9 @@ resolved `ReferenceFact::target` values.
 
 v1.4 adds a small policy-query vocabulary to the public SDK:
 
+See [policy-queries.md](policy-queries.md) for the shared policy-query syntax,
+evidence, unknown, budget, and template semantics.
+
 - `Events<'_>` derives capability `events`
 - `Calls<'_>` derives capability `calls`
 - `ControlFlow<'_>` derives capability `control_flow`

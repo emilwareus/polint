@@ -3,6 +3,10 @@
 `DataFlow<'_>` is a v1.4 preview SDK view for source-to-sink policy queries.
 Requesting it derives the supported `dataflow` capability.
 
+See [policy-queries.md](policy-queries.md) for the shared query-object style,
+evidence header, precision/status vocabulary, unknown semantics, and template
+starter workflow.
+
 The public surface is intentionally policy-level. Rules construct one
 `FlowQuery`, run `flow.forbidden(query)`, and report returned
 `PolicyViolation` values. polint does not expose raw data-flow nodes, graph

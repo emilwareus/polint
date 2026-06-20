@@ -28,6 +28,9 @@ Preview policy query views return `PolicyViolation` values. When a rule reports
 one through `violation.diagnostic(ctx.rule_id(), "...")`, polint emits a stable
 scalar evidence header:
 
+See [policy-queries.md](policy-queries.md) for the full policy-query preview
+contract, query vocabulary, precision/status vocabulary, and template starters.
+
 - `policy_query`: one of `events.matching`, `calls.forbidden_reachable`,
   `control_flow.missing_guard`, `control_flow.missing_cleanup`, or
   `data_flow.forbidden`.

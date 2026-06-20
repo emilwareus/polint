@@ -30,6 +30,7 @@ for the current disposition table.
 
 Preview policy-query references:
 
+- [Policy query preview](policy-queries.md)
 - [Events](events.md)
 - [Calls](calls.md)
 - [Control-flow policies](control-flow.md)

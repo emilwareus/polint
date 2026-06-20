@@ -3,6 +3,10 @@
 `Events<'_>` is a preview SDK view for matching semantic policy events.
 Requesting it derives the supported `events` capability.
 
+See [policy-queries.md](policy-queries.md) for the shared query-object style,
+evidence header, precision/status vocabulary, unknown semantics, and template
+starter workflow.
+
 Phase 56 backs call-event matching with existing call and refined-call facts.
 The API remains preview because additional event families, such as field writes
 and lifecycle events, will be promoted in later phases.

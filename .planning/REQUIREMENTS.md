@@ -98,8 +98,8 @@ Requirements for the v1.4 milestone. Each maps to exactly one roadmap phase.
 
 ### Validation and Public Boundary
 
-- [ ] **VAL-01**: Each preview view and each query family has at least one temp-repo style test where generated `.polint/rules` imports only `polint::sdk::prelude::*`, registers through `polint::runner::run_cli`, consumes real facts, and asserts diagnostics through `polint check --format json`.
-- [ ] **VAL-02**: Public docs under `docs/facts/` describe the preview status, syntax, limits, precision tiers, heuristic behavior, unknown/budget semantics, and realistic examples for every new view and query type.
+- [x] **VAL-01**: Each preview view and each query family has at least one temp-repo style test where generated `.polint/rules` imports only `polint::sdk::prelude::*`, registers through `polint::runner::run_cli`, consumes real facts, and asserts diagnostics through `polint check --format json`.
+- [x] **VAL-02**: Public docs under `docs/facts/` describe the preview status, syntax, limits, precision tiers, heuristic behavior, unknown/budget semantics, and realistic examples for every new view and query type.
 - [ ] **VAL-03**: The public-surface leak gate proves raw CFG, call graph, semantic graph, data-flow graph, solver, provider, `AnalysisDb`, and private IDs are not reachable from the supported SDK, CLI, runner, README, generated skill text, or docs/facts surfaces.
 - [ ] **VAL-04**: Milestone exit verification runs full workspace tests, formatting, clippy, temp-repo SDK tests, cache invalidation tests, docs/example smoke tests, and deterministic repeated-run checks for the flagship policies.
 
@@ -176,8 +176,8 @@ Which phases cover which requirements.
 | TPL-03 | Phase 60 | Complete |
 | TPL-04 | Phase 60 | Complete |
 | TPL-05 | Phase 60 | Complete |
-| VAL-01 | Phase 61 | Planned |
-| VAL-02 | Phase 61 | Planned |
+| VAL-01 | Phase 61 | Complete |
+| VAL-02 | Phase 61 | Complete |
 | VAL-03 | Phase 62 | Planned |
 | VAL-04 | Phase 62 | Planned |
 

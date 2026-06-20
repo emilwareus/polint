@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.4
 milestone_name: Policy Query Surface
 status: executing
-last_updated: "2026-06-20T17:44:21.719Z"
-last_activity: 2026-06-20 -- Phase 61 plans created; implementation starting
+last_updated: "2026-06-20T17:50:14.667Z"
+last_activity: 2026-06-20 -- Phase 61 complete; Phase 62 is next
 progress:
   total_phases: 8
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 21
-  completed_plans: 18
-  percent: 75
+  completed_plans: 21
+  percent: 88
 ---
 
 # State: polint
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-06-20)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 61 Public Docs and External SDK Validation
+**Current focus:** Phase 62 Promotion Gate, Boundary Proof, and Closeout
 
 ## Current Status
 
@@ -41,10 +41,10 @@ See: `.planning/PROJECT.md` (updated 2026-06-20)
 
 ## Current Position
 
-Phase: 61 - Public Docs and External SDK Validation
-Plan: 61-01
-Status: In Progress
-Last activity: 2026-06-20 -- Phase 61 plans created; implementation starting
+Phase: 62 - Promotion Gate, Boundary Proof, and Closeout
+Plan: Not planned yet
+Status: Planned
+Last activity: 2026-06-20 -- Phase 61 complete; Phase 62 is next
 
 ### Active Milestone Phase Progress
 
@@ -56,7 +56,7 @@ Last activity: 2026-06-20 -- Phase 61 plans created; implementation starting
 | 58 | Complete | Data-flow forbidden-flow queries complete for HTTP request trust-boundary sources, secret-like names, exact call sinks, logger sinks, call barriers, unknown/budget evidence, and external rule validation |
 | 59 | Complete | Normalized policy evidence header, query digests, deterministic sorting/deduplication, cap-filtered policy unknowns, cache-version digest inputs, docs, skills, and verification complete |
 | 60 | Complete | `polint new-rule --template` selector, ten flagship policy template bodies, generated positive/negative fixtures, README/docs/skill updates, and focused verification complete |
-| 61 | In Progress | Plans created for consolidated policy-query docs, external SDK matrix validation, docs coverage tests, and closeout |
+| 61 | Complete | Consolidated policy-query docs, cross-links, docs coverage test, external SDK matrix test, and verification complete |
 | 62 | Planned | Promotion gate, boundary proof, and closeout |
 
 ### Open repo-admin action (T-42-04-10)

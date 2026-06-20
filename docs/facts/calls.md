@@ -3,6 +3,10 @@
 `Calls<'_>` is a preview SDK view for policy-level reachable-call checks.
 Requesting it derives the supported `calls` capability.
 
+See [policy-queries.md](policy-queries.md) for the shared query-object style,
+evidence header, precision/status vocabulary, unknown semantics, and template
+starter workflow.
+
 Phase 56 implements `Calls::forbidden_reachable(ReachQuery)` over private
 refined-call and reachability facts. The public API returns policy violations;
 it does not expose raw call-graph nodes, dense IDs, solver internals, or
