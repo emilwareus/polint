@@ -57,8 +57,8 @@ Prefer typed fact views in the rule signature:
 - Preview policy query views `Events<'_>` and `Calls<'_>` are provider-backed
   for Phase 56 call-event and reachable-call policies. `ControlFlow<'_>` is
   provider-backed for Phase 57 same-function call-event guard and cleanup
-  policies. `DataFlow<'_>` still fails closed with `polint/capability` until
-  bounded source/sink/barrier behavior lands.
+  policies. `DataFlow<'_>` is provider-backed for Phase 58 bounded
+  source/sink/barrier policies.
 
 Keep `RuleCtx` narrow: diagnostics, options/settings, path helpers, and
 capability/setup metadata. Do not import `polint::core`, parser adapters,

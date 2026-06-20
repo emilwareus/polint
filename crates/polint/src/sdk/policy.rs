@@ -2,8 +2,9 @@
 //!
 //! These types define the public shape for v1.4 policy queries. They are
 //! intentionally plain data structs with `new(required...)` constructors and
-//! named option fields. Runtime query behavior is fail-closed until the
-//! corresponding preview capabilities are backed by provider facts.
+//! named option fields. Runtime query behavior is backed only for documented
+//! preview scopes; unsupported patterns return no policy matches rather than
+//! exposing internal graph APIs.
 
 use crate::diagnostics::{Diagnostic, TextRange};
 
@@ -292,6 +293,14 @@ impl SourcePattern {
             values: collect_strings(names),
         }
     }
+
+    pub(crate) fn kind(&self) -> SourcePatternKind {
+        self.kind
+    }
+
+    pub(crate) fn values(&self) -> &[String] {
+        &self.values
+    }
 }
 
 /// Pattern for data-flow sinks.
@@ -316,6 +325,14 @@ impl SinkPattern {
             kind: SinkPatternKind::Logger,
             values: Vec::new(),
         }
+    }
+
+    pub(crate) fn kind(&self) -> SinkPatternKind {
+        self.kind
+    }
+
+    pub(crate) fn values(&self) -> &[String] {
+        &self.values
     }
 }
 
@@ -375,6 +392,14 @@ impl BarrierPattern {
             values: collect_strings(targets),
         }
     }
+
+    pub(crate) fn kind(&self) -> BarrierPatternKind {
+        self.kind
+    }
+
+    pub(crate) fn values(&self) -> &[String] {
+        &self.values
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -384,13 +409,13 @@ pub(crate) enum EventPatternKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SourcePatternKind {
+pub(crate) enum SourcePatternKind {
     HttpRequest,
     SecretLike,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SinkPatternKind {
+pub(crate) enum SinkPatternKind {
     Call,
     Logger,
 }
@@ -401,7 +426,7 @@ pub(crate) enum GuardPatternKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BarrierPatternKind {
+pub(crate) enum BarrierPatternKind {
     None,
     CallAny,
 }

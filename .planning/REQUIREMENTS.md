@@ -74,11 +74,11 @@ Requirements for the v1.4 milestone. Each maps to exactly one roadmap phase.
 
 ### Data-Flow Policies
 
-- [ ] **FLOW-01**: `DataFlow<'_>` supports `forbidden(FlowQuery)` for source-to-sink policies with optional barriers/sanitizers.
-- [ ] **FLOW-02**: `DataFlow<'_>` supports required-barrier semantics for policies such as request-to-shell requiring validation, HTML sinks requiring escaping, and external URL fetches requiring host allowlists.
-- [ ] **FLOW-03**: Built-in source and sink patterns cover HTTP request inputs, route params, environment/secrets, PII-like identifiers, file paths, URLs, loggers, analytics, shell commands, SQL/query execution, HTML/JSX raw insertion, and outbound network clients.
-- [ ] **FLOW-04**: Flow queries use the existing private data-flow and evidence substrate for bounded interprocedural path search, path ranking, summary expansion handles, and deterministic capped results.
-- [ ] **FLOW-05**: Data-flow queries clearly distinguish exact, heuristic, unsupported, unknown, and budget-exceeded results; heuristic patterns must say they are heuristic.
+- [x] **FLOW-01**: `DataFlow<'_>` supports `forbidden(FlowQuery)` for backed source-to-sink policies with optional barriers/sanitizers through `BarrierPattern::call_any`.
+- [x] **FLOW-02**: `DataFlow<'_>` supports required-barrier semantics for call-based policies, including request-to-dangerous-call and secret-to-log patterns, by suppressing paths that cross a matching sanitizer/barrier call and reporting uncovered paths.
+- [x] **FLOW-03**: Built-in Phase 58 patterns cover HTTP request trust-boundary sources, explicit `secret_like` name sources, exact call sinks, logger sinks, and explicit barrier calls. Broader built-in categories such as SQL, raw HTML/JSX, SSRF URLs, file paths, analytics, PII, and outbound network clients remain template/future taxonomy work.
+- [x] **FLOW-04**: Flow queries use the existing private data-flow substrate for bounded path search, source-introduction edges, existing local/direct-call/summary edges, deterministic capped results, and path evidence without exposing raw graph APIs.
+- [x] **FLOW-05**: Data-flow queries distinguish found, heuristic, unknown, and budget-exceeded results in policy diagnostics; unsupported pattern families return no matches until backed, and heuristic patterns are documented honestly.
 
 ### Violations, Evidence, Cache, and Unknowns
 
@@ -161,11 +161,11 @@ Which phases cover which requirements.
 | CTRL-02 | Phase 57 | Complete |
 | CTRL-03 | Phase 57 | Complete |
 | CTRL-04 | Phase 57 | Complete |
-| FLOW-01 | Phase 58 | Planned |
-| FLOW-02 | Phase 58 | Planned |
-| FLOW-03 | Phase 58 | Planned |
-| FLOW-04 | Phase 58 | Planned |
-| FLOW-05 | Phase 58 | Planned |
+| FLOW-01 | Phase 58 | Complete |
+| FLOW-02 | Phase 58 | Complete |
+| FLOW-03 | Phase 58 | Complete |
+| FLOW-04 | Phase 58 | Complete |
+| FLOW-05 | Phase 58 | Complete |
 | EVID-01 | Phase 59 | Planned |
 | EVID-02 | Phase 59 | Planned |
 | EVID-03 | Phase 59 | Planned |

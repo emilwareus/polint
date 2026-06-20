@@ -903,20 +903,19 @@ impl<'a> ControlFlow<'a> {
     }
 }
 
-/// Preview data-flow policy view. Requesting this view maps to fail-closed `dataflow`.
+/// Preview data-flow policy view. Requesting this view maps to provider-backed `dataflow`.
 #[derive(Clone, Copy)]
 pub struct DataFlow<'a> {
-    _db: &'a AnalysisDb,
+    db: &'a AnalysisDb,
 }
 
 impl<'a> DataFlow<'a> {
     /// Finds forbidden source-to-sink flows described by `query`.
     ///
-    /// This method is preview vocabulary only in Phase 55. Rules requesting
-    /// `DataFlow<'_>` fail closed before execution until Phase 58 provides
-    /// real data-flow query facts.
-    pub fn forbidden(self, _query: FlowQuery) -> Vec<PolicyViolation> {
-        preview_query_unavailable("DataFlow::forbidden")
+    /// Phase 58 answers bounded source-to-sink queries over private data-flow
+    /// facts without exposing raw graph nodes, edges, or solver internals.
+    pub fn forbidden(self, query: FlowQuery) -> Vec<PolicyViolation> {
+        crate::policy_queries::forbidden_flows(self.db, query)
     }
 }
 
@@ -991,12 +990,8 @@ impl_fact_view!(CallGraph, _db);
 impl_fact_view!(Events);
 impl_fact_view!(Calls);
 impl_fact_view!(ControlFlow);
-impl_fact_view!(DataFlow, _db);
+impl_fact_view!(DataFlow);
 impl_fact_view!(TestSuiteMetrics, _db);
-
-fn preview_query_unavailable(method: &str) -> ! {
-    panic!("{method} is preview-only; requesting rules must fail closed before execution")
-}
 
 #[cfg(test)]
 mod tests {

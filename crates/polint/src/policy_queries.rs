@@ -1,11 +1,21 @@
 use crate::analysis::calls::facts::{CallCallee, CallPrecision, CallSiteFact, CallTargetStatus};
-use crate::analysis::ids::{CallSiteId, MirBodyId, MirOpId};
+use crate::analysis::data_flow::facts::{
+    DataFlowConfidence, DataFlowEdgeFact, DataFlowEdgeKind, DataFlowNodeFact, DataFlowNodeKind,
+    DataFlowPrecision,
+};
+use crate::analysis::data_flow::query::{
+    DataFlowPath, DataFlowPathStatus, DataFlowSearchBudget, find_paths,
+};
+use crate::analysis::data_flow::store::DataFlowStore;
+use crate::analysis::ids::{CallSiteId, DataFlowNodeId, MirBodyId, MirOpId, PlaceId};
+use crate::analysis::places::{PlaceFact, PlaceProjection, PlaceRoot};
 use crate::analysis::reachability::facts::{ReachabilityRootFact, RootKind};
 use crate::analysis::refined_calls::facts::{RefinedCallConfidence, RefinedCallEdgeFact};
 use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId};
 use crate::sdk::policy::{
-    EventPattern, EventPatternKind, GuardPattern, GuardPatternKind, GuardQuery, LifecycleQuery,
-    PolicyConfidence, PolicyPrecision, PolicyStatus, PolicyViolation, ReachQuery,
+    BarrierPattern, BarrierPatternKind, EventPattern, EventPatternKind, FlowQuery, GuardPattern,
+    GuardPatternKind, GuardQuery, LifecycleQuery, PolicyConfidence, PolicyPrecision, PolicyStatus,
+    PolicyViolation, ReachQuery, SinkPattern, SinkPatternKind, SourcePattern, SourcePatternKind,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -26,6 +36,64 @@ pub(crate) fn missing_guards(db: &AnalysisDb, query: GuardQuery) -> Vec<PolicyVi
 
 pub(crate) fn missing_cleanup(db: &AnalysisDb, query: LifecycleQuery) -> Vec<PolicyViolation> {
     missing_cleanup_calls(db, &query)
+}
+
+pub(crate) fn forbidden_flows(db: &AnalysisDb, query: FlowQuery) -> Vec<PolicyViolation> {
+    forbidden_data_flows(db, &query)
+}
+
+fn forbidden_data_flows(db: &AnalysisDb, query: &FlowQuery) -> Vec<PolicyViolation> {
+    let Some(store) = db.data_flow_store() else {
+        return Vec::new();
+    };
+
+    let site_by_id = call_sites_by_id(db);
+    let sources = matching_flow_sources(db, store, &query.source);
+    let sinks = matching_flow_sinks(db, store, &query.sink, &site_by_id);
+    if sources.is_empty() || sinks.is_empty() {
+        return Vec::new();
+    }
+
+    let budget = DataFlowSearchBudget {
+        max_depth: query.max_depth,
+        max_paths: query.max_paths,
+    };
+    let mut results: Vec<PolicyViolation> = Vec::new();
+    let mut emitted = BTreeSet::new();
+
+    'sources: for source in &sources {
+        for sink in &sinks {
+            let paths = find_paths(store, source.node, sink.node, budget);
+            for path in paths {
+                match path.status {
+                    DataFlowPathStatus::Found => {
+                        if barrier_covers_path(db, store, &site_by_id, &path, &query.barriers) {
+                            continue;
+                        }
+                        if query.max_paths > 0 && results.len() >= query.max_paths {
+                            if let Some(last) = results.pop() {
+                                results.push(last.with_budget_exceeded("data_flow_query_budget"));
+                            }
+                            break 'sources;
+                        }
+                        let key = flow_result_key(source, sink, &path);
+                        if emitted.insert(key) {
+                            results.push(flow_violation(db, store, source, sink, &path, query));
+                        }
+                    }
+                    DataFlowPathStatus::Unknown | DataFlowPathStatus::BudgetExceeded => {
+                        let key = flow_result_key(source, sink, &path);
+                        if emitted.insert(key) {
+                            results.push(flow_violation(db, store, source, sink, &path, query));
+                        }
+                    }
+                    DataFlowPathStatus::NotFound => {}
+                }
+            }
+        }
+    }
+
+    results
 }
 
 fn matching_call_events(db: &AnalysisDb, pattern: &EventPattern) -> Vec<PolicyViolation> {
@@ -250,6 +318,584 @@ fn missing_cleanup_calls(db: &AnalysisDb, query: &LifecycleQuery) -> Vec<PolicyV
     }
 
     results
+}
+
+#[derive(Debug, Clone)]
+struct FlowSource {
+    node: DataFlowNodeId,
+    label: String,
+    precision: PolicyPrecision,
+    heuristic: bool,
+}
+
+#[derive(Debug, Clone)]
+struct FlowSink {
+    node: DataFlowNodeId,
+    site: CallSiteId,
+    file: String,
+    range: crate::diagnostics::TextRange,
+    target_label: String,
+    precision: PolicyPrecision,
+    heuristic: bool,
+}
+
+fn matching_flow_sources(
+    db: &AnalysisDb,
+    store: &DataFlowStore,
+    pattern: &SourcePattern,
+) -> Vec<FlowSource> {
+    let mut sources = BTreeMap::<DataFlowNodeId, FlowSource>::new();
+    match pattern.kind() {
+        SourcePatternKind::HttpRequest => {
+            for node in store
+                .nodes()
+                .iter()
+                .filter(|node| node.kind == DataFlowNodeKind::Source)
+            {
+                let Some(model) = node
+                    .model
+                    .and_then(|model| store.models().iter().find(|fact| fact.id == model))
+                else {
+                    continue;
+                };
+                if model
+                    .payload_labels
+                    .iter()
+                    .any(|label| http_source_label(label))
+                {
+                    sources.insert(
+                        node.id,
+                        FlowSource {
+                            node: node.id,
+                            label: model
+                                .model_id
+                                .clone()
+                                .unwrap_or_else(|| "http_request".to_string()),
+                            precision: policy_precision_from_data_flow(model.precision),
+                            heuristic: true,
+                        },
+                    );
+                }
+            }
+        }
+        SourcePatternKind::SecretLike => {
+            for node in store.nodes() {
+                if node.kind == DataFlowNodeKind::Source
+                    && source_model_matches_values(store, node, pattern.values())
+                {
+                    sources.insert(
+                        node.id,
+                        FlowSource {
+                            node: node.id,
+                            label: source_node_label(store, node),
+                            precision: PolicyPrecision::Heuristic,
+                            heuristic: true,
+                        },
+                    );
+                }
+
+                if node.kind == DataFlowNodeKind::Place
+                    && let Some(place) = node.place.and_then(|place| place_by_id(db, place))
+                    && place_matches_values(place, pattern.values())
+                {
+                    sources.insert(
+                        node.id,
+                        FlowSource {
+                            node: node.id,
+                            label: place_label(place),
+                            precision: PolicyPrecision::Heuristic,
+                            heuristic: true,
+                        },
+                    );
+                }
+            }
+        }
+    }
+    sources.into_values().collect()
+}
+
+fn matching_flow_sinks(
+    db: &AnalysisDb,
+    store: &DataFlowStore,
+    pattern: &SinkPattern,
+    site_by_id: &BTreeMap<CallSiteId, &CallSiteFact>,
+) -> Vec<FlowSink> {
+    let mut sinks = BTreeMap::<(CallSiteId, DataFlowNodeId), FlowSink>::new();
+
+    if !db.refined_call_edges().is_empty() {
+        for edge in db.refined_call_edges() {
+            let Some(site) = site_by_id.get(&edge.site).copied() else {
+                continue;
+            };
+            let candidates = call_edge_candidates(db, edge, site_by_id);
+            if !sink_matches_candidates(pattern, &candidates) {
+                continue;
+            }
+            push_flow_sinks_for_site(
+                db,
+                store,
+                pattern,
+                site,
+                best_call_target_label(db, edge, site_by_id),
+                policy_precision_from_call_precision(edge.precision),
+                &mut sinks,
+            );
+        }
+    } else {
+        for site in db.call_sites() {
+            let candidates = vec![call_site_label(site)];
+            if !sink_matches_candidates(pattern, &candidates) {
+                continue;
+            }
+            push_flow_sinks_for_site(
+                db,
+                store,
+                pattern,
+                site,
+                call_site_label(site),
+                policy_precision_from_call_precision(site.precision),
+                &mut sinks,
+            );
+        }
+    }
+
+    sinks.into_values().collect()
+}
+
+fn push_flow_sinks_for_site(
+    db: &AnalysisDb,
+    store: &DataFlowStore,
+    pattern: &SinkPattern,
+    site: &CallSiteFact,
+    target_label: String,
+    precision: PolicyPrecision,
+    sinks: &mut BTreeMap<(CallSiteId, DataFlowNodeId), FlowSink>,
+) {
+    for place in site.arguments.iter().copied().chain(site.receiver) {
+        for node in nodes_for_place(store, place) {
+            sinks.insert(
+                (site.id, node.id),
+                FlowSink {
+                    node: node.id,
+                    site: site.id,
+                    file: db.path_for(site.file),
+                    range: site.span.diagnostic_range(),
+                    target_label: target_label.clone(),
+                    precision,
+                    heuristic: pattern.kind() == SinkPatternKind::Logger,
+                },
+            );
+        }
+    }
+}
+
+fn nodes_for_place(store: &DataFlowStore, place: PlaceId) -> Vec<&DataFlowNodeFact> {
+    store
+        .nodes()
+        .iter()
+        .filter(|node| node.place == Some(place))
+        .collect()
+}
+
+fn sink_matches_candidates(pattern: &SinkPattern, candidates: &[String]) -> bool {
+    match pattern.kind() {
+        SinkPatternKind::Call => pattern
+            .values()
+            .iter()
+            .any(|value| candidates.iter().any(|candidate| candidate == value)),
+        SinkPatternKind::Logger => candidates
+            .iter()
+            .any(|candidate| logger_candidate(candidate)),
+    }
+}
+
+fn barrier_covers_path(
+    db: &AnalysisDb,
+    store: &DataFlowStore,
+    site_by_id: &BTreeMap<CallSiteId, &CallSiteFact>,
+    path: &DataFlowPath,
+    barrier: &BarrierPattern,
+) -> bool {
+    match barrier.kind() {
+        BarrierPatternKind::None => false,
+        BarrierPatternKind::CallAny => path.edges.iter().any(|edge_id| {
+            store
+                .edges()
+                .iter()
+                .find(|edge| edge.id == *edge_id)
+                .and_then(edge_call_site)
+                .is_some_and(|site| barrier_matches_call_site(db, site_by_id, site, barrier))
+        }),
+    }
+}
+
+fn barrier_matches_call_site(
+    db: &AnalysisDb,
+    site_by_id: &BTreeMap<CallSiteId, &CallSiteFact>,
+    site: CallSiteId,
+    barrier: &BarrierPattern,
+) -> bool {
+    if barrier.kind() != BarrierPatternKind::CallAny {
+        return false;
+    }
+    let mut candidates = db
+        .refined_call_edges()
+        .iter()
+        .filter(|edge| edge.site == site)
+        .flat_map(|edge| call_edge_candidates(db, edge, site_by_id))
+        .collect::<Vec<_>>();
+    if let Some(site) = site_by_id.get(&site) {
+        candidates.push(call_site_label(site));
+    }
+    candidates.sort();
+    candidates.dedup();
+    barrier
+        .values()
+        .iter()
+        .any(|value| candidates.iter().any(|candidate| candidate == value))
+}
+
+fn edge_call_site(edge: &DataFlowEdgeFact) -> Option<CallSiteId> {
+    edge.call_site.or_else(|| {
+        edge.evidence.iter().find_map(|evidence| {
+            evidence
+                .strip_prefix("call_site=")
+                .and_then(|value| value.parse::<u64>().ok())
+                .map(CallSiteId)
+        })
+    })
+}
+
+fn flow_violation(
+    _db: &AnalysisDb,
+    store: &DataFlowStore,
+    source: &FlowSource,
+    sink: &FlowSink,
+    path: &DataFlowPath,
+    query: &FlowQuery,
+) -> PolicyViolation {
+    let (status, precision) = match path.status {
+        DataFlowPathStatus::Found => {
+            let path_precision = path_precision(store, path).unwrap_or(source.precision);
+            let precision =
+                min_policy_precision([source.precision, sink.precision, path_precision]);
+            let status =
+                if source.heuristic || sink.heuristic || precision == PolicyPrecision::Heuristic {
+                    PolicyStatus::Heuristic
+                } else {
+                    PolicyStatus::Exact
+                };
+            (status, precision)
+        }
+        DataFlowPathStatus::Unknown => (PolicyStatus::Unknown, PolicyPrecision::Unknown),
+        DataFlowPathStatus::BudgetExceeded => {
+            (PolicyStatus::BudgetExceeded, PolicyPrecision::Unknown)
+        }
+        DataFlowPathStatus::NotFound => (PolicyStatus::Unknown, PolicyPrecision::Unknown),
+    };
+
+    let barrier_status = match query.barriers.kind() {
+        BarrierPatternKind::None => "not_configured",
+        BarrierPatternKind::CallAny => "uncovered",
+    };
+    let mut evidence = vec![
+        ("policy".to_string(), "forbidden_flow".to_string()),
+        ("source".to_string(), source.label.clone()),
+        ("sink".to_string(), sink.target_label.clone()),
+        ("sink_call_site".to_string(), sink.site.0.to_string()),
+        (
+            "path_status".to_string(),
+            data_flow_path_status_label(path.status).to_string(),
+        ),
+        ("path".to_string(), path_label(store, path)),
+        ("path_edge_count".to_string(), path.edges.len().to_string()),
+        ("barrier_status".to_string(), barrier_status.to_string()),
+        (
+            "supported_scope".to_string(),
+            "bounded_private_data_flow".to_string(),
+        ),
+        (
+            "requested_max_depth".to_string(),
+            query.max_depth.to_string(),
+        ),
+        (
+            "requested_max_paths".to_string(),
+            query.max_paths.to_string(),
+        ),
+        (
+            "minimum_precision".to_string(),
+            policy_precision_label(query.minimum_precision).to_string(),
+        ),
+    ];
+    if query.barriers.kind() == BarrierPatternKind::CallAny {
+        evidence.push((
+            "required_barrier".to_string(),
+            query.barriers.values().join(","),
+        ));
+    }
+    if let Some(reason) = path.budget_reason {
+        evidence.push(("budget_reason".to_string(), format!("{reason:?}")));
+    }
+    if let Some(confidence) = path_confidence(store, path) {
+        evidence.push((
+            "data_flow_confidence".to_string(),
+            data_flow_confidence_label(confidence).to_string(),
+        ));
+    }
+
+    PolicyViolation::new(sink.file.clone(), sink.range, status, precision, evidence)
+}
+
+fn flow_result_key(source: &FlowSource, sink: &FlowSink, path: &DataFlowPath) -> String {
+    format!(
+        "{}:{}:{:?}:{:?}",
+        source.node.0, sink.node.0, path.status, path.edges
+    )
+}
+
+fn path_precision(store: &DataFlowStore, path: &DataFlowPath) -> Option<PolicyPrecision> {
+    let mut precision = None;
+    for edge in path_edges(store, path) {
+        precision = Some(match precision {
+            Some(current) => {
+                min_policy_precision([current, policy_precision_from_data_flow(edge.precision)])
+            }
+            None => policy_precision_from_data_flow(edge.precision),
+        });
+    }
+    precision
+}
+
+fn path_confidence(store: &DataFlowStore, path: &DataFlowPath) -> Option<DataFlowConfidence> {
+    let mut confidence = None;
+    for edge in path_edges(store, path) {
+        confidence = Some(match confidence {
+            Some(current) => min_data_flow_confidence(current, edge.confidence),
+            None => edge.confidence,
+        });
+    }
+    confidence
+}
+
+fn path_edges<'a>(store: &'a DataFlowStore, path: &DataFlowPath) -> Vec<&'a DataFlowEdgeFact> {
+    path.edges
+        .iter()
+        .filter_map(|id| store.edges().iter().find(|edge| edge.id == *id))
+        .collect()
+}
+
+fn path_label(store: &DataFlowStore, path: &DataFlowPath) -> String {
+    if path.edges.is_empty() {
+        return data_flow_path_status_label(path.status).to_string();
+    }
+    path_edges(store, path)
+        .into_iter()
+        .map(|edge| data_flow_edge_step_label(edge.kind))
+        .collect::<Vec<_>>()
+        .join(" -> ")
+}
+
+fn min_policy_precision<const N: usize>(values: [PolicyPrecision; N]) -> PolicyPrecision {
+    values
+        .into_iter()
+        .min_by_key(|precision| precision_rank(*precision))
+        .unwrap_or(PolicyPrecision::Unknown)
+}
+
+fn min_data_flow_confidence(
+    left: DataFlowConfidence,
+    right: DataFlowConfidence,
+) -> DataFlowConfidence {
+    if data_flow_confidence_rank(left) <= data_flow_confidence_rank(right) {
+        left
+    } else {
+        right
+    }
+}
+
+fn source_model_matches_values(
+    store: &DataFlowStore,
+    node: &DataFlowNodeFact,
+    values: &[String],
+) -> bool {
+    node.model
+        .and_then(|model| store.models().iter().find(|fact| fact.id == model))
+        .is_some_and(|model| {
+            model
+                .payload_labels
+                .iter()
+                .chain(model.model_id.iter())
+                .any(|label| contains_any_folded(label, values))
+        })
+}
+
+fn source_node_label(store: &DataFlowStore, node: &DataFlowNodeFact) -> String {
+    node.model
+        .and_then(|model| store.models().iter().find(|fact| fact.id == model))
+        .and_then(|model| model.model_id.clone())
+        .unwrap_or_else(|| "source".to_string())
+}
+
+fn place_by_id(db: &AnalysisDb, place: PlaceId) -> Option<&PlaceFact> {
+    db.mir_places().iter().find(|fact| fact.id == place)
+}
+
+fn place_matches_values(place: &PlaceFact, values: &[String]) -> bool {
+    place_name_values(place)
+        .iter()
+        .any(|candidate| contains_any_folded(candidate, values))
+}
+
+fn place_label(place: &PlaceFact) -> String {
+    place_name_values(place)
+        .into_iter()
+        .find(|value| !value.is_empty())
+        .unwrap_or_else(|| "place".to_string())
+}
+
+fn place_name_values(place: &PlaceFact) -> Vec<String> {
+    let mut values = Vec::new();
+    match &place.root {
+        PlaceRoot::Local { name, .. } | PlaceRoot::Global { name, .. } => {
+            values.push(name.clone());
+        }
+        PlaceRoot::Parameter { name, index, .. } => {
+            values.push(name.clone().unwrap_or_else(|| format!("param{index}")));
+        }
+        PlaceRoot::Temporary { ordinal, .. } => values.push(format!("temporary{ordinal}")),
+        PlaceRoot::CallReturn { call } => values.push(format!("call_return{}", call.0)),
+        PlaceRoot::Unknown { evidence } => values.push(evidence.clone()),
+    }
+    for projection in &place.projections {
+        match projection {
+            PlaceProjection::Field(value)
+            | PlaceProjection::Property(value)
+            | PlaceProjection::IndexKnown(value) => values.push(value.clone()),
+            PlaceProjection::IndexUnknown { evidence } | PlaceProjection::Unknown { evidence } => {
+                values.push(evidence.clone());
+            }
+            PlaceProjection::Deref => values.push("deref".to_string()),
+            PlaceProjection::AwaitResult => values.push("await".to_string()),
+            PlaceProjection::CallReturn(call) => values.push(format!("call_return{}", call.0)),
+        }
+    }
+    values
+}
+
+fn contains_any_folded(candidate: &str, values: &[String]) -> bool {
+    if values.is_empty() {
+        return false;
+    }
+    let candidate = candidate.to_ascii_lowercase();
+    values
+        .iter()
+        .map(|value| value.to_ascii_lowercase())
+        .any(|value| candidate.contains(&value))
+}
+
+fn http_source_label(label: &str) -> bool {
+    [
+        "source_kind=PathParam",
+        "source_kind=QueryString",
+        "source_kind=RequestBody",
+        "source_kind=RequestHeader",
+        "source_kind=Cookie",
+    ]
+    .contains(&label)
+}
+
+fn logger_candidate(candidate: &str) -> bool {
+    let candidate = candidate.to_ascii_lowercase();
+    candidate == "log"
+        || candidate == "print"
+        || candidate == "printf"
+        || candidate == "println"
+        || candidate == "log.print"
+        || candidate == "log.printf"
+        || candidate == "log.println"
+        || candidate == "console.log"
+        || candidate == "logger.log"
+        || candidate == "logger.info"
+        || candidate == "logger.warn"
+        || candidate == "logger.error"
+        || candidate.ends_with(".log")
+        || candidate.ends_with(".info")
+        || candidate.ends_with(".warn")
+        || candidate.ends_with(".error")
+}
+
+fn policy_precision_from_data_flow(precision: DataFlowPrecision) -> PolicyPrecision {
+    match precision {
+        DataFlowPrecision::Exact => PolicyPrecision::Exact,
+        DataFlowPrecision::SetupAware => PolicyPrecision::SetupAware,
+        DataFlowPrecision::Syntax => PolicyPrecision::Syntax,
+        DataFlowPrecision::Conservative => PolicyPrecision::Conservative,
+        DataFlowPrecision::Heuristic => PolicyPrecision::Heuristic,
+        DataFlowPrecision::Unknown => PolicyPrecision::Unknown,
+    }
+}
+
+fn data_flow_path_status_label(status: DataFlowPathStatus) -> &'static str {
+    match status {
+        DataFlowPathStatus::Found => "found",
+        DataFlowPathStatus::NotFound => "not_found",
+        DataFlowPathStatus::Unknown => "unknown",
+        DataFlowPathStatus::BudgetExceeded => "budget_exceeded",
+    }
+}
+
+fn data_flow_edge_step_label(kind: DataFlowEdgeKind) -> &'static str {
+    match kind {
+        DataFlowEdgeKind::LocalBinding
+        | DataFlowEdgeKind::LocalAssignment
+        | DataFlowEdgeKind::LocalUse
+        | DataFlowEdgeKind::LocalRead
+        | DataFlowEdgeKind::LocalWrite
+        | DataFlowEdgeKind::FieldProjection
+        | DataFlowEdgeKind::IndexProjection
+        | DataFlowEdgeKind::Dereference
+        | DataFlowEdgeKind::AddressOf => "local_value",
+        DataFlowEdgeKind::ReturnValue => "return_value",
+        DataFlowEdgeKind::CallArgumentToParameter
+        | DataFlowEdgeKind::CallArgumentToReturn
+        | DataFlowEdgeKind::CallReturnToUse
+        | DataFlowEdgeKind::ReceiverToMethod => "call_boundary",
+        DataFlowEdgeKind::SummaryTito | DataFlowEdgeKind::SummaryProjected => "summary",
+        DataFlowEdgeKind::UnknownFlow | DataFlowEdgeKind::HavocFlow => "unknown",
+        DataFlowEdgeKind::BudgetTruncated => "budget",
+        DataFlowEdgeKind::SourceIntroduction => "source",
+        DataFlowEdgeKind::SinkReachability => "sink",
+        DataFlowEdgeKind::Sanitizer => "sanitizer",
+        DataFlowEdgeKind::Barrier => "barrier",
+        DataFlowEdgeKind::Model => "model",
+    }
+}
+
+fn data_flow_confidence_label(confidence: DataFlowConfidence) -> &'static str {
+    match confidence {
+        DataFlowConfidence::High => "high",
+        DataFlowConfidence::Medium => "medium",
+        DataFlowConfidence::Low => "low",
+    }
+}
+
+fn data_flow_confidence_rank(confidence: DataFlowConfidence) -> u8 {
+    match confidence {
+        DataFlowConfidence::High => 3,
+        DataFlowConfidence::Medium => 2,
+        DataFlowConfidence::Low => 1,
+    }
+}
+
+fn policy_precision_label(precision: PolicyPrecision) -> &'static str {
+    match precision {
+        PolicyPrecision::Exact => "exact",
+        PolicyPrecision::SetupAware => "setup_aware",
+        PolicyPrecision::Syntax => "syntax",
+        PolicyPrecision::Conservative => "conservative",
+        PolicyPrecision::Heuristic => "heuristic",
+        PolicyPrecision::Unknown => "unknown",
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -862,8 +1508,15 @@ mod tests {
         UnresolvedCallReason,
     };
     use crate::analysis::calls::store::CallOutput;
+    use crate::analysis::data_flow::facts::{
+        DataFlowAlgorithm, DataFlowConfidence, DataFlowEdgeFact, DataFlowEdgeKind,
+        DataFlowModelFact, DataFlowModelKind, DataFlowNodeFact, DataFlowNodeKind,
+        DataFlowPrecision, DataFlowProvenance, DataFlowStatus, DataFlowValidation,
+    };
+    use crate::analysis::data_flow::store::DataFlowOutput;
     use crate::analysis::ids::{
-        CallTargetId, MirBodyId, MirOpId, ReachabilityRootId, RefinedCallEdgeId,
+        CallTargetId, DataFlowEdgeId, DataFlowModelId, DataFlowNodeId, MirBodyId, MirOpId, PlaceId,
+        ReachabilityRootId, RefinedCallEdgeId,
     };
     use crate::analysis::reachability::facts::{
         RootPrecision, RootProvenance, RootStatus, compute_reachability_root_stable_key,
@@ -1036,6 +1689,131 @@ mod tests {
             LifecycleQuery::new(EventPattern::call("Begin"), EventPattern::call("Rollback"));
 
         assert!(missing_cleanup(&db, query).is_empty());
+    }
+
+    #[test]
+    fn data_flow_forbidden_reports_http_source_to_call_sink() {
+        let db = data_flow_policy_db(vec![data_flow_edge(
+            0,
+            0,
+            1,
+            DataFlowEdgeKind::SourceIntroduction,
+            DataFlowStatus::Present,
+            Vec::new(),
+        )]);
+
+        let violations = forbidden_flows(
+            &db,
+            FlowQuery::new(
+                SourcePattern::http_request(),
+                SinkPattern::call("dangerous"),
+            ),
+        );
+
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].status(), PolicyStatus::Heuristic);
+        assert_eq!(violations[0].precision(), PolicyPrecision::SetupAware);
+        let diagnostic = violations[0].diagnostic("local/test", "request reaches sink");
+        assert!(
+            diagnostic
+                .evidence
+                .iter()
+                .any(|evidence| evidence.label == "policy" && evidence.value == "forbidden_flow")
+        );
+        assert!(diagnostic.evidence.iter().any(|evidence| {
+            evidence.label == "barrier_status" && evidence.value == "not_configured"
+        }));
+    }
+
+    #[test]
+    fn data_flow_forbidden_respects_barrier_call() {
+        let db = data_flow_policy_db_with_barrier();
+        let mut query = FlowQuery::new(
+            SourcePattern::http_request(),
+            SinkPattern::call("dangerous"),
+        );
+        query.barriers = BarrierPattern::call_any(["validate"]);
+
+        assert!(forbidden_flows(&db, query).is_empty());
+    }
+
+    #[test]
+    fn data_flow_forbidden_marks_budget_when_depth_cap_truncates() {
+        let db = data_flow_policy_db_with_sink_place(
+            vec![
+                data_flow_edge(
+                    0,
+                    0,
+                    1,
+                    DataFlowEdgeKind::SourceIntroduction,
+                    DataFlowStatus::Present,
+                    Vec::new(),
+                ),
+                data_flow_edge(
+                    1,
+                    1,
+                    2,
+                    DataFlowEdgeKind::LocalAssignment,
+                    DataFlowStatus::Present,
+                    Vec::new(),
+                ),
+            ],
+            PlaceId(2),
+        );
+        let mut query = FlowQuery::new(
+            SourcePattern::http_request(),
+            SinkPattern::call("dangerous"),
+        );
+        query.max_depth = 1;
+
+        let violations = forbidden_flows(&db, query);
+
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].status(), PolicyStatus::BudgetExceeded);
+        let diagnostic = violations[0].diagnostic("local/test", "request reaches sink");
+        assert!(diagnostic.evidence.iter().any(|evidence| {
+            evidence.label == "budget_reason" && evidence.value == "PathDepth"
+        }));
+    }
+
+    #[test]
+    fn data_flow_forbidden_surfaces_unknown_path() {
+        let db = data_flow_policy_db(vec![data_flow_edge(
+            0,
+            0,
+            1,
+            DataFlowEdgeKind::UnknownFlow,
+            DataFlowStatus::Unknown,
+            Vec::new(),
+        )]);
+
+        let violations = forbidden_flows(
+            &db,
+            FlowQuery::new(
+                SourcePattern::http_request(),
+                SinkPattern::call("dangerous"),
+            ),
+        );
+
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].status(), PolicyStatus::Unknown);
+        assert_eq!(violations[0].precision(), PolicyPrecision::Unknown);
+    }
+
+    #[test]
+    fn data_flow_forbidden_returns_no_results_without_store() {
+        let db = AnalysisDb::new();
+
+        assert!(
+            forbidden_flows(
+                &db,
+                FlowQuery::new(
+                    SourcePattern::http_request(),
+                    SinkPattern::call("dangerous")
+                )
+            )
+            .is_empty()
+        );
     }
 
     fn policy_query_db(test_root: bool) -> AnalysisDb {
@@ -1251,6 +2029,213 @@ mod tests {
         db
     }
 
+    fn data_flow_policy_db(edges: Vec<DataFlowEdgeFact>) -> AnalysisDb {
+        data_flow_policy_db_with_sink_place(edges, PlaceId(1))
+    }
+
+    fn data_flow_policy_db_with_sink_place(
+        edges: Vec<DataFlowEdgeFact>,
+        sink_place: PlaceId,
+    ) -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/main.go"),
+            "src/main.go".to_string(),
+            "package main\nfunc handler() { dangerous(input) }\n".to_string(),
+        );
+        let handler = push_test_function(&mut db, file, "handler", 1, false);
+        let dangerous = push_test_function(&mut db, file, "dangerous", 2, false);
+        let site = call_site_with_args(1, file, handler, "dangerous", vec![sink_place]);
+
+        db.replace_call_facts(CallOutput {
+            sites: vec![site.clone()],
+            targets: vec![call_target(1, site.id, handler, dangerous)],
+            unresolved: Vec::new(),
+        })
+        .expect("valid call facts");
+        db.replace_refined_call_facts(RefinedCallOutput {
+            edges: vec![refined_edge(1, site.id, handler, dangerous, "dangerous")],
+        })
+        .expect("valid refined call facts");
+        db.replace_data_flow_facts(DataFlowOutput {
+            nodes: data_flow_nodes(file, handler),
+            edges,
+            models: vec![source_model()],
+            budgets: Vec::new(),
+        })
+        .expect("valid data-flow facts");
+        db
+    }
+
+    fn data_flow_policy_db_with_barrier() -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/main.go"),
+            "src/main.go".to_string(),
+            "package main\nfunc handler() { dangerous(validate(input)) }\n".to_string(),
+        );
+        let handler = push_test_function(&mut db, file, "handler", 1, false);
+        let dangerous = push_test_function(&mut db, file, "dangerous", 2, false);
+        let validate = push_test_function(&mut db, file, "validate", 3, false);
+        let dangerous_site = call_site_with_args(1, file, handler, "dangerous", vec![PlaceId(2)]);
+        let validate_site = call_site_with_args(2, file, handler, "validate", vec![PlaceId(1)]);
+
+        db.replace_call_facts(CallOutput {
+            sites: vec![dangerous_site.clone(), validate_site.clone()],
+            targets: vec![
+                call_target(1, dangerous_site.id, handler, dangerous),
+                call_target(2, validate_site.id, handler, validate),
+            ],
+            unresolved: Vec::new(),
+        })
+        .expect("valid call facts");
+        db.replace_refined_call_facts(RefinedCallOutput {
+            edges: vec![
+                refined_edge(1, dangerous_site.id, handler, dangerous, "dangerous"),
+                refined_edge(2, validate_site.id, handler, validate, "validate"),
+            ],
+        })
+        .expect("valid refined call facts");
+        db.replace_data_flow_facts(DataFlowOutput {
+            nodes: data_flow_nodes(file, handler),
+            edges: vec![
+                data_flow_edge(
+                    0,
+                    0,
+                    1,
+                    DataFlowEdgeKind::SourceIntroduction,
+                    DataFlowStatus::Present,
+                    Vec::new(),
+                ),
+                data_flow_edge(
+                    1,
+                    1,
+                    2,
+                    DataFlowEdgeKind::CallArgumentToReturn,
+                    DataFlowStatus::Present,
+                    vec!["call_site=2".to_string()],
+                ),
+            ],
+            models: vec![source_model()],
+            budgets: Vec::new(),
+        })
+        .expect("valid data-flow facts");
+        db
+    }
+
+    fn data_flow_nodes(file: FileId, function: FunctionId) -> Vec<DataFlowNodeFact> {
+        vec![
+            DataFlowNodeFact {
+                id: DataFlowNodeId(0),
+                kind: DataFlowNodeKind::Source,
+                language: Language::Go,
+                file: Some(file),
+                function: Some(function),
+                body: None,
+                operation: None,
+                cfg_node: None,
+                place: None,
+                symbol: None,
+                reference: None,
+                call_site: None,
+                model: Some(DataFlowModelId(0)),
+                span: Some(Span::point(file, 1, 1)),
+                stable_key: "node:source".to_string(),
+            },
+            data_flow_place_node(1, file, function, PlaceId(1)),
+            data_flow_place_node(2, file, function, PlaceId(2)),
+        ]
+    }
+
+    fn data_flow_place_node(
+        id: u64,
+        file: FileId,
+        function: FunctionId,
+        place: PlaceId,
+    ) -> DataFlowNodeFact {
+        DataFlowNodeFact {
+            id: DataFlowNodeId(id),
+            kind: DataFlowNodeKind::Place,
+            language: Language::Go,
+            file: Some(file),
+            function: Some(function),
+            body: None,
+            operation: None,
+            cfg_node: None,
+            place: Some(place),
+            symbol: None,
+            reference: None,
+            call_site: None,
+            model: None,
+            span: Some(Span::point(file, id as u32 + 1, 1)),
+            stable_key: format!("node:place:{id}"),
+        }
+    }
+
+    fn source_model() -> DataFlowModelFact {
+        DataFlowModelFact {
+            id: DataFlowModelId(0),
+            kind: DataFlowModelKind::Source,
+            language: Language::Go,
+            provider_id: "test".to_string(),
+            model_id: Some("QueryString".to_string()),
+            source_stable_key: Some("trust-boundary:test".to_string()),
+            status: DataFlowStatus::Present,
+            precision: DataFlowPrecision::SetupAware,
+            validation: DataFlowValidation::ReferentiallyValidated,
+            confidence: DataFlowConfidence::High,
+            provenance: DataFlowProvenance::Native,
+            evidence: vec!["trust_boundary".to_string()],
+            payload_labels: vec!["source_kind=QueryString".to_string()],
+            stable_key: "model:source".to_string(),
+        }
+    }
+
+    fn data_flow_edge(
+        id: u64,
+        from: u64,
+        to: u64,
+        kind: DataFlowEdgeKind,
+        status: DataFlowStatus,
+        evidence: Vec<String>,
+    ) -> DataFlowEdgeFact {
+        DataFlowEdgeFact {
+            id: DataFlowEdgeId(id),
+            from: DataFlowNodeId(from),
+            to: DataFlowNodeId(to),
+            kind,
+            algorithm: DataFlowAlgorithm::LocalMir,
+            status,
+            precision: if status == DataFlowStatus::Present {
+                match kind {
+                    DataFlowEdgeKind::LocalBinding
+                    | DataFlowEdgeKind::LocalAssignment
+                    | DataFlowEdgeKind::LocalUse
+                    | DataFlowEdgeKind::LocalRead
+                    | DataFlowEdgeKind::LocalWrite => DataFlowPrecision::Syntax,
+                    _ => DataFlowPrecision::SetupAware,
+                }
+            } else {
+                DataFlowPrecision::Unknown
+            },
+            validation: DataFlowValidation::Native,
+            confidence: if status == DataFlowStatus::Present {
+                DataFlowConfidence::High
+            } else {
+                DataFlowConfidence::Low
+            },
+            provenance: DataFlowProvenance::Native,
+            call_site: None,
+            call_target: None,
+            refined_call: None,
+            model: None,
+            budget: None,
+            evidence,
+            input_stable_keys: Vec::new(),
+            stable_key: format!("edge:{id}:{from}:{to}:{status:?}"),
+        }
+    }
+
     fn push_test_function(
         db: &mut AnalysisDb,
         file: FileId,
@@ -1294,6 +2279,18 @@ mod tests {
             in_throw: false,
             stable_key: format!("site:{id}:{callee}"),
         }
+    }
+
+    fn call_site_with_args(
+        id: u64,
+        file: FileId,
+        caller: FunctionId,
+        callee: &str,
+        arguments: Vec<PlaceId>,
+    ) -> CallSiteFact {
+        let mut site = call_site(id, file, caller, callee);
+        site.arguments = arguments;
+        site
     }
 
     fn call_target(

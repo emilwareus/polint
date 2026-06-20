@@ -304,7 +304,8 @@ polint explain --rule local/no-raw-colors --format json
 requires a bounded limit and emits only public fact fields. `inspect unknowns`
 reports the consolidated setup, unsupported, budget, model, and resolution
 queue. `unknowns --cap ...` remains supported for cap-filtered compatibility and
-unsupported rows for reserved capabilities such as dataflow. `explain` reports
+unsupported rows for surfaces that do not expose cap-filtered unknowns yet, such
+as dataflow. `explain` reports
 macro-derived fact views and capability support; it does not expose provider execution graphs,
 layer-cache internals, or eval/debug schemas.
 

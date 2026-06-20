@@ -38,13 +38,13 @@ v1.4 adds a small policy-query vocabulary to the public SDK:
 - `ControlFlow<'_>` derives capability `control_flow`
 - `DataFlow<'_>` derives capability `dataflow`
 
-`Events<'_>`, `Calls<'_>`, and `ControlFlow<'_>` are preview but
-provider-backed for their documented scopes: call-event matching,
-reachable-call checks, and same-function call-event guard/cleanup checks.
-`DataFlow<'_>` remains fail-closed until bounded source/sink/barrier behavior
-lands. A rule can compile, appear in `polint inspect rule --format json`, and
-show derived fact views, but unsupported preview capabilities produce
-`polint/capability` diagnostics and prevent that rule from running.
+`Events<'_>`, `Calls<'_>`, `ControlFlow<'_>`, and `DataFlow<'_>` are preview
+but provider-backed for their documented scopes: call-event matching,
+reachable-call checks, same-function call-event guard/cleanup checks, and
+bounded source/sink/barrier data-flow checks. A rule can compile, appear in
+`polint inspect rule --format json`, show derived fact views, and execute
+without `polint/capability` diagnostics when it requests these supported preview
+views.
 
 ```rust
 #[polint::rule(id = "local/no-secret-logs", description = "Secret logs", severity = "error")]
@@ -72,7 +72,8 @@ This is the only public query-object style for the preview surface:
 Reserved raw capabilities such as `cfg`, `call_graph`, `coverage_facts`, and
 `test_suite_metrics` must stay unsupported until a rule can consume real public
 SDK facts for them. `Cfg<'_>` and `CallGraph<'_>` are not aliases for
-`ControlFlow<'_>` or `Calls<'_>`.
+`ControlFlow<'_>` or `Calls<'_>`. `DataFlow<'_>` is a policy query view, not a
+raw graph view.
 
 Rules that request unsupported or setup-missing hard capabilities produce
 `polint/capability` diagnostics during `polint check` and are not executed with

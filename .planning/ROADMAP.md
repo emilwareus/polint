@@ -22,7 +22,7 @@ Phase numbering continues from v1.3's last phase 54. v1.4 promotes a narrow poli
 - [x] **Phase 55: SDK Query Vocabulary and Preview Contract** - Define preview views, query structs, pattern structs, capability derivation, and the "one public way" API contract. Completed 2026-06-20.
 - [x] **Phase 56: Events and Calls Query Surface** - Implement `Events<'_>` and `Calls<'_>` policy queries over v1.3 refined calls, reachability roots, and unknown taxonomy. Completed 2026-06-20.
 - [x] **Phase 57: Control-Flow Guard and Lifecycle Queries** - Implement `ControlFlow<'_>` guard and cleanup policies without exposing raw CFG/dominance graphs. Completed 2026-06-20.
-- [ ] **Phase 58: Data-Flow Source/Sink/Barrier Queries** - Promote `DataFlow<'_>` preview methods for forbidden flows and required barriers over bounded private path search.
+- [x] **Phase 58: Data-Flow Source/Sink/Barrier Queries** - Promote `DataFlow<'_>` preview methods for forbidden flows and required barriers over bounded private path search. Completed 2026-06-20.
 - [ ] **Phase 59: Violation Evidence, Unknowns, and Cache Semantics** - Normalize violation results, diagnostic evidence, deterministic ordering, cache keys, and user-visible unknown/budget behavior.
 - [ ] **Phase 60: Flagship Rule Templates and Agent Ergonomics** - Generate realistic policy templates and update README/examples/skill text around the same query-object syntax.
 - [ ] **Phase 61: Public Docs and External SDK Validation** - Document every preview view/query and prove external repo-local rule usage through temp-repo tests.
@@ -99,11 +99,11 @@ Phase numbering continues from v1.3's last phase 54. v1.4 promotes a narrow poli
 **Requirements:** FLOW-01, FLOW-02, FLOW-03, FLOW-04, FLOW-05
 
 **Success Criteria:**
-1. `DataFlow<'_>::forbidden(FlowQuery)` reports source-to-sink violations with optional barriers/sanitizers.
-2. Required-barrier semantics cover request-to-shell validation, SSRF host allowlists, dangerous HTML escaping, and user-controlled path validation.
-3. Built-in source/sink patterns cover HTTP inputs, route params, environment/secrets, PII-like identifiers, file paths, URLs, loggers, analytics, shell, SQL/query, HTML/raw JSX, and outbound network clients.
-4. Flow queries use bounded private path search with ranked evidence paths, summary expansion handles, deterministic caps, and repeated-run stability.
-5. Results expose exact/heuristic/unsupported/unknown/budget-exceeded states honestly, with heuristic wording in diagnostics and docs.
+1. `DataFlow<'_>::forbidden(FlowQuery)` reports backed source-to-sink violations with optional call barriers/sanitizers.
+2. Required-barrier semantics cover call-based policies by suppressing found paths that cross a matching `BarrierPattern::call_any` target and reporting uncovered paths.
+3. Built-in Phase 58 source/sink patterns cover HTTP request trust-boundary sources, explicit secret-like source names, exact call sinks, logger sinks, and explicit barrier calls; broader SQL, HTML, SSRF, file path, analytics, PII, and outbound network categories remain future/template work.
+4. Flow queries use bounded private path search over source-introduction, local, direct-call, and summary-projected data-flow facts with deterministic caps and repeated-run stability.
+5. Results expose found/heuristic/unknown/budget-exceeded states honestly, with heuristic wording in diagnostics and docs.
 
 **Example policies unlocked:**
 - Request values must not flow to `exec.Command` unless validated.
@@ -194,8 +194,8 @@ for violation in flow.forbidden(query) {
 |-------|------|----------------|--------|-----------|
 | 55 | SDK Query Vocabulary and Preview Contract | 3/3 | Complete | 2026-06-20 |
 | 56 | Events and Calls Query Surface | 3/3 | Complete | 2026-06-20 |
-| 57 | Control-Flow Guard and Lifecycle Queries | 0/0 | Planned | - |
-| 58 | Data-Flow Source/Sink/Barrier Queries | 0/0 | Planned | - |
+| 57 | Control-Flow Guard and Lifecycle Queries | 3/3 | Complete | 2026-06-20 |
+| 58 | Data-Flow Source/Sink/Barrier Queries | 3/3 | Complete | 2026-06-20 |
 | 59 | Violation Evidence, Unknowns, and Cache Semantics | 0/0 | Planned | - |
 | 60 | Flagship Rule Templates and Agent Ergonomics | 0/0 | Planned | - |
 | 61 | Public Docs and External SDK Validation | 0/0 | Planned | - |
@@ -218,18 +218,18 @@ for violation in flow.forbidden(query) {
 
 ## Next Up
 
-**Phase 58: Data-Flow Source/Sink/Barrier Queries** - promote `DataFlow<'_>` preview methods for forbidden flows and required barriers over bounded private path search.
+**Phase 59: Violation Evidence, Unknowns, and Cache Semantics** - normalize violation results, diagnostic evidence, deterministic ordering, cache keys, and user-visible unknown/budget behavior.
 
 Suggested command:
 
 ```bash
-/gsd-discuss-phase 58 /Users/emilwareus/conductor/workspaces/exlint/louisville-v1
+/gsd-discuss-phase 59 /Users/emilwareus/conductor/workspaces/exlint/louisville-v1
 ```
 
 For a direct implementation plan:
 
 ```bash
-/gsd-plan-phase 57 /Users/emilwareus/conductor/workspaces/exlint/louisville-v1
+/gsd-plan-phase 59 /Users/emilwareus/conductor/workspaces/exlint/louisville-v1
 ```
 
 ---

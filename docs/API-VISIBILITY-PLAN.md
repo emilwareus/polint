@@ -37,7 +37,7 @@ no-leak proof all exist. Broad raw graph/database APIs stay deferred.
 | Metric views | stable | `FileMetrics<'_>`, `FunctionMetrics<'_>`, and `ComplexityMetrics<'_>` are documented in `docs/facts/metrics.md`; threshold helpers are bounded over stored facts. |
 | `Cfg<'_>` | defer | Reserved capability. Needs public fact design, docs, temp-repo tests, bounded queries, setup behavior, cache/input proof, and no-leak proof before support. |
 | `CallGraph<'_>` | defer | Reserved capability. A future API must separate direct/refined/unresolved/dynamic/unsupported/budgeted results. |
-| `DataFlow<'_>` | defer | Reserved capability documented in `docs/facts/data-flow.md`; future promotion requires explicit limits and unknown/budget evidence. |
+| `DataFlow<'_>` | preview | Policy-level view documented in `docs/facts/data-flow.md`; v1.4 backs bounded source/sink/barrier queries while raw graph APIs stay private. |
 | `Evidence<'_>` | internal | Evidence remains diagnostic rendering data, not a rule-author SDK view; see `docs/facts/evidence.md`. |
 | Effects/Summaries | internal | Private analysis substrate; no public SDK, stable CLI JSON, or docs/facts contract yet. |
 | Types/Values/Aliases | internal | Private precision substrate; no public SDK, stable CLI JSON, or docs/facts contract yet. |
@@ -62,14 +62,15 @@ names compile and appear in rule manifests. Unsupported preview families fail
 closed with `polint/capability` until provider-backed query behavior lands.
 Phase 56 promotes `Events<'_>` and `Calls<'_>` to provider-backed preview
 behavior. Phase 57 promotes `ControlFlow<'_>` for same-function call-event guard
-and cleanup checks. Raw graph internals remain private.
+and cleanup checks. Phase 58 promotes `DataFlow<'_>` for bounded
+source/sink/barrier policies. Raw graph internals remain private.
 
 | Surface | Disposition | Required gates and notes |
 |---|---|---|
 | `Events<'_>` | preview | Public policy view under `polint::sdk::facts`; derives supported `events`; documented in `docs/facts/events.md`; Phase 56 backs call-event matching with provider facts. |
 | `Calls<'_>` | preview | Public policy view under `polint::sdk::facts`; derives supported `calls`; documented in `docs/facts/calls.md`; Phase 56 backs bounded reachable-call queries with provider facts. |
 | `ControlFlow<'_>` | preview | Public policy view under `polint::sdk::facts`; derives supported `control_flow`; documented in `docs/facts/control-flow.md`; Phase 57 backs same-function call-event guard and cleanup queries with provider facts. |
-| `DataFlow<'_>` | preview | Promoted as a policy-level view, not a raw data-flow graph; derives `dataflow`; documented in `docs/facts/data-flow.md`; fail-closed until Phase 58 source/sink/barrier behavior exists. |
+| `DataFlow<'_>` | preview | Promoted as a policy-level view, not a raw data-flow graph; derives supported `dataflow`; documented in `docs/facts/data-flow.md`; Phase 58 backs bounded source/sink/barrier behavior. |
 | Query structs | preview | `ReachQuery`, `GuardQuery`, `LifecycleQuery`, and `FlowQuery` live under `polint::sdk::policy` and are re-exported by the prelude. Required inputs use `new(...)`; optional knobs are named fields. |
 | Pattern structs | preview | `EventPattern`, `SourcePattern`, `SinkPattern`, `GuardPattern`, and `BarrierPattern` live under `polint::sdk::policy` and are re-exported by the prelude. Phase 55 starts with exact strings and explicit lists. |
 | `PolicyViolation` and status enums | preview | `PolicyViolation`, `PolicyStatus`, `PolicyPrecision`, and `PolicyConfidence` are public result vocabulary; full evidence semantics are deferred to Phase 59. |

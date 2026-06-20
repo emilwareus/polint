@@ -700,17 +700,17 @@ fn support_for(capability: &str) -> CapabilityAccumulator {
             None,
             None,
         ),
+        "dataflow" => (
+            CapabilitySupportStatus::Supported,
+            None,
+            None,
+            None,
+        ),
         "cfg" | "call_graph" | "coverage_facts" => (
             CapabilitySupportStatus::Unsupported,
             Some("Capability is reserved for a later phase.".to_string()),
             None,
             Some("docs/facts/capability-plans.md".to_string()),
-        ),
-        "dataflow" => (
-            CapabilitySupportStatus::Unsupported,
-            Some("Preview data-flow policy queries are reserved until bounded source/sink/barrier queries have docs, tests, and provider-backed behavior.".to_string()),
-            None,
-            Some("docs/facts/data-flow.md".to_string()),
         ),
         _ => (
             CapabilitySupportStatus::Unsupported,
@@ -1092,7 +1092,7 @@ mod tests {
         }));
         assert_eq!(
             plan.support_view().status_for("dataflow"),
-            Some(crate::core::CapabilitySupportStatus::Unsupported)
+            Some(crate::core::CapabilitySupportStatus::Supported)
         );
     }
 
@@ -1150,27 +1150,13 @@ mod tests {
             vec![
                 ("calls", CapabilitySupportStatus::Supported, None),
                 ("control_flow", CapabilitySupportStatus::Supported, None),
-                (
-                    "dataflow",
-                    CapabilitySupportStatus::Unsupported,
-                    Some("docs/facts/data-flow.md")
-                ),
+                ("dataflow", CapabilitySupportStatus::Supported, None),
                 ("events", CapabilitySupportStatus::Supported, None),
             ]
         );
 
         let diagnostics = plan.diagnostics();
-        let capability = "dataflow";
-        assert!(
-            diagnostics.iter().any(|diagnostic| {
-                diagnostic.rule_id == "polint/capability"
-                    && diagnostic.evidence.iter().any(|evidence| {
-                        evidence.label == "capability" && evidence.value == capability
-                    })
-            }),
-            "missing fail-closed diagnostic for {capability}: {diagnostics:#?}"
-        );
-        for capability in ["events", "calls", "control_flow"] {
+        for capability in ["events", "calls", "control_flow", "dataflow"] {
             assert!(
                 diagnostics.iter().all(|diagnostic| {
                     !diagnostic.evidence.iter().any(|evidence| {

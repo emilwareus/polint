@@ -30,9 +30,9 @@ pub(crate) use provider::{
 /// and `evidence`).
 ///
 /// Public policy views consume selected pipeline projections through `Events`,
-/// `Calls`, and `ControlFlow`; the raw `Cfg`, raw `CallGraph`, and `DataFlow`
-/// views remain reserved/unsupported. So when no enabled rule requests one of
-/// these graph capabilities, the whole pipeline is dead work:
+/// `Calls`, `ControlFlow`, and `DataFlow`; raw `Cfg` and raw `CallGraph` views
+/// remain reserved/unsupported. So when no enabled rule requests one of these
+/// graph capabilities, the whole pipeline is dead work:
 /// it builds MIR, CFGs, call graphs, points-to and a whole-repo solver state that
 /// nothing consumes. Gating on it lets a syntactic rule set (metrics, imports,
 /// string literals, Go tests) skip the pipeline entirely and avoid its very large
@@ -49,6 +49,7 @@ const SEMANTIC_PIPELINE_TRIGGER_CAPABILITIES: &[&str] = &[
     "events",
     "calls",
     "control_flow",
+    "dataflow",
 ];
 
 pub(crate) struct AnalysisKernel;

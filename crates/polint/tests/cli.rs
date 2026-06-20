@@ -916,7 +916,7 @@ pub(crate) fn rule(ctx: &mut RuleCtx<'_>, symbols: Symbols<'_>, references: Refe
 }
 
 #[test]
-fn phase55_preview_rule_syntax_compiles_and_fails_closed() {
+fn phase55_preview_rule_syntax_compiles_and_executes_supported_views() {
     let temp = tempfile::tempdir().unwrap();
     write_file(
         &temp.path().join(".polint.toml"),
@@ -973,10 +973,6 @@ pub(crate) fn rule(
     cleanup_query.minimum_precision = PolicyPrecision::SetupAware;
     let _ = control.missing_cleanup(cleanup_query);
 
-    ctx.warn(
-        &Span::point(FileId(0), 1, 1),
-        "phase55 preview rule body executed",
-    );
     Ok(())
 }
 "#,
@@ -997,21 +993,23 @@ pub(crate) fn rule(
             .success(),
     );
 
+    let diagnostics = diagnostics_for_rule(&json, "local/phase55-preview");
+    assert_eq!(
+        diagnostics.len(),
+        1,
+        "preview rule should execute and report the secret-log data-flow policy: {json:#?}"
+    );
     assert!(
-        diagnostics_for_rule(&json, "local/phase55-preview").is_empty(),
-        "preview rule body must not run while dataflow remains unsupported: {json:#?}"
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["message"] == "secret-like value reaches logging without redaction"
+                && diagnostic_has_evidence(diagnostic, "policy", "forbidden_flow")
+                && diagnostic_has_evidence(diagnostic, "sink", "log")
+                && diagnostic_has_evidence(diagnostic, "barrier_status", "uncovered")
+        }),
+        "missing data-flow diagnostic evidence: {json:#?}"
     );
     let capability_diagnostics = diagnostics_for_rule(&json, "polint/capability");
-    let capability = "dataflow";
-    assert!(
-        capability_diagnostics.iter().any(|diagnostic| {
-            diagnostic_has_evidence(diagnostic, "rule", "local/phase55-preview")
-                && diagnostic_has_evidence(diagnostic, "capability", capability)
-                && diagnostic_has_evidence(diagnostic, "status", "unsupported")
-        }),
-        "expected unsupported {capability} capability diagnostic: {json:#?}"
-    );
-    for capability in ["events", "calls", "control_flow"] {
+    for capability in ["events", "calls", "control_flow", "dataflow"] {
         assert!(
             capability_diagnostics.iter().all(|diagnostic| {
                 !diagnostic_has_evidence(diagnostic, "rule", "local/phase55-preview")
@@ -1306,6 +1304,92 @@ func Rollback() {}
                 !diagnostic_has_evidence(diagnostic, "capability", "control_flow")
             }),
         "control_flow should execute without capability diagnostics: {json:#?}"
+    );
+}
+
+#[test]
+fn phase58_data_flow_rule_reports_json() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_phase41_rule_pack(
+        temp.path(),
+        r#"use std::process::ExitCode;
+use polint::runner;
+mod rule;
+fn main() -> ExitCode { runner::run_cli(vec![rule::rule()]) }
+"#,
+        r#"use polint::sdk::prelude::*;
+
+#[polint::rule(id = "local/phase58-data-flow", description = "Phase 58 data-flow", severity = "error")]
+pub(crate) fn rule(ctx: &mut RuleCtx<'_>, flow: DataFlow<'_>) -> RuleResult {
+    let mut query = FlowQuery::new(
+        SourcePattern::secret_like(["token", "password"]),
+        SinkPattern::logger(),
+    );
+    query.barriers = BarrierPattern::call_any(["redact", "mask_secret"]);
+    query.max_depth = 8;
+    query.max_paths = 4;
+
+    for violation in flow.forbidden(query) {
+        ctx.report(violation.diagnostic(
+            ctx.rule_id(),
+            "secret-like value reaches logging without redaction",
+        ));
+    }
+
+    Ok(())
+}
+"#,
+    );
+    write_file(
+        &temp.path().join("src/app.ts"),
+        r#"export function handler(token: string) {
+  console.log(token);
+}
+"#,
+    );
+
+    let json = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["check", "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+
+    let diagnostics = diagnostics_for_rule(&json, "local/phase58-data-flow");
+    assert_eq!(
+        diagnostics.len(),
+        1,
+        "expected one data-flow diagnostic: {json:#?}"
+    );
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["message"] == "secret-like value reaches logging without redaction"
+                && diagnostic_has_evidence(diagnostic, "policy", "forbidden_flow")
+                && diagnostic_has_evidence(diagnostic, "source", "token")
+                && diagnostic_has_evidence(diagnostic, "sink", "log")
+                && diagnostic_has_evidence(diagnostic, "required_barrier", "redact,mask_secret")
+                && diagnostic_has_evidence(diagnostic, "barrier_status", "uncovered")
+                && diagnostic_has_evidence(diagnostic, "path_status", "found")
+        }),
+        "missing data-flow diagnostic evidence: {json:#?}"
+    );
+    assert!(
+        diagnostics_for_rule(&json, "polint/capability")
+            .iter()
+            .all(|diagnostic| { !diagnostic_has_evidence(diagnostic, "capability", "dataflow") }),
+        "dataflow should execute without capability diagnostics: {json:#?}"
     );
 }
 

@@ -6816,13 +6816,13 @@ pub struct Capabilities {
     pub events: bool,
     /// Preview policy-level call queries. Bounded reachable-call checks are provider-backed.
     pub calls: bool,
-    /// Preview policy-level control-flow queries. Fails closed until guard/lifecycle facts are supported.
+    /// Preview policy-level control-flow queries. Same-function guard/lifecycle checks are provider-backed.
     pub control_flow: bool,
     /// Reserved for future control-flow graph facts. Branch obligations are available through [`Capabilities::branch_obligations`].
     pub cfg: bool,
     /// Reserved for future call graph facts. Direct syntactic calls are available on [`FunctionFact::calls`].
     pub call_graph: bool,
-    /// Reserved for future dataflow facts built on CFG, symbols, and call graph support.
+    /// Preview policy-level data-flow queries. Bounded source/sink/barrier checks are provider-backed.
     pub dataflow: bool,
     /// Needs Go test facts harvested from `_test.go` files.
     pub go_tests: bool,
