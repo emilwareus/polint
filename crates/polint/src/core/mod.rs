@@ -6812,6 +6812,12 @@ pub struct Capabilities {
     pub symbols: bool,
     /// Needs symbol reference facts; this also requires symbol identities.
     pub references: bool,
+    /// Preview policy-level semantic events. Fails closed until event-query facts are supported.
+    pub events: bool,
+    /// Preview policy-level call queries. Fails closed until call-query facts are supported.
+    pub calls: bool,
+    /// Preview policy-level control-flow queries. Fails closed until guard/lifecycle facts are supported.
+    pub control_flow: bool,
     /// Reserved for future control-flow graph facts. Branch obligations are available through [`Capabilities::branch_obligations`].
     pub cfg: bool,
     /// Reserved for future call graph facts. Direct syntactic calls are available on [`FunctionFact::calls`].
@@ -6875,6 +6881,21 @@ impl Capabilities {
     pub fn references(mut self) -> Self {
         self.references = true;
         self.symbols = true;
+        self
+    }
+
+    pub fn events(mut self) -> Self {
+        self.events = true;
+        self
+    }
+
+    pub fn calls(mut self) -> Self {
+        self.calls = true;
+        self
+    }
+
+    pub fn control_flow(mut self) -> Self {
+        self.control_flow = true;
         self
     }
 
@@ -6956,6 +6977,9 @@ impl Capabilities {
             ("module_graph", self.module_graph),
             ("symbols", self.symbols),
             ("references", self.references),
+            ("events", self.events),
+            ("calls", self.calls),
+            ("control_flow", self.control_flow),
             ("cfg", self.cfg),
             ("call_graph", self.call_graph),
             ("dataflow", self.dataflow),
@@ -9030,6 +9054,29 @@ mod tests {
         );
 
         assert!(ctx.capability_support().entries().is_empty());
+    }
+
+    #[test]
+    fn policy_preview_capabilities_have_distinct_names() {
+        let capabilities = Capabilities::new()
+            .events()
+            .calls()
+            .control_flow()
+            .dataflow()
+            .cfg()
+            .call_graph();
+
+        assert_eq!(
+            capabilities.requested_names().collect::<Vec<_>>(),
+            vec![
+                "events",
+                "calls",
+                "control_flow",
+                "cfg",
+                "call_graph",
+                "dataflow"
+            ]
+        );
     }
 
     #[test]

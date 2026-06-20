@@ -1726,6 +1726,9 @@ impl FactsListReport {
             public_fact_view("file_metrics").unwrap(),
             public_fact_view("function_metrics").unwrap(),
             public_fact_view("complexity_metrics").unwrap(),
+            public_fact_view("events").unwrap(),
+            public_fact_view("calls").unwrap(),
+            public_fact_view("control_flow").unwrap(),
             public_fact_view("cfg").unwrap(),
             public_fact_view("call_graph").unwrap(),
             public_fact_view("dataflow").unwrap(),
@@ -1816,6 +1819,33 @@ fn public_fact_view(capability: &str) -> Option<PublicFactView> {
             sampling: false,
             unknowns: false,
         },
+        "events" => PublicFactView {
+            capability: "events",
+            view_type: "Events",
+            canonical_path: "polint::sdk::facts::Events<'_>",
+            stability: "preview",
+            docs_path: "docs/facts/events.md",
+            sampling: false,
+            unknowns: false,
+        },
+        "calls" => PublicFactView {
+            capability: "calls",
+            view_type: "Calls",
+            canonical_path: "polint::sdk::facts::Calls<'_>",
+            stability: "preview",
+            docs_path: "docs/facts/calls.md",
+            sampling: false,
+            unknowns: false,
+        },
+        "control_flow" => PublicFactView {
+            capability: "control_flow",
+            view_type: "ControlFlow",
+            canonical_path: "polint::sdk::facts::ControlFlow<'_>",
+            stability: "preview",
+            docs_path: "docs/facts/control-flow.md",
+            sampling: false,
+            unknowns: false,
+        },
         "call_graph" => PublicFactView {
             capability: "call_graph",
             view_type: "CallGraph",
@@ -1829,7 +1859,7 @@ fn public_fact_view(capability: &str) -> Option<PublicFactView> {
             capability: "dataflow",
             view_type: "DataFlow",
             canonical_path: "polint::sdk::facts::DataFlow<'_>",
-            stability: "reserved",
+            stability: "preview",
             docs_path: "docs/facts/data-flow.md",
             sampling: false,
             unknowns: false,
@@ -2917,7 +2947,10 @@ fn sanitize_name(name: &str) -> String {
 mod tests {
     use clap::CommandFactory;
 
-    use super::{Cli, LocalRuleHostProfile, explain_derived_edge_provenance};
+    use super::{
+        Cli, FactsListReport, LocalRuleHostProfile, explain_derived_edge_provenance,
+        public_fact_view,
+    };
 
     #[test]
     fn explain_private_plumbing_surfaces_derived_edge_provenance() {
@@ -2993,6 +3026,70 @@ mod tests {
         assert_eq!(
             LocalRuleHostProfile::from_env_value(Some("profiling".to_string())),
             LocalRuleHostProfile::Custom("profiling".to_string())
+        );
+    }
+
+    #[test]
+    fn facts_list_reports_phase55_preview_capabilities() {
+        let report = FactsListReport::new();
+        let preview = report
+            .views
+            .iter()
+            .filter(|view| {
+                matches!(
+                    view.capability,
+                    "events" | "calls" | "control_flow" | "dataflow"
+                )
+            })
+            .map(|view| {
+                (
+                    view.capability,
+                    view.view_type,
+                    view.canonical_path,
+                    view.stability,
+                    view.docs_path,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            preview,
+            vec![
+                (
+                    "calls",
+                    "Calls",
+                    "polint::sdk::facts::Calls<'_>",
+                    "preview",
+                    "docs/facts/calls.md"
+                ),
+                (
+                    "control_flow",
+                    "ControlFlow",
+                    "polint::sdk::facts::ControlFlow<'_>",
+                    "preview",
+                    "docs/facts/control-flow.md"
+                ),
+                (
+                    "dataflow",
+                    "DataFlow",
+                    "polint::sdk::facts::DataFlow<'_>",
+                    "preview",
+                    "docs/facts/data-flow.md"
+                ),
+                (
+                    "events",
+                    "Events",
+                    "polint::sdk::facts::Events<'_>",
+                    "preview",
+                    "docs/facts/events.md"
+                ),
+            ]
+        );
+
+        assert_eq!(public_fact_view("cfg").unwrap().stability, "reserved");
+        assert_eq!(
+            public_fact_view("call_graph").unwrap().stability,
+            "reserved"
         );
     }
 

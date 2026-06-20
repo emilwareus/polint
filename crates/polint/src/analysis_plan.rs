@@ -682,6 +682,24 @@ fn support_for(capability: &str) -> CapabilityAccumulator {
             Some("Use go_tests for current Go test evidence.".to_string()),
             Some("docs/facts/capability-plans.md".to_string()),
         ),
+        "events" => (
+            CapabilitySupportStatus::Unsupported,
+            Some("Preview event policy queries are reserved until event facts have docs, tests, and provider-backed behavior.".to_string()),
+            None,
+            Some("docs/facts/events.md".to_string()),
+        ),
+        "calls" => (
+            CapabilitySupportStatus::Unsupported,
+            Some("Preview call policy queries are reserved until call-query facts have docs, tests, and provider-backed behavior.".to_string()),
+            None,
+            Some("docs/facts/calls.md".to_string()),
+        ),
+        "control_flow" => (
+            CapabilitySupportStatus::Unsupported,
+            Some("Preview control-flow policy queries are reserved until guard and lifecycle facts have docs, tests, and provider-backed behavior.".to_string()),
+            None,
+            Some("docs/facts/control-flow.md".to_string()),
+        ),
         "cfg" | "call_graph" | "coverage_facts" => (
             CapabilitySupportStatus::Unsupported,
             Some("Capability is reserved for a later phase.".to_string()),
@@ -690,7 +708,7 @@ fn support_for(capability: &str) -> CapabilityAccumulator {
         ),
         "dataflow" => (
             CapabilitySupportStatus::Unsupported,
-            Some("Capability is reserved until bounded public data-flow queries have docs, tests, and setup behavior.".to_string()),
+            Some("Preview data-flow policy queries are reserved until bounded source/sink/barrier queries have docs, tests, and provider-backed behavior.".to_string()),
             None,
             Some("docs/facts/data-flow.md".to_string()),
         ),
@@ -1107,6 +1125,64 @@ mod tests {
             capability.docs_path.as_deref(),
             Some("docs/facts/capability-plans.md")
         );
+    }
+
+    #[test]
+    fn preview_policy_capabilities_remain_fail_closed() {
+        let plan = AnalysisPlan::from_capability_names_for_test(&[
+            "events",
+            "calls",
+            "control_flow",
+            "dataflow",
+        ]);
+
+        assert_eq!(
+            plan.capabilities()
+                .iter()
+                .map(|capability| {
+                    (
+                        capability.capability.as_str(),
+                        capability.status.clone(),
+                        capability.docs_path.as_deref(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "calls",
+                    CapabilitySupportStatus::Unsupported,
+                    Some("docs/facts/calls.md")
+                ),
+                (
+                    "control_flow",
+                    CapabilitySupportStatus::Unsupported,
+                    Some("docs/facts/control-flow.md")
+                ),
+                (
+                    "dataflow",
+                    CapabilitySupportStatus::Unsupported,
+                    Some("docs/facts/data-flow.md")
+                ),
+                (
+                    "events",
+                    CapabilitySupportStatus::Unsupported,
+                    Some("docs/facts/events.md")
+                ),
+            ]
+        );
+
+        let diagnostics = plan.diagnostics();
+        for capability in ["events", "calls", "control_flow", "dataflow"] {
+            assert!(
+                diagnostics.iter().any(|diagnostic| {
+                    diagnostic.rule_id == "polint/capability"
+                        && diagnostic.evidence.iter().any(|evidence| {
+                            evidence.label == "capability" && evidence.value == capability
+                        })
+                }),
+                "missing fail-closed diagnostic for {capability}: {diagnostics:#?}"
+            );
+        }
     }
 
     #[test]

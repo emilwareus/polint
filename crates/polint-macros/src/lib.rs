@@ -342,6 +342,9 @@ fn capability_for_type(ty: &Type) -> syn::Result<(Ident, Ident, String, String)>
         "ModuleGraphFacts" => "module_graph",
         "Symbols" => "symbols",
         "References" => "references",
+        "Events" => "events",
+        "Calls" => "calls",
+        "ControlFlow" => "control_flow",
         "Cfg" => "cfg",
         "CallGraph" => "call_graph",
         "DataFlow" => "dataflow",
@@ -478,6 +481,9 @@ mod tests {
         assert_eq!(capability("CoverageFacts<'_>"), "coverage_facts");
         assert_eq!(capability("TestSuiteMetrics<'_>"), "test_suite_metrics");
         assert_eq!(capability("DataFlow<'_>"), "dataflow");
+        assert_eq!(capability("Events<'_>"), "events");
+        assert_eq!(capability("Calls<'_>"), "calls");
+        assert_eq!(capability("ControlFlow<'_>"), "control_flow");
         assert_eq!(capability("Cfg<'_>"), "cfg");
         assert_eq!(capability("CallGraph<'_>"), "call_graph");
         assert_eq!(capability("FileMetrics<'_>"), "file_metrics");
@@ -506,6 +512,10 @@ mod tests {
         assert_eq!(
             canonical_path("polint::sdk::prelude::Imports<'_>"),
             "polint::sdk::facts::Imports<'_>"
+        );
+        assert_eq!(
+            canonical_path("polint::sdk::prelude::ControlFlow<'_>"),
+            "polint::sdk::facts::ControlFlow<'_>"
         );
     }
 
