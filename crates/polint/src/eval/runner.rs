@@ -990,7 +990,7 @@ mod tests {
     }
 
     #[test]
-    fn phase40_public_boundary_does_not_advertise_hidden_eval_or_unpromoted_views() {
+    fn phase40_public_boundary_does_not_advertise_hidden_eval_or_raw_graph_support() {
         let root = repo_root();
         let read = |path: &str| std::fs::read_to_string(root.join(path)).unwrap();
         let public_text = [
@@ -1002,7 +1002,8 @@ mod tests {
         .join("\n");
 
         assert!(!public_text.contains("polint eval"));
-        assert!(!public_text.contains("CallGraph<'_"));
+        assert!(!public_text.contains("CallGraph<'_> is supported"));
+        assert!(!public_text.contains("CallGraph<'_>` is supported"));
         assert!(!public_text.contains("DataFlow<'_> is supported"));
         assert!(!public_text.contains("Evidence<'_"));
         assert!(!read("crates/polint/src/lib.rs").contains("pub mod eval"));

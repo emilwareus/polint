@@ -966,10 +966,12 @@ pub(crate) fn rule(
         EventPattern::write_field("account.balance"),
         GuardPattern::call_any(["authorize", "require_admin"]),
     ));
-    let _ = control.missing_cleanup(LifecycleQuery::new(
+    let mut cleanup_query = LifecycleQuery::new(
         EventPattern::call("begin_transaction"),
         EventPattern::call("rollback"),
-    ));
+    );
+    cleanup_query.minimum_precision = PolicyPrecision::SetupAware;
+    let _ = control.missing_cleanup(cleanup_query);
 
     ctx.warn(
         &Span::point(FileId(0), 1, 1),

@@ -145,6 +145,8 @@ pub struct LifecycleQuery {
     pub max_depth: usize,
     /// Maximum uncovered paths returned by the query.
     pub max_paths: usize,
+    /// Minimum acceptable precision.
+    pub minimum_precision: PolicyPrecision,
 }
 
 impl LifecycleQuery {
@@ -156,6 +158,7 @@ impl LifecycleQuery {
             require_error_cleanup: true,
             max_depth: 4,
             max_paths: 20,
+            minimum_precision: PolicyPrecision::Conservative,
         }
     }
 }
