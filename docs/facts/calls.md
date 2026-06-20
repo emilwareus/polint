@@ -38,10 +38,11 @@ pub(crate) fn no_dangerous_reachable(ctx: &mut RuleCtx<'_>, calls: Calls<'_>) ->
 - `query.minimum_precision` and `query.minimum_confidence` filter the private
   refined-call edges used for traversal.
 
-Returned diagnostics include policy status, policy precision, target, root,
-path, depth, call status, call precision, and confidence evidence where
-available. Budget truncation is surfaced as budget evidence instead of being
-treated as a complete absence proof.
+Returned diagnostics include the common policy evidence header documented in
+[evidence.md](evidence.md), plus target, root, path, depth, call status, call
+precision, and confidence evidence where available. Budget truncation is
+surfaced as budget evidence instead of being treated as a complete absence
+proof.
 
 `Calls<'_>` is not the raw `CallGraph<'_>` view. `CallGraph<'_>` remains a
 reserved raw capability and is not the supported rule-authoring path for

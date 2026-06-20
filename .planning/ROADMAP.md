@@ -23,7 +23,7 @@ Phase numbering continues from v1.3's last phase 54. v1.4 promotes a narrow poli
 - [x] **Phase 56: Events and Calls Query Surface** - Implement `Events<'_>` and `Calls<'_>` policy queries over v1.3 refined calls, reachability roots, and unknown taxonomy. Completed 2026-06-20.
 - [x] **Phase 57: Control-Flow Guard and Lifecycle Queries** - Implement `ControlFlow<'_>` guard and cleanup policies without exposing raw CFG/dominance graphs. Completed 2026-06-20.
 - [x] **Phase 58: Data-Flow Source/Sink/Barrier Queries** - Promote `DataFlow<'_>` preview methods for forbidden flows and required barriers over bounded private path search. Completed 2026-06-20.
-- [ ] **Phase 59: Violation Evidence, Unknowns, and Cache Semantics** - Normalize violation results, diagnostic evidence, deterministic ordering, cache keys, and user-visible unknown/budget behavior.
+- [x] **Phase 59: Violation Evidence, Unknowns, and Cache Semantics** - Normalize violation results, diagnostic evidence, deterministic ordering, cache keys, and user-visible unknown/budget behavior. Completed 2026-06-20.
 - [ ] **Phase 60: Flagship Rule Templates and Agent Ergonomics** - Generate realistic policy templates and update README/examples/skill text around the same query-object syntax.
 - [ ] **Phase 61: Public Docs and External SDK Validation** - Document every preview view/query and prove external repo-local rule usage through temp-repo tests.
 - [ ] **Phase 62: Promotion Gate, Boundary Proof, and Closeout** - Enforce public-surface leak gates, full regression, deterministic checks, and milestone exit verification.
@@ -196,7 +196,7 @@ for violation in flow.forbidden(query) {
 | 56 | Events and Calls Query Surface | 3/3 | Complete | 2026-06-20 |
 | 57 | Control-Flow Guard and Lifecycle Queries | 3/3 | Complete | 2026-06-20 |
 | 58 | Data-Flow Source/Sink/Barrier Queries | 3/3 | Complete | 2026-06-20 |
-| 59 | Violation Evidence, Unknowns, and Cache Semantics | 0/3 | In Progress | - |
+| 59 | Violation Evidence, Unknowns, and Cache Semantics | 3/3 | Complete | 2026-06-20 |
 | 60 | Flagship Rule Templates and Agent Ergonomics | 0/0 | Planned | - |
 | 61 | Public Docs and External SDK Validation | 0/0 | Planned | - |
 | 62 | Promotion Gate, Boundary Proof, and Closeout | 0/0 | Planned | - |
@@ -218,18 +218,18 @@ for violation in flow.forbidden(query) {
 
 ## Next Up
 
-**Phase 59: Violation Evidence, Unknowns, and Cache Semantics** - execute the planned evidence, unknowns, cache, and determinism work.
+**Phase 60: Flagship Rule Templates and Agent Ergonomics** - generate realistic policy templates and update README/examples/skill text around the same query-object syntax.
 
 Suggested command:
 
 ```bash
-/gsd-discuss-phase 59 /Users/emilwareus/conductor/workspaces/exlint/louisville-v1
+/gsd-discuss-phase 60 /Users/emilwareus/conductor/workspaces/exlint/louisville-v1
 ```
 
 For a direct implementation plan:
 
 ```bash
-/gsd-plan-phase 59 /Users/emilwareus/conductor/workspaces/exlint/louisville-v1
+/gsd-plan-phase 60 /Users/emilwareus/conductor/workspaces/exlint/louisville-v1
 ```
 
 ---

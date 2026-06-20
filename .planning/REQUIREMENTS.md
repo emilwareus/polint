@@ -82,11 +82,11 @@ Requirements for the v1.4 milestone. Each maps to exactly one roadmap phase.
 
 ### Violations, Evidence, Cache, and Unknowns
 
-- [ ] **EVID-01**: All query families return a consistent `PolicyViolation`-style result that can produce a diagnostic with rule ID, message, primary span, labels, suggestions when available, and structured evidence.
-- [ ] **EVID-02**: Violation evidence includes query type, matched patterns, root/source/sink/event spans, path steps, precision/confidence/status, budget state, and unknown reasons in stable JSON/SARIF output.
-- [ ] **EVID-03**: Results are deterministically sorted and deduplicated across sequential/parallel execution, cache restore, provider ordering, and repeated runs.
-- [ ] **EVID-04**: Query parameters, preview API versions, rule options, language lifecycle inputs, solver budgets, and model/adaptation files participate in cache identity with must-invalidate and must-preserve-hit tests.
-- [ ] **EVID-05**: Unknown and budget behavior is user-visible and actionable; policy rules must not silently pass when setup gaps, unsupported semantics, or budget exhaustion make the answer incomplete.
+- [x] **EVID-01**: All query families return a consistent `PolicyViolation`-style result that can produce a diagnostic with rule ID, message, primary span, labels, suggestions when available, and structured evidence.
+- [x] **EVID-02**: Violation evidence includes query type, matched patterns, root/source/sink/event spans, path steps, precision/confidence/status, budget state, and unknown reasons in stable JSON/SARIF output.
+- [x] **EVID-03**: Results are deterministically sorted and deduplicated across sequential/parallel execution, cache restore, provider ordering, and repeated runs.
+- [x] **EVID-04**: Query parameters, preview API versions, rule options, language lifecycle inputs, solver budgets, and model/adaptation files participate in cache identity with must-invalidate and must-preserve-hit tests.
+- [x] **EVID-05**: Unknown and budget behavior is user-visible and actionable; policy rules must not silently pass when setup gaps, unsupported semantics, or budget exhaustion make the answer incomplete.
 
 ### Flagship Rule Templates
 
@@ -166,11 +166,11 @@ Which phases cover which requirements.
 | FLOW-03 | Phase 58 | Complete |
 | FLOW-04 | Phase 58 | Complete |
 | FLOW-05 | Phase 58 | Complete |
-| EVID-01 | Phase 59 | Planned |
-| EVID-02 | Phase 59 | Planned |
-| EVID-03 | Phase 59 | Planned |
-| EVID-04 | Phase 59 | Planned |
-| EVID-05 | Phase 59 | Planned |
+| EVID-01 | Phase 59 | Complete |
+| EVID-02 | Phase 59 | Complete |
+| EVID-03 | Phase 59 | Complete |
+| EVID-04 | Phase 59 | Complete |
+| EVID-05 | Phase 59 | Complete |
 | TPL-01 | Phase 60 | Planned |
 | TPL-02 | Phase 60 | Planned |
 | TPL-03 | Phase 60 | Planned |

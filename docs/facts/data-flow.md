@@ -67,10 +67,13 @@ Phase 58 backs these patterns:
 
 ## Result Evidence
 
-Diagnostics built through `violation.diagnostic(...)` include standard
-`policy_status` and `policy_precision` fields plus data-flow evidence such as:
+Diagnostics built through `violation.diagnostic(...)` include the common policy
+evidence header documented in [evidence.md](evidence.md), plus data-flow
+evidence such as:
 
 - `policy=forbidden_flow`
+- `policy_query=data_flow.forbidden`
+- `query_digest`
 - `source`
 - `sink`
 - `path_status`

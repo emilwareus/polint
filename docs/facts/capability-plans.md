@@ -67,6 +67,12 @@ This is the only public query-object style for the preview surface:
 `Query::new(required...)`, explicit option fields, one view method, and
 `PolicyViolation::diagnostic(...)`.
 
+Policy diagnostics share a normalized evidence header: `policy_query`,
+`policy_query_version`, `query_digest`, `policy_status`, and
+`policy_precision`. Cap-filtered unknown reports are supported for preview
+policy capabilities through
+`polint unknowns --cap events|calls|control_flow|dataflow --format json`.
+
 ## Reserved Capabilities
 
 Reserved raw capabilities such as `cfg`, `call_graph`, `coverage_facts`, and

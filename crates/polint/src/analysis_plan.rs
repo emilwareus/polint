@@ -6,6 +6,7 @@ use crate::core::{
     Rule, RuleMeta, RuleOptions, SourceFile, rule_id_matches,
 };
 use crate::diagnostics::{Diagnostic, Severity, TextRange};
+use crate::sdk::policy::POLICY_QUERY_VERSION;
 #[cfg(test)]
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -775,6 +776,7 @@ fn plan_digest(
             "capability.rules={}",
             encode_str_list(&capability.rules)
         ));
+        push_policy_query_digest_parts(&mut parts, capability);
     }
 
     for check in setup_checks {
@@ -792,6 +794,23 @@ fn plan_digest(
 
     let part_refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
     stable_hash(&part_refs)
+}
+
+fn push_policy_query_digest_parts(parts: &mut Vec<String>, capability: &PlannedCapability) {
+    if let Some(version) = policy_query_version_for_capability(&capability.capability) {
+        parts.push(format!(
+            "capability.policy_query_version.{}={}",
+            encode_str(&capability.capability),
+            encode_str(version)
+        ));
+    }
+}
+
+fn policy_query_version_for_capability(capability: &str) -> Option<&'static str> {
+    match capability {
+        "events" | "calls" | "control_flow" | "dataflow" => Some(POLICY_QUERY_VERSION),
+        _ => None,
+    }
 }
 
 fn encode_str(value: &str) -> String {
@@ -1166,6 +1185,37 @@ mod tests {
                 "supported capability {capability} should not emit diagnostics: {diagnostics:#?}"
             );
         }
+    }
+
+    #[test]
+    fn policy_query_version_digest_parts_apply_only_to_policy_capabilities() {
+        for capability in ["events", "calls", "control_flow", "dataflow"] {
+            assert_eq!(
+                policy_query_version_for_capability(capability),
+                Some(POLICY_QUERY_VERSION)
+            );
+        }
+        for capability in ["resolved_imports", "symbols", "cfg", "call_graph"] {
+            assert_eq!(policy_query_version_for_capability(capability), None);
+        }
+
+        let mut parts = Vec::new();
+        push_policy_query_digest_parts(
+            &mut parts,
+            &PlannedCapability {
+                capability: "dataflow".to_string(),
+                language: None,
+                status: CapabilitySupportStatus::Supported,
+                rules: vec!["local/rule".to_string()],
+                reason: None,
+                hint: None,
+                docs_path: None,
+            },
+        );
+
+        assert_eq!(parts.len(), 1);
+        assert!(parts[0].contains("capability.policy_query_version."));
+        assert!(parts[0].contains(POLICY_QUERY_VERSION));
     }
 
     #[test]

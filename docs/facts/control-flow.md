@@ -61,12 +61,12 @@ pub(crate) fn transaction_cleanup(ctx: &mut RuleCtx<'_>, control: ControlFlow<'_
 - `require_error_cleanup` is surfaced as evidence. Phase 57 does not prove exact
   cleanup on every normal and error exit.
 
-Returned diagnostics include policy status, policy precision, target,
-function, control scope, required guard or cleanup, uncovered path,
-order-source, call status, call precision, confidence when available, and budget
-evidence when truncation occurs. Because the current implementation proves only
-same-function ordering, returned policy results use conservative precision and
-heuristic status.
+Returned diagnostics include the common policy evidence header documented in
+[evidence.md](evidence.md), plus target, function, control scope, required
+guard or cleanup, uncovered path, order-source, call status, call precision,
+confidence when available, and budget evidence when truncation occurs. Because
+the current implementation proves only same-function ordering, returned policy
+results use conservative precision and heuristic status.
 
 `ControlFlow<'_>` is not the raw `Cfg<'_>` view. `Cfg<'_>` remains a reserved
 raw capability and is not the supported rule-authoring path for guard or

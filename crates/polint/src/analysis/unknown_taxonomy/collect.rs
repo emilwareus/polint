@@ -1,5 +1,10 @@
 use crate::analysis::adaptation::facts::RejectionReason;
 use crate::analysis::calls::facts::{CallTargetStatus, UnresolvedCallReason};
+use crate::analysis::data_flow::facts::{
+    DataFlowBudgetFact, DataFlowBudgetReason, DataFlowEdgeFact, DataFlowEdgeKind,
+    DataFlowPrecision, DataFlowStatus,
+};
+use crate::analysis::evidence::facts::{EvidenceUnknownFact, EvidenceUnknownReason};
 use crate::analysis::points_to::facts::{PointsToPrecision, PointsToStatus};
 use crate::analysis::refined_calls::facts::RefinedCallEdgeFact;
 use crate::analysis::unknown_taxonomy::facts::{
@@ -39,6 +44,8 @@ pub(crate) fn public_capability_unknowns(db: &AnalysisDb, capability: &str) -> V
         "resolved_imports" => resolved_import_unknowns(db),
         "symbols" => symbol_unknowns(db),
         "references" => reference_unknowns(db),
+        "events" | "calls" | "control_flow" => policy_call_unknowns(db, capability),
+        "dataflow" => data_flow_unknowns(db),
         _ => Vec::new(),
     };
     normalize_rows(rows)
@@ -353,6 +360,167 @@ fn adaptation_unknowns(db: &AnalysisDb) -> Vec<UnknownRow> {
         .collect()
 }
 
+fn policy_call_unknowns(db: &AnalysisDb, capability: &str) -> Vec<UnknownRow> {
+    db.refined_call_edges()
+        .iter()
+        .filter(|edge| edge.status != CallTargetStatus::Resolved)
+        .map(|edge| {
+            let mut row = refined_call_unknown(db, edge);
+            row.capability = Some(capability.to_string());
+            row.docs_path = Some(policy_capability_docs_path(capability).to_string());
+            row.suggested_artifact = Some("model_or_setup".to_string());
+            row
+        })
+        .collect()
+}
+
+fn data_flow_unknowns(db: &AnalysisDb) -> Vec<UnknownRow> {
+    let mut rows = Vec::new();
+    rows.extend(
+        db.data_flow_edges()
+            .iter()
+            .filter(|edge| edge.status != DataFlowStatus::Present)
+            .map(|edge| data_flow_edge_unknown(db, edge)),
+    );
+    rows.extend(
+        db.data_flow_budgets()
+            .iter()
+            .filter(|budget| budget.status != DataFlowStatus::Present)
+            .map(data_flow_budget_unknown),
+    );
+    rows.extend(
+        db.evidence_unknowns()
+            .iter()
+            .map(evidence_unknown_for_data_flow),
+    );
+    rows
+}
+
+fn data_flow_edge_unknown(db: &AnalysisDb, edge: &DataFlowEdgeFact) -> UnknownRow {
+    let (file, span) = data_flow_edge_location(db, edge);
+    UnknownRow::new(UnknownRowInput {
+        category: data_flow_status_category(edge.status),
+        capability: Some("dataflow".to_string()),
+        family: Some("DataFlowEdge".to_string()),
+        provider: "polint.data_flow".to_string(),
+        file,
+        span,
+        status: data_flow_status_label(edge.status).to_string(),
+        reason: Some(data_flow_edge_reason(edge)),
+        precision: Some(data_flow_precision_label(edge.precision).to_string()),
+        docs_path: Some("docs/facts/data-flow.md".to_string()),
+        suggested_artifact: Some(data_flow_status_artifact(edge.status).to_string()),
+        source_stable_key: Some(edge.stable_key.clone()),
+    })
+}
+
+fn data_flow_budget_unknown(budget: &DataFlowBudgetFact) -> UnknownRow {
+    UnknownRow::new(UnknownRowInput {
+        category: UnknownCategory::BudgetExceeded,
+        capability: Some("dataflow".to_string()),
+        family: Some("DataFlowBudget".to_string()),
+        provider: "polint.data_flow".to_string(),
+        file: "<workspace>".to_string(),
+        span: None,
+        status: data_flow_status_label(budget.status).to_string(),
+        reason: Some(format!(
+            "{} limit={} observed={}",
+            data_flow_budget_reason_label(budget.reason),
+            budget.limit,
+            budget.observed
+        )),
+        precision: Some("unknown".to_string()),
+        docs_path: Some("docs/facts/data-flow.md".to_string()),
+        suggested_artifact: Some("budget_or_model".to_string()),
+        source_stable_key: Some(budget.stable_key.clone()),
+    })
+}
+
+fn evidence_unknown_for_data_flow(unknown: &EvidenceUnknownFact) -> UnknownRow {
+    UnknownRow::new(UnknownRowInput {
+        category: evidence_unknown_category(unknown.reason),
+        capability: Some("dataflow".to_string()),
+        family: Some("EvidenceUnknown".to_string()),
+        provider: "polint.evidence".to_string(),
+        file: "<workspace>".to_string(),
+        span: None,
+        status: "unknown".to_string(),
+        reason: Some(format!(
+            "{}:{}",
+            evidence_unknown_reason_label(unknown.reason),
+            unknown.message
+        )),
+        precision: Some("unknown".to_string()),
+        docs_path: Some("docs/facts/evidence.md".to_string()),
+        suggested_artifact: Some("model_or_budget".to_string()),
+        source_stable_key: Some(unknown.stable_key.clone()),
+    })
+}
+
+fn data_flow_edge_location(
+    db: &AnalysisDb,
+    edge: &DataFlowEdgeFact,
+) -> (String, Option<UnknownSpan>) {
+    let node = db
+        .data_flow_nodes()
+        .iter()
+        .find(|node| node.id == edge.to)
+        .or_else(|| {
+            db.data_flow_nodes()
+                .iter()
+                .find(|node| node.id == edge.from)
+        });
+    let file = node
+        .and_then(|node| node.file)
+        .map(|file| db.path_for(file))
+        .unwrap_or_else(|| "<workspace>".to_string());
+    let span = node
+        .and_then(|node| node.span.as_ref())
+        .map(UnknownSpan::from_span);
+    (file, span)
+}
+
+fn data_flow_status_category(status: DataFlowStatus) -> UnknownCategory {
+    match status {
+        DataFlowStatus::SetupMissing => UnknownCategory::SetupMissing,
+        DataFlowStatus::Unsupported => UnknownCategory::UnsupportedSemantic,
+        DataFlowStatus::BudgetExceeded => UnknownCategory::BudgetExceeded,
+        DataFlowStatus::Rejected => UnknownCategory::Rejected,
+        DataFlowStatus::Unknown | DataFlowStatus::Present => UnknownCategory::MissingFact,
+    }
+}
+
+fn data_flow_status_artifact(status: DataFlowStatus) -> &'static str {
+    match status {
+        DataFlowStatus::SetupMissing => "fixture",
+        DataFlowStatus::Unsupported => "provider",
+        DataFlowStatus::BudgetExceeded => "budget_or_model",
+        DataFlowStatus::Rejected => "model",
+        DataFlowStatus::Unknown | DataFlowStatus::Present => "model",
+    }
+}
+
+fn evidence_unknown_category(reason: EvidenceUnknownReason) -> UnknownCategory {
+    match reason {
+        EvidenceUnknownReason::SetupMissing => UnknownCategory::SetupMissing,
+        EvidenceUnknownReason::UnsupportedEdge => UnknownCategory::UnsupportedSemantic,
+        EvidenceUnknownReason::BudgetExceeded => UnknownCategory::BudgetExceeded,
+        EvidenceUnknownReason::DynamicCall | EvidenceUnknownReason::OpaqueSummary => {
+            UnknownCategory::MissingFact
+        }
+    }
+}
+
+fn policy_capability_docs_path(capability: &str) -> &'static str {
+    match capability {
+        "events" => "docs/facts/events.md",
+        "calls" => "docs/facts/calls.md",
+        "control_flow" => "docs/facts/control-flow.md",
+        "dataflow" => "docs/facts/data-flow.md",
+        _ => "docs/facts/capability-plans.md",
+    }
+}
+
 fn stable_key_for(db: &AnalysisDb, family: FactFamily, run_id: u64) -> Option<String> {
     db.metadata_for(FactRef::new(family, run_id))
         .map(|metadata| metadata.stable_key.clone())
@@ -554,6 +722,84 @@ fn call_precision_label(precision: crate::analysis::calls::facts::CallPrecision)
     }
 }
 
+fn data_flow_status_label(status: DataFlowStatus) -> &'static str {
+    match status {
+        DataFlowStatus::Present => "present",
+        DataFlowStatus::Unknown => "unknown",
+        DataFlowStatus::Unsupported => "unsupported",
+        DataFlowStatus::SetupMissing => "setup_missing",
+        DataFlowStatus::BudgetExceeded => "budget_exceeded",
+        DataFlowStatus::Rejected => "rejected",
+    }
+}
+
+fn data_flow_precision_label(precision: DataFlowPrecision) -> &'static str {
+    match precision {
+        DataFlowPrecision::Exact => "exact",
+        DataFlowPrecision::SetupAware => "setup_aware",
+        DataFlowPrecision::Syntax => "syntax",
+        DataFlowPrecision::Conservative => "conservative",
+        DataFlowPrecision::Heuristic => "heuristic",
+        DataFlowPrecision::Unknown => "unknown",
+    }
+}
+
+fn data_flow_edge_kind_label(kind: DataFlowEdgeKind) -> &'static str {
+    match kind {
+        DataFlowEdgeKind::LocalBinding => "local_binding",
+        DataFlowEdgeKind::LocalAssignment => "local_assignment",
+        DataFlowEdgeKind::LocalUse => "local_use",
+        DataFlowEdgeKind::LocalRead => "local_read",
+        DataFlowEdgeKind::LocalWrite => "local_write",
+        DataFlowEdgeKind::ReturnValue => "return_value",
+        DataFlowEdgeKind::FieldProjection => "field_projection",
+        DataFlowEdgeKind::IndexProjection => "index_projection",
+        DataFlowEdgeKind::Dereference => "dereference",
+        DataFlowEdgeKind::AddressOf => "address_of",
+        DataFlowEdgeKind::CallArgumentToParameter => "call_argument_to_parameter",
+        DataFlowEdgeKind::CallArgumentToReturn => "call_argument_to_return",
+        DataFlowEdgeKind::CallReturnToUse => "call_return_to_use",
+        DataFlowEdgeKind::ReceiverToMethod => "receiver_to_method",
+        DataFlowEdgeKind::SummaryTito => "summary_tito",
+        DataFlowEdgeKind::SummaryProjected => "summary_projected",
+        DataFlowEdgeKind::UnknownFlow => "unknown_flow",
+        DataFlowEdgeKind::HavocFlow => "havoc_flow",
+        DataFlowEdgeKind::BudgetTruncated => "budget_truncated",
+        DataFlowEdgeKind::SourceIntroduction => "source_introduction",
+        DataFlowEdgeKind::SinkReachability => "sink_reachability",
+        DataFlowEdgeKind::Sanitizer => "sanitizer",
+        DataFlowEdgeKind::Barrier => "barrier",
+        DataFlowEdgeKind::Model => "model",
+    }
+}
+
+fn data_flow_edge_reason(edge: &DataFlowEdgeFact) -> String {
+    if edge.evidence.is_empty() {
+        data_flow_edge_kind_label(edge.kind).to_string()
+    } else {
+        edge.evidence.join(",")
+    }
+}
+
+fn data_flow_budget_reason_label(reason: DataFlowBudgetReason) -> &'static str {
+    match reason {
+        DataFlowBudgetReason::NodeLimit => "node_limit",
+        DataFlowBudgetReason::EdgeLimit => "edge_limit",
+        DataFlowBudgetReason::PathDepth => "path_depth",
+        DataFlowBudgetReason::PathCount => "path_count",
+    }
+}
+
+fn evidence_unknown_reason_label(reason: EvidenceUnknownReason) -> &'static str {
+    match reason {
+        EvidenceUnknownReason::DynamicCall => "dynamic_call",
+        EvidenceUnknownReason::UnsupportedEdge => "unsupported_edge",
+        EvidenceUnknownReason::SetupMissing => "setup_missing",
+        EvidenceUnknownReason::BudgetExceeded => "budget_exceeded",
+        EvidenceUnknownReason::OpaqueSummary => "opaque_summary",
+    }
+}
+
 fn unresolved_call_reason_label(reason: UnresolvedCallReason) -> &'static str {
     match reason {
         UnresolvedCallReason::FunctionValue => "function_value",
@@ -587,8 +833,17 @@ mod tests {
         CallSyntaxKind,
     };
     use crate::analysis::calls::store::CallOutput;
+    use crate::analysis::data_flow::facts::{
+        DataFlowAlgorithm, DataFlowBudgetFact, DataFlowConfidence, DataFlowEdgeFact,
+        DataFlowEdgeKind, DataFlowNodeFact, DataFlowNodeKind, DataFlowPrecision,
+        DataFlowProvenance, DataFlowStatus, DataFlowValidation,
+    };
+    use crate::analysis::data_flow::store::DataFlowOutput;
+    use crate::analysis::evidence::facts::{EvidenceUnknownFact, EvidenceUnknownReason};
+    use crate::analysis::evidence::store::EvidenceOutput;
     use crate::analysis::ids::{
-        CallSiteId, DerivedEdgeId, MirBodyId, MirOpId, RefinedCallEdgeId, SemanticNodeId,
+        CallSiteId, DataFlowBudgetId, DataFlowEdgeId, DataFlowNodeId, DerivedEdgeId, MirBodyId,
+        MirOpId, RefinedCallEdgeId, SemanticNodeId,
     };
     use crate::analysis::refined_calls::facts::{
         RefinedCallConfidence, RefinedCallTier, RefinedCallValidation,
@@ -648,6 +903,123 @@ mod tests {
             Some("docs/facts/resolved-imports.md")
         );
         assert_eq!(rows[0].suggested_artifact.as_deref(), Some("fixture"));
+    }
+
+    #[test]
+    fn public_policy_call_unknowns_are_cap_filtered() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file("a.ts".into(), "a.ts".to_string(), "call();".to_string());
+        db.replace_call_facts(CallOutput {
+            sites: vec![CallSiteFact {
+                in_throw: false,
+                id: CallSiteId(0),
+                language: Language::TypeScript,
+                file,
+                caller: FunctionId(0),
+                owner_symbol: None,
+                body: MirBodyId(0),
+                operation: MirOpId(0),
+                span: Span::point(file, 1, 1),
+                kind: CallSyntaxKind::Function,
+                callee: CallCallee::Unknown {
+                    reason: UnresolvedCallReason::BudgetExceeded,
+                },
+                receiver: None,
+                arguments: Vec::new(),
+                result: None,
+                status: CallTargetStatus::BudgetExceeded,
+                precision: CallPrecision::Unknown,
+                stable_key: "callsite:budget".to_string(),
+            }],
+            targets: Vec::new(),
+            unresolved: Vec::new(),
+        })
+        .expect("call facts");
+        db.replace_refined_call_facts(RefinedCallOutput {
+            edges: vec![refined_budget_edge()],
+        })
+        .expect("refined calls");
+
+        let rows = public_capability_unknowns(&db, "control_flow");
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].capability.as_deref(), Some("control_flow"));
+        assert_eq!(rows[0].category, UnknownCategory::BudgetExceeded);
+        assert_eq!(
+            rows[0].docs_path.as_deref(),
+            Some("docs/facts/control-flow.md")
+        );
+        assert_eq!(
+            rows[0].suggested_artifact.as_deref(),
+            Some("model_or_setup")
+        );
+    }
+
+    #[test]
+    fn public_dataflow_unknowns_include_edges_budgets_and_evidence_unknowns() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file("a.ts".into(), "a.ts".to_string(), "source();".to_string());
+        db.replace_data_flow_facts(DataFlowOutput {
+            nodes: vec![data_flow_node(0, file, 1), data_flow_node(1, file, 2)],
+            edges: vec![DataFlowEdgeFact {
+                id: DataFlowEdgeId(0),
+                from: DataFlowNodeId(0),
+                to: DataFlowNodeId(1),
+                kind: DataFlowEdgeKind::UnknownFlow,
+                algorithm: DataFlowAlgorithm::QuerySearch,
+                status: DataFlowStatus::Unknown,
+                precision: DataFlowPrecision::Unknown,
+                validation: DataFlowValidation::Native,
+                confidence: DataFlowConfidence::Low,
+                provenance: DataFlowProvenance::Query,
+                call_site: None,
+                call_target: None,
+                refined_call: None,
+                model: None,
+                budget: None,
+                evidence: vec!["dynamic_property".to_string()],
+                input_stable_keys: Vec::new(),
+                stable_key: "df:unknown".to_string(),
+            }],
+            models: Vec::new(),
+            budgets: vec![DataFlowBudgetFact {
+                id: DataFlowBudgetId(0),
+                reason: DataFlowBudgetReason::PathDepth,
+                limit: 4,
+                observed: 5,
+                status: DataFlowStatus::BudgetExceeded,
+                stable_key: "df:budget".to_string(),
+            }],
+        })
+        .expect("data-flow facts");
+        db.replace_evidence_facts(EvidenceOutput {
+            unknowns: vec![EvidenceUnknownFact {
+                bundle: None,
+                path: None,
+                slice: None,
+                edge: None,
+                reason: EvidenceUnknownReason::OpaqueSummary,
+                message: "summary expansion omitted".to_string(),
+                source_fact_stable_keys: Vec::new(),
+                stable_key: "ev:unknown".to_string(),
+            }],
+            ..EvidenceOutput::empty()
+        })
+        .expect("evidence facts");
+
+        let rows = public_capability_unknowns(&db, "dataflow");
+        let families = rows
+            .iter()
+            .filter_map(|row| row.family.as_deref())
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(rows.len(), 3);
+        assert!(families.contains("DataFlowEdge"));
+        assert!(families.contains("DataFlowBudget"));
+        assert!(families.contains("EvidenceUnknown"));
+        assert!(rows.iter().all(|row| {
+            row.capability.as_deref() == Some("dataflow") && row.docs_path.as_deref().is_some()
+        }));
     }
 
     #[test]
@@ -855,6 +1227,26 @@ mod tests {
             evidence: vec!["solver_derived_edge".to_string()],
             input_stable_keys: vec!["solver:budget".to_string()],
             stable_key: "refined:budget".to_string(),
+        }
+    }
+
+    fn data_flow_node(id: u64, file: crate::core::FileId, line: u32) -> DataFlowNodeFact {
+        DataFlowNodeFact {
+            id: DataFlowNodeId(id),
+            kind: DataFlowNodeKind::Place,
+            language: Language::TypeScript,
+            file: Some(file),
+            function: None,
+            body: None,
+            operation: None,
+            cfg_node: None,
+            place: None,
+            symbol: None,
+            reference: None,
+            call_site: None,
+            model: None,
+            span: Some(Span::point(file, line, 1)),
+            stable_key: format!("df:node:{id}"),
         }
     }
 

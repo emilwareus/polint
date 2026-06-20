@@ -303,11 +303,11 @@ polint explain --rule local/no-raw-colors --format json
 `facts list` reports stable and reserved fact-view dispositions. `facts sample`
 requires a bounded limit and emits only public fact fields. `inspect unknowns`
 reports the consolidated setup, unsupported, budget, model, and resolution
-queue. `unknowns --cap ...` remains supported for cap-filtered compatibility and
-unsupported rows for surfaces that do not expose cap-filtered unknowns yet, such
-as dataflow. `explain` reports
-macro-derived fact views and capability support; it does not expose provider execution graphs,
-layer-cache internals, or eval/debug schemas.
+queue. `unknowns --cap ...` remains supported for cap-filtered compatibility,
+including preview policy query capabilities such as `events`, `calls`,
+`control_flow`, and `dataflow`; reserved surfaces still return unsupported rows.
+`explain` reports macro-derived fact views and capability support; it does not
+expose provider execution graphs, layer-cache internals, or eval/debug schemas.
 
 ## Writing A Rule
 

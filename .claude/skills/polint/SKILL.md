@@ -113,11 +113,10 @@ polint explain --rule local/no-raw-colors --format json
 
 `facts list` reports stable and reserved fact-view dispositions. `facts sample`
 requires a bounded limit and emits only public fact fields. `unknowns` reports
-public setup/resolution gaps for supported facts and unsupported rows for
-surfaces that do not expose cap-filtered unknowns yet, such as dataflow.
-`explain` reports macro-derived fact
-views and capability support; it does not expose provider execution graphs,
-layer-cache internals, or eval/debug schemas.
+public setup/resolution gaps, preview policy query unknowns, and unsupported
+rows for reserved surfaces. `explain` reports macro-derived fact views and
+capability support; it does not expose provider execution graphs, layer-cache
+internals, or eval/debug schemas.
 
 ## Writing A Rule
 
@@ -232,7 +231,7 @@ allow_files = ["src/theme/**"]
 ## Agent Rules
 
 - Do not add project policies to the polint CLI as built-ins.
-- Treat raw `Cfg<'_>`, raw `CallGraph<'_>`, `Evidence<'_>`, model packs, provider extensions, and `polint eval` as reserved/preview/internal unless public docs and temp-repo tests explicitly promote them. The policy query views `Events<'_>` and `Calls<'_>` are provider-backed for Phase 56 call-event and reachable-call policies; `ControlFlow<'_>` is provider-backed for Phase 57 same-function call-event guard and cleanup policies; `DataFlow<'_>` is provider-backed for Phase 58 bounded source/sink/barrier policies.
+- Treat raw `Cfg<'_>`, raw `CallGraph<'_>`, `Evidence<'_>`, model packs, provider extensions, and `polint eval` as reserved/preview/internal unless public docs and temp-repo tests explicitly promote them. The policy query views `Events<'_>` and `Calls<'_>` are provider-backed for Phase 56 call-event and reachable-call policies; `ControlFlow<'_>` is provider-backed for Phase 57 same-function call-event guard and cleanup policies; `DataFlow<'_>` is provider-backed for Phase 58 bounded source/sink/barrier policies. Policy diagnostics include `policy_query`, `policy_query_version`, `query_digest`, `policy_status`, and `policy_precision` evidence.
 - Document only stable, supported CLI workflows; keep debug helpers, exploratory analysis surfaces, and future/TBD behavior out of generated skills until they are intentionally promoted.
 - Keep rules small and specific to the repository convention they enforce.
 - State when a rule is heuristic, especially for test evidence or branch coverage.

@@ -6,7 +6,31 @@
 //! preview scopes; unsupported patterns return no policy matches rather than
 //! exposing internal graph APIs.
 
+use crate::cache::stable_hash;
 use crate::diagnostics::{Diagnostic, TextRange};
+
+pub(crate) const POLICY_QUERY_VERSION: &str = "policy-query-preview-v1";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PolicyOperation {
+    EventsMatching,
+    CallsForbiddenReachable,
+    ControlFlowMissingGuard,
+    ControlFlowMissingCleanup,
+    DataFlowForbidden,
+}
+
+impl PolicyOperation {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::EventsMatching => "events.matching",
+            Self::CallsForbiddenReachable => "calls.forbidden_reachable",
+            Self::ControlFlowMissingGuard => "control_flow.missing_guard",
+            Self::ControlFlowMissingCleanup => "control_flow.missing_cleanup",
+            Self::DataFlowForbidden => "data_flow.forbidden",
+        }
+    }
+}
 
 /// Result status for a policy-query match.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +78,8 @@ pub enum PolicyConfidence {
 /// Preview violation returned by policy-query views.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PolicyViolation {
+    query: PolicyOperation,
+    query_digest: String,
     file: String,
     range: TextRange,
     status: PolicyStatus,
@@ -63,6 +89,8 @@ pub struct PolicyViolation {
 
 impl PolicyViolation {
     pub(crate) fn new(
+        query: PolicyOperation,
+        query_digest: impl Into<String>,
         file: impl Into<String>,
         range: TextRange,
         status: PolicyStatus,
@@ -70,6 +98,8 @@ impl PolicyViolation {
         evidence: Vec<(String, String)>,
     ) -> Self {
         Self {
+            query,
+            query_digest: query_digest.into(),
             file: file.into(),
             range,
             status,
@@ -86,6 +116,29 @@ impl PolicyViolation {
         self.evidence.push((label.into(), value.into()));
     }
 
+    pub(crate) fn stable_key(&self) -> String {
+        let mut parts = vec![
+            format!("query={}", encode_str(self.query.label())),
+            format!("query_digest={}", encode_str(&self.query_digest)),
+            format!("file={}", encode_str(&self.file)),
+            format!("start_line={}", self.range.start_line),
+            format!("start_col={}", self.range.start_col),
+            format!("end_line={}", self.range.end_line),
+            format!("end_col={}", self.range.end_col),
+            format!("status={}", policy_status_label(self.status)),
+            format!("precision={}", policy_precision_label(self.precision)),
+        ];
+        for (label, value) in &self.evidence {
+            parts.push(format!(
+                "evidence:{}={}",
+                encode_str(label),
+                encode_str(value)
+            ));
+        }
+        let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
+        stable_hash(&refs)
+    }
+
     /// Returns the result status.
     pub fn status(&self) -> PolicyStatus {
         self.status
@@ -100,6 +153,9 @@ impl PolicyViolation {
     pub fn diagnostic(&self, rule_id: &str, message: impl Into<String>) -> Diagnostic {
         let mut diagnostic =
             Diagnostic::error(rule_id.to_string(), self.file.clone(), self.range, message)
+                .with_evidence("policy_query", self.query.label())
+                .with_evidence("policy_query_version", POLICY_QUERY_VERSION)
+                .with_evidence("query_digest", self.query_digest.clone())
                 .with_evidence("policy_status", policy_status_label(self.status))
                 .with_evidence("policy_precision", policy_precision_label(self.precision));
         for (label, value) in &self.evidence {
@@ -141,6 +197,25 @@ impl ReachQuery {
             minimum_confidence: PolicyConfidence::Low,
         }
     }
+
+    pub(crate) fn query_digest(&self) -> String {
+        policy_query_digest([
+            encode_str(PolicyOperation::CallsForbiddenReachable.label()),
+            encode_event_pattern("target", &self.target),
+            encode_event_pattern_list("roots", &self.roots),
+            format!("include_tests={}", self.include_tests),
+            format!("max_depth={}", self.max_depth),
+            format!("max_paths={}", self.max_paths),
+            format!(
+                "minimum_precision={}",
+                policy_precision_label(self.minimum_precision)
+            ),
+            format!(
+                "minimum_confidence={}",
+                policy_confidence_label(self.minimum_confidence)
+            ),
+        ])
+    }
 }
 
 /// Query for missing guard policies.
@@ -168,6 +243,20 @@ impl GuardQuery {
             max_paths: 20,
             minimum_precision: PolicyPrecision::Conservative,
         }
+    }
+
+    pub(crate) fn query_digest(&self) -> String {
+        policy_query_digest([
+            encode_str(PolicyOperation::ControlFlowMissingGuard.label()),
+            encode_event_pattern("event", &self.event),
+            encode_guard_pattern("guard", &self.guard),
+            format!("max_depth={}", self.max_depth),
+            format!("max_paths={}", self.max_paths),
+            format!(
+                "minimum_precision={}",
+                policy_precision_label(self.minimum_precision)
+            ),
+        ])
     }
 }
 
@@ -200,6 +289,21 @@ impl LifecycleQuery {
             minimum_precision: PolicyPrecision::Conservative,
         }
     }
+
+    pub(crate) fn query_digest(&self) -> String {
+        policy_query_digest([
+            encode_str(PolicyOperation::ControlFlowMissingCleanup.label()),
+            encode_event_pattern("start", &self.start),
+            encode_event_pattern("cleanup", &self.cleanup),
+            format!("require_error_cleanup={}", self.require_error_cleanup),
+            format!("max_depth={}", self.max_depth),
+            format!("max_paths={}", self.max_paths),
+            format!(
+                "minimum_precision={}",
+                policy_precision_label(self.minimum_precision)
+            ),
+        ])
+    }
 }
 
 /// Query for source-to-sink data-flow policies.
@@ -230,6 +334,21 @@ impl FlowQuery {
             max_paths: 20,
             minimum_precision: PolicyPrecision::Conservative,
         }
+    }
+
+    pub(crate) fn query_digest(&self) -> String {
+        policy_query_digest([
+            encode_str(PolicyOperation::DataFlowForbidden.label()),
+            encode_source_pattern("source", &self.source),
+            encode_sink_pattern("sink", &self.sink),
+            encode_barrier_pattern("barriers", &self.barriers),
+            format!("max_depth={}", self.max_depth),
+            format!("max_paths={}", self.max_paths),
+            format!(
+                "minimum_precision={}",
+                policy_precision_label(self.minimum_precision)
+            ),
+        ])
     }
 }
 
@@ -263,6 +382,13 @@ impl EventPattern {
 
     pub(crate) fn values(&self) -> &[String] {
         &self.values
+    }
+
+    pub(crate) fn query_digest(&self) -> String {
+        policy_query_digest([
+            encode_str(PolicyOperation::EventsMatching.label()),
+            encode_event_pattern("event", self),
+        ])
     }
 }
 
@@ -439,6 +565,115 @@ where
     values.into_iter().map(Into::into).collect()
 }
 
+fn policy_query_digest<const N: usize>(parts: [String; N]) -> String {
+    let mut all_parts = vec![format!("version={}", encode_str(POLICY_QUERY_VERSION))];
+    all_parts.extend(parts);
+    let refs = all_parts.iter().map(String::as_str).collect::<Vec<_>>();
+    stable_hash(&refs)
+}
+
+fn encode_event_pattern(label: &str, pattern: &EventPattern) -> String {
+    format!(
+        "{}=kind:{};values:{}",
+        encode_str(label),
+        event_pattern_kind_label(pattern.kind),
+        encode_string_set(&pattern.values)
+    )
+}
+
+fn encode_event_pattern_list(label: &str, patterns: &[EventPattern]) -> String {
+    let mut encoded = patterns
+        .iter()
+        .map(|pattern| encode_event_pattern("pattern", pattern))
+        .collect::<Vec<_>>();
+    encoded.sort();
+    format!("{}=[{}]", encode_str(label), encoded.join("|"))
+}
+
+fn encode_source_pattern(label: &str, pattern: &SourcePattern) -> String {
+    format!(
+        "{}=kind:{};values:{}",
+        encode_str(label),
+        source_pattern_kind_label(pattern.kind),
+        encode_string_set(&pattern.values)
+    )
+}
+
+fn encode_sink_pattern(label: &str, pattern: &SinkPattern) -> String {
+    format!(
+        "{}=kind:{};values:{}",
+        encode_str(label),
+        sink_pattern_kind_label(pattern.kind),
+        encode_string_set(&pattern.values)
+    )
+}
+
+fn encode_guard_pattern(label: &str, pattern: &GuardPattern) -> String {
+    format!(
+        "{}=kind:{};values:{}",
+        encode_str(label),
+        guard_pattern_kind_label(pattern.kind),
+        encode_string_set(&pattern.values)
+    )
+}
+
+fn encode_barrier_pattern(label: &str, pattern: &BarrierPattern) -> String {
+    format!(
+        "{}=kind:{};values:{}",
+        encode_str(label),
+        barrier_pattern_kind_label(pattern.kind),
+        encode_string_set(&pattern.values)
+    )
+}
+
+fn encode_string_set(values: &[String]) -> String {
+    let mut values = values
+        .iter()
+        .map(|value| encode_str(value))
+        .collect::<Vec<_>>();
+    values.sort();
+    values.dedup();
+    values.join(",")
+}
+
+fn encode_str(value: &str) -> String {
+    format!("{}:{value}", value.len())
+}
+
+fn event_pattern_kind_label(kind: EventPatternKind) -> &'static str {
+    match kind {
+        EventPatternKind::Call => "call",
+        EventPatternKind::WriteField => "write_field",
+    }
+}
+
+fn source_pattern_kind_label(kind: SourcePatternKind) -> &'static str {
+    match kind {
+        SourcePatternKind::HttpRequest => "http_request",
+        SourcePatternKind::SecretLike => "secret_like",
+    }
+}
+
+fn sink_pattern_kind_label(kind: SinkPatternKind) -> &'static str {
+    match kind {
+        SinkPatternKind::Call => "call",
+        SinkPatternKind::Logger => "logger",
+    }
+}
+
+fn guard_pattern_kind_label(kind: GuardPatternKind) -> &'static str {
+    match kind {
+        GuardPatternKind::CallAny => "call_any",
+    }
+}
+
+fn barrier_pattern_kind_label(kind: BarrierPatternKind) -> &'static str {
+    match kind {
+        BarrierPatternKind::None => "none",
+        BarrierPatternKind::CallAny => "call_any",
+    }
+}
+
 fn policy_status_label(status: PolicyStatus) -> &'static str {
     match status {
         PolicyStatus::Exact => "exact",
@@ -457,5 +692,44 @@ fn policy_precision_label(precision: PolicyPrecision) -> &'static str {
         PolicyPrecision::Conservative => "conservative",
         PolicyPrecision::Heuristic => "heuristic",
         PolicyPrecision::Unknown => "unknown",
+    }
+}
+
+fn policy_confidence_label(confidence: PolicyConfidence) -> &'static str {
+    match confidence {
+        PolicyConfidence::High => "high",
+        PolicyConfidence::Medium => "medium",
+        PolicyConfidence::Low => "low",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn policy_query_digest_is_stable_for_same_query() {
+        let mut left = FlowQuery::new(
+            SourcePattern::secret_like(["token", "password"]),
+            SinkPattern::logger(),
+        );
+        left.barriers = BarrierPattern::call_any(["redact", "mask_secret"]);
+
+        let mut right = FlowQuery::new(
+            SourcePattern::secret_like(["password", "token"]),
+            SinkPattern::logger(),
+        );
+        right.barriers = BarrierPattern::call_any(["mask_secret", "redact"]);
+
+        assert_eq!(left.query_digest(), right.query_digest());
+    }
+
+    #[test]
+    fn policy_query_digest_changes_when_options_change() {
+        let baseline = ReachQuery::new(EventPattern::call("dangerous"));
+        let mut changed = baseline.clone();
+        changed.max_depth += 1;
+
+        assert_ne!(baseline.query_digest(), changed.query_digest());
     }
 }

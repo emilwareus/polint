@@ -14,35 +14,51 @@ use crate::analysis::refined_calls::facts::{RefinedCallConfidence, RefinedCallEd
 use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId};
 use crate::sdk::policy::{
     BarrierPattern, BarrierPatternKind, EventPattern, EventPatternKind, FlowQuery, GuardPattern,
-    GuardPatternKind, GuardQuery, LifecycleQuery, PolicyConfidence, PolicyPrecision, PolicyStatus,
-    PolicyViolation, ReachQuery, SinkPattern, SinkPatternKind, SourcePattern, SourcePatternKind,
+    GuardPatternKind, GuardQuery, LifecycleQuery, PolicyConfidence, PolicyOperation,
+    PolicyPrecision, PolicyStatus, PolicyViolation, ReachQuery, SinkPattern, SinkPatternKind,
+    SourcePattern, SourcePatternKind,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 pub(crate) fn matching_events(db: &AnalysisDb, query: EventPattern) -> Vec<PolicyViolation> {
-    match query.kind() {
-        EventPatternKind::Call => matching_call_events(db, &query),
+    let query_digest = query.query_digest();
+    normalize_policy_results(match query.kind() {
+        EventPatternKind::Call => matching_call_events(db, &query, &query_digest),
         EventPatternKind::WriteField => Vec::new(),
-    }
+    })
 }
 
 pub(crate) fn forbidden_reachable(db: &AnalysisDb, query: ReachQuery) -> Vec<PolicyViolation> {
-    forbidden_reachable_calls(db, &query)
+    let query_digest = query.query_digest();
+    normalize_policy_results(forbidden_reachable_calls(db, &query, &query_digest))
 }
 
 pub(crate) fn missing_guards(db: &AnalysisDb, query: GuardQuery) -> Vec<PolicyViolation> {
-    missing_guard_calls(db, &query)
+    let query_digest = query.query_digest();
+    normalize_policy_results(missing_guard_calls(db, &query, &query_digest))
 }
 
 pub(crate) fn missing_cleanup(db: &AnalysisDb, query: LifecycleQuery) -> Vec<PolicyViolation> {
-    missing_cleanup_calls(db, &query)
+    let query_digest = query.query_digest();
+    normalize_policy_results(missing_cleanup_calls(db, &query, &query_digest))
 }
 
 pub(crate) fn forbidden_flows(db: &AnalysisDb, query: FlowQuery) -> Vec<PolicyViolation> {
-    forbidden_data_flows(db, &query)
+    let query_digest = query.query_digest();
+    normalize_policy_results(forbidden_data_flows(db, &query, &query_digest))
 }
 
-fn forbidden_data_flows(db: &AnalysisDb, query: &FlowQuery) -> Vec<PolicyViolation> {
+fn normalize_policy_results(mut results: Vec<PolicyViolation>) -> Vec<PolicyViolation> {
+    results.sort_by_key(PolicyViolation::stable_key);
+    results.dedup_by(|left, right| left.stable_key() == right.stable_key());
+    results
+}
+
+fn forbidden_data_flows(
+    db: &AnalysisDb,
+    query: &FlowQuery,
+    query_digest: &str,
+) -> Vec<PolicyViolation> {
     let Some(store) = db.data_flow_store() else {
         return Vec::new();
     };
@@ -78,13 +94,29 @@ fn forbidden_data_flows(db: &AnalysisDb, query: &FlowQuery) -> Vec<PolicyViolati
                         }
                         let key = flow_result_key(source, sink, &path);
                         if emitted.insert(key) {
-                            results.push(flow_violation(db, store, source, sink, &path, query));
+                            results.push(flow_violation(
+                                db,
+                                store,
+                                source,
+                                sink,
+                                &path,
+                                query,
+                                query_digest,
+                            ));
                         }
                     }
                     DataFlowPathStatus::Unknown | DataFlowPathStatus::BudgetExceeded => {
                         let key = flow_result_key(source, sink, &path);
                         if emitted.insert(key) {
-                            results.push(flow_violation(db, store, source, sink, &path, query));
+                            results.push(flow_violation(
+                                db,
+                                store,
+                                source,
+                                sink,
+                                &path,
+                                query,
+                                query_digest,
+                            ));
                         }
                     }
                     DataFlowPathStatus::NotFound => {}
@@ -96,7 +128,11 @@ fn forbidden_data_flows(db: &AnalysisDb, query: &FlowQuery) -> Vec<PolicyViolati
     results
 }
 
-fn matching_call_events(db: &AnalysisDb, pattern: &EventPattern) -> Vec<PolicyViolation> {
+fn matching_call_events(
+    db: &AnalysisDb,
+    pattern: &EventPattern,
+    query_digest: &str,
+) -> Vec<PolicyViolation> {
     let site_by_id = call_sites_by_id(db);
     if !db.refined_call_edges().is_empty() {
         return db
@@ -108,6 +144,8 @@ fn matching_call_events(db: &AnalysisDb, pattern: &EventPattern) -> Vec<PolicyVi
                         db,
                         edge,
                         &site_by_id,
+                        PolicyOperation::EventsMatching,
+                        query_digest,
                         vec![
                             ("event", "call".to_string()),
                             ("target", best_call_target_label(db, edge, &site_by_id)),
@@ -125,6 +163,8 @@ fn matching_call_events(db: &AnalysisDb, pattern: &EventPattern) -> Vec<PolicyVi
         .filter_map(|site| {
             if call_pattern_matches_site(pattern, site) {
                 Some(PolicyViolation::new(
+                    PolicyOperation::EventsMatching,
+                    query_digest,
                     db.path_for(site.file),
                     site.span.diagnostic_range(),
                     policy_status_from_call_status(site.status),
@@ -141,7 +181,11 @@ fn matching_call_events(db: &AnalysisDb, pattern: &EventPattern) -> Vec<PolicyVi
         .collect()
 }
 
-fn forbidden_reachable_calls(db: &AnalysisDb, query: &ReachQuery) -> Vec<PolicyViolation> {
+fn forbidden_reachable_calls(
+    db: &AnalysisDb,
+    query: &ReachQuery,
+    query_digest: &str,
+) -> Vec<PolicyViolation> {
     if query.max_depth == 0 || query.max_paths == 0 {
         return Vec::new();
     }
@@ -188,6 +232,8 @@ fn forbidden_reachable_calls(db: &AnalysisDb, query: &ReachQuery) -> Vec<PolicyV
                         db,
                         edge,
                         &site_by_id,
+                        PolicyOperation::CallsForbiddenReachable,
+                        query_digest,
                         vec![
                             ("root", root_label.clone()),
                             ("path", path.join(" -> ")),
@@ -218,7 +264,11 @@ fn forbidden_reachable_calls(db: &AnalysisDb, query: &ReachQuery) -> Vec<PolicyV
     results
 }
 
-fn missing_guard_calls(db: &AnalysisDb, query: &GuardQuery) -> Vec<PolicyViolation> {
+fn missing_guard_calls(
+    db: &AnalysisDb,
+    query: &GuardQuery,
+    query_digest: &str,
+) -> Vec<PolicyViolation> {
     if query.max_depth == 0
         || query.max_paths == 0
         || query.event.kind() != EventPatternKind::Call
@@ -250,6 +300,8 @@ fn missing_guard_calls(db: &AnalysisDb, query: &GuardQuery) -> Vec<PolicyViolati
             results.push(control_violation(
                 db,
                 event,
+                PolicyOperation::ControlFlowMissingGuard,
+                query_digest,
                 vec![
                     ("policy", "missing_guard".to_string()),
                     ("required_guard", query.guard.values().join(",")),
@@ -267,7 +319,11 @@ fn missing_guard_calls(db: &AnalysisDb, query: &GuardQuery) -> Vec<PolicyViolati
     results
 }
 
-fn missing_cleanup_calls(db: &AnalysisDb, query: &LifecycleQuery) -> Vec<PolicyViolation> {
+fn missing_cleanup_calls(
+    db: &AnalysisDb,
+    query: &LifecycleQuery,
+    query_digest: &str,
+) -> Vec<PolicyViolation> {
     if query.max_depth == 0
         || query.max_paths == 0
         || query.start.kind() != EventPatternKind::Call
@@ -299,6 +355,8 @@ fn missing_cleanup_calls(db: &AnalysisDb, query: &LifecycleQuery) -> Vec<PolicyV
             results.push(control_violation(
                 db,
                 event,
+                PolicyOperation::ControlFlowMissingCleanup,
+                query_digest,
                 vec![
                     ("policy", "missing_cleanup".to_string()),
                     ("required_cleanup", query.cleanup.values().join(",")),
@@ -573,6 +631,7 @@ fn flow_violation(
     sink: &FlowSink,
     path: &DataFlowPath,
     query: &FlowQuery,
+    query_digest: &str,
 ) -> PolicyViolation {
     let (status, precision) = match path.status {
         DataFlowPathStatus::Found => {
@@ -643,7 +702,15 @@ fn flow_violation(
         ));
     }
 
-    PolicyViolation::new(sink.file.clone(), sink.range, status, precision, evidence)
+    PolicyViolation::new(
+        PolicyOperation::DataFlowForbidden,
+        query_digest,
+        sink.file.clone(),
+        sink.range,
+        status,
+        precision,
+        evidence,
+    )
 }
 
 fn flow_result_key(source: &FlowSource, sink: &FlowSink, path: &DataFlowPath) -> String {
@@ -1106,6 +1173,8 @@ fn guard_matches_event(event: &ControlCallEvent, guard: &GuardPattern) -> bool {
 fn control_violation(
     db: &AnalysisDb,
     event: &ControlCallEvent,
+    query: PolicyOperation,
+    query_digest: &str,
     mut evidence: Vec<(&'static str, String)>,
 ) -> PolicyViolation {
     evidence.extend([
@@ -1130,6 +1199,8 @@ fn control_violation(
     }
 
     PolicyViolation::new(
+        query,
+        query_digest,
         event.file.clone(),
         event.range,
         PolicyStatus::Heuristic,
@@ -1332,6 +1403,8 @@ fn violation_for_edge(
     db: &AnalysisDb,
     edge: &RefinedCallEdgeFact,
     site_by_id: &BTreeMap<CallSiteId, &CallSiteFact>,
+    query: PolicyOperation,
+    query_digest: &str,
     mut evidence: Vec<(&'static str, String)>,
 ) -> PolicyViolation {
     let (file, range) = site_by_id.get(&edge.site).map_or_else(
@@ -1355,6 +1428,8 @@ fn violation_for_edge(
         evidence.push(("unknown_reason", format!("{reason:?}")));
     }
     PolicyViolation::new(
+        query,
+        query_digest,
         file,
         range,
         policy_status_from_call_status(edge.status),
@@ -1814,6 +1889,124 @@ mod tests {
             )
             .is_empty()
         );
+    }
+
+    #[test]
+    fn policy_query_diagnostics_include_normalized_header() {
+        let db = policy_query_db(false);
+
+        let event_query = EventPattern::call("dangerous");
+        let event_digest = event_query.query_digest();
+        let event = matching_events(&db, event_query)
+            .pop()
+            .expect("event violation")
+            .diagnostic("local/test", "event");
+        assert_policy_header(&event, "events.matching", &event_digest);
+
+        let mut reach_query = ReachQuery::new(EventPattern::call("dangerous"));
+        reach_query.roots = vec![EventPattern::call("main")];
+        let reach_digest = reach_query.query_digest();
+        let reach = forbidden_reachable(&db, reach_query)
+            .pop()
+            .expect("reach violation")
+            .diagnostic("local/test", "reach");
+        assert_policy_header(&reach, "calls.forbidden_reachable", &reach_digest);
+
+        let control_db = policy_query_db_with_call_sequence(&["dangerous"]);
+        let guard_query = GuardQuery::new(
+            EventPattern::call("dangerous"),
+            GuardPattern::call_any(["authorize"]),
+        );
+        let guard_digest = guard_query.query_digest();
+        let guard = missing_guards(&control_db, guard_query)
+            .pop()
+            .expect("guard violation")
+            .diagnostic("local/test", "guard");
+        assert_policy_header(&guard, "control_flow.missing_guard", &guard_digest);
+
+        let lifecycle_db = policy_query_db_with_call_sequence(&["Begin"]);
+        let lifecycle_query =
+            LifecycleQuery::new(EventPattern::call("Begin"), EventPattern::call("Rollback"));
+        let lifecycle_digest = lifecycle_query.query_digest();
+        let lifecycle = missing_cleanup(&lifecycle_db, lifecycle_query)
+            .pop()
+            .expect("lifecycle violation")
+            .diagnostic("local/test", "lifecycle");
+        assert_policy_header(
+            &lifecycle,
+            "control_flow.missing_cleanup",
+            &lifecycle_digest,
+        );
+
+        let flow_db = data_flow_policy_db(vec![data_flow_edge(
+            0,
+            0,
+            1,
+            DataFlowEdgeKind::SourceIntroduction,
+            DataFlowStatus::Present,
+            Vec::new(),
+        )]);
+        let flow_query = FlowQuery::new(
+            SourcePattern::http_request(),
+            SinkPattern::call("dangerous"),
+        );
+        let flow_digest = flow_query.query_digest();
+        let flow = forbidden_flows(&flow_db, flow_query)
+            .pop()
+            .expect("flow violation")
+            .diagnostic("local/test", "flow");
+        assert_policy_header(&flow, "data_flow.forbidden", &flow_digest);
+    }
+
+    #[test]
+    fn policy_query_results_are_sorted_and_repeatable() {
+        let db = policy_query_db_with_two_matching_targets();
+        let query = ReachQuery::new(EventPattern::call("dangerous"));
+
+        let first = forbidden_reachable(&db, query.clone())
+            .into_iter()
+            .map(|violation| violation.stable_key())
+            .collect::<Vec<_>>();
+        let second = forbidden_reachable(&db, query)
+            .into_iter()
+            .map(|violation| violation.stable_key())
+            .collect::<Vec<_>>();
+        let mut sorted = first.clone();
+        sorted.sort();
+
+        assert_eq!(first, second);
+        assert_eq!(first, sorted);
+    }
+
+    fn assert_policy_header(
+        diagnostic: &crate::diagnostics::Diagnostic,
+        query: &str,
+        digest: &str,
+    ) {
+        assert!(
+            diagnostic
+                .evidence
+                .iter()
+                .any(|evidence| { evidence.label == "policy_query" && evidence.value == query })
+        );
+        assert!(diagnostic.evidence.iter().any(|evidence| {
+            evidence.label == "policy_query_version"
+                && evidence.value == crate::sdk::policy::POLICY_QUERY_VERSION
+        }));
+        assert!(
+            diagnostic
+                .evidence
+                .iter()
+                .any(|evidence| { evidence.label == "query_digest" && evidence.value == digest })
+        );
+        assert!(
+            diagnostic.evidence.iter().any(|evidence| {
+                evidence.label == "policy_status" && !evidence.value.is_empty()
+            })
+        );
+        assert!(diagnostic.evidence.iter().any(|evidence| {
+            evidence.label == "policy_precision" && !evidence.value.is_empty()
+        }));
     }
 
     fn policy_query_db(test_root: bool) -> AnalysisDb {

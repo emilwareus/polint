@@ -26,8 +26,10 @@ pub(crate) fn no_raw_dangerous_call(ctx: &mut RuleCtx<'_>, events: Events<'_>) -
 - `EventPattern::write_field("field")` is preview vocabulary. It currently
   returns no provider-backed matches until write-event facts are promoted.
 
-Results are returned as `PolicyViolation`s with diagnostic status, precision,
-and evidence. They do not expose raw AST, MIR, CFG, solver, call-graph node, or
+Results are returned as `PolicyViolation`s with the common policy evidence
+header documented in [evidence.md](evidence.md), plus event-specific keys such
+as `event`, `target`, `call_status`, `call_precision`, and `confidence` when
+available. They do not expose raw AST, MIR, CFG, solver, call-graph node, or
 provider IDs.
 
 Matching intentionally starts with exact strings and explicit lists. It does not

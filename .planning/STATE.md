@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.4
 milestone_name: Policy Query Surface
 status: executing
-last_updated: "2026-06-20T16:52:53.722Z"
-last_activity: 2026-06-20 -- Phase 59 plans created; execution starting
+last_updated: "2026-06-20T17:22:45.443Z"
+last_activity: 2026-06-20 -- Phase 59 complete; Phase 60 is next
 progress:
   total_phases: 8
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 15
-  completed_plans: 12
-  percent: 50
+  completed_plans: 15
+  percent: 63
 ---
 
 # State: polint
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-06-20)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 59 Violation Evidence, Unknowns, and Cache Semantics
+**Current focus:** Phase 60 Flagship Rule Templates and Agent Ergonomics
 
 ## Current Status
 
@@ -41,10 +41,10 @@ See: `.planning/PROJECT.md` (updated 2026-06-20)
 
 ## Current Position
 
-Phase: 59 - Violation Evidence, Unknowns, and Cache Semantics
-Plan: 59-01
-Status: In Progress
-Last activity: 2026-06-20 -- Phase 59 plans created; execution starting
+Phase: 60 - Flagship Rule Templates and Agent Ergonomics
+Plan: Not planned yet
+Status: Planned
+Last activity: 2026-06-20 -- Phase 59 complete; Phase 60 is next
 
 ### Active Milestone Phase Progress
 
@@ -54,7 +54,7 @@ Last activity: 2026-06-20 -- Phase 59 plans created; execution starting
 | 56 | Complete | Events and calls query surface complete; call-event matching and reachable-call policies are provider-backed, with non-call events/package scopes deferred honestly |
 | 57 | Complete | Control-flow guard and lifecycle queries complete for same-function call-event guard and cleanup policies; write events, exact exit proof, and bounded interprocedural search deferred honestly |
 | 58 | Complete | Data-flow forbidden-flow queries complete for HTTP request trust-boundary sources, secret-like names, exact call sinks, logger sinks, call barriers, unknown/budget evidence, and external rule validation |
-| 59 | In Progress | Plans created for normalized policy evidence, cap-filtered policy unknowns, cache semantics, determinism, docs, and closeout |
+| 59 | Complete | Normalized policy evidence header, query digests, deterministic sorting/deduplication, cap-filtered policy unknowns, cache-version digest inputs, docs, skills, and verification complete |
 | 60 | Planned | Flagship rule templates and agent ergonomics |
 | 61 | Planned | Public docs and external SDK validation |
 | 62 | Planned | Promotion gate, boundary proof, and closeout |

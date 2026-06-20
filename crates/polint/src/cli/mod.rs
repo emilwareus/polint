@@ -1233,7 +1233,7 @@ fn unknowns(root: PathBuf, args: &UnknownsArgs) -> Result<u8> {
     let support = public_fact_view(&args.capability);
     if support
         .as_ref()
-        .is_none_or(|view| view.stability != "stable" || !view.unknowns)
+        .is_none_or(|view| !view_supports_unknowns(view))
     {
         let row = crate::analysis::unknown_taxonomy::collect::unsupported_capability_row(
             &args.capability,
@@ -1282,7 +1282,7 @@ fn inspect_unknowns(root: PathBuf, args: &InspectUnknownsArgs) -> Result<u8> {
         let support = public_fact_view(capability);
         if support
             .as_ref()
-            .is_none_or(|view| view.stability != "stable" || !view.unknowns)
+            .is_none_or(|view| !view_supports_unknowns(view))
         {
             let row = crate::analysis::unknown_taxonomy::collect::unsupported_capability_row(
                 capability,
@@ -1329,6 +1329,10 @@ fn inspect_unknowns(root: PathBuf, args: &InspectUnknownsArgs) -> Result<u8> {
     };
     println!("{}", serde_json::to_string_pretty(&report)?);
     Ok(0)
+}
+
+fn view_supports_unknowns(view: &PublicFactView) -> bool {
+    view.unknowns && matches!(view.stability, "stable" | "preview")
 }
 
 fn explain(root: PathBuf, args: &ExplainArgs) -> Result<u8> {
@@ -1826,7 +1830,7 @@ fn public_fact_view(capability: &str) -> Option<PublicFactView> {
             stability: "preview",
             docs_path: "docs/facts/events.md",
             sampling: false,
-            unknowns: false,
+            unknowns: true,
         },
         "calls" => PublicFactView {
             capability: "calls",
@@ -1835,7 +1839,7 @@ fn public_fact_view(capability: &str) -> Option<PublicFactView> {
             stability: "preview",
             docs_path: "docs/facts/calls.md",
             sampling: false,
-            unknowns: false,
+            unknowns: true,
         },
         "control_flow" => PublicFactView {
             capability: "control_flow",
@@ -1844,7 +1848,7 @@ fn public_fact_view(capability: &str) -> Option<PublicFactView> {
             stability: "preview",
             docs_path: "docs/facts/control-flow.md",
             sampling: false,
-            unknowns: false,
+            unknowns: true,
         },
         "call_graph" => PublicFactView {
             capability: "call_graph",
@@ -1862,7 +1866,7 @@ fn public_fact_view(capability: &str) -> Option<PublicFactView> {
             stability: "preview",
             docs_path: "docs/facts/data-flow.md",
             sampling: false,
-            unknowns: false,
+            unknowns: true,
         },
         "coverage_facts" => PublicFactView {
             capability: "coverage_facts",

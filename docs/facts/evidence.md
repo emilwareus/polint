@@ -21,3 +21,31 @@ The renderer is conservative:
 
 Future public evidence fact views should be added only through the SDK contract
 with documented limits and heuristic behavior.
+
+## Policy Query Evidence
+
+Preview policy query views return `PolicyViolation` values. When a rule reports
+one through `violation.diagnostic(ctx.rule_id(), "...")`, polint emits a stable
+scalar evidence header:
+
+- `policy_query`: one of `events.matching`, `calls.forbidden_reachable`,
+  `control_flow.missing_guard`, `control_flow.missing_cleanup`, or
+  `data_flow.forbidden`.
+- `policy_query_version`: the preview policy-query evidence/cache version.
+- `query_digest`: a deterministic digest of the query object, including
+  patterns, option fields, and the policy-query version.
+- `policy_status`: `exact`, `heuristic`, `unknown`, `unsupported`, or
+  `budget_exceeded`.
+- `policy_precision`: `exact`, `setup_aware`, `syntax`, `conservative`,
+  `heuristic`, or `unknown`.
+
+Each query family also emits flat query-specific evidence. For example,
+reachable-call policies include `root`, `target`, and `path`; control-flow
+policies include `required_guard` or `required_cleanup`; data-flow policies
+include `source`, `sink`, `path_status`, and `barrier_status`.
+
+Provider facts are cached by lifecycle/config/model inputs. Policy query
+results are evaluated inside rule execution, so runtime query parameters are
+not analysis fact-cache keys today. The `query_digest` evidence is the stable
+identity for query-result semantics and is the key material a future
+query-result cache should use.

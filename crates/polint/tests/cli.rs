@@ -126,18 +126,21 @@ fn facts_list_json_is_stable_and_public_only() {
             && view["sampling"] == true
             && view["unknowns"] == false
     }));
-    let stability_for = |capability: &str| {
+    let view_for = |capability: &str| {
         views
             .iter()
             .find(|view| view["capability"] == capability)
             .unwrap_or_else(|| panic!("missing facts list view for {capability}: {views:#?}"))
-            ["stability"]
+    };
+    let stability_for = |capability: &str| {
+        view_for(capability)["stability"]
             .as_str()
             .unwrap_or_else(|| panic!("missing stability for {capability}: {views:#?}"))
             .to_string()
     };
     for capability in ["events", "calls", "control_flow", "dataflow"] {
         assert_eq!(stability_for(capability), "preview");
+        assert_eq!(view_for(capability)["unknowns"], true);
     }
     for capability in ["cfg", "call_graph"] {
         assert_eq!(stability_for(capability), "reserved");
@@ -258,20 +261,18 @@ exclude = []
         "{unsupported_stable}"
     );
 
-    let unsupported = output_string(
+    let dataflow = stdout_json(
         polint_cmd()
             .current_dir(temp.path())
             .args(["unknowns", "--cap", "dataflow", "--format", "json"])
             .assert()
-            .code(2),
+            .success(),
     );
-    assert!(
-        unsupported.contains("\"status\": \"unsupported\""),
-        "{unsupported}"
-    );
-    assert!(
-        unsupported.contains("docs/facts/data-flow.md"),
-        "{unsupported}"
+    assert_eq!(dataflow["capability"], "dataflow");
+    assert_eq!(
+        dataflow["rows"].as_array().map(Vec::len),
+        Some(0),
+        "{dataflow:#?}"
     );
 }
 
@@ -323,20 +324,21 @@ exclude = []
     assert_eq!(filtered["capability"], "resolved_imports");
     assert_eq!(filtered["rows"][0]["category"], "missing_fact");
 
-    let unsupported = output_string(
+    let dataflow = stdout_json(
         polint_cmd()
             .current_dir(temp.path())
             .args([
                 "inspect", "unknowns", "--cap", "dataflow", "--format", "json",
             ])
             .assert()
-            .code(2),
+            .success(),
     );
-    assert!(unsupported.contains("\"category\": \"unsupported_semantic\""));
-    assert!(unsupported.contains("docs/facts/data-flow.md"));
-    assert!(!unsupported.contains("polint.solver"));
-    assert!(!unsupported.contains("RefinedCallEdge"));
-    assert!(!unsupported.contains("source_stable_key"));
+    assert_eq!(dataflow["capability"], "dataflow");
+    assert_eq!(
+        dataflow["rows"].as_array().map(Vec::len),
+        Some(0),
+        "{dataflow:#?}"
+    );
 }
 
 #[test]
