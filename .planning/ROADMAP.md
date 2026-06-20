@@ -19,7 +19,7 @@ Phase numbering continues from v1.3's last phase 54. v1.4 promotes a narrow poli
 
 ## Phases (v1.4)
 
-- [ ] **Phase 55: SDK Query Vocabulary and Preview Contract** - Define preview views, query structs, pattern structs, capability derivation, and the "one public way" API contract.
+- [x] **Phase 55: SDK Query Vocabulary and Preview Contract** - Define preview views, query structs, pattern structs, capability derivation, and the "one public way" API contract. Completed 2026-06-20.
 - [ ] **Phase 56: Events and Calls Query Surface** - Implement `Events<'_>` and `Calls<'_>` policy queries over v1.3 refined calls, reachability roots, and unknown taxonomy.
 - [ ] **Phase 57: Control-Flow Guard and Lifecycle Queries** - Implement `ControlFlow<'_>` guard and cleanup policies without exposing raw CFG/dominance graphs.
 - [ ] **Phase 58: Data-Flow Source/Sink/Barrier Queries** - Promote `DataFlow<'_>` preview methods for forbidden flows and required barriers over bounded private path search.
@@ -192,7 +192,7 @@ for violation in flow.forbidden(query) {
 
 | Phase | Name | Plans Complete | Status | Completed |
 |-------|------|----------------|--------|-----------|
-| 55 | SDK Query Vocabulary and Preview Contract | 0/0 | Planned | - |
+| 55 | SDK Query Vocabulary and Preview Contract | 3/3 | Complete | 2026-06-20 |
 | 56 | Events and Calls Query Surface | 0/0 | Planned | - |
 | 57 | Control-Flow Guard and Lifecycle Queries | 0/0 | Planned | - |
 | 58 | Data-Flow Source/Sink/Barrier Queries | 0/0 | Planned | - |
@@ -218,18 +218,18 @@ for violation in flow.forbidden(query) {
 
 ## Next Up
 
-**Phase 55: SDK Query Vocabulary and Preview Contract** - define the preview API contract before wiring behavior.
+**Phase 56: Events and Calls Query Surface** - implement event matching and reachable-call policy queries over the Phase 55 preview vocabulary.
 
 Suggested command:
 
 ```bash
-/gsd-discuss-phase 55 /Users/emilwareus/conductor/workspaces/exlint/louisville-v1
+/gsd-discuss-phase 56 /Users/emilwareus/conductor/workspaces/exlint/louisville-v1
 ```
 
 For a direct implementation plan:
 
 ```bash
-/gsd-plan-phase 55 /Users/emilwareus/conductor/workspaces/exlint/louisville-v1
+/gsd-plan-phase 56 /Users/emilwareus/conductor/workspaces/exlint/louisville-v1
 ```
 
 ---

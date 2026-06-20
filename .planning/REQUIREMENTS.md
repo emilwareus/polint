@@ -51,12 +51,12 @@ Requirements for the v1.4 milestone. Each maps to exactly one roadmap phase.
 
 ### Preview SDK Surface
 
-- [ ] **API-01**: Rule authors can request preview fact views `Events<'_>`, `Calls<'_>`, `ControlFlow<'_>`, and `DataFlow<'_>` from `#[polint::rule]` signatures using only `polint::sdk::prelude::*`.
-- [ ] **API-02**: Advanced policy rules use one public query-object style: `Query::new(required...)`, explicit option fields, a single view method, and violation results. Fluent DSLs, closure filters, string mini-languages, and raw graph traversal are not supported public APIs.
-- [ ] **API-03**: Query structs exist for `ReachQuery`, `GuardQuery`, `LifecycleQuery`, and `FlowQuery`, with stable required inputs, explicit defaults, deterministic ordering, and documented budget knobs.
-- [ ] **API-04**: Pattern structs exist for `EventPattern`, `SourcePattern`, `SinkPattern`, `GuardPattern`, and `BarrierPattern`, covering calls, imports/packages, fields/properties, HTTP/trust boundaries, secrets, PII-like values, loggers, command execution, network requests, HTML sinks, and persistence writes.
-- [ ] **API-05**: Macro-derived capabilities, rule manifests, and capability diagnostics understand the new preview views; unsupported setup produces `polint/capability` diagnostics and the rule does not run with placeholder facts.
-- [ ] **API-06**: Existing reserved low-level `Cfg<'_>` and `CallGraph<'_>` remain reserved; v1.4 promotes policy-level `ControlFlow<'_>` and `Calls<'_>` instead of exposing raw CFG or call-graph internals.
+- [x] **API-01**: Rule authors can request preview fact views `Events<'_>`, `Calls<'_>`, `ControlFlow<'_>`, and `DataFlow<'_>` from `#[polint::rule]` signatures using only `polint::sdk::prelude::*`.
+- [x] **API-02**: Advanced policy rules use one public query-object style: `Query::new(required...)`, explicit option fields, a single view method, and violation results. Fluent DSLs, closure filters, string mini-languages, and raw graph traversal are not supported public APIs.
+- [x] **API-03**: Query structs exist for `ReachQuery`, `GuardQuery`, `LifecycleQuery`, and `FlowQuery`, with stable required inputs, explicit defaults, deterministic ordering, and documented budget knobs.
+- [x] **API-04**: Pattern structs exist for `EventPattern`, `SourcePattern`, `SinkPattern`, `GuardPattern`, and `BarrierPattern`, covering calls, imports/packages, fields/properties, HTTP/trust boundaries, secrets, PII-like values, loggers, command execution, network requests, HTML sinks, and persistence writes.
+- [x] **API-05**: Macro-derived capabilities, rule manifests, and capability diagnostics understand the new preview views; unsupported setup produces `polint/capability` diagnostics and the rule does not run with placeholder facts.
+- [x] **API-06**: Existing reserved low-level `Cfg<'_>` and `CallGraph<'_>` remain reserved; v1.4 promotes policy-level `ControlFlow<'_>` and `Calls<'_>` instead of exposing raw CFG or call-graph internals.
 
 ### Events and Calls
 
@@ -147,12 +147,12 @@ Which phases cover which requirements.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| API-01 | Phase 55 | Planned |
-| API-02 | Phase 55 | Planned |
-| API-03 | Phase 55 | Planned |
-| API-04 | Phase 55 | Planned |
-| API-05 | Phase 55 | Planned |
-| API-06 | Phase 55 | Planned |
+| API-01 | Phase 55 | Complete |
+| API-02 | Phase 55 | Complete |
+| API-03 | Phase 55 | Complete |
+| API-04 | Phase 55 | Complete |
+| API-05 | Phase 55 | Complete |
+| API-06 | Phase 55 | Complete |
 | CALL-01 | Phase 56 | Planned |
 | CALL-02 | Phase 56 | Planned |
 | CALL-03 | Phase 56 | Planned |

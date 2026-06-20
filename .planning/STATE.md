@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.4
 milestone_name: Policy Query Surface
 status: executing
-last_updated: "2026-06-20T08:16:32.180Z"
-last_activity: 2026-06-20 -- Phase 55 planning complete
+last_updated: "2026-06-20T09:20:00.000Z"
+last_activity: 2026-06-20 -- Phase 55 complete; Phase 56 next
 progress:
   total_phases: 8
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 3
-  completed_plans: 0
-  percent: 0
+  completed_plans: 3
+  percent: 12
 ---
 
 # State: polint
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-06-20)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** v1.4 Policy Query Surface requirements and roadmap
+**Current focus:** Phase 56 Events and Calls Query Surface planning
 
 ## Current Status
 
@@ -41,16 +41,16 @@ See: `.planning/PROJECT.md` (updated 2026-06-20)
 
 ## Current Position
 
-Phase: 55 - SDK Query Vocabulary and Preview Contract
+Phase: 56 - Events and Calls Query Surface
 Plan: —
-Status: Ready to execute
-Last activity: 2026-06-20 -- Phase 55 planning complete
+Status: Planned
+Last activity: 2026-06-20 -- Phase 55 complete; Phase 56 next
 
 ### Active Milestone Phase Progress
 
 | Phase | Status | Notes |
 |-------|--------|-------|
-| 55 | Planned | SDK query vocabulary and preview contract |
+| 55 | Complete | SDK query vocabulary and preview contract complete; preview compile/manifest/capability/docs/leak-gate behavior verified |
 | 56 | Planned | Events and calls query surface |
 | 57 | Planned | Control-flow guard and lifecycle queries |
 | 58 | Planned | Data-flow source/sink/barrier queries |
