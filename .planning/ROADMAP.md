@@ -198,7 +198,7 @@ for violation in flow.forbidden(query) {
 | 58 | Data-Flow Source/Sink/Barrier Queries | 3/3 | Complete | 2026-06-20 |
 | 59 | Violation Evidence, Unknowns, and Cache Semantics | 3/3 | Complete | 2026-06-20 |
 | 60 | Flagship Rule Templates and Agent Ergonomics | 3/3 | Complete | 2026-06-20 |
-| 61 | Public Docs and External SDK Validation | 0/0 | Planned | - |
+| 61 | Public Docs and External SDK Validation | 0/3 | In Progress | - |
 | 62 | Promotion Gate, Boundary Proof, and Closeout | 0/0 | Planned | - |
 
 ## Parallel-Eligible Phases

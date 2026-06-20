@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.4
 milestone_name: Policy Query Surface
 status: executing
-last_updated: "2026-06-20T17:42:31.144Z"
-last_activity: 2026-06-20 -- Phase 60 complete; Phase 61 is next
+last_updated: "2026-06-20T17:44:21.719Z"
+last_activity: 2026-06-20 -- Phase 61 plans created; implementation starting
 progress:
   total_phases: 8
   completed_phases: 6
-  total_plans: 18
+  total_plans: 21
   completed_plans: 18
   percent: 75
 ---
@@ -42,9 +42,9 @@ See: `.planning/PROJECT.md` (updated 2026-06-20)
 ## Current Position
 
 Phase: 61 - Public Docs and External SDK Validation
-Plan: Not planned yet
-Status: Planned
-Last activity: 2026-06-20 -- Phase 60 complete; Phase 61 is next
+Plan: 61-01
+Status: In Progress
+Last activity: 2026-06-20 -- Phase 61 plans created; implementation starting
 
 ### Active Milestone Phase Progress
 
@@ -56,7 +56,7 @@ Last activity: 2026-06-20 -- Phase 60 complete; Phase 61 is next
 | 58 | Complete | Data-flow forbidden-flow queries complete for HTTP request trust-boundary sources, secret-like names, exact call sinks, logger sinks, call barriers, unknown/budget evidence, and external rule validation |
 | 59 | Complete | Normalized policy evidence header, query digests, deterministic sorting/deduplication, cap-filtered policy unknowns, cache-version digest inputs, docs, skills, and verification complete |
 | 60 | Complete | `polint new-rule --template` selector, ten flagship policy template bodies, generated positive/negative fixtures, README/docs/skill updates, and focused verification complete |
-| 61 | Planned | Public docs and external SDK validation |
+| 61 | In Progress | Plans created for consolidated policy-query docs, external SDK matrix validation, docs coverage tests, and closeout |
 | 62 | Planned | Promotion gate, boundary proof, and closeout |
 
 ### Open repo-admin action (T-42-04-10)
