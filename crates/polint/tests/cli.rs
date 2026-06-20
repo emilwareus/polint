@@ -558,7 +558,8 @@ exclude = []
 
     let data_flow = fs::read_to_string(repo_root().join("docs/facts/data-flow.md")).unwrap();
     let evidence = fs::read_to_string(repo_root().join("docs/facts/evidence.md")).unwrap();
-    assert!(data_flow.contains("reserved for a future SDK fact view"));
+    assert!(data_flow.contains("v1.4 preview SDK view"));
+    assert!(data_flow.contains("raw data-flow graph APIs remain"));
     assert!(evidence.contains("not a public SDK fact view"));
 }
 
@@ -3735,7 +3736,6 @@ const DIRECT_CALLS_INTERNAL_PUBLIC_MARKERS: &[&str] = &[
     "UnresolvedCallFact",
     "analysis::calls",
     "direct-call-facts",
-    "Calls<'_>",
     "CallEdges<'_>",
 ];
 
@@ -6976,6 +6976,57 @@ fn new_rule_policy_templates_generate_fixture_tests() {
     );
     assert_eq!(value["summary"]["total"], 20);
     assert_eq!(value["summary"]["failed"], 0, "{value:#?}");
+}
+
+#[test]
+fn new_rule_policy_templates_are_deterministic() {
+    let temp = tempfile::tempdir().unwrap();
+    polint_cmd()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success();
+    write_file(
+        &temp.path().join("go.mod"),
+        "module example.com/policytemplatedeterminism\n\ngo 1.22\n",
+    );
+
+    for (language, template) in [
+        ("ts", "secret-to-log"),
+        ("go", "sensitive-write-guard"),
+        ("go", "raw-reachable-api"),
+    ] {
+        let rule_name = format!("deterministic-{template}");
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["new-rule", language, &rule_name, "--template", template])
+            .assert()
+            .success();
+    }
+    point_generated_rule_pack_at_local_polint(temp.path());
+
+    let first = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["test", "--no-cache", "--format", "json"])
+            .assert()
+            .success(),
+    );
+    let second = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["test", "--no-cache", "--format", "json"])
+            .assert()
+            .success(),
+    );
+
+    assert_eq!(
+        first["summary"], second["summary"],
+        "{first:#?}\n{second:#?}"
+    );
+    assert_eq!(first["cases"], second["cases"], "{first:#?}\n{second:#?}");
+    assert_eq!(first["summary"]["total"], 6);
+    assert_eq!(first["summary"]["failed"], 0, "{first:#?}");
 }
 
 #[test]
