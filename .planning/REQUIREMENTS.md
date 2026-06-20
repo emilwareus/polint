@@ -90,11 +90,11 @@ Requirements for the v1.4 milestone. Each maps to exactly one roadmap phase.
 
 ### Flagship Rule Templates
 
-- [ ] **TPL-01**: `polint new-rule` can generate a request-to-shell template using `DataFlow<'_>`, `FlowQuery`, `SourcePattern::http_request`, `SinkPattern::call`, and validation barriers.
-- [ ] **TPL-02**: Generated templates cover secret-to-log and PII-to-analytics policies with explicit heuristic wording and redaction/barrier examples.
-- [ ] **TPL-03**: Generated templates cover auth/validation-before-sensitive-write, transaction cleanup, and raw reachable API policies using `ControlFlow<'_>` and `Calls<'_>`.
-- [ ] **TPL-04**: Generated templates cover SSRF, dangerous HTML sinks, unsafe deserialization from request data, and user-controlled file path policies using the same query-object style.
-- [ ] **TPL-05**: README, examples, generated agent skill text, and docs show the flagship templates as repo-local policy examples without presenting polint as a bundled ruleset.
+- [x] **TPL-01**: `polint new-rule` can generate a request-to-shell template using `DataFlow<'_>`, `FlowQuery`, `SourcePattern::http_request`, `SinkPattern::call`, and validation barriers.
+- [x] **TPL-02**: Generated templates cover secret-to-log and PII-to-analytics policies with explicit heuristic wording and redaction/barrier examples.
+- [x] **TPL-03**: Generated templates cover auth/validation-before-sensitive-write, transaction cleanup, and raw reachable API policies using `ControlFlow<'_>` and `Calls<'_>`.
+- [x] **TPL-04**: Generated templates cover SSRF, dangerous HTML sinks, unsafe deserialization from request data, and user-controlled file path policies using the same query-object style.
+- [x] **TPL-05**: README, examples, generated agent skill text, and docs show the flagship templates as repo-local policy examples without presenting polint as a bundled ruleset.
 
 ### Validation and Public Boundary
 
@@ -171,11 +171,11 @@ Which phases cover which requirements.
 | EVID-03 | Phase 59 | Complete |
 | EVID-04 | Phase 59 | Complete |
 | EVID-05 | Phase 59 | Complete |
-| TPL-01 | Phase 60 | Planned |
-| TPL-02 | Phase 60 | Planned |
-| TPL-03 | Phase 60 | Planned |
-| TPL-04 | Phase 60 | Planned |
-| TPL-05 | Phase 60 | Planned |
+| TPL-01 | Phase 60 | Complete |
+| TPL-02 | Phase 60 | Complete |
+| TPL-03 | Phase 60 | Complete |
+| TPL-04 | Phase 60 | Complete |
+| TPL-05 | Phase 60 | Complete |
 | VAL-01 | Phase 61 | Planned |
 | VAL-02 | Phase 61 | Planned |
 | VAL-03 | Phase 62 | Planned |

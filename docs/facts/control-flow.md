@@ -71,3 +71,12 @@ results use conservative precision and heuristic status.
 `ControlFlow<'_>` is not the raw `Cfg<'_>` view. `Cfg<'_>` remains a reserved
 raw capability and is not the supported rule-authoring path for guard or
 lifecycle policies.
+
+## Template Starters
+
+`polint new-rule go require-sensitive-write-guard --template
+sensitive-write-guard` scaffolds a guard-before-sensitive-call policy.
+`polint new-rule go require-transaction-cleanup --template transaction-cleanup`
+scaffolds a same-function cleanup policy. Generated templates use
+`ControlFlow<'_>` and the query-object style shown above, with fixtures that
+users can edit to their local guard, write, begin, and cleanup APIs.

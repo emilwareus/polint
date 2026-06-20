@@ -193,6 +193,24 @@ struct NewRuleArgs {
     language: String,
     /// Rule directory/name.
     rule_name: String,
+    /// Flagship policy template to scaffold.
+    #[arg(long, value_enum)]
+    template: Option<RuleTemplateKind>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[clap(rename_all = "kebab-case")]
+enum RuleTemplateKind {
+    RequestToShell,
+    SecretToLog,
+    PiiToAnalytics,
+    SensitiveWriteGuard,
+    TransactionCleanup,
+    RawReachableApi,
+    Ssrf,
+    DangerousHtml,
+    UnsafeDeserialization,
+    UserFilePath,
 }
 
 #[derive(Debug, Args, Clone)]
@@ -689,9 +707,9 @@ fn new_rule(root: PathBuf, args: &NewRuleArgs) -> Result<()> {
 
     fs::write(
         &module_path,
-        rule_module_template(&args.language, &rule_name),
+        rule_module_template(&args.language, &rule_name, args.template),
     )?;
-    write_rule_fixture_skeleton(&root, &args.language, &rule_name, &module)?;
+    write_rule_fixture_skeleton(&root, &args.language, &rule_name, &module, args.template)?;
     println!("Created rule module {}", module_path.display());
     Ok(())
 }
@@ -840,6 +858,7 @@ fn write_rule_fixture_skeleton(
     language: &str,
     rule_name: &str,
     module: &str,
+    template: Option<RuleTemplateKind>,
 ) -> Result<()> {
     let rule_tests_dir = root.join(".polint/tests/rules").join(module);
     if rule_tests_dir.exists() {
@@ -852,14 +871,26 @@ fn write_rule_fixture_skeleton(
     write_rule_fixture_case(
         &rule_tests_dir.join("positive"),
         language,
-        &rule_fixture_positive_source_template(language),
-        &rule_fixture_manifest_template(rule_name, fixture_file, false),
+        &rule_fixture_positive_source_template(language, template),
+        &rule_fixture_manifest_template(
+            rule_name,
+            fixture_file,
+            false,
+            rule_fixture_message_contains(template),
+            rule_fixture_severity(template),
+        ),
     )?;
     write_rule_fixture_case(
         &rule_tests_dir.join("negative"),
         language,
-        &rule_fixture_negative_source_template(language),
-        &rule_fixture_manifest_template(rule_name, fixture_file, true),
+        &rule_fixture_negative_source_template(language, template),
+        &rule_fixture_manifest_template(
+            rule_name,
+            fixture_file,
+            true,
+            rule_fixture_message_contains(template),
+            rule_fixture_severity(template),
+        ),
     )?;
     Ok(())
 }
@@ -891,6 +922,8 @@ fn rule_fixture_manifest_template(
     rule_name: &str,
     fixture_file: &str,
     expect_diagnostic: bool,
+    message_contains: &str,
+    severity: &str,
 ) -> String {
     let expected = if expect_diagnostic {
         format!(
@@ -898,8 +931,8 @@ fn rule_fixture_manifest_template(
 [[expect.diagnostic]]
 rule_id = "custom/{rule_name}"
 file = "{fixture_file}"
-severity = "warn"
-message_contains = "Project-specific policy"
+severity = "{severity}"
+message_contains = "{message_contains}"
 "#
         )
     } else {
@@ -915,7 +948,26 @@ paths = ["src/**"]
     )
 }
 
-fn rule_fixture_positive_source_template(language: &str) -> String {
+fn rule_fixture_message_contains(template: Option<RuleTemplateKind>) -> &'static str {
+    template.map_or("Project-specific policy", |template| {
+        policy_template_spec("ts", template).message
+    })
+}
+
+fn rule_fixture_severity(template: Option<RuleTemplateKind>) -> &'static str {
+    if template.is_some() { "error" } else { "warn" }
+}
+
+fn rule_fixture_positive_source_template(
+    language: &str,
+    template: Option<RuleTemplateKind>,
+) -> String {
+    if let Some(template) = template {
+        return policy_template_spec(language, template)
+            .positive_source
+            .to_string();
+    }
+
     match language {
         "go" => r#"package main
 
@@ -928,7 +980,16 @@ func main() {}
     }
 }
 
-fn rule_fixture_negative_source_template(language: &str) -> String {
+fn rule_fixture_negative_source_template(
+    language: &str,
+    template: Option<RuleTemplateKind>,
+) -> String {
+    if let Some(template) = template {
+        return policy_template_spec(language, template)
+            .negative_source
+            .to_string();
+    }
+
     match language {
         "go" => r#"package main
 
@@ -946,7 +1007,15 @@ func replaceMe(err error) error {
     }
 }
 
-fn rule_module_template(language: &str, rule_name: &str) -> String {
+fn rule_module_template(
+    language: &str,
+    rule_name: &str,
+    template: Option<RuleTemplateKind>,
+) -> String {
+    if let Some(template) = template {
+        return policy_rule_module_template(language, rule_name, template);
+    }
+
     let module = rust_module_name(rule_name);
     let fact_params = match language {
         "go" => "tests: GoTests<'_>, branches: BranchObligations<'_>",
@@ -994,6 +1063,750 @@ pub(crate) fn {module}(ctx: &mut RuleCtx<'_>, {fact_params}) -> RuleResult {{
 "#
     )
 }
+
+struct PolicyTemplateSpec {
+    description: &'static str,
+    view_param: &'static str,
+    body: String,
+    message: &'static str,
+    positive_source: &'static str,
+    negative_source: &'static str,
+}
+
+fn policy_rule_module_template(
+    language: &str,
+    rule_name: &str,
+    template: RuleTemplateKind,
+) -> String {
+    let module = rust_module_name(rule_name);
+    let spec = policy_template_spec(language, template);
+    let PolicyTemplateSpec {
+        description,
+        view_param,
+        body,
+        ..
+    } = spec;
+
+    format!(
+        r#"use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "custom/{rule_name}",
+    description = "{description}",
+    severity = "warn"
+)]
+pub(crate) fn {module}(ctx: &mut RuleCtx<'_>, {view_param}) -> RuleResult {{
+{body}
+    Ok(())
+}}
+"#
+    )
+}
+
+fn policy_template_spec(language: &str, template: RuleTemplateKind) -> PolicyTemplateSpec {
+    let go = matches!(language, "go");
+    match template {
+        RuleTemplateKind::RequestToShell => data_flow_policy_template(
+            "Request data must not reach shell execution without validation.",
+            "Request data reaches shell execution without validation.",
+            "SourcePattern::http_request()",
+            call_sink(if go { "execCommand" } else { "exec" }),
+            r#"["validate_command", "allow_command"]"#,
+            if go {
+                GO_REQUEST_TO_SHELL_POSITIVE
+            } else {
+                TS_REQUEST_TO_SHELL_POSITIVE
+            },
+            if go {
+                GO_REQUEST_TO_SHELL_NEGATIVE
+            } else {
+                TS_REQUEST_TO_SHELL_NEGATIVE
+            },
+        ),
+        RuleTemplateKind::SecretToLog => data_flow_policy_template(
+            "Secret-like values must not reach logs without redaction.",
+            "Secret-like value reaches logging without redaction.",
+            r#"SourcePattern::secret_like(["token", "password", "apiKey"])"#,
+            "SinkPattern::logger()",
+            r#"["redact", "mask_secret"]"#,
+            if go {
+                GO_SECRET_TO_LOG_POSITIVE
+            } else {
+                TS_SECRET_TO_LOG_POSITIVE
+            },
+            if go {
+                GO_SECRET_TO_LOG_NEGATIVE
+            } else {
+                TS_SECRET_TO_LOG_NEGATIVE
+            },
+        ),
+        RuleTemplateKind::PiiToAnalytics => data_flow_policy_template(
+            "PII-like values must not reach analytics calls without anonymization.",
+            "PII-like value reaches analytics without anonymization.",
+            r#"SourcePattern::secret_like(["email", "user_id", "phone"])"#,
+            call_sink(if go {
+                "trackAnalytics"
+            } else {
+                "analyticsTrack"
+            }),
+            r#"["anonymize", "hash_user_id"]"#,
+            if go {
+                GO_PII_TO_ANALYTICS_POSITIVE
+            } else {
+                TS_PII_TO_ANALYTICS_POSITIVE
+            },
+            if go {
+                GO_PII_TO_ANALYTICS_NEGATIVE
+            } else {
+                TS_PII_TO_ANALYTICS_NEGATIVE
+            },
+        ),
+        RuleTemplateKind::SensitiveWriteGuard => control_guard_policy_template(
+            "Sensitive write calls require a validation or authorization guard first.",
+            "Sensitive write requires validation or authorization first.",
+            "writeBalance",
+            r#"["authorize", "validate_payment"]"#,
+            if go {
+                GO_SENSITIVE_WRITE_GUARD_POSITIVE
+            } else {
+                TS_SENSITIVE_WRITE_GUARD_POSITIVE
+            },
+            if go {
+                GO_SENSITIVE_WRITE_GUARD_NEGATIVE
+            } else {
+                TS_SENSITIVE_WRITE_GUARD_NEGATIVE
+            },
+        ),
+        RuleTemplateKind::TransactionCleanup => control_cleanup_policy_template(
+            "Transactions must be cleaned up after they are opened.",
+            "Transaction begin requires rollback or cleanup.",
+            if go { "Begin" } else { "beginTransaction" },
+            if go { "Rollback" } else { "rollback" },
+            if go {
+                GO_TRANSACTION_CLEANUP_POSITIVE
+            } else {
+                TS_TRANSACTION_CLEANUP_POSITIVE
+            },
+            if go {
+                GO_TRANSACTION_CLEANUP_NEGATIVE
+            } else {
+                TS_TRANSACTION_CLEANUP_NEGATIVE
+            },
+        ),
+        RuleTemplateKind::RawReachableApi => calls_policy_template(
+            "Raw internal APIs must not be reachable from production roots.",
+            "Raw internal API is reachable from this root.",
+            "dangerousAdmin",
+            "main",
+            if go {
+                GO_RAW_REACHABLE_API_POSITIVE
+            } else {
+                TS_RAW_REACHABLE_API_POSITIVE
+            },
+            if go {
+                GO_RAW_REACHABLE_API_NEGATIVE
+            } else {
+                TS_RAW_REACHABLE_API_NEGATIVE
+            },
+        ),
+        RuleTemplateKind::Ssrf => data_flow_policy_template(
+            "Request-controlled URLs must not reach outbound fetches without allowlisting.",
+            "Request-controlled URL reaches outbound fetch without allowlisting.",
+            "SourcePattern::http_request()",
+            call_sink(if go { "fetchURL" } else { "fetchUrl" }),
+            r#"["allowlist_url", "validate_url"]"#,
+            if go {
+                GO_SSRF_POSITIVE
+            } else {
+                TS_SSRF_POSITIVE
+            },
+            if go {
+                GO_SSRF_NEGATIVE
+            } else {
+                TS_SSRF_NEGATIVE
+            },
+        ),
+        RuleTemplateKind::DangerousHtml => data_flow_policy_template(
+            "Request data must not reach HTML sinks without escaping.",
+            "Request data reaches an HTML sink without escaping.",
+            "SourcePattern::http_request()",
+            call_sink(if go { "renderHTML" } else { "setInnerHTML" }),
+            r#"["escape_html", "sanitize_html"]"#,
+            if go {
+                GO_DANGEROUS_HTML_POSITIVE
+            } else {
+                TS_DANGEROUS_HTML_POSITIVE
+            },
+            if go {
+                GO_DANGEROUS_HTML_NEGATIVE
+            } else {
+                TS_DANGEROUS_HTML_NEGATIVE
+            },
+        ),
+        RuleTemplateKind::UnsafeDeserialization => data_flow_policy_template(
+            "Request data must not reach unsafe deserialization without validation.",
+            "Request data reaches unsafe deserialization without validation.",
+            "SourcePattern::http_request()",
+            call_sink("unsafeDeserialize"),
+            r#"["validate_payload", "verify_schema"]"#,
+            if go {
+                GO_UNSAFE_DESERIALIZATION_POSITIVE
+            } else {
+                TS_UNSAFE_DESERIALIZATION_POSITIVE
+            },
+            if go {
+                GO_UNSAFE_DESERIALIZATION_NEGATIVE
+            } else {
+                TS_UNSAFE_DESERIALIZATION_NEGATIVE
+            },
+        ),
+        RuleTemplateKind::UserFilePath => data_flow_policy_template(
+            "Request-controlled paths must not reach file APIs without validation.",
+            "Request-controlled path reaches a file API without validation.",
+            "SourcePattern::http_request()",
+            call_sink("readFile"),
+            r#"["validate_path", "safe_join"]"#,
+            if go {
+                GO_USER_FILE_PATH_POSITIVE
+            } else {
+                TS_USER_FILE_PATH_POSITIVE
+            },
+            if go {
+                GO_USER_FILE_PATH_NEGATIVE
+            } else {
+                TS_USER_FILE_PATH_NEGATIVE
+            },
+        ),
+    }
+}
+
+fn data_flow_policy_template(
+    description: &'static str,
+    message: &'static str,
+    source: &'static str,
+    sink: impl Into<String>,
+    barriers: &'static str,
+    positive_source: &'static str,
+    negative_source: &'static str,
+) -> PolicyTemplateSpec {
+    let sink = sink.into();
+    PolicyTemplateSpec {
+        description,
+        view_param: "flow: DataFlow<'_>",
+        body: format!(
+            r#"    let mut query = FlowQuery::new(
+        {source},
+        {sink},
+    );
+    query.barriers = BarrierPattern::call_any({barriers});
+    query.max_paths = 10;
+
+    for violation in flow.forbidden(query) {{
+        ctx.report(violation.diagnostic(
+            ctx.rule_id(),
+            "{message}",
+        ));
+    }}
+"#
+        ),
+        message,
+        positive_source,
+        negative_source,
+    }
+}
+
+fn control_guard_policy_template(
+    description: &'static str,
+    message: &'static str,
+    event: &'static str,
+    guards: &'static str,
+    positive_source: &'static str,
+    negative_source: &'static str,
+) -> PolicyTemplateSpec {
+    PolicyTemplateSpec {
+        description,
+        view_param: "control: ControlFlow<'_>",
+        body: format!(
+            r#"    let mut query = GuardQuery::new(
+        EventPattern::call("{event}"),
+        GuardPattern::call_any({guards}),
+    );
+    query.max_paths = 10;
+
+    for violation in control.missing_guard(query) {{
+        ctx.report(violation.diagnostic(
+            ctx.rule_id(),
+            "{message}",
+        ));
+    }}
+"#
+        ),
+        message,
+        positive_source,
+        negative_source,
+    }
+}
+
+fn control_cleanup_policy_template(
+    description: &'static str,
+    message: &'static str,
+    start: &'static str,
+    cleanup: &'static str,
+    positive_source: &'static str,
+    negative_source: &'static str,
+) -> PolicyTemplateSpec {
+    PolicyTemplateSpec {
+        description,
+        view_param: "control: ControlFlow<'_>",
+        body: format!(
+            r#"    let mut query = LifecycleQuery::new(
+        EventPattern::call("{start}"),
+        EventPattern::call("{cleanup}"),
+    );
+    query.max_paths = 10;
+
+    for violation in control.missing_cleanup(query) {{
+        ctx.report(violation.diagnostic(
+            ctx.rule_id(),
+            "{message}",
+        ));
+    }}
+"#
+        ),
+        message,
+        positive_source,
+        negative_source,
+    }
+}
+
+fn calls_policy_template(
+    description: &'static str,
+    message: &'static str,
+    target: &'static str,
+    root: &'static str,
+    positive_source: &'static str,
+    negative_source: &'static str,
+) -> PolicyTemplateSpec {
+    PolicyTemplateSpec {
+        description,
+        view_param: "calls: Calls<'_>",
+        body: format!(
+            r#"    let mut query = ReachQuery::new(EventPattern::call("{target}"));
+    query.roots = vec![EventPattern::call("{root}")];
+    query.max_depth = 8;
+    query.max_paths = 10;
+
+    for violation in calls.forbidden_reachable(query) {{
+        ctx.report(violation.diagnostic(
+            ctx.rule_id(),
+            "{message}",
+        ));
+    }}
+"#
+        ),
+        message,
+        positive_source,
+        negative_source,
+    }
+}
+
+fn call_sink(target: &'static str) -> String {
+    format!(r#"SinkPattern::call("{target}")"#)
+}
+
+const TS_REQUEST_TO_SHELL_POSITIVE: &str = r#"import express from "express";
+const app = express();
+
+function validate_command(command: string): string { return command; }
+
+app.get("/run", function handler(req, res) {
+  const command = validate_command(String(req.query.cmd));
+  void command;
+});
+"#;
+
+const TS_REQUEST_TO_SHELL_NEGATIVE: &str = r#"import express from "express";
+const app = express();
+
+function exec(command: string) {}
+
+app.get("/run", function handler(req, res) {
+  exec(String(req.query.cmd));
+});
+"#;
+
+const TS_SECRET_TO_LOG_POSITIVE: &str = r#"function redact(value: string): string { return value; }
+
+export function handler(token: string) {
+  const redacted = redact(token);
+  console.log("redacted");
+  void redacted;
+}
+"#;
+
+const TS_SECRET_TO_LOG_NEGATIVE: &str = r#"export function handler(token: string) {
+  console.log(token);
+}
+"#;
+
+const TS_PII_TO_ANALYTICS_POSITIVE: &str = r#"function analyticsTrack(value: string) {}
+function anonymize(value: string): string { return value; }
+
+export function handler(email: string) {
+  const anonymous = anonymize(email);
+  analyticsTrack("anonymous");
+  void anonymous;
+}
+"#;
+
+const TS_PII_TO_ANALYTICS_NEGATIVE: &str = r#"function analyticsTrack(value: string) {}
+
+export function handler(email: string) {
+  analyticsTrack(email);
+}
+"#;
+
+const TS_SENSITIVE_WRITE_GUARD_POSITIVE: &str = r#"function authorize() {}
+function writeBalance() {}
+
+export function handler() {
+  authorize();
+  writeBalance();
+}
+"#;
+
+const TS_SENSITIVE_WRITE_GUARD_NEGATIVE: &str = r#"function writeBalance() {}
+
+export function handler() {
+  writeBalance();
+}
+"#;
+
+const TS_TRANSACTION_CLEANUP_POSITIVE: &str = r#"function beginTransaction() {}
+function rollback() {}
+
+export function handler() {
+  beginTransaction();
+  rollback();
+}
+"#;
+
+const TS_TRANSACTION_CLEANUP_NEGATIVE: &str = r#"function beginTransaction() {}
+
+export function handler() {
+  beginTransaction();
+}
+"#;
+
+const TS_RAW_REACHABLE_API_POSITIVE: &str = r#"function safeAdmin() {}
+
+export function main() {
+  safeAdmin();
+}
+"#;
+
+const TS_RAW_REACHABLE_API_NEGATIVE: &str = r#"function dangerousAdmin() {}
+function handler() { dangerousAdmin(); }
+
+export function main() {
+  handler();
+}
+"#;
+
+const TS_SSRF_POSITIVE: &str = r#"import express from "express";
+const app = express();
+
+function allowlist_url(url: string): string { return url; }
+
+app.get("/fetch", function handler(req, res) {
+  const url = allowlist_url(String(req.query.url));
+  void url;
+});
+"#;
+
+const TS_SSRF_NEGATIVE: &str = r#"import express from "express";
+const app = express();
+
+function fetchUrl(url: string) {}
+
+app.get("/fetch", function handler(req, res) {
+  fetchUrl(String(req.query.url));
+});
+"#;
+
+const TS_DANGEROUS_HTML_POSITIVE: &str = r#"import express from "express";
+const app = express();
+
+function setInnerHTML(html: string) {}
+function sanitize_html(html: string): string { return html; }
+
+app.post("/preview", function handler(req, res) {
+  const preview = sanitize_html(String(req.body.html));
+  setInnerHTML("<p>safe preview</p>");
+  void preview;
+});
+"#;
+
+const TS_DANGEROUS_HTML_NEGATIVE: &str = r#"import express from "express";
+const app = express();
+
+function setInnerHTML(html: string) {}
+
+app.post("/preview", function handler(req, res) {
+  setInnerHTML(String(req.body.html));
+});
+"#;
+
+const TS_UNSAFE_DESERIALIZATION_POSITIVE: &str = r#"import express from "express";
+const app = express();
+
+function unsafeDeserialize(raw: string) {}
+function verify_schema(raw: string): string { return raw; }
+
+app.post("/load", function handler(req, res) {
+  const payload = verify_schema(String(req.body.payload));
+  unsafeDeserialize("{}");
+  void payload;
+});
+"#;
+
+const TS_UNSAFE_DESERIALIZATION_NEGATIVE: &str = r#"import express from "express";
+const app = express();
+
+function unsafeDeserialize(raw: string) {}
+
+app.post("/load", function handler(req, res) {
+  unsafeDeserialize(String(req.body.payload));
+});
+"#;
+
+const TS_USER_FILE_PATH_POSITIVE: &str = r#"import express from "express";
+const app = express();
+
+function readFile(path: string) {}
+function validate_path(path: string): string { return path; }
+
+app.get("/file", function handler(req, res) {
+  const requested = validate_path(String(req.query.path));
+  readFile("/tmp/safe.txt");
+  void requested;
+});
+"#;
+
+const TS_USER_FILE_PATH_NEGATIVE: &str = r#"import express from "express";
+const app = express();
+
+function readFile(path: string) {}
+
+app.get("/file", function handler(req, res) {
+  readFile(String(req.query.path));
+});
+"#;
+
+const GO_REQUEST_TO_SHELL_POSITIVE: &str = r#"package main
+
+func validate_command(command string) string { return command }
+
+func handler(command string) {
+	safe := validate_command(command)
+	_ = safe
+}
+"#;
+
+const GO_REQUEST_TO_SHELL_NEGATIVE: &str = r#"package main
+
+func execCommand(command string) {}
+
+func handler(command string) {
+	execCommand(command)
+}
+"#;
+
+const GO_SECRET_TO_LOG_POSITIVE: &str = r#"package main
+
+func log(value string) {}
+func redact(value string) string { return value }
+
+func handler(token string) {
+	redacted := redact(token)
+	log("redacted")
+	_ = redacted
+}
+"#;
+
+const GO_SECRET_TO_LOG_NEGATIVE: &str = r#"package main
+
+func log(value string) {}
+
+func handler(token string) {
+	log(token)
+}
+"#;
+
+const GO_PII_TO_ANALYTICS_POSITIVE: &str = r#"package main
+
+func trackAnalytics(value string) {}
+func anonymize(value string) string { return value }
+
+func handler(email string) {
+	anonymous := anonymize(email)
+	trackAnalytics("anonymous")
+	_ = anonymous
+}
+"#;
+
+const GO_PII_TO_ANALYTICS_NEGATIVE: &str = r#"package main
+
+func trackAnalytics(value string) {}
+
+func handler(email string) {
+	trackAnalytics(email)
+}
+"#;
+
+const GO_SENSITIVE_WRITE_GUARD_POSITIVE: &str = r#"package main
+
+func authorize() {}
+func writeBalance() {}
+
+func handler() {
+	authorize()
+	writeBalance()
+}
+"#;
+
+const GO_SENSITIVE_WRITE_GUARD_NEGATIVE: &str = r#"package main
+
+func writeBalance() {}
+
+func handler() {
+	writeBalance()
+}
+"#;
+
+const GO_TRANSACTION_CLEANUP_POSITIVE: &str = r#"package main
+
+func Begin() {}
+func Rollback() {}
+
+func handler() {
+	Begin()
+	Rollback()
+}
+"#;
+
+const GO_TRANSACTION_CLEANUP_NEGATIVE: &str = r#"package main
+
+func Begin() {}
+
+func handler() {
+	Begin()
+}
+"#;
+
+const GO_RAW_REACHABLE_API_POSITIVE: &str = r#"package main
+
+func main() {
+	safeAdmin()
+}
+
+func safeAdmin() {}
+"#;
+
+const GO_RAW_REACHABLE_API_NEGATIVE: &str = r#"package main
+
+func main() {
+	handler()
+}
+
+func handler() {
+	dangerousAdmin()
+}
+
+func dangerousAdmin() {}
+"#;
+
+const GO_SSRF_POSITIVE: &str = r#"package main
+
+func allowlist_url(url string) string { return url }
+
+func handler(url string) {
+	safe := allowlist_url(url)
+	_ = safe
+}
+"#;
+
+const GO_SSRF_NEGATIVE: &str = r#"package main
+
+func fetchURL(url string) {}
+
+func handler(url string) {
+	fetchURL(url)
+}
+"#;
+
+const GO_DANGEROUS_HTML_POSITIVE: &str = r#"package main
+
+func renderHTML(html string) {}
+func sanitize_html(html string) string { return html }
+
+func handler(html string) {
+	safe := sanitize_html(html)
+	renderHTML("<p>safe preview</p>")
+	_ = safe
+}
+"#;
+
+const GO_DANGEROUS_HTML_NEGATIVE: &str = r#"package main
+
+func renderHTML(html string) {}
+
+func handler(html string) {
+	renderHTML(html)
+}
+"#;
+
+const GO_UNSAFE_DESERIALIZATION_POSITIVE: &str = r#"package main
+
+func unsafeDeserialize(raw string) {}
+func verify_schema(raw string) string { return raw }
+
+func handler(payload string) {
+	safe := verify_schema(payload)
+	unsafeDeserialize("{}")
+	_ = safe
+}
+"#;
+
+const GO_UNSAFE_DESERIALIZATION_NEGATIVE: &str = r#"package main
+
+func unsafeDeserialize(raw string) {}
+
+func handler(payload string) {
+	unsafeDeserialize(payload)
+}
+"#;
+
+const GO_USER_FILE_PATH_POSITIVE: &str = r#"package main
+
+func readFile(path string) {}
+func validate_path(path string) string { return path }
+
+func handler(path string) {
+	safe := validate_path(path)
+	readFile("/tmp/safe.txt")
+	_ = safe
+}
+"#;
+
+const GO_USER_FILE_PATH_NEGATIVE: &str = r#"package main
+
+func readFile(path string) {}
+
+func handler(path string) {
+	readFile(path)
+}
+"#;
 
 fn baseline(root: PathBuf, args: &BaselineArgs) -> Result<u8> {
     match &args.command {

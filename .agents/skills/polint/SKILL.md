@@ -16,6 +16,7 @@ Start rule modules with `use polint::sdk::prelude::*;`.
 ```bash
 polint init
 polint new-rule ts no-raw-colors
+polint new-rule ts no-secret-logs --template secret-to-log
 polint test --format json
 polint inspect rule --format json
 polint check --format ai-friendly --fail-on none
@@ -23,7 +24,12 @@ polint check --format ai-friendly --fail-on none
 
 `polint new-rule <lang> <name>` creates a rule module, wires it into
 `.polint/rules/src/main.rs`, and creates positive and negative fixture cases
-under `.polint/tests/rules/<name>/`.
+under `.polint/tests/rules/<name>/`. For v1.4 policy-query starters, use
+`--template <id>` with one of `request-to-shell`, `secret-to-log`,
+`pii-to-analytics`, `sensitive-write-guard`, `transaction-cleanup`,
+`raw-reachable-api`, `ssrf`, `dangerous-html`, `unsafe-deserialization`, or
+`user-file-path`. Templates are repo-local scaffolds to edit, not built-in rules
+enabled by polint.
 
 ## Agent JSON
 

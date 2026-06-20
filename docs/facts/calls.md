@@ -47,3 +47,10 @@ proof.
 `Calls<'_>` is not the raw `CallGraph<'_>` view. `CallGraph<'_>` remains a
 reserved raw capability and is not the supported rule-authoring path for
 reachability policies.
+
+## Template Starter
+
+`polint new-rule go no-raw-admin-reachable --template raw-reachable-api`
+scaffolds a reachable-call policy using `Calls<'_>` and `ReachQuery`. The
+generated target and root call names are placeholders for repo-local APIs; the
+template is a starting point, not a bundled rule.

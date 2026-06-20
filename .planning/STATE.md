@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.4
 milestone_name: Policy Query Surface
 status: executing
-last_updated: "2026-06-20T17:26:33.646Z"
-last_activity: 2026-06-20 -- Phase 60 plans created; implementation starting
+last_updated: "2026-06-20T17:42:31.144Z"
+last_activity: 2026-06-20 -- Phase 60 complete; Phase 61 is next
 progress:
   total_phases: 8
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 18
-  completed_plans: 15
-  percent: 63
+  completed_plans: 18
+  percent: 75
 ---
 
 # State: polint
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-06-20)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 60 Flagship Rule Templates and Agent Ergonomics
+**Current focus:** Phase 61 Public Docs and External SDK Validation
 
 ## Current Status
 
@@ -41,10 +41,10 @@ See: `.planning/PROJECT.md` (updated 2026-06-20)
 
 ## Current Position
 
-Phase: 60 - Flagship Rule Templates and Agent Ergonomics
-Plan: 60-01
-Status: In Progress
-Last activity: 2026-06-20 -- Phase 60 plans created; implementation starting
+Phase: 61 - Public Docs and External SDK Validation
+Plan: Not planned yet
+Status: Planned
+Last activity: 2026-06-20 -- Phase 60 complete; Phase 61 is next
 
 ### Active Milestone Phase Progress
 
@@ -55,7 +55,7 @@ Last activity: 2026-06-20 -- Phase 60 plans created; implementation starting
 | 57 | Complete | Control-flow guard and lifecycle queries complete for same-function call-event guard and cleanup policies; write events, exact exit proof, and bounded interprocedural search deferred honestly |
 | 58 | Complete | Data-flow forbidden-flow queries complete for HTTP request trust-boundary sources, secret-like names, exact call sinks, logger sinks, call barriers, unknown/budget evidence, and external rule validation |
 | 59 | Complete | Normalized policy evidence header, query digests, deterministic sorting/deduplication, cap-filtered policy unknowns, cache-version digest inputs, docs, skills, and verification complete |
-| 60 | In Progress | Plans created for the `new-rule --template` selector, flagship policy template bodies, generated fixture coverage, docs, README, skill text, and closeout |
+| 60 | Complete | `polint new-rule --template` selector, ten flagship policy template bodies, generated positive/negative fixtures, README/docs/skill updates, and focused verification complete |
 | 61 | Planned | Public docs and external SDK validation |
 | 62 | Planned | Promotion gate, boundary proof, and closeout |
 

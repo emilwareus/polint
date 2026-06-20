@@ -6591,6 +6591,166 @@ fn new_rule_generic_uses_sdk_query_helpers() {
 }
 
 #[test]
+fn new_rule_policy_template_modules_use_public_sdk_only() {
+    let cases = [
+        (
+            "ts",
+            "request-to-shell",
+            "DataFlow<'_>",
+            "FlowQuery::new",
+            "SourcePattern::http_request()",
+            "SinkPattern::call(\"exec\")",
+        ),
+        (
+            "ts",
+            "secret-to-log",
+            "DataFlow<'_>",
+            "FlowQuery::new",
+            "SourcePattern::secret_like",
+            "SinkPattern::logger()",
+        ),
+        (
+            "ts",
+            "pii-to-analytics",
+            "DataFlow<'_>",
+            "FlowQuery::new",
+            "email",
+            "analyticsTrack",
+        ),
+        (
+            "go",
+            "sensitive-write-guard",
+            "ControlFlow<'_>",
+            "GuardQuery::new",
+            "writeBalance",
+            "validate_payment",
+        ),
+        (
+            "go",
+            "transaction-cleanup",
+            "ControlFlow<'_>",
+            "LifecycleQuery::new",
+            "Begin",
+            "Rollback",
+        ),
+        (
+            "go",
+            "raw-reachable-api",
+            "Calls<'_>",
+            "ReachQuery::new",
+            "dangerousAdmin",
+            "EventPattern::call(\"main\")",
+        ),
+        (
+            "ts",
+            "ssrf",
+            "DataFlow<'_>",
+            "FlowQuery::new",
+            "SourcePattern::http_request()",
+            "fetchUrl",
+        ),
+        (
+            "ts",
+            "dangerous-html",
+            "DataFlow<'_>",
+            "FlowQuery::new",
+            "SourcePattern::http_request()",
+            "setInnerHTML",
+        ),
+        (
+            "ts",
+            "unsafe-deserialization",
+            "DataFlow<'_>",
+            "FlowQuery::new",
+            "SourcePattern::http_request()",
+            "unsafeDeserialize",
+        ),
+        (
+            "ts",
+            "user-file-path",
+            "DataFlow<'_>",
+            "FlowQuery::new",
+            "SourcePattern::http_request()",
+            "readFile",
+        ),
+    ];
+
+    for (language, template, view, query, first, second) in cases {
+        let temp = tempfile::tempdir().unwrap();
+        let rule_name = format!("template-{template}");
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["new-rule", language, &rule_name, "--template", template])
+            .assert()
+            .success();
+
+        let module_name = rule_name.replace('-', "_");
+        let module = fs::read_to_string(
+            temp.path()
+                .join(".polint/rules/src")
+                .join(format!("{module_name}.rs")),
+        )
+        .unwrap();
+        assert!(module.contains("use polint::sdk::prelude::*;"), "{module}");
+        assert!(module.contains("#[polint::rule("), "{module}");
+        assert!(module.contains(view), "{template}: {module}");
+        assert!(module.contains(query), "{template}: {module}");
+        assert!(module.contains(first), "{template}: {module}");
+        assert!(module.contains(second), "{template}: {module}");
+        assert!(module.contains("violation.diagnostic("), "{module}");
+        assert!(!module.contains("Capabilities::new("), "{module}");
+        assert!(!module.contains("impl Rule"), "{module}");
+        assert!(!module.contains("polint::core"), "{module}");
+        assert!(!module.contains("crate::core"), "{module}");
+    }
+}
+
+#[test]
+fn new_rule_policy_templates_generate_fixture_tests() {
+    let temp = tempfile::tempdir().unwrap();
+    polint_cmd()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success();
+    write_file(
+        &temp.path().join("go.mod"),
+        "module example.com/policytemplates\n\ngo 1.22\n",
+    );
+
+    for (language, template) in [
+        ("ts", "request-to-shell"),
+        ("ts", "secret-to-log"),
+        ("ts", "pii-to-analytics"),
+        ("go", "sensitive-write-guard"),
+        ("go", "transaction-cleanup"),
+        ("go", "raw-reachable-api"),
+        ("ts", "ssrf"),
+        ("ts", "dangerous-html"),
+        ("ts", "unsafe-deserialization"),
+        ("ts", "user-file-path"),
+    ] {
+        let rule_name = format!("template-{template}");
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["new-rule", language, &rule_name, "--template", template])
+            .assert()
+            .success();
+    }
+    point_generated_rule_pack_at_local_polint(temp.path());
+
+    let value = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["test", "--no-cache", "--format", "json"])
+            .assert()
+            .success(),
+    );
+    assert_eq!(value["summary"]["total"], 20);
+    assert_eq!(value["summary"]["failed"], 0, "{value:#?}");
+}
+
+#[test]
 fn rule_macro_rejects_unknown_fact_view_parameter() {
     let temp = tempfile::tempdir().unwrap();
     let polint_path = repo_root()

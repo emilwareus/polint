@@ -44,6 +44,18 @@ pub(crate) fn no_secret_logs(ctx: &mut RuleCtx<'_>, flow: DataFlow<'_>) -> RuleR
 There is no alternate fluent builder, string query language, closure filter, or
 public graph traversal API.
 
+## Template Starters
+
+`polint new-rule <lang> <name> --template <id>` can scaffold data-flow policy
+starters for `request-to-shell`, `secret-to-log`, `pii-to-analytics`, `ssrf`,
+`dangerous-html`, `unsafe-deserialization`, and `user-file-path`. Each generated
+rule uses `DataFlow<'_>`, `FlowQuery`, explicit source/sink/barrier patterns,
+and positive/negative fixtures under `.polint/tests/rules/`.
+
+Templates are editable repo-local examples. They use the backed primitives below
+and intentionally do not claim a complete built-in taxonomy for PII, SSRF, HTML,
+deserialization, analytics, or file paths.
+
 ## Supported Patterns
 
 Phase 58 backs these patterns:
