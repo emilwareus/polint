@@ -9,6 +9,7 @@
 #![deny(missing_docs)]
 
 pub mod facts;
+pub mod policy;
 pub mod scope;
 
 use crate::core::{FileId, TestFact};
@@ -45,10 +46,14 @@ pub mod prelude {
     pub use crate::rule_error::{RuleError, RuleResult};
     pub use crate::sdk::collect_go_tests;
     pub use crate::sdk::facts::{
-        BranchObligations, CallGraph, Cfg, ComplexityMetrics, CoverageFacts, DataFlow, FileMetrics,
-        FunctionMetrics, Functions, GoTests, Imports, JsxAttributes, ModuleGraphFacts, Packages,
-        References, ResolvedImports, SourceFiles, StringLiterals, Symbols, TestSuiteMetrics,
-        TsClasses, TsComponents,
+        BranchObligations, CallGraph, Calls, Cfg, ComplexityMetrics, ControlFlow, CoverageFacts,
+        DataFlow, Events, FileMetrics, FunctionMetrics, Functions, GoTests, Imports, JsxAttributes,
+        ModuleGraphFacts, Packages, References, ResolvedImports, SourceFiles, StringLiterals,
+        Symbols, TestSuiteMetrics, TsClasses, TsComponents,
+    };
+    pub use crate::sdk::policy::{
+        BarrierPattern, EventPattern, FlowQuery, GuardPattern, GuardQuery, LifecycleQuery,
+        PolicyPrecision, PolicyStatus, PolicyViolation, ReachQuery, SinkPattern, SourcePattern,
     };
     pub use crate::sdk::scope::{file_in_scope, file_matches_globs, glob_matches};
 }

@@ -11,6 +11,7 @@ use crate::core::{
     ResolutionStatus, ResolvedImportFact, SourceFile, StringLiteralFact, SymbolFact, SymbolId,
     SymbolKind, SymbolResolutionStatus, TestFact, TsClassFact, TsComponentFact,
 };
+use crate::sdk::policy::{FlowQuery, GuardQuery, LifecycleQuery, PolicyViolation, ReachQuery};
 use crate::symbol_graph::query;
 
 /// Public source-file view. Requesting this view maps to the `syntax` capability.
@@ -842,10 +843,81 @@ pub struct CallGraph<'a> {
     _db: &'a AnalysisDb,
 }
 
-/// Reserved dataflow fact view. Requesting this view currently maps to unsupported `dataflow`.
+/// Preview event policy view. Requesting this view maps to fail-closed `events`.
+#[derive(Clone, Copy)]
+pub struct Events<'a> {
+    _db: &'a AnalysisDb,
+}
+
+impl<'a> Events<'a> {
+    /// Finds events matching `query`.
+    ///
+    /// This method is preview vocabulary only in Phase 55. Rules requesting
+    /// `Events<'_>` fail closed before execution until Phase 56 provides real
+    /// event facts.
+    pub fn matching(self, _query: crate::sdk::policy::EventPattern) -> Vec<PolicyViolation> {
+        preview_query_unavailable("Events::matching")
+    }
+}
+
+/// Preview calls policy view. Requesting this view maps to fail-closed `calls`.
+#[derive(Clone, Copy)]
+pub struct Calls<'a> {
+    _db: &'a AnalysisDb,
+}
+
+impl<'a> Calls<'a> {
+    /// Finds forbidden reachable calls described by `query`.
+    ///
+    /// This method is preview vocabulary only in Phase 55. Rules requesting
+    /// `Calls<'_>` fail closed before execution until Phase 56 provides real
+    /// call-query facts.
+    pub fn forbidden_reachable(self, _query: ReachQuery) -> Vec<PolicyViolation> {
+        preview_query_unavailable("Calls::forbidden_reachable")
+    }
+}
+
+/// Preview control-flow policy view. Requesting this view maps to fail-closed `control_flow`.
+#[derive(Clone, Copy)]
+pub struct ControlFlow<'a> {
+    _db: &'a AnalysisDb,
+}
+
+impl<'a> ControlFlow<'a> {
+    /// Finds events missing a required guard.
+    ///
+    /// This method is preview vocabulary only in Phase 55. Rules requesting
+    /// `ControlFlow<'_>` fail closed before execution until Phase 57 provides
+    /// real guard-query facts.
+    pub fn missing_guard(self, _query: GuardQuery) -> Vec<PolicyViolation> {
+        preview_query_unavailable("ControlFlow::missing_guard")
+    }
+
+    /// Finds lifecycle starts missing required cleanup.
+    ///
+    /// This method is preview vocabulary only in Phase 55. Rules requesting
+    /// `ControlFlow<'_>` fail closed before execution until Phase 57 provides
+    /// real lifecycle-query facts.
+    pub fn missing_cleanup(self, _query: LifecycleQuery) -> Vec<PolicyViolation> {
+        preview_query_unavailable("ControlFlow::missing_cleanup")
+    }
+}
+
+/// Preview data-flow policy view. Requesting this view maps to fail-closed `dataflow`.
 #[derive(Clone, Copy)]
 pub struct DataFlow<'a> {
     _db: &'a AnalysisDb,
+}
+
+impl<'a> DataFlow<'a> {
+    /// Finds forbidden source-to-sink flows described by `query`.
+    ///
+    /// This method is preview vocabulary only in Phase 55. Rules requesting
+    /// `DataFlow<'_>` fail closed before execution until Phase 58 provides
+    /// real data-flow query facts.
+    pub fn forbidden(self, _query: FlowQuery) -> Vec<PolicyViolation> {
+        preview_query_unavailable("DataFlow::forbidden")
+    }
 }
 
 /// Reserved coverage fact view. Requesting this view currently maps to unsupported `coverage_facts`.
@@ -916,8 +988,15 @@ impl_fact_view!(JsxAttributes);
 impl_fact_view!(CoverageFacts);
 impl_fact_view!(Cfg, _db);
 impl_fact_view!(CallGraph, _db);
+impl_fact_view!(Events, _db);
+impl_fact_view!(Calls, _db);
+impl_fact_view!(ControlFlow, _db);
 impl_fact_view!(DataFlow, _db);
 impl_fact_view!(TestSuiteMetrics, _db);
+
+fn preview_query_unavailable(method: &str) -> ! {
+    panic!("{method} is preview-only; requesting rules must fail closed before execution")
+}
 
 #[cfg(test)]
 mod tests {
