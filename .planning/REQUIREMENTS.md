@@ -1,159 +1,200 @@
-# Requirements: polint v1.3 Graph Engine Precision
+# Requirements: polint v1.4 Policy Query Surface
 
-**Defined:** 2026-05-27
+**Defined:** 2026-06-20
 **Core Value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Milestone goal:** Turn v1.2's isolated semantic facts (MIR, CFG, calls, types, points-to, data flow) into a unified semantic graph and solver core, and use it to raise Go x/tools RTA and Jelly JS/TS call-graph benchmark recall from <3% to >25-30% while keeping precision a first-class target.
+**Milestone goal:** Promote the useful parts of the private graph, control-flow, and data-flow engine into a small preview SDK for policy queries. Rule authors should express advanced repo-local policies through typed query objects and pattern structs, not raw graph traversal or ad hoc DSLs.
 
-**Source research:** `research/evaluation-harness/GRAPH-ENGINE-BENCHMARK-RESEARCH.md`, `.planning/research/SUMMARY.md` (architecture, features, stack, pitfalls).
+**Source context:** v1.2 built private CFG, direct/refined calls, data-flow, path evidence, summaries, demand queries, and promotion gates. v1.3 improved the shared semantic graph, reachability roots, Go/TS call solving, solver budgets, unknown taxonomy, adaptation models, and benchmark gates. v1.4 turns the validated substrate into a user-facing rule-authoring surface while keeping solver internals private.
+
+## API Design Contract
+
+v1.4 should have one obvious way to write these rules:
+
+```rust
+#[polint::rule(
+    id = "local/no-secret-logs",
+    description = "Secret-like values must not flow to logs without redaction.",
+    severity = "error"
+)]
+pub(crate) fn no_secret_logs(ctx: &mut RuleCtx<'_>, flow: DataFlow<'_>) -> RuleResult {
+    let mut query = FlowQuery::new(
+        SourcePattern::secret_like(["token", "password", "apiKey"]),
+        SinkPattern::logger(),
+    );
+    query.barriers = BarrierPattern::call_any(["redact", "mask_secret"]);
+    query.max_paths = 20;
+
+    for violation in flow.forbidden(query) {
+        ctx.report(violation.diagnostic(
+            ctx.rule_id(),
+            "Secret-like value reaches logging without redaction.",
+        ));
+    }
+
+    Ok(())
+}
+```
+
+The public style is:
+
+1. Request a typed preview view in the `#[polint::rule]` function signature.
+2. Construct one plain query object with typed patterns.
+3. Run one query method on the view.
+4. Report each returned violation through its diagnostic helper.
+
+Do not add competing public forms for the same behavior: no fluent builder DSL, no closure-filter DSL, no string query language, no public raw CFG/call/data-flow graph traversal as the normal rule-authoring path.
 
 ## v1 Requirements
 
-Requirements for the v1.3 milestone. Each maps to exactly one roadmap phase.
+Requirements for the v1.4 milestone. Each maps to exactly one roadmap phase.
 
-### Identity & Reachability
+### Preview SDK Surface
 
-- [x] **IDENT-01**: polint emits stable internal identity records `(file, span, language, package/module, container, display, signature digest)` for every function and callsite, deduplicated by semantic identity before scoring.
-- [x] **IDENT-02**: polint provides per-benchmark identity renderers — Go `RelString`-style function/method names and Jelly `file:start_line:start_col:end_line:end_col` callsite/function spans — with ≥99% Jelly oracle-span coverage on micro fixtures and CRLF/LF normalization.
-- [x] **IDENT-03**: polint reports identity-vs-unsupported categories distinctly (`wrong_identity`, `unsupported_edge`, `unresolved_edge`, `package_load_limitation`, `model_missing`) in evaluation output.
-- [x] **REACH-01**: polint discovers explicit reachability roots from the v1.2 entrypoint substrate (`main`, `init`, exported, tests, configured repo entrypoints) and exposes them as typed facts.
-- [x] **REACH-02**: polint scores benchmark suites in the mode each oracle expects via a `scoring_mode` field (`oracle-rta`, `oracle-jelly`, `whole-repo`) on suite manifests; unreachable direct calls remain facts but are marked outside the reachable graph.
-- [x] **REACH-03**: polint enforces a determinism gate (10 shuffled provider-order runs produce byte-identical observed JSON) before any solver phase lands and the gate is inherited by every subsequent solver phase.
+- [ ] **API-01**: Rule authors can request preview fact views `Events<'_>`, `Calls<'_>`, `ControlFlow<'_>`, and `DataFlow<'_>` from `#[polint::rule]` signatures using only `polint::sdk::prelude::*`.
+- [ ] **API-02**: Advanced policy rules use one public query-object style: `Query::new(required...)`, explicit option fields, a single view method, and violation results. Fluent DSLs, closure filters, string mini-languages, and raw graph traversal are not supported public APIs.
+- [ ] **API-03**: Query structs exist for `ReachQuery`, `GuardQuery`, `LifecycleQuery`, and `FlowQuery`, with stable required inputs, explicit defaults, deterministic ordering, and documented budget knobs.
+- [ ] **API-04**: Pattern structs exist for `EventPattern`, `SourcePattern`, `SinkPattern`, `GuardPattern`, and `BarrierPattern`, covering calls, imports/packages, fields/properties, HTTP/trust boundaries, secrets, PII-like values, loggers, command execution, network requests, HTML sinks, and persistence writes.
+- [ ] **API-05**: Macro-derived capabilities, rule manifests, and capability diagnostics understand the new preview views; unsupported setup produces `polint/capability` diagnostics and the rule does not run with placeholder facts.
+- [ ] **API-06**: Existing reserved low-level `Cfg<'_>` and `CallGraph<'_>` remain reserved; v1.4 promotes policy-level `ControlFlow<'_>` and `Calls<'_>` instead of exposing raw CFG or call-graph internals.
 
-### Shared Semantic Graph & Unified Solver
+### Events and Calls
 
-- [x] **GRAPH-01**: polint has a private `analysis::semantic_graph` with typed `NodeKind` (function, callsite, scope, place, abstract object, module, package) and `EdgeKind` (call, member-of, alloc, flow), indexes, validation, provider manifest, and cache key.
-- [x] **GRAPH-02**: polint defines a constraint vocabulary (`CopyEdge`, `Alloc`, `FieldLoad`, `FieldStore`, `CallConstraint`, `ModelEdge`, `TypeConstraint`) that language frontends emit into the semantic graph; constraint emission is verified by snapshot fixtures.
-- [x] **GRAPH-03**: polint has a private unified `analysis::solver` with deterministic `VecDeque` worklist, explicit `SolverBudget` / `BudgetStatus`, per-language `SolverPolicy` trait scaffolding, and folds v1.2's `points_to::solver` in as a sub-domain.
-- [x] **GRAPH-04**: every solver-derived edge carries `DerivedEdgeProvenance` (contributing fact IDs, constraint kind, solver step) consumable by `polint explain`.
-- [ ] **GRAPH-05**: `refined_calls::provider` is reworked to project over solver output and preserves the v1.2 `RefinedCallEdgeFact` contract for downstream `data_flow`/`evidence`/SDK views without contract changes.
+- [ ] **CALL-01**: `Events<'_>` can match semantic events through `EventPattern` without exposing raw AST, MIR, CFG, solver, or graph node IDs.
+- [ ] **CALL-02**: `Calls<'_>` supports `forbidden_reachable(ReachQuery)` for policies such as "no raw API reachable from request handlers" and returns deterministic violations with root, callsite, target, precision, and unknown/budget evidence.
+- [ ] **CALL-03**: Reach queries can constrain roots, packages/modules, target patterns, trust-boundary roots, tests inclusion, max depth, max paths, and minimum precision/confidence.
+- [ ] **CALL-04**: Call-query behavior is backed by the v1.3 refined-call projection and unknown taxonomy, preserving precision floors and surfacing unresolved or budget-exceeded edges honestly.
 
-### Go Critical Path
+### Control-Flow Policies
 
-- [x] **GO-01**: polint ships a `polint-go-frontend` Go sidecar binary that uses `go/packages` + `go/ssa` + `golang.org/x/tools v0.45.0` and emits NDJSON facts (functions, methods, receiver types, init, method sets, call sites, types) over stdio with a versioned schema.
-- [x] **GO-02**: polint has `src/go/semantic/` with a sidecar client and lowering layer that maps NDJSON facts to semantic-graph constraints with stable identities and exact source spans.
-- [x] **GO-03**: the sidecar process boundary enforces typed protocol with explicit terminators, per-request timeouts, cancellation propagation, a single long-lived sidecar per `polint check`, and orphan-process cleanup verified by a SIGTERM fixture (no surviving Go processes after 5 seconds).
-- [x] **GO-04**: polint distinguishes `GoPackagesLoadFailed`, `GoVersionUnsupported`, and `GoSidecarTimeout` in the unsupported/unknown taxonomy and includes the sidecar binary digest + Go toolchain version in cache keys.
-- [x] **GO-05**: polint has a private Go RTA driver in `analysis::solver::go_rta` (reachable functions from roots, address-taken function tracking, dynamic call sites by signature, runtime types through interfaces, interface invoke by method-set, fixed-point iteration).
+- [ ] **CTRL-01**: `ControlFlow<'_>` supports `missing_guard(GuardQuery)` for policies such as auth-before-sensitive-write, validation-before-money-move, and allowlist-before-dangerous-call.
+- [ ] **CTRL-02**: `ControlFlow<'_>` supports `missing_cleanup(LifecycleQuery)` for policies such as transaction rollback/commit, file close, lock unlock, span end, and resource release on success and error exits.
+- [ ] **CTRL-03**: Guard and lifecycle queries can express same-function and bounded-interprocedural checks without exposing dominance/postdominance graphs directly.
+- [ ] **CTRL-04**: Control-flow results include precise event spans, guard/cleanup candidates, uncovered paths, conservative unknowns, and budget status in diagnostic evidence.
 
-### JS/TS Critical Path
+### Data-Flow Policies
 
-- [x] **JS-01**: polint enumerates JS/TS functions (declarations, expressions, arrows, methods, constructors, accessors, class static blocks) and callsites (calls, `new`, tagged templates, optional calls, dynamic import, require) with exact Jelly-shaped spans matching ≥99% of Jelly fixture oracle spans.
-- [x] **JS-02**: polint builds proper lexical scopes (`var`, `let`, `const`, functions, classes, imports, destructuring, parameters, catch, re-exports) and a module graph covering ESM, CommonJS, and TypeScript path aliases.
-- [x] **JS-03**: polint emits JS/TS direct call bindings (`f()`, `ns.f()`, imported aliases, local aliases) as `CopyEdge` + `CallConstraint` constraints into the semantic graph.
-- [ ] **JS-04**: polint has a private JS/TS function-token propagation driver in `analysis::solver::ts_tokens` with per-variable token caps, a `"too-many-tokens"` sentinel, and `BudgetExceeded` reporting consumed by the unknown taxonomy.
-- [x] **JS-05**: polint has a private JS/TS object/property/prototype/class/`this` model in `src/ts/object_model/` + `analysis::solver::ts_object_model` (allocation-site abstraction, bounded property buckets with computed-property handling, prototype-walk termination, `this` for arrow/method/constructor/bound/`call`/`apply`).
+- [ ] **FLOW-01**: `DataFlow<'_>` supports `forbidden(FlowQuery)` for source-to-sink policies with optional barriers/sanitizers.
+- [ ] **FLOW-02**: `DataFlow<'_>` supports required-barrier semantics for policies such as request-to-shell requiring validation, HTML sinks requiring escaping, and external URL fetches requiring host allowlists.
+- [ ] **FLOW-03**: Built-in source and sink patterns cover HTTP request inputs, route params, environment/secrets, PII-like identifiers, file paths, URLs, loggers, analytics, shell commands, SQL/query execution, HTML/JSX raw insertion, and outbound network clients.
+- [ ] **FLOW-04**: Flow queries use the existing private data-flow and evidence substrate for bounded interprocedural path search, path ranking, summary expansion handles, and deterministic capped results.
+- [ ] **FLOW-05**: Data-flow queries clearly distinguish exact, heuristic, unsupported, unknown, and budget-exceeded results; heuristic patterns must say they are heuristic.
 
-### Adaptation, Cache, Budgets, Taxonomy
+### Violations, Evidence, Cache, and Unknowns
 
-- [ ] **ADAPT-01**: polint has a private `analysis::adaptation/` with a TOML model schema (source pattern, target pattern, confidence, language, scope, evidence), a loader, and a validator that confirms target symbols exist in the semantic graph before accepting facts.
-- [ ] **ADAPT-02**: `benchmark adapted` mode reports prompt hash, changed model files, accepted/rejected facts, unknown delta, precision/recall delta, runtime/cache delta, and held-out subset deltas; the adaptation agent runs in a sandbox that cannot read benchmark oracle files.
-- [x] **CACHE-01**: every new v1.3 fact family has a dependency index and cache key participating digests for the sidecar binary, Go toolchain version, adaptation model files, and solver budgets, verified by both must-invalidate and must-preserve-hit fixtures.
-- [x] **CACHE-02**: polint enforces solver budgets across token-set size, property abstraction, dynamic-call fanout, model expansion, and package depth, with budget exhaustion surfaced as facts rather than silent precision drops.
-- [ ] **TAX-01**: polint consolidates the unsupported/unknown taxonomy across providers (`SetupMissing`, `UnsupportedSemantic`, `MissingFact`, `OutOfScope`, plus sidecar-specific failure modes) and exposes it via `polint inspect unknowns --format json`.
+- [ ] **EVID-01**: All query families return a consistent `PolicyViolation`-style result that can produce a diagnostic with rule ID, message, primary span, labels, suggestions when available, and structured evidence.
+- [ ] **EVID-02**: Violation evidence includes query type, matched patterns, root/source/sink/event spans, path steps, precision/confidence/status, budget state, and unknown reasons in stable JSON/SARIF output.
+- [ ] **EVID-03**: Results are deterministically sorted and deduplicated across sequential/parallel execution, cache restore, provider ordering, and repeated runs.
+- [ ] **EVID-04**: Query parameters, preview API versions, rule options, language lifecycle inputs, solver budgets, and model/adaptation files participate in cache identity with must-invalidate and must-preserve-hit tests.
+- [ ] **EVID-05**: Unknown and budget behavior is user-visible and actionable; policy rules must not silently pass when setup gaps, unsupported semantics, or budget exhaustion make the answer incomplete.
 
-### Benchmark Promotion
+### Flagship Rule Templates
 
-- [x] **BENCH-01**: the benchmark promotion gate enforces hard per-suite precision floors (Go ≥60%, Jelly configurable), tracks F-score β=0.5 alongside F1, enforces per-language deltas separately, includes a polyglot Go+TS canary fixture, and asserts a public-API leak CI gate (no v1.3 solver types reachable from `polint::sdk::prelude::*`).
+- [ ] **TPL-01**: `polint new-rule` can generate a request-to-shell template using `DataFlow<'_>`, `FlowQuery`, `SourcePattern::http_request`, `SinkPattern::call`, and validation barriers.
+- [ ] **TPL-02**: Generated templates cover secret-to-log and PII-to-analytics policies with explicit heuristic wording and redaction/barrier examples.
+- [ ] **TPL-03**: Generated templates cover auth/validation-before-sensitive-write, transaction cleanup, and raw reachable API policies using `ControlFlow<'_>` and `Calls<'_>`.
+- [ ] **TPL-04**: Generated templates cover SSRF, dangerous HTML sinks, unsafe deserialization from request data, and user-controlled file path policies using the same query-object style.
+- [ ] **TPL-05**: README, examples, generated agent skill text, and docs show the flagship templates as repo-local policy examples without presenting polint as a bundled ruleset.
+
+### Validation and Public Boundary
+
+- [ ] **VAL-01**: Each preview view and each query family has at least one temp-repo style test where generated `.polint/rules` imports only `polint::sdk::prelude::*`, registers through `polint::runner::run_cli`, consumes real facts, and asserts diagnostics through `polint check --format json`.
+- [ ] **VAL-02**: Public docs under `docs/facts/` describe the preview status, syntax, limits, precision tiers, heuristic behavior, unknown/budget semantics, and realistic examples for every new view and query type.
+- [ ] **VAL-03**: The public-surface leak gate proves raw CFG, call graph, semantic graph, data-flow graph, solver, provider, `AnalysisDb`, and private IDs are not reachable from the supported SDK, CLI, runner, README, generated skill text, or docs/facts surfaces.
+- [ ] **VAL-04**: Milestone exit verification runs full workspace tests, formatting, clippy, temp-repo SDK tests, cache invalidation tests, docs/example smoke tests, and deterministic repeated-run checks for the flagship policies.
 
 ## Future Requirements
 
-Deferred to v1.4+. Tracked but not in the v1.3 roadmap.
+Deferred to v1.5+ unless explicitly pulled forward.
 
-### Precision Layers
+### Stable Query Surface
 
-- **PREC-FUT-01**: Go VTA provider (type-flow refinement above RTA).
-- **PREC-FUT-02**: Bounded Andersen-style points-to as a separate opt-in family.
-- **PREC-FUT-03**: Context sensitivity (k-CFA / object-sensitive) on top of the v1.3 solver core.
+- **STABLE-FUT-01**: Promote preview query APIs to stable after at least one milestone of external-rule usage and compatibility review.
+- **STABLE-FUT-02**: Add semver-stable JSON schema for query evidence consumed by agents and IDEs.
+- **STABLE-FUT-03**: Add migration tooling if preview query names or fields change before stabilization.
 
-### Public Surface
+### More Precision
 
-- **SDK-FUT-01**: Public SDK views over the v1.3 semantic graph and unified call graph (requires two-milestone benchmark stability before promotion).
-- **SDK-FUT-02**: Public `polint inspect graph` and `polint query` commands over solver output.
+- **PREC-FUT-01**: Context sensitivity controls for specific flow/call queries.
+- **PREC-FUT-02**: Opt-in bounded Andersen/VTA precision exposed as query options after benchmark gates.
+- **PREC-FUT-03**: Language-specific framework packs for Rails/Django/Spring/etc. after Go and TS/JS policy queries prove the model.
 
-### Language Scope
+### Interactive Querying
 
-- **LANG-FUT-01**: Python semantic frontend and benchmark adapters.
-- **LANG-FUT-02**: Java semantic frontend and benchmark adapters.
-
-### Adaptation
-
-- **ADAPT-FUT-01**: Native-callable shim library for JS built-ins (`Array.prototype.map`, `Promise.then`, etc.) loaded through the adaptation schema.
-- **ADAPT-FUT-02**: Reflection / dynamic-import auto-modelling with safe defaults.
+- **QUERY-FUT-01**: Public `polint query` command for exploratory policy queries outside Rust rule code.
+- **QUERY-FUT-02**: IDE/LSP integration that visualizes policy paths and unknowns.
+- **QUERY-FUT-03**: Agent-editable policy templates with guarded auto-fix suggestions.
 
 ## Out of Scope
 
-Explicitly excluded from v1.3 to prevent scope creep.
+Explicitly excluded from v1.4 to prevent scope creep.
 
 | Feature | Reason |
 |---------|--------|
-| cgo-hosted Go runtime inside the Rust process | Breaks rayon determinism, the workspace `unsafe_code = "forbid"` lint, and cross-compilation. Use the out-of-process sidecar instead. |
-| Reimplementing `go/types` / `go/ssa` in Rust | Multi-engineer-year, diverges from the upstream compatibility authority. Sidecar consumes the official Go libraries. |
-| Datalog / Datafrog / `differential-dataflow` framework | Opaque scheduling conflicts with v1.2's deterministic layer-cache and provenance invariants. Solver stays a hand-rolled deterministic worklist. |
-| Async runtime (`tokio`/`async-std`) in the solver core | Determinism. The solver is synchronous; rayon handles parallelism at safe boundaries. |
-| Promoting any v1.3 type to the public SDK | v1.2 promotion discipline applies: new analysis stays `pub(crate)` until benchmark gates approve over two milestones. |
-| Python and Java parity | Go and TS/JS must prove the complete model first. |
-| Whole-program closed-world points-to as default analysis | Cost/precision tradeoff is wrong for repo-local rules; available as opt-in only later. |
-| Auto-modeled reflection edges in Go or JS | Inventing edges from heuristics destroys precision; explicit `unsupported_edge` is correct behavior. |
-| Recall-by-flooding (emitting every plausible edge) | Hard precision floors in the promotion gate make this fail-build, by design. |
-| Benchmark-label adaptation (agent reading oracle expected edges) | Adaptation agent runs in a sandbox that cannot read oracle files; model facts whose targets match oracle expectations are rejected. |
-| Wildcard / broad-pattern adaptation models | Schema validator requires concrete target patterns; broad patterns flooding recall are rejected design-time. |
-| Public CLI for the new semantic graph or solver | `polint inspect unknowns --format json` is the only new public CLI surface in v1.3. |
+| Raw public CFG, call graph, semantic graph, solver, or data-flow graph APIs | The product value is simple policy authoring. Raw graph APIs freeze internals and create many ways to do the same thing. |
+| A string query language | Adds parser, documentation, escaping, and partial-overlap problems with Rust query structs. Rust rules already give users a typed host language. |
+| Fluent builder DSLs for every query option | Creates multiple equivalent spellings and fights the "one good way" API goal. Use `Query::new(...)` plus explicit option fields. |
+| Bundled production ruleset | polint remains a framework for repo-local rules. Templates are examples/scaffolds, not shipped default policy. |
+| Perfect whole-program precision | Preview APIs must expose precision/unknown/budget limits honestly rather than pretending exact coverage. |
+| Auto-fixing advanced policy violations | Most violations require domain judgment. v1.4 can include suggestions/evidence, not automatic rewrites. |
+| Python/Java parity | Go and TS/JS remain the proving languages for this policy query surface. |
+| Public adaptation/model-pack authoring surface | Existing adaptation internals may feed query answers, but v1.4 should not expose a separate model-pack SDK. |
+| Replacing ESLint, Biome, Ruff, golangci-lint, or formatters | These policy queries target repo-specific semantic policies generic linters cannot know. |
 
 ## Traceability
 
-Which phases cover which requirements. Filled by the roadmapper after roadmap creation.
+Which phases cover which requirements.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| IDENT-01 | Phase 42 | Complete |
-| IDENT-02 | Phase 42 | Complete |
-| IDENT-03 | Phase 42 | Complete |
-| REACH-01 | Phase 43 | Complete |
-| REACH-02 | Phase 43 | Complete |
-| REACH-03 | Phase 43 | Complete |
-| GRAPH-01 | Phase 44 | Complete |
-| GRAPH-02 | Phase 44 | Complete |
-| GRAPH-03 | Phase 47 | Complete |
-| GRAPH-04 | Phase 47 | Complete |
-| GRAPH-05 | Phase 52 | Pending |
-| GO-01 | Phase 46 | Complete |
-| GO-02 | Phase 46 | Complete |
-| GO-03 | Phase 46 | Complete |
-| GO-04 | Phase 46 | Complete |
-| GO-05 | Phase 48 | Complete |
-| JS-01 | Phase 45 | Complete |
-| JS-02 | Phase 45 | Complete |
-| JS-03 | Phase 45 | Complete |
-| JS-04 | Phase 49 | Pending |
-| JS-05 | Phase 50 | Complete |
-| ADAPT-01 | Phase 51 | Pending |
-| ADAPT-02 | Phase 51 | Pending |
-| CACHE-01 | Phase 53 | Complete |
-| CACHE-02 | Phase 53 | Complete |
-| TAX-01 | Phase 52 | Pending |
-| BENCH-01 | Phase 54 | Complete |
+| API-01 | Phase 55 | Planned |
+| API-02 | Phase 55 | Planned |
+| API-03 | Phase 55 | Planned |
+| API-04 | Phase 55 | Planned |
+| API-05 | Phase 55 | Planned |
+| API-06 | Phase 55 | Planned |
+| CALL-01 | Phase 56 | Planned |
+| CALL-02 | Phase 56 | Planned |
+| CALL-03 | Phase 56 | Planned |
+| CALL-04 | Phase 56 | Planned |
+| CTRL-01 | Phase 57 | Planned |
+| CTRL-02 | Phase 57 | Planned |
+| CTRL-03 | Phase 57 | Planned |
+| CTRL-04 | Phase 57 | Planned |
+| FLOW-01 | Phase 58 | Planned |
+| FLOW-02 | Phase 58 | Planned |
+| FLOW-03 | Phase 58 | Planned |
+| FLOW-04 | Phase 58 | Planned |
+| FLOW-05 | Phase 58 | Planned |
+| EVID-01 | Phase 59 | Planned |
+| EVID-02 | Phase 59 | Planned |
+| EVID-03 | Phase 59 | Planned |
+| EVID-04 | Phase 59 | Planned |
+| EVID-05 | Phase 59 | Planned |
+| TPL-01 | Phase 60 | Planned |
+| TPL-02 | Phase 60 | Planned |
+| TPL-03 | Phase 60 | Planned |
+| TPL-04 | Phase 60 | Planned |
+| TPL-05 | Phase 60 | Planned |
+| VAL-01 | Phase 61 | Planned |
+| VAL-02 | Phase 61 | Planned |
+| VAL-03 | Phase 62 | Planned |
+| VAL-04 | Phase 62 | Planned |
 
 **Coverage:**
-- v1.3 requirements: 27 total
-- Mapped to phases: 27 (100%)
+- v1.4 requirements: 33 total
+- Mapped to phases: 33 (100%)
 - Unmapped: 0
 
 **Phase coverage breakdown:**
-- Phase 42: IDENT-01, IDENT-02, IDENT-03 (3 reqs)
-- Phase 43: REACH-01, REACH-02, REACH-03 (3 reqs)
-- Phase 44: GRAPH-01, GRAPH-02 (2 reqs)
-- Phase 45: JS-01, JS-02, JS-03 (3 reqs) — parallel-eligible with Phase 46
-- Phase 46: GO-01, GO-02, GO-03, GO-04 (4 reqs) — parallel-eligible with Phase 45
-- Phase 47: GRAPH-03, GRAPH-04 (2 reqs)
-- Phase 48: GO-05 (1 req) — parallel-eligible with Phase 49
-- Phase 49: JS-04 (1 req) — parallel-eligible with Phase 48
-- Phase 50: JS-05 (1 req)
-- Phase 51: ADAPT-01, ADAPT-02 (2 reqs)
-- Phase 52: GRAPH-05, TAX-01 (2 reqs)
-- Phase 53: CACHE-01, CACHE-02 (2 reqs)
-- Phase 54: BENCH-01 (1 req)
+- Phase 55: API-01, API-02, API-03, API-04, API-05, API-06 (6 reqs)
+- Phase 56: CALL-01, CALL-02, CALL-03, CALL-04 (4 reqs)
+- Phase 57: CTRL-01, CTRL-02, CTRL-03, CTRL-04 (4 reqs)
+- Phase 58: FLOW-01, FLOW-02, FLOW-03, FLOW-04, FLOW-05 (5 reqs)
+- Phase 59: EVID-01, EVID-02, EVID-03, EVID-04, EVID-05 (5 reqs)
+- Phase 60: TPL-01, TPL-02, TPL-03, TPL-04, TPL-05 (5 reqs)
+- Phase 61: VAL-01, VAL-02 (2 reqs)
+- Phase 62: VAL-03, VAL-04 (2 reqs)
 
 ---
-*Requirements defined: 2026-05-27*
-*Last updated: 2026-05-31 after Phase 45 fixture and gate closure*
+*Requirements defined: 2026-06-20*

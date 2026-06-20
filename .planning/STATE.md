@@ -1,28 +1,27 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.3
-milestone_name: Graph Engine Precision
-status: milestone_complete
-last_updated: 2026-06-06T10:05:33Z
-last_activity: 2026-06-06
+milestone: v1.4
+milestone_name: Policy Query Surface
+status: planning
+last_updated: "2026-06-20T07:58:34Z"
+last_activity: 2026-06-20
 progress:
-  total_phases: 13
-  completed_phases: 13
-  total_plans: 50
-  completed_plans: 50
-  percent: 100
-stopped_at: Milestone complete (Phase 54 was final phase)
+  total_phases: 8
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # State: polint
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (updated 2026-05-27)
+See: `.planning/PROJECT.md` (updated 2026-06-20)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Milestone complete
+**Current focus:** v1.4 Policy Query Surface requirements and roadmap
 
 ## Current Status
 
@@ -32,7 +31,8 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 - v1.1 Capability Fulfillment completed the capability plan, resolved imports/module graph, and symbols/references foundations.
 - Static-analysis engine research completed on 2026-05-16 in `research/ROADMAP.md`.
 - v1.2 Static Analysis Engine Implementation was audited, archived, and closed on 2026-05-27.
-- v1.2 requirements and roadmap were archived to `.planning/milestones/`; a fresh `.planning/REQUIREMENTS.md` should be created by the next milestone.
+- v1.3 Graph Engine Precision completed on 2026-06-06 and its requirements/roadmap are archived to `.planning/milestones/`.
+- v1.4 Policy Query Surface requirements and roadmap are active in `.planning/REQUIREMENTS.md` and `.planning/ROADMAP.md`.
 - Phase 22 has been shipped for review in PR #22: https://github.com/emilwareus/polint/pull/22.
 - Phase 24 has been shipped for review in PR #25: https://github.com/emilwareus/polint/pull/25.
 - Phase 29 has been shipped for review in PR #34: https://github.com/emilwareus/polint/pull/34.
@@ -41,10 +41,23 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 ## Current Position
 
-Phase: 54
-Plan: Not started
-Status: Milestone complete
-Last activity: 2026-06-06
+Phase: 55 - SDK Query Vocabulary and Preview Contract
+Plan: —
+Status: Ready for phase discussion/planning
+Last activity: 2026-06-20 — Milestone v1.4 roadmap created
+
+### Active Milestone Phase Progress
+
+| Phase | Status | Notes |
+|-------|--------|-------|
+| 55 | Planned | SDK query vocabulary and preview contract |
+| 56 | Planned | Events and calls query surface |
+| 57 | Planned | Control-flow guard and lifecycle queries |
+| 58 | Planned | Data-flow source/sink/barrier queries |
+| 59 | Planned | Violation evidence, unknowns, and cache semantics |
+| 60 | Planned | Flagship rule templates and agent ergonomics |
+| 61 | Planned | Public docs and external SDK validation |
+| 62 | Planned | Promotion gate, boundary proof, and closeout |
 
 ### Open repo-admin action (T-42-04-10)
 

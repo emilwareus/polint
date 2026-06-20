@@ -40,7 +40,7 @@ Phase 31 of v1.2 completed on 2026-05-21. polint now has a private P0 abstract-d
 
 v1.2 Static Analysis Engine Implementation shipped on 2026-05-27. It delivered the full private static-analysis engine substrate from the research roadmap: kernel scheduling, provenance, internal evaluation, cache identity and persistence, semantic backbone, MIR, CFG, calls, abstract domains, summaries, demand queries, extension sinks, framework/trust facts, type/value/alias precision layers, refined calls, data flow, slicing/evidence, benchmark promotion gates, and bounded public SDK/query ergonomics.
 
-v1.3 Graph Engine Precision is in progress. Phase 44 completed on 2026-05-30: a private `analysis::semantic_graph` (all `pub(crate)`) now provides the unified-solver keystone — closed `NodeKind`/`EdgeKind` taxonomies composing existing v1.2 identities, the closed GRAPH-02 constraint vocabulary (`CopyEdge`/`Alloc`/`FieldLoad`/`FieldStore`/`CallConstraint`/`ModelEdge`/`TypeConstraint`), deterministic by-kind/outgoing/incoming indexes, a kernel provider slotted between `type_value_alias` and `refined_calls` with a digest-complete cache key and validation, Go/TS snapshot fixtures, inheritance of the Phase 43 determinism gate, and a green public-surface-leak boundary. (Prior v1.3 phases: 42 benchmark identity/renderers, 43 reachability/roots/scoring-mode.)
+v1.3 Graph Engine Precision completed in June 2026. It delivered the private shared semantic graph, reachability/root semantics, Go semantic frontend and RTA driver, JS/TS inventory and function-token/object-model drivers, adaptation models, solver budgets, unknown taxonomy, and promotion gates needed to make graph precision measurable while keeping solver internals out of the public SDK.
 
 Archived milestone records:
 
@@ -51,28 +51,26 @@ Archived milestone records:
 - `.planning/milestones/v1.2-REQUIREMENTS.md`
 - `.planning/milestones/v1.2-MILESTONE-AUDIT.md`
 - `.planning/milestones/v1.2-phases/`
+- `.planning/milestones/v1.3-ROADMAP.md`
+- `.planning/milestones/v1.3-REQUIREMENTS.md`
 
-## Current Milestone: v1.3 Graph Engine Precision
+## Current Milestone: v1.4 Policy Query Surface
 
-**Goal:** Turn v1.2's isolated semantic facts (MIR, CFG, calls, types, points-to, data flow) into a unified semantic graph and solver core, and use it to raise Go x/tools RTA and Jelly JS/TS call-graph benchmark scores from <3% to >25-30% recall while keeping precision a first-class target.
+**Goal:** Expose the private graph, control-flow, and data-flow engine through a small, clear rule-authoring SDK for repo-specific policy queries without exposing raw solver or graph internals.
 
 **Target features:**
-- Benchmark identity and span normalization (Go `RelString` and Jelly span renderers, deduplication, identity-vs-unsupported reporting categories)
-- Reachability and root semantics (explicit roots, reachable-graph scoring, mode-aware oracle alignment)
-- JS/TS function and callsite inventory with exact-span identity hardening (Oxc-backed enumeration matching Jelly expectations)
-- JS/TS scope, binding, imports, and module graph for tracking function flow
-- Go semantic frontend backed by `go/packages` and SSA-style facts (package loading, type checking, receiver types, init functions, method sets)
-- Shared semantic graph and unified call-graph solver consuming direct, refined, entrypoint, and summary facts
-- Go RTA / VTA provider (reachable functions, address-taken, dynamic dispatch, interface invoke matching, fixed-point iteration)
-- JS/TS function-token propagation solver (tokens through assignments, aliases, parameters, returns, closures)
-- JS/TS object, property, prototype, class, and `this` model with allocation-site abstraction and bounded computed handling
-- Adaptation model layer for validated repo-local framework and native models, consumed by the solver with accept/reject reporting
-- Cache and solver budgets threaded throughout (digest inputs, per-family caches, token/property/fanout budgets, cold/warm reporting)
-- Unsupported and unknown taxonomy across providers for trustworthy diagnostic queues
+- Public preview views for `Events<'_>`, `Calls<'_>`, `ControlFlow<'_>`, and `DataFlow<'_>`.
+- A single clear query-object style for advanced policies: construct query, run query, report violations.
+- Query structs for `ReachQuery`, `GuardQuery`, `LifecycleQuery`, and `FlowQuery`.
+- Pattern structs for semantic events, sources, sinks, guards, and barriers.
+- Violation result types that produce consistent diagnostics, precision/status evidence, path evidence, and budget/unknown context.
+- Flagship generated rule templates for request-to-shell, secret logs, sensitive-write guards, transaction cleanup, raw reachable APIs, PII/analytics, SSRF, and dangerous HTML sinks.
+- Preview/stability gates: docs under `docs/facts/`, temp-repo SDK tests, cache-key participation, unknown/budget diagnostics, generated skill updates, and public-surface leak proof.
+- Strict public-boundary discipline: no raw CFG, call graph, data-flow graph, solver, provider, or `AnalysisDb` exposure.
 
-**Source research:** `research/evaluation-harness/GRAPH-ENGINE-BENCHMARK-RESEARCH.md` — current baselines are Go x/tools RTA 10% precision / 2.7% recall and Jelly 25% precision / 0.63% recall. The architectural keystone is a single shared semantic graph / solver core with language-specific frontends feeding it.
+**Source context:** v1.2 built private CFG, calls, data-flow, slicing/evidence, summaries, and demand-query substrates. v1.3 improved the shared semantic graph and solver precision. v1.4 should convert those internals into a user-facing policy authoring surface that keeps one obvious way to express advanced rules.
 
-The longer-term target remains a complete, agent-consumable static-analysis graph of the codebase: modules, symbols, references, calls, CFGs, summaries, type/value/alias facts, dataflow, taint, evidence, and extension-provided repository knowledge. v1.2 built the private substrate first; v1.3 should continue promoting public SDK/CLI contracts only when fixtures and benchmark gates prove them.
+The longer-term target remains a complete, agent-consumable static-analysis graph of the codebase: modules, symbols, references, calls, CFGs, summaries, type/value/alias facts, dataflow, taint, evidence, and extension-provided repository knowledge. v1.2 built the private substrate first, v1.3 improved precision, and v1.4 should promote public SDK/CLI contracts only when fixtures and benchmark gates prove them.
 
 ## Requirements
 
@@ -135,7 +133,7 @@ The longer-term target remains a complete, agent-consumable static-analysis grap
 
 ### Active
 
-v1.3 Graph Engine Precision active requirements are defined in `.planning/REQUIREMENTS.md`. They cover identity/span normalization, reachability and root semantics, JS/TS inventory and binding, Go semantic frontend and RTA, the shared semantic graph and unified call solver, JS/TS function-token propagation and object/property modeling, adaptation models, cache and solver budgets, and unsupported/unknown taxonomy.
+v1.4 Policy Query Surface active requirements are defined in `.planning/REQUIREMENTS.md`. They cover the public preview query views, pattern and query types, violation diagnostics/evidence, flagship generated templates, preview gates, docs, temp-repo tests, cache/unknown behavior, and public-boundary proof.
 
 ### Out of Scope
 
@@ -219,7 +217,7 @@ v1.3 Graph Engine Precision active requirements are defined in `.planning/REQUIR
 
 ## Next Milestone Goals
 
-v1.3 Graph Engine Precision is the active milestone. See the "Current Milestone" section above and `.planning/REQUIREMENTS.md` / `.planning/ROADMAP.md` for the scoped requirements and phase plan derived from `research/evaluation-harness/GRAPH-ENGINE-BENCHMARK-RESEARCH.md`.
+v1.4 Policy Query Surface is the active milestone. See the "Current Milestone" section above and `.planning/REQUIREMENTS.md` / `.planning/ROADMAP.md` for the scoped requirements and phase plan.
 
 ## Evolution
 
@@ -239,4 +237,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-30 after Phase 44 completion*
+*Last updated: 2026-06-20 after starting v1.4 Policy Query Surface*

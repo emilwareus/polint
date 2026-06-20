@@ -5,281 +5,232 @@
 - [x] **v1.0 MVP** - repo-local static analysis framework for Go and TypeScript/JavaScript, shipped 2026-05-02. Archive: [v1.0 roadmap](milestones/v1.0-ROADMAP.md).
 - [x] **v1.1 Capability Fulfillment** - capability planning, resolved imports/module graph, and symbol/reference foundations for Go and TS/JS.
 - [x] **v1.2 Static Analysis Engine Implementation** - private, validated, cache-aware, agent-extensible analysis engine substrate; 22 phases and 136 plans shipped 2026-05-27. Archive: [v1.2 roadmap](milestones/v1.2-ROADMAP.md).
-- [ ] **v1.3 Graph Engine Precision** - shared semantic graph + unified call solver; raises Go RTA and Jelly recall from <3% to >25-30% while holding precision floors. 13 phases (42-54) starting 2026-05-27.
+- [x] **v1.3 Graph Engine Precision** - shared semantic graph, reachability/root semantics, Go RTA, JS/TS token/object models, adaptation, unknown taxonomy, budgets, and benchmark promotion gates. Archive: [v1.3 roadmap](milestones/v1.3-ROADMAP.md).
+- [ ] **v1.4 Policy Query Surface** - preview SDK views and typed query objects for realistic repo-local policies over calls, control flow, and data flow.
 
 ## Current Status
 
-**Milestone:** v1.3 Graph Engine Precision (active)
-**Phases planned:** 13 (Phase 42 - Phase 54)
-**Requirements coverage:** 27/27 mapped
+**Milestone:** v1.4 Policy Query Surface (active)
+**Phases planned:** 8 (Phase 55 - Phase 62)
+**Requirements coverage:** 33/33 mapped
 **Granularity:** fine
 
-Phase numbering continues from v1.2's last phase 41. Phases 45/46 may run in parallel; phases 48/49 may run in parallel. All new analysis modules stay `pub(crate)` — v1.2 promotion discipline applies; no public SDK promotion in v1.3.
+Phase numbering continues from v1.3's last phase 54. v1.4 promotes a narrow policy-level SDK surface while keeping raw analysis internals private.
 
-## Phases (v1.3)
+## Phases (v1.4)
 
-- [x] **Phase 42: Benchmark Identity, Renderers, Dedup & Identity Taxonomy** - Stable identity records, Go `RelString` and Jelly span renderers, identity-vs-unsupported categorization, public-surface-leak CI gate. ✅ Verified 5/5 (full Go module import-path RelString deferred to Phase 46; broad Jelly coverage to Phase 45).
-- [x] **Phase 43: Reachability, Roots & Per-Suite Scoring Mode** - Explicit roots from v1.2 entrypoints, per-suite scoring mode, determinism gate (10-shuffle byte-identical observed JSON).
-- [x] **Phase 44: Semantic Graph Skeleton & Constraint Vocabulary** - Private `analysis::semantic_graph` with typed nodes/edges/indexes/cache key; constraint enum (`CopyEdge`, `Alloc`, `FieldLoad`, `FieldStore`, `CallConstraint`, `ModelEdge`, `TypeConstraint`).
-- [x] **Phase 45: JS/TS Inventory, Scope, Bindings, Module Graph & Direct Calls** - Oxc-backed exact-span function/callsite enumeration, lexical scopes, ESM/CJS/tsconfig module graph, direct call emission as constraints. ✅ Verified 5/5. May run in parallel with Phase 46.
-- [ ] **Phase 46: Go Semantic Frontend & Sidecar** - `polint-go-frontend` Go binary (`go/packages` + `go/ssa`), NDJSON protocol, sidecar client, lowering to semantic graph; typed process boundary, version pinning, failure taxonomy. May run in parallel with Phase 45.
-- [ ] **Phase 47: Unified Solver Core & Derived-Edge Provenance** - Private `analysis::solver` (deterministic `VecDeque` worklist, `SolverBudget`, `BudgetStatus`, per-language `SolverPolicy` scaffolding); folds in `points_to` as a sub-domain; `DerivedEdgeProvenance` contract.
-- [x] **Phase 48: Go RTA Driver** - Private `analysis::solver::go_rta` (reachable functions from roots, address-taken tracking, dynamic dispatch by signature, interface invoke by method-set, fixed-point iteration). May run in parallel with Phase 49.
-- [x] **Phase 49: JS/TS Function-Token Propagation Driver** - Private `analysis::solver::ts_tokens` with per-variable token caps, `"too-many-tokens"` sentinel, `BudgetExceeded` reporting. May run in parallel with Phase 48.
-- [x] **Phase 50: JS/TS Object/Property/Prototype/`this` Model & Driver** - Private `src/ts/object_model/` + `analysis::solver::ts_object_model` (allocation-site abstraction, bounded property buckets with computed-property handling, prototype-walk termination, `this` binding rules). ✅ Verified 5/5 (external Jelly corpus floors deferred to Phase 54).
-- [x] **Phase 51: Adaptation Model Layer** - Private `analysis::adaptation` (TOML schema, loader, validator confirming target symbols exist, `ModelEdge` emission); `benchmark adapted` mode with prompt hash, accepted/rejected facts, deltas, held-out subset reporting, sandboxed agent.
-- [x] **Phase 52: Refined-Calls Rework & Unknown Taxonomy Consolidation** - `refined_calls::provider` projects over solver output preserving v1.2 `RefinedCallEdgeFact` contract; consolidated taxonomy via `polint inspect unknowns --format json`.
-- [x] **Phase 53: Cache & Solver Budgets Consolidation** - Cache keys digest sidecar binary, Go toolchain, adaptation model files, and solver budgets across every new family; solver budgets enforce token-set/property/fanout/model/package-depth caps with `BudgetExceeded` as facts.
-- [x] **Phase 54: Benchmark Promotion Gate Extension** - Per-suite precision floors (Go ≥60%, Jelly configurable), F-score β=0.5 alongside F1, per-language deltas, polyglot Go+TS canary, public-API leak CI gate (no v1.3 solver types in `polint::sdk::prelude::*`). ✅ Verified 10/10 with external Go/Jelly recall values recorded as limited/skipped in `54-AUDIT.md`.
+- [ ] **Phase 55: SDK Query Vocabulary and Preview Contract** - Define preview views, query structs, pattern structs, capability derivation, and the "one public way" API contract.
+- [ ] **Phase 56: Events and Calls Query Surface** - Implement `Events<'_>` and `Calls<'_>` policy queries over v1.3 refined calls, reachability roots, and unknown taxonomy.
+- [ ] **Phase 57: Control-Flow Guard and Lifecycle Queries** - Implement `ControlFlow<'_>` guard and cleanup policies without exposing raw CFG/dominance graphs.
+- [ ] **Phase 58: Data-Flow Source/Sink/Barrier Queries** - Promote `DataFlow<'_>` preview methods for forbidden flows and required barriers over bounded private path search.
+- [ ] **Phase 59: Violation Evidence, Unknowns, and Cache Semantics** - Normalize violation results, diagnostic evidence, deterministic ordering, cache keys, and user-visible unknown/budget behavior.
+- [ ] **Phase 60: Flagship Rule Templates and Agent Ergonomics** - Generate realistic policy templates and update README/examples/skill text around the same query-object syntax.
+- [ ] **Phase 61: Public Docs and External SDK Validation** - Document every preview view/query and prove external repo-local rule usage through temp-repo tests.
+- [ ] **Phase 62: Promotion Gate, Boundary Proof, and Closeout** - Enforce public-surface leak gates, full regression, deterministic checks, and milestone exit verification.
 
 ## Phase Details
 
-### Phase 42: Benchmark Identity, Renderers, Dedup & Identity Taxonomy
-**Goal**: polint can render benchmark-grade identity for every function and callsite, dedupe by semantic identity, and distinguish identity-vs-unsupported categories so every downstream metric becomes trustworthy.
-**Depends on**: v1.2 substrate (`FactMeta`, `analysis::ids`, `analysis::calls`)
-**Requirements**: IDENT-01, IDENT-02, IDENT-03
-**Success Criteria** (what must be TRUE):
-  1. polint emits a stable identity record `(file, span, language, package/module, container, display, signature digest)` for every function and callsite, deduplicated before scoring (verified by snapshot fixtures).
-  2. Per-benchmark renderers produce Go `RelString`-style names and Jelly `file:start_line:start_col:end_line:end_col` spans with ≥99% Jelly oracle-span coverage on micro fixtures across Linux + macOS CI.
-  3. CRLF/LF normalization fixture passes and produces byte-identical renderer output.
-  4. Evaluation output reports distinct categories `wrong_identity`, `unsupported_edge`, `unresolved_edge`, `package_load_limitation`, `model_missing`.
-  5. Public-surface-leak CI gate is installed: external rule crate compiles against `polint::sdk::prelude::*` and reaches zero v1.3 solver types. ✅ Addressed by Plan 04 (leak-gate job on Linux + macOS; locked ALLOWED_PRELUDE = 97 entries).
-**Plans**: 5 total — 01 (identity substrate) ✅, 02 (renderers) ✅, 03 (identity taxonomy) ✅, 04 (public-surface-leak CI gate) ✅, 05 (gap closure: Go package-name qualification + dedup total-order determinism) ✅
+### Phase 55: SDK Query Vocabulary and Preview Contract
 
-### Phase 43: Reachability, Roots & Per-Suite Scoring Mode
-**Goal**: polint discovers explicit reachability roots from the v1.2 entrypoint substrate, scores each benchmark suite in the mode its oracle expects, and inherits a determinism gate every subsequent solver phase must pass.
-**Depends on**: Phase 42 (identity); v1.2 entrypoints
-**Requirements**: REACH-01, REACH-02, REACH-03
-**Success Criteria** (what must be TRUE):
-  1. Reachability roots (`main`, `init`, exported, tests, configured repo entrypoints) are discoverable as typed facts derived from the v1.2 entrypoint substrate.
-  2. Each suite manifest declares a `scoring_mode` (`oracle-rta`, `oracle-jelly`, `whole-repo`) and the gate fails if it is missing; unreachable direct calls remain facts but are marked outside the reachable graph.
-  3. Determinism gate fixture passes: 10 shuffled provider-order runs produce byte-identical observed JSON, identical solver step counts, and identical budget-exceeded reasons.
-  4. The determinism gate is wired so every subsequent solver-introducing phase inherits it as an acceptance gate.
-**Plans**: 3 total
-- [x] 43-01-PLAN.md — analysis::reachability module + ReachabilityRootFact/RootKind + root discovery (Go main/init/exported, entrypoint bridge, configured roots) + polint.reachability provider/cache + kernel splice (REACH-01)
-- [x] 43-02-PLAN.md — required scoring_mode field + 4 suite manifest updates + reachable-set BFS/DFS + CallReachabilityFact marking + mode-aware scoring filter (REACH-02)
-- [x] 43-03-PLAN.md — reserved solver_step_count/budget_exceeded_reasons section + N=10 determinism-gate harness + Go/TS fixtures + fast-CI Linux+macOS job + inheritance contract (REACH-03)
+**Goal:** Establish the public vocabulary and constraints before implementation so the milestone has one clear rule-authoring shape.
 
-### Phase 44: Semantic Graph Skeleton & Constraint Vocabulary
-**Goal**: polint has a private shared semantic graph with stable identities, typed edges, and a closed constraint vocabulary that language frontends emit into — the architectural keystone for the unified solver.
-**Depends on**: Phase 42 (identity), Phase 43 (reachability)
-**Requirements**: GRAPH-01, GRAPH-02
-**Success Criteria** (what must be TRUE):
-  1. Private `analysis::semantic_graph` exists with typed `NodeKind` (function, callsite, scope, place, abstract object, module, package) and `EdgeKind` (call, member-of, alloc, flow), outgoing/incoming/by-kind indexes, validation, provider manifest, and cache key.
-  2. Constraint vocabulary is defined as a closed enum (`CopyEdge`, `Alloc`, `FieldLoad`, `FieldStore`, `CallConstraint`, `ModelEdge`, `TypeConstraint`) with snapshot fixtures asserting language frontends emit the expected shapes.
-  3. Dependency index for the shared-graph cache layer is designed and lists every contributing input (semantic index, module graph, MIR, CFG, direct calls, types, summaries, entrypoints, extensions, accepted adaptation models, solver budgets).
-  4. Public-boundary proof: `analysis::semantic_graph` and the constraint enum stay `pub(crate)`, never reachable from `polint::sdk::prelude::*`.
-**Plans**: 3 total
-- [x] 44-01-PLAN.md — analysis::semantic_graph module + NodeKind/EdgeKind closed enums (composing existing v1.2 IDs) + node/edge facts + SemanticNodeId/SemanticEdgeId + stable keys + SemanticGraphStore indexes (GRAPH-01)
-- [x] 44-02-PLAN.md — ConstraintKind closed vocabulary + ConstraintFact family + SemanticConstraintId + build_semantic_graph emission from existing facts + ModelEdge reserved-empty + points-to naming-collision guard (GRAPH-02)
-- [x] 44-03-PLAN.md — polint.semantic_graph provider + cache key + validation + kernel order/run/validation splice + Go/TS snapshot fixtures + determinism-gate inheritance + public-surface-leak proof (GRAPH-01, GRAPH-02)
+**Depends on:** v1.2/v1.3 private graph, calls, CFG, data-flow, evidence, unknown taxonomy, capability derivation, rule manifests.
 
-### Phase 45: JS/TS Inventory, Scope, Bindings, Module Graph & Direct Calls
-**Goal**: polint enumerates every JS/TS function and callsite with Jelly-shaped spans, builds proper lexical scopes and a module graph, and emits direct bindings as constraints — the JS/TS foundation for the token solver.
-**Depends on**: Phase 42 (identity), Phase 44 (semantic graph skeleton)
-**Requirements**: JS-01, JS-02, JS-03
-**Success Criteria** (what must be TRUE):
-  1. polint enumerates JS/TS functions (declarations, expressions, arrows, methods, constructors, accessors, class static blocks) and callsites (calls, `new`, tagged templates, optional calls, dynamic import, require) with Jelly-shaped spans matching ≥99% of Jelly fixture oracle spans.
-  2. Lexical scopes (`var`, `let`, `const`, functions, classes, imports, destructuring, parameters, catch, re-exports) and a module graph covering ESM, CommonJS, and TypeScript path aliases are built and stored as private facts.
-  3. JS/TS direct call bindings (`f()`, `ns.f()`, imported aliases, local aliases) emit `CopyEdge` + `CallConstraint` constraints into the semantic graph (verified by snapshot fixtures).
-  4. All new JS/TS modules (`src/ts/inventory/`, `src/ts/scope/`) stay `pub(crate)` and pass the public-surface-leak gate.
-**Plans**: 5 total
-- [x] 45-01-PLAN.md — private JS/TS inventory fact model, Oxc function/callsite extraction, normalized inventory output (JS-01)
-- [x] 45-02-PLAN.md — private JS/TS scope/binding facts, Oxc semantic extraction, scope store indexes, unresolved dynamic boundary rows (JS-02)
-- [x] 45-03-PLAN.md — private TS direct binding facts, local/import/module-mediated direct bindings, normalized binding store/cache contract (JS-02, JS-03 foundation)
-- [x] 45-04-PLAN.md — project TS direct bindings into semantic graph `CopyEdge` and `CallConstraint` rows (JS-03)
-- [x] 45-05-PLAN.md — close Phase 45 with Jelly, module/binding, cache/determinism, and public-surface fixtures (JS-01, JS-02, JS-03)
-**UI hint**: no
+**Requirements:** API-01, API-02, API-03, API-04, API-05, API-06
 
-May run in parallel with Phase 46 (shares no Rust modules).
+**Success Criteria:**
+1. `Events<'_>`, `Calls<'_>`, `ControlFlow<'_>`, and `DataFlow<'_>` are exported from the SDK prelude as preview views and are constructible only through macro-derived fact-view parameters.
+2. Public query structs exist for `ReachQuery`, `GuardQuery`, `LifecycleQuery`, and `FlowQuery` with `new(required...)`, explicit option fields, deterministic defaults, and no competing fluent/string/closure DSL.
+3. Public pattern structs exist for events, sources, sinks, guards, and barriers with reviewed constructors for the flagship policy examples.
+4. Capability derivation, rule manifests, and support diagnostics understand the new preview views and fail closed when setup is missing.
+5. `Cfg<'_>` and `CallGraph<'_>` remain reserved low-level names; raw graph, solver, provider, and private ID types stay unreachable from supported public surfaces.
 
-### Phase 46: Go Semantic Frontend & Sidecar
-**Goal**: polint runs a co-shipped Go sidecar backed by `go/packages` + `go/ssa` over a typed NDJSON protocol with version pinning, timeouts, and clean orphan handling, lowering Go semantic facts into the shared semantic graph.
-**Depends on**: Phase 42 (identity), Phase 44 (semantic graph skeleton)
-**Requirements**: GO-01, GO-02, GO-03, GO-04
-**Success Criteria** (what must be TRUE):
-  1. `polint-go-frontend` Go sidecar binary uses `go/packages` + `go/ssa` + `golang.org/x/tools v0.45.0` and emits NDJSON facts (functions, methods, receiver types, init, method sets, call sites, types) over stdio with a versioned schema.
-  2. `src/go/semantic/` (sidecar client + lowering) maps NDJSON facts to semantic-graph constraints with stable identities and exact source spans.
-  3. Process boundary is hardened: typed protocol with explicit terminators, per-request timeouts, cancellation propagation, a single long-lived sidecar per `polint check`, and SIGTERM-cleanup fixture asserts no surviving Go processes after 5 seconds.
-  4. `GoPackagesLoadFailed`, `GoVersionUnsupported`, and `GoSidecarTimeout` appear as distinct categories in the unsupported/unknown taxonomy; the sidecar binary digest + Go toolchain version participate in cache keys.
-**Plans**: 52-01 Refined calls solver projection; 52-02 downstream compatibility verification; 52-03 private unknown taxonomy; 52-04 public inspect unknowns and closeout.
+**Implementation notes:**
+- Start with type definitions, docs comments, macro capability mapping, and capability diagnostics before wiring query behavior.
+- Use plain structs and typed constructors. Avoid trait-heavy or generic APIs unless an existing SDK pattern requires them.
+- Treat all preview names as public liabilities even if documented as preview.
 
-May run in parallel with Phase 45 (shares no Rust modules; Go sidecar workstream is independent).
+### Phase 56: Events and Calls Query Surface
 
-### Phase 47: Unified Solver Core & Derived-Edge Provenance
-**Goal**: polint has a single private deterministic solver consuming the constraint vocabulary, with explicit budgets, per-language policy scaffolding, and full provenance on every derived edge — the heart of v1.3.
-**Depends on**: Phase 44 (constraint vocabulary), Phase 45 (TS constraints) or Phase 46 (Go constraints) — at least one frontend emitting constraints
-**Requirements**: GRAPH-03, GRAPH-04
-**Success Criteria** (what must be TRUE):
-  1. Private `analysis::solver` exists with deterministic `VecDeque` worklist, explicit `SolverBudget` and `BudgetStatus`, and per-language `SolverPolicy` trait scaffolding; v1.2's `points_to::solver` is folded in as a sub-domain.
-  2. Solver inherits the determinism gate from Phase 43 — 10-shuffle byte-identical observed JSON passes.
-  3. Every solver-derived edge carries `DerivedEdgeProvenance` (contributing fact IDs totally ordered by stable ID, constraint kind, solver step) consumable by `polint explain`; property test asserts deletion of any contributing fact invalidates the derived edge.
-  4. Dependency contract is documented (closed input set, single-fixpoint-per-run, bounded outer iterations) and a cycle-detection fixture proves no solver↔summary loop is admitted.
-  5. All solver types stay `pub(crate)` and the public-surface-leak gate continues to pass.
-**Plans**: 3 total
-- [x] 47-01-PLAN.md — analysis::solver core: VecDeque worklist engine + SolverBudget/BudgetStatus + SolverPolicy trait (points-to fold as first real impl + Go/TS honest stubs) (GRAPH-03)
-- [x] 47-02-PLAN.md — DerivedEdgeProvenance (contributing facts total-ordered by stable ID + constraint kind + solver step) + derived-edge fact family/store + polint explain consumption + deletion property test (GRAPH-04)
-- [x] 47-03-PLAN.md — polint.solver provider/cache-key/validate wiring + dependency-contract doc + cycle-detection fixture + ~7 provider-order snapshot updates + determinism-gate + public-surface-leak proof (GRAPH-03, GRAPH-04)
+**Goal:** Let rules ask whether important calls/events are reachable from roots or trust boundaries without exposing call-graph internals.
 
-### Phase 48: Go RTA Driver
-**Goal**: polint resolves Go interface calls and dynamic dispatch through a hand-rolled RTA driver over the unified solver, lifting Go x/tools RTA recall toward the 70-90% algorithmic ceiling while holding precision.
-**Depends on**: Phase 43 (reachability), Phase 46 (Go semantic frontend), Phase 47 (solver core)
-**Requirements**: GO-05
-**Success Criteria** (what must be TRUE):
-  1. Private `analysis::solver::go_rta` implements reachability fixpoint from roots, address-taken function tracking, dynamic call sites by signature, runtime types through interfaces, interface invoke by method-set, and fixed-point iteration.
-  2. Iteration cap fixture demonstrates `BudgetExceeded` is emitted for runaway dispatch rather than silently dropped.
-  3. Per-language `solver_config.go.*` knobs (e.g., address-taken threshold) exist and a polyglot Go+TS canary fixture exercises cross-language non-regression.
-  4. Native fixture coverage proves RTA produces benchmark-grade edges on Go x/tools testdata and the determinism gate still passes.
-**Plans**: 3 total
-- [x] 48-01-PLAN.md — Go-frontend RTA-signal emission: sidecar harvests *ssa.MakeInterface instantiated types + *ssa.MakeClosure/func-value address-taken + dynamic-callsite dispatch detail; new crate-private GoSemantic* facts lowered/stored/validated/cache-keyed (GO-05)
-- [x] 48-02-PLAN.md — analysis::solver::go_rta RTA fixpoint policy (reachability ⊗ instantiated-types ⊗ dispatch) + SolverEngine production routing + PolicyOutcome derived-edge channel + GoRtaSubBudget + [solver] config table + cache-key; points-to byte-identical (GO-05)
-- [x] 48-03-PLAN.md — verification: iteration-cap BudgetExceeded fixture + interface-dispatch/address-taken native fixtures + polyglot Go+TS canary + go_rta determinism fixture; determinism + public-surface-leak gates stay green (GO-05)
+**Depends on:** Phase 55; v1.3 refined-call projection; reachability roots; unknown taxonomy.
 
-May run in parallel with Phase 49 (drivers share the solver but their iteration logic is independent).
+**Requirements:** CALL-01, CALL-02, CALL-03, CALL-04
 
-### Phase 49: JS/TS Function-Token Propagation Driver
-**Goal**: polint propagates JS/TS function tokens through assignments, parameters, returns, and closures inside the unified solver — the main Jelly recall lever — with strict per-variable budgets to prevent memory blowup.
-**Depends on**: Phase 45 (JS/TS scope + direct binding), Phase 47 (solver core)
-**Requirements**: JS-04
-**Success Criteria** (what must be TRUE):
-  1. Private `analysis::solver::ts_tokens` propagates tokens through `CopyEdge` and call/return constraints with a per-variable token cap.
-  2. When the cap is exceeded, the solver collapses to a `"too-many-tokens"` sentinel and emits `BudgetExceeded` consumed by the unknown taxonomy rather than silently dropping precision.
-  3. Memory-ceiling fixture proves RSS stays bounded on token-explosion inputs (uses `BitSet`/`roaring::RoaringBitmap` indexed by stable function ID).
-  4. Per-language `solver_config.js.*` knobs (e.g., function-expression inclusion) exist; aggregate metrics on Jelly fixtures show recall improvement without precision regression beyond the Phase 54 floor.
-**Plans**:
-- [x] 49-01-PLAN.md — JS token budget/config/cache substrate and `TokenFlowRequired` handoff classifier.
-- [x] 49-02-PLAN.md — private `analysis::solver::ts_tokens` closed inputs, deterministic token fixpoint, `"too-many-tokens"` sentinel, token-derived `DerivedEdgeFact` dispatch, and real `TsTokensPolicy`.
-- [x] 49-03-PLAN.md — native TS token fixtures, token-explosion budget proof, polyglot/determinism/Jelly evidence, leak gate, and full-suite sweep.
+**Success Criteria:**
+1. `Events<'_>::matching(EventPattern)` returns deterministic semantic event matches for calls, writes, trust-boundary roots, and lifecycle events without leaking raw AST/MIR/graph IDs.
+2. `Calls<'_>::forbidden_reachable(ReachQuery)` returns violations for raw APIs reachable from selected roots with root, path, callsite, target, precision, and unknown evidence.
+3. `ReachQuery` supports root pattern, target pattern, package/module scope, tests inclusion, max depth, max paths, and minimum precision/confidence fields.
+4. Fixtures cover raw reachable admin APIs, framework route roots, CLI roots, tests excluded/included, unresolved calls, and budget-exceeded paths.
+5. Existing v1.3 precision floors and refined-call contracts remain intact.
 
-May run in parallel with Phase 48 (drivers share the solver core but their iteration logic is independent).
+**Example policies unlocked:**
+- Raw database admin/client methods must not be reachable from HTTP handlers.
+- Deprecated internal package APIs must not be reachable from production entrypoints.
+- Dangerous shell/network/file APIs must not be reachable from unauthenticated roots.
 
-### Phase 50: JS/TS Object/Property/Prototype/`this` Model & Driver
-**Goal**: polint models JS/TS allocation sites, property reads/writes, prototype chains, classes, and `this` binding inside the unified solver — the highest precision/cost tradeoff in v1.3 — behind a capability flag until gates approve.
-**Depends on**: Phase 49 (token propagation stable), Phase 45 (JS/TS inventory)
-**Requirements**: JS-05
-**Success Criteria** (what must be TRUE):
-  1. Private `src/ts/object_model/` + `analysis::solver::ts_object_model` implement allocation-site abstraction, bounded property buckets with computed-property handling, prototype-walk termination, and `this` resolution for arrow, method, constructor, bound, `call`, and `apply` forms.
-  2. Per-family budgets cap property buckets and receiver-set fanout; budget exhaustion appears as facts in the unknown taxonomy, not as silent precision drops.
-  3. Native fixtures cover prototype-walk termination, arrow-vs-method `this`, and computed-property collapse; determinism gate continues to pass with the object model enabled.
-  4. The model ships behind a capability flag and Jelly benchmark deltas are recorded against both `oracle-jelly` and `whole-repo` scoring modes.
-**Plans**:
-- [x] 50-01-PLAN.md — private TS object-model facts, deterministic storage, and semantic graph lowering for object/property/receiver/class facts.
-- [x] 50-02-PLAN.md — object-model opt-in flag, per-family object budgets, config mapping, and solver digest participation.
-- [x] 50-03-PLAN.md — private `analysis::solver::ts_object_model` property-bucket fixpoint and property-backed derived edge dispatch.
-- [x] 50-04-PLAN.md — bounded prototype/class/accessor lookup plus `this`/receiver binding for methods, arrows, constructors, bound, `call`, and `apply`.
-- [x] 50-05-PLAN.md — native object-model fixtures, budget/determinism/polyglot/Jelly evidence, leak gate, full regression, and roadmap closeout.
+### Phase 57: Control-Flow Guard and Lifecycle Queries
 
-### Phase 51: Adaptation Model Layer
-**Goal**: polint accepts repo-local validated framework/native model facts as solver constraints, with sandboxed agent runs, accept/reject reporting, and held-out validation that prevents oracle-label leakage and recall flooding.
-**Depends on**: Phase 47 (solver functional), Phase 48 or Phase 49 (at least one driver functional)
-**Requirements**: ADAPT-01, ADAPT-02
-**Success Criteria** (what must be TRUE):
-  1. Private `analysis::adaptation/` exists with a TOML model schema (source pattern, target pattern, confidence, language, scope, evidence), a loader, and a validator that rejects facts whose targets do not resolve in the semantic graph.
-  2. `benchmark adapted` mode reports prompt hash, changed model files, accepted/rejected facts, unknown delta, precision/recall delta, runtime/cache delta, and held-out subset deltas.
-  3. The adaptation agent runs in a sandbox directory that cannot read benchmark oracle files (`research/evaluation-harness/repos/*/expected*`, `research/evaluation-harness/suites/*.toml`); prompt-sanitizer fixture asserts no oracle paths leak in.
-  4. Validator rejects model facts whose RHS exactly matches oracle expectations and wildcard/broad-pattern models; `ModelEdge` constraints are emitted only for accepted facts.
-**Plans**:
-- [x] 51-01-PLAN.md — private adaptation TOML schema, loader, deterministic store, validator, budgets, and cache digest fragments.
-- [x] 51-02-PLAN.md — accepted model lowering to `ModelEdge` constraints plus solver cache/provenance, language isolation, and public-surface proof.
-- [x] 51-03-PLAN.md — `benchmark adapted` reporting, sandbox/prompt sanitizer, changed model artifacts, deltas, and held-out subset evidence.
-- [x] 51-04-PLAN.md — accepted/rejected fixtures, adapted-report gates, public leak/full regression, verification, and roadmap closeout.
+**Goal:** Let rules express "this event requires a guard" and "this acquired resource requires cleanup" policies over private CFG/dominance facts.
 
-### Phase 52: Refined-Calls Rework & Unknown Taxonomy Consolidation
-**Goal**: polint retires v1.2's heuristic refined-call refiners in favor of a thin projection over solver output, preserves the public `RefinedCallEdgeFact` contract unchanged, and exposes a consolidated unsupported/unknown diagnostic queue.
-**Depends on**: Phase 47-50 (solver + drivers functional), Phase 46 (Go sidecar failure modes)
-**Requirements**: GRAPH-05, TAX-01
-**Success Criteria** (what must be TRUE):
-  1. `refined_calls::provider` is reworked to project over solver output and preserves the v1.2 `RefinedCallEdgeFact` contract for downstream `data_flow`/`evidence`/SDK views without contract changes (verified by integration tests against v1.2 fixtures).
-  2. Private `analysis::unknown_taxonomy` consolidates categories across providers: `SetupMissing`, `UnsupportedSemantic`, `MissingFact`, `OutOfScope`, plus sidecar-specific `GoPackagesLoadFailed`, `GoVersionUnsupported`, `GoSidecarTimeout`.
-  3. `polint inspect unknowns --format json` is added as a public CLI surface (the only new public CLI surface in v1.3) and returns the consolidated taxonomy with stable JSON.
-  4. v1.2 heuristic refiners are removed; downstream data-flow/evidence fixtures continue to pass byte-identical or with explicitly-documented improvements.
-**Plans**:
-  1. F0.5 Metric & Promotion Report Foundation
-  2. Precision/Flooding/Per-Language Promotion Gates
-  3. Polyglot Canary & CI Leak Gate
-  4. Final Audit & State Closeout
+**Depends on:** Phase 55; Phase 56 event patterns; private CFG, dominance, postdominance, summaries, evidence.
 
-### Phase 53: Cache & Solver Budgets Consolidation
-**Goal**: polint threads cache key participation and solver budgets uniformly across every new v1.3 fact family, with positive (must-invalidate) and negative (must-preserve-hit) fixtures proving correct cross-family invalidation.
-**Depends on**: All earlier v1.3 phases (consolidation sweep)
-**Requirements**: CACHE-01, CACHE-02
-**Success Criteria** (what must be TRUE):
-  1. Every new v1.3 fact family (semantic graph, solver, RTA driver, token driver, object model, adaptation) declares a dependency index and cache-key digest that includes the sidecar binary digest, Go toolchain version, adaptation model files, and solver budgets.
-  2. Single-input-mutation fixtures prove each upstream change invalidates the right downstream layer (must-invalidate); negative fixtures prove no-op changes preserve cache hits (must-preserve-hit).
-  3. Solver budgets are enforced across token-set size, property abstraction, dynamic-call fanout, model expansion, and package depth; budget exhaustion surfaces as facts (`BudgetExceeded`) rather than silent precision drops.
-  4. Cold/warm RSS thresholds appear as required columns in the benchmark report.
-**Plans**: TBD
+**Requirements:** CTRL-01, CTRL-02, CTRL-03, CTRL-04
 
-### Phase 54: Benchmark Promotion Gate Extension
-**Goal**: polint enforces v1.3's exit gates — per-language precision floors, F-score β=0.5 tracking, per-language deltas, polyglot canary, and a public-API leak CI gate — to prove the milestone delivers benchmark-grade precision/recall without leaking solver internals.
-**Depends on**: All earlier v1.3 phases (final exit gate)
-**Requirements**: BENCH-01
-**Success Criteria** (what must be TRUE):
-  1. Promotion gate enforces hard per-suite precision floors (Go ≥60%, Jelly configurable) and rejects "flooding" synthetic fixtures regardless of recall improvement.
-  2. F-score β=0.5 (precision-weighted) is tracked alongside F1 in promotion reports; per-language deltas are reported and enforced separately.
-  3. Polyglot Go+TS canary fixture is included in the gate and runs on every solver change.
-  4. Public-API leak CI gate asserts no v1.3 solver types are reachable from `polint::sdk::prelude::*`; the gate fails the build if a `pub` slips in by accident.
-  5. v1.3 milestone audit records final Go and Jelly recall numbers against baseline (`<3%` → `>25-30%` target) with precision floors held.
-**Plans**: TBD
+**Success Criteria:**
+1. `ControlFlow<'_>::missing_guard(GuardQuery)` finds missing auth/validation/allowlist guards before sensitive events.
+2. `ControlFlow<'_>::missing_cleanup(LifecycleQuery)` finds missing rollback/commit/close/unlock/end cleanup on success and error exits.
+3. Query options support same-function and bounded-interprocedural modes without exposing raw CFG nodes or dominance graphs.
+4. Violations include event spans, guard/cleanup candidates, uncovered path evidence, conservative unknowns, and budget status.
+5. Fixtures cover auth-before-write, validation-before-money-move, transaction rollback, file close, lock unlock, and tracing span end.
+
+**Example policies unlocked:**
+- Balance or permission writes require an authorization guard.
+- Money movement requires validation before persistence.
+- Transactions opened with `Begin` must commit or rollback on every exit path.
+
+### Phase 58: Data-Flow Source/Sink/Barrier Queries
+
+**Goal:** Let rules express source-to-sink and required-sanitizer policies through `DataFlow<'_>` preview methods.
+
+**Depends on:** Phase 55; Phase 56 events/calls; private data-flow facts, summaries, source/sink/model facts, evidence paths.
+
+**Requirements:** FLOW-01, FLOW-02, FLOW-03, FLOW-04, FLOW-05
+
+**Success Criteria:**
+1. `DataFlow<'_>::forbidden(FlowQuery)` reports source-to-sink violations with optional barriers/sanitizers.
+2. Required-barrier semantics cover request-to-shell validation, SSRF host allowlists, dangerous HTML escaping, and user-controlled path validation.
+3. Built-in source/sink patterns cover HTTP inputs, route params, environment/secrets, PII-like identifiers, file paths, URLs, loggers, analytics, shell, SQL/query, HTML/raw JSX, and outbound network clients.
+4. Flow queries use bounded private path search with ranked evidence paths, summary expansion handles, deterministic caps, and repeated-run stability.
+5. Results expose exact/heuristic/unsupported/unknown/budget-exceeded states honestly, with heuristic wording in diagnostics and docs.
+
+**Example policies unlocked:**
+- Request values must not flow to `exec.Command` unless validated.
+- Secrets must not flow to logs unless redacted.
+- User-controlled URLs must not flow to HTTP clients unless allowlisted.
+- Raw HTML sinks must receive escaped/sanitized values.
+
+### Phase 59: Violation Evidence, Unknowns, and Cache Semantics
+
+**Goal:** Make every query family report results in one diagnostic/evidence shape with deterministic cache-safe behavior.
+
+**Depends on:** Phases 56-58; private evidence, unknown taxonomy, cache identity, diagnostics.
+
+**Requirements:** EVID-01, EVID-02, EVID-03, EVID-04, EVID-05
+
+**Success Criteria:**
+1. Query methods return a consistent violation type with `diagnostic(rule_id, message)` and structured evidence projection to JSON/SARIF.
+2. Evidence records query type, matched patterns, spans, path steps, precision/confidence/status, budgets, and unknown reasons.
+3. Results are sorted/deduped deterministically across parallel execution, cache restore, provider-order shuffles, and repeated runs.
+4. Query parameters, preview API versions, rule options, lifecycle inputs, solver budgets, and model/adaptation files participate in cache identity.
+5. Setup gaps, unsupported semantics, and budget exhaustion are visible to users and do not create silent false negatives.
+
+**Implementation notes:**
+- Keep rule-specific wording in the rule. Keep path/precision/unknown structure in the shared violation evidence.
+- Prefer one shared evidence schema over per-query bespoke JSON.
+
+### Phase 60: Flagship Rule Templates and Agent Ergonomics
+
+**Goal:** Turn the API into concrete value users can copy immediately.
+
+**Depends on:** Phases 56-59.
+
+**Requirements:** TPL-01, TPL-02, TPL-03, TPL-04, TPL-05
+
+**Success Criteria:**
+1. `polint new-rule` can scaffold request-to-shell, secret-log, PII-analytics, sensitive-write-guard, transaction-cleanup, raw-reachable-api, SSRF, dangerous-HTML, unsafe-deserialization, and user-controlled-file-path templates.
+2. Every template uses the same query-object style and imports only `polint::sdk::prelude::*`.
+3. Templates carry honest heuristic wording where source/sink detection is heuristic.
+4. README, examples, generated skill text, and docs position templates as repo-local starting points, not bundled default rules.
+5. Template fixtures prove each scaffold compiles and produces an expected diagnostic in a temp repo.
+
+**Template syntax target:**
+
+```rust
+let mut query = FlowQuery::new(SourcePattern::http_request(), SinkPattern::call("exec.Command"));
+query.barriers = BarrierPattern::call_any(["validate_command"]);
+query.max_paths = 10;
+
+for violation in flow.forbidden(query) {
+    ctx.report(violation.diagnostic(ctx.rule_id(), "Request data reaches shell execution."));
+}
+```
+
+### Phase 61: Public Docs and External SDK Validation
+
+**Goal:** Prove the preview surface is usable by outside rule authors and documented honestly.
+
+**Depends on:** Phases 55-60.
+
+**Requirements:** VAL-01, VAL-02
+
+**Success Criteria:**
+1. `docs/facts/` includes preview pages for events, calls, control-flow, data-flow, patterns, query structs, violation evidence, precision tiers, unknowns, budgets, and limits.
+2. Temp-repo tests cover each preview view and query family through generated `.polint/rules`, public SDK imports only, `polint::runner::run_cli`, real facts, and `polint check --format json` assertions.
+3. Docs include the flagship policy examples and explicitly label heuristic behavior.
+4. Capability support and `polint inspect`/manifest output show preview status consistently.
+
+**Implementation notes:**
+- These tests are the external-consumer contract. They should not reach into `polint::core`, parser adapters, analysis modules, or test helpers.
+
+### Phase 62: Promotion Gate, Boundary Proof, and Closeout
+
+**Goal:** Enforce the v1.4 exit gates and prove the policy query surface is useful without leaking internals.
+
+**Depends on:** All earlier v1.4 phases.
+
+**Requirements:** VAL-03, VAL-04
+
+**Success Criteria:**
+1. Public-surface leak tests prove raw CFG, call graph, semantic graph, data-flow graph, solver, provider, `AnalysisDb`, and private IDs are unreachable from supported SDK/CLI/runner/docs/skill surfaces.
+2. Full workspace formatting, clippy, tests, temp-repo SDK tests, cache invalidation tests, docs/example smoke tests, and deterministic repeated-run checks pass.
+3. A milestone audit records which preview APIs are ready, which remain preview-limited, and which future stabilization items move to v1.5.
+4. `PROJECT.md`, `REQUIREMENTS.md`, `ROADMAP.md`, and `STATE.md` are updated with final traceability and next-step guidance.
 
 ## Phase Progress
 
 | Phase | Name | Plans Complete | Status | Completed |
 |-------|------|----------------|--------|-----------|
-| 42 | Benchmark Identity, Renderers, Dedup & Identity Taxonomy | 5/5 | Complete   | 2026-05-29 |
-| 43 | Reachability, Roots & Per-Suite Scoring Mode | 3/3 | Complete    | 2026-05-29 |
-| 44 | Semantic Graph Skeleton & Constraint Vocabulary | 3/3 | Complete    | 2026-05-30 |
-| 45 | JS/TS Inventory, Scope, Bindings, Module Graph & Direct Calls | 5/5 | Complete    | 2026-05-31 |
-| 46 | Go Semantic Frontend & Sidecar | 4/4 | Complete    | 2026-06-01 |
-| 47 | Unified Solver Core & Derived-Edge Provenance | 3/3 | Complete    | 2026-06-02 |
-| 48 | Go RTA Driver | 3/3 | Complete    | 2026-06-02 |
-| 49 | JS/TS Function-Token Propagation Driver | 3/3 | Complete | 2026-06-03 |
-| 50 | JS/TS Object/Property/Prototype/`this` Model & Driver | 5/5 | Complete | 2026-06-04 |
-| 51 | Adaptation Model Layer | 4/4 | Complete | 2026-06-04 |
-| 52 | Refined-Calls Rework & Unknown Taxonomy Consolidation | 4/4 | Complete | 2026-06-05 |
-| 53 | Cache & Solver Budgets Consolidation | 4/4 | Complete    | 2026-06-05 |
-| 54 | Benchmark Promotion Gate Extension | 4/4 | Complete    | 2026-06-06 |
+| 55 | SDK Query Vocabulary and Preview Contract | 0/0 | Planned | - |
+| 56 | Events and Calls Query Surface | 0/0 | Planned | - |
+| 57 | Control-Flow Guard and Lifecycle Queries | 0/0 | Planned | - |
+| 58 | Data-Flow Source/Sink/Barrier Queries | 0/0 | Planned | - |
+| 59 | Violation Evidence, Unknowns, and Cache Semantics | 0/0 | Planned | - |
+| 60 | Flagship Rule Templates and Agent Ergonomics | 0/0 | Planned | - |
+| 61 | Public Docs and External SDK Validation | 0/0 | Planned | - |
+| 62 | Promotion Gate, Boundary Proof, and Closeout | 0/0 | Planned | - |
 
 ## Parallel-Eligible Phases
 
-- **Phase 45 ↔ Phase 46** — JS/TS inventory/scope/bindings and Go semantic frontend/sidecar share no Rust modules; can run concurrently after Phase 44 lands.
-- **Phase 48 ↔ Phase 49** — Go RTA driver and JS/TS function-token propagation driver share the solver core but their iteration logic and fixtures are independent; can run concurrently after Phase 47 lands.
+- **Phase 56 -> Phase 57/58:** Events/calls should land before control-flow and data-flow policies because both reuse event/pattern vocabulary.
+- **Phase 57 and Phase 58:** Control-flow and data-flow query implementation may proceed in parallel after Phase 56 if write ownership is split cleanly.
+- **Phase 60 and Phase 61:** Template work and docs/tests can overlap after query semantics stabilize, but temp-repo tests should be the final authority.
 
-## Promotion Discipline (Inherited from v1.2)
+## Promotion Discipline
 
-- Every new v1.3 module is `pub(crate)`. No public SDK type promotion in v1.3.
-- The only new public CLI surface in v1.3 is `polint inspect unknowns --format json` (Phase 52).
-- Public-API leak CI gate (Phase 42 installs, Phase 54 enforces) ensures no v1.3 solver type is reachable from `polint::sdk::prelude::*`.
-- Future SDK promotion of `Reachability<'_>`, `CallGraph<'_>`, or `Adaptation<'_>` requires two-milestone benchmark stability and a separate explicit phase (deferred to v1.4+).
+- New public names are preview policy views, not raw analysis internals.
+- `Cfg<'_>` and `CallGraph<'_>` stay reserved unless a separate explicit promotion phase changes that.
+- `DataFlow<'_>` becomes a policy query view, not a raw graph view.
+- Rules continue to consume typed fact-view parameters through `#[polint::rule]`; do not reintroduce broad fact access through `RuleCtx`.
+- Capability names must stay honest: unsupported or setup-missing hard capabilities produce capability diagnostics and the rule does not run with placeholder facts.
+- Query APIs must expose precision, unknown, and budget state rather than claiming exact whole-program coverage.
 
-## Archived Phase Summary
+## Next Up
 
-<details>
-<summary>v1.2 Static Analysis Engine Implementation (Phases 20-41) - shipped 2026-05-27</summary>
+**Phase 55: SDK Query Vocabulary and Preview Contract** - define the preview API contract before wiring behavior.
 
-| Phase | Name | Plans | Completed |
-|-------|------|-------|-----------|
-| 20 | Private Analysis Kernel Facade | 2/2 | 2026-05-16 |
-| 21 | Provenance, Precision, and Validation Metadata | 4/4 | 2026-05-17 |
-| 22 | Internal Evaluation Harness MVP | 6/6 | 2026-05-17 |
-| 23 | Input Snapshots and Cache-Key Vocabulary | 5/5 | 2026-05-18 |
-| 24 | Persistent Layer Cache for Existing Cheap Facts | 5/5 | 2026-05-18 |
-| 25 | Rule Manifest, Inspect, and Test Skeleton | 4/4 | 2026-05-18 |
-| 26 | Semantic Index Deepening | 6/6 | 2026-05-19 |
-| 27 | Layered Module/Package/Topology Graph | 7/7 | 2026-05-19 |
-| 28 | Private Semantic MIR and Place Identity | 7/7 | 2026-05-20 |
-| 29 | Local CFG and Control Dependence | 6/6 | 2026-05-20 |
-| 30 | Direct Call Facts | 8/8 | 2026-05-21 |
-| 31 | P0 Abstract-Domain Kernel | 5/5 | 2026-05-21 |
-| 32 | Summary Kernel and Direct Summaries | 7/7 | 2026-05-21 |
-| 33 | Demand Queries and Summary SCC Cache | 7/7 | 2026-05-24 |
-| 34 | Rust Extension/Provider Sink | 6/6 | 2026-05-23 |
-| 35 | Framework Entrypoints and Trust Boundaries | 8/8 | 2026-05-24 |
-| 36 | P0 Type/Value/Place/Alias Substrate | 7/7 | 2026-05-24 |
-| 37 | Refined Call Graph Providers | 6/6 | 2026-05-25 |
-| 38 | Local Plus Summary-Projected Data Flow | 10/10 | 2026-05-25 |
-| 39 | Slicing, Paths, and Evidence Bundles | 7/7 | 2026-05-25 |
-| 40 | External Benchmark Adapters and Promotion Gates | 8/8 | 2026-05-26 |
-| 41 | Public SDK Query Views and Agent Ergonomics | 5/5 | 2026-05-26 |
+Suggested command:
 
-</details>
+```bash
+/gsd-discuss-phase 55 /Users/emilwareus/conductor/workspaces/exlint/louisville-v1
+```
+
+For a direct implementation plan:
+
+```bash
+/gsd-plan-phase 55 /Users/emilwareus/conductor/workspaces/exlint/louisville-v1
+```
+
+---
+*Roadmap created: 2026-06-20*
