@@ -1508,6 +1508,7 @@ pub(crate) fn apply_report_filters(
 
 fn diagnostic_matches_rule_pattern(pattern: &str, diagnostic: &Diagnostic) -> bool {
     crate::core::rule_id_matches(pattern, &diagnostic.rule_id)
+        || diagnostic.rule_id.starts_with("parser/")
         || (diagnostic.rule_id == "polint/capability"
             && diagnostic.evidence.iter().any(|evidence| {
                 evidence.label == "rule" && crate::core::rule_id_matches(pattern, &evidence.value)
@@ -2614,6 +2615,26 @@ mod tests {
             .map(|diagnostic| diagnostic.rule_id.as_str())
             .collect::<Vec<_>>();
         assert_eq!(rule_ids, ["polint/unused-ignore", "local/no-todo"]);
+    }
+
+    #[test]
+    fn only_rule_keeps_parser_diagnostics() {
+        let diagnostics = vec![
+            Diagnostic::error("parser/ts", "src/a.ts", TextRange::point(1, 1), "parse"),
+            Diagnostic::warning(
+                "local/no-todo",
+                "src/b.ts",
+                TextRange::point(1, 1),
+                "finding",
+            ),
+        ];
+
+        let filtered = apply_report_filters(diagnostics, Some("local/no-todo"));
+        let rule_ids = filtered
+            .iter()
+            .map(|diagnostic| diagnostic.rule_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(rule_ids, ["parser/ts", "local/no-todo"]);
     }
 
     #[test]

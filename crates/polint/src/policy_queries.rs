@@ -59,6 +59,10 @@ fn forbidden_data_flows(
     query: &FlowQuery,
     query_digest: &str,
 ) -> Vec<PolicyViolation> {
+    if query.max_depth == 0 || query.max_paths == 0 {
+        return Vec::new();
+    }
+
     let Some(store) = db.data_flow_store() else {
         return Vec::new();
     };
@@ -86,37 +90,43 @@ fn forbidden_data_flows(
                         if barrier_covers_path(db, store, &site_by_id, &path, &query.barriers) {
                             continue;
                         }
-                        if query.max_paths > 0 && results.len() >= query.max_paths {
-                            if let Some(last) = results.pop() {
-                                results.push(last.with_budget_exceeded("data_flow_query_budget"));
-                            }
-                            break 'sources;
-                        }
                         let key = flow_result_key(source, sink, &path);
                         if emitted.insert(key) {
-                            results.push(flow_violation(
-                                db,
-                                store,
-                                source,
-                                sink,
-                                &path,
-                                query,
-                                query_digest,
-                            ));
+                            let violation =
+                                flow_violation(db, store, source, sink, &path, query, query_digest);
+                            if !data_flow_violation_meets_minimum(
+                                &violation,
+                                query.minimum_precision,
+                            ) {
+                                continue;
+                            }
+                            if !push_capped_data_flow_violation(
+                                &mut results,
+                                violation,
+                                query.max_paths,
+                            ) {
+                                break 'sources;
+                            }
                         }
                     }
                     DataFlowPathStatus::Unknown | DataFlowPathStatus::BudgetExceeded => {
                         let key = flow_result_key(source, sink, &path);
                         if emitted.insert(key) {
-                            results.push(flow_violation(
-                                db,
-                                store,
-                                source,
-                                sink,
-                                &path,
-                                query,
-                                query_digest,
-                            ));
+                            let violation =
+                                flow_violation(db, store, source, sink, &path, query, query_digest);
+                            if !data_flow_violation_meets_minimum(
+                                &violation,
+                                query.minimum_precision,
+                            ) {
+                                continue;
+                            }
+                            if !push_capped_data_flow_violation(
+                                &mut results,
+                                violation,
+                                query.max_paths,
+                            ) {
+                                break 'sources;
+                            }
                         }
                     }
                     DataFlowPathStatus::NotFound => {}
@@ -167,7 +177,7 @@ fn matching_call_events(
                     query_digest,
                     db.path_for(site.file),
                     site.span.diagnostic_range(),
-                    policy_status_from_call_status(site.status),
+                    policy_status_from_call_status_and_precision(site.status, site.precision),
                     policy_precision_from_call_precision(site.precision),
                     vec![
                         ("event".to_string(), "call".to_string()),
@@ -485,8 +495,7 @@ fn matching_flow_sinks(
             let Some(site) = site_by_id.get(&edge.site).copied() else {
                 continue;
             };
-            let candidates = call_edge_candidates(db, edge, site_by_id);
-            if !sink_matches_candidates(pattern, &candidates) {
+            if !sink_matches_edge(db, pattern, edge, site_by_id) {
                 continue;
             }
             push_flow_sinks_for_site(
@@ -501,8 +510,7 @@ fn matching_flow_sinks(
         }
     } else {
         for site in db.call_sites() {
-            let candidates = vec![call_site_label(site)];
-            if !sink_matches_candidates(pattern, &candidates) {
+            if !sink_matches_site(pattern, site) {
                 continue;
             }
             push_flow_sinks_for_site(
@@ -529,6 +537,12 @@ fn push_flow_sinks_for_site(
     precision: PolicyPrecision,
     sinks: &mut BTreeMap<(CallSiteId, DataFlowNodeId), FlowSink>,
 ) {
+    let sink_precision = match pattern.kind() {
+        SinkPatternKind::Call => precision,
+        SinkPatternKind::Logger => PolicyPrecision::Heuristic,
+    };
+    let sink_heuristic = pattern.kind() == SinkPatternKind::Logger;
+
     for place in site.arguments.iter().copied().chain(site.receiver) {
         for node in nodes_for_place(store, place) {
             sinks.insert(
@@ -539,8 +553,8 @@ fn push_flow_sinks_for_site(
                     file: db.path_for(site.file),
                     range: site.span.diagnostic_range(),
                     target_label: target_label.clone(),
-                    precision,
-                    heuristic: pattern.kind() == SinkPatternKind::Logger,
+                    precision: sink_precision,
+                    heuristic: sink_heuristic,
                 },
             );
         }
@@ -565,6 +579,30 @@ fn sink_matches_candidates(pattern: &SinkPattern, candidates: &[String]) -> bool
             .iter()
             .any(|candidate| logger_candidate(candidate)),
     }
+}
+
+fn sink_matches_edge(
+    db: &AnalysisDb,
+    pattern: &SinkPattern,
+    edge: &RefinedCallEdgeFact,
+    site_by_id: &BTreeMap<CallSiteId, &CallSiteFact>,
+) -> bool {
+    let candidates = call_edge_match_candidates(db, edge, site_by_id);
+    match pattern.kind() {
+        SinkPatternKind::Call => explicit_values_match_preferred(
+            pattern.values(),
+            &candidates.semantic,
+            &candidates.syntax,
+        ),
+        SinkPatternKind::Logger => candidates
+            .all()
+            .any(|candidate| logger_candidate(candidate)),
+    }
+}
+
+fn sink_matches_site(pattern: &SinkPattern, site: &CallSiteFact) -> bool {
+    let candidates = vec![call_site_label(site)];
+    sink_matches_candidates(pattern, &candidates)
 }
 
 fn barrier_covers_path(
@@ -596,21 +634,25 @@ fn barrier_matches_call_site(
     if barrier.kind() != BarrierPatternKind::CallAny {
         return false;
     }
-    let mut candidates = db
+    let mut semantic = Vec::new();
+    let mut syntax = Vec::new();
+    for edge in db
         .refined_call_edges()
         .iter()
         .filter(|edge| edge.site == site)
-        .flat_map(|edge| call_edge_candidates(db, edge, site_by_id))
-        .collect::<Vec<_>>();
-    if let Some(site) = site_by_id.get(&site) {
-        candidates.push(call_site_label(site));
+    {
+        let candidates = call_edge_match_candidates(db, edge, site_by_id);
+        semantic.extend(candidates.semantic);
+        syntax.extend(candidates.syntax);
     }
-    candidates.sort();
-    candidates.dedup();
-    barrier
-        .values()
-        .iter()
-        .any(|value| candidates.iter().any(|candidate| candidate == value))
+    if let Some(site) = site_by_id.get(&site) {
+        syntax.push(call_site_label(site));
+    }
+    semantic.sort();
+    semantic.dedup();
+    syntax.sort();
+    syntax.dedup();
+    explicit_values_match_preferred(barrier.values(), &semantic, &syntax)
 }
 
 fn edge_call_site(edge: &DataFlowEdgeFact) -> Option<CallSiteId> {
@@ -638,12 +680,7 @@ fn flow_violation(
             let path_precision = path_precision(store, path).unwrap_or(source.precision);
             let precision =
                 min_policy_precision([source.precision, sink.precision, path_precision]);
-            let status =
-                if source.heuristic || sink.heuristic || precision == PolicyPrecision::Heuristic {
-                    PolicyStatus::Heuristic
-                } else {
-                    PolicyStatus::Exact
-                };
+            let status = found_data_flow_status(source, sink, precision);
             (status, precision)
         }
         DataFlowPathStatus::Unknown => (PolicyStatus::Unknown, PolicyPrecision::Unknown),
@@ -713,11 +750,58 @@ fn flow_violation(
     )
 }
 
+fn found_data_flow_status(
+    source: &FlowSource,
+    sink: &FlowSink,
+    precision: PolicyPrecision,
+) -> PolicyStatus {
+    if source.heuristic
+        || sink.heuristic
+        || !matches!(
+            precision,
+            PolicyPrecision::Exact | PolicyPrecision::SetupAware
+        )
+    {
+        PolicyStatus::Heuristic
+    } else {
+        PolicyStatus::Exact
+    }
+}
+
 fn flow_result_key(source: &FlowSource, sink: &FlowSink, path: &DataFlowPath) -> String {
     format!(
-        "{}:{}:{:?}:{:?}",
-        source.node.0, sink.node.0, path.status, path.edges
+        "{}:{}:{}:{}:{:?}:{:?}",
+        source.node.0, sink.site.0, sink.node.0, sink.target_label, path.status, path.edges
     )
+}
+
+fn push_capped_data_flow_violation(
+    results: &mut Vec<PolicyViolation>,
+    violation: PolicyViolation,
+    max_paths: usize,
+) -> bool {
+    if results.len() < max_paths {
+        results.push(violation);
+        true
+    } else {
+        if let Some(last) = results.pop() {
+            results.push(last.with_budget_exceeded("data_flow_query_budget"));
+        }
+        false
+    }
+}
+
+fn data_flow_violation_meets_minimum(
+    violation: &PolicyViolation,
+    minimum: PolicyPrecision,
+) -> bool {
+    if matches!(
+        violation.status(),
+        PolicyStatus::Unknown | PolicyStatus::BudgetExceeded | PolicyStatus::Unsupported
+    ) {
+        return true;
+    }
+    precision_rank(violation.precision()) >= precision_rank(minimum)
 }
 
 fn path_precision(store: &DataFlowStore, path: &DataFlowPath) -> Option<PolicyPrecision> {
@@ -988,10 +1072,11 @@ struct ControlCallEvent {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct ControlOrder {
+    order_source_rank: u8,
+    operation_ordinal: u32,
     line: u32,
     col: u32,
     byte: u32,
-    operation_ordinal: u32,
     stable_key: String,
 }
 
@@ -1075,10 +1160,12 @@ fn control_event_for_edge(
     cfg_orders: &BTreeMap<(MirBodyId, MirOpId), CfgOrder>,
 ) -> Option<ControlCallEvent> {
     let site = site_by_id.get(&edge.site)?;
-    let mut candidates = call_edge_candidates(db, edge, site_by_id);
-    if candidates.is_empty() {
-        candidates.push(call_site_label(site));
-    }
+    let match_candidates = call_edge_match_candidates(db, edge, site_by_id);
+    let candidates = if match_candidates.semantic.is_empty() {
+        match_candidates.syntax
+    } else {
+        match_candidates.semantic
+    };
     let target_label = best_call_target_label(db, edge, site_by_id);
     Some(ControlCallEvent {
         function: edge.caller,
@@ -1120,12 +1207,13 @@ fn control_order(
 ) -> ControlOrder {
     let cfg_order = cfg_orders.get(&(site.body, site.operation));
     ControlOrder {
-        line: site.span.start_line,
-        col: site.span.start_col,
-        byte: site.span.start_byte,
+        order_source_rank: if cfg_order.is_some() { 0 } else { 1 },
         operation_ordinal: cfg_order
             .map(|order| order.operation_ordinal)
             .unwrap_or(u32::MAX),
+        line: site.span.start_line,
+        col: site.span.start_col,
+        byte: site.span.start_byte,
         stable_key: site.stable_key.clone(),
     }
 }
@@ -1155,10 +1243,7 @@ fn event_matches_pattern(event: &ControlCallEvent, pattern: &EventPattern) -> bo
     if pattern.kind() != EventPatternKind::Call {
         return false;
     }
-    pattern
-        .values()
-        .iter()
-        .any(|value| event.candidates.iter().any(|candidate| candidate == value))
+    explicit_values_match_preferred(pattern.values(), &event.candidates, &[])
 }
 
 fn guard_matches_event(event: &ControlCallEvent, guard: &GuardPattern) -> bool {
@@ -1203,13 +1288,31 @@ fn control_violation(
         query_digest,
         event.file.clone(),
         event.range,
-        PolicyStatus::Heuristic,
-        PolicyPrecision::Conservative,
+        control_policy_status(event.status),
+        control_policy_precision(event.precision),
         evidence
             .into_iter()
             .map(|(label, value)| (label.to_string(), value))
             .collect(),
     )
+}
+
+fn control_policy_status(status: CallTargetStatus) -> PolicyStatus {
+    match status {
+        CallTargetStatus::BudgetExceeded => PolicyStatus::BudgetExceeded,
+        CallTargetStatus::Unsupported => PolicyStatus::Unsupported,
+        CallTargetStatus::Unresolved | CallTargetStatus::SetupMissing => PolicyStatus::Unknown,
+        CallTargetStatus::Resolved | CallTargetStatus::Ambiguous | CallTargetStatus::Rejected => {
+            PolicyStatus::Heuristic
+        }
+    }
+}
+
+fn control_policy_precision(precision: CallPrecision) -> PolicyPrecision {
+    min_policy_precision([
+        PolicyPrecision::Conservative,
+        policy_precision_from_call_precision(precision),
+    ])
 }
 
 fn refined_adjacency<'a>(
@@ -1281,11 +1384,8 @@ fn call_pattern_matches_edge(
     if pattern.kind() != EventPatternKind::Call {
         return false;
     }
-    let candidates = call_edge_candidates(db, edge, site_by_id);
-    pattern
-        .values()
-        .iter()
-        .any(|value| candidates.iter().any(|candidate| candidate == value))
+    let candidates = call_edge_match_candidates(db, edge, site_by_id);
+    explicit_values_match_preferred(pattern.values(), &candidates.semantic, &candidates.syntax)
 }
 
 fn call_pattern_matches_site(pattern: &EventPattern, site: &CallSiteFact) -> bool {
@@ -1325,34 +1425,73 @@ fn call_pattern_matches_root(
         .any(|value| candidates.iter().any(|candidate| candidate == value))
 }
 
-fn call_edge_candidates(
+#[derive(Debug, Clone, Default)]
+struct CallMatchCandidates {
+    semantic: Vec<String>,
+    syntax: Vec<String>,
+}
+
+impl CallMatchCandidates {
+    fn all(&self) -> impl Iterator<Item = &String> {
+        self.semantic.iter().chain(self.syntax.iter())
+    }
+}
+
+fn call_edge_match_candidates(
     db: &AnalysisDb,
     edge: &RefinedCallEdgeFact,
     site_by_id: &BTreeMap<CallSiteId, &CallSiteFact>,
-) -> Vec<String> {
-    let mut candidates = Vec::new();
-    if let Some(synthetic_target) = &edge.synthetic_target {
-        candidates.push(synthetic_target.clone());
+) -> CallMatchCandidates {
+    let mut semantic = Vec::new();
+    if let Some(synthetic_target) = &edge.synthetic_target
+        && synthetic_target_is_user_matchable(synthetic_target)
+    {
+        semantic.push(synthetic_target.clone());
     }
     if let Some(symbol) = edge
         .target_symbol
         .and_then(|symbol| db.symbol_by_id(symbol))
     {
-        candidates.push(symbol.name.clone());
-        candidates.push(symbol.qualified_name.clone());
+        semantic.push(symbol.name.clone());
+        semantic.push(symbol.qualified_name.clone());
     }
     if let Some(function) = edge
         .target_function
         .and_then(|function| function_by_id(db, function))
     {
-        candidates.push(function.name.clone());
+        semantic.push(function.name.clone());
     }
+    let mut syntax = Vec::new();
     if let Some(site) = site_by_id.get(&edge.site) {
-        candidates.push(call_site_label(site));
+        syntax.push(call_site_label(site));
     }
-    candidates.sort();
-    candidates.dedup();
-    candidates
+    semantic.sort();
+    semantic.dedup();
+    syntax.sort();
+    syntax.dedup();
+    CallMatchCandidates { semantic, syntax }
+}
+
+fn synthetic_target_is_user_matchable(target: &str) -> bool {
+    !target.starts_with("ts-js:")
+        && !target.starts_with("go:")
+        && !target.starts_with("framework:")
+        && !target.starts_with("synthetic:")
+}
+
+fn explicit_values_match_preferred(
+    values: &[String],
+    semantic: &[String],
+    syntax: &[String],
+) -> bool {
+    let candidates = if semantic.is_empty() {
+        syntax
+    } else {
+        semantic
+    };
+    values
+        .iter()
+        .any(|value| candidates.iter().any(|candidate| candidate == value))
 }
 
 fn best_call_target_label(
@@ -1375,7 +1514,9 @@ fn best_call_target_label(
     {
         return function.name.clone();
     }
-    if let Some(synthetic_target) = &edge.synthetic_target {
+    if let Some(synthetic_target) = &edge.synthetic_target
+        && synthetic_target_is_user_matchable(synthetic_target)
+    {
         return synthetic_target.clone();
     }
     site_by_id
@@ -1432,7 +1573,7 @@ fn violation_for_edge(
         query_digest,
         file,
         range,
-        policy_status_from_call_status(edge.status),
+        policy_status_from_call_status_and_precision(edge.status, edge.precision),
         policy_precision_from_call_precision(edge.precision),
         evidence
             .into_iter()
@@ -1464,9 +1605,22 @@ fn edge_is_query_candidate(edge: &RefinedCallEdgeFact, query: &ReachQuery) -> bo
             || !traversable_status(edge.status))
 }
 
-fn policy_status_from_call_status(status: CallTargetStatus) -> PolicyStatus {
+fn policy_status_from_call_status_and_precision(
+    status: CallTargetStatus,
+    precision: CallPrecision,
+) -> PolicyStatus {
     match status {
-        CallTargetStatus::Resolved => PolicyStatus::Exact,
+        CallTargetStatus::Resolved => {
+            let precision = policy_precision_from_call_precision(precision);
+            if matches!(
+                precision,
+                PolicyPrecision::Exact | PolicyPrecision::SetupAware
+            ) {
+                PolicyStatus::Exact
+            } else {
+                PolicyStatus::Heuristic
+            }
+        }
         CallTargetStatus::Ambiguous | CallTargetStatus::Rejected => PolicyStatus::Heuristic,
         CallTargetStatus::BudgetExceeded => PolicyStatus::BudgetExceeded,
         CallTargetStatus::Unsupported => PolicyStatus::Unsupported,
@@ -1583,6 +1737,12 @@ mod tests {
         UnresolvedCallReason,
     };
     use crate::analysis::calls::store::CallOutput;
+    use crate::analysis::cfg::facts::{
+        BasicBlockFact, BasicBlockKind, CfgFunctionFact, CfgNodeFact, CfgNodeKind, CfgPrecision,
+        CfgStatus,
+    };
+    use crate::analysis::cfg::ids::{BasicBlockId, CfgFunctionId, CfgNodeId};
+    use crate::analysis::cfg::store::CfgOutput;
     use crate::analysis::data_flow::facts::{
         DataFlowAlgorithm, DataFlowConfidence, DataFlowEdgeFact, DataFlowEdgeKind,
         DataFlowModelFact, DataFlowModelKind, DataFlowNodeFact, DataFlowNodeKind,
@@ -1616,6 +1776,38 @@ mod tests {
     }
 
     #[test]
+    fn events_matching_fallback_uses_call_site_precision_for_status() {
+        let db = policy_query_db_with_conservative_fallback_call_site();
+
+        let violations = matching_events(&db, EventPattern::call("dangerous"));
+
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].status(), PolicyStatus::Heuristic);
+        assert_eq!(violations[0].precision(), PolicyPrecision::Conservative);
+    }
+
+    #[test]
+    fn events_matching_call_prefers_semantic_target_over_syntax_label() {
+        let db = policy_query_db_with_syntax_label_resolved_to_different_target();
+
+        assert!(matching_events(&db, EventPattern::call("dangerous")).is_empty());
+        assert_eq!(
+            matching_events(&db, EventPattern::call("safeTarget")).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn events_matching_call_uses_syntax_label_for_internal_synthetic_target() {
+        let db = policy_query_db_with_internal_synthetic_target();
+
+        assert_eq!(
+            matching_events(&db, EventPattern::call("dangerous")).len(),
+            1
+        );
+    }
+
+    #[test]
     fn calls_forbidden_reachable_finds_target_from_root() {
         let db = policy_query_db(false);
         let mut query = ReachQuery::new(EventPattern::call("dangerous"));
@@ -1642,6 +1834,18 @@ mod tests {
 
     #[test]
     fn calls_forbidden_reachable_surfaces_unresolved_matching_target() {
+        let db = policy_query_db_with_unresolved_target();
+        let mut query = ReachQuery::new(EventPattern::call("dangerous"));
+        query.minimum_precision = PolicyPrecision::Unknown;
+        let violations = forbidden_reachable(&db, query);
+
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].status(), PolicyStatus::Unknown);
+        assert_eq!(violations[0].precision(), PolicyPrecision::Unknown);
+    }
+
+    #[test]
+    fn calls_forbidden_reachable_surfaces_unresolved_matching_target_at_default_precision() {
         let db = policy_query_db_with_unresolved_target();
         let violations = forbidden_reachable(&db, ReachQuery::new(EventPattern::call("dangerous")));
 
@@ -1696,6 +1900,18 @@ mod tests {
     #[test]
     fn control_flow_missing_guard_ignores_prior_guard() {
         let db = policy_query_db_with_call_sequence(&["authorize", "dangerous"]);
+        let query = GuardQuery::new(
+            EventPattern::call("dangerous"),
+            GuardPattern::call_any(["authorize"]),
+        );
+
+        assert!(missing_guards(&db, query).is_empty());
+    }
+
+    #[test]
+    fn control_flow_missing_guard_prefers_cfg_order_when_available() {
+        let db =
+            policy_query_db_with_cfg_ordered_call_sequence(&[("dangerous", 2), ("authorize", 1)]);
         let query = GuardQuery::new(
             EventPattern::call("dangerous"),
             GuardPattern::call_any(["authorize"]),
@@ -1801,6 +2017,82 @@ mod tests {
     }
 
     #[test]
+    fn data_flow_forbidden_reports_distinct_sink_call_sites_for_same_place() {
+        let db = data_flow_policy_db_with_two_sink_sites_same_place();
+
+        let violations = forbidden_flows(
+            &db,
+            FlowQuery::new(
+                SourcePattern::http_request(),
+                SinkPattern::call("dangerous"),
+            ),
+        );
+
+        assert_eq!(violations.len(), 2);
+        assert_ne!(violations[0].stable_key(), violations[1].stable_key());
+    }
+
+    #[test]
+    fn data_flow_forbidden_filters_found_paths_below_minimum_precision() {
+        let db = data_flow_policy_db(vec![data_flow_edge(
+            0,
+            0,
+            1,
+            DataFlowEdgeKind::SourceIntroduction,
+            DataFlowStatus::Present,
+            Vec::new(),
+        )]);
+        let mut query = FlowQuery::new(
+            SourcePattern::http_request(),
+            SinkPattern::call("dangerous"),
+        );
+        query.minimum_precision = PolicyPrecision::Exact;
+
+        assert!(forbidden_flows(&db, query).is_empty());
+    }
+
+    #[test]
+    fn data_flow_forbidden_logger_sink_uses_heuristic_precision_for_syntax_match() {
+        let db = data_flow_policy_db_with_unresolved_logger_sink(vec![data_flow_edge(
+            0,
+            0,
+            1,
+            DataFlowEdgeKind::SourceIntroduction,
+            DataFlowStatus::Present,
+            Vec::new(),
+        )]);
+        let mut query = FlowQuery::new(SourcePattern::http_request(), SinkPattern::logger());
+        query.minimum_precision = PolicyPrecision::Heuristic;
+
+        let violations = forbidden_flows(&db, query);
+
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].status(), PolicyStatus::Heuristic);
+        assert_eq!(violations[0].precision(), PolicyPrecision::Heuristic);
+    }
+
+    #[test]
+    fn data_flow_forbidden_call_sink_uses_syntax_label_for_internal_synthetic_target() {
+        let db = data_flow_policy_db_with_internal_synthetic_target(vec![data_flow_edge(
+            0,
+            0,
+            1,
+            DataFlowEdgeKind::SourceIntroduction,
+            DataFlowStatus::Present,
+            Vec::new(),
+        )]);
+        let mut query = FlowQuery::new(
+            SourcePattern::http_request(),
+            SinkPattern::call("dangerous"),
+        );
+        query.minimum_precision = PolicyPrecision::Unknown;
+
+        let violations = forbidden_flows(&db, query);
+
+        assert_eq!(violations.len(), 1);
+    }
+
+    #[test]
     fn data_flow_forbidden_respects_barrier_call() {
         let db = data_flow_policy_db_with_barrier();
         let mut query = FlowQuery::new(
@@ -1840,6 +2132,7 @@ mod tests {
             SinkPattern::call("dangerous"),
         );
         query.max_depth = 1;
+        query.minimum_precision = PolicyPrecision::Unknown;
 
         let violations = forbidden_flows(&db, query);
 
@@ -1852,7 +2145,94 @@ mod tests {
     }
 
     #[test]
+    fn data_flow_forbidden_caps_found_plus_budget_status_to_max_paths() {
+        let db = data_flow_policy_db_with_sink_place(
+            vec![
+                data_flow_edge(
+                    0,
+                    0,
+                    1,
+                    DataFlowEdgeKind::SourceIntroduction,
+                    DataFlowStatus::Present,
+                    Vec::new(),
+                ),
+                data_flow_edge(
+                    1,
+                    0,
+                    2,
+                    DataFlowEdgeKind::SourceIntroduction,
+                    DataFlowStatus::Present,
+                    Vec::new(),
+                ),
+                data_flow_edge(
+                    2,
+                    2,
+                    1,
+                    DataFlowEdgeKind::LocalAssignment,
+                    DataFlowStatus::Present,
+                    Vec::new(),
+                ),
+            ],
+            PlaceId(1),
+        );
+        let mut query = FlowQuery::new(
+            SourcePattern::http_request(),
+            SinkPattern::call("dangerous"),
+        );
+        query.max_paths = 1;
+        query.minimum_precision = PolicyPrecision::Unknown;
+
+        let violations = forbidden_flows(&db, query);
+
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].status(), PolicyStatus::BudgetExceeded);
+    }
+
+    #[test]
+    fn data_flow_forbidden_returns_no_results_for_zero_path_budget() {
+        let db = data_flow_policy_db(vec![data_flow_edge(
+            0,
+            0,
+            1,
+            DataFlowEdgeKind::SourceIntroduction,
+            DataFlowStatus::Present,
+            Vec::new(),
+        )]);
+        let mut query = FlowQuery::new(
+            SourcePattern::http_request(),
+            SinkPattern::call("dangerous"),
+        );
+        query.max_paths = 0;
+
+        assert!(forbidden_flows(&db, query).is_empty());
+    }
+
+    #[test]
     fn data_flow_forbidden_surfaces_unknown_path() {
+        let db = data_flow_policy_db(vec![data_flow_edge(
+            0,
+            0,
+            1,
+            DataFlowEdgeKind::UnknownFlow,
+            DataFlowStatus::Unknown,
+            Vec::new(),
+        )]);
+
+        let mut query = FlowQuery::new(
+            SourcePattern::http_request(),
+            SinkPattern::call("dangerous"),
+        );
+        query.minimum_precision = PolicyPrecision::Unknown;
+
+        let violations = forbidden_flows(&db, query);
+
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].status(), PolicyStatus::Unknown);
+        assert_eq!(violations[0].precision(), PolicyPrecision::Unknown);
+    }
+
+    #[test]
+    fn data_flow_forbidden_surfaces_unknown_path_at_default_precision() {
         let db = data_flow_policy_db(vec![data_flow_edge(
             0,
             0,
@@ -1872,7 +2252,6 @@ mod tests {
 
         assert_eq!(violations.len(), 1);
         assert_eq!(violations[0].status(), PolicyStatus::Unknown);
-        assert_eq!(violations[0].precision(), PolicyPrecision::Unknown);
     }
 
     #[test]
@@ -2073,6 +2452,78 @@ mod tests {
         db
     }
 
+    fn policy_query_db_with_conservative_fallback_call_site() -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/main.go"),
+            "src/main.go".to_string(),
+            "package main\nfunc main() { dangerous() }\n".to_string(),
+        );
+        let main = push_test_function(&mut db, file, "main", 1, false);
+        let mut site = call_site(0, file, main, "dangerous");
+        site.precision = CallPrecision::Conservative;
+
+        db.replace_call_facts(CallOutput {
+            sites: vec![site],
+            targets: Vec::new(),
+            unresolved: Vec::new(),
+        })
+        .expect("valid call facts");
+        db.replace_refined_call_facts(RefinedCallOutput { edges: Vec::new() })
+            .expect("valid refined call facts");
+        db
+    }
+
+    fn policy_query_db_with_syntax_label_resolved_to_different_target() -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/main.go"),
+            "src/main.go".to_string(),
+            "package main\nfunc main() { dangerous() }\nfunc safeTarget() {}\n".to_string(),
+        );
+        let main = push_test_function(&mut db, file, "main", 1, false);
+        let safe = push_test_function(&mut db, file, "safeTarget", 2, false);
+        let site = call_site(0, file, main, "dangerous");
+
+        db.replace_call_facts(CallOutput {
+            sites: vec![site.clone()],
+            targets: vec![call_target(0, site.id, main, safe)],
+            unresolved: Vec::new(),
+        })
+        .expect("valid call facts");
+        db.replace_refined_call_facts(RefinedCallOutput {
+            edges: vec![refined_edge(0, site.id, main, safe, "safeTarget")],
+        })
+        .expect("valid refined call facts");
+        db
+    }
+
+    fn policy_query_db_with_internal_synthetic_target() -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/main.go"),
+            "src/main.go".to_string(),
+            "package main\nfunc main() { dangerous() }\n".to_string(),
+        );
+        let main = push_test_function(&mut db, file, "main", 1, false);
+        let mut site = call_site(0, file, main, "dangerous");
+        site.status = CallTargetStatus::BudgetExceeded;
+        site.precision = CallPrecision::Unknown;
+        let mut edge = unresolved_refined_edge(0, site.id, main, "dangerous");
+        edge.status = CallTargetStatus::BudgetExceeded;
+        edge.synthetic_target = Some("ts-js:points-to-budget:1".to_string());
+
+        db.replace_call_facts(CallOutput {
+            sites: vec![site],
+            targets: Vec::new(),
+            unresolved: Vec::new(),
+        })
+        .expect("valid call facts");
+        db.replace_refined_call_facts(RefinedCallOutput { edges: vec![edge] })
+            .expect("valid refined call facts");
+        db
+    }
+
     fn policy_query_db_with_unresolved_target() -> AnalysisDb {
         let mut db = AnalysisDb::new();
         let file = db.add_file(
@@ -2138,8 +2589,8 @@ mod tests {
             "package main\nfunc main() { dangerous(); dangerous() }\nfunc dangerousA() {}\nfunc dangerousB() {}\n".to_string(),
         );
         let main = push_test_function(&mut db, file, "main", 1, false);
-        let dangerous_a = push_test_function(&mut db, file, "dangerousA", 2, false);
-        let dangerous_b = push_test_function(&mut db, file, "dangerousB", 3, false);
+        let dangerous_a = push_test_function(&mut db, file, "dangerous", 2, false);
+        let dangerous_b = push_test_function(&mut db, file, "dangerous", 3, false);
 
         let first = call_site(0, file, main, "dangerous");
         let second = call_site(1, file, main, "dangerous");
@@ -2222,8 +2673,114 @@ mod tests {
         db
     }
 
+    fn policy_query_db_with_cfg_ordered_call_sequence(callees: &[(&str, u32)]) -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/main.go"),
+            "src/main.go".to_string(),
+            "package main\nfunc handler() {}\n".to_string(),
+        );
+        let handler = push_test_function(&mut db, file, "handler", 1, false);
+        let mut sites = Vec::new();
+        let mut targets = Vec::new();
+        let mut edges = Vec::new();
+        let mut cfg_nodes = Vec::new();
+
+        for (index, (callee, cfg_ordinal)) in callees.iter().enumerate() {
+            let id = index as u64;
+            let operation = MirOpId(id);
+            let callee_function =
+                push_test_function(&mut db, file, callee, index as u32 + 10, false);
+            let site = call_site(id, file, handler, callee);
+            targets.push(call_target(id, site.id, handler, callee_function));
+            edges.push(refined_edge(id, site.id, handler, callee_function, callee));
+            cfg_nodes.push(cfg_node(id, file, handler, operation, *cfg_ordinal));
+            sites.push(site);
+        }
+
+        db.replace_call_facts(CallOutput {
+            sites,
+            targets,
+            unresolved: Vec::new(),
+        })
+        .expect("valid call facts");
+        db.replace_refined_call_facts(RefinedCallOutput { edges })
+            .expect("valid refined call facts");
+        db.replace_cfg_facts(CfgOutput {
+            functions: vec![cfg_function(file, handler)],
+            nodes: cfg_nodes,
+            blocks: vec![cfg_block()],
+            ..CfgOutput::empty()
+        })
+        .expect("valid cfg facts");
+        db
+    }
+
     fn data_flow_policy_db(edges: Vec<DataFlowEdgeFact>) -> AnalysisDb {
         data_flow_policy_db_with_sink_place(edges, PlaceId(1))
+    }
+
+    fn data_flow_policy_db_with_unresolved_logger_sink(edges: Vec<DataFlowEdgeFact>) -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/main.go"),
+            "src/main.go".to_string(),
+            "package main\nfunc handler() { log(input) }\n".to_string(),
+        );
+        let handler = push_test_function(&mut db, file, "handler", 1, false);
+        let site = call_site_with_args(1, file, handler, "log", vec![PlaceId(1)]);
+        let site_id = site.id;
+
+        db.replace_call_facts(CallOutput {
+            sites: vec![site],
+            targets: Vec::new(),
+            unresolved: Vec::new(),
+        })
+        .expect("valid call facts");
+        db.replace_refined_call_facts(RefinedCallOutput {
+            edges: vec![unresolved_refined_edge(1, site_id, handler, "log")],
+        })
+        .expect("valid refined call facts");
+        db.replace_data_flow_facts(DataFlowOutput {
+            nodes: data_flow_nodes(file, handler),
+            edges,
+            models: vec![source_model()],
+            budgets: Vec::new(),
+        })
+        .expect("valid data-flow facts");
+        db
+    }
+
+    fn data_flow_policy_db_with_internal_synthetic_target(
+        edges: Vec<DataFlowEdgeFact>,
+    ) -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/main.go"),
+            "src/main.go".to_string(),
+            "package main\nfunc handler() { dangerous(input) }\n".to_string(),
+        );
+        let handler = push_test_function(&mut db, file, "handler", 1, false);
+        let site = call_site_with_args(1, file, handler, "dangerous", vec![PlaceId(1)]);
+        let mut edge = unresolved_refined_edge(1, site.id, handler, "dangerous");
+        edge.synthetic_target = Some("ts-js:callable-place:1".to_string());
+
+        db.replace_call_facts(CallOutput {
+            sites: vec![site],
+            targets: Vec::new(),
+            unresolved: Vec::new(),
+        })
+        .expect("valid call facts");
+        db.replace_refined_call_facts(RefinedCallOutput { edges: vec![edge] })
+            .expect("valid refined call facts");
+        db.replace_data_flow_facts(DataFlowOutput {
+            nodes: data_flow_nodes(file, handler),
+            edges,
+            models: vec![source_model()],
+            budgets: Vec::new(),
+        })
+        .expect("valid data-flow facts");
+        db
     }
 
     fn data_flow_policy_db_with_sink_place(
@@ -2253,6 +2810,51 @@ mod tests {
         db.replace_data_flow_facts(DataFlowOutput {
             nodes: data_flow_nodes(file, handler),
             edges,
+            models: vec![source_model()],
+            budgets: Vec::new(),
+        })
+        .expect("valid data-flow facts");
+        db
+    }
+
+    fn data_flow_policy_db_with_two_sink_sites_same_place() -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/main.go"),
+            "src/main.go".to_string(),
+            "package main\nfunc handler() { dangerous(input); dangerous(input) }\n".to_string(),
+        );
+        let handler = push_test_function(&mut db, file, "handler", 1, false);
+        let dangerous = push_test_function(&mut db, file, "dangerous", 2, false);
+        let first_site = call_site_with_args(1, file, handler, "dangerous", vec![PlaceId(1)]);
+        let second_site = call_site_with_args(2, file, handler, "dangerous", vec![PlaceId(1)]);
+
+        db.replace_call_facts(CallOutput {
+            sites: vec![first_site.clone(), second_site.clone()],
+            targets: vec![
+                call_target(1, first_site.id, handler, dangerous),
+                call_target(2, second_site.id, handler, dangerous),
+            ],
+            unresolved: Vec::new(),
+        })
+        .expect("valid call facts");
+        db.replace_refined_call_facts(RefinedCallOutput {
+            edges: vec![
+                refined_edge(1, first_site.id, handler, dangerous, "dangerous"),
+                refined_edge(2, second_site.id, handler, dangerous, "dangerous"),
+            ],
+        })
+        .expect("valid refined call facts");
+        db.replace_data_flow_facts(DataFlowOutput {
+            nodes: data_flow_nodes(file, handler),
+            edges: vec![data_flow_edge(
+                0,
+                0,
+                1,
+                DataFlowEdgeKind::SourceIntroduction,
+                DataFlowStatus::Present,
+                Vec::new(),
+            )],
             models: vec![source_model()],
             budgets: Vec::new(),
         })
@@ -2426,6 +3028,61 @@ mod tests {
             evidence,
             input_stable_keys: Vec::new(),
             stable_key: format!("edge:{id}:{from}:{to}:{status:?}"),
+        }
+    }
+
+    fn cfg_function(file: FileId, function: FunctionId) -> CfgFunctionFact {
+        CfgFunctionFact {
+            id: CfgFunctionId(0),
+            body: MirBodyId(function.0),
+            function,
+            language: Language::Go,
+            file,
+            span: Span::point(file, 1, 1),
+            entry_node: CfgNodeId(0),
+            normal_exit_node: CfgNodeId(0),
+            exceptional_exit_node: None,
+            stable_key: "cfg:function:handler".to_string(),
+            status: CfgStatus::Resolved,
+            precision: CfgPrecision::ExactLowered,
+        }
+    }
+
+    fn cfg_node(
+        id: u64,
+        file: FileId,
+        function: FunctionId,
+        operation: MirOpId,
+        operation_ordinal: u32,
+    ) -> CfgNodeFact {
+        CfgNodeFact {
+            id: CfgNodeId(id),
+            cfg_function: CfgFunctionId(0),
+            body: MirBodyId(function.0),
+            operation: Some(operation),
+            block: BasicBlockId(0),
+            kind: CfgNodeKind::CallSite,
+            span: Some(Span::point(file, id as u32 + 2, 1)),
+            generated: false,
+            operation_ordinal,
+            stable_key: format!("cfg:node:{id}"),
+            status: CfgStatus::Resolved,
+            precision: CfgPrecision::ExactLowered,
+        }
+    }
+
+    fn cfg_block() -> BasicBlockFact {
+        BasicBlockFact {
+            id: BasicBlockId(0),
+            cfg_function: CfgFunctionId(0),
+            kind: BasicBlockKind::StraightLine,
+            first_node: Some(CfgNodeId(0)),
+            last_node: Some(CfgNodeId(0)),
+            reachable: true,
+            reverse_postorder: 0,
+            stable_key: "cfg:block:body".to_string(),
+            status: CfgStatus::Resolved,
+            precision: CfgPrecision::ExactLowered,
         }
     }
 

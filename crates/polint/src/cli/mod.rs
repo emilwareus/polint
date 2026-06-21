@@ -213,6 +213,23 @@ enum RuleTemplateKind {
     UserFilePath,
 }
 
+impl RuleTemplateKind {
+    fn as_kebab_case(self) -> &'static str {
+        match self {
+            Self::RequestToShell => "request-to-shell",
+            Self::SecretToLog => "secret-to-log",
+            Self::PiiToAnalytics => "pii-to-analytics",
+            Self::SensitiveWriteGuard => "sensitive-write-guard",
+            Self::TransactionCleanup => "transaction-cleanup",
+            Self::RawReachableApi => "raw-reachable-api",
+            Self::Ssrf => "ssrf",
+            Self::DangerousHtml => "dangerous-html",
+            Self::UnsafeDeserialization => "unsafe-deserialization",
+            Self::UserFilePath => "user-file-path",
+        }
+    }
+}
+
 #[derive(Debug, Args, Clone)]
 struct BaselineArgs {
     #[command(subcommand)]
@@ -678,6 +695,10 @@ fn gitignore_line_covers(line: &str, entry: &str) -> bool {
 
 fn new_rule(root: PathBuf, args: &NewRuleArgs) -> Result<()> {
     let rule_name = validate_rule_name(&args.rule_name)?;
+    let language = RuleLanguage::parse(&args.language)?;
+    if let Some(template) = args.template {
+        validate_rule_template_language(language, template)?;
+    }
     let rules_dir = root.join(".polint/rules");
     let module = rust_module_name(&rule_name);
     let module_path = rules_dir.join("src").join(format!("{module}.rs"));
@@ -707,11 +728,77 @@ fn new_rule(root: PathBuf, args: &NewRuleArgs) -> Result<()> {
 
     fs::write(
         &module_path,
-        rule_module_template(&args.language, &rule_name, args.template),
+        rule_module_template(language.as_str(), &rule_name, args.template),
     )?;
-    write_rule_fixture_skeleton(&root, &args.language, &rule_name, &module, args.template)?;
+    write_rule_fixture_skeleton(&root, language, &rule_name, &module, args.template)?;
     println!("Created rule module {}", module_path.display());
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuleLanguage {
+    Go,
+    Ts,
+    Js,
+    Generic,
+}
+
+impl RuleLanguage {
+    fn parse(value: &str) -> Result<Self> {
+        match value {
+            "go" => Ok(Self::Go),
+            "ts" => Ok(Self::Ts),
+            "js" => Ok(Self::Js),
+            "generic" => Ok(Self::Generic),
+            _ => anyhow::bail!(
+                "unsupported rule language `{value}`; expected one of: go, ts, js, generic"
+            ),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Go => "go",
+            Self::Ts => "ts",
+            Self::Js => "js",
+            Self::Generic => "generic",
+        }
+    }
+
+    fn fixture_file(self) -> &'static str {
+        match self {
+            Self::Go => "src/example.go",
+            Self::Js => "src/example.js",
+            Self::Ts | Self::Generic => "src/example.ts",
+        }
+    }
+}
+
+fn validate_rule_template_language(
+    language: RuleLanguage,
+    template: RuleTemplateKind,
+) -> Result<()> {
+    match language {
+        RuleLanguage::Ts => Ok(()),
+        RuleLanguage::Go
+            if matches!(
+                template,
+                RuleTemplateKind::SensitiveWriteGuard
+                    | RuleTemplateKind::TransactionCleanup
+                    | RuleTemplateKind::RawReachableApi
+            ) =>
+        {
+            Ok(())
+        }
+        RuleLanguage::Go => anyhow::bail!(
+            "template `{}` is not available for Go yet; use `ts` or choose one of: sensitive-write-guard, transaction-cleanup, raw-reachable-api",
+            template.as_kebab_case()
+        ),
+        RuleLanguage::Js | RuleLanguage::Generic => anyhow::bail!(
+            "policy templates are currently available for `ts` and selected `go` templates, not `{}`",
+            language.as_str()
+        ),
+    }
 }
 
 fn rust_module_name(rule_name: &str) -> String {
@@ -855,7 +942,7 @@ fn validate_rule_name(name: &str) -> Result<String> {
 
 fn write_rule_fixture_skeleton(
     root: &Path,
-    language: &str,
+    language: RuleLanguage,
     rule_name: &str,
     module: &str,
     template: Option<RuleTemplateKind>,
@@ -864,14 +951,11 @@ fn write_rule_fixture_skeleton(
     if rule_tests_dir.exists() {
         return Ok(());
     }
-    let fixture_file = match language {
-        "go" => "src/example.go",
-        _ => "src/example.ts",
-    };
+    let fixture_file = language.fixture_file();
     write_rule_fixture_case(
         &rule_tests_dir.join("positive"),
-        language,
-        &rule_fixture_positive_source_template(language, template),
+        language.as_str(),
+        &rule_fixture_positive_source_template(language.as_str(), template),
         &rule_fixture_manifest_template(
             rule_name,
             fixture_file,
@@ -882,8 +966,8 @@ fn write_rule_fixture_skeleton(
     )?;
     write_rule_fixture_case(
         &rule_tests_dir.join("negative"),
-        language,
-        &rule_fixture_negative_source_template(language, template),
+        language.as_str(),
+        &rule_fixture_negative_source_template(language.as_str(), template),
         &rule_fixture_manifest_template(
             rule_name,
             fixture_file,
@@ -903,6 +987,7 @@ fn write_rule_fixture_case(
 ) -> Result<()> {
     let source_path = match language {
         "go" => case_dir.join("src/example.go"),
+        "js" => case_dir.join("src/example.js"),
         _ => case_dir.join("src/example.ts"),
     };
     fs::create_dir_all(source_path.parent().unwrap_or(case_dir))
@@ -913,6 +998,13 @@ fn write_rule_fixture_case(
             case_dir.join("polint-test.toml").display()
         )
     })?;
+    if language == "go" {
+        fs::write(
+            case_dir.join("go.mod"),
+            "module example.com/polint-rule-fixture\n\ngo 1.22\n",
+        )
+        .with_context(|| format!("failed to write {}", case_dir.join("go.mod").display()))?;
+    }
     fs::write(&source_path, source)
         .with_context(|| format!("failed to write {}", source_path.display()))?;
     Ok(())
@@ -974,6 +1066,11 @@ fn rule_fixture_positive_source_template(
 func main() {}
 "#
         .to_string(),
+        "generic" => r#"function keepMe() {
+	return "allowed";
+}
+"#
+        .to_string(),
         _ => r#"export const example = "allowed";
 "#
         .to_string(),
@@ -998,6 +1095,11 @@ func replaceMe(err error) error {
 		return err
 	}
 	return nil
+}
+"#
+        .to_string(),
+        "generic" => r#"function replaceMe() {
+	return "blocked";
 }
 "#
         .to_string(),
@@ -1043,8 +1145,11 @@ fn rule_module_template(
     let _ = attribute_count;"#
         }
         _ => {
-            r#"    let function_count = functions.iter().count();
-    let _ = function_count;"#
+            r#"    for function in functions.iter() {
+        if function.name == "replaceMe" {
+            ctx.warn(&function.span, "Project-specific policy: replace this placeholder function.");
+        }
+    }"#
         }
     };
     format!(
@@ -1093,7 +1198,7 @@ fn policy_rule_module_template(
 #[polint::rule(
     id = "custom/{rule_name}",
     description = "{description}",
-    severity = "warn"
+    severity = "error"
 )]
 pub(crate) fn {module}(ctx: &mut RuleCtx<'_>, {view_param}) -> RuleResult {{
 {body}
@@ -1112,16 +1217,19 @@ fn policy_template_spec(language: &str, template: RuleTemplateKind) -> PolicyTem
             "SourcePattern::http_request()",
             call_sink(if go { "execCommand" } else { "exec" }),
             r#"["validate_command", "allow_command"]"#,
-            if go {
-                GO_REQUEST_TO_SHELL_POSITIVE
-            } else {
-                TS_REQUEST_TO_SHELL_POSITIVE
-            },
-            if go {
-                GO_REQUEST_TO_SHELL_NEGATIVE
-            } else {
-                TS_REQUEST_TO_SHELL_NEGATIVE
-            },
+            None,
+            (
+                if go {
+                    GO_REQUEST_TO_SHELL_POSITIVE
+                } else {
+                    TS_REQUEST_TO_SHELL_POSITIVE
+                },
+                if go {
+                    GO_REQUEST_TO_SHELL_NEGATIVE
+                } else {
+                    TS_REQUEST_TO_SHELL_NEGATIVE
+                },
+            ),
         ),
         RuleTemplateKind::SecretToLog => data_flow_policy_template(
             "Secret-like values must not reach logs without redaction.",
@@ -1129,16 +1237,19 @@ fn policy_template_spec(language: &str, template: RuleTemplateKind) -> PolicyTem
             r#"SourcePattern::secret_like(["token", "password", "apiKey"])"#,
             "SinkPattern::logger()",
             r#"["redact", "mask_secret"]"#,
-            if go {
-                GO_SECRET_TO_LOG_POSITIVE
-            } else {
-                TS_SECRET_TO_LOG_POSITIVE
-            },
-            if go {
-                GO_SECRET_TO_LOG_NEGATIVE
-            } else {
-                TS_SECRET_TO_LOG_NEGATIVE
-            },
+            Some("Heuristic"),
+            (
+                if go {
+                    GO_SECRET_TO_LOG_POSITIVE
+                } else {
+                    TS_SECRET_TO_LOG_POSITIVE
+                },
+                if go {
+                    GO_SECRET_TO_LOG_NEGATIVE
+                } else {
+                    TS_SECRET_TO_LOG_NEGATIVE
+                },
+            ),
         ),
         RuleTemplateKind::PiiToAnalytics => data_flow_policy_template(
             "PII-like values must not reach analytics calls without anonymization.",
@@ -1150,16 +1261,19 @@ fn policy_template_spec(language: &str, template: RuleTemplateKind) -> PolicyTem
                 "analyticsTrack"
             }),
             r#"["anonymize", "hash_user_id"]"#,
-            if go {
-                GO_PII_TO_ANALYTICS_POSITIVE
-            } else {
-                TS_PII_TO_ANALYTICS_POSITIVE
-            },
-            if go {
-                GO_PII_TO_ANALYTICS_NEGATIVE
-            } else {
-                TS_PII_TO_ANALYTICS_NEGATIVE
-            },
+            Some("Heuristic"),
+            (
+                if go {
+                    GO_PII_TO_ANALYTICS_POSITIVE
+                } else {
+                    TS_PII_TO_ANALYTICS_POSITIVE
+                },
+                if go {
+                    GO_PII_TO_ANALYTICS_NEGATIVE
+                } else {
+                    TS_PII_TO_ANALYTICS_NEGATIVE
+                },
+            ),
         ),
         RuleTemplateKind::SensitiveWriteGuard => control_guard_policy_template(
             "Sensitive write calls require a validation or authorization guard first.",
@@ -1215,16 +1329,19 @@ fn policy_template_spec(language: &str, template: RuleTemplateKind) -> PolicyTem
             "SourcePattern::http_request()",
             call_sink(if go { "fetchURL" } else { "fetchUrl" }),
             r#"["allowlist_url", "validate_url"]"#,
-            if go {
-                GO_SSRF_POSITIVE
-            } else {
-                TS_SSRF_POSITIVE
-            },
-            if go {
-                GO_SSRF_NEGATIVE
-            } else {
-                TS_SSRF_NEGATIVE
-            },
+            None,
+            (
+                if go {
+                    GO_SSRF_POSITIVE
+                } else {
+                    TS_SSRF_POSITIVE
+                },
+                if go {
+                    GO_SSRF_NEGATIVE
+                } else {
+                    TS_SSRF_NEGATIVE
+                },
+            ),
         ),
         RuleTemplateKind::DangerousHtml => data_flow_policy_template(
             "Request data must not reach HTML sinks without escaping.",
@@ -1232,16 +1349,19 @@ fn policy_template_spec(language: &str, template: RuleTemplateKind) -> PolicyTem
             "SourcePattern::http_request()",
             call_sink(if go { "renderHTML" } else { "setInnerHTML" }),
             r#"["escape_html", "sanitize_html"]"#,
-            if go {
-                GO_DANGEROUS_HTML_POSITIVE
-            } else {
-                TS_DANGEROUS_HTML_POSITIVE
-            },
-            if go {
-                GO_DANGEROUS_HTML_NEGATIVE
-            } else {
-                TS_DANGEROUS_HTML_NEGATIVE
-            },
+            None,
+            (
+                if go {
+                    GO_DANGEROUS_HTML_POSITIVE
+                } else {
+                    TS_DANGEROUS_HTML_POSITIVE
+                },
+                if go {
+                    GO_DANGEROUS_HTML_NEGATIVE
+                } else {
+                    TS_DANGEROUS_HTML_NEGATIVE
+                },
+            ),
         ),
         RuleTemplateKind::UnsafeDeserialization => data_flow_policy_template(
             "Request data must not reach unsafe deserialization without validation.",
@@ -1249,16 +1369,19 @@ fn policy_template_spec(language: &str, template: RuleTemplateKind) -> PolicyTem
             "SourcePattern::http_request()",
             call_sink("unsafeDeserialize"),
             r#"["validate_payload", "verify_schema"]"#,
-            if go {
-                GO_UNSAFE_DESERIALIZATION_POSITIVE
-            } else {
-                TS_UNSAFE_DESERIALIZATION_POSITIVE
-            },
-            if go {
-                GO_UNSAFE_DESERIALIZATION_NEGATIVE
-            } else {
-                TS_UNSAFE_DESERIALIZATION_NEGATIVE
-            },
+            None,
+            (
+                if go {
+                    GO_UNSAFE_DESERIALIZATION_POSITIVE
+                } else {
+                    TS_UNSAFE_DESERIALIZATION_POSITIVE
+                },
+                if go {
+                    GO_UNSAFE_DESERIALIZATION_NEGATIVE
+                } else {
+                    TS_UNSAFE_DESERIALIZATION_NEGATIVE
+                },
+            ),
         ),
         RuleTemplateKind::UserFilePath => data_flow_policy_template(
             "Request-controlled paths must not reach file APIs without validation.",
@@ -1266,16 +1389,19 @@ fn policy_template_spec(language: &str, template: RuleTemplateKind) -> PolicyTem
             "SourcePattern::http_request()",
             call_sink("readFile"),
             r#"["validate_path", "safe_join"]"#,
-            if go {
-                GO_USER_FILE_PATH_POSITIVE
-            } else {
-                TS_USER_FILE_PATH_POSITIVE
-            },
-            if go {
-                GO_USER_FILE_PATH_NEGATIVE
-            } else {
-                TS_USER_FILE_PATH_NEGATIVE
-            },
+            None,
+            (
+                if go {
+                    GO_USER_FILE_PATH_POSITIVE
+                } else {
+                    TS_USER_FILE_PATH_POSITIVE
+                },
+                if go {
+                    GO_USER_FILE_PATH_NEGATIVE
+                } else {
+                    TS_USER_FILE_PATH_NEGATIVE
+                },
+            ),
         ),
     }
 }
@@ -1286,10 +1412,14 @@ fn data_flow_policy_template(
     source: &'static str,
     sink: impl Into<String>,
     barriers: &'static str,
-    positive_source: &'static str,
-    negative_source: &'static str,
+    minimum_precision: Option<&'static str>,
+    fixtures: (&'static str, &'static str),
 ) -> PolicyTemplateSpec {
     let sink = sink.into();
+    let (positive_source, negative_source) = fixtures;
+    let minimum_precision = minimum_precision
+        .map(|precision| format!("    query.minimum_precision = PolicyPrecision::{precision};\n"))
+        .unwrap_or_default();
     PolicyTemplateSpec {
         description,
         view_param: "flow: DataFlow<'_>",
@@ -1299,7 +1429,7 @@ fn data_flow_policy_template(
         {sink},
     );
     query.barriers = BarrierPattern::call_any({barriers});
-    query.max_paths = 10;
+{minimum_precision}    query.max_paths = 10;
 
     for violation in flow.forbidden(query) {{
         ctx.report(violation.diagnostic(
@@ -2117,7 +2247,9 @@ fn inspect_unknowns(root: PathBuf, args: &InspectUnknownsArgs) -> Result<u8> {
         .capability
         .as_deref()
         .map(|capability| vec![capability])
-        .unwrap_or_else(|| vec!["resolved_imports", "symbols", "references"]);
+        .unwrap_or_else(|| {
+            crate::analysis::unknown_taxonomy::collect::PUBLIC_UNKNOWN_CAPABILITIES.to_vec()
+        });
     let analysis = analyze_for_agent_json(&root, &args.paths, args.no_cache, &requested_caps)?;
     let rows = if let Some(capability) = &args.capability {
         crate::analysis::unknown_taxonomy::collect::public_capability_unknowns(

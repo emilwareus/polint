@@ -301,11 +301,15 @@ exclude = []
     );
     assert_eq!(consolidated["version"], 1);
     assert_eq!(consolidated["capability"], "all");
-    assert_eq!(consolidated["rows"][0]["category"], "missing_fact");
-    assert!(consolidated["rows"][0].get("provider").is_none());
-    assert!(consolidated["rows"][0].get("family").is_none());
-    assert_eq!(consolidated["rows"][0]["reason"], "not_found");
-    assert!(consolidated["rows"][0].get("source_stable_key").is_none());
+    let rows = consolidated["rows"].as_array().expect("unknown rows");
+    let import_row = rows
+        .iter()
+        .find(|row| row["reason"] == "not_found")
+        .unwrap_or_else(|| panic!("missing import-resolution unknown row: {consolidated:#?}"));
+    assert_eq!(import_row["category"], "missing_fact");
+    assert!(import_row.get("provider").is_none());
+    assert!(import_row.get("family").is_none());
+    assert!(import_row.get("source_stable_key").is_none());
 
     let filtered = stdout_json(
         polint_cmd()
@@ -338,6 +342,45 @@ exclude = []
         dataflow["rows"].as_array().map(Vec::len),
         Some(0),
         "{dataflow:#?}"
+    );
+}
+
+#[test]
+fn inspect_unknowns_default_requests_preview_policy_unknowns() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+"#,
+    );
+    write_file(
+        &temp.path().join("src/app.ts"),
+        r#"export function handler(cb: () => void) {
+  cb();
+}
+"#,
+    );
+
+    let value = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["inspect", "unknowns", "--format", "json"])
+            .assert()
+            .success(),
+    );
+    let rows = value["rows"].as_array().expect("unknown rows");
+
+    assert!(
+        rows.iter().any(|row| {
+            row["docs_path"] == "docs/facts/data-flow.md"
+                && row["reason"]
+                    .as_str()
+                    .is_some_and(|reason| reason.contains("unresolved_calls"))
+        }),
+        "unfiltered inspect unknowns should request preview policy/dataflow facts: {value:#?}"
     );
 }
 
@@ -954,6 +997,7 @@ pub(crate) fn rule(
         SinkPattern::logger(),
     );
     flow_query.barriers = BarrierPattern::call_any(["redact", "mask_secret"]);
+    flow_query.minimum_precision = PolicyPrecision::Heuristic;
     flow_query.max_paths = 20;
 
     for violation in flow.forbidden(flow_query) {
@@ -1159,8 +1203,12 @@ func dangerous() {}
     assert!(
         diagnostics.iter().any(|diagnostic| {
             diagnostic["message"] == "dangerous call event matched"
-                && diagnostic_has_evidence(diagnostic, "target", "dangerous")
-                && diagnostic_has_evidence(diagnostic, "policy_precision", "heuristic")
+                && diagnostic_has_evidence(
+                    diagnostic,
+                    "target",
+                    "example.com/policyquery/src.dangerous",
+                )
+                && diagnostic_has_evidence(diagnostic, "policy_precision", "setup_aware")
         }),
         "missing event diagnostic evidence: {json:#?}"
     );
@@ -1168,7 +1216,11 @@ func dangerous() {}
         diagnostics.iter().any(|diagnostic| {
             diagnostic["message"] == "dangerous call is reachable from main"
                 && diagnostic_has_evidence(diagnostic, "root", "main")
-                && diagnostic_has_evidence(diagnostic, "target", "dangerous")
+                && diagnostic_has_evidence(
+                    diagnostic,
+                    "target",
+                    "example.com/policyquery/src.dangerous",
+                )
                 && diagnostic_has_evidence(diagnostic, "confidence", "high")
         }),
         "missing reachable-call diagnostic evidence: {json:#?}"
@@ -1341,6 +1393,7 @@ pub(crate) fn rule(ctx: &mut RuleCtx<'_>, flow: DataFlow<'_>) -> RuleResult {
     );
     query.barriers = BarrierPattern::call_any(["redact", "mask_secret"]);
     query.max_depth = 8;
+    query.minimum_precision = PolicyPrecision::Heuristic;
     query.max_paths = 4;
 
     for violation in flow.forbidden(query) {
@@ -1520,6 +1573,7 @@ pub(crate) fn rule(
         SinkPattern::logger(),
     );
     flow_query.barriers = BarrierPattern::call_any(["redact"]);
+    flow_query.minimum_precision = PolicyPrecision::Heuristic;
     flow_query.max_paths = 4;
 
     for violation in flow.forbidden(flow_query) {
@@ -6811,11 +6865,87 @@ fn new_rule_generic_uses_sdk_query_helpers() {
     assert!(module.contains("use polint::sdk::prelude::*;"));
     assert!(!module.contains("SourceFiles<'_>"));
     assert!(module.contains("functions: Functions<'_>"));
-    assert!(module.contains("functions.iter().count()"));
+    assert!(module.contains("function.name == \"replaceMe\""));
     assert!(!module.contains("fn capabilities"));
     assert!(!module.contains("impl Rule"));
     let internal_core_path = ["crate", "core"].join("::");
     assert!(!module.contains(&internal_core_path));
+
+    point_generated_rule_pack_at_local_polint(temp.path());
+    let value = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["test", "--no-cache", "--format", "json"])
+            .assert()
+            .success(),
+    );
+    assert_eq!(value["summary"]["total"], 2);
+    assert_eq!(value["summary"]["failed"], 0, "{value:#?}");
+}
+
+#[test]
+fn new_rule_rejects_unknown_language() {
+    let temp = tempfile::tempdir().unwrap();
+
+    polint_cmd()
+        .current_dir(temp.path())
+        .args(["new-rule", "python", "bad-python"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "unsupported rule language `python`",
+        ));
+}
+
+#[test]
+fn new_rule_js_uses_js_fixture_files_for_non_template_rules() {
+    let temp = tempfile::tempdir().unwrap();
+    polint_cmd()
+        .current_dir(temp.path())
+        .args(["new-rule", "js", "no-debug-name"])
+        .assert()
+        .success();
+
+    assert!(
+        temp.path()
+            .join(".polint/tests/rules/no_debug_name/positive/src/example.js")
+            .is_file()
+    );
+    assert!(
+        !temp
+            .path()
+            .join(".polint/tests/rules/no_debug_name/positive/src/example.ts")
+            .exists()
+    );
+}
+
+#[test]
+fn new_rule_policy_templates_reject_unbacked_language_combinations() {
+    let temp = tempfile::tempdir().unwrap();
+
+    polint_cmd()
+        .current_dir(temp.path())
+        .args([
+            "new-rule",
+            "go",
+            "bad-flow",
+            "--template",
+            "request-to-shell",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "template `request-to-shell` is not available for Go yet",
+        ));
+
+    polint_cmd()
+        .current_dir(temp.path())
+        .args(["new-rule", "js", "bad-js", "--template", "secret-to-log"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "policy templates are currently available for `ts` and selected `go` templates",
+        ));
 }
 
 #[test]
@@ -6921,6 +7051,7 @@ fn new_rule_policy_template_modules_use_public_sdk_only() {
         .unwrap();
         assert!(module.contains("use polint::sdk::prelude::*;"), "{module}");
         assert!(module.contains("#[polint::rule("), "{module}");
+        assert!(module.contains("severity = \"error\""), "{module}");
         assert!(module.contains(view), "{template}: {module}");
         assert!(module.contains(query), "{template}: {module}");
         assert!(module.contains(first), "{template}: {module}");

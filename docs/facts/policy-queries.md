@@ -42,6 +42,7 @@ pub(crate) fn no_secret_logs(ctx: &mut RuleCtx<'_>, flow: DataFlow<'_>) -> RuleR
         SinkPattern::logger(),
     );
     query.barriers = BarrierPattern::call_any(["redact", "mask_secret"]);
+    query.minimum_precision = PolicyPrecision::Heuristic;
     query.max_paths = 20;
 
     for violation in flow.forbidden(query) {
@@ -126,7 +127,8 @@ diagnostics rather than running rules with placeholder facts.
 ## Template Starters
 
 `polint new-rule <lang> <name> --template <id>` creates repo-local policy
-scaffolds using the same query-object style. Template IDs are:
+scaffolds using the same query-object style for the supported language/template
+pairs. TypeScript supports:
 
 - `request-to-shell`
 - `secret-to-log`
@@ -138,6 +140,14 @@ scaffolds using the same query-object style. Template IDs are:
 - `dangerous-html`
 - `unsafe-deserialization`
 - `user-file-path`
+
+Go currently supports:
+
+- `sensitive-write-guard`
+- `transaction-cleanup`
+- `raw-reachable-api`
+
+Policy templates are not currently generated for `js` or `generic` rules.
 
 Templates include positive and negative fixture cases under `.polint/tests/`.
 They are starting points to edit for local APIs, not built-in rules enabled by

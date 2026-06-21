@@ -197,11 +197,7 @@ impl AnalysisPlan {
     ) -> Vec<String> {
         self.rules
             .iter()
-            .filter(|rule| {
-                rule.requested_capabilities
-                    .iter()
-                    .any(|requested| requested == capability)
-            })
+            .filter(|rule| rule_requests_capability(rule, capability))
             .filter(|rule| rule_matches_any_file(rule, files))
             .map(|rule| rule.id.clone())
             .collect()
@@ -646,10 +642,10 @@ fn plan_capabilities(rules: &[PlannedRule]) -> Vec<PlannedCapability> {
     let mut capabilities = BTreeMap::<String, CapabilityAccumulator>::new();
     for rule in rules {
         for requested in &rule.requested_capabilities {
-            let entry = capabilities
-                .entry(requested.clone())
-                .or_insert_with(|| support_for(requested));
-            entry.rules.insert(rule.id.clone());
+            insert_capability_request(&mut capabilities, requested, &rule.id);
+            for dependency in capability_dependencies(requested) {
+                insert_capability_request(&mut capabilities, dependency, &rule.id);
+            }
         }
     }
 
@@ -665,6 +661,27 @@ fn plan_capabilities(rules: &[PlannedRule]) -> Vec<PlannedCapability> {
             docs_path: accumulator.docs_path,
         })
         .collect()
+}
+
+fn insert_capability_request(
+    capabilities: &mut BTreeMap<String, CapabilityAccumulator>,
+    capability: &str,
+    rule_id: &str,
+) {
+    let entry = capabilities
+        .entry(capability.to_string())
+        .or_insert_with(|| support_for(capability));
+    entry.rules.insert(rule_id.to_string());
+}
+
+fn capability_dependencies(capability: &str) -> &'static [&'static str] {
+    match capability {
+        "events" | "calls" | "control_flow" | "dataflow" => {
+            &["resolved_imports", "module_graph", "symbols", "references"]
+        }
+        "references" => &["symbols"],
+        _ => &[],
+    }
 }
 
 #[rustfmt::skip]
@@ -732,6 +749,12 @@ fn support_for(capability: &str) -> CapabilityAccumulator {
 
 fn requested_capabilities(capabilities: Capabilities) -> Vec<String> {
     capabilities.requested_names().map(str::to_string).collect()
+}
+
+fn rule_requests_capability(rule: &PlannedRule, capability: &str) -> bool {
+    rule.requested_capabilities.iter().any(|requested| {
+        requested == capability || capability_dependencies(requested).contains(&capability)
+    })
 }
 
 fn plan_digest(
@@ -1155,24 +1178,28 @@ mod tests {
             "dataflow",
         ]);
 
-        assert_eq!(
-            plan.capabilities()
+        for capability in [
+            "calls",
+            "control_flow",
+            "dataflow",
+            "events",
+            "module_graph",
+            "references",
+            "resolved_imports",
+            "symbols",
+        ] {
+            let planned = plan
+                .capabilities()
                 .iter()
-                .map(|capability| {
-                    (
-                        capability.capability.as_str(),
-                        capability.status.clone(),
-                        capability.docs_path.as_deref(),
-                    )
-                })
-                .collect::<Vec<_>>(),
-            vec![
-                ("calls", CapabilitySupportStatus::Supported, None),
-                ("control_flow", CapabilitySupportStatus::Supported, None),
-                ("dataflow", CapabilitySupportStatus::Supported, None),
-                ("events", CapabilitySupportStatus::Supported, None),
-            ]
-        );
+                .find(|planned| planned.capability == capability)
+                .unwrap_or_else(|| panic!("missing planned capability {capability}: {plan:#?}"));
+            assert_eq!(planned.status, CapabilitySupportStatus::Supported);
+            assert_eq!(planned.docs_path.as_deref(), None);
+            assert_eq!(
+                planned.rules,
+                vec!["test/requested-capabilities".to_string()]
+            );
+        }
 
         let diagnostics = plan.diagnostics();
         for capability in ["events", "calls", "control_flow", "dataflow"] {
@@ -1185,6 +1212,31 @@ mod tests {
                 "supported capability {capability} should not emit diagnostics: {diagnostics:#?}"
             );
         }
+    }
+
+    #[test]
+    fn policy_capability_dependencies_match_rules_for_setup_gates() {
+        let rules = vec![rule(
+            "local/no-secret-flow",
+            "No secret flow",
+            Severity::Error,
+            Capabilities::new().dataflow(),
+        )];
+        let plan = AnalysisPlan::from_rules(&rules, None, &BTreeMap::new());
+        let file = SourceFile {
+            id: crate::core::FileId(0),
+            path: "src/app.go".into(),
+            relative_path: "src/app.go".to_string(),
+            language: Language::Go,
+            source: "".into(),
+            content_hash: "hash".to_string(),
+        };
+        let files = [&file];
+
+        assert_eq!(
+            plan.rules_for_capability_matching_files("references", &files),
+            vec!["local/no-secret-flow".to_string()]
+        );
     }
 
     #[test]

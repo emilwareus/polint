@@ -20,6 +20,16 @@ use crate::go::semantic::diagnostics::{
     GO_PACKAGES_LOAD_FAILED, GO_SIDECAR_TIMEOUT, GO_VERSION_UNSUPPORTED,
 };
 
+pub(crate) const PUBLIC_UNKNOWN_CAPABILITIES: &[&str] = &[
+    "resolved_imports",
+    "symbols",
+    "references",
+    "events",
+    "calls",
+    "control_flow",
+    "dataflow",
+];
+
 pub(crate) fn unsupported_capability_row(capability: &str, docs_path: Option<&str>) -> UnknownRow {
     UnknownRow::new(UnknownRowInput {
         category: UnknownCategory::UnsupportedSemantic,
@@ -45,7 +55,11 @@ pub(crate) fn public_capability_unknowns(db: &AnalysisDb, capability: &str) -> V
         "symbols" => symbol_unknowns(db),
         "references" => reference_unknowns(db),
         "events" | "calls" | "control_flow" => policy_call_unknowns(db, capability),
-        "dataflow" => data_flow_unknowns(db),
+        "dataflow" => {
+            let mut rows = data_flow_unknowns(db);
+            rows.extend(policy_call_unknowns(db, capability));
+            rows
+        }
         _ => Vec::new(),
     };
     normalize_rows(rows)
@@ -81,7 +95,7 @@ pub(crate) fn all_unknowns_with_diagnostics(
     diagnostics: &[Diagnostic],
 ) -> Vec<UnknownRow> {
     let mut rows = Vec::new();
-    for capability in ["resolved_imports", "symbols", "references"] {
+    for capability in PUBLIC_UNKNOWN_CAPABILITIES {
         rows.extend(public_capability_unknowns(db, capability));
     }
     rows.extend(graph_engine_unknowns_with_diagnostics(db, diagnostics));
@@ -296,11 +310,25 @@ fn refined_call_unknowns(db: &AnalysisDb) -> Vec<UnknownRow> {
     db.refined_call_edges()
         .iter()
         .filter(|edge| edge.status != CallTargetStatus::Resolved)
-        .map(|edge| refined_call_unknown(db, edge))
+        .map(|edge| {
+            refined_call_unknown(
+                db,
+                edge,
+                "refined_calls",
+                "docs/facts/capability-plans.md",
+                "model",
+            )
+        })
         .collect()
 }
 
-fn refined_call_unknown(db: &AnalysisDb, edge: &RefinedCallEdgeFact) -> UnknownRow {
+fn refined_call_unknown(
+    db: &AnalysisDb,
+    edge: &RefinedCallEdgeFact,
+    capability: &str,
+    docs_path: &str,
+    suggested_artifact: &str,
+) -> UnknownRow {
     let category = match edge.status {
         CallTargetStatus::SetupMissing => UnknownCategory::SetupMissing,
         CallTargetStatus::Unsupported => UnknownCategory::UnsupportedSemantic,
@@ -312,7 +340,7 @@ fn refined_call_unknown(db: &AnalysisDb, edge: &RefinedCallEdgeFact) -> UnknownR
     let site = db.call_sites().iter().find(|site| site.id == edge.site);
     UnknownRow::new(UnknownRowInput {
         category,
-        capability: Some("refined_calls".to_string()),
+        capability: Some(capability.to_string()),
         family: Some("RefinedCallEdge".to_string()),
         provider: "polint.refined_calls".to_string(),
         file: site
@@ -325,8 +353,8 @@ fn refined_call_unknown(db: &AnalysisDb, edge: &RefinedCallEdgeFact) -> UnknownR
             .map(unresolved_call_reason_label)
             .map(str::to_string),
         precision: Some(call_precision_label(edge.precision).to_string()),
-        docs_path: Some("docs/facts/capability-plans.md".to_string()),
-        suggested_artifact: Some("model".to_string()),
+        docs_path: Some(docs_path.to_string()),
+        suggested_artifact: Some(suggested_artifact.to_string()),
         source_stable_key: Some(edge.stable_key.clone()),
     })
 }
@@ -365,11 +393,13 @@ fn policy_call_unknowns(db: &AnalysisDb, capability: &str) -> Vec<UnknownRow> {
         .iter()
         .filter(|edge| edge.status != CallTargetStatus::Resolved)
         .map(|edge| {
-            let mut row = refined_call_unknown(db, edge);
-            row.capability = Some(capability.to_string());
-            row.docs_path = Some(policy_capability_docs_path(capability).to_string());
-            row.suggested_artifact = Some("model_or_setup".to_string());
-            row
+            refined_call_unknown(
+                db,
+                edge,
+                capability,
+                policy_capability_docs_path(capability),
+                "model_or_setup",
+            )
         })
         .collect()
 }
@@ -956,6 +986,51 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_unknowns_include_policy_capabilities() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file("a.ts".into(), "a.ts".to_string(), "call();".to_string());
+        db.replace_call_facts(CallOutput {
+            sites: vec![CallSiteFact {
+                in_throw: false,
+                id: CallSiteId(0),
+                language: Language::TypeScript,
+                file,
+                caller: FunctionId(0),
+                owner_symbol: None,
+                body: MirBodyId(0),
+                operation: MirOpId(0),
+                span: Span::point(file, 1, 1),
+                kind: CallSyntaxKind::Function,
+                callee: CallCallee::Unknown {
+                    reason: UnresolvedCallReason::BudgetExceeded,
+                },
+                receiver: None,
+                arguments: Vec::new(),
+                result: None,
+                status: CallTargetStatus::BudgetExceeded,
+                precision: CallPrecision::Unknown,
+                stable_key: "callsite:budget".to_string(),
+            }],
+            targets: Vec::new(),
+            unresolved: Vec::new(),
+        })
+        .expect("call facts");
+        db.replace_refined_call_facts(RefinedCallOutput {
+            edges: vec![refined_budget_edge()],
+        })
+        .expect("refined calls");
+
+        let capabilities = all_unknowns(&db)
+            .into_iter()
+            .filter_map(|row| row.capability)
+            .collect::<BTreeSet<_>>();
+
+        assert!(capabilities.contains("events"));
+        assert!(capabilities.contains("calls"));
+        assert!(capabilities.contains("control_flow"));
+    }
+
+    #[test]
     fn public_dataflow_unknowns_include_edges_budgets_and_evidence_unknowns() {
         let mut db = AnalysisDb::new();
         let file = db.add_file("a.ts".into(), "a.ts".to_string(), "source();".to_string());
@@ -1019,6 +1094,54 @@ mod tests {
         assert!(families.contains("EvidenceUnknown"));
         assert!(rows.iter().all(|row| {
             row.capability.as_deref() == Some("dataflow") && row.docs_path.as_deref().is_some()
+        }));
+    }
+
+    #[test]
+    fn public_dataflow_unknowns_include_refined_call_unknowns() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            "a.ts".into(),
+            "a.ts".to_string(),
+            "sink(value);".to_string(),
+        );
+        db.replace_call_facts(CallOutput {
+            sites: vec![CallSiteFact {
+                in_throw: false,
+                id: CallSiteId(0),
+                language: Language::TypeScript,
+                file,
+                caller: FunctionId(0),
+                owner_symbol: None,
+                body: MirBodyId(0),
+                operation: MirOpId(0),
+                span: Span::point(file, 1, 1),
+                kind: CallSyntaxKind::Function,
+                callee: CallCallee::Unknown {
+                    reason: UnresolvedCallReason::UnknownCallee,
+                },
+                receiver: None,
+                arguments: Vec::new(),
+                result: None,
+                status: CallTargetStatus::Unresolved,
+                precision: CallPrecision::Unknown,
+                stable_key: "callsite:unknown".to_string(),
+            }],
+            targets: Vec::new(),
+            unresolved: Vec::new(),
+        })
+        .expect("call facts");
+        db.replace_refined_call_facts(RefinedCallOutput {
+            edges: vec![refined_budget_edge()],
+        })
+        .expect("refined calls");
+
+        let rows = public_capability_unknowns(&db, "dataflow");
+
+        assert!(rows.iter().any(|row| {
+            row.capability.as_deref() == Some("dataflow")
+                && row.family.as_deref() == Some("RefinedCallEdge")
+                && row.docs_path.as_deref() == Some("docs/facts/data-flow.md")
         }));
     }
 

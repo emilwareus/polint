@@ -4,7 +4,7 @@
 
 use crate::config::{
     IgnoreConfig, LoadedConfig, PathContextPair, PathContextsConfig, PolintConfig, ProfileConfig,
-    RuleConfig, RuleSection, WorkspaceConfig,
+    ReachabilityConfig, RuleConfig, RuleSection, SolverConfig, WorkspaceConfig,
 };
 use crate::core::{Rule, RuleOptions};
 use std::collections::BTreeSet;
@@ -105,6 +105,11 @@ fn deterministic_polint_config(config: &PolintConfig) -> String {
             deterministic_path_contexts(&config.path_contexts)
         ),
         format!("ignores={}", deterministic_ignores(&config.ignores)),
+        format!(
+            "reachability={}",
+            deterministic_reachability(&config.reachability)
+        ),
+        format!("solver={}", deterministic_solver(&config.solver)),
     ]
     .join("\x1e")
 }
@@ -193,6 +198,39 @@ fn deterministic_path_context_pair(pair: &PathContextPair) -> String {
 
 fn deterministic_ignores(ignores: &IgnoreConfig) -> String {
     format!("require_reason={}", ignores.require_reason)
+}
+
+fn deterministic_reachability(reachability: &ReachabilityConfig) -> String {
+    format!("roots={}", deterministic_string_list(&reachability.roots))
+}
+
+fn deterministic_solver(solver: &SolverConfig) -> String {
+    format!(
+        "go.address_taken_threshold={}|go.max_candidates_per_callsite={}|go.max_rta_rounds={}|go.max_worklist_steps={}|js.object_model={}|js.max_tokens_per_var={}|js.max_candidates_per_callsite={}|js.max_token_worklist_steps={}|js.max_object_objects_per_place={}|js.max_object_properties_per_object={}|js.max_object_tokens_per_property={}|js.max_object_computed_buckets_per_object={}|js.max_object_prototype_depth={}|js.max_object_receiver_candidates_per_callsite={}|js.max_object_worklist_steps={}",
+        deterministic_usize_option(solver.go.address_taken_threshold),
+        deterministic_usize_option(solver.go.max_candidates_per_callsite),
+        deterministic_usize_option(solver.go.max_rta_rounds),
+        deterministic_usize_option(solver.go.max_worklist_steps),
+        deterministic_bool_option(solver.js.object_model),
+        deterministic_usize_option(solver.js.max_tokens_per_var),
+        deterministic_usize_option(solver.js.max_candidates_per_callsite),
+        deterministic_usize_option(solver.js.max_token_worklist_steps),
+        deterministic_usize_option(solver.js.max_object_objects_per_place),
+        deterministic_usize_option(solver.js.max_object_properties_per_object),
+        deterministic_usize_option(solver.js.max_object_tokens_per_property),
+        deterministic_usize_option(solver.js.max_object_computed_buckets_per_object),
+        deterministic_usize_option(solver.js.max_object_prototype_depth),
+        deterministic_usize_option(solver.js.max_object_receiver_candidates_per_callsite),
+        deterministic_usize_option(solver.js.max_object_worklist_steps),
+    )
+}
+
+fn deterministic_usize_option(value: Option<usize>) -> String {
+    value.map(|value| value.to_string()).unwrap_or_default()
+}
+
+fn deterministic_bool_option(value: Option<bool>) -> String {
+    value.map(|value| value.to_string()).unwrap_or_default()
 }
 
 fn deterministic_string_map(map: &std::collections::BTreeMap<String, String>) -> String {
@@ -363,6 +401,37 @@ mod tests {
         modified.config.ignores.require_reason = true;
 
         assert_ne!(config_hash(&baseline), config_hash(&modified));
+    }
+
+    #[test]
+    fn config_hash_differs_when_reachability_roots_change() {
+        let baseline = sample_loaded(false);
+        let mut modified = baseline.clone();
+        modified
+            .config
+            .reachability
+            .roots
+            .push("cmd/server.main".to_string());
+
+        assert_ne!(config_hash(&baseline), config_hash(&modified));
+    }
+
+    #[test]
+    fn config_hash_differs_when_solver_knobs_change() {
+        let baseline = sample_loaded(false);
+
+        let mut go_modified = baseline.clone();
+        go_modified.config.solver.go.address_taken_threshold = Some(17);
+
+        let mut js_modified = baseline.clone();
+        js_modified.config.solver.js.object_model = Some(true);
+
+        let mut object_modified = baseline.clone();
+        object_modified.config.solver.js.max_object_prototype_depth = Some(4);
+
+        assert_ne!(config_hash(&baseline), config_hash(&go_modified));
+        assert_ne!(config_hash(&baseline), config_hash(&js_modified));
+        assert_ne!(config_hash(&baseline), config_hash(&object_modified));
     }
 
     #[test]

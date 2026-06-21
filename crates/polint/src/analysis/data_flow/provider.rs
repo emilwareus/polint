@@ -225,10 +225,22 @@ fn push_source_introduction_edge(
         to: target_node,
         kind: DataFlowEdgeKind::SourceIntroduction,
         algorithm: DataFlowAlgorithm::ExtensionModel,
-        status: DataFlowStatus::Present,
-        precision: DataFlowPrecision::SetupAware,
+        status: if boundary.target_parameter_index.is_some() {
+            DataFlowStatus::Present
+        } else {
+            DataFlowStatus::Unknown
+        },
+        precision: if boundary.target_parameter_index.is_some() {
+            DataFlowPrecision::SetupAware
+        } else {
+            DataFlowPrecision::Unknown
+        },
         validation: DataFlowValidation::ReferentiallyValidated,
-        confidence: DataFlowConfidence::High,
+        confidence: if boundary.target_parameter_index.is_some() {
+            DataFlowConfidence::High
+        } else {
+            DataFlowConfidence::Low
+        },
         provenance: DataFlowProvenance::Native,
         call_site: None,
         call_target: None,
@@ -241,7 +253,7 @@ fn push_source_introduction_edge(
             boundary
                 .target_parameter_index
                 .map(|index| format!("target_parameter_index={index}"))
-                .unwrap_or_else(|| "target_parameter_index=all".to_string()),
+                .unwrap_or_else(|| "target_parameter_index=unknown".to_string()),
         ],
         input_stable_keys: vec![boundary.stable_key.clone(), place.stable_key.clone()],
         stable_key,
@@ -501,6 +513,66 @@ mod tests {
         );
     }
 
+    #[test]
+    fn source_models_downgrade_unknown_parameter_index_edges() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/main.ts"),
+            "src/main.ts".to_string(),
+            "export function handler(req: Request, res: Response) {}\n".to_string(),
+        );
+        let function = db.push_function(FunctionFact {
+            id: FunctionId(0),
+            file,
+            name: "handler".to_string(),
+            span: Span::point(file, 1, 1),
+            language: Language::TypeScript,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+        });
+        db.replace_semantic_mir(MirOutput {
+            bodies: vec![mir_body(file, function)],
+            places: vec![
+                parameter_place_with_index(file, function, 0, "req"),
+                parameter_place_with_index(file, function, 1, "res"),
+            ],
+            operations: Vec::new(),
+            unsupported: Vec::new(),
+        })
+        .expect("valid MIR");
+        let mut boundary = trust_boundary(file, function);
+        boundary.target_parameter_index = None;
+        db.replace_entrypoint_facts(EntrypointOutput {
+            entrypoints: vec![entrypoint(file, function)],
+            trust_boundaries: vec![boundary],
+            dispatch_edges: Vec::new(),
+            unresolved: Vec::new(),
+        })
+        .expect("valid entrypoint facts");
+        let mut output = DataFlowOutput::empty();
+        derive_local_place_nodes(&db, &mut output);
+
+        derive_source_models(&db, &mut output);
+
+        let source_edges = output
+            .edges
+            .iter()
+            .filter(|edge| edge.kind == DataFlowEdgeKind::SourceIntroduction)
+            .collect::<Vec<_>>();
+        assert_eq!(source_edges.len(), 2);
+        assert!(source_edges.iter().all(|edge| {
+            edge.status == DataFlowStatus::Unknown
+                && edge.precision == DataFlowPrecision::Unknown
+                && edge.confidence == DataFlowConfidence::Low
+                && edge
+                    .evidence
+                    .iter()
+                    .any(|value| value == "target_parameter_index=unknown")
+        }));
+    }
+
     fn mir_body(file: FileId, function: FunctionId) -> MirBody {
         MirBody {
             id: MirBodyId(0),
@@ -517,18 +589,27 @@ mod tests {
     }
 
     fn parameter_place(file: FileId, function: FunctionId) -> PlaceFact {
+        parameter_place_with_index(file, function, 0, "req")
+    }
+
+    fn parameter_place_with_index(
+        file: FileId,
+        function: FunctionId,
+        index: u32,
+        name: &str,
+    ) -> PlaceFact {
         PlaceFact {
-            id: PlaceId(0),
+            id: PlaceId(index as u64),
             language: Language::TypeScript,
             file: Some(file),
             function: Some(function),
             root: PlaceRoot::Parameter {
                 function,
-                index: 0,
-                name: Some("req".to_string()),
+                index,
+                name: Some(name.to_string()),
             },
             projections: Vec::<PlaceProjection>::new(),
-            stable_key: "place:req".to_string(),
+            stable_key: format!("place:{name}"),
             status: PlaceStatus::Resolved,
         }
     }

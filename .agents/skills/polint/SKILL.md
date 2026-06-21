@@ -24,12 +24,13 @@ polint check --format ai-friendly --fail-on none
 
 `polint new-rule <lang> <name>` creates a rule module, wires it into
 `.polint/rules/src/main.rs`, and creates positive and negative fixture cases
-under `.polint/tests/rules/<name>/`. For v1.4 policy-query starters, use
-`--template <id>` with one of `request-to-shell`, `secret-to-log`,
+under `.polint/tests/rules/<name_with_underscores>/`. For v1.4 policy-query starters, use
+`--template <id>` with TypeScript for `request-to-shell`, `secret-to-log`,
 `pii-to-analytics`, `sensitive-write-guard`, `transaction-cleanup`,
 `raw-reachable-api`, `ssrf`, `dangerous-html`, `unsafe-deserialization`, or
-`user-file-path`. Templates are repo-local scaffolds to edit, not built-in rules
-enabled by polint.
+`user-file-path`. Go currently supports `sensitive-write-guard`,
+`transaction-cleanup`, and `raw-reachable-api`. Templates are repo-local
+scaffolds to edit, not built-in rules enabled by polint.
 
 ## Agent JSON
 

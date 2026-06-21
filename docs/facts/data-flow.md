@@ -20,6 +20,7 @@ pub(crate) fn no_secret_logs(ctx: &mut RuleCtx<'_>, flow: DataFlow<'_>) -> RuleR
         SinkPattern::logger(),
     );
     query.barriers = BarrierPattern::call_any(["redact", "mask_secret"]);
+    query.minimum_precision = PolicyPrecision::Heuristic;
     query.max_depth = 8;
     query.max_paths = 20;
 
@@ -41,20 +42,25 @@ pub(crate) fn no_secret_logs(ctx: &mut RuleCtx<'_>, flow: DataFlow<'_>) -> RuleR
 - `query.barriers` accepts `BarrierPattern::none()` or
   `BarrierPattern::call_any(["redact", "mask_secret"])`.
 - `query.max_depth` and `query.max_paths` cap the private path search.
-- `query.minimum_precision` is retained as the public precision knob. Phase 58
-  reports precision evidence and keeps stricter filtering conservative until the
-  shared evidence semantics are normalized in Phase 59.
+- `query.minimum_precision` filters found paths by their precision. Unknown,
+  budget-exceeded, and unsupported results remain visible even when their
+  precision is below the found-path threshold, so uncertainty is not turned into
+  a silent pass.
 
 There is no alternate fluent builder, string query language, closure filter, or
 public graph traversal API.
 
 ## Template Starters
 
-`polint new-rule <lang> <name> --template <id>` can scaffold data-flow policy
+`polint new-rule ts <name> --template <id>` can scaffold data-flow policy
 starters for `request-to-shell`, `secret-to-log`, `pii-to-analytics`, `ssrf`,
-`dangerous-html`, `unsafe-deserialization`, and `user-file-path`. Each generated
-rule uses `DataFlow<'_>`, `FlowQuery`, explicit source/sink/barrier patterns,
-and positive/negative fixtures under `.polint/tests/rules/`.
+`dangerous-html`, `unsafe-deserialization`, and `user-file-path`. The current
+Go template set is limited to non-data-flow starters:
+`sensitive-write-guard`, `transaction-cleanup`, and `raw-reachable-api`. Policy
+templates are not currently generated for `js` or `generic` rules. Each
+generated data-flow rule uses `DataFlow<'_>`, `FlowQuery`, explicit
+source/sink/barrier patterns, and positive/negative fixtures under
+`.polint/tests/rules/`.
 
 Templates are editable repo-local examples. They use the backed primitives below
 and intentionally do not claim a complete built-in taxonomy for PII, SSRF, HTML,

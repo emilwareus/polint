@@ -57,6 +57,7 @@ pub(crate) fn no_secret_logs(ctx: &mut RuleCtx<'_>, flow: DataFlow<'_>) -> RuleR
         SinkPattern::logger(),
     );
     query.barriers = BarrierPattern::call_any(["redact", "mask_secret"]);
+    query.minimum_precision = PolicyPrecision::Heuristic;
 
     for violation in flow.forbidden(query) {
         ctx.report(violation.diagnostic(ctx.rule_id(), "secret reaches logs"));

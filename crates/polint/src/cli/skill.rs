@@ -284,12 +284,13 @@ Repo-local rules live in **one** Rust package under `.polint/rules/`:
 `polint new-rule <lang> <name>` adds `src/<name_with_underscores>.rs`, wires it
 into `src/main.rs`, and creates positive and negative fixture cases under
 `.polint/tests/rules/<name_with_underscores>/`. For v1.4 policy-query starters,
-use `--template <id>` with one of `request-to-shell`, `secret-to-log`,
+use `--template <id>` with TypeScript for `request-to-shell`, `secret-to-log`,
 `pii-to-analytics`, `sensitive-write-guard`, `transaction-cleanup`,
 `raw-reachable-api`, `ssrf`, `dangerous-html`, `unsafe-deserialization`, or
-`user-file-path`. Templates are repo-local scaffolds to edit, not built-in rules
-that polint enables automatically. See `examples/multiple-rules` in the polint
-repo for several rules in one pack.
+`user-file-path`. Go currently supports `sensitive-write-guard`,
+`transaction-cleanup`, and `raw-reachable-api`. Templates are repo-local
+scaffolds to edit, not built-in rules that polint enables automatically. See
+`examples/multiple-rules` in the polint repo for several rules in one pack.
 
 ## Agent JSON
 
