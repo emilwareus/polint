@@ -7056,6 +7056,16 @@ fn new_rule_policy_template_modules_use_public_sdk_only() {
         assert!(module.contains(query), "{template}: {module}");
         assert!(module.contains(first), "{template}: {module}");
         assert!(module.contains(second), "{template}: {module}");
+        if view == "DataFlow<'_>" {
+            assert!(
+                module.contains("query.max_depth = 24;"),
+                "{template}: {module}"
+            );
+            assert!(
+                module.contains("query.max_paths = 128;"),
+                "{template}: {module}"
+            );
+        }
         assert!(module.contains("violation.diagnostic("), "{module}");
         assert!(!module.contains("Capabilities::new("), "{module}");
         assert!(!module.contains("impl Rule"), "{module}");

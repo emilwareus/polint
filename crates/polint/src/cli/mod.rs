@@ -1429,7 +1429,8 @@ fn data_flow_policy_template(
         {sink},
     );
     query.barriers = BarrierPattern::call_any({barriers});
-{minimum_precision}    query.max_paths = 10;
+{minimum_precision}    query.max_depth = 24;
+    query.max_paths = 128;
 
     for violation in flow.forbidden(query) {{
         ctx.report(violation.diagnostic(
@@ -1548,10 +1549,11 @@ const TS_REQUEST_TO_SHELL_POSITIVE: &str = r#"import express from "express";
 const app = express();
 
 function validate_command(command: string): string { return command; }
+function exec(command: string) {}
 
 app.get("/run", function handler(req, res) {
-  const command = validate_command(String(req.query.cmd));
-  void command;
+  // Request input is validated before reaching the shell wrapper.
+  exec(validate_command(String(req.query.cmd)));
 });
 "#;
 
@@ -1561,6 +1563,7 @@ const app = express();
 function exec(command: string) {}
 
 app.get("/run", function handler(req, res) {
+  // Policy violation: raw query-string data reaches shell execution.
   exec(String(req.query.cmd));
 });
 "#;
@@ -1568,13 +1571,13 @@ app.get("/run", function handler(req, res) {
 const TS_SECRET_TO_LOG_POSITIVE: &str = r#"function redact(value: string): string { return value; }
 
 export function handler(token: string) {
-  const redacted = redact(token);
-  console.log("redacted");
-  void redacted;
+  // Token-like input is redacted before it is logged.
+  console.log(redact(token));
 }
 "#;
 
 const TS_SECRET_TO_LOG_NEGATIVE: &str = r#"export function handler(token: string) {
+  // Policy violation: token-like input reaches a logger unchanged.
   console.log(token);
 }
 "#;
@@ -1583,15 +1586,15 @@ const TS_PII_TO_ANALYTICS_POSITIVE: &str = r#"function analyticsTrack(value: str
 function anonymize(value: string): string { return value; }
 
 export function handler(email: string) {
-  const anonymous = anonymize(email);
-  analyticsTrack("anonymous");
-  void anonymous;
+  // User identifiers are anonymized before analytics ingestion.
+  analyticsTrack(anonymize(email));
 }
 "#;
 
 const TS_PII_TO_ANALYTICS_NEGATIVE: &str = r#"function analyticsTrack(value: string) {}
 
 export function handler(email: string) {
+  // Policy violation: raw PII-like input reaches analytics.
   analyticsTrack(email);
 }
 "#;
@@ -1600,6 +1603,7 @@ const TS_SENSITIVE_WRITE_GUARD_POSITIVE: &str = r#"function authorize() {}
 function writeBalance() {}
 
 export function handler() {
+  // Authorization happens before the sensitive write.
   authorize();
   writeBalance();
 }
@@ -1608,6 +1612,7 @@ export function handler() {
 const TS_SENSITIVE_WRITE_GUARD_NEGATIVE: &str = r#"function writeBalance() {}
 
 export function handler() {
+  // Policy violation: sensitive write has no prior guard in this function.
   writeBalance();
 }
 "#;
@@ -1616,6 +1621,7 @@ const TS_TRANSACTION_CLEANUP_POSITIVE: &str = r#"function beginTransaction() {}
 function rollback() {}
 
 export function handler() {
+  // The opened transaction is cleaned up before the function exits.
   beginTransaction();
   rollback();
 }
@@ -1624,6 +1630,7 @@ export function handler() {
 const TS_TRANSACTION_CLEANUP_NEGATIVE: &str = r#"function beginTransaction() {}
 
 export function handler() {
+  // Policy violation: the transaction is opened without cleanup.
   beginTransaction();
 }
 "#;
@@ -1631,6 +1638,7 @@ export function handler() {
 const TS_RAW_REACHABLE_API_POSITIVE: &str = r#"function safeAdmin() {}
 
 export function main() {
+  // Production root reaches only the safe wrapper.
   safeAdmin();
 }
 "#;
@@ -1639,6 +1647,7 @@ const TS_RAW_REACHABLE_API_NEGATIVE: &str = r#"function dangerousAdmin() {}
 function handler() { dangerousAdmin(); }
 
 export function main() {
+  // Policy violation: production root reaches the raw admin API.
   handler();
 }
 "#;
@@ -1647,10 +1656,11 @@ const TS_SSRF_POSITIVE: &str = r#"import express from "express";
 const app = express();
 
 function allowlist_url(url: string): string { return url; }
+function fetchUrl(url: string) {}
 
 app.get("/fetch", function handler(req, res) {
-  const url = allowlist_url(String(req.query.url));
-  void url;
+  // Request-controlled URL is allowlisted before outbound fetch.
+  fetchUrl(allowlist_url(String(req.query.url)));
 });
 "#;
 
@@ -1660,6 +1670,7 @@ const app = express();
 function fetchUrl(url: string) {}
 
 app.get("/fetch", function handler(req, res) {
+  // Policy violation: request-controlled URL reaches outbound fetch.
   fetchUrl(String(req.query.url));
 });
 "#;
@@ -1671,9 +1682,8 @@ function setInnerHTML(html: string) {}
 function sanitize_html(html: string): string { return html; }
 
 app.post("/preview", function handler(req, res) {
-  const preview = sanitize_html(String(req.body.html));
-  setInnerHTML("<p>safe preview</p>");
-  void preview;
+  // Request HTML is sanitized before it reaches the DOM sink.
+  setInnerHTML(sanitize_html(String(req.body.html)));
 });
 "#;
 
@@ -1683,6 +1693,7 @@ const app = express();
 function setInnerHTML(html: string) {}
 
 app.post("/preview", function handler(req, res) {
+  // Policy violation: request body reaches a raw HTML sink.
   setInnerHTML(String(req.body.html));
 });
 "#;
@@ -1694,9 +1705,8 @@ function unsafeDeserialize(raw: string) {}
 function verify_schema(raw: string): string { return raw; }
 
 app.post("/load", function handler(req, res) {
-  const payload = verify_schema(String(req.body.payload));
-  unsafeDeserialize("{}");
-  void payload;
+  // Request payload is schema-checked before deserialization.
+  unsafeDeserialize(verify_schema(String(req.body.payload)));
 });
 "#;
 
@@ -1706,6 +1716,7 @@ const app = express();
 function unsafeDeserialize(raw: string) {}
 
 app.post("/load", function handler(req, res) {
+  // Policy violation: unverified request body reaches deserialization.
   unsafeDeserialize(String(req.body.payload));
 });
 "#;
@@ -1717,9 +1728,8 @@ function readFile(path: string) {}
 function validate_path(path: string): string { return path; }
 
 app.get("/file", function handler(req, res) {
-  const requested = validate_path(String(req.query.path));
-  readFile("/tmp/safe.txt");
-  void requested;
+  // Request path is normalized/validated before file access.
+  readFile(validate_path(String(req.query.path)));
 });
 "#;
 
@@ -1729,6 +1739,7 @@ const app = express();
 function readFile(path: string) {}
 
 app.get("/file", function handler(req, res) {
+  // Policy violation: request-controlled path reaches file access.
   readFile(String(req.query.path));
 });
 "#;
@@ -1800,6 +1811,7 @@ func authorize() {}
 func writeBalance() {}
 
 func handler() {
+	// Authorization happens before the sensitive write.
 	authorize()
 	writeBalance()
 }
@@ -1810,6 +1822,7 @@ const GO_SENSITIVE_WRITE_GUARD_NEGATIVE: &str = r#"package main
 func writeBalance() {}
 
 func handler() {
+	// Policy violation: sensitive write has no prior guard in this function.
 	writeBalance()
 }
 "#;
@@ -1820,6 +1833,7 @@ func Begin() {}
 func Rollback() {}
 
 func handler() {
+	// The opened transaction is cleaned up before the function exits.
 	Begin()
 	Rollback()
 }
@@ -1830,6 +1844,7 @@ const GO_TRANSACTION_CLEANUP_NEGATIVE: &str = r#"package main
 func Begin() {}
 
 func handler() {
+	// Policy violation: the transaction is opened without cleanup.
 	Begin()
 }
 "#;
@@ -1837,6 +1852,7 @@ func handler() {
 const GO_RAW_REACHABLE_API_POSITIVE: &str = r#"package main
 
 func main() {
+	// Production root reaches only the safe wrapper.
 	safeAdmin()
 }
 
@@ -1846,6 +1862,7 @@ func safeAdmin() {}
 const GO_RAW_REACHABLE_API_NEGATIVE: &str = r#"package main
 
 func main() {
+	// Policy violation: production root reaches the raw admin API.
 	handler()
 }
 

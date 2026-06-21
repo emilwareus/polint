@@ -71,6 +71,166 @@ pub(crate) fn no_secret_logs(ctx: &mut RuleCtx<'_>, flow: DataFlow<'_>) -> RuleR
   Options include `barriers`, `max_depth`, `max_paths`, and
   `minimum_precision`.
 
+## Realistic Examples
+
+These examples show the rule code and the application code being analyzed. The
+comments in the application snippets mark the local convention the rule is
+enforcing.
+
+### Request Data To Shell Execution
+
+Rule:
+
+```rust
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/no-request-to-shell",
+    description = "Request data must not reach shell execution.",
+    severity = "error"
+)]
+pub(crate) fn no_request_to_shell(ctx: &mut RuleCtx<'_>, flow: DataFlow<'_>) -> RuleResult {
+    let mut query = FlowQuery::new(
+        SourcePattern::http_request(),
+        SinkPattern::call("exec"),
+    );
+    query.barriers = BarrierPattern::call_any(["validate_command", "allow_command"]);
+    query.max_depth = 24;
+    query.max_paths = 128;
+
+    for violation in flow.forbidden(query) {
+        ctx.report(violation.diagnostic(
+            ctx.rule_id(),
+            "request data reaches shell execution without validation",
+        ));
+    }
+
+    Ok(())
+}
+```
+
+Application code:
+
+```ts
+import express from "express";
+
+const app = express();
+
+function exec(command: string) {}
+function validate_command(command: string): string { return command; }
+
+app.get("/run", function handler(req, res) {
+  // Violation: request-controlled data flows straight into the shell wrapper.
+  exec(String(req.query.cmd));
+});
+
+app.get("/safe-run", function handler(req, res) {
+  // Allowed: the request value crosses the local validation barrier first.
+  exec(validate_command(String(req.query.cmd)));
+});
+```
+
+### Sensitive Write Requires A Guard
+
+Rule:
+
+```rust
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/guard-sensitive-write",
+    description = "Balance writes require authorization.",
+    severity = "error"
+)]
+pub(crate) fn guard_sensitive_write(
+    ctx: &mut RuleCtx<'_>,
+    control: ControlFlow<'_>,
+) -> RuleResult {
+    let mut query = GuardQuery::new(
+        EventPattern::call("writeBalance"),
+        GuardPattern::call_any(["authorize", "validate_payment"]),
+    );
+    query.max_paths = 10;
+
+    for violation in control.missing_guard(query) {
+        ctx.report(violation.diagnostic(
+            ctx.rule_id(),
+            "sensitive write requires authorization first",
+        ));
+    }
+
+    Ok(())
+}
+```
+
+Application code:
+
+```go
+package billing
+
+func authorize(userID string) {}
+func writeBalance(userID string, cents int) {}
+
+func refundWithoutGuard(userID string, cents int) {
+	// Violation: the sensitive write has no prior guard in this function.
+	writeBalance(userID, -cents)
+}
+
+func refundWithGuard(userID string, cents int) {
+	// Allowed: the guard call occurs before the sensitive write.
+	authorize(userID)
+	writeBalance(userID, -cents)
+}
+```
+
+### Raw Admin API Reachability
+
+Rule:
+
+```rust
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "local/no-raw-admin-reachable",
+    description = "Production roots must not reach raw admin APIs.",
+    severity = "error"
+)]
+pub(crate) fn no_raw_admin_reachable(ctx: &mut RuleCtx<'_>, calls: Calls<'_>) -> RuleResult {
+    let mut query = ReachQuery::new(EventPattern::call("dangerousAdmin"));
+    query.roots = vec![EventPattern::call("main")];
+    query.include_tests = false;
+    query.max_depth = 8;
+    query.max_paths = 10;
+
+    for violation in calls.forbidden_reachable(query) {
+        ctx.report(violation.diagnostic(
+            ctx.rule_id(),
+            "raw admin API is reachable from a production root",
+        ));
+    }
+
+    Ok(())
+}
+```
+
+Application code:
+
+```go
+package main
+
+func main() {
+	// Violation: production startup reaches the raw admin function through
+	// a helper call chain.
+	handler()
+}
+
+func handler() {
+	dangerousAdmin()
+}
+
+func dangerousAdmin() {}
+```
+
 ## Pattern Vocabulary
 
 - `EventPattern::call("target")` matches exact call target candidates from the
@@ -151,7 +311,9 @@ Policy templates are not currently generated for `js` or `generic` rules.
 
 Templates include positive and negative fixture cases under `.polint/tests/`.
 They are starting points to edit for local APIs, not built-in rules enabled by
-polint.
+polint. Generated data-flow starters use bounded `max_depth` and `max_paths`
+settings large enough for the included HTTP request fixtures; tighten or raise
+those caps based on the size and precision needs of the local codebase.
 
 ## Limits
 
