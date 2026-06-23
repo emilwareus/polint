@@ -15,6 +15,7 @@ members = [
     "examples/go-sensitive-writes/.polint/rules",
     "examples/go-test-quality/.polint/rules",
     "examples/multiple-rules/.polint/rules",
+    "examples/review-rules/.polint/rules",
     "examples/ts-complexity/.polint/rules",
     "examples/ts-design-tokens/.polint/rules",
     "examples/ts-no-raw-api-calls/.polint/rules",

@@ -132,6 +132,50 @@ Profiles are explicit:
 - Unknown profiles are errors.
 - Profile names are arbitrary. There is no default profile.
 
+## Review rules (diff-gated)
+
+`polint review <ref>` is `polint check` with the **identical rule-as-code setup**,
+gated so a rule fires only against a **diff to a target branch or commit**:
+
+```bash
+polint review origin/main      # diff HEAD against the merge-base with origin/main
+polint review <commit-sha>     # diff against a specific commit
+polint review <base>...<head>  # an explicit three-dot range
+```
+
+Review rules are normal `#[polint::rule]` Rust functions that use the full SDK and
+analysis engine. The only differences from a check rule are the `kind = "review"`
+designation and an optional `ChangedFiles<'_>` parameter that exposes the diff (the
+changed paths, their status, and the changed line ranges) as a typed fact view:
+
+```rust
+#[polint::rule(id = "review/migrations", description = "Migrations changed.",
+               severity = "warn", kind = "review")]
+fn migrations(ctx: &mut RuleCtx<'_>, changes: ChangedFiles<'_>) -> RuleResult {
+    for changed in changes.iter() {
+        if changed.matches_glob("db/migrations/**") {
+            ctx.warn(&Span::point(/* ... */), "A DB owner must review this migration.");
+        }
+    }
+    Ok(())
+}
+```
+
+By default `polint review` surfaces only diagnostics that intersect the diff — both
+the changed file and (unless `--whole-file`) the changed line ranges — so *any* rule
+is "check, but only on the diff" for free. Use `--no-diff-gate` to surface every
+review finding regardless of the diff, or `--whole-file` to gate on changed files
+only. Review rules are inert under `polint check` (which runs only check-kind rules).
+
+Scaffold one with `polint new-rule generic <name> --review`, which generates a
+`kind = "review"` rule with a `ChangedFiles<'_>` parameter (review rules are
+exercised with `polint review`, so no static check fixtures are generated). See
+`examples/review-rules/` for a simple path-watcher and a complex rule that restricts
+real symbol/reference analysis to changed code. Review-rule heuristics are
+heuristic — they are repo-local policy, not exact analysis.
+
+`ChangedFiles<'_>` is documented in [`docs/facts/changed-files.md`](docs/facts/changed-files.md).
+
 ## Cache
 
 polint keeps local, untracked cache data under `.polint/cache` by default:

@@ -397,6 +397,21 @@ or inferred from nearest `go.mod` files. Setup gaps are reported as
 `polint/capability` diagnostics. Symbol/reference facts are not call graph, CFG,
 dataflow, coverage, or Go SSA facts.
 
+## Review Rules
+
+`polint review <ref>` is `polint check` gated to a diff against a target branch or
+commit (`origin/main`, a SHA, or `a...b`). Author a review rule like a check rule but
+mark it `#[polint::rule(..., kind = "review")]` and request the `ChangedFiles<'_>`
+fact view for the diff. `ChangedFiles<'_>` exposes `iter()`, `contains_path()`,
+`matches_glob()`, and `lines_for()`; each entry has `path()`, `status()`, `lines()`,
+and `is_added/is_modified/is_deleted/is_renamed()`. It is empty under `polint check`.
+By default `polint review` surfaces only diagnostics intersecting the diff (changed
+file plus changed line ranges); `--no-diff-gate` shows all review findings and
+`--whole-file` gates by file only. Anchor a whole-file watcher on a changed line
+(`ChangedFileRef::lines()`) so the line-aware gate keeps it. Scaffold with
+`polint new-rule generic <name> --review`. Review rules are inert under `polint
+check`. See `docs/facts/changed-files.md`. Keep heuristic claims heuristic.
+
 ## Config Pattern
 
 Profiles are explicit named subsets. `polint check` with no `--profile` runs

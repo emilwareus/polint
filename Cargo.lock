@@ -1226,6 +1226,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "polint-example-review-rules"
+version = "0.1.16"
+dependencies = [
+ "polint",
+]
+
+[[package]]
 name = "polint-example-ts-complexity-rule"
 version = "0.1.16"
 dependencies = [

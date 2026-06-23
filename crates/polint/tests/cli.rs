@@ -748,6 +748,50 @@ fn new_rule_generates_positive_and_negative_agent_fixtures() {
 }
 
 #[test]
+fn new_rule_review_scaffolds_review_kind_with_changed_files() {
+    let temp = tempfile::tempdir().unwrap();
+    polint_cmd()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success();
+    polint_cmd()
+        .current_dir(temp.path())
+        .args(["new-rule", "generic", "db-migration-review", "--review"])
+        .assert()
+        .success();
+
+    let module = fs::read_to_string(temp.path().join(".polint/rules/src/db_migration_review.rs"))
+        .expect("review rule module should exist");
+    assert!(
+        module.contains("kind = \"review\""),
+        "review scaffold must set kind = review: {module}"
+    );
+    assert!(
+        module.contains("ChangedFiles<'_>"),
+        "review scaffold must request the ChangedFiles fact view: {module}"
+    );
+
+    let main_rs = fs::read_to_string(temp.path().join(".polint/rules/src/main.rs"))
+        .expect("main.rs should exist");
+    assert!(
+        main_rs.contains("db_migration_review::db_migration_review()")
+            && main_rs.contains("polint::runner::run_cli"),
+        "main.rs should register the review rule via run_cli: {main_rs}"
+    );
+
+    // Review rules are exercised via `polint review` against a diff, so no
+    // static `polint check` fixtures are generated for them.
+    assert!(
+        !temp
+            .path()
+            .join(".polint/tests/rules/db_migration_review")
+            .exists(),
+        "review scaffold should not generate diff-independent check fixtures"
+    );
+}
+
+#[test]
 fn phase41_metric_query_helpers_external_rule() {
     let temp = tempfile::tempdir().unwrap();
     write_file(

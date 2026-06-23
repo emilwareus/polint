@@ -1,0 +1,8 @@
+[workspace]
+# Cover the sample sources both review rules analyze: the SQL migration the
+# simple rule watches, and the TypeScript module pair the complex rule walks.
+include = ["db/migrations/**/*.sql", "src/**/*.ts"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]

@@ -195,6 +195,10 @@ struct NewRuleArgs {
     language: String,
     /// Rule directory/name.
     rule_name: String,
+    /// Scaffold a review-kind rule (`kind = "review"`) with a `ChangedFiles<'_>`
+    /// parameter, run via `polint review <ref>` instead of `polint check`.
+    #[arg(long)]
+    review: bool,
 }
 
 #[derive(Debug, Args, Clone)]
@@ -729,10 +733,21 @@ fn new_rule(root: PathBuf, args: &NewRuleArgs) -> Result<()> {
 
     fs::write(
         &module_path,
-        rule_module_template(&args.language, &rule_name),
+        rule_module_template(&args.language, &rule_name, args.review),
     )?;
-    write_rule_fixture_skeleton(&root, &args.language, &rule_name, &module)?;
-    println!("Created rule module {}", module_path.display());
+    if args.review {
+        // A review rule's diagnostics depend on a diff, so the static
+        // positive/negative `polint check` fixtures do not apply. Review rules
+        // are exercised with `polint review <ref>`.
+        println!(
+            "Created review rule module {} (run it with `polint review <ref>`; \
+             no diff-based fixtures were generated)",
+            module_path.display()
+        );
+    } else {
+        write_rule_fixture_skeleton(&root, &args.language, &rule_name, &module)?;
+        println!("Created rule module {}", module_path.display());
+    }
     Ok(())
 }
 
@@ -986,7 +1001,10 @@ func replaceMe(err error) error {
     }
 }
 
-fn rule_module_template(language: &str, rule_name: &str) -> String {
+fn rule_module_template(language: &str, rule_name: &str, review: bool) -> String {
+    if review {
+        return review_rule_module_template(rule_name);
+    }
     let module = rust_module_name(rule_name);
     let fact_params = match language {
         "go" => "tests: GoTests<'_>, branches: BranchObligations<'_>",
@@ -1029,6 +1047,40 @@ fn rule_module_template(language: &str, rule_name: &str) -> String {
 pub(crate) fn {module}(ctx: &mut RuleCtx<'_>, {fact_params}) -> RuleResult {{
 {query_example}
     let _ = ctx.options().settings.len();
+    Ok(())
+}}
+"#
+    )
+}
+
+/// Scaffold a review-kind rule: `kind = "review"` plus a `ChangedFiles<'_>`
+/// parameter and a glob-match loop. Run with `polint review <ref>`.
+fn review_rule_module_template(rule_name: &str) -> String {
+    let module = rust_module_name(rule_name);
+    format!(
+        r#"use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "review/{rule_name}",
+    description = "Review-only policy (heuristic): {rule_name}.",
+    severity = "warn",
+    kind = "review"
+)]
+pub(crate) fn {module}(ctx: &mut RuleCtx<'_>, changes: ChangedFiles<'_>) -> RuleResult {{
+    // `changes` is the diff against the target ref passed to `polint review`.
+    // It is empty under `polint check`, so this rule only fires on a review.
+    let rule_id = ctx.rule_id().to_string();
+    for changed in changes.iter() {{
+        // Replace the glob with the paths your policy cares about.
+        if changed.matches_glob("db/migrations/**") {{
+            ctx.report(Diagnostic::warning(
+                rule_id.clone(),
+                changed.path().to_string(),
+                DiagnosticRange::point(1, 1),
+                "Reviewer attention required: a watched path changed.",
+            ));
+        }}
+    }}
     Ok(())
 }}
 "#
