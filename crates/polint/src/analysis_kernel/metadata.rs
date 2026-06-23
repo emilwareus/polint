@@ -295,16 +295,73 @@ pub(crate) enum FactMetaInsert {
 }
 
 #[derive(Debug, Default, Clone)]
+struct FactFamilyRows {
+    dense: Vec<Option<FactMeta>>,
+    sparse: BTreeMap<u64, FactMeta>,
+}
+
+impl FactFamilyRows {
+    const DENSE_GAP_LIMIT: usize = 1024;
+
+    fn insert(&mut self, run_id: u64, meta: FactMeta) {
+        if let Ok(index) = usize::try_from(run_id)
+            && index <= self.dense.len().saturating_add(Self::DENSE_GAP_LIMIT)
+        {
+            if self.dense.len() <= index {
+                self.dense.resize_with(index + 1, || None);
+            }
+            self.dense[index] = Some(meta);
+            self.sparse.remove(&run_id);
+        } else {
+            self.sparse.insert(run_id, meta);
+        }
+    }
+
+    #[cfg(test)]
+    fn remove(&mut self, run_id: u64) -> Option<FactMeta> {
+        if let Ok(index) = usize::try_from(run_id)
+            && let Some(row) = self.dense.get_mut(index)
+        {
+            return row.take();
+        }
+        self.sparse.remove(&run_id)
+    }
+
+    fn get(&self, run_id: u64) -> Option<&FactMeta> {
+        if let Ok(index) = usize::try_from(run_id)
+            && let Some(row) = self.dense.get(index)
+        {
+            return row.as_ref();
+        }
+        self.sparse.get(&run_id)
+    }
+
+    fn rows(&self) -> impl Iterator<Item = (u64, &FactMeta)> {
+        self.dense
+            .iter()
+            .enumerate()
+            .filter_map(|(run_id, metadata)| {
+                metadata.as_ref().map(|metadata| (run_id as u64, metadata))
+            })
+            .chain(
+                self.sparse
+                    .iter()
+                    .map(|(run_id, metadata)| (*run_id, metadata)),
+            )
+    }
+}
+
+#[derive(Debug, Default, Clone)]
 pub(crate) struct FactMetaStore {
-    rows: BTreeMap<FactRef, FactMeta>,
-    stable_key_owners: BTreeMap<(FactFamily, String), StableKeyOwner>,
+    rows: BTreeMap<FactFamily, FactFamilyRows>,
+    stable_key_owners: BTreeMap<FactFamily, BTreeMap<String, StableKeyOwner>>,
     stable_key_conflicts: BTreeSet<StableKeyConflict>,
 }
 
 impl FactMetaStore {
     pub(crate) fn insert(&mut self, reference: FactRef, meta: FactMeta) -> FactMetaInsert {
-        let owner_key = (reference.family, meta.stable_key.clone());
-        let result = if let Some(owner) = self.stable_key_owners.get(&owner_key) {
+        let family_owners = self.stable_key_owners.entry(reference.family).or_default();
+        let result = if let Some(owner) = family_owners.get(&meta.stable_key) {
             if owner.reference == reference && owner.payload_digest == meta.payload_digest {
                 FactMetaInsert::Idempotent
             } else {
@@ -323,8 +380,8 @@ impl FactMetaStore {
                 }
             }
         } else {
-            self.stable_key_owners.insert(
-                owner_key,
+            family_owners.insert(
+                meta.stable_key.clone(),
                 StableKeyOwner {
                     reference,
                     payload_digest: meta.payload_digest.clone(),
@@ -333,26 +390,45 @@ impl FactMetaStore {
             FactMetaInsert::Inserted
         };
 
-        self.rows.insert(reference, meta);
+        self.rows
+            .entry(reference.family)
+            .or_default()
+            .insert(reference.run_id, meta);
         result
     }
 
     pub(crate) fn remove_family(&mut self, family: FactFamily) {
-        self.rows
-            .retain(|reference, _metadata| reference.family != family);
-        self.stable_key_owners
-            .retain(|(owner_family, _stable_key), _owner| *owner_family != family);
-        self.stable_key_conflicts
-            .retain(|conflict| conflict.family != family);
+        self.rows.remove(&family);
+        self.stable_key_owners.remove(&family);
+
+        let conflict_start = StableKeyConflict {
+            family,
+            stable_key: String::new(),
+            existing: FactRef::new(FactFamily::SourceFile, 0),
+            incoming: FactRef::new(FactFamily::SourceFile, 0),
+        };
+        let conflicts = self
+            .stable_key_conflicts
+            .range(conflict_start..)
+            .take_while(|conflict| conflict.family == family)
+            .cloned()
+            .collect::<Vec<_>>();
+        for conflict in conflicts {
+            self.stable_key_conflicts.remove(&conflict);
+        }
     }
 
     #[cfg(test)]
     pub(crate) fn remove_for_test(&mut self, reference: FactRef) -> Option<FactMeta> {
-        self.rows.remove(&reference)
+        self.rows
+            .get_mut(&reference.family)
+            .and_then(|rows| rows.remove(reference.run_id))
     }
 
     pub(crate) fn get(&self, reference: FactRef) -> Option<&FactMeta> {
-        self.rows.get(&reference)
+        self.rows
+            .get(&reference.family)
+            .and_then(|rows| rows.get(reference.run_id))
     }
 
     pub(crate) fn stable_key_conflicts(&self) -> impl Iterator<Item = &StableKeyConflict> {
@@ -366,13 +442,15 @@ impl FactMetaStore {
         stable_key: &str,
     ) -> Option<&StableKeyOwner> {
         self.stable_key_owners
-            .get(&(family, stable_key.to_string()))
+            .get(&family)
+            .and_then(|owners| owners.get(stable_key))
     }
 
     pub(crate) fn rows(&self) -> impl Iterator<Item = (FactRef, &FactMeta)> {
-        self.rows
-            .iter()
-            .map(|(reference, metadata)| (*reference, metadata))
+        self.rows.iter().flat_map(|(family, rows)| {
+            rows.rows()
+                .map(move |(run_id, metadata)| (FactRef::new(*family, run_id), metadata))
+        })
     }
 }
 
@@ -536,6 +614,55 @@ mod tests {
                 .stable_key_owner(FactFamily::Import, "import:key")
                 .map(|owner| owner.reference),
             Some(first_ref)
+        );
+    }
+
+    #[test]
+    fn remove_family_drops_rows_owners_and_conflicts_for_that_family_only() {
+        let mut store = FactMetaStore::default();
+        let import_ref = FactRef::new(FactFamily::Import, 1);
+        let duplicate_import_ref = FactRef::new(FactFamily::Import, 2);
+        let function_ref = FactRef::new(FactFamily::Function, 1);
+
+        store.insert(import_ref, test_meta("shared:key", "payload:a"));
+        store.insert(duplicate_import_ref, test_meta("shared:key", "payload:b"));
+        store.insert(function_ref, test_meta("function:key", "payload:c"));
+
+        store.remove_family(FactFamily::Import);
+
+        assert!(store.get(import_ref).is_none());
+        assert!(store.get(duplicate_import_ref).is_none());
+        assert!(
+            store
+                .stable_key_owner(FactFamily::Import, "shared:key")
+                .is_none()
+        );
+        assert_eq!(store.stable_key_conflicts().count(), 0);
+        assert!(store.get(function_ref).is_some());
+        assert!(
+            store
+                .stable_key_owner(FactFamily::Function, "function:key")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn fact_meta_store_accepts_sparse_high_run_ids_without_dense_resize() {
+        let mut store = FactMetaStore::default();
+        let high_ref = FactRef::new(FactFamily::Import, u64::MAX);
+        let low_ref = FactRef::new(FactFamily::Import, 0);
+
+        store.insert(high_ref, test_meta("import:high", "payload:high"));
+        store.insert(low_ref, test_meta("import:low", "payload:low"));
+
+        assert_eq!(store.get(high_ref).unwrap().stable_key, "import:high");
+        assert_eq!(store.get(low_ref).unwrap().stable_key, "import:low");
+        assert_eq!(
+            store
+                .rows()
+                .map(|(reference, metadata)| (reference, metadata.stable_key.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(low_ref, "import:low"), (high_ref, "import:high")]
         );
     }
 

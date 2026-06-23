@@ -7,10 +7,12 @@ See [policy-queries.md](policy-queries.md) for the shared query-object style,
 evidence header, precision/status vocabulary, unknown semantics, and template
 starter workflow.
 
-Phase 57 backs same-function call-event guard and lifecycle queries with the
-existing call/refined-call facts and CFG operation order where available. The
-API remains preview because exact interprocedural path proof, write-field
-events, resource identity pairing, and per-exit cleanup proof are deferred.
+Phase 57 backs same-function call-event guard and lifecycle queries with
+refined call facts and CFG-backed operation order. MIR operation order and
+source spans are fallback ordering sources when CFG rows are absent. The API
+remains preview because exact path dominance proof, interprocedural proof,
+write-field events, resource identity pairing, and per-exit cleanup proof are
+deferred.
 
 ```rust
 #[polint::rule(id = "local/require-auth-before-dangerous-call", description = "Auth guard", severity = "error")]
@@ -56,7 +58,7 @@ pub(crate) fn transaction_cleanup(ctx: &mut RuleCtx<'_>, control: ControlFlow<'_
 - `GuardPattern::call_any([...])` is an explicit list of canonical call names.
 - Phase 57 supports `EventPattern::call(...)` for guard and lifecycle queries.
   `EventPattern::write_field(...)` is still preview vocabulary and returns no
-  provider-backed control-flow results.
+  control-flow results.
 - `max_paths` caps returned violations and reports budget evidence when
   truncated.
 - `minimum_precision` filters the private call facts considered by the query.
@@ -69,8 +71,10 @@ Returned diagnostics include the common policy evidence header documented in
 [evidence.md](evidence.md), plus target, function, control scope, required
 guard or cleanup, uncovered path, order-source, call status, call precision,
 confidence when available, and budget evidence when truncation occurs. Because
-the current implementation proves only same-function ordering, returned policy
-results use conservative precision and heuristic status.
+the current implementation proves same-function operation ordering, not path
+dominance or every exit path, returned policy results use conservative precision
+and heuristic status. The `order_source` evidence is `cfg_operation_order` when
+CFG rows are available, otherwise `mir_operation_order` or `source_span`.
 
 `ControlFlow<'_>` is not the raw `Cfg<'_>` view. `Cfg<'_>` remains a reserved
 raw capability and is not the supported rule-authoring path for guard or

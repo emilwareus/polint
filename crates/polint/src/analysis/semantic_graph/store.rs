@@ -78,6 +78,49 @@ impl SemanticGraphOutput {
         }
         self
     }
+
+    pub(crate) fn validate_references(&self) -> Result<(), AnalysisError> {
+        let node_ids: BTreeSet<SemanticNodeId> = self.nodes.iter().map(|node| node.id).collect();
+
+        for edge in &self.edges {
+            if !node_ids.contains(&edge.source) {
+                return Err(AnalysisError::InvalidFact {
+                    provider: SEMANTIC_GRAPH_PROVIDER_ID,
+                    reason: format!(
+                        "dangling edge source {:?} for semantic edge `{}`",
+                        edge.source, edge.stable_key
+                    ),
+                });
+            }
+            if !node_ids.contains(&edge.target) {
+                return Err(AnalysisError::InvalidFact {
+                    provider: SEMANTIC_GRAPH_PROVIDER_ID,
+                    reason: format!(
+                        "dangling edge target {:?} for semantic edge `{}`",
+                        edge.target, edge.stable_key
+                    ),
+                });
+            }
+        }
+
+        // `TypeConstraint.type_fact` references the type substrate (a different
+        // family) and is intentionally NOT checked here.
+        for constraint in &self.constraints {
+            for node in constraint.kind.referenced_nodes() {
+                if !node_ids.contains(&node) {
+                    return Err(AnalysisError::InvalidFact {
+                        provider: SEMANTIC_GRAPH_PROVIDER_ID,
+                        reason: format!(
+                            "dangling constraint node {:?} for semantic constraint `{}`",
+                            node, constraint.stable_key
+                        ),
+                    });
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 /// Typed semantic-graph store with the deterministic read indexes consumers use
@@ -106,49 +149,13 @@ impl SemanticGraphStore {
     /// [`AnalysisError::InvalidFact`], mirroring the reachability store) and building
     /// the four deterministic index sidecars.
     pub(crate) fn from_output(output: SemanticGraphOutput) -> Result<Self, AnalysisError> {
-        let output = output.normalized();
+        Self::from_normalized_output(output.normalized())
+    }
 
-        let node_ids: BTreeSet<SemanticNodeId> = output.nodes.iter().map(|node| node.id).collect();
-
-        for edge in &output.edges {
-            if !node_ids.contains(&edge.source) {
-                return Err(AnalysisError::InvalidFact {
-                    provider: SEMANTIC_GRAPH_PROVIDER_ID,
-                    reason: format!(
-                        "dangling edge source {:?} for semantic edge `{}`",
-                        edge.source, edge.stable_key
-                    ),
-                });
-            }
-            if !node_ids.contains(&edge.target) {
-                return Err(AnalysisError::InvalidFact {
-                    provider: SEMANTIC_GRAPH_PROVIDER_ID,
-                    reason: format!(
-                        "dangling edge target {:?} for semantic edge `{}`",
-                        edge.target, edge.stable_key
-                    ),
-                });
-            }
-        }
-
-        // Referentially validate every `SemanticNodeId` a constraint references
-        // against the stored node set (dangling -> InvalidFact), mirroring the
-        // edge-endpoint check. `TypeConstraint.type_fact` references the type
-        // substrate (a different family) and is intentionally NOT checked here.
-        for constraint in &output.constraints {
-            for node in constraint.kind.referenced_nodes() {
-                if !node_ids.contains(&node) {
-                    return Err(AnalysisError::InvalidFact {
-                        provider: SEMANTIC_GRAPH_PROVIDER_ID,
-                        reason: format!(
-                            "dangling constraint node {:?} for semantic constraint `{}`",
-                            node, constraint.stable_key
-                        ),
-                    });
-                }
-            }
-        }
-
+    pub(crate) fn from_normalized_output(
+        output: SemanticGraphOutput,
+    ) -> Result<Self, AnalysisError> {
+        output.validate_references()?;
         let mut store = Self {
             nodes: output.nodes,
             edges: output.edges,

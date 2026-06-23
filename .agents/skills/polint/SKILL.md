@@ -63,9 +63,11 @@ Prefer typed fact views in the rule signature:
 - `StringLiterals<'_>` and `JsxAttributes<'_>` for TS/JS literal and JSX rules.
 - `GoTests<'_>` and `BranchObligations<'_>` for Go branch/test policies.
 - Preview policy query views `Events<'_>` and `Calls<'_>` are provider-backed
-  for Phase 56 call-event and reachable-call policies. `ControlFlow<'_>` is
-  provider-backed for Phase 57 same-function call-event guard and cleanup
-  policies. `DataFlow<'_>` is provider-backed for Phase 58 bounded
+  for Phase 56 call-event and reachable-call policies. `ControlFlow<'_>` uses
+  CFG-backed operation order plus refined call targets for Phase 57
+  same-function call-event guard and cleanup policies, with MIR/source ordering
+  only as fallback when CFG facts are absent. `DataFlow<'_>` is provider-backed
+  for Phase 58 bounded
   source/sink/barrier policies. Policy diagnostics include `policy_query`,
   `policy_query_version`, `query_digest`, `policy_status`, and
   `policy_precision` evidence.

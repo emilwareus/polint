@@ -43,8 +43,10 @@ pub(crate) struct SummaryStore {
 
 impl SummaryStore {
     pub(crate) fn from_output(output: SummaryOutput) -> Result<Self, AnalysisError> {
-        let output = output.normalized();
+        Self::from_normalized_output(output.normalized())
+    }
 
+    pub(crate) fn from_normalized_output(output: SummaryOutput) -> Result<Self, AnalysisError> {
         let mut store = Self {
             output,
             ..Self::default()

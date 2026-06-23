@@ -96,6 +96,51 @@ pub(crate) fn derive_calls_with_cache_stats(
     }
 }
 
+pub(crate) fn derive_call_sites_with_cache_stats(
+    db: &mut AnalysisDb,
+    input_snapshot: &InputSnapshot,
+    manifest: &ProviderManifest,
+    semantic_mir_output_digest: Digest,
+    cfg_output_digest: Digest,
+    upstream_syntax_output_digests: Vec<Digest>,
+) -> CallsProviderOutput {
+    let output = CallOutput {
+        sites: extract_call_sites(db),
+        targets: Vec::new(),
+        unresolved: Vec::new(),
+    }
+    .normalized();
+    let absent_symbol_graph = Digest::absent(DigestKind::ProviderOutput, "polint.symbol_graph");
+    let absent_module_topology =
+        Digest::absent(DigestKind::ProviderOutput, "polint.module_topology");
+    let output_digest = calls_output_digest(
+        db,
+        manifest,
+        input_snapshot,
+        &semantic_mir_output_digest,
+        &cfg_output_digest,
+        &absent_symbol_graph,
+        &absent_module_topology,
+        &upstream_syntax_output_digests,
+        &output,
+    );
+    let mut cache_stats = CacheStats::default();
+    cache_stats.record_recompute();
+
+    match db.replace_call_facts(output) {
+        Ok(()) => CallsProviderOutput {
+            diagnostics: Vec::new(),
+            cache_stats,
+            output_digest: Some(output_digest),
+        },
+        Err(error) => CallsProviderOutput {
+            diagnostics: vec![provider_error_diagnostic(error.to_string())],
+            cache_stats,
+            output_digest: Some(output_digest),
+        },
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn calls_output_digest(
     db: &AnalysisDb,

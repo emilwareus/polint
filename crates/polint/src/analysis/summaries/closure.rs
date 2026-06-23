@@ -103,6 +103,7 @@ pub(crate) fn close_summaries_by_scc(
         scc_iteration_counts: Vec::new(),
         scc_output_digests: BTreeMap::new(),
     };
+    let mut summary_metadata_dirty = false;
 
     for scc in &schedule.sccs {
         result.total_sccs_processed += 1;
@@ -125,6 +126,7 @@ pub(crate) fn close_summaries_by_scc(
 
             if !scc_summaries.is_empty() || !scc_events.is_empty() {
                 merge_updated_summaries(db, &scc_summaries, &scc_events);
+                summary_metadata_dirty = true;
             }
 
             // Compute the post-merge SCC output digest for backdating.
@@ -150,6 +152,7 @@ pub(crate) fn close_summaries_by_scc(
 
             if !scc_summaries.is_empty() || !scc_events.is_empty() {
                 merge_updated_summaries(db, &scc_summaries, &scc_events);
+                summary_metadata_dirty = true;
             }
 
             // Compute the post-merge SCC output digest for backdating.
@@ -168,6 +171,10 @@ pub(crate) fn close_summaries_by_scc(
             // Record demand query entry
             record_scc_demand_query(demand_engine, scc, &scc_digest, 1, was_backdated);
         }
+    }
+
+    if summary_metadata_dirty {
+        db.refresh_summary_metadata_after_bulk_update();
     }
 
     result
@@ -784,7 +791,7 @@ fn merge_updated_summaries(
     let mut merged_events = existing_events;
     merged_events.extend(events.iter().cloned());
 
-    db.replace_summary_facts(SummaryOutput {
+    db.replace_summary_facts_without_metadata(SummaryOutput {
         summaries: merged,
         events: merged_events,
     });

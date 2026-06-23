@@ -188,6 +188,43 @@ fn matching_call_events(
                 None
             }
         })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .chain(matching_function_call_events(db, pattern, query_digest))
+        .collect()
+}
+
+fn matching_function_call_events(
+    db: &AnalysisDb,
+    pattern: &EventPattern,
+    query_digest: &str,
+) -> Vec<PolicyViolation> {
+    if !db.call_sites().is_empty() {
+        return Vec::new();
+    }
+
+    db.functions()
+        .iter()
+        .filter_map(|function| {
+            let target = function_call_match(function, pattern)?;
+            Some(PolicyViolation::new(
+                PolicyOperation::EventsMatching,
+                query_digest,
+                db.path_for(function.file),
+                function.span.diagnostic_range(),
+                PolicyStatus::Heuristic,
+                PolicyPrecision::Syntax,
+                vec![
+                    ("event".to_string(), "call".to_string()),
+                    ("target".to_string(), target.to_string()),
+                    ("function".to_string(), function.name.clone()),
+                    (
+                        "event_source".to_string(),
+                        "syntax_function_calls".to_string(),
+                    ),
+                ],
+            ))
+        })
         .collect()
 }
 
@@ -603,6 +640,30 @@ fn sink_matches_edge(
 fn sink_matches_site(pattern: &SinkPattern, site: &CallSiteFact) -> bool {
     let candidates = vec![call_site_label(site)];
     sink_matches_candidates(pattern, &candidates)
+}
+
+fn function_call_match<'a>(function: &'a FunctionFact, pattern: &EventPattern) -> Option<&'a str> {
+    if pattern.kind() != EventPatternKind::Call {
+        return None;
+    }
+
+    function
+        .calls
+        .iter()
+        .find(|candidate| {
+            pattern
+                .values()
+                .iter()
+                .any(|value| call_name_matches(candidate, value))
+        })
+        .map(String::as_str)
+}
+
+fn call_name_matches(candidate: &str, value: &str) -> bool {
+    candidate == value
+        || candidate
+            .rsplit_once('.')
+            .is_some_and(|(_, tail)| tail == value)
 }
 
 fn barrier_covers_path(
@@ -1081,8 +1142,10 @@ struct ControlOrder {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct CfgOrder {
+struct OperationOrder {
     operation_ordinal: u32,
+    source_rank: u8,
+    source: &'static str,
 }
 
 fn call_sites_by_id(db: &AnalysisDb) -> BTreeMap<CallSiteId, &CallSiteFact> {
@@ -1094,7 +1157,7 @@ fn ordered_control_call_events(
     minimum_precision: PolicyPrecision,
 ) -> Vec<ControlCallEvent> {
     let site_by_id = call_sites_by_id(db);
-    let cfg_orders = cfg_orders_by_operation(db);
+    let operation_orders = control_orders_by_operation(db);
     let mut events = Vec::new();
 
     if !db.refined_call_edges().is_empty() {
@@ -1102,7 +1165,7 @@ fn ordered_control_call_events(
             if !precision_meets(edge.precision, minimum_precision) {
                 continue;
             }
-            if let Some(event) = control_event_for_edge(db, edge, &site_by_id, &cfg_orders) {
+            if let Some(event) = control_event_for_edge(db, edge, &site_by_id, &operation_orders) {
                 events.push(event);
             }
         }
@@ -1113,7 +1176,7 @@ fn ordered_control_call_events(
             {
                 continue;
             }
-            events.push(control_event_for_site(db, site, &cfg_orders));
+            events.push(control_event_for_site(db, site, &operation_orders));
         }
     }
 
@@ -1134,30 +1197,58 @@ fn ordered_control_call_events(
     events
 }
 
-fn cfg_orders_by_operation(db: &AnalysisDb) -> BTreeMap<(MirBodyId, MirOpId), CfgOrder> {
+fn control_orders_by_operation(db: &AnalysisDb) -> BTreeMap<(MirBodyId, MirOpId), OperationOrder> {
     let mut orders = BTreeMap::new();
+    for operation in db.mir_operations() {
+        insert_operation_order(
+            &mut orders,
+            (operation.body, operation.id),
+            OperationOrder {
+                operation_ordinal: operation.ordinal,
+                source_rank: 1,
+                source: "mir_operation_order",
+            },
+        );
+    }
     for node in db.cfg_nodes() {
-        if let Some(operation) = node.operation {
-            let key = (node.body, operation);
-            orders
-                .entry(key)
-                .and_modify(|existing: &mut CfgOrder| {
-                    existing.operation_ordinal =
-                        existing.operation_ordinal.min(node.operation_ordinal);
-                })
-                .or_insert(CfgOrder {
-                    operation_ordinal: node.operation_ordinal,
-                });
-        }
+        let Some(operation) = node.operation else {
+            continue;
+        };
+        insert_operation_order(
+            &mut orders,
+            (node.body, operation),
+            OperationOrder {
+                operation_ordinal: node.operation_ordinal,
+                source_rank: 0,
+                source: "cfg_operation_order",
+            },
+        );
     }
     orders
+}
+
+fn insert_operation_order(
+    orders: &mut BTreeMap<(MirBodyId, MirOpId), OperationOrder>,
+    key: (MirBodyId, MirOpId),
+    next: OperationOrder,
+) {
+    orders
+        .entry(key)
+        .and_modify(|existing| {
+            if (next.source_rank, next.operation_ordinal)
+                < (existing.source_rank, existing.operation_ordinal)
+            {
+                *existing = next;
+            }
+        })
+        .or_insert(next);
 }
 
 fn control_event_for_edge(
     db: &AnalysisDb,
     edge: &RefinedCallEdgeFact,
     site_by_id: &BTreeMap<CallSiteId, &CallSiteFact>,
-    cfg_orders: &BTreeMap<(MirBodyId, MirOpId), CfgOrder>,
+    operation_orders: &BTreeMap<(MirBodyId, MirOpId), OperationOrder>,
 ) -> Option<ControlCallEvent> {
     let site = site_by_id.get(&edge.site)?;
     let match_candidates = call_edge_match_candidates(db, edge, site_by_id);
@@ -1173,8 +1264,8 @@ fn control_event_for_edge(
         range: site.span.diagnostic_range(),
         target_label,
         candidates,
-        order: control_order(site, cfg_orders),
-        order_source: control_order_source(site, cfg_orders),
+        order: control_order(site, operation_orders),
+        order_source: control_order_source(site, operation_orders),
         status: edge.status,
         precision: edge.precision,
         confidence: Some(edge.confidence),
@@ -1184,7 +1275,7 @@ fn control_event_for_edge(
 fn control_event_for_site(
     db: &AnalysisDb,
     site: &CallSiteFact,
-    cfg_orders: &BTreeMap<(MirBodyId, MirOpId), CfgOrder>,
+    operation_orders: &BTreeMap<(MirBodyId, MirOpId), OperationOrder>,
 ) -> ControlCallEvent {
     let label = call_site_label(site);
     ControlCallEvent {
@@ -1193,8 +1284,8 @@ fn control_event_for_site(
         range: site.span.diagnostic_range(),
         target_label: label.clone(),
         candidates: vec![label],
-        order: control_order(site, cfg_orders),
-        order_source: control_order_source(site, cfg_orders),
+        order: control_order(site, operation_orders),
+        order_source: control_order_source(site, operation_orders),
         status: site.status,
         precision: site.precision,
         confidence: None,
@@ -1203,12 +1294,12 @@ fn control_event_for_site(
 
 fn control_order(
     site: &CallSiteFact,
-    cfg_orders: &BTreeMap<(MirBodyId, MirOpId), CfgOrder>,
+    operation_orders: &BTreeMap<(MirBodyId, MirOpId), OperationOrder>,
 ) -> ControlOrder {
-    let cfg_order = cfg_orders.get(&(site.body, site.operation));
+    let operation_order = operation_orders.get(&(site.body, site.operation));
     ControlOrder {
-        order_source_rank: if cfg_order.is_some() { 0 } else { 1 },
-        operation_ordinal: cfg_order
+        order_source_rank: operation_order.map(|order| order.source_rank).unwrap_or(2),
+        operation_ordinal: operation_order
             .map(|order| order.operation_ordinal)
             .unwrap_or(u32::MAX),
         line: site.span.start_line,
@@ -1220,13 +1311,12 @@ fn control_order(
 
 fn control_order_source(
     site: &CallSiteFact,
-    cfg_orders: &BTreeMap<(MirBodyId, MirOpId), CfgOrder>,
+    operation_orders: &BTreeMap<(MirBodyId, MirOpId), OperationOrder>,
 ) -> &'static str {
-    if cfg_orders.contains_key(&(site.body, site.operation)) {
-        "cfg_operation_order"
-    } else {
-        "source_span"
-    }
+    operation_orders
+        .get(&(site.body, site.operation))
+        .map(|order| order.source)
+        .unwrap_or("source_span")
 }
 
 fn control_events_by_function(
@@ -1288,7 +1378,7 @@ fn control_violation(
         query_digest,
         event.file.clone(),
         event.range,
-        control_policy_status(event.status),
+        control_policy_status(event.status, event.precision),
         control_policy_precision(event.precision),
         evidence
             .into_iter()
@@ -1297,11 +1387,19 @@ fn control_violation(
     )
 }
 
-fn control_policy_status(status: CallTargetStatus) -> PolicyStatus {
+fn control_policy_status(status: CallTargetStatus, precision: CallPrecision) -> PolicyStatus {
     match status {
         CallTargetStatus::BudgetExceeded => PolicyStatus::BudgetExceeded,
         CallTargetStatus::Unsupported => PolicyStatus::Unsupported,
-        CallTargetStatus::Unresolved | CallTargetStatus::SetupMissing => PolicyStatus::Unknown,
+        CallTargetStatus::SetupMissing => PolicyStatus::Unknown,
+        CallTargetStatus::Unresolved => match precision {
+            CallPrecision::Unknown | CallPrecision::Unsupported => PolicyStatus::Unknown,
+            CallPrecision::Exact
+            | CallPrecision::SetupAware
+            | CallPrecision::Conservative
+            | CallPrecision::Heuristic
+            | CallPrecision::Ambiguous => PolicyStatus::Heuristic,
+        },
         CallTargetStatus::Resolved | CallTargetStatus::Ambiguous | CallTargetStatus::Rejected => {
             PolicyStatus::Heuristic
         }
@@ -1750,9 +1848,11 @@ mod tests {
     };
     use crate::analysis::data_flow::store::DataFlowOutput;
     use crate::analysis::ids::{
-        CallTargetId, DataFlowEdgeId, DataFlowModelId, DataFlowNodeId, MirBodyId, MirOpId, PlaceId,
-        ReachabilityRootId, RefinedCallEdgeId,
+        CallTargetId, DataFlowEdgeId, DataFlowModelId, DataFlowNodeId, MirBodyId, MirOpId,
+        MirPredicateId, PlaceId, ReachabilityRootId, RefinedCallEdgeId,
     };
+    use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
+    use crate::analysis::mir::op::{MirOperation, MirOperationKind};
     use crate::analysis::reachability::facts::{
         RootPrecision, RootProvenance, RootStatus, compute_reachability_root_stable_key,
     };
@@ -1784,6 +1884,24 @@ mod tests {
         assert_eq!(violations.len(), 1);
         assert_eq!(violations[0].status(), PolicyStatus::Heuristic);
         assert_eq!(violations[0].precision(), PolicyPrecision::Conservative);
+    }
+
+    #[test]
+    fn events_matching_uses_syntax_function_calls_without_call_site_facts() {
+        let db = policy_query_db_with_syntax_function_call("client.dangerous");
+
+        let violations = matching_events(&db, EventPattern::call("dangerous"));
+
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].status(), PolicyStatus::Heuristic);
+        assert_eq!(violations[0].precision(), PolicyPrecision::Syntax);
+        let diagnostic = violations[0].diagnostic("local/test", "event");
+        assert!(diagnostic.evidence.iter().any(|evidence| {
+            evidence.label == "event_source" && evidence.value == "syntax_function_calls"
+        }));
+        assert!(diagnostic.evidence.iter().any(|evidence| {
+            evidence.label == "target" && evidence.value == "client.dangerous"
+        }));
     }
 
     #[test]
@@ -1898,6 +2016,21 @@ mod tests {
     }
 
     #[test]
+    fn control_flow_missing_guard_treats_local_callsite_match_as_heuristic() {
+        let db = policy_query_db_with_unresolved_conservative_call_site();
+        let query = GuardQuery::new(
+            EventPattern::call("dangerous"),
+            GuardPattern::call_any(["authorize"]),
+        );
+
+        let violations = missing_guards(&db, query);
+
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].status(), PolicyStatus::Heuristic);
+        assert_eq!(violations[0].precision(), PolicyPrecision::Conservative);
+    }
+
+    #[test]
     fn control_flow_missing_guard_ignores_prior_guard() {
         let db = policy_query_db_with_call_sequence(&["authorize", "dangerous"]);
         let query = GuardQuery::new(
@@ -1909,9 +2042,23 @@ mod tests {
     }
 
     #[test]
-    fn control_flow_missing_guard_prefers_cfg_order_when_available() {
+    fn control_flow_missing_guard_prefers_cfg_order_over_mir_order() {
+        let db = policy_query_db_with_cfg_ordered_call_sequence(&[
+            ("dangerous", 1, 2),
+            ("authorize", 2, 1),
+        ]);
+        let query = GuardQuery::new(
+            EventPattern::call("dangerous"),
+            GuardPattern::call_any(["authorize"]),
+        );
+
+        assert!(missing_guards(&db, query).is_empty());
+    }
+
+    #[test]
+    fn control_flow_missing_guard_falls_back_to_mir_order_when_cfg_is_absent() {
         let db =
-            policy_query_db_with_cfg_ordered_call_sequence(&[("dangerous", 2), ("authorize", 1)]);
+            policy_query_db_with_mir_ordered_call_sequence(&[("dangerous", 2), ("authorize", 1)]);
         let query = GuardQuery::new(
             EventPattern::call("dangerous"),
             GuardPattern::call_any(["authorize"]),
@@ -2474,6 +2621,48 @@ mod tests {
         db
     }
 
+    fn policy_query_db_with_unresolved_conservative_call_site() -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/main.go"),
+            "src/main.go".to_string(),
+            "package main\nfunc main() { dangerous() }\n".to_string(),
+        );
+        let main = push_test_function(&mut db, file, "main", 1, false);
+        let mut site = call_site(0, file, main, "dangerous");
+        site.status = CallTargetStatus::Unresolved;
+        site.precision = CallPrecision::Conservative;
+
+        db.replace_call_facts(CallOutput {
+            sites: vec![site],
+            targets: Vec::new(),
+            unresolved: Vec::new(),
+        })
+        .expect("valid call facts");
+        db
+    }
+
+    fn policy_query_db_with_syntax_function_call(call: &str) -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/main.ts"),
+            "src/main.ts".to_string(),
+            "export function handler() { client.dangerous(); }\n".to_string(),
+        );
+        db.push_function(FunctionFact {
+            id: FunctionId(0),
+            file,
+            name: "handler".to_string(),
+            span: Span::point(file, 1, 1),
+            language: Language::TypeScript,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 1,
+            calls: vec![call.to_string()],
+        });
+        db
+    }
+
     fn policy_query_db_with_syntax_label_resolved_to_different_target() -> AnalysisDb {
         let mut db = AnalysisDb::new();
         let file = db.add_file(
@@ -2673,7 +2862,7 @@ mod tests {
         db
     }
 
-    fn policy_query_db_with_cfg_ordered_call_sequence(callees: &[(&str, u32)]) -> AnalysisDb {
+    fn policy_query_db_with_mir_ordered_call_sequence(callees: &[(&str, u32)]) -> AnalysisDb {
         let mut db = AnalysisDb::new();
         let file = db.add_file(
             PathBuf::from("src/main.go"),
@@ -2684,9 +2873,9 @@ mod tests {
         let mut sites = Vec::new();
         let mut targets = Vec::new();
         let mut edges = Vec::new();
-        let mut cfg_nodes = Vec::new();
+        let mut operations = Vec::new();
 
-        for (index, (callee, cfg_ordinal)) in callees.iter().enumerate() {
+        for (index, (callee, operation_ordinal)) in callees.iter().enumerate() {
             let id = index as u64;
             let operation = MirOpId(id);
             let callee_function =
@@ -2694,10 +2883,22 @@ mod tests {
             let site = call_site(id, file, handler, callee);
             targets.push(call_target(id, site.id, handler, callee_function));
             edges.push(refined_edge(id, site.id, handler, callee_function, callee));
-            cfg_nodes.push(cfg_node(id, file, handler, operation, *cfg_ordinal));
+            operations.push(mir_operation(
+                operation,
+                MirBodyId(handler.0),
+                *operation_ordinal,
+                file,
+            ));
             sites.push(site);
         }
 
+        db.replace_semantic_mir(MirOutput {
+            bodies: vec![mir_body(file, handler)],
+            places: Vec::new(),
+            operations,
+            unsupported: Vec::new(),
+        })
+        .expect("valid semantic MIR facts");
         db.replace_call_facts(CallOutput {
             sites,
             targets,
@@ -2706,13 +2907,101 @@ mod tests {
         .expect("valid call facts");
         db.replace_refined_call_facts(RefinedCallOutput { edges })
             .expect("valid refined call facts");
+        db
+    }
+
+    fn policy_query_db_with_cfg_ordered_call_sequence(callees: &[(&str, u32, u32)]) -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/main.go"),
+            "src/main.go".to_string(),
+            "package main\nfunc handler() {}\n".to_string(),
+        );
+        let handler = push_test_function(&mut db, file, "handler", 1, false);
+        let body = MirBodyId(handler.0);
+        let cfg_function = CfgFunctionId(handler.0);
+        let mut sites = Vec::new();
+        let mut targets = Vec::new();
+        let mut edges = Vec::new();
+        let mut operations = Vec::new();
+        let mut cfg_nodes = Vec::new();
+        let mut cfg_blocks = Vec::new();
+
+        for (index, (callee, mir_ordinal, cfg_ordinal)) in callees.iter().enumerate() {
+            let id = index as u64;
+            let operation = MirOpId(id);
+            let block = BasicBlockId(id + 1);
+            let cfg_node = CfgNodeId(id + 1);
+            let callee_function =
+                push_test_function(&mut db, file, callee, index as u32 + 10, false);
+            let site = call_site(id, file, handler, callee);
+            targets.push(call_target(id, site.id, handler, callee_function));
+            edges.push(refined_edge(id, site.id, handler, callee_function, callee));
+            operations.push(mir_operation(operation, body, *mir_ordinal, file));
+            cfg_nodes.push(CfgNodeFact {
+                id: cfg_node,
+                cfg_function,
+                body,
+                operation: Some(operation),
+                block,
+                kind: CfgNodeKind::CallSite,
+                span: Some(site.span.clone()),
+                generated: false,
+                operation_ordinal: *cfg_ordinal,
+                stable_key: format!("cfg:node:{id}:{callee}"),
+                status: CfgStatus::Resolved,
+                precision: CfgPrecision::ExactLowered,
+            });
+            cfg_blocks.push(BasicBlockFact {
+                id: block,
+                cfg_function,
+                kind: BasicBlockKind::StraightLine,
+                first_node: Some(cfg_node),
+                last_node: Some(cfg_node),
+                reachable: true,
+                reverse_postorder: *cfg_ordinal,
+                stable_key: format!("cfg:block:{id}:{callee}"),
+                status: CfgStatus::Resolved,
+                precision: CfgPrecision::ExactLowered,
+            });
+            sites.push(site);
+        }
+
+        db.replace_semantic_mir(MirOutput {
+            bodies: vec![mir_body(file, handler)],
+            places: Vec::new(),
+            operations,
+            unsupported: Vec::new(),
+        })
+        .expect("valid semantic MIR facts");
         db.replace_cfg_facts(CfgOutput {
-            functions: vec![cfg_function(file, handler)],
+            functions: vec![CfgFunctionFact {
+                id: cfg_function,
+                body,
+                function: handler,
+                language: Language::Go,
+                file,
+                span: Span::point(file, 1, 1),
+                entry_node: CfgNodeId(10_000),
+                normal_exit_node: CfgNodeId(10_001),
+                exceptional_exit_node: None,
+                stable_key: "cfg:function:handler".to_string(),
+                status: CfgStatus::Resolved,
+                precision: CfgPrecision::ExactLowered,
+            }],
             nodes: cfg_nodes,
-            blocks: vec![cfg_block()],
+            blocks: cfg_blocks,
             ..CfgOutput::empty()
         })
-        .expect("valid cfg facts");
+        .expect("valid CFG facts");
+        db.replace_call_facts(CallOutput {
+            sites,
+            targets,
+            unresolved: Vec::new(),
+        })
+        .expect("valid call facts");
+        db.replace_refined_call_facts(RefinedCallOutput { edges })
+            .expect("valid refined call facts");
         db
     }
 
@@ -3031,58 +3320,38 @@ mod tests {
         }
     }
 
-    fn cfg_function(file: FileId, function: FunctionId) -> CfgFunctionFact {
-        CfgFunctionFact {
-            id: CfgFunctionId(0),
-            body: MirBodyId(function.0),
-            function,
+    fn mir_body(file: FileId, function: FunctionId) -> MirBody {
+        MirBody {
+            id: MirBodyId(function.0),
             language: Language::Go,
             file,
+            function,
+            package: None,
+            module: None,
+            owner_stable_key: "function:handler".to_string(),
             span: Span::point(file, 1, 1),
-            entry_node: CfgNodeId(0),
-            normal_exit_node: CfgNodeId(0),
-            exceptional_exit_node: None,
-            stable_key: "cfg:function:handler".to_string(),
-            status: CfgStatus::Resolved,
-            precision: CfgPrecision::ExactLowered,
+            stable_key: "mir:body:handler".to_string(),
+            status: MirStatus::Resolved,
         }
     }
 
-    fn cfg_node(
-        id: u64,
-        file: FileId,
-        function: FunctionId,
+    fn mir_operation(
         operation: MirOpId,
-        operation_ordinal: u32,
-    ) -> CfgNodeFact {
-        CfgNodeFact {
-            id: CfgNodeId(id),
-            cfg_function: CfgFunctionId(0),
-            body: MirBodyId(function.0),
-            operation: Some(operation),
-            block: BasicBlockId(0),
-            kind: CfgNodeKind::CallSite,
-            span: Some(Span::point(file, id as u32 + 2, 1)),
-            generated: false,
-            operation_ordinal,
-            stable_key: format!("cfg:node:{id}"),
-            status: CfgStatus::Resolved,
-            precision: CfgPrecision::ExactLowered,
-        }
-    }
-
-    fn cfg_block() -> BasicBlockFact {
-        BasicBlockFact {
-            id: BasicBlockId(0),
-            cfg_function: CfgFunctionId(0),
-            kind: BasicBlockKind::StraightLine,
-            first_node: Some(CfgNodeId(0)),
-            last_node: Some(CfgNodeId(0)),
-            reachable: true,
-            reverse_postorder: 0,
-            stable_key: "cfg:block:body".to_string(),
-            status: CfgStatus::Resolved,
-            precision: CfgPrecision::ExactLowered,
+        body: MirBodyId,
+        ordinal: u32,
+        file: FileId,
+    ) -> MirOperation {
+        MirOperation {
+            id: operation,
+            body,
+            ordinal,
+            span: Span::point(file, ordinal + 1, 1),
+            kind: MirOperationKind::Branch {
+                predicate: MirPredicateId(operation.0),
+                predicate_place: None,
+            },
+            stable_key: format!("mir:op:{:05}", operation.0),
+            status: MirStatus::Resolved,
         }
     }
 

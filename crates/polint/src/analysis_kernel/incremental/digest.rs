@@ -33,14 +33,15 @@ pub(crate) enum DigestKind {
 impl Digest {
     pub(crate) fn from_parts(kind: DigestKind, label: &str, parts: &[&str]) -> Self {
         let kind_label = kind.as_str();
-        let mut encoded_parts = Vec::with_capacity(parts.len() + 1);
-        encoded_parts.push(length_prefixed_part("kind", kind_label));
-        encoded_parts.extend(parts.iter().map(|part| length_prefixed_part(label, part)));
-        let hash_parts = encoded_parts.iter().map(String::as_str).collect::<Vec<_>>();
+        let mut hash = FNV_OFFSET_BASIS;
+        fingerprint_length_prefixed_part(&mut hash, "kind", kind_label);
+        for part in parts {
+            fingerprint_length_prefixed_part(&mut hash, label, part);
+        }
 
         Self {
             kind,
-            value: crate::cache::stable_hash(&hash_parts),
+            value: format!("{hash:016x}"),
         }
     }
 
@@ -92,8 +93,46 @@ impl fmt::Display for Digest {
     }
 }
 
-fn length_prefixed_part(label: &str, value: &str) -> String {
-    format!("{}:{}={}:{}", label.len(), label, value.len(), value)
+const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+const FNV_PRIME: u64 = 0x100000001b3;
+const PART_SEPARATOR: u8 = 0xfe;
+
+fn fingerprint_length_prefixed_part(hash: &mut u64, label: &str, value: &str) {
+    fingerprint_usize_decimal(hash, label.len());
+    fingerprint_byte(hash, b':');
+    fingerprint_bytes(hash, label.as_bytes());
+    fingerprint_byte(hash, b'=');
+    fingerprint_usize_decimal(hash, value.len());
+    fingerprint_byte(hash, b':');
+    fingerprint_bytes(hash, value.as_bytes());
+    fingerprint_byte(hash, PART_SEPARATOR);
+}
+
+fn fingerprint_usize_decimal(hash: &mut u64, mut value: usize) {
+    if value == 0 {
+        fingerprint_byte(hash, b'0');
+        return;
+    }
+
+    let mut buffer = [0u8; 20];
+    let mut index = buffer.len();
+    while value > 0 {
+        index -= 1;
+        buffer[index] = b'0' + (value % 10) as u8;
+        value /= 10;
+    }
+    fingerprint_bytes(hash, &buffer[index..]);
+}
+
+fn fingerprint_bytes(hash: &mut u64, bytes: &[u8]) {
+    for byte in bytes {
+        fingerprint_byte(hash, *byte);
+    }
+}
+
+fn fingerprint_byte(hash: &mut u64, byte: u8) {
+    *hash ^= u64::from(byte);
+    *hash = hash.wrapping_mul(FNV_PRIME);
 }
 
 #[cfg(test)]

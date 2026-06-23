@@ -3,6 +3,7 @@
     reason = "Phase 31 stores domain rows before provider/debug/eval plans consume every index."
 )]
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use super::core::{
@@ -26,6 +27,12 @@ pub(crate) struct DomainOutput {
     pub(crate) events: Vec<DomainEventFact>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DomainMaterialization {
+    Full,
+    SummaryInputs,
+}
+
 impl DomainOutput {
     pub(crate) fn empty() -> Self {
         Self::default()
@@ -40,6 +47,19 @@ impl DomainOutput {
         place_stable_keys: &BTreeMap<PlaceId, String>,
     ) -> Self {
         Self::from_results_with_place_filter(results, Some(place_stable_keys))
+    }
+
+    pub(crate) fn from_results_with_materialization(
+        results: &DomainResults,
+        place_stable_keys: Option<&BTreeMap<PlaceId, String>>,
+        materialization: DomainMaterialization,
+    ) -> Self {
+        match materialization {
+            DomainMaterialization::Full => {
+                Self::from_results_with_place_filter(results, place_stable_keys)
+            }
+            DomainMaterialization::SummaryInputs => Self::from_results_for_summary_inputs(results),
+        }
     }
 
     fn from_results_with_place_filter(
@@ -144,6 +164,71 @@ impl DomainOutput {
         output.normalized()
     }
 
+    fn from_results_for_summary_inputs(results: &DomainResults) -> Self {
+        let mut output = Self::empty();
+        for function in results.functions() {
+            push_reachability_observation(
+                &mut output.observations,
+                function.body,
+                None,
+                None,
+                DomainLocation::FunctionEntry,
+                &function.body_stable_key,
+                &function.entry_state,
+            );
+            if function.status == SolverStatus::BudgetExceeded {
+                output.events.push(DomainEventFact {
+                    id: DomainEventId(0),
+                    body: function.body,
+                    block: None,
+                    operation: None,
+                    slot: None,
+                    status: DomainStatus::BudgetExceeded,
+                    precision: DomainPrecision::Unknown,
+                    reason: "solver_budget_exceeded".to_string(),
+                    stable_key: stable_key_from_parts(
+                        FactFamily::DomainEvent,
+                        &[
+                            ("body", function.body_stable_key.clone()),
+                            ("reason", "solver_budget_exceeded".to_string()),
+                        ],
+                    ),
+                });
+            }
+        }
+        for block in results.blocks() {
+            push_reachability_observation(
+                &mut output.observations,
+                block.body,
+                Some(block.block),
+                None,
+                DomainLocation::BlockEntry,
+                &block.stable_key,
+                &block.entry,
+            );
+        }
+        for event in results.unknown_top_events() {
+            output.events.push(DomainEventFact {
+                id: DomainEventId(0),
+                body: event.body,
+                block: event.block,
+                operation: event.operation,
+                slot: None,
+                status: status_for_top_reason(event.reason),
+                precision: precision_for_top_reason(event.reason),
+                reason: event.reason.as_str().to_string(),
+                stable_key: stable_key_from_parts(
+                    FactFamily::DomainEvent,
+                    &[
+                        ("source", event.stable_key.clone()),
+                        ("reason", event.reason.as_str().to_string()),
+                    ],
+                ),
+            });
+        }
+        output.normalized()
+    }
+
     pub(crate) fn normalized(mut self) -> Self {
         self.observations.sort_by(|left, right| {
             (
@@ -212,20 +297,15 @@ fn push_state_observations(
     state: &ProductState,
     place_stable_keys: Option<&BTreeMap<PlaceId, String>>,
 ) {
-    let (status, precision, value) = reachability_fact_value(&state.core.reachability);
-    rows.push(observation(
+    push_reachability_observation(
+        rows,
         body,
         block,
         operation,
-        None,
-        None,
-        DomainSlot::Reachability,
         location,
         source_stable_key,
-        status,
-        precision,
-        value,
-    ));
+        state,
+    );
     for (place, value) in &state.core.nilness {
         let (status, precision, value) = nilness_fact_value(value);
         let (place_ref, stable_place) = stable_place_ref(*place, place_stable_keys);
@@ -313,16 +393,41 @@ fn push_state_observations(
     }
 }
 
+fn push_reachability_observation(
+    rows: &mut Vec<DomainObservationFact>,
+    body: MirBodyId,
+    block: Option<BasicBlockId>,
+    operation: Option<MirOpId>,
+    location: DomainLocation,
+    source_stable_key: &str,
+    state: &ProductState,
+) {
+    let (status, precision, value) = reachability_fact_value(&state.core.reachability);
+    rows.push(observation(
+        body,
+        block,
+        operation,
+        None,
+        None,
+        DomainSlot::Reachability,
+        location,
+        source_stable_key,
+        status,
+        precision,
+        value,
+    ));
+}
+
 fn stable_place_ref(
     place: PlaceId,
     place_stable_keys: Option<&BTreeMap<PlaceId, String>>,
-) -> (Option<PlaceId>, Option<String>) {
+) -> (Option<PlaceId>, Option<Cow<'_, str>>) {
     match place_stable_keys {
         Some(place_stable_keys) => place_stable_keys
             .get(&place)
-            .map(|stable_key| (Some(place), Some(stable_key.clone())))
+            .map(|stable_key| (Some(place), Some(Cow::Borrowed(stable_key.as_str()))))
             .unwrap_or((None, None)),
-        None => (Some(place), Some(format!("place:{}", place.0))),
+        None => (Some(place), Some(Cow::Owned(format!("place:{}", place.0)))),
     }
 }
 
@@ -335,7 +440,7 @@ fn observation(
     block: Option<BasicBlockId>,
     operation: Option<MirOpId>,
     place: Option<PlaceId>,
-    stable_place: Option<String>,
+    stable_place: Option<Cow<'_, str>>,
     slot: DomainSlot,
     location: DomainLocation,
     source_stable_key: &str,
@@ -362,7 +467,10 @@ fn observation(
                 ("source", source_stable_key.to_string()),
                 ("slot", slot.as_str().to_string()),
                 ("location", location.as_str().to_string()),
-                ("place", stable_place.unwrap_or_else(|| "none".to_string())),
+                (
+                    "place",
+                    stable_place.as_deref().unwrap_or("none").to_string(),
+                ),
             ],
         ),
     }
@@ -515,7 +623,10 @@ pub(crate) struct DomainStore {
 
 impl DomainStore {
     pub(crate) fn from_output(output: DomainOutput) -> Self {
-        let output = output.normalized();
+        Self::from_normalized_output(output.normalized())
+    }
+
+    pub(crate) fn from_normalized_output(output: DomainOutput) -> Self {
         let mut store = Self {
             output,
             ..Self::default()

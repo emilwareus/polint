@@ -61,7 +61,10 @@ pub(crate) struct RefinedCallStore {
 
 impl RefinedCallStore {
     pub(crate) fn from_output(output: RefinedCallOutput) -> Result<Self, AnalysisError> {
-        let output = output.normalized();
+        Self::from_normalized_output(output.normalized())
+    }
+
+    pub(crate) fn from_normalized_output(output: RefinedCallOutput) -> Result<Self, AnalysisError> {
         let mut seen_keys = BTreeSet::new();
         let mut seen_ids = BTreeSet::new();
         for edge in &output.edges {

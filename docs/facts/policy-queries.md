@@ -71,6 +71,10 @@ pub(crate) fn no_secret_logs(ctx: &mut RuleCtx<'_>, flow: DataFlow<'_>) -> RuleR
   Options include `barriers`, `max_depth`, `max_paths`, and
   `minimum_precision`.
 
+`ControlFlow<'_>` queries are backed by refined call facts and CFG operation
+order when CFG rows exist. MIR operation order and source spans are fallback
+ordering sources; raw CFG traversal remains private.
+
 ## Realistic Examples
 
 These examples show the rule code and the application code being analyzed. The
@@ -233,9 +237,11 @@ func dangerousAdmin() {}
 
 ## Pattern Vocabulary
 
-- `EventPattern::call("target")` matches exact call target candidates from the
-  call/refined-call facts. `EventPattern::write_field("field")` is reserved
-  preview vocabulary and currently returns no backed matches.
+- `EventPattern::call("target")` matches direct call-event candidates. Events
+  are syntax-first and report syntax precision with function-level ranges when
+  no deeper policy view is requested; they upgrade to call/refined-call facts
+  when those facts are already available. `EventPattern::write_field("field")`
+  is reserved preview vocabulary and currently returns no backed matches.
 - `SourcePattern::http_request()` matches supported HTTP trust-boundary source
   models such as path params, query strings, request bodies, request headers,
   and cookies.
@@ -262,8 +268,9 @@ func dangerousAdmin() {}
 Query-specific evidence is flat and family-specific. Reachability diagnostics
 include `root`, `target`, `path`, and `depth`. Control-flow diagnostics include
 `required_guard` or `required_cleanup`, `control_scope`, `uncovered_path`, and
-budget fields. Data-flow diagnostics include `source`, `sink`, `path_status`,
-`path`, `barrier_status`, `required_barrier`, and budget fields.
+budget fields. Event diagnostics include `event`, `target`, and sometimes
+`function` and `event_source`. Data-flow diagnostics include `source`, `sink`,
+`path_status`, `path`, `barrier_status`, `required_barrier`, and budget fields.
 
 ## Precision, Status, And Unknowns
 

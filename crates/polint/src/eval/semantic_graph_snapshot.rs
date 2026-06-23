@@ -50,8 +50,7 @@ fn run_fixture_kernel(name: &str) -> KernelOutput {
     let fixture = load_native_fixture(&fixture_dir(name)).expect("fixture loads");
     let temp = copy_fixture_repo_for_test(&fixture).expect("copy fixture repo");
     if name == "ts_direct_bindings" {
-        let plan =
-            AnalysisPlan::from_capability_names_for_test(&["resolved_imports", "module_graph"]);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["calls"]);
         return run_kernel_for_repo_with_plan_for_test(temp.path(), &plan)
             .expect("kernel runs over TS direct-binding fixture repo");
     }
@@ -299,7 +298,7 @@ fn ts_direct_bindings_fixture_records_non_string_dynamic_import_reason() {
 fn semantic_graph_digest_changes_when_ts_path_alias_fixture_changes() {
     let fixture = load_native_fixture(&fixture_dir("ts_direct_bindings")).expect("fixture loads");
     let temp = copy_fixture_repo_for_test(&fixture).expect("copy fixture repo");
-    let plan = AnalysisPlan::from_capability_names_for_test(&["resolved_imports", "module_graph"]);
+    let plan = AnalysisPlan::from_capability_names_for_test(&["calls"]);
     let first =
         run_kernel_for_repo_with_plan_for_test(temp.path(), &plan).expect("first kernel run");
     let first_digest = provider_output_digest(&first, "polint.semantic_graph");

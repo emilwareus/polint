@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result, anyhow};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::change_set::{ChangeKind, ChangeSet, ChangeSetRow};
 use super::dependency_index::{
@@ -26,6 +26,7 @@ pub(crate) const LAYER_CACHE_MANIFEST_SCHEMA: &str = "polint-layer-cache-manifes
 const LAYER_CACHE_MANIFEST_MAX_BYTES: u64 = 4 * 1_048_576;
 const LAYER_CACHE_PAYLOAD_MAX_BYTES: u64 = 64 * 1_048_576;
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+const MANIFEST_LAYER_DEPENDENCY_SOURCE: &str = "__manifest_layer__";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct LayerCacheManifest {
@@ -35,7 +36,9 @@ pub(crate) struct LayerCacheManifest {
     pub(crate) output_digest: Digest,
     pub(crate) payload_digest: Digest,
     pub(crate) created_by_polint: String,
+    #[serde(with = "manifest_dependencies")]
     pub(crate) dependencies: Vec<DependencyEdge>,
+    #[serde(skip)]
     pub(crate) dependency_index: DependencyIndex,
     pub(crate) precision: PrecisionTier,
     pub(crate) validation: String,
@@ -52,24 +55,103 @@ impl LayerCacheManifest {
         validation: impl Into<String>,
         mut warnings: Vec<String>,
     ) -> Self {
-        dependencies.sort();
-        dependencies.dedup();
+        sort_and_dedup_manifest_dependencies(&mut dependencies);
         warnings.sort();
         warnings.dedup();
 
-        Self {
+        let mut manifest = Self {
             manifest_schema: LAYER_CACHE_MANIFEST_SCHEMA.to_string(),
             dependency_index_schema: DEPENDENCY_INDEX_SCHEMA.to_string(),
             key,
             output_digest,
             payload_digest,
             created_by_polint: env!("CARGO_PKG_VERSION").to_string(),
-            dependency_index: DependencyIndex::from_edges(dependencies.clone()),
+            dependency_index: DependencyIndex::default(),
             dependencies,
             precision,
             validation: validation.into(),
             warnings,
+        };
+        manifest.canonicalize_dependency_sources();
+        manifest
+    }
+
+    fn canonicalize_dependency_sources(&mut self) {
+        let from = relative_manifest_dependency_source();
+        for edge in &mut self.dependencies {
+            edge.from = from.clone();
         }
+        sort_and_dedup_manifest_dependencies(&mut self.dependencies);
+    }
+}
+
+pub(crate) fn relative_manifest_dependency_source() -> CacheNode {
+    CacheNode::Input(MANIFEST_LAYER_DEPENDENCY_SOURCE.to_string())
+}
+
+fn sort_and_dedup_manifest_dependencies(dependencies: &mut Vec<DependencyEdge>) {
+    dependencies.sort_by(manifest_dependency_order);
+    dependencies.dedup_by(manifest_dependencies_match);
+}
+
+fn manifest_dependency_order(left: &DependencyEdge, right: &DependencyEdge) -> std::cmp::Ordering {
+    (&left.to, left.kind, left.required_shape, &left.from).cmp(&(
+        &right.to,
+        right.kind,
+        right.required_shape,
+        &right.from,
+    ))
+}
+
+fn manifest_dependencies_match(left: &mut DependencyEdge, right: &mut DependencyEdge) -> bool {
+    left.to == right.to
+        && left.kind == right.kind
+        && left.required_shape == right.required_shape
+        && left.from == right.from
+}
+
+#[derive(Deserialize, Serialize)]
+struct ManifestDependencyRow {
+    to: CacheNode,
+    kind: DependencyKind,
+    required_shape: ShapeKind,
+}
+
+mod manifest_dependencies {
+    use super::*;
+
+    pub(super) fn serialize<S>(
+        dependencies: &[DependencyEdge],
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let rows = dependencies
+            .iter()
+            .map(|edge| ManifestDependencyRow {
+                to: edge.to.clone(),
+                kind: edge.kind,
+                required_shape: edge.required_shape,
+            })
+            .collect::<Vec<_>>();
+        rows.serialize(serializer)
+    }
+
+    pub(super) fn deserialize<'de, D>(deserializer: D) -> Result<Vec<DependencyEdge>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let rows = Vec::<ManifestDependencyRow>::deserialize(deserializer)?;
+        Ok(rows
+            .into_iter()
+            .map(|row| DependencyEdge {
+                from: relative_manifest_dependency_source(),
+                to: row.to,
+                kind: row.kind,
+                required_shape: row.required_shape,
+            })
+            .collect())
     }
 }
 
@@ -132,6 +214,10 @@ impl LayerCacheStore {
         payload_digest_for_bytes(&payload)
     }
 
+    pub(crate) fn payload_digest_for_json_bytes(payload: &[u8]) -> Result<Digest> {
+        payload_digest_for_bytes(payload)
+    }
+
     pub(crate) fn read_json<T>(&self, key: &LayerKey) -> LayerCacheReadOutcome<T>
     where
         T: for<'de> Deserialize<'de>,
@@ -171,10 +257,11 @@ impl LayerCacheStore {
             evict_file(&manifest_path);
             return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::Miss);
         };
-        let Ok(manifest) = serde_json::from_str::<LayerCacheManifest>(&raw_manifest) else {
+        let Ok(mut manifest) = serde_json::from_str::<LayerCacheManifest>(&raw_manifest) else {
             evict_file(&manifest_path);
             return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::InvalidEvicted);
         };
+        manifest.canonicalize_dependency_sources();
         if !self.manifest_metadata_is_supported(&manifest, key) {
             evict_file(&manifest_path);
             return LayerCacheReadOutcome::without_value(LayerCacheReadStatus::InvalidEvicted);
@@ -235,25 +322,41 @@ impl LayerCacheStore {
         if manifest.manifest_schema != LAYER_CACHE_MANIFEST_SCHEMA {
             return Err(anyhow!("unsupported layer cache manifest schema"));
         }
-        let payload_digest = Self::payload_digest_for_json(value)?;
+        let payload = serde_json::to_vec(value)?;
+        let payload_digest = payload_digest_for_bytes(&payload)?;
         if payload_digest != manifest.payload_digest {
             return Err(anyhow!("layer cache payload digest mismatch"));
         }
         if !self.manifest_metadata_is_supported(manifest, &manifest.key) {
             return Err(anyhow!("unsupported layer cache manifest metadata"));
         }
-        self.write_json_inner(&manifest.key, manifest, value)
+        self.write_json_bytes_inner(&manifest.key, manifest, payload)
     }
 
-    fn write_json_inner<T>(
+    pub(crate) fn write_json_bytes(
+        &self,
+        manifest: &LayerCacheManifest,
+        payload: Vec<u8>,
+    ) -> Result<LayerCacheWriteStatus> {
+        if manifest.manifest_schema != LAYER_CACHE_MANIFEST_SCHEMA {
+            return Err(anyhow!("unsupported layer cache manifest schema"));
+        }
+        let payload_digest = payload_digest_for_bytes(&payload)?;
+        if payload_digest != manifest.payload_digest {
+            return Err(anyhow!("layer cache payload digest mismatch"));
+        }
+        if !self.manifest_metadata_is_supported(manifest, &manifest.key) {
+            return Err(anyhow!("unsupported layer cache manifest metadata"));
+        }
+        self.write_json_bytes_inner(&manifest.key, manifest, payload)
+    }
+
+    fn write_json_bytes_inner(
         &self,
         key: &LayerKey,
         manifest: &LayerCacheManifest,
-        value: &T,
-    ) -> Result<LayerCacheWriteStatus>
-    where
-        T: Serialize,
-    {
+        payload: Vec<u8>,
+    ) -> Result<LayerCacheWriteStatus> {
         if !self.enabled {
             return Ok(LayerCacheWriteStatus::BypassedDisabled);
         }
@@ -279,7 +382,6 @@ impl LayerCacheStore {
         self.ensure_managed_dir(&self.blobs_dir())?;
         self.ensure_managed_dir(&self.manifests_dir())?;
 
-        let payload = serde_json::to_vec(value)?;
         self.write_layer_file_atomic(&payload_path, payload)
             .with_context(|| format!("failed to write layer payload {}", payload_path.display()))?;
 
@@ -292,14 +394,7 @@ impl LayerCacheStore {
         manifest_path: &Path,
         manifest: &LayerCacheManifest,
     ) -> Result<()> {
-        let mut normalized = manifest.clone();
-        normalized.dependencies.sort();
-        normalized.dependencies.dedup();
-        normalized.dependency_index = DependencyIndex::from_edges(normalized.dependencies.clone());
-        normalized.warnings.sort();
-        normalized.warnings.dedup();
-
-        self.write_layer_file_atomic(manifest_path, serde_json::to_vec(&normalized)?)
+        self.write_layer_file_atomic(manifest_path, serde_json::to_vec(manifest)?)
             .with_context(|| {
                 format!("failed to write layer manifest {}", manifest_path.display())
             })?;
@@ -342,7 +437,6 @@ impl LayerCacheStore {
             && is_safe_digest_file_component(&manifest.payload_digest.value)
             && is_supported_validation_label(&manifest.validation)
             && dependencies_match_layer_key(manifest)
-            && dependency_index_matches_dependencies(manifest)
             && invalidation_allows_manifest_reuse(manifest, key)
     }
 
@@ -458,9 +552,10 @@ impl LayerCacheStore {
             ) else {
                 continue;
             };
-            let Ok(manifest) = serde_json::from_str::<LayerCacheManifest>(&raw_manifest) else {
+            let Ok(mut manifest) = serde_json::from_str::<LayerCacheManifest>(&raw_manifest) else {
                 continue;
             };
+            manifest.canonicalize_dependency_sources();
             if layer_keys_share_identity(&manifest.key, key)
                 && !invalidation_allows_manifest_reuse(&manifest, key)
             {
@@ -489,7 +584,7 @@ impl LayerCacheStore {
     where
         T: Serialize,
     {
-        self.write_json_inner(key, manifest, value)
+        self.write_json_bytes_inner(key, manifest, serde_json::to_vec(value)?)
     }
 
     #[cfg(test)]
@@ -501,7 +596,7 @@ impl LayerCacheStore {
     where
         T: Serialize,
     {
-        self.write_json_inner(&manifest.key, manifest, value)
+        self.write_json_bytes_inner(&manifest.key, manifest, serde_json::to_vec(value)?)
     }
 }
 
@@ -542,19 +637,28 @@ fn dependencies_match_layer_key(manifest: &LayerCacheManifest) -> bool {
     if requires_dependencies && manifest.dependencies.is_empty() {
         return false;
     }
-    manifest.dependencies.iter().all(|edge| {
-        matches!(
-            &edge.from,
-            CacheNode::Layer(layer_key) if layer_key == &manifest.key
-        )
-    })
+    manifest
+        .dependencies
+        .iter()
+        .all(|edge| dependency_source_matches_manifest(edge, manifest))
 }
 
-fn dependency_index_matches_dependencies(manifest: &LayerCacheManifest) -> bool {
-    manifest.dependency_index == DependencyIndex::from_edges(manifest.dependencies.clone())
+fn dependency_source_matches_manifest(
+    edge: &DependencyEdge,
+    manifest: &LayerCacheManifest,
+) -> bool {
+    match &edge.from {
+        CacheNode::Input(value) => value == MANIFEST_LAYER_DEPENDENCY_SOURCE,
+        CacheNode::Layer(layer_key) => layer_key == &manifest.key,
+        _ => false,
+    }
 }
 
 fn invalidation_allows_manifest_reuse(manifest: &LayerCacheManifest, key: &LayerKey) -> bool {
+    if manifest.key == *key {
+        return true;
+    }
+
     let plan = invalidation_plan_for_manifest(manifest, key);
     plan.affected_nodes.is_empty()
         && plan
@@ -568,7 +672,21 @@ fn invalidation_plan_for_manifest(
     key: &LayerKey,
 ) -> InvalidationPlan {
     let change_set = manifest_change_set(manifest, key);
-    InvalidationPlan::from_change_set(&manifest.dependency_index, &change_set)
+    let dependency_index = DependencyIndex::from_edges(expanded_manifest_dependencies(manifest));
+    InvalidationPlan::from_change_set(&dependency_index, &change_set)
+}
+
+fn expanded_manifest_dependencies(manifest: &LayerCacheManifest) -> Vec<DependencyEdge> {
+    let from = CacheNode::Layer(manifest.key.clone());
+    manifest
+        .dependencies
+        .iter()
+        .cloned()
+        .map(|mut edge| {
+            edge.from = from.clone();
+            edge
+        })
+        .collect()
 }
 
 fn manifest_change_set(manifest: &LayerCacheManifest, key: &LayerKey) -> ChangeSet {
@@ -797,8 +915,8 @@ fn evict_file(path: &Path) {
 mod tests {
     use super::*;
     use crate::analysis_kernel::incremental::{
-        CacheNode, DependencyEdge, DependencyIndex, DependencyKind, Digest, DigestKind, LayerKey,
-        PrecisionTier, ShapeKind,
+        CacheNode, DependencyEdge, DependencyKind, Digest, DigestKind, LayerKey, PrecisionTier,
+        ShapeKind,
     };
 
     #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -913,6 +1031,12 @@ mod tests {
         assert_eq!(outcome.status, LayerCacheReadStatus::Hit);
         assert_eq!(outcome.value, Some(payload));
         assert_eq!(outcome.output_digest, Some(manifest.output_digest));
+        assert_eq!(
+            outcome.manifest.as_ref().and_then(|manifest| {
+                manifest.dependencies.first().map(|edge| edge.from.clone())
+            }),
+            Some(relative_manifest_dependency_source())
+        );
         assert!(
             store
                 .blobs_dir_for_test()
@@ -1017,11 +1141,20 @@ mod tests {
         let json = serde_json::to_value(manifest).expect("manifest should serialize");
 
         assert_eq!(json["manifest_schema"], "polint-layer-cache-manifest-2");
-        assert_eq!(
-            json["dependency_index"]["schema_version"],
-            "polint-dependency-index-1"
+        assert_eq!(json["dependency_index_schema"], "polint-dependency-index-1");
+        let dependencies = json["dependencies"]
+            .as_array()
+            .expect("manifest dependencies should serialize as rows");
+        assert_eq!(dependencies.len(), 1);
+        assert!(
+            dependencies[0].get("from").is_none(),
+            "manifest dependencies should be stored relative to manifest.key"
         );
+        assert!(dependencies[0].get("to").is_some());
+        assert!(dependencies[0].get("kind").is_some());
+        assert!(dependencies[0].get("required_shape").is_some());
         for forbidden in [
+            "dependency_index",
             concat!("raw_", "source"),
             concat!("source", "_text"),
             concat!("created", "_at"),
@@ -1094,7 +1227,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_same_layer_manifest_is_evicted_on_miss_through_dependency_index() {
+    fn stale_same_layer_manifest_is_evicted_on_miss_through_lazy_dependency_index() {
         let scratch = scratch_dir();
         let store = LayerCacheStore::new(scratch.path().join("layers"), true);
         let payload = Payload {
@@ -1200,35 +1333,6 @@ mod tests {
 
         assert_eq!(
             dependency_index_schema_mismatch.status,
-            LayerCacheReadStatus::InvalidEvicted
-        );
-
-        let manifest = manifest_for_payload(layer_key.clone(), &payload);
-        store.write_json(&manifest, &payload).unwrap();
-        let mut manifest_with_nested_schema_mismatch = manifest;
-        manifest_with_nested_schema_mismatch
-            .dependency_index
-            .schema_version = "old-dependency-index".to_string();
-        write_manifest_only(&store, &layer_key, &manifest_with_nested_schema_mismatch);
-
-        let nested_dependency_index_schema_mismatch: LayerCacheReadOutcome<Payload> =
-            store.read_json(&layer_key);
-
-        assert_eq!(
-            nested_dependency_index_schema_mismatch.status,
-            LayerCacheReadStatus::InvalidEvicted
-        );
-
-        let manifest = manifest_for_payload(layer_key.clone(), &payload);
-        store.write_json(&manifest, &payload).unwrap();
-        let mut manifest_with_mismatched_index = manifest;
-        manifest_with_mismatched_index.dependency_index = DependencyIndex::from_edges(Vec::new());
-        write_manifest_only(&store, &layer_key, &manifest_with_mismatched_index);
-
-        let dependency_index_mismatch: LayerCacheReadOutcome<Payload> = store.read_json(&layer_key);
-
-        assert_eq!(
-            dependency_index_mismatch.status,
             LayerCacheReadStatus::InvalidEvicted
         );
 

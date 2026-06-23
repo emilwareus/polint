@@ -845,7 +845,7 @@ pub struct CallGraph<'a> {
     _db: &'a AnalysisDb,
 }
 
-/// Preview event policy view. Requesting this view maps to provider-backed `events`.
+/// Preview event policy view. Requesting this view maps to lightweight `events`.
 #[derive(Clone, Copy)]
 pub struct Events<'a> {
     db: &'a AnalysisDb,
@@ -854,8 +854,9 @@ pub struct Events<'a> {
 impl<'a> Events<'a> {
     /// Finds events matching `query`.
     ///
-    /// Phase 56 supports call-event matching over the existing call/refined-call
-    /// facts. Other event kinds remain preview vocabulary until backed facts land.
+    /// Supports call-event matching over syntax-derived function calls, upgrading
+    /// to call/refined-call facts when another requested capability already
+    /// builds them. Other event kinds remain preview vocabulary until backed facts land.
     pub fn matching(self, query: EventPattern) -> Vec<PolicyViolation> {
         crate::policy_queries::matching_events(self.db, query)
     }
@@ -877,7 +878,7 @@ impl<'a> Calls<'a> {
     }
 }
 
-/// Preview control-flow policy view. Requesting this view maps to provider-backed `control_flow`.
+/// Preview control-flow policy view. Requesting this view maps to `control_flow`.
 #[derive(Clone, Copy)]
 pub struct ControlFlow<'a> {
     db: &'a AnalysisDb,
@@ -887,8 +888,9 @@ impl<'a> ControlFlow<'a> {
     /// Finds events missing a required guard.
     ///
     /// Phase 57 supports same-function call-event guard checks over private
-    /// call/refined-call facts and CFG operation order where available. Other
-    /// event families remain preview vocabulary until backed facts land.
+    /// refined call facts and CFG-backed operation order, with MIR/source
+    /// ordering as fallback when CFG facts are absent. Other event families
+    /// remain preview vocabulary until backed facts land.
     pub fn missing_guard(self, query: GuardQuery) -> Vec<PolicyViolation> {
         crate::policy_queries::missing_guards(self.db, query)
     }
@@ -896,8 +898,9 @@ impl<'a> ControlFlow<'a> {
     /// Finds lifecycle starts missing required cleanup.
     ///
     /// Phase 57 supports same-function call-event lifecycle checks over private
-    /// call/refined-call facts and CFG operation order where available. Exact
-    /// error-exit and interprocedural resource proof remains deferred.
+    /// refined call facts and CFG-backed operation order, with MIR/source
+    /// ordering as fallback when CFG facts are absent. Exact path, error-exit,
+    /// and interprocedural resource proof remains deferred.
     pub fn missing_cleanup(self, query: LifecycleQuery) -> Vec<PolicyViolation> {
         crate::policy_queries::missing_cleanup(self.db, query)
     }

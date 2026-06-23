@@ -288,10 +288,7 @@ impl AnalysisPlan {
     #[cfg(test)]
     pub(crate) fn full_pipeline_for_test() -> Self {
         Self::from_capability_names_for_test(&[
-            "resolved_imports",
-            "module_graph",
-            "symbols",
-            "references",
+            "dataflow",
             "file_metrics",
             "function_metrics",
             "complexity_metrics",
@@ -676,7 +673,7 @@ fn insert_capability_request(
 
 fn capability_dependencies(capability: &str) -> &'static [&'static str] {
     match capability {
-        "events" | "calls" | "control_flow" | "dataflow" => {
+        "calls" | "control_flow" | "dataflow" => {
             &["resolved_imports", "module_graph", "symbols", "references"]
         }
         "references" => &["symbols"],
@@ -1200,6 +1197,34 @@ mod tests {
                 vec!["test/requested-capabilities".to_string()]
             );
         }
+
+        let events_only = AnalysisPlan::from_capability_names_for_test(&["events"]);
+        assert_eq!(
+            events_only
+                .capabilities()
+                .iter()
+                .map(|planned| planned.capability.as_str())
+                .collect::<Vec<_>>(),
+            vec!["events"],
+            "events-only rules should stay on the lightweight syntax path"
+        );
+
+        let control_flow_only = AnalysisPlan::from_capability_names_for_test(&["control_flow"]);
+        assert_eq!(
+            control_flow_only
+                .capabilities()
+                .iter()
+                .map(|planned| planned.capability.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "control_flow",
+                "module_graph",
+                "references",
+                "resolved_imports",
+                "symbols",
+            ],
+            "control-flow rules need the same graph prerequisites as call rules"
+        );
 
         let diagnostics = plan.diagnostics();
         for capability in ["events", "calls", "control_flow", "dataflow"] {

@@ -41,10 +41,14 @@ evidence, unknown, budget, and template semantics.
 - `ControlFlow<'_>` derives capability `control_flow`
 - `DataFlow<'_>` derives capability `dataflow`
 
-`Events<'_>`, `Calls<'_>`, `ControlFlow<'_>`, and `DataFlow<'_>` are preview
-but provider-backed for their documented scopes: call-event matching,
-reachable-call checks, same-function call-event guard/cleanup checks, and
-bounded source/sink/barrier data-flow checks. A rule can compile, appear in
+`Events<'_>`, `Calls<'_>`, `ControlFlow<'_>`, and `DataFlow<'_>` are preview.
+`Events<'_>` is syntax-first for direct call-event matching and upgrades when
+deeper call facts are already present. `ControlFlow<'_>` uses refined call facts
+and CFG-backed operation order for same-function guard/cleanup checks, with
+MIR/source ordering only as fallback when CFG rows are absent. `Calls<'_>` and
+`DataFlow<'_>` use the deeper provider-backed pipelines for reachable-call
+checks and bounded source/sink/barrier data-flow checks. A rule can compile,
+appear in
 `polint inspect rule --format json`, show derived fact views, and execute
 without `polint/capability` diagnostics when it requests these supported preview
 views.

@@ -100,12 +100,16 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
     let base_output =
         build_semantic_graph_with_ts_direct_bindings(db, &ts_direct_bindings.bindings).normalized();
     let adaptation_models = collect_adaptation_model_input(loaded, &base_output, adaptation_budget);
-    let output = build_semantic_graph_with_ts_direct_bindings_and_adaptation_models(
-        db,
-        &ts_direct_bindings.bindings,
-        &adaptation_models.store,
-    )
-    .normalized();
+    let output = if adaptation_models.store.accepted().is_empty() {
+        base_output
+    } else {
+        build_semantic_graph_with_ts_direct_bindings_and_adaptation_models(
+            db,
+            &ts_direct_bindings.bindings,
+            &adaptation_models.store,
+        )
+        .normalized()
+    };
 
     // Phase 4: digest over the stored stable KEYS (never dense IDs — see
     // `semantic_graph_output_digest`), with the empty-output sentinel.
@@ -133,7 +137,7 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
     // Phase 5-8: store (assigns dense IDs + referentially validates inside
     // from_output). On store error the db keeps its prior state and the facts the
     // digest certifies were not persisted, so return output_digest: None.
-    match db.replace_semantic_graph_facts(output) {
+    match db.replace_normalized_semantic_graph_facts(output) {
         Ok(()) => {
             db.replace_adaptation_model_facts(
                 adaptation_models.store.accepted().to_vec(),

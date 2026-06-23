@@ -345,12 +345,7 @@ pub(crate) fn run_module_topology_core_fixture_for_test(
     let started = std::time::Instant::now();
     let fixture = load_native_fixture(fixture_dir)?;
     let temp = crate::eval::observed::copy_fixture_repo_for_test(&fixture)?;
-    let plan = crate::analysis_plan::AnalysisPlan::from_capability_names_for_test(&[
-        "resolved_imports",
-        "module_graph",
-        "symbols",
-        "references",
-    ]);
+    let plan = crate::analysis_plan::AnalysisPlan::from_capability_names_for_test(&["calls"]);
 
     let cold_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
         &fixture,
@@ -419,12 +414,8 @@ pub(crate) fn run_semantic_mir_core_fixture_for_test(
     let started = std::time::Instant::now();
     let fixture = load_native_fixture(fixture_dir)?;
     let temp = crate::eval::observed::copy_fixture_repo_for_test(&fixture)?;
-    let plan = crate::analysis_plan::AnalysisPlan::from_capability_names_for_test(&[
-        "symbols",
-        "references",
-        "resolved_imports",
-        "module_graph",
-    ]);
+    let plan =
+        crate::analysis_plan::AnalysisPlan::from_capability_names_for_test(&["control_flow"]);
 
     let cold_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
         &fixture,
@@ -473,12 +464,7 @@ pub(crate) fn run_cfg_core_fixture_for_test(
     let started = std::time::Instant::now();
     let fixture = load_native_fixture(fixture_dir)?;
     let temp = crate::eval::observed::copy_fixture_repo_for_test(&fixture)?;
-    let plan = crate::analysis_plan::AnalysisPlan::from_capability_names_for_test(&[
-        "symbols",
-        "references",
-        "resolved_imports",
-        "module_graph",
-    ]);
+    let plan = crate::analysis_plan::AnalysisPlan::from_capability_names_for_test(&["calls"]);
 
     let cold_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
         &fixture,
@@ -537,12 +523,7 @@ pub(crate) fn run_direct_calls_core_fixture_for_test(
     let started = std::time::Instant::now();
     let fixture = load_native_fixture(fixture_dir)?;
     let temp = crate::eval::observed::copy_fixture_repo_for_test(&fixture)?;
-    let plan = crate::analysis_plan::AnalysisPlan::from_capability_names_for_test(&[
-        "symbols",
-        "references",
-        "resolved_imports",
-        "module_graph",
-    ]);
+    let plan = crate::analysis_plan::AnalysisPlan::from_capability_names_for_test(&["calls"]);
 
     let cold_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
         &fixture,
@@ -599,12 +580,7 @@ pub(crate) fn run_abstract_domains_core_fixture_for_test(
     let started = std::time::Instant::now();
     let fixture = load_native_fixture(fixture_dir)?;
     let temp = crate::eval::observed::copy_fixture_repo_for_test(&fixture)?;
-    let plan = crate::analysis_plan::AnalysisPlan::from_capability_names_for_test(&[
-        "symbols",
-        "references",
-        "resolved_imports",
-        "module_graph",
-    ]);
+    let plan = crate::analysis_plan::AnalysisPlan::from_capability_names_for_test(&["calls"]);
 
     let cold_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
         &fixture,
@@ -683,12 +659,7 @@ pub(crate) fn run_direct_summaries_core_fixture_for_test(
     let started = std::time::Instant::now();
     let fixture = load_native_fixture(fixture_dir)?;
     let temp = crate::eval::observed::copy_fixture_repo_for_test(&fixture)?;
-    let plan = crate::analysis_plan::AnalysisPlan::from_capability_names_for_test(&[
-        "symbols",
-        "references",
-        "resolved_imports",
-        "module_graph",
-    ]);
+    let plan = crate::analysis_plan::AnalysisPlan::from_capability_names_for_test(&["calls"]);
 
     let cold_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
         &fixture,
@@ -745,12 +716,7 @@ pub(crate) fn run_direct_summaries_scc_closure_fixture_for_test(
     let started = std::time::Instant::now();
     let fixture = load_native_fixture(fixture_dir)?;
     let temp = crate::eval::observed::copy_fixture_repo_for_test(&fixture)?;
-    let plan = crate::analysis_plan::AnalysisPlan::from_capability_names_for_test(&[
-        "symbols",
-        "references",
-        "resolved_imports",
-        "module_graph",
-    ]);
+    let plan = crate::analysis_plan::AnalysisPlan::from_capability_names_for_test(&["calls"]);
 
     let cold_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
         &fixture,
@@ -807,12 +773,7 @@ pub(crate) fn run_framework_entrypoints_core_fixture_for_test(
     let started = std::time::Instant::now();
     let fixture = load_native_fixture(fixture_dir)?;
     let temp = crate::eval::observed::copy_fixture_repo_for_test(&fixture)?;
-    let plan = crate::analysis_plan::AnalysisPlan::from_capability_names_for_test(&[
-        "symbols",
-        "references",
-        "resolved_imports",
-        "module_graph",
-    ]);
+    let plan = crate::analysis_plan::AnalysisPlan::from_capability_names_for_test(&["calls"]);
 
     let cold_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
         &fixture,
