@@ -465,7 +465,7 @@ mod semantic_mir_provider {
         .expect("write ts");
         let loaded = load_config(temp.path()).expect("default config loads");
         let cache = Cache::new("", false);
-        let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["control_flow"]);
 
         let output = AnalysisKernel::run(KernelInput {
             loaded: &loaded,

@@ -11,6 +11,7 @@ use serde_json::Value;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use super::digest::{Digest, DigestKind};
 use crate::analysis_kernel::ProviderManifest;
@@ -75,9 +76,9 @@ pub(crate) struct LayerKey {
     pub(crate) lifecycle_digest: Digest,
     pub(crate) config_digest: Digest,
     pub(crate) toolchain_digest: Digest,
-    pub(crate) input_digests: Vec<Digest>,
-    pub(crate) dependency_layer_digests: Vec<Digest>,
-    pub(crate) extension_digests: Vec<Digest>,
+    pub(crate) input_digests: Arc<Vec<Digest>>,
+    pub(crate) dependency_layer_digests: Arc<Vec<Digest>>,
+    pub(crate) extension_digests: Arc<Vec<Digest>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -137,9 +138,9 @@ impl LayerKey {
             lifecycle_digest,
             config_digest,
             toolchain_digest,
-            input_digests: sorted_digests(input_digests),
-            dependency_layer_digests: sorted_digests(dependency_layer_digests),
-            extension_digests: sorted_digests(extension_digests),
+            input_digests: Arc::new(sorted_digests(input_digests)),
+            dependency_layer_digests: Arc::new(sorted_digests(dependency_layer_digests)),
+            extension_digests: Arc::new(sorted_digests(extension_digests)),
         }
     }
 
@@ -2530,7 +2531,7 @@ mod tests {
             "polint.go.syntax",
             "2",
             "go-facts-v2",
-            base.input_digests.clone(),
+            base.input_digests.as_ref().clone(),
             base.config_digest.clone(),
             base.lifecycle_digest.clone(),
             base.toolchain_digest.clone(),
@@ -2541,7 +2542,7 @@ mod tests {
             "polint.go.syntax",
             "1",
             "go-facts-v3",
-            base.input_digests.clone(),
+            base.input_digests.as_ref().clone(),
             base.config_digest.clone(),
             base.lifecycle_digest.clone(),
             base.toolchain_digest.clone(),

@@ -1,6 +1,6 @@
 use super::cache_key::abstract_domains_provider_parameter_digest;
 use super::solver::{LocalDomainSolver, SolverInput, SolverPolicy};
-use super::store::DomainOutput;
+use super::store::{DomainMaterialization, DomainOutput};
 use crate::analysis::cfg::ids::BasicBlockId;
 use crate::analysis::ids::{MirBodyId, MirOpId, PlaceId};
 use crate::analysis_kernel::ProviderManifest;
@@ -29,13 +29,75 @@ pub(crate) fn derive_abstract_domains_with_cache_stats(
     module_topology_output_digest: Digest,
     upstream_syntax_output_digests: Vec<Digest>,
 ) -> AbstractDomainsProviderOutput {
+    derive_abstract_domains_with_materialization(
+        db,
+        input_snapshot,
+        manifest,
+        semantic_mir_output_digest,
+        cfg_output_digest,
+        calls_output_digest,
+        symbol_graph_output_digest,
+        module_topology_output_digest,
+        upstream_syntax_output_digests,
+        DomainMaterialization::Full,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn derive_summary_input_abstract_domains_with_cache_stats(
+    db: &mut AnalysisDb,
+    input_snapshot: &InputSnapshot,
+    manifest: &ProviderManifest,
+    semantic_mir_output_digest: Digest,
+    cfg_output_digest: Digest,
+    calls_output_digest: Digest,
+    symbol_graph_output_digest: Digest,
+    module_topology_output_digest: Digest,
+    upstream_syntax_output_digests: Vec<Digest>,
+) -> AbstractDomainsProviderOutput {
+    derive_abstract_domains_with_materialization(
+        db,
+        input_snapshot,
+        manifest,
+        semantic_mir_output_digest,
+        cfg_output_digest,
+        calls_output_digest,
+        symbol_graph_output_digest,
+        module_topology_output_digest,
+        upstream_syntax_output_digests,
+        DomainMaterialization::SummaryInputs,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn derive_abstract_domains_with_materialization(
+    db: &mut AnalysisDb,
+    input_snapshot: &InputSnapshot,
+    manifest: &ProviderManifest,
+    semantic_mir_output_digest: Digest,
+    cfg_output_digest: Digest,
+    calls_output_digest: Digest,
+    symbol_graph_output_digest: Digest,
+    module_topology_output_digest: Digest,
+    upstream_syntax_output_digests: Vec<Digest>,
+    materialization: DomainMaterialization,
+) -> AbstractDomainsProviderOutput {
     let solver = LocalDomainSolver::new(SolverPolicy::deterministic());
-    let result = solver.solve(SolverInput::from(&*db));
+    let result = match materialization {
+        DomainMaterialization::Full => solver.solve(SolverInput::from(&*db)),
+        DomainMaterialization::SummaryInputs => {
+            solver.solve_summary_inputs(SolverInput::from(&*db))
+        }
+    };
     let body_keys = body_stable_key_map(db);
     let block_keys = block_stable_key_map(db);
     let operation_keys = operation_stable_key_map(db);
     let place_keys = place_stable_key_map(db);
-    let output = DomainOutput::from_results_with_place_keys(result.results(), &place_keys);
+    let output = DomainOutput::from_results_with_materialization(
+        result.results(),
+        Some(&place_keys),
+        materialization,
+    );
     let output_digest = abstract_domains_output_digest(
         manifest,
         input_snapshot,
@@ -50,10 +112,11 @@ pub(crate) fn derive_abstract_domains_with_cache_stats(
         &operation_keys,
         &place_keys,
         &output,
+        materialization,
     );
     let mut cache_stats = CacheStats::default();
     cache_stats.record_recompute();
-    db.replace_abstract_domain_facts(output);
+    db.replace_normalized_abstract_domain_facts(output);
 
     AbstractDomainsProviderOutput {
         diagnostics: Vec::new(),
@@ -77,11 +140,13 @@ fn abstract_domains_output_digest(
     operation_keys: &std::collections::BTreeMap<MirOpId, String>,
     place_keys: &std::collections::BTreeMap<PlaceId, String>,
     output: &DomainOutput,
+    materialization: DomainMaterialization,
 ) -> Digest {
     let mut parts = vec![
         format!("provider_id={}", manifest.id),
         format!("provider_version={}", manifest.provider_version()),
         format!("schema={}", manifest.primary_schema_label()),
+        format!("materialization={}", materialization_label(materialization)),
         format!(
             "parameters={}",
             abstract_domains_provider_parameter_digest()
@@ -156,6 +221,13 @@ fn abstract_domains_output_digest(
     parts.sort();
     let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
     Digest::from_parts(DigestKind::ProviderOutput, "abstract_domains_output", &refs)
+}
+
+fn materialization_label(materialization: DomainMaterialization) -> &'static str {
+    match materialization {
+        DomainMaterialization::Full => "full",
+        DomainMaterialization::SummaryInputs => "summary_inputs",
+    }
 }
 
 fn extend_component_parts(parts: &mut Vec<String>, prefix: &str, components: &[InputComponent]) {

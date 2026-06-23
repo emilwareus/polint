@@ -11,7 +11,7 @@ use crate::analysis_kernel::incremental::{
     InputSnapshot, LayerCacheManifest, LayerCacheReadStatus, LayerCacheStore,
     LayerCacheWriteStatus, LayerKey, LayerKind, PrecisionTier, ShapeKind, dependency_layer_digest,
     module_graph_topology_input_digest_rows, module_graph_topology_input_digests,
-    semantic_provider_parameter_digest,
+    relative_manifest_dependency_source, semantic_provider_parameter_digest,
 };
 use crate::analysis_kernel::{FactFamily, ProviderManifest, stable_key_from_parts};
 use crate::analysis_plan::AnalysisPlan;
@@ -1950,13 +1950,13 @@ fn normalized_file_path(file: &SourceFile) -> String {
 }
 
 fn dependency_edge(
-    from: &CacheNode,
+    _from: &CacheNode,
     to: CacheNode,
     kind: DependencyKind,
     required_shape: ShapeKind,
 ) -> DependencyEdge {
     DependencyEdge {
-        from: from.clone(),
+        from: relative_manifest_dependency_source(),
         to,
         kind,
         required_shape,
@@ -2852,10 +2852,12 @@ mod tests {
         assert!(edge_kinds.contains(&DependencyKind::Lifecycle));
         assert!(edge_kinds.contains(&DependencyKind::ProviderSchema));
         assert!(edge_kinds.contains(&DependencyKind::UpstreamLayer));
+        let manifest_source =
+            crate::analysis_kernel::incremental::relative_manifest_dependency_source();
         assert!(edges.iter().any(|edge| matches!(
             (&edge.from, &edge.to, edge.required_shape),
-            (CacheNode::Layer(layer), CacheNode::Input(input), ShapeKind::Import)
-                if layer == &key && input.contains("import:src/app.ts:react")
+            (from, CacheNode::Input(input), ShapeKind::Import)
+                if from == &manifest_source && input.contains("import:src/app.ts:react")
         )));
     }
 
@@ -2898,15 +2900,17 @@ mod tests {
             "pnpm-workspace.yaml",
             "tsconfig.json",
         ] {
+            let manifest_source =
+                crate::analysis_kernel::incremental::relative_manifest_dependency_source();
             assert!(
                 edges.iter().any(|edge| matches!(
                     (&edge.from, &edge.to, edge.kind, edge.required_shape),
                     (
-                        CacheNode::Layer(layer),
+                        from,
                         CacheNode::Input(input),
                         DependencyKind::Input,
                         ShapeKind::ModuleTopology
-                    ) if layer == &key && input.contains(file_name)
+                    ) if from == &manifest_source && input.contains(file_name)
                 )),
                 "missing topology dependency edge for {file_name}"
             );

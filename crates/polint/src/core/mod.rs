@@ -62,7 +62,7 @@ use crate::analysis::refined_calls::provider::REFINED_CALLS_PROVIDER_ID;
 use crate::analysis::refined_calls::store::{RefinedCallOutput, RefinedCallStore};
 use crate::analysis::semantic_graph::constraints::ConstraintFact;
 use crate::analysis::semantic_graph::facts::{SemanticEdgeFact, SemanticNodeFact};
-use crate::analysis::semantic_graph::store::{SemanticGraphOutput, SemanticGraphStore};
+use crate::analysis::semantic_graph::store::SemanticGraphOutput;
 use crate::analysis::solver::budget::BudgetStatus;
 use crate::analysis::solver::facts::DerivedEdgeFact;
 use crate::analysis::solver::store::{SolverOutput, SolverStore};
@@ -111,6 +111,8 @@ use crate::ts::object_model::facts::{
 use crate::ts::object_model::store::{TsObjectModelOutput, TsObjectModelStore};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
@@ -734,8 +736,6 @@ pub struct AnalysisDb {
     evidence_omitted_regions: Vec<EvidenceOmittedRegionFact>,
     evidence_replay_keys: Vec<EvidenceReplayKeyFact>,
     evidence_store: Option<EvidenceStore>,
-    abstract_domain_observations: Vec<DomainObservationFact>,
-    abstract_domain_events: Vec<DomainEventFact>,
     abstract_domain_store: Option<DomainStore>,
     summary_facts: Vec<SummaryFact>,
     summary_events: Vec<SummaryEventFact>,
@@ -907,8 +907,6 @@ impl Default for AnalysisDb {
             evidence_omitted_regions: Vec::new(),
             evidence_replay_keys: Vec::new(),
             evidence_store: None,
-            abstract_domain_observations: Vec::new(),
-            abstract_domain_events: Vec::new(),
             abstract_domain_store: None,
             summary_facts: Vec::new(),
             summary_events: Vec::new(),
@@ -1340,12 +1338,23 @@ impl AnalysisDb {
         self.identity_store.as_ref()
     }
 
+    #[allow(
+        dead_code,
+        reason = "Provider hot paths pass normalized output directly; tests and compatibility callers still use the normalizing entry point."
+    )]
     pub(crate) fn replace_refined_call_facts(
         &mut self,
         output: RefinedCallOutput,
     ) -> Result<(), AnalysisError> {
-        let store = RefinedCallStore::from_output(output)?;
-        self.refined_call_edges = store.edges().to_vec();
+        self.replace_normalized_refined_call_facts(output.normalized())
+    }
+
+    pub(crate) fn replace_normalized_refined_call_facts(
+        &mut self,
+        output: RefinedCallOutput,
+    ) -> Result<(), AnalysisError> {
+        let store = RefinedCallStore::from_normalized_output(output)?;
+        self.refined_call_edges.clear();
         self.refined_call_store = Some(store);
         self.refresh_refined_call_metadata();
         Ok(())
@@ -1383,10 +1392,18 @@ impl AnalysisDb {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn replace_abstract_domain_facts(&mut self, output: DomainOutput) {
         let store = DomainStore::from_output(output);
-        self.abstract_domain_observations = store.observations().to_vec();
-        self.abstract_domain_events = store.events().to_vec();
+        self.replace_abstract_domain_store(store);
+    }
+
+    pub(crate) fn replace_normalized_abstract_domain_facts(&mut self, output: DomainOutput) {
+        let store = DomainStore::from_normalized_output(output);
+        self.replace_abstract_domain_store(store);
+    }
+
+    fn replace_abstract_domain_store(&mut self, store: DomainStore) {
         self.abstract_domain_store = Some(store);
         self.refresh_abstract_domain_metadata();
     }
@@ -1459,7 +1476,11 @@ impl AnalysisDb {
     }
 
     pub(crate) fn refined_call_edges(&self) -> &[RefinedCallEdgeFact] {
-        &self.refined_call_edges
+        if let Some(store) = &self.refined_call_store {
+            store.edges()
+        } else {
+            &self.refined_call_edges
+        }
     }
 
     #[allow(dead_code)]
@@ -1526,11 +1547,17 @@ impl AnalysisDb {
     }
 
     pub(crate) fn abstract_domain_observations(&self) -> &[DomainObservationFact] {
-        &self.abstract_domain_observations
+        self.abstract_domain_store
+            .as_ref()
+            .map(DomainStore::observations)
+            .unwrap_or(&[])
     }
 
     pub(crate) fn abstract_domain_events(&self) -> &[DomainEventFact] {
-        &self.abstract_domain_events
+        self.abstract_domain_store
+            .as_ref()
+            .map(DomainStore::events)
+            .unwrap_or(&[])
     }
 
     #[allow(dead_code)]
@@ -1539,11 +1566,37 @@ impl AnalysisDb {
     }
 
     pub(crate) fn replace_summary_facts(&mut self, output: SummaryOutput) {
+        self.replace_summary_facts_without_metadata(output);
+        self.refresh_summary_metadata();
+    }
+
+    pub(crate) fn replace_summary_facts_without_metadata(&mut self, output: SummaryOutput) {
         let store =
             SummaryStore::from_output(output).expect("summary output should produce a valid store");
-        self.summary_facts = store.all_summaries().to_vec();
-        self.summary_events = store.all_events().to_vec();
+        self.summary_facts.clear();
+        self.summary_events.clear();
         self.summary_store = Some(store);
+    }
+
+    pub(crate) fn merge_summary_facts_without_metadata(
+        &mut self,
+        summaries: &[SummaryFact],
+        events: &[SummaryEventFact],
+    ) {
+        if let Some(store) = &mut self.summary_store {
+            store.merge_updates(summaries, events);
+            self.summary_facts.clear();
+            self.summary_events.clear();
+            return;
+        }
+
+        self.replace_summary_facts_without_metadata(SummaryOutput {
+            summaries: summaries.to_vec(),
+            events: events.to_vec(),
+        });
+    }
+
+    pub(crate) fn refresh_summary_metadata_after_bulk_update(&mut self) {
         self.refresh_summary_metadata();
     }
 
@@ -1560,11 +1613,19 @@ impl AnalysisDb {
     }
 
     pub(crate) fn summary_facts(&self) -> &[SummaryFact] {
-        &self.summary_facts
+        if let Some(store) = &self.summary_store {
+            store.all_summaries()
+        } else {
+            &self.summary_facts
+        }
     }
 
     pub(crate) fn summary_events(&self) -> &[SummaryEventFact] {
-        &self.summary_events
+        if let Some(store) = &self.summary_store {
+            store.all_events()
+        } else {
+            &self.summary_events
+        }
     }
 
     #[allow(dead_code)]
@@ -1667,14 +1728,25 @@ impl AnalysisDb {
     /// ID assignment) and referentially validates every edge endpoint and constraint
     /// node reference — a dangling reference returns [`AnalysisError::InvalidFact`] so
     /// the db is never left holding a malformed graph.
+    #[allow(
+        dead_code,
+        reason = "Provider hot paths pass normalized output directly; tests and compatibility callers still use the normalizing entry point."
+    )]
     pub(crate) fn replace_semantic_graph_facts(
         &mut self,
         output: SemanticGraphOutput,
     ) -> Result<(), AnalysisError> {
-        let store = SemanticGraphStore::from_output(output)?;
-        self.semantic_nodes = store.nodes().to_vec();
-        self.semantic_edges = store.edges().to_vec();
-        self.semantic_constraints = store.constraints().to_vec();
+        self.replace_normalized_semantic_graph_facts(output.normalized())
+    }
+
+    pub(crate) fn replace_normalized_semantic_graph_facts(
+        &mut self,
+        output: SemanticGraphOutput,
+    ) -> Result<(), AnalysisError> {
+        output.validate_references()?;
+        self.semantic_nodes = output.nodes;
+        self.semantic_edges = output.edges;
+        self.semantic_constraints = output.constraints;
         Ok(())
     }
 
@@ -1906,13 +1978,23 @@ impl AnalysisDb {
         &self.unresolved_framework_facts
     }
 
+    #[allow(
+        dead_code,
+        reason = "Compatibility callers can still pass unnormalized aggregate output; providers use the normalized fast path."
+    )]
     pub(crate) fn replace_type_value_alias_facts(&mut self, output: TypeValueAliasOutput) {
-        let output = output.normalized();
-        let type_store = TypeStore::from_output(output.types);
-        let value_store = ValueStore::from_output(output.values);
-        let access_path_store = AccessPathStore::from_output(output.access_paths);
-        let points_to_store = PointsToStore::from_output(output.points_to);
-        let alias_store = AliasStore::from_output(output.aliases);
+        self.replace_normalized_type_value_alias_facts(output.normalized());
+    }
+
+    pub(crate) fn replace_normalized_type_value_alias_facts(
+        &mut self,
+        output: TypeValueAliasOutput,
+    ) {
+        let type_store = TypeStore::from_normalized_output(output.types);
+        let value_store = ValueStore::from_normalized_output(output.values);
+        let access_path_store = AccessPathStore::from_normalized_output(output.access_paths);
+        let points_to_store = PointsToStore::from_normalized_output(output.points_to);
+        let alias_store = AliasStore::from_normalized_output(output.aliases);
 
         self.type_facts = type_store.types().to_vec();
         self.narrowed_type_facts = type_store.narrowed().to_vec();
@@ -2032,46 +2114,59 @@ impl AnalysisDb {
         self.fact_meta.remove_family(FactFamily::CallTarget);
         self.fact_meta.remove_family(FactFamily::UnresolvedCall);
 
-        let site_metadata = self
-            .call_sites
-            .iter()
-            .map(|fact| (fact.id.0, self.call_site_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in site_metadata {
+        for index in 0..self.call_sites.len() {
+            let (run_id, metadata) = {
+                let fact = &self.call_sites[index];
+                (fact.id.0, self.call_site_metadata(fact))
+            };
             self.record_fact_meta(FactFamily::CallSite, run_id, metadata);
         }
 
-        let target_metadata = self
-            .call_targets
-            .iter()
-            .map(|fact| (fact.id.0, self.call_target_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in target_metadata {
+        for index in 0..self.call_targets.len() {
+            let (run_id, metadata) = {
+                let fact = &self.call_targets[index];
+                (fact.id.0, self.call_target_metadata(fact))
+            };
             self.record_fact_meta(FactFamily::CallTarget, run_id, metadata);
         }
 
-        let unresolved_metadata = self
-            .unresolved_calls
-            .iter()
-            .enumerate()
-            .map(|(index, fact)| (index as u64, self.unresolved_call_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in unresolved_metadata {
+        for index in 0..self.unresolved_calls.len() {
+            let (run_id, metadata) = {
+                let fact = &self.unresolved_calls[index];
+                (index as u64, self.unresolved_call_metadata(fact))
+            };
             self.record_fact_meta(FactFamily::UnresolvedCall, run_id, metadata);
         }
+
+        self.finish_fact_meta_insertions(&[
+            FactFamily::CallSite,
+            FactFamily::CallTarget,
+            FactFamily::UnresolvedCall,
+        ]);
     }
 
     fn refresh_refined_call_metadata(&mut self) {
         self.fact_meta.remove_family(FactFamily::RefinedCallEdge);
 
-        let edge_metadata = self
-            .refined_call_edges
-            .iter()
-            .map(|fact| (fact.id.0, self.refined_call_edge_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in edge_metadata {
+        if let Some(store) = self.refined_call_store.take() {
+            for fact in store.edges() {
+                let run_id = fact.id.0;
+                let metadata = self.refined_call_edge_metadata(fact);
+                self.record_fact_meta(FactFamily::RefinedCallEdge, run_id, metadata);
+            }
+            self.refined_call_store = Some(store);
+            self.finish_fact_meta_insertions(&[FactFamily::RefinedCallEdge]);
+            return;
+        }
+
+        for index in 0..self.refined_call_edges.len() {
+            let (run_id, metadata) = {
+                let fact = &self.refined_call_edges[index];
+                (fact.id.0, self.refined_call_edge_metadata(fact))
+            };
             self.record_fact_meta(FactFamily::RefinedCallEdge, run_id, metadata);
         }
+        self.finish_fact_meta_insertions(&[FactFamily::RefinedCallEdge]);
     }
 
     fn refresh_data_flow_metadata(&mut self) {
@@ -2115,6 +2210,13 @@ impl AnalysisDb {
         for (run_id, metadata) in budget_metadata {
             self.record_fact_meta(FactFamily::DataFlowBudget, run_id, metadata);
         }
+
+        self.finish_fact_meta_insertions(&[
+            FactFamily::DataFlowNode,
+            FactFamily::DataFlowEdge,
+            FactFamily::DataFlowModel,
+            FactFamily::DataFlowBudget,
+        ]);
     }
 
     fn refresh_evidence_metadata(&mut self) {
@@ -2204,29 +2306,41 @@ impl AnalysisDb {
         for (run_id, metadata) in replay_metadata {
             self.record_fact_meta(FactFamily::EvidenceReplayKey, run_id, metadata);
         }
+
+        self.finish_fact_meta_insertions(&[
+            FactFamily::EvidenceNode,
+            FactFamily::EvidenceEdge,
+            FactFamily::EvidenceBundle,
+            FactFamily::EvidencePath,
+            FactFamily::EvidenceSlice,
+            FactFamily::EvidenceUnknown,
+            FactFamily::EvidenceOmittedRegion,
+            FactFamily::EvidenceReplayKey,
+        ]);
     }
 
     fn refresh_abstract_domain_metadata(&mut self) {
         self.fact_meta.remove_family(FactFamily::DomainObservation);
         self.fact_meta.remove_family(FactFamily::DomainEvent);
 
-        let observation_metadata = self
-            .abstract_domain_observations
-            .iter()
-            .map(|fact| (fact.id.0, self.domain_observation_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in observation_metadata {
+        let Some(store) = self.abstract_domain_store.take() else {
+            return;
+        };
+
+        for fact in store.observations() {
+            let run_id = fact.id.0;
+            let metadata = self.domain_observation_metadata(fact);
             self.record_fact_meta(FactFamily::DomainObservation, run_id, metadata);
         }
 
-        let event_metadata = self
-            .abstract_domain_events
-            .iter()
-            .map(|fact| (fact.id.0, self.domain_event_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in event_metadata {
+        for fact in store.events() {
+            let run_id = fact.id.0;
+            let metadata = self.domain_event_metadata(fact);
             self.record_fact_meta(FactFamily::DomainEvent, run_id, metadata);
         }
+
+        self.abstract_domain_store = Some(store);
+        self.finish_fact_meta_insertions(&[FactFamily::DomainObservation, FactFamily::DomainEvent]);
     }
 
     fn refresh_summary_metadata(&mut self) {
@@ -2236,26 +2350,57 @@ impl AnalysisDb {
         self.fact_meta.remove_family(FactFamily::SummaryTito);
         self.fact_meta.remove_family(FactFamily::SummaryEvent);
 
-        let summary_metadata = self
-            .summary_facts
-            .iter()
-            .map(|fact| {
+        if let Some(store) = self.summary_store.take() {
+            for fact in store.all_summaries() {
                 let family = summary_domain_to_fact_family(fact.domain);
-                (family, fact.id.0, self.summary_fact_metadata(fact))
-            })
-            .collect::<Vec<_>>();
-        for (family, run_id, metadata) in summary_metadata {
+                let run_id = fact.id.0;
+                let metadata = self.summary_fact_metadata(fact);
+                self.record_fact_meta(family, run_id, metadata);
+            }
+
+            for fact in store.all_events() {
+                let run_id = fact.id.0;
+                let metadata = self.summary_event_metadata(fact);
+                self.record_fact_meta(FactFamily::SummaryEvent, run_id, metadata);
+            }
+
+            self.summary_store = Some(store);
+            self.finish_fact_meta_insertions(&[
+                FactFamily::SummaryControl,
+                FactFamily::SummaryCall,
+                FactFamily::SummaryMemory,
+                FactFamily::SummaryTito,
+                FactFamily::SummaryEvent,
+            ]);
+            return;
+        }
+
+        for index in 0..self.summary_facts.len() {
+            let (family, run_id, metadata) = {
+                let fact = &self.summary_facts[index];
+                (
+                    summary_domain_to_fact_family(fact.domain),
+                    fact.id.0,
+                    self.summary_fact_metadata(fact),
+                )
+            };
             self.record_fact_meta(family, run_id, metadata);
         }
 
-        let event_metadata = self
-            .summary_events
-            .iter()
-            .map(|fact| (fact.id.0, self.summary_event_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in event_metadata {
+        for index in 0..self.summary_events.len() {
+            let (run_id, metadata) = {
+                let fact = &self.summary_events[index];
+                (fact.id.0, self.summary_event_metadata(fact))
+            };
             self.record_fact_meta(FactFamily::SummaryEvent, run_id, metadata);
         }
+        self.finish_fact_meta_insertions(&[
+            FactFamily::SummaryControl,
+            FactFamily::SummaryCall,
+            FactFamily::SummaryMemory,
+            FactFamily::SummaryTito,
+            FactFamily::SummaryEvent,
+        ]);
     }
 
     #[allow(
@@ -2273,6 +2418,7 @@ impl AnalysisDb {
         for (run_id, metadata) in metadata {
             self.record_fact_meta(FactFamily::ExtensionFact, run_id, metadata);
         }
+        self.finish_fact_meta_insertions(&[FactFamily::ExtensionFact]);
     }
 
     fn refresh_adaptation_model_metadata(&mut self) {
@@ -2286,6 +2432,7 @@ impl AnalysisDb {
         for (run_id, metadata) in metadata {
             self.record_fact_meta(FactFamily::AdaptationModel, run_id, metadata);
         }
+        self.finish_fact_meta_insertions(&[FactFamily::AdaptationModel]);
     }
 
     fn refresh_entrypoint_metadata(&mut self) {
@@ -2330,6 +2477,12 @@ impl AnalysisDb {
         for (run_id, metadata) in unresolved_metadata {
             self.record_fact_meta(FactFamily::UnresolvedFramework, run_id, metadata);
         }
+        self.finish_fact_meta_insertions(&[
+            FactFamily::Entrypoint,
+            FactFamily::TrustBoundary,
+            FactFamily::DispatchEdge,
+            FactFamily::UnresolvedFramework,
+        ]);
     }
 
     fn refresh_type_value_alias_metadata(&mut self) {
@@ -2346,77 +2499,80 @@ impl AnalysisDb {
             self.fact_meta.remove_family(family);
         }
 
-        let type_metadata = self
-            .type_facts
-            .iter()
-            .map(|fact| (fact.id.0, self.type_fact_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in type_metadata {
+        for index in 0..self.type_facts.len() {
+            let (run_id, metadata) = {
+                let fact = &self.type_facts[index];
+                (fact.id.0, self.type_fact_metadata(fact))
+            };
             self.record_fact_meta(FactFamily::Type, run_id, metadata);
         }
 
-        let narrowed_metadata = self
-            .narrowed_type_facts
-            .iter()
-            .map(|fact| (fact.id.0, self.narrowed_type_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in narrowed_metadata {
+        for index in 0..self.narrowed_type_facts.len() {
+            let (run_id, metadata) = {
+                let fact = &self.narrowed_type_facts[index];
+                (fact.id.0, self.narrowed_type_metadata(fact))
+            };
             self.record_fact_meta(FactFamily::NarrowedType, run_id, metadata);
         }
 
-        let value_metadata = self
-            .value_facts
-            .iter()
-            .map(|fact| (fact.id.0, self.value_fact_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in value_metadata {
+        for index in 0..self.value_facts.len() {
+            let (run_id, metadata) = {
+                let fact = &self.value_facts[index];
+                (fact.id.0, self.value_fact_metadata(fact))
+            };
             self.record_fact_meta(FactFamily::Value, run_id, metadata);
         }
 
-        let allocation_metadata = self
-            .allocation_tokens
-            .iter()
-            .map(|fact| (fact.id.0, self.allocation_token_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in allocation_metadata {
+        for index in 0..self.allocation_tokens.len() {
+            let (run_id, metadata) = {
+                let fact = &self.allocation_tokens[index];
+                (fact.id.0, self.allocation_token_metadata(fact))
+            };
             self.record_fact_meta(FactFamily::AllocationToken, run_id, metadata);
         }
 
-        let access_path_metadata = self
-            .access_path_facts
-            .iter()
-            .map(|fact| (fact.id.0, self.access_path_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in access_path_metadata {
+        for index in 0..self.access_path_facts.len() {
+            let (run_id, metadata) = {
+                let fact = &self.access_path_facts[index];
+                (fact.id.0, self.access_path_metadata(fact))
+            };
             self.record_fact_meta(FactFamily::AccessPath, run_id, metadata);
         }
 
-        let points_to_constraint_metadata = self
-            .points_to_constraints
-            .iter()
-            .map(|fact| (fact.id.0, self.points_to_constraint_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in points_to_constraint_metadata {
+        for index in 0..self.points_to_constraints.len() {
+            let (run_id, metadata) = {
+                let fact = &self.points_to_constraints[index];
+                (fact.id.0, self.points_to_constraint_metadata(fact))
+            };
             self.record_fact_meta(FactFamily::PointsToConstraint, run_id, metadata);
         }
 
-        let points_to_set_metadata = self
-            .points_to_sets
-            .iter()
-            .map(|fact| (fact.id.0, self.points_to_set_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in points_to_set_metadata {
+        for index in 0..self.points_to_sets.len() {
+            let (run_id, metadata) = {
+                let fact = &self.points_to_sets[index];
+                (fact.id.0, self.points_to_set_metadata(fact))
+            };
             self.record_fact_meta(FactFamily::PointsToSet, run_id, metadata);
         }
 
-        let alias_metadata = self
-            .alias_answers
-            .iter()
-            .map(|fact| (fact.id.0, self.alias_answer_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in alias_metadata {
+        for index in 0..self.alias_answers.len() {
+            let (run_id, metadata) = {
+                let fact = &self.alias_answers[index];
+                (fact.id.0, self.alias_answer_metadata(fact))
+            };
             self.record_fact_meta(FactFamily::AliasAnswer, run_id, metadata);
         }
+
+        self.finish_fact_meta_insertions(&[
+            FactFamily::Type,
+            FactFamily::NarrowedType,
+            FactFamily::Value,
+            FactFamily::AllocationToken,
+            FactFamily::AccessPath,
+            FactFamily::PointsToConstraint,
+            FactFamily::PointsToSet,
+            FactFamily::AliasAnswer,
+        ]);
     }
 
     fn type_fact_metadata(&self, fact: &TypeFact) -> FactMeta {
@@ -2690,40 +2846,28 @@ impl AnalysisDb {
 
     fn summary_fact_metadata(&self, fact: &SummaryFact) -> FactMeta {
         let (precision, confidence) = summary_precision_metadata(fact.status, fact.precision);
-        fact_meta_from_stable_key(
-            summary_domain_to_fact_family(fact.domain),
-            POLINT_DIRECT_SUMMARIES_PROVIDER_ID,
+        FactMeta {
+            stable_key: fact.stable_key.clone(),
+            producer_id: POLINT_DIRECT_SUMMARIES_PROVIDER_ID,
+            layer_id: POLINT_DIRECT_SUMMARIES_PROVIDER_ID,
             precision,
             confidence,
-            fact.stable_key.clone(),
-            stable_parts([
-                ("status", fact.status.as_str().to_string()),
-                ("precision", fact.precision.as_str().to_string()),
-                ("domain", fact.domain.as_str().to_string()),
-                ("callable", fact.callable_stable_key.clone()),
-                ("provenance", fact.provenance.as_str().to_string()),
-                ("payload_digest", fact.payload_digest.clone()),
-            ]),
-        )
+            validation: ValidationStatus::NativeTrusted,
+            payload_digest: summary_fact_payload_metadata_digest(fact),
+        }
     }
 
     fn summary_event_metadata(&self, fact: &SummaryEventFact) -> FactMeta {
         let (precision, confidence) = summary_precision_metadata(fact.status, fact.precision);
-        fact_meta_from_stable_key(
-            FactFamily::SummaryEvent,
-            POLINT_DIRECT_SUMMARIES_PROVIDER_ID,
+        FactMeta {
+            stable_key: fact.stable_key.clone(),
+            producer_id: POLINT_DIRECT_SUMMARIES_PROVIDER_ID,
+            layer_id: POLINT_DIRECT_SUMMARIES_PROVIDER_ID,
             precision,
             confidence,
-            fact.stable_key.clone(),
-            stable_parts([
-                ("status", fact.status.as_str().to_string()),
-                ("precision", fact.precision.as_str().to_string()),
-                ("domain", fact.domain.as_str().to_string()),
-                ("callable", fact.callable_stable_key.clone()),
-                ("event_kind", fact.event_kind.clone()),
-                ("reason", fact.reason.clone()),
-            ]),
-        )
+            validation: ValidationStatus::NativeTrusted,
+            payload_digest: summary_event_payload_metadata_digest(fact),
+        }
     }
 
     fn refresh_cfg_metadata(&mut self) {
@@ -2739,86 +2883,89 @@ impl AnalysisDb {
         self.fact_meta
             .remove_family(FactFamily::UnsupportedControlFlow);
 
-        let function_metadata = self
-            .cfg_functions
-            .iter()
-            .map(|fact| (fact.id.0, self.cfg_function_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in function_metadata {
+        for index in 0..self.cfg_functions.len() {
+            let (run_id, metadata) = {
+                let fact = &self.cfg_functions[index];
+                (fact.id.0, self.cfg_function_metadata(fact))
+            };
             self.record_fact_meta(FactFamily::CfgFunction, run_id, metadata);
         }
 
-        let node_metadata = self
-            .cfg_nodes
-            .iter()
-            .map(|fact| (fact.id.0, self.cfg_node_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in node_metadata {
+        for index in 0..self.cfg_nodes.len() {
+            let (run_id, metadata) = {
+                let fact = &self.cfg_nodes[index];
+                (fact.id.0, self.cfg_node_metadata(fact))
+            };
             self.record_fact_meta(FactFamily::CfgNode, run_id, metadata);
         }
 
-        let block_metadata = self
-            .cfg_blocks
-            .iter()
-            .map(|fact| (fact.id.0, self.cfg_block_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in block_metadata {
+        for index in 0..self.cfg_blocks.len() {
+            let (run_id, metadata) = {
+                let fact = &self.cfg_blocks[index];
+                (fact.id.0, self.cfg_block_metadata(fact))
+            };
             self.record_fact_meta(FactFamily::BasicBlock, run_id, metadata);
         }
 
-        let edge_metadata = self
-            .cfg_edges
-            .iter()
-            .map(|fact| (fact.id.0, self.cfg_edge_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in edge_metadata {
+        for index in 0..self.cfg_edges.len() {
+            let (run_id, metadata) = {
+                let fact = &self.cfg_edges[index];
+                (fact.id.0, self.cfg_edge_metadata(fact))
+            };
             self.record_fact_meta(FactFamily::CfgEdge, run_id, metadata);
         }
 
-        let reachability_metadata = self
-            .cfg_reachability
-            .iter()
-            .map(|fact| (fact.id.0, self.cfg_reachability_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in reachability_metadata {
+        for index in 0..self.cfg_reachability.len() {
+            let (run_id, metadata) = {
+                let fact = &self.cfg_reachability[index];
+                (fact.id.0, self.cfg_reachability_metadata(fact))
+            };
             self.record_fact_meta(FactFamily::CfgReachability, run_id, metadata);
         }
 
-        let dominator_metadata = self
-            .cfg_dominators
-            .iter()
-            .map(|fact| (fact.id.0, self.cfg_dominator_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in dominator_metadata {
+        for index in 0..self.cfg_dominators.len() {
+            let (run_id, metadata) = {
+                let fact = &self.cfg_dominators[index];
+                (fact.id.0, self.cfg_dominator_metadata(fact))
+            };
             self.record_fact_meta(FactFamily::CfgDominator, run_id, metadata);
         }
 
-        let postdominator_metadata = self
-            .cfg_postdominators
-            .iter()
-            .map(|fact| (fact.id.0, self.cfg_postdominator_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in postdominator_metadata {
+        for index in 0..self.cfg_postdominators.len() {
+            let (run_id, metadata) = {
+                let fact = &self.cfg_postdominators[index];
+                (fact.id.0, self.cfg_postdominator_metadata(fact))
+            };
             self.record_fact_meta(FactFamily::CfgPostDominator, run_id, metadata);
         }
 
-        let dependence_metadata = self
-            .cfg_control_dependence
-            .iter()
-            .map(|fact| (fact.id.0, self.cfg_control_dependence_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in dependence_metadata {
+        for index in 0..self.cfg_control_dependence.len() {
+            let (run_id, metadata) = {
+                let fact = &self.cfg_control_dependence[index];
+                (fact.id.0, self.cfg_control_dependence_metadata(fact))
+            };
             self.record_fact_meta(FactFamily::CfgControlDependence, run_id, metadata);
         }
 
-        let unsupported_metadata = self
-            .unsupported_control_flow
-            .iter()
-            .map(|fact| (fact.id.0, self.unsupported_control_flow_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in unsupported_metadata {
+        for index in 0..self.unsupported_control_flow.len() {
+            let (run_id, metadata) = {
+                let fact = &self.unsupported_control_flow[index];
+                (fact.id.0, self.unsupported_control_flow_metadata(fact))
+            };
             self.record_fact_meta(FactFamily::UnsupportedControlFlow, run_id, metadata);
         }
+
+        self.finish_fact_meta_insertions(&[
+            FactFamily::CfgFunction,
+            FactFamily::CfgNode,
+            FactFamily::BasicBlock,
+            FactFamily::CfgEdge,
+            FactFamily::CfgReachability,
+            FactFamily::CfgDominator,
+            FactFamily::CfgPostDominator,
+            FactFamily::CfgControlDependence,
+            FactFamily::UnsupportedControlFlow,
+        ]);
     }
 
     fn refresh_semantic_mir_metadata(&mut self) {
@@ -2828,41 +2975,44 @@ impl AnalysisDb {
         self.fact_meta
             .remove_family(FactFamily::UnsupportedSemantic);
 
-        let body_metadata = self
-            .mir_bodies()
-            .iter()
-            .map(|body| (body.id.0, self.mir_body_metadata(body)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in body_metadata {
+        for index in 0..self.mir_bodies().len() {
+            let (run_id, metadata) = {
+                let body = &self.mir_bodies()[index];
+                (body.id.0, self.mir_body_metadata(body))
+            };
             self.record_fact_meta(FactFamily::MirBody, run_id, metadata);
         }
 
-        let operation_metadata = self
-            .mir_operations()
-            .iter()
-            .map(|operation| (operation.id.0, self.mir_operation_metadata(operation)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in operation_metadata {
+        for index in 0..self.mir_operations().len() {
+            let (run_id, metadata) = {
+                let operation = &self.mir_operations()[index];
+                (operation.id.0, self.mir_operation_metadata(operation))
+            };
             self.record_fact_meta(FactFamily::MirOperation, run_id, metadata);
         }
 
-        let place_metadata = self
-            .mir_places()
-            .iter()
-            .map(|place| (place.id.0, self.place_metadata(place)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in place_metadata {
+        for index in 0..self.mir_places().len() {
+            let (run_id, metadata) = {
+                let place = &self.mir_places()[index];
+                (place.id.0, self.place_metadata(place))
+            };
             self.record_fact_meta(FactFamily::Place, run_id, metadata);
         }
 
-        let unsupported_metadata = self
-            .unsupported_semantics()
-            .iter()
-            .map(|row| (row.id.0, self.unsupported_semantic_metadata(row)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in unsupported_metadata {
+        for index in 0..self.unsupported_semantics().len() {
+            let (run_id, metadata) = {
+                let row = &self.unsupported_semantics()[index];
+                (row.id.0, self.unsupported_semantic_metadata(row))
+            };
             self.record_fact_meta(FactFamily::UnsupportedSemantic, run_id, metadata);
         }
+
+        self.finish_fact_meta_insertions(&[
+            FactFamily::MirBody,
+            FactFamily::MirOperation,
+            FactFamily::Place,
+            FactFamily::UnsupportedSemantic,
+        ]);
     }
 
     fn refresh_module_graph_metadata(&mut self) {
@@ -2896,6 +3046,11 @@ impl AnalysisDb {
         for (run_id, metadata) in edge_metadata {
             self.record_fact_meta(FactFamily::ModuleEdge, run_id, metadata);
         }
+        self.finish_fact_meta_insertions(&[
+            FactFamily::ModuleNode,
+            FactFamily::ResolvedImport,
+            FactFamily::ModuleEdge,
+        ]);
     }
 
     fn refresh_topology_metadata(&mut self) {
@@ -3023,6 +3178,14 @@ impl AnalysisDb {
         for (run_id, metadata) in overlay_metadata {
             self.record_fact_meta(FactFamily::RepoTopologyOverlay, run_id, metadata);
         }
+        self.finish_fact_meta_insertions(&[
+            FactFamily::WorkspaceRoot,
+            FactFamily::TopologyPackage,
+            FactFamily::SourceSet,
+            FactFamily::DependencyRequirement,
+            FactFamily::ResolvedDependencyEdge,
+            FactFamily::RepoTopologyOverlay,
+        ]);
     }
 
     fn refresh_import_to_package_metadata(&mut self) {
@@ -3046,6 +3209,7 @@ impl AnalysisDb {
         for (run_id, metadata) in metadata {
             self.record_fact_meta(FactFamily::ImportToPackage, run_id, metadata);
         }
+        self.finish_fact_meta_insertions(&[FactFamily::ImportToPackage]);
     }
 
     fn refresh_semantic_index_metadata(&mut self) {
@@ -3170,6 +3334,15 @@ impl AnalysisDb {
         for (run_id, metadata) in stable_export_metadata {
             self.record_fact_meta(FactFamily::StableExport, run_id, metadata);
         }
+        self.finish_fact_meta_insertions(&[
+            FactFamily::Scope,
+            FactFamily::SemanticImport,
+            FactFamily::Export,
+            FactFamily::Alias,
+            FactFamily::Resolution,
+            FactFamily::GeneratedSymbol,
+            FactFamily::StableExport,
+        ]);
     }
 
     fn refresh_symbol_graph_metadata(&mut self) {
@@ -3177,32 +3350,34 @@ impl AnalysisDb {
         self.fact_meta.remove_family(FactFamily::Definition);
         self.fact_meta.remove_family(FactFamily::Reference);
 
-        let symbol_metadata = self
-            .symbols
-            .iter()
-            .map(|symbol| (symbol.id.0, self.symbol_fact_metadata(symbol)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in symbol_metadata {
+        for index in 0..self.symbols.len() {
+            let (run_id, metadata) = {
+                let symbol = &self.symbols[index];
+                (symbol.id.0, self.symbol_fact_metadata(symbol))
+            };
             self.record_fact_meta(FactFamily::Symbol, run_id, metadata);
         }
 
-        let definition_metadata = self
-            .definitions
-            .iter()
-            .map(|definition| (definition.id.0, self.definition_fact_metadata(definition)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in definition_metadata {
+        for index in 0..self.definitions.len() {
+            let (run_id, metadata) = {
+                let definition = &self.definitions[index];
+                (definition.id.0, self.definition_fact_metadata(definition))
+            };
             self.record_fact_meta(FactFamily::Definition, run_id, metadata);
         }
 
-        let reference_metadata = self
-            .references
-            .iter()
-            .map(|reference| (reference.id.0, self.reference_fact_metadata(reference)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in reference_metadata {
+        for index in 0..self.references.len() {
+            let (run_id, metadata) = {
+                let reference = &self.references[index];
+                (reference.id.0, self.reference_fact_metadata(reference))
+            };
             self.record_fact_meta(FactFamily::Reference, run_id, metadata);
         }
+        self.finish_fact_meta_insertions(&[
+            FactFamily::Symbol,
+            FactFamily::Definition,
+            FactFamily::Reference,
+        ]);
     }
 
     fn refresh_metric_metadata(&mut self) {
@@ -3239,6 +3414,11 @@ impl AnalysisDb {
         for (run_id, metadata) in complexity_metadata {
             self.record_fact_meta(FactFamily::ComplexityMetric, run_id, metadata);
         }
+        self.finish_fact_meta_insertions(&[
+            FactFamily::FileMetric,
+            FactFamily::FunctionMetric,
+            FactFamily::ComplexityMetric,
+        ]);
     }
 
     fn rebuild_symbol_graph_indexes(&mut self) {
@@ -4085,6 +4265,16 @@ impl AnalysisDb {
         let reference = FactRef::new(family, run_id);
         let _insert = self.fact_meta.insert(reference, meta);
         debug_assert!(self.metadata_for(reference).is_some());
+    }
+
+    fn finish_fact_meta_insertions(&mut self, families: &[FactFamily]) {
+        for family in families {
+            self.fact_meta.finish_family_insertions(*family);
+        }
+    }
+
+    pub(crate) fn finish_all_fact_meta_insertions(&mut self) {
+        self.fact_meta.finish_all_insertions();
     }
 
     fn package_metadata(&self, fact: &PackageFact) -> FactMeta {
@@ -5796,8 +5986,7 @@ fn fact_meta_from_stable_key<const EXTRA: usize>(
     stable_key: String,
     payload_extra_parts: [(&'static str, String); EXTRA],
 ) -> FactMeta {
-    let payload_parts = payload_extra_parts.to_vec();
-    let payload_digest = metadata_payload_digest(&stable_key, &payload_parts);
+    let payload_digest = metadata_payload_digest(&stable_key, &payload_extra_parts);
 
     FactMeta {
         stable_key,
@@ -5819,8 +6008,7 @@ fn fact_meta_from_stable_key_with_validation<const EXTRA: usize>(
     stable_key: String,
     payload_extra_parts: [(&'static str, String); EXTRA],
 ) -> FactMeta {
-    let payload_parts = payload_extra_parts.to_vec();
-    let payload_digest = metadata_payload_digest(&stable_key, &payload_parts);
+    let payload_digest = metadata_payload_digest(&stable_key, &payload_extra_parts);
 
     FactMeta {
         stable_key,
@@ -5857,19 +6045,127 @@ fn stable_parts<const N: usize>(parts: [(&'static str, String); N]) -> [(&'stati
 fn metadata_payload_digest(stable_key: &str, parts: &[(&'static str, String)]) -> String {
     let mut normalized = parts
         .iter()
-        .map(|(label, value)| format!("{label}={}", metadata_value(value)))
+        .map(|(label, value)| (*label, metadata_value(value)))
         .collect::<Vec<_>>();
-    normalized.sort();
+    normalized.sort_by(compare_metadata_parts);
 
-    let mut digest_parts = Vec::with_capacity(normalized.len() + 1);
-    digest_parts.push(stable_key.to_string());
-    digest_parts.extend(normalized);
-    let digest_refs = digest_parts.iter().map(String::as_str).collect::<Vec<_>>();
-    fingerprint(&digest_refs)
+    let mut hash = 0xcbf29ce484222325_u64;
+    fingerprint_part(&mut hash, stable_key.as_bytes());
+    for (label, value) in &normalized {
+        fingerprint_metadata_part(&mut hash, label, value.as_ref());
+    }
+    lower_hex_u64(hash)
 }
 
-fn metadata_value(value: &str) -> String {
-    value.replace('\\', "/")
+fn summary_fact_payload_metadata_digest(fact: &SummaryFact) -> String {
+    let mut hash = 0xcbf29ce484222325_u64;
+    fingerprint_part(&mut hash, fact.stable_key.as_bytes());
+    fingerprint_normalized_metadata_part(&mut hash, "callable", &fact.callable_stable_key);
+    fingerprint_normalized_metadata_part(&mut hash, "domain", fact.domain.as_str());
+    fingerprint_normalized_metadata_part(&mut hash, "payload_digest", &fact.payload_digest);
+    fingerprint_normalized_metadata_part(&mut hash, "precision", fact.precision.as_str());
+    fingerprint_normalized_metadata_part(&mut hash, "provenance", fact.provenance.as_str());
+    fingerprint_normalized_metadata_part(&mut hash, "status", fact.status.as_str());
+    lower_hex_u64(hash)
+}
+
+fn summary_event_payload_metadata_digest(fact: &SummaryEventFact) -> String {
+    let mut hash = 0xcbf29ce484222325_u64;
+    fingerprint_part(&mut hash, fact.stable_key.as_bytes());
+    fingerprint_normalized_metadata_part(&mut hash, "callable", &fact.callable_stable_key);
+    fingerprint_normalized_metadata_part(&mut hash, "domain", fact.domain.as_str());
+    fingerprint_normalized_metadata_part(&mut hash, "event_kind", &fact.event_kind);
+    fingerprint_normalized_metadata_part(&mut hash, "precision", fact.precision.as_str());
+    fingerprint_normalized_metadata_part(&mut hash, "reason", &fact.reason);
+    fingerprint_normalized_metadata_part(&mut hash, "status", fact.status.as_str());
+    lower_hex_u64(hash)
+}
+
+fn lower_hex_u64(value: u64) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(16);
+    for shift in (0..64).step_by(4).rev() {
+        let nibble = ((value >> shift) & 0x0f) as usize;
+        output.push(char::from(HEX[nibble]));
+    }
+    output
+}
+
+fn metadata_value(value: &str) -> Cow<'_, str> {
+    if value.contains('\\') {
+        Cow::Owned(value.replace('\\', "/"))
+    } else {
+        Cow::Borrowed(value)
+    }
+}
+
+fn compare_metadata_parts(
+    left: &(&'static str, Cow<'_, str>),
+    right: &(&'static str, Cow<'_, str>),
+) -> Ordering {
+    let mut index = 0;
+    loop {
+        match (
+            metadata_part_byte(left.0, left.1.as_ref(), index),
+            metadata_part_byte(right.0, right.1.as_ref(), index),
+        ) {
+            (Some(left), Some(right)) => match left.cmp(&right) {
+                Ordering::Equal => index += 1,
+                ordering => return ordering,
+            },
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (None, None) => return Ordering::Equal,
+        }
+    }
+}
+
+fn metadata_part_byte(label: &str, value: &str, index: usize) -> Option<u8> {
+    if index < label.len() {
+        return Some(label.as_bytes()[index]);
+    }
+    if index == label.len() {
+        return Some(b'=');
+    }
+    value.as_bytes().get(index - label.len() - 1).copied()
+}
+
+fn fingerprint_metadata_part(hash: &mut u64, label: &str, value: &str) {
+    for byte in label.as_bytes() {
+        fingerprint_byte(hash, *byte);
+    }
+    fingerprint_byte(hash, b'=');
+    for byte in value.as_bytes() {
+        fingerprint_byte(hash, *byte);
+    }
+    fingerprint_separator(hash);
+}
+
+fn fingerprint_normalized_metadata_part(hash: &mut u64, label: &str, value: &str) {
+    for byte in label.as_bytes() {
+        fingerprint_byte(hash, *byte);
+    }
+    fingerprint_byte(hash, b'=');
+    for byte in value.bytes() {
+        fingerprint_byte(hash, if byte == b'\\' { b'/' } else { byte });
+    }
+    fingerprint_separator(hash);
+}
+
+fn fingerprint_part(hash: &mut u64, bytes: &[u8]) {
+    for byte in bytes {
+        fingerprint_byte(hash, *byte);
+    }
+    fingerprint_separator(hash);
+}
+
+fn fingerprint_byte(hash: &mut u64, byte: u8) {
+    *hash ^= u64::from(byte);
+    *hash = hash.wrapping_mul(0x100000001b3);
+}
+
+fn fingerprint_separator(hash: &mut u64) {
+    fingerprint_byte(hash, 0xff);
 }
 
 fn span_metadata_value(span: &Span) -> String {
@@ -6899,11 +7195,17 @@ pub struct Capabilities {
     pub symbols: bool,
     /// Needs symbol reference facts; this also requires symbol identities.
     pub references: bool,
+    /// Preview policy-level semantic events. Direct call-event matching is syntax-backed and upgrades when deeper call facts are present.
+    pub events: bool,
+    /// Preview policy-level call queries. Bounded reachable-call checks are provider-backed.
+    pub calls: bool,
+    /// Preview policy-level control-flow queries. Same-function guard/lifecycle checks are provider-backed.
+    pub control_flow: bool,
     /// Reserved for future control-flow graph facts. Branch obligations are available through [`Capabilities::branch_obligations`].
     pub cfg: bool,
     /// Reserved for future call graph facts. Direct syntactic calls are available on [`FunctionFact::calls`].
     pub call_graph: bool,
-    /// Reserved for future dataflow facts built on CFG, symbols, and call graph support.
+    /// Preview policy-level data-flow queries. Bounded source/sink/barrier checks are provider-backed.
     pub dataflow: bool,
     /// Needs Go test facts harvested from `_test.go` files.
     pub go_tests: bool,
@@ -6964,6 +7266,21 @@ impl Capabilities {
     pub fn references(mut self) -> Self {
         self.references = true;
         self.symbols = true;
+        self
+    }
+
+    pub fn events(mut self) -> Self {
+        self.events = true;
+        self
+    }
+
+    pub fn calls(mut self) -> Self {
+        self.calls = true;
+        self
+    }
+
+    pub fn control_flow(mut self) -> Self {
+        self.control_flow = true;
         self
     }
 
@@ -7050,6 +7367,9 @@ impl Capabilities {
             ("module_graph", self.module_graph),
             ("symbols", self.symbols),
             ("references", self.references),
+            ("events", self.events),
+            ("calls", self.calls),
+            ("control_flow", self.control_flow),
             ("cfg", self.cfg),
             ("call_graph", self.call_graph),
             ("dataflow", self.dataflow),
@@ -8229,6 +8549,79 @@ mod tests {
         }
     }
 
+    mod summary_fact_metadata {
+        use super::*;
+        use crate::analysis::ids::{SummaryEventId, SummaryId};
+        use crate::analysis::summaries::facts::{
+            SummaryDomainKind, SummaryPrecision, SummaryProvenance, SummaryStatus,
+        };
+
+        #[test]
+        fn fast_summary_fact_digest_matches_generic_metadata_digest() {
+            let fact = SummaryFact {
+                id: SummaryId(0),
+                callable_stable_key: "callable\\key".to_string(),
+                function: FunctionId(1),
+                domain: SummaryDomainKind::CallEffects,
+                status: SummaryStatus::Present,
+                precision: SummaryPrecision::SetupAware,
+                provenance: SummaryProvenance::InterproceduralClosure,
+                payload_digest: "payload\\digest".to_string(),
+                tito_flows: Vec::new(),
+                stable_key: "summary:key".to_string(),
+            };
+
+            let generic = metadata_payload_digest(
+                &fact.stable_key,
+                &stable_parts([
+                    ("status", fact.status.as_str().to_string()),
+                    ("precision", fact.precision.as_str().to_string()),
+                    ("domain", fact.domain.as_str().to_string()),
+                    ("callable", fact.callable_stable_key.clone()),
+                    ("provenance", fact.provenance.as_str().to_string()),
+                    ("payload_digest", fact.payload_digest.clone()),
+                ]),
+            );
+
+            assert_eq!(summary_fact_payload_metadata_digest(&fact), generic);
+        }
+
+        #[test]
+        fn fast_summary_event_digest_matches_generic_metadata_digest() {
+            let fact = SummaryEventFact {
+                id: SummaryEventId(0),
+                callable_stable_key: "callable\\key".to_string(),
+                function: FunctionId(1),
+                domain: SummaryDomainKind::CallEffects,
+                event_kind: "unresolved\\callee".to_string(),
+                reason: "dynamic\\target".to_string(),
+                status: SummaryStatus::Unknown,
+                precision: SummaryPrecision::UnknownTop,
+                stable_key: "summary:event:key".to_string(),
+            };
+
+            let generic = metadata_payload_digest(
+                &fact.stable_key,
+                &stable_parts([
+                    ("status", fact.status.as_str().to_string()),
+                    ("precision", fact.precision.as_str().to_string()),
+                    ("domain", fact.domain.as_str().to_string()),
+                    ("callable", fact.callable_stable_key.clone()),
+                    ("event_kind", fact.event_kind.clone()),
+                    ("reason", fact.reason.clone()),
+                ]),
+            );
+
+            assert_eq!(summary_event_payload_metadata_digest(&fact), generic);
+        }
+
+        #[test]
+        fn lower_hex_u64_is_zero_padded_and_lowercase() {
+            assert_eq!(lower_hex_u64(0), "0000000000000000");
+            assert_eq!(lower_hex_u64(0x0123_4567_89ab_cdef), "0123456789abcdef");
+        }
+    }
+
     mod data_flow_fact_metadata {
         use super::*;
         use crate::analysis::data_flow::facts::{
@@ -9127,6 +9520,29 @@ mod tests {
         );
 
         assert!(ctx.capability_support().entries().is_empty());
+    }
+
+    #[test]
+    fn policy_preview_capabilities_have_distinct_names() {
+        let capabilities = Capabilities::new()
+            .events()
+            .calls()
+            .control_flow()
+            .dataflow()
+            .cfg()
+            .call_graph();
+
+        assert_eq!(
+            capabilities.requested_names().collect::<Vec<_>>(),
+            vec![
+                "events",
+                "calls",
+                "control_flow",
+                "cfg",
+                "call_graph",
+                "dataflow"
+            ]
+        );
     }
 
     #[test]

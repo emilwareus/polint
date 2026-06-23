@@ -7,7 +7,6 @@ use super::facts::{
     SummaryStatus,
 };
 use super::scc::{Scc, SccSchedule};
-use super::store::SummaryOutput;
 use crate::analysis::calls::facts::CallTargetStatus;
 use crate::analysis::ids::{SummaryEventId, SummaryId};
 use crate::analysis_kernel::FactFamily;
@@ -103,6 +102,7 @@ pub(crate) fn close_summaries_by_scc(
         scc_iteration_counts: Vec::new(),
         scc_output_digests: BTreeMap::new(),
     };
+    let mut summary_metadata_dirty = false;
 
     for scc in &schedule.sccs {
         result.total_sccs_processed += 1;
@@ -125,6 +125,7 @@ pub(crate) fn close_summaries_by_scc(
 
             if !scc_summaries.is_empty() || !scc_events.is_empty() {
                 merge_updated_summaries(db, &scc_summaries, &scc_events);
+                summary_metadata_dirty = true;
             }
 
             // Compute the post-merge SCC output digest for backdating.
@@ -150,6 +151,7 @@ pub(crate) fn close_summaries_by_scc(
 
             if !scc_summaries.is_empty() || !scc_events.is_empty() {
                 merge_updated_summaries(db, &scc_summaries, &scc_events);
+                summary_metadata_dirty = true;
             }
 
             // Compute the post-merge SCC output digest for backdating.
@@ -168,6 +170,10 @@ pub(crate) fn close_summaries_by_scc(
             // Record demand query entry
             record_scc_demand_query(demand_engine, scc, &scc_digest, 1, was_backdated);
         }
+    }
+
+    if summary_metadata_dirty {
+        db.refresh_summary_metadata_after_bulk_update();
     }
 
     result
@@ -749,45 +755,7 @@ fn merge_updated_summaries(
     updated: &[SummaryFact],
     events: &[SummaryEventFact],
 ) {
-    // Read all existing summaries
-    let existing_summaries: Vec<SummaryFact> = match db.summary_store() {
-        Some(store) => store.all_summaries().to_vec(),
-        None => Vec::new(),
-    };
-    let existing_events: Vec<SummaryEventFact> = match db.summary_store() {
-        Some(store) => store.all_events().to_vec(),
-        None => Vec::new(),
-    };
-
-    // Build a map of updated summaries keyed by (function, domain)
-    let mut updated_map: BTreeMap<(FunctionId, SummaryDomainKind), &SummaryFact> = BTreeMap::new();
-    for fact in updated {
-        updated_map.insert((fact.function, fact.domain), fact);
-    }
-
-    // Merge: replace existing facts with updated ones where available
-    let mut merged: Vec<SummaryFact> = Vec::new();
-    for existing in &existing_summaries {
-        if let Some(replacement) = updated_map.remove(&(existing.function, existing.domain)) {
-            merged.push(replacement.clone());
-        } else {
-            merged.push(existing.clone());
-        }
-    }
-
-    // Add any remaining new summaries (shouldn't happen typically)
-    for (_, new_fact) in updated_map {
-        merged.push(new_fact.clone());
-    }
-
-    // Merge events
-    let mut merged_events = existing_events;
-    merged_events.extend(events.iter().cloned());
-
-    db.replace_summary_facts(SummaryOutput {
-        summaries: merged,
-        events: merged_events,
-    });
+    db.merge_summary_facts_without_metadata(updated, events);
 }
 
 // ---------------------------------------------------------------------------

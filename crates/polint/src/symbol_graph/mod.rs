@@ -10,7 +10,7 @@ use crate::analysis_kernel::incremental::{
     CacheNode, CacheStats, DependencyEdge, DependencyKind, Digest, DigestKind, InputComponent,
     InputSnapshot, LayerCacheManifest, LayerCacheReadStatus, LayerCacheStore,
     LayerCacheWriteStatus, LayerKey, LayerKind, PrecisionTier, ShapeKind, dependency_layer_digest,
-    semantic_provider_parameter_digest,
+    relative_manifest_dependency_source, semantic_provider_parameter_digest,
 };
 use crate::analysis_plan::AnalysisPlan;
 use crate::cache::Cache;
@@ -163,7 +163,8 @@ pub(crate) fn derive_requested_symbols_with_cache_stats(
         LayerCacheReadStatus::BypassedDisabled => {
             cache_stats.record_disabled_bypass();
             cache_stats.record_recompute();
-            let mut derivation = derive_requested_symbols_uncached(db, loaded, plan);
+            let (mut derivation, _) =
+                derive_requested_symbols_uncached_with_payload(db, loaded, plan);
             derivation.cache_stats = cache_stats;
             derivation
         }
@@ -174,8 +175,9 @@ pub(crate) fn derive_requested_symbols_with_cache_stats(
                 cache_stats.record_invalid_evicted_read();
             }
             cache_stats.record_recompute();
-            let mut derivation = derive_requested_symbols_uncached(db, loaded, plan);
-            let payload = symbol_graph_layer_payload(db, &derivation);
+            let (mut derivation, payload) =
+                derive_requested_symbols_uncached_with_payload(db, loaded, plan);
+            let payload = payload.unwrap_or_else(|| symbol_graph_layer_payload(db, &derivation));
             let dependencies = symbol_graph_layer_dependency_edges(
                 db,
                 &layer_key,
@@ -205,8 +207,16 @@ fn derive_requested_symbols_uncached(
     loaded: &LoadedConfig,
     plan: &AnalysisPlan,
 ) -> SymbolGraphDerivation {
+    derive_requested_symbols_uncached_with_payload(db, loaded, plan).0
+}
+
+fn derive_requested_symbols_uncached_with_payload(
+    db: &mut AnalysisDb,
+    loaded: &LoadedConfig,
+    plan: &AnalysisPlan,
+) -> (SymbolGraphDerivation, Option<SymbolGraphLayerPayload>) {
     if !plan.requests_any_capability(SYMBOL_GRAPH_CAPABILITIES) {
-        return SymbolGraphDerivation::default();
+        return (SymbolGraphDerivation::default(), None);
     }
 
     let mut builder = SymbolGraphBuilder::new();
@@ -255,11 +265,9 @@ fn derive_requested_symbols_uncached(
         .diagnostics
         .extend(capability_diagnostics(&derivation.capability_support));
     sort_symbol_derivation(&mut derivation);
-    derivation.output_digest = Some(symbol_graph_output_digest_for_payload(
-        &symbol_graph_layer_payload(db, &derivation),
-        None,
-    ));
-    derivation
+    let payload = symbol_graph_layer_payload(db, &derivation);
+    derivation.output_digest = Some(symbol_graph_output_digest_for_payload(&payload, None));
+    (derivation, Some(payload))
 }
 
 #[expect(
@@ -659,7 +667,14 @@ fn write_symbol_graph_layer_payload(
     stats: &mut CacheStats,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<Digest> {
-    let payload_digest = match LayerCacheStore::payload_digest_for_json(payload) {
+    let payload_bytes = match serde_json::to_vec(payload) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            diagnostics.push(cache_write_diagnostic("symbol graph layer", error.into()));
+            return None;
+        }
+    };
+    let payload_digest = match LayerCacheStore::payload_digest_for_json_bytes(&payload_bytes) {
         Ok(digest) => digest,
         Err(error) => {
             diagnostics.push(cache_write_diagnostic("symbol graph layer", error));
@@ -677,7 +692,7 @@ fn write_symbol_graph_layer_payload(
         Vec::new(),
     );
 
-    match store.write_json(&manifest, payload) {
+    match store.write_json_bytes(&manifest, payload_bytes) {
         Ok(LayerCacheWriteStatus::Written) => stats.record_write(),
         Ok(LayerCacheWriteStatus::BypassedDisabled) => stats.record_disabled_bypass(),
         Err(error) => diagnostics.push(cache_write_diagnostic("symbol graph layer", error)),
@@ -807,13 +822,13 @@ fn normalized_file_path(file: &SourceFile) -> String {
 }
 
 fn dependency_edge(
-    from: &CacheNode,
+    _from: &CacheNode,
     to: CacheNode,
     kind: DependencyKind,
     required_shape: ShapeKind,
 ) -> DependencyEdge {
     DependencyEdge {
-        from: from.clone(),
+        from: relative_manifest_dependency_source(),
         to,
         kind,
         required_shape,

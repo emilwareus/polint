@@ -1,28 +1,27 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.3
-milestone_name: Graph Engine Precision
-status: milestone_complete
-last_updated: 2026-06-23T16:30:00Z
-last_activity: 2026-06-23
+milestone: v1.4
+milestone_name: Policy Query Surface
+status: complete
+last_updated: "2026-06-20T18:30:15.491Z"
+last_activity: 2026-06-20 -- v1.4 Policy Query Surface completed locally with clean full workspace verification
 progress:
-  total_phases: 13
-  completed_phases: 13
-  total_plans: 50
-  completed_plans: 50
+  total_phases: 8
+  completed_phases: 8
+  total_plans: 24
+  completed_plans: 24
   percent: 100
-stopped_at: Milestone complete (Phase 54 was final phase)
 ---
 
 # State: polint
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (updated 2026-05-27)
+See: `.planning/PROJECT.md` (updated 2026-06-20)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Milestone complete
+**Current focus:** v1.4 Policy Query Surface complete; clean full workspace verification recorded
 
 ## Current Status
 
@@ -32,7 +31,8 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 - v1.1 Capability Fulfillment completed the capability plan, resolved imports/module graph, and symbols/references foundations.
 - Static-analysis engine research completed on 2026-05-16 in `research/ROADMAP.md`.
 - v1.2 Static Analysis Engine Implementation was audited, archived, and closed on 2026-05-27.
-- v1.2 requirements and roadmap were archived to `.planning/milestones/`; a fresh `.planning/REQUIREMENTS.md` should be created by the next milestone.
+- v1.3 Graph Engine Precision completed on 2026-06-06 and its requirements/roadmap are archived to `.planning/milestones/`.
+- v1.4 Policy Query Surface requirements and roadmap are complete in `.planning/REQUIREMENTS.md` and `.planning/ROADMAP.md`.
 - Phase 22 has been shipped for review in PR #22: https://github.com/emilwareus/polint/pull/22.
 - Phase 24 has been shipped for review in PR #25: https://github.com/emilwareus/polint/pull/25.
 - Phase 29 has been shipped for review in PR #34: https://github.com/emilwareus/polint/pull/34.
@@ -41,10 +41,23 @@ See: `.planning/PROJECT.md` (updated 2026-05-27)
 
 ## Current Position
 
-Phase: 54
-Plan: Not started
-Status: Milestone complete
-Last activity: 2026-06-06
+Phase: 62 - Promotion Gate, Boundary Proof, and Closeout
+Plan: 62-03
+Status: Complete
+Last activity: 2026-06-20 -- v1.4 Policy Query Surface completed locally with clean full workspace verification
+
+### Active Milestone Phase Progress
+
+| Phase | Status | Notes |
+|-------|--------|-------|
+| 55 | Complete | SDK query vocabulary and preview contract complete; preview compile/manifest/capability/docs/leak-gate behavior verified |
+| 56 | Complete | Events and calls query surface complete; call-event matching and reachable-call policies are provider-backed, with non-call events/package scopes deferred honestly |
+| 57 | Complete | Control-flow guard and lifecycle queries complete for same-function call-event guard and cleanup policies; write events, exact exit proof, and bounded interprocedural search deferred honestly |
+| 58 | Complete | Data-flow forbidden-flow queries complete for HTTP request trust-boundary sources, secret-like names, exact call sinks, logger sinks, call barriers, unknown/budget evidence, and external rule validation |
+| 59 | Complete | Normalized policy evidence header, query digests, deterministic sorting/deduplication, cap-filtered policy unknowns, cache-version digest inputs, docs, skills, and verification complete |
+| 60 | Complete | `polint new-rule --template` selector, ten flagship policy template bodies, generated positive/negative fixtures, README/docs/skill updates, and focused verification complete |
+| 61 | Complete | Consolidated policy-query docs, cross-links, docs coverage test, external SDK matrix test, and verification complete |
+| 62 | Complete | Boundary proof, deterministic flagship-template regression, final local verification, milestone audit, and closeout complete |
 
 ### Open repo-admin action (T-42-04-10)
 
@@ -623,9 +636,12 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 
 ## Next Action
 
-Push quick task 260607-e7j, then continue recall work on the next largest Jelly blockers.
+Review the local v1.4 commit stack and decide whether to archive the milestone
+with `/gsd-complete-milestone` or start a v1.5 milestone from the Phase 62 audit
+follow-ups. Do not push local commits unless explicitly instructed; CI is
+intentionally avoided during autonomous local commits.
 
 ## Operator Next Steps
 
-- Push the computed-property recall improvements.
-- Pick the next recall slice from `performance/2026-06-06-jelly-gap-closure-research.md`.
+- Review `.planning/phases/62-promotion-gate-boundary-proof-and-closeout/62-MILESTONE-AUDIT.md`.
+- Preserve the current boundary: `Events<'_>`, `Calls<'_>`, `ControlFlow<'_>`, and `DataFlow<'_>` are provider-backed for documented preview scopes; raw `Cfg<'_>`, raw `CallGraph<'_>`, and raw data-flow graph traversal remain private/reserved.

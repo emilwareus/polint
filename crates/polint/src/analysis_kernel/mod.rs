@@ -22,26 +22,40 @@ pub(crate) use provider::{
     CachePolicy, LanguageScope, PrecisionCeiling, ProviderManifest, SchemaVersion,
 };
 
-/// Capabilities whose facts are produced by the interprocedural/semantic provider
-/// pipeline (everything downstream of the module and symbol graphs:
-/// `module_topology`, `semantic_mir`, `cfg`, `calls`, `go.semantic`, `identity`,
-/// `abstract_domains`, summaries, `entrypoints`, `reachability`, `extensions`,
-/// `type_value_alias`, `semantic_graph`, `solver`, `refined_calls`, `data_flow`,
-/// and `evidence`).
-///
-/// No public SDK fact view reads any fact this pipeline emits — the `Cfg`,
-/// `CallGraph`, and `DataFlow` views are reserved/unsupported. So when no enabled
-/// rule requests one of these graph capabilities, the whole pipeline is dead work:
-/// it builds MIR, CFGs, call graphs, points-to and a whole-repo solver state that
-/// nothing consumes. Gating on it lets a syntactic rule set (metrics, imports,
-/// string literals, Go tests) skip the pipeline entirely and avoid its very large
-/// peak-memory cost.
-///
-/// The set mirrors [`module_graph`](crate::module_graph)'s own trigger list so the
-/// invariant "the semantic pipeline runs only when the module/symbol graphs that
-/// feed it also ran" holds by construction.
-const SEMANTIC_PIPELINE_TRIGGER_CAPABILITIES: &[&str] =
-    &["resolved_imports", "module_graph", "symbols", "references"];
+/// Capabilities that require whole-repo discovery even when the deep semantic
+/// pipeline is skipped. Resolved imports, module graph, symbols, and references
+/// are cross-file facts, so file-scoped source loading would change their
+/// meaning.
+const CROSS_FILE_ANALYSIS_TRIGGER_CAPABILITIES: &[&str] = &[
+    "resolved_imports",
+    "module_graph",
+    "symbols",
+    "references",
+    "calls",
+    "control_flow",
+    "dataflow",
+];
+
+/// Capabilities whose facts need local semantic lowering: `semantic_mir` and
+/// direct call-site facts.
+const SEMANTIC_PIPELINE_TRIGGER_CAPABILITIES: &[&str] = &["calls", "control_flow", "dataflow"];
+
+/// Capabilities whose facts need CFG, call targets, and the refined-call
+/// projection. `ControlFlow` consumes these same-function facts directly.
+const CFG_CALL_PIPELINE_TRIGGER_CAPABILITIES: &[&str] = &["calls", "control_flow", "dataflow"];
+
+/// Capabilities whose facts need the expensive interprocedural refinement stack
+/// downstream of calls: Go semantic facts, identity, abstract domains,
+/// summaries, entrypoints/reachability, extensions, type/value aliases,
+/// semantic graph, and solver output. Control-flow policies consume the
+/// resulting refined call graph, so they must preserve the same target
+/// precision as call-graph policies.
+const FULL_REFINEMENT_PIPELINE_TRIGGER_CAPABILITIES: &[&str] =
+    &["calls", "control_flow", "dataflow"];
+
+/// Capabilities that need the data-flow and evidence projections. Reachability
+/// and same-function control-flow policies do not consume these facts.
+const DATA_FLOW_PIPELINE_TRIGGER_CAPABILITIES: &[&str] = &["dataflow"];
 
 pub(crate) struct AnalysisKernel;
 
@@ -74,27 +88,48 @@ impl AnalysisKernel {
     }
 
     pub(crate) fn run(input: KernelInput<'_>) -> anyhow::Result<KernelOutput> {
-        // Gate the interprocedural/semantic pipeline on whether any enabled rule
-        // actually requests a graph capability. Syntactic rule sets skip it wholesale,
-        // which is the dominant memory and CPU cost on large repos. See
-        // `SEMANTIC_PIPELINE_TRIGGER_CAPABILITIES`.
+        // Gate provider work in slices. Cross-file facts keep whole-repo
+        // discovery, but deeper semantic providers only run when a requested
+        // view consumes their outputs. Syntactic rule sets skip all of this,
+        // which is the dominant memory and CPU cost on large repos.
+        let run_cross_file_analysis = input
+            .plan
+            .requests_any_capability(CROSS_FILE_ANALYSIS_TRIGGER_CAPABILITIES);
         let run_semantic_pipeline = input
             .plan
             .requests_any_capability(SEMANTIC_PIPELINE_TRIGGER_CAPABILITIES);
+        let run_cfg_call_pipeline = input
+            .plan
+            .requests_any_capability(CFG_CALL_PIPELINE_TRIGGER_CAPABILITIES);
+        let run_full_refinement_pipeline = input
+            .plan
+            .requests_any_capability(FULL_REFINEMENT_PIPELINE_TRIGGER_CAPABILITIES);
+        let run_data_flow_pipeline = input
+            .plan
+            .requests_any_capability(DATA_FLOW_PIPELINE_TRIGGER_CAPABILITIES);
+        let compact_domain_materialization =
+            Self::directly_requests_any_capability(input.plan, &["control_flow"])
+                && !Self::directly_requests_any_capability(input.plan, &["calls", "dataflow"]);
 
-        // When the semantic pipeline is skipped, the only consumers of a file are the
-        // rules scoped to it (and the syntactic providers feeding those rules). A file
-        // matched by no enabled rule's `files` scope cannot produce any diagnostic, so
-        // we never read or parse it. When the semantic pipeline runs, cross-file
-        // resolution needs the full workspace, so we keep the unscoped discovery.
-        let rule_scope = if run_semantic_pipeline {
+        // When cross-file analysis is skipped, the only consumers of a file are
+        // the rules scoped to it and the syntactic providers feeding those
+        // rules. A file matched by no enabled rule's `files` scope cannot
+        // produce any diagnostic, so we never read or parse it. Cross-file facts
+        // need the full workspace, so they keep unscoped discovery without
+        // forcing the deep semantic provider slices.
+        let rule_scope = if run_cross_file_analysis {
             None
         } else {
             Self::rule_scope_globset(input.plan)
         };
         tracing::info!(
             target: "polint::kernel",
+            run_cross_file_analysis,
             run_semantic_pipeline,
+            run_cfg_call_pipeline,
+            run_full_refinement_pipeline,
+            run_data_flow_pipeline,
+            compact_domain_materialization,
             rule_scoped = rule_scope.is_some(),
             "analysis kernel pipeline gate"
         );
@@ -253,7 +288,7 @@ impl AnalysisKernel {
                 "polint.symbol_graph",
             )
         });
-        let module_topology = if run_semantic_pipeline {
+        let module_topology = if run_cfg_call_pipeline {
             crate::module_graph::derive_module_topology_with_cache_stats(
                 &mut db,
                 input.cache,
@@ -314,7 +349,7 @@ impl AnalysisKernel {
                     "polint.semantic_mir",
                 )
             });
-        let cfg = if run_semantic_pipeline {
+        let cfg = if run_cfg_call_pipeline {
             crate::analysis::cfg::provider::derive_cfg_with_cache_stats(
                 &mut db,
                 &input_snapshot,
@@ -341,7 +376,7 @@ impl AnalysisKernel {
         let cfg_dependency_output_digest = cfg_output_digest.unwrap_or_else(|| {
             incremental::Digest::absent(incremental::DigestKind::ProviderOutput, "polint.cfg")
         });
-        let calls = if run_semantic_pipeline {
+        let calls = if run_cfg_call_pipeline {
             crate::analysis::calls::provider::derive_calls_with_cache_stats(
                 &mut db,
                 &input_snapshot,
@@ -350,6 +385,18 @@ impl AnalysisKernel {
                 cfg_dependency_output_digest.clone(),
                 symbol_dependency_output_digest.clone(),
                 module_topology_dependency_output_digest.clone(),
+                vec![
+                    go_dependency_output_digest.clone(),
+                    ts_dependency_output_digest.clone(),
+                ],
+            )
+        } else if run_semantic_pipeline {
+            crate::analysis::calls::provider::derive_call_sites_with_cache_stats(
+                &mut db,
+                &input_snapshot,
+                Self::provider_manifest("polint.calls"),
+                semantic_mir_dependency_output_digest.clone(),
+                cfg_dependency_output_digest.clone(),
                 vec![
                     go_dependency_output_digest.clone(),
                     ts_dependency_output_digest.clone(),
@@ -372,7 +419,7 @@ impl AnalysisKernel {
             incremental::Digest::absent(incremental::DigestKind::ProviderOutput, "polint.calls")
         });
 
-        let go_semantic = if run_semantic_pipeline {
+        let go_semantic = if run_full_refinement_pipeline {
             crate::go::semantic::provider::derive_go_semantic_with_cache_stats(
                 &mut db,
                 input.loaded,
@@ -399,7 +446,7 @@ impl AnalysisKernel {
             )
         });
 
-        let identity = if run_semantic_pipeline {
+        let identity = if run_full_refinement_pipeline {
             crate::analysis::identity::provider::derive_identity_with_cache_stats(
                 &mut db,
                 &input_snapshot,
@@ -423,7 +470,22 @@ impl AnalysisKernel {
             incremental::Digest::absent(incremental::DigestKind::ProviderOutput, "polint.identity")
         });
 
-        let abstract_domains = if run_semantic_pipeline {
+        let abstract_domains = if run_full_refinement_pipeline && compact_domain_materialization {
+            crate::analysis::domains::provider::derive_summary_input_abstract_domains_with_cache_stats(
+                &mut db,
+                &input_snapshot,
+                Self::provider_manifest("polint.abstract_domains"),
+                semantic_mir_dependency_output_digest.clone(),
+                cfg_dependency_output_digest.clone(),
+                calls_dependency_output_digest.clone(),
+                symbol_dependency_output_digest.clone(),
+                module_topology_dependency_output_digest.clone(),
+                vec![
+                    go_dependency_output_digest.clone(),
+                    ts_dependency_output_digest.clone(),
+                ],
+            )
+        } else if run_full_refinement_pipeline {
             crate::analysis::domains::provider::derive_abstract_domains_with_cache_stats(
                 &mut db,
                 &input_snapshot,
@@ -463,7 +525,7 @@ impl AnalysisKernel {
         let entrypoints_calls_digest = calls_dependency_output_digest.clone();
         let entrypoints_symbol_digest = symbol_dependency_output_digest.clone();
         let entrypoints_topology_digest = module_topology_dependency_output_digest.clone();
-        let direct_summaries = if run_semantic_pipeline {
+        let direct_summaries = if run_full_refinement_pipeline {
             crate::analysis::summaries::provider::derive_direct_summaries_with_cache_stats(
                 &mut db,
                 &input_snapshot,
@@ -487,7 +549,7 @@ impl AnalysisKernel {
 
         // SCC closure: interprocedural summary improvement over SCCs.
         // Runs after direct summaries so callee summaries are available.
-        let scc_closure = if run_semantic_pipeline {
+        let scc_closure = if run_full_refinement_pipeline {
             crate::analysis::summaries::provider::run_scc_closure_with_cache(
                 &mut db,
                 input.cache,
@@ -529,7 +591,7 @@ impl AnalysisKernel {
             Some(direct_summaries_output_digest.clone()),
         ));
 
-        let entrypoints = if run_semantic_pipeline {
+        let entrypoints = if run_full_refinement_pipeline {
             crate::analysis::entrypoints::provider::derive_entrypoints_with_cache_stats(
                 &mut db,
                 &input_snapshot,
@@ -567,7 +629,7 @@ impl AnalysisKernel {
 
         // polint.reachability runs immediately after polint.entrypoints (D-19),
         // consuming the calls/entrypoints/identity/symbol/topology output digests.
-        let reachability = if run_semantic_pipeline {
+        let reachability = if run_full_refinement_pipeline {
             crate::analysis::reachability::provider::derive_reachability_with_cache_stats(
                 &mut db,
                 &input_snapshot,
@@ -601,7 +663,7 @@ impl AnalysisKernel {
             reachability_output_digest,
         ));
 
-        let extensions = if run_semantic_pipeline {
+        let extensions = if run_full_refinement_pipeline {
             crate::analysis::extensions::provider::derive_extension_provider_outputs_with_cache_stats(
                 &mut db,
                 &input.loaded.root,
@@ -627,7 +689,7 @@ impl AnalysisKernel {
             )
         });
 
-        let type_value_alias = if run_semantic_pipeline {
+        let type_value_alias = if run_full_refinement_pipeline {
             crate::analysis::types::provider::derive_type_value_alias_with_cache_stats(
                 &mut db,
                 &input_snapshot,
@@ -686,7 +748,7 @@ impl AnalysisKernel {
         // graph from already-stored facts plus repo-local adaptation models, and folds
         // every consumed upstream provider output digest into its own output digest
         // (D-17).
-        let semantic_graph = if run_semantic_pipeline {
+        let semantic_graph = if run_full_refinement_pipeline {
             crate::analysis::semantic_graph::provider::derive_semantic_graph_with_cache_stats(
                 &mut db,
                 input.loaded,
@@ -740,7 +802,7 @@ impl AnalysisKernel {
         // upstream change invalidates the solver cache" was false). Auto-enrolls in the
         // Phase 43 determinism gate (D-14). Thread the per-language solver config into
         // SolverBudget (D-10/D-11).
-        let solver = if run_semantic_pipeline {
+        let solver = if run_full_refinement_pipeline {
             crate::analysis::solver::provider::derive_solver_with_cache_stats(
                 &mut db,
                 &input_snapshot,
@@ -766,7 +828,7 @@ impl AnalysisKernel {
             incremental::Digest::absent(incremental::DigestKind::ProviderOutput, "polint.solver")
         });
 
-        let refined_calls = if run_semantic_pipeline {
+        let refined_calls = if run_cfg_call_pipeline {
             crate::analysis::refined_calls::provider::derive_refined_calls_with_cache_stats(
                 &mut db,
                 &input_snapshot,
@@ -798,7 +860,7 @@ impl AnalysisKernel {
                     "polint.refined_calls",
                 )
             });
-        let data_flow = if run_semantic_pipeline {
+        let data_flow = if run_data_flow_pipeline {
             crate::analysis::data_flow::provider::derive_data_flow_with_cache_stats(
                 &mut db,
                 &input_snapshot,
@@ -828,7 +890,7 @@ impl AnalysisKernel {
         let data_flow_dependency_output_digest = data_flow_output_digest.unwrap_or_else(|| {
             incremental::Digest::absent(incremental::DigestKind::ProviderOutput, "polint.data_flow")
         });
-        let evidence = if run_semantic_pipeline {
+        let evidence = if run_data_flow_pipeline {
             crate::analysis::evidence::provider::derive_evidence_with_cache_stats(
                 &mut db,
                 &input_snapshot,
@@ -877,6 +939,7 @@ impl AnalysisKernel {
         let validation_diagnostics =
             validation::validate_fact_metadata(&db, Self::provider_manifests());
         diagnostics.extend(validation_diagnostics);
+        db.finish_all_fact_meta_insertions();
         let run_report = incremental::KernelRunReport::new(
             input_snapshot,
             provider_outputs,
@@ -987,6 +1050,14 @@ impl AnalysisKernel {
             .find(|manifest| manifest.id == provider_id)
             .unwrap_or_else(|| panic!("missing provider manifest {provider_id}"))
     }
+
+    fn directly_requests_any_capability(plan: &AnalysisPlan, capabilities: &[&str]) -> bool {
+        plan.rules().iter().any(|rule| {
+            rule.requested_capabilities
+                .iter()
+                .any(|requested| capabilities.contains(&requested.as_str()))
+        })
+    }
 }
 
 fn provider_output_summary_parts(db: &AnalysisDb, manifest: &ProviderManifest) -> Vec<String> {
@@ -1030,6 +1101,7 @@ mod tests {
         SymbolPrecision, SymbolResolutionStatus, TestFact, TsClassFact, TsComponentFact,
     };
     use std::path::{Path, PathBuf};
+    use std::time::Instant;
 
     fn span(file: crate::core::FileId, start_byte: u32) -> Span {
         Span {
@@ -1523,7 +1595,7 @@ mod tests {
         .expect("write app");
         let loaded = load_config(temp.path()).expect("default config loads");
         let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
-        let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["calls"]);
 
         let first = AnalysisKernel::run(KernelInput {
             loaded: &loaded,
@@ -1589,7 +1661,7 @@ mod tests {
         .expect("write ts");
         let loaded = load_config(temp.path()).expect("default config loads");
         let cache = Cache::new("", false);
-        let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["calls"]);
 
         let output = AnalysisKernel::run(KernelInput {
             loaded: &loaded,
@@ -1617,7 +1689,7 @@ mod tests {
         .expect("write ts");
         let loaded = load_config(temp.path()).expect("default config loads");
         let cache = Cache::new("", false);
-        let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["calls"]);
 
         let output = AnalysisKernel::run(KernelInput {
             loaded: &loaded,
@@ -1645,7 +1717,7 @@ mod tests {
         .expect("write ts");
         let loaded = load_config(temp.path()).expect("default config loads");
         let cache = Cache::new("", false);
-        let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["control_flow"]);
 
         let output = AnalysisKernel::run(KernelInput {
             loaded: &loaded,
@@ -1781,6 +1853,377 @@ mod tests {
         let semantic_mir = provider_output(&output, "polint.semantic_mir");
         assert_eq!(semantic_mir.cache_stats.recomputes, 0);
         assert!(!semantic_mir.output_digest.value.is_empty());
+    }
+
+    #[test]
+    fn events_only_plan_stays_off_semantic_pipeline() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join("app.ts"),
+            "export function app() { fetch('/health'); }\n",
+        )
+        .expect("write ts");
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let cache = Cache::new("", false);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["events"]);
+
+        let output = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("kernel should run");
+
+        assert_eq!(
+            provider_output(&output, "polint.semantic_mir")
+                .cache_stats
+                .recomputes,
+            0
+        );
+        assert_eq!(
+            provider_output(&output, "polint.calls")
+                .cache_stats
+                .recomputes,
+            0
+        );
+        assert_eq!(
+            provider_output(&output, "polint.refined_calls")
+                .cache_stats
+                .recomputes,
+            0
+        );
+        assert_eq!(
+            provider_output(&output, "polint.data_flow")
+                .cache_stats
+                .recomputes,
+            0
+        );
+        assert_eq!(
+            provider_output(&output, "polint.evidence")
+                .cache_stats
+                .recomputes,
+            0
+        );
+    }
+
+    #[test]
+    fn symbols_and_references_stay_off_semantic_pipeline() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join("app.ts"),
+            "export function app() { return 42; }\nexport const value = app();\n",
+        )
+        .expect("write ts");
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let cache = Cache::new("", false);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
+
+        let output = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("kernel should run");
+
+        assert_eq!(
+            provider_output(&output, "polint.symbol_graph")
+                .cache_stats
+                .recomputes,
+            1
+        );
+        for provider_id in [
+            "polint.module_topology",
+            "polint.semantic_mir",
+            "polint.cfg",
+            "polint.calls",
+            "polint.refined_calls",
+            "polint.data_flow",
+            "polint.evidence",
+        ] {
+            assert_eq!(
+                provider_output(&output, provider_id).cache_stats.recomputes,
+                0,
+                "{provider_id} should stay off for symbols/references-only plans"
+            );
+        }
+    }
+
+    #[test]
+    fn control_flow_plan_keeps_cfg_and_refined_call_facts() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join("app.ts"),
+            "function authorize() {}\nfunction dangerous() {}\nexport function app(input: boolean) { if (input) { authorize(); } dangerous(); }\n",
+        )
+        .expect("write ts");
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let cache = Cache::new("", false);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["control_flow"]);
+
+        let output = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("kernel should run");
+
+        for provider_id in [
+            "polint.semantic_mir",
+            "polint.cfg",
+            "polint.calls",
+            "polint.go.semantic",
+            "polint.identity",
+            "polint.abstract_domains",
+            "polint.direct_summaries",
+            "polint.entrypoints",
+            "polint.reachability",
+            "polint.extensions",
+            "polint.type_value_alias",
+            "polint.semantic_graph",
+            "polint.solver",
+            "polint.refined_calls",
+        ] {
+            assert_eq!(
+                provider_output(&output, provider_id).cache_stats.recomputes,
+                1,
+                "{provider_id} should run for control-flow plans"
+            );
+        }
+        assert!(
+            !output.db.call_sites().is_empty(),
+            "control-flow plans should derive call-site facts"
+        );
+        assert!(
+            !output.db.refined_call_edges().is_empty(),
+            "control-flow plans should keep refined call edges for semantic target matching"
+        );
+        assert!(
+            !output.db.cfg_nodes().is_empty(),
+            "control-flow plans should derive CFG nodes for control ordering"
+        );
+        assert!(
+            !output.db.cfg_reachability().is_empty(),
+            "control-flow plans should derive CFG reachability rows"
+        );
+        assert!(
+            !output.db.cfg_dominators().is_empty(),
+            "control-flow plans should derive CFG dominator rows"
+        );
+        assert!(
+            !output.db.cfg_postdominators().is_empty(),
+            "control-flow plans should derive CFG postdominator rows"
+        );
+        for provider_id in ["polint.data_flow", "polint.evidence"] {
+            assert_eq!(
+                provider_output(&output, provider_id).cache_stats.recomputes,
+                0,
+                "{provider_id} should stay off unless a dataflow rule asks for it"
+            );
+        }
+    }
+
+    #[test]
+    fn calls_plan_keeps_full_cfg_relation_rows() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join("app.ts"),
+            "export function app(input: string) { if (input) { dangerous(); } cleanup(); }\n",
+        )
+        .expect("write ts");
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let cache = Cache::new("", false);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["calls"]);
+
+        let output = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("kernel should run");
+
+        assert_eq!(
+            provider_output(&output, "polint.cfg")
+                .cache_stats
+                .recomputes,
+            1
+        );
+        assert!(
+            !output.db.cfg_reachability().is_empty(),
+            "calls plans should still derive full CFG relation rows"
+        );
+        assert!(
+            !output.db.cfg_postdominators().is_empty(),
+            "calls plans should keep postdominator rows for downstream refinements"
+        );
+    }
+
+    #[test]
+    #[ignore = "synthetic performance smoke; run manually with POLINT_SYNTHETIC_FILES=N"]
+    fn control_flow_synthetic_refined_pipeline_benchmark() {
+        let file_count = std::env::var("POLINT_SYNTHETIC_FILES")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(100);
+        if file_count > 500 && std::env::var_os("POLINT_SYNTHETIC_ALLOW_LARGE").is_none() {
+            panic!(
+                "refusing to generate {file_count} files without POLINT_SYNTHETIC_ALLOW_LARGE=1"
+            );
+        }
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let src = temp.path().join("src");
+        std::fs::create_dir_all(&src).expect("create src");
+        for index in 0..file_count {
+            std::fs::write(
+                src.join(format!("route_{index:05}.ts")),
+                format!(
+                    "\
+export function route_{index}(input: string) {{
+  authorize(input);
+  fetch(`/api/${{input}}`);
+  cleanup(input);
+}}
+
+function authorize(value: string) {{ return value.length > 0; }}
+function cleanup(value: string) {{ return value.trim(); }}
+"
+                ),
+            )
+            .expect("write synthetic file");
+        }
+
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let cache_enabled = std::env::var_os("POLINT_SYNTHETIC_CACHE").is_some();
+        let cache_root = std::env::var_os("POLINT_SYNTHETIC_CACHE_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| temp.path().join(".polint-cache"));
+        let cache = Cache::new(cache_root, cache_enabled);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["control_flow"]);
+
+        let started = Instant::now();
+        let output = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: true,
+        })
+        .expect("kernel should run");
+        let elapsed = started.elapsed();
+
+        eprintln!(
+            "control_flow refined synthetic: files={} functions={} mir_ops={} cfg_nodes={} call_sites={} refined_edges={} domain_obs={} summary_facts={} semantic_nodes={} semantic_edges={} semantic_constraints={} type_facts={} points_to_constraints={} points_to_sets={} solver_edges={} metadata_rows={} elapsed_ms={:.3}",
+            output.db.files().len(),
+            output.db.functions().len(),
+            output.db.mir_operations().len(),
+            output.db.cfg_nodes().len(),
+            output.db.call_sites().len(),
+            output.db.refined_call_edges().len(),
+            output.db.abstract_domain_observations().len(),
+            output.db.summary_facts().len(),
+            output.db.semantic_nodes().len(),
+            output.db.semantic_edges().len(),
+            output.db.semantic_constraints().len(),
+            output.db.type_facts().len(),
+            output.db.points_to_constraints().len(),
+            output.db.points_to_sets().len(),
+            output.db.solver_derived_edges().len(),
+            output.db.fact_meta().rows().count(),
+            elapsed.as_secs_f64() * 1000.0
+        );
+        for provider_id in [
+            "polint.module_graph",
+            "polint.symbol_graph",
+            "polint.semantic_mir",
+            "polint.cfg",
+            "polint.calls",
+            "polint.go.semantic",
+            "polint.identity",
+            "polint.abstract_domains",
+            "polint.direct_summaries",
+            "polint.entrypoints",
+            "polint.reachability",
+            "polint.extensions",
+            "polint.type_value_alias",
+            "polint.semantic_graph",
+            "polint.solver",
+            "polint.refined_calls",
+        ] {
+            let stats = &provider_output(&output, provider_id).cache_stats;
+            if cache_enabled {
+                assert!(
+                    stats.recomputes == 1 || stats.hits + stats.verified_reuse > 0,
+                    "{provider_id} should recompute or reuse cache for synthetic control-flow benchmark"
+                );
+            } else {
+                assert_eq!(
+                    stats.recomputes, 1,
+                    "{provider_id} should run for synthetic control-flow benchmark"
+                );
+            }
+        }
+        for provider_id in ["polint.data_flow", "polint.evidence"] {
+            assert_eq!(
+                provider_output(&output, provider_id).cache_stats.recomputes,
+                0,
+                "{provider_id} should stay off for synthetic control-flow benchmark"
+            );
+        }
+    }
+
+    #[test]
+    fn calls_plan_skips_data_flow_and_evidence() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join("app.ts"),
+            "export function root() { target(); }\nexport function target() {}\n",
+        )
+        .expect("write ts");
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let cache = Cache::new("", false);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["calls"]);
+
+        let output = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("kernel should run");
+
+        assert_eq!(
+            provider_output(&output, "polint.refined_calls")
+                .cache_stats
+                .recomputes,
+            1
+        );
+        assert_eq!(
+            provider_output(&output, "polint.data_flow")
+                .cache_stats
+                .recomputes,
+            0
+        );
+        assert_eq!(
+            provider_output(&output, "polint.evidence")
+                .cache_stats
+                .recomputes,
+            0
+        );
     }
 
     #[test]
@@ -1975,12 +2418,7 @@ function setup() {
         .expect("write ts");
         let loaded = load_config(temp.path()).expect("config loads");
         let cache = Cache::new("", false);
-        let plan = AnalysisPlan::from_capability_names_for_test(&[
-            "symbols",
-            "references",
-            "resolved_imports",
-            "module_graph",
-        ]);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["calls"]);
 
         let output = AnalysisKernel::run(KernelInput {
             loaded: &loaded,
@@ -2022,12 +2460,7 @@ function setup() {
             repo_root.join("tests/eval-fixtures/framework-entrypoints/mixed-go-ts/repo");
         let loaded = load_config(&fixture_repo).expect("fixture config loads");
         let cache = Cache::new("", false);
-        let plan = AnalysisPlan::from_capability_names_for_test(&[
-            "symbols",
-            "references",
-            "resolved_imports",
-            "module_graph",
-        ]);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["calls"]);
 
         let output = AnalysisKernel::run(KernelInput {
             loaded: &loaded,

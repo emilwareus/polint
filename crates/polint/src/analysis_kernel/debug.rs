@@ -3948,7 +3948,6 @@ export const value = answer();
             "metadata_debug_json_for_test",
             "producer_id",
             "layer_id",
-            "confidence",
             "validation",
             "provenance metadata",
         ] {

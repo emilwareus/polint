@@ -47,12 +47,25 @@ pub(crate) fn derive_refined_calls_with_cache_stats(
 ) -> RefinedCallsProviderOutput {
     debug_assert_eq!(manifest.id, REFINED_CALLS_PROVIDER_ID);
     let mut output = RefinedCallOutput::empty();
+    let call_site_languages = db
+        .call_sites()
+        .iter()
+        .map(|site| (site.id, site.language))
+        .collect::<BTreeMap<_, _>>();
     for target in db.call_targets() {
+        let base_target_key = db
+            .metadata_for(FactRef::new(FactFamily::CallTarget, target.id.0))
+            .map(|metadata| metadata.stable_key.clone())
+            .unwrap_or_else(|| target.stable_key.clone());
         output.edges.push(refined_edge_from_base_target(
-            db,
             target,
             crate::analysis::ids::RefinedCallEdgeId(0),
             RefinedCallTier::DirectOnly,
+            call_site_languages
+                .get(&target.site)
+                .copied()
+                .unwrap_or(crate::core::Language::Unknown),
+            base_target_key,
         ));
     }
     output
@@ -87,7 +100,7 @@ pub(crate) fn derive_refined_calls_with_cache_stats(
     let mut cache_stats = CacheStats::default();
     cache_stats.record_recompute();
 
-    match db.replace_refined_call_facts(output) {
+    match db.replace_normalized_refined_call_facts(output) {
         Ok(()) => RefinedCallsProviderOutput {
             diagnostics: Vec::new(),
             cache_stats,
@@ -110,10 +123,11 @@ fn finalized_output(mut output: RefinedCallOutput) -> RefinedCallOutput {
 }
 
 fn refined_edge_from_base_target(
-    db: &AnalysisDb,
     target: &CallTargetFact,
     id: crate::analysis::ids::RefinedCallEdgeId,
     tier: RefinedCallTier,
+    language: crate::core::Language,
+    base_target_key: String,
 ) -> RefinedCallEdgeFact {
     RefinedCallEdgeFact {
         id,
@@ -123,12 +137,7 @@ fn refined_edge_from_base_target(
         target_function: target.target_function,
         target_symbol: target.target_symbol,
         synthetic_target: None,
-        language: db
-            .call_sites()
-            .iter()
-            .find(|site| site.id == target.site)
-            .map(|site| site.language)
-            .unwrap_or(crate::core::Language::Unknown),
+        language,
         edge_kind: target.edge_kind,
         algorithm: target.algorithm,
         tier,
@@ -139,12 +148,8 @@ fn refined_edge_from_base_target(
         validation: validation_for_target(target),
         confidence: confidence_for_target(target),
         evidence: vec!["base_call_target".to_string()],
-        input_stable_keys: vec![
-            db.metadata_for(FactRef::new(FactFamily::CallTarget, target.id.0))
-                .map(|metadata| metadata.stable_key.clone())
-                .unwrap_or_else(|| target.stable_key.clone()),
-        ],
-        stable_key: stable_refined_call_key(db, target, tier),
+        input_stable_keys: vec![base_target_key.clone()],
+        stable_key: stable_refined_call_key(target, tier, &base_target_key),
     }
 }
 
@@ -214,6 +219,21 @@ impl<'a> SolverProjectionIndex<'a> {
                 Some((node.id, function))
             })
             .collect();
+        let callsite_by_id = db
+            .call_sites()
+            .iter()
+            .map(|site| (site.id, site))
+            .collect::<BTreeMap<_, _>>();
+        let callsite_id_by_node = db
+            .semantic_nodes()
+            .iter()
+            .filter_map(|node| {
+                let NodeKind::Callsite(callsite) = node.kind else {
+                    return None;
+                };
+                Some((node.id, callsite))
+            })
+            .collect::<BTreeMap<_, _>>();
         let mut callsite_by_stable_key = db
             .call_sites()
             .iter()
@@ -223,7 +243,11 @@ impl<'a> SolverProjectionIndex<'a> {
             let ConstraintKind::CallConstraint { callsite } = &constraint.kind else {
                 continue;
             };
-            let Some(site) = core_callsite_for_semantic_node(db, *callsite) else {
+            let Some(site) = callsite_id_by_node
+                .get(callsite)
+                .and_then(|callsite| callsite_by_id.get(callsite))
+                .copied()
+            else {
                 continue;
             };
             callsite_by_stable_key.insert(constraint.stable_key.as_str(), site);
@@ -247,22 +271,6 @@ impl<'a> SolverProjectionIndex<'a> {
                 .copied()
         })
     }
-}
-
-fn core_callsite_for_semantic_node(
-    db: &AnalysisDb,
-    node: crate::analysis::ids::SemanticNodeId,
-) -> Option<&CallSiteFact> {
-    let callsite = db.semantic_nodes().iter().find_map(|fact| {
-        if fact.id != node {
-            return None;
-        }
-        let NodeKind::Callsite(callsite) = fact.kind else {
-            return None;
-        };
-        Some(callsite)
-    })?;
-    db.call_sites().iter().find(|site| site.id == callsite)
 }
 
 fn core_callsite_for_go_semantic_callsite<'a>(
@@ -479,19 +487,15 @@ fn confidence_for_target(target: &CallTargetFact) -> RefinedCallConfidence {
 }
 
 fn stable_refined_call_key(
-    db: &AnalysisDb,
     target: &CallTargetFact,
     tier: RefinedCallTier,
+    base_target_key: &str,
 ) -> String {
-    let base_key = db
-        .metadata_for(FactRef::new(FactFamily::CallTarget, target.id.0))
-        .map(|metadata| metadata.stable_key.clone())
-        .unwrap_or_else(|| target.stable_key.clone());
     crate::analysis_kernel::stable_key_from_parts(
         FactFamily::RefinedCallEdge,
         &[
             ("tier", format!("{tier:?}")),
-            ("base_target", base_key),
+            ("base_target", base_target_key.to_string()),
             ("site", target.site.0.to_string()),
         ],
     )
@@ -1344,7 +1348,6 @@ mod tests {
 
     #[test]
     fn refined_key_is_stable_for_base_target_and_tier() {
-        let db = AnalysisDb::new();
         let target = CallTargetFact {
             id: CallTargetId(7),
             site: CallSiteId(3),
@@ -1361,8 +1364,8 @@ mod tests {
         };
 
         assert_eq!(
-            stable_refined_call_key(&db, &target, RefinedCallTier::DirectOnly),
-            stable_refined_call_key(&db, &target, RefinedCallTier::DirectOnly)
+            stable_refined_call_key(&target, RefinedCallTier::DirectOnly, &target.stable_key),
+            stable_refined_call_key(&target, RefinedCallTier::DirectOnly, &target.stable_key)
         );
     }
 

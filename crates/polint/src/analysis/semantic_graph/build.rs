@@ -42,13 +42,15 @@ use crate::ts::binding::direct::{
 };
 use crate::ts::binding::facts::{TsDirectBindingFact, TsDirectBindingKind, TsDirectBindingStatus};
 use crate::ts::binding::store::TsDirectBindingOutput;
-use crate::ts::inventory::extract::extract_ts_inventory;
+use crate::ts::inventory::extract::{extract_ts_inventory, extract_ts_inventory_from_program};
 use crate::ts::inventory::store::TsInventoryOutput;
+use crate::ts::object_model::extract::extract_ts_object_model_from_program;
 use crate::ts::object_model::facts::{
     TsObjectModelStatus, TsPropertyKey, TsPropertyReadFact, TsPropertyWriteFact,
     TsReceiverBindingFact,
 };
-use crate::ts::scope::extract::extract_ts_scope;
+use crate::ts::object_model::store::TsObjectModelOutput;
+use crate::ts::scope::extract::extract_ts_scope_from_program;
 use crate::ts::scope::store::TsScopeOutput;
 
 /// Projects a real-but-minimal semantic graph from already-stored v1.2 facts.
@@ -59,8 +61,19 @@ use crate::ts::scope::store::TsScopeOutput;
 /// `normalized()` (and `SemanticGraphStore::from_output`) to sort by stable key and
 /// assign dense IDs (D-05).
 pub(crate) fn build_semantic_graph(db: &AnalysisDb) -> SemanticGraphOutput {
-    let ts_direct_bindings = collect_ts_direct_bindings(db);
-    build_semantic_graph_with_ts_direct_bindings(db, &ts_direct_bindings.bindings)
+    let ts_direct_bindings = collect_ts_direct_binding_collection(db);
+    build_semantic_graph_with_ts_direct_binding_collection(db, &ts_direct_bindings)
+}
+
+pub(crate) fn build_semantic_graph_with_ts_direct_binding_collection(
+    db: &AnalysisDb,
+    ts_direct_bindings: &TsDirectBindingCollection,
+) -> SemanticGraphOutput {
+    build_semantic_graph_with_ts_direct_binding_collection_and_adaptation_models(
+        db,
+        ts_direct_bindings,
+        &AdaptationModelStore::default(),
+    )
 }
 
 pub(crate) fn build_semantic_graph_with_ts_direct_bindings(
@@ -79,13 +92,35 @@ pub(crate) fn build_semantic_graph_with_ts_direct_bindings_and_adaptation_models
     ts_direct_bindings: &[TsDirectBindingFact],
     adaptation_models: &AdaptationModelStore,
 ) -> SemanticGraphOutput {
+    build_semantic_graph_with_inputs(db, ts_direct_bindings, adaptation_models, None)
+}
+
+pub(crate) fn build_semantic_graph_with_ts_direct_binding_collection_and_adaptation_models(
+    db: &AnalysisDb,
+    ts_direct_bindings: &TsDirectBindingCollection,
+    adaptation_models: &AdaptationModelStore,
+) -> SemanticGraphOutput {
+    build_semantic_graph_with_inputs(
+        db,
+        ts_direct_bindings.bindings(),
+        adaptation_models,
+        Some(ts_direct_bindings.analyses.as_slice()),
+    )
+}
+
+fn build_semantic_graph_with_inputs(
+    db: &AnalysisDb,
+    ts_direct_bindings: &[TsDirectBindingFact],
+    adaptation_models: &AdaptationModelStore,
+    ts_analyses: Option<&[TsFileAnalysis]>,
+) -> SemanticGraphOutput {
     let mut builder = GraphBuilder::default();
 
     builder.project_nodes(db);
     builder.project_call_edges_and_constraints(db);
     builder.project_go_semantic(db);
     builder.project_ts_direct_bindings(db, ts_direct_bindings);
-    builder.project_ts_token_source_flows(db);
+    builder.project_ts_token_source_flows(db, ts_analyses);
     builder.project_ts_object_model(db);
     builder.project_adaptation_models(adaptation_models);
     builder.project_member_of_edges(db);
@@ -101,19 +136,180 @@ struct TsFileAnalysis {
     file: FileId,
     inventory: TsInventoryOutput,
     scope: TsScopeOutput,
+    object_model: TsObjectModelOutput,
+    token_source_flows: Vec<TsTokenSourceFlow>,
+}
+
+struct TsBindingFileAnalysis {
+    file: FileId,
+    inventory: TsInventoryOutput,
+    scope: TsScopeOutput,
+}
+
+trait TsDirectBindingAnalysis {
+    fn file(&self) -> FileId;
+    fn inventory(&self) -> &TsInventoryOutput;
+    fn scope(&self) -> &TsScopeOutput;
+}
+
+impl TsDirectBindingAnalysis for TsFileAnalysis {
+    fn file(&self) -> FileId {
+        self.file
+    }
+
+    fn inventory(&self) -> &TsInventoryOutput {
+        &self.inventory
+    }
+
+    fn scope(&self) -> &TsScopeOutput {
+        &self.scope
+    }
+}
+
+impl TsDirectBindingAnalysis for TsBindingFileAnalysis {
+    fn file(&self) -> FileId {
+        self.file
+    }
+
+    fn inventory(&self) -> &TsInventoryOutput {
+        &self.inventory
+    }
+
+    fn scope(&self) -> &TsScopeOutput {
+        &self.scope
+    }
+}
+
+pub(crate) struct TsDirectBindingCollection {
+    output: TsDirectBindingOutput,
+    analyses: Vec<TsFileAnalysis>,
+}
+
+impl TsDirectBindingCollection {
+    pub(crate) fn output(&self) -> &TsDirectBindingOutput {
+        &self.output
+    }
+
+    pub(crate) fn bindings(&self) -> &[TsDirectBindingFact] {
+        &self.output.bindings
+    }
+
+    pub(crate) fn take_object_model_output(&mut self) -> TsObjectModelOutput {
+        let mut output = TsObjectModelOutput::default();
+        for analysis in &mut self.analyses {
+            let file_output = std::mem::take(&mut analysis.object_model);
+            output.allocations.extend(file_output.allocations);
+            output.property_writes.extend(file_output.property_writes);
+            output.property_reads.extend(file_output.property_reads);
+            output
+                .receiver_bindings
+                .extend(file_output.receiver_bindings);
+            output.prototype_links.extend(file_output.prototype_links);
+        }
+        output
+    }
+}
+
+pub(crate) fn collect_ts_direct_binding_collection(db: &AnalysisDb) -> TsDirectBindingCollection {
+    let analyses = collect_ts_file_analyses(db);
+    let output = collect_ts_direct_bindings_from_analyses(db, &analyses);
+    TsDirectBindingCollection { output, analyses }
 }
 
 pub(crate) fn collect_ts_direct_bindings(db: &AnalysisDb) -> TsDirectBindingOutput {
-    let analyses = db
-        .files()
+    let analyses = collect_ts_binding_file_analyses(db);
+    collect_ts_direct_bindings_from_analyses(db, &analyses)
+}
+
+fn collect_ts_file_analyses(db: &AnalysisDb) -> Vec<TsFileAnalysis> {
+    db.files()
         .iter()
         .filter(|file| file.language.is_ts_family())
-        .map(|file| TsFileAnalysis {
+        .map(analyze_ts_file)
+        .collect()
+}
+
+fn analyze_ts_file(file: &SourceFile) -> TsFileAnalysis {
+    let source = file.source.as_ref();
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source, parse_source_type(&file.path)).parse();
+
+    if parsed.panicked && parsed.program.body.is_empty() {
+        return TsFileAnalysis {
             file: file.id,
-            inventory: extract_ts_inventory(file),
-            scope: extract_ts_scope(file),
-        })
-        .collect::<Vec<_>>();
+            inventory: TsInventoryOutput::default(),
+            scope: TsScopeOutput::default(),
+            object_model: TsObjectModelOutput::default(),
+            token_source_flows: Vec::new(),
+        };
+    }
+
+    let semantic = SemanticBuilder::new().build(&parsed.program).semantic;
+    let nodes = semantic.nodes();
+    let inventory =
+        extract_ts_inventory_from_program(file, source, &parsed.program, nodes).normalized();
+    let scope =
+        extract_ts_scope_from_program(file, source, &parsed.program, semantic.scoping(), nodes)
+            .normalized();
+    let object_model = extract_ts_object_model_from_program(
+        file,
+        source,
+        &parsed.program,
+        semantic.scoping(),
+        nodes,
+        &inventory,
+    );
+    let token_source_flows = collect_ts_token_source_flows_from_nodes(file, &inventory, nodes);
+
+    TsFileAnalysis {
+        file: file.id,
+        inventory,
+        scope,
+        object_model,
+        token_source_flows,
+    }
+}
+
+fn collect_ts_binding_file_analyses(db: &AnalysisDb) -> Vec<TsBindingFileAnalysis> {
+    db.files()
+        .iter()
+        .filter(|file| file.language.is_ts_family())
+        .map(analyze_ts_binding_file)
+        .collect()
+}
+
+fn analyze_ts_binding_file(file: &SourceFile) -> TsBindingFileAnalysis {
+    let source = file.source.as_ref();
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source, parse_source_type(&file.path)).parse();
+
+    if parsed.panicked && parsed.program.body.is_empty() {
+        return TsBindingFileAnalysis {
+            file: file.id,
+            inventory: TsInventoryOutput::default(),
+            scope: TsScopeOutput::default(),
+        };
+    }
+
+    let semantic = SemanticBuilder::new().build(&parsed.program).semantic;
+    let nodes = semantic.nodes();
+    let inventory =
+        extract_ts_inventory_from_program(file, source, &parsed.program, nodes).normalized();
+    let scope =
+        extract_ts_scope_from_program(file, source, &parsed.program, semantic.scoping(), nodes)
+            .normalized();
+
+    TsBindingFileAnalysis {
+        file: file.id,
+        inventory,
+        scope,
+    }
+}
+
+fn collect_ts_direct_bindings_from_analyses<A: TsDirectBindingAnalysis>(
+    db: &AnalysisDb,
+    analyses: &[A],
+) -> TsDirectBindingOutput {
     if analyses.is_empty() {
         return TsDirectBindingOutput::default();
     }
@@ -121,7 +317,7 @@ pub(crate) fn collect_ts_direct_bindings(db: &AnalysisDb) -> TsDirectBindingOutp
     let analysis_by_file = analyses
         .iter()
         .enumerate()
-        .map(|(index, analysis)| (analysis.file, index))
+        .map(|(index, analysis)| (analysis.file(), index))
         .collect::<BTreeMap<_, _>>();
     let module_files = db
         .module_nodes()
@@ -131,8 +327,8 @@ pub(crate) fn collect_ts_direct_bindings(db: &AnalysisDb) -> TsDirectBindingOutp
             let analysis = analyses.get(*analysis_by_file.get(&file)?)?;
             Some(TsDirectBindingModuleFile {
                 module_node: node.id,
-                inventory: &analysis.inventory,
-                scope: &analysis.scope,
+                inventory: analysis.inventory(),
+                scope: analysis.scope(),
             })
         })
         .collect::<Vec<_>>();
@@ -144,10 +340,10 @@ pub(crate) fn collect_ts_direct_bindings(db: &AnalysisDb) -> TsDirectBindingOutp
     };
 
     let mut bindings = Vec::new();
-    for analysis in &analyses {
+    for analysis in analyses {
         let output = resolve_direct_bindings_with_modules(
-            &analysis.inventory,
-            &analysis.scope,
+            analysis.inventory(),
+            analysis.scope(),
             &module_input,
         );
         bindings.extend(output.bindings);
@@ -326,13 +522,13 @@ impl GraphBuilder {
         // CopyEdge/CallConstraint rows here and do not create CallTargetFact rows.
         // The calls/refined-calls contract remains owned by analysis::calls until a
         // later plan deliberately promotes direct TS bindings into that fact family.
-        let context = TsDirectBindingNodeContext::new(db);
+        let context = TsDirectBindingNodeContext::new(db, self);
         for binding in bindings {
             if binding.status != TsDirectBindingStatus::Resolved {
                 continue;
             }
             let Some(callsite_node) =
-                context.callsite_node_for_binding(self, &binding.callsite_stable_key)
+                context.callsite_node_for_binding(&binding.callsite_stable_key)
             else {
                 continue;
             };
@@ -346,7 +542,7 @@ impl GraphBuilder {
             let Some(target_key) = binding.target_function_stable_key.as_deref() else {
                 continue;
             };
-            let Some(target_node) = context.function_node_for_binding(self, target_key) else {
+            let Some(target_node) = context.function_node_for_binding(target_key) else {
                 continue;
             };
             if direct_binding_emits_copy_edge(binding.kind) {
@@ -361,39 +557,58 @@ impl GraphBuilder {
         }
     }
 
-    fn project_ts_token_source_flows(&mut self, db: &AnalysisDb) {
-        let context = TsDirectBindingNodeContext::new(db);
+    fn project_ts_token_source_flows(
+        &mut self,
+        db: &AnalysisDb,
+        ts_analyses: Option<&[TsFileAnalysis]>,
+    ) {
+        let context = TsDirectBindingNodeContext::new(db, self);
+        if let Some(analyses) = ts_analyses {
+            for analysis in analyses {
+                for flow in &analysis.token_source_flows {
+                    self.project_ts_token_source_flow(flow, &context);
+                }
+            }
+            return;
+        }
+
         for file in db
             .files()
             .iter()
             .filter(|file| file.language.is_ts_family())
         {
-            for flow in collect_ts_token_source_flows(file) {
-                let Some(source_node) =
-                    context.function_node_for_binding(self, &flow.source_function_stable_key)
-                else {
-                    continue;
-                };
-                let Some(callsite_node) =
-                    context.callsite_node_for_binding(self, &flow.callsite_stable_key)
-                else {
-                    continue;
-                };
-                self.push_constraint(
-                    ConstraintKind::CopyEdge {
-                        dst: callsite_node,
-                        src: source_node,
-                    },
-                    &flow.stable_key,
-                );
+            for flow in collect_ts_token_source_flows(file, None) {
+                self.project_ts_token_source_flow(&flow, &context);
             }
         }
+    }
+
+    fn project_ts_token_source_flow(
+        &mut self,
+        flow: &TsTokenSourceFlow,
+        context: &TsDirectBindingNodeContext<'_>,
+    ) {
+        let Some(source_node) = context.function_node_for_binding(&flow.source_function_stable_key)
+        else {
+            return;
+        };
+        let Some(callsite_node) = context.callsite_node_for_binding(&flow.callsite_stable_key)
+        else {
+            return;
+        };
+        self.push_constraint(
+            ConstraintKind::CopyEdge {
+                dst: callsite_node,
+                src: source_node,
+            },
+            &flow.stable_key,
+        );
     }
 
     // -- TS object-model constraints ---------------------------------------
 
     fn project_ts_object_model(&mut self, db: &AnalysisDb) {
-        let context = TsObjectModelNodeContext::new(db);
+        let context = TsObjectModelNodeContext::new(db, self);
 
         for allocation in db.ts_object_allocations() {
             if !is_lowerable_object_model_status(&allocation.status) {
@@ -449,8 +664,7 @@ impl GraphBuilder {
                 },
                 &read.stable_key,
             );
-            if let Some(callsite) = context.callsite_node(self, read.callsite_stable_key.as_deref())
-            {
+            if let Some(callsite) = context.callsite_node(read.callsite_stable_key.as_deref()) {
                 self.push_constraint(
                     ConstraintKind::CallConstraint { callsite },
                     &read.stable_key,
@@ -468,9 +682,7 @@ impl GraphBuilder {
             ) {
                 self.push_constraint(ConstraintKind::CopyEdge { dst, src }, &binding.stable_key);
             }
-            if let Some(callsite) =
-                context.callsite_node(self, binding.callsite_stable_key.as_deref())
-            {
+            if let Some(callsite) = context.callsite_node(binding.callsite_stable_key.as_deref()) {
                 self.push_constraint(
                     ConstraintKind::CallConstraint { callsite },
                     &binding.stable_key,
@@ -718,7 +930,23 @@ struct TsTokenSourceFlowIndex {
     local_return_token_by_function_var: BTreeMap<(NodeId, String), Option<String>>,
 }
 
-fn collect_ts_token_source_flows(file: &SourceFile) -> Vec<TsTokenSourceFlow> {
+fn collect_ts_token_source_flows(
+    file: &SourceFile,
+    inventory: Option<&TsInventoryOutput>,
+) -> Vec<TsTokenSourceFlow> {
+    match inventory {
+        Some(inventory) => collect_ts_token_source_flows_with_inventory(file, inventory),
+        None => {
+            let inventory = extract_ts_inventory(file);
+            collect_ts_token_source_flows_with_inventory(file, &inventory)
+        }
+    }
+}
+
+fn collect_ts_token_source_flows_with_inventory(
+    file: &SourceFile,
+    inventory: &TsInventoryOutput,
+) -> Vec<TsTokenSourceFlow> {
     let source = file.source.as_ref();
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, source, parse_source_type(&file.path)).parse();
@@ -727,10 +955,17 @@ fn collect_ts_token_source_flows(file: &SourceFile) -> Vec<TsTokenSourceFlow> {
         return Vec::new();
     }
 
-    let inventory = extract_ts_inventory(file);
     let semantic = SemanticBuilder::new().build(&parsed.program).semantic;
-    let nodes = semantic.nodes();
-    let mut index = TsTokenSourceFlowIndex::from_inventory(&inventory, nodes);
+    collect_ts_token_source_flows_from_nodes(file, inventory, semantic.nodes())
+}
+
+fn collect_ts_token_source_flows_from_nodes(
+    file: &SourceFile,
+    inventory: &TsInventoryOutput,
+    nodes: &AstNodes<'_>,
+) -> Vec<TsTokenSourceFlow> {
+    let source = file.source.as_ref();
+    let mut index = TsTokenSourceFlowIndex::from_inventory(inventory, nodes);
     index.collect_parameter_calls(source, nodes);
     index.collect_local_alias_assignments(nodes);
     index.collect_returned_functions(nodes);
@@ -1267,65 +1502,72 @@ fn matching_core_callsite<'a>(
 }
 
 struct TsDirectBindingNodeContext<'a> {
-    db: &'a AnalysisDb,
     file_by_relative_path: BTreeMap<&'a str, FileId>,
+    callsite_node_by_location: BTreeMap<(FileId, u32, u32), SemanticNodeId>,
+    function_nodes_by_location: BTreeMap<(FileId, u32, u32), Vec<(String, SemanticNodeId)>>,
 }
 
 impl<'a> TsDirectBindingNodeContext<'a> {
-    fn new(db: &'a AnalysisDb) -> Self {
+    fn new(db: &'a AnalysisDb, builder: &GraphBuilder) -> Self {
+        let file_by_relative_path = db
+            .files()
+            .iter()
+            .map(|file| (file.relative_path.as_str(), file.id))
+            .collect();
+
+        let callsite_node_by_location = db
+            .call_sites()
+            .iter()
+            .filter_map(|site| {
+                let key = node_key_from_identity("callsite", &site.stable_key);
+                let node = builder.node_by_key.get(&key).copied()?;
+                Some(((site.file, site.span.start_byte, site.span.end_byte), node))
+            })
+            .collect();
+
+        let mut function_nodes_by_location =
+            BTreeMap::<(FileId, u32, u32), Vec<(String, SemanticNodeId)>>::new();
+        for function in db.functions() {
+            let key = function_node_key(db, function);
+            let Some(node) = builder.node_by_key.get(&key).copied() else {
+                continue;
+            };
+            function_nodes_by_location
+                .entry((
+                    function.file,
+                    function.span.start_byte,
+                    function.span.end_byte,
+                ))
+                .or_default()
+                .push((function.name.clone(), node));
+        }
+        for nodes in function_nodes_by_location.values_mut() {
+            nodes.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+        }
+
         Self {
-            db,
-            file_by_relative_path: db
-                .files()
-                .iter()
-                .map(|file| (file.relative_path.as_str(), file.id))
-                .collect(),
+            file_by_relative_path,
+            callsite_node_by_location,
+            function_nodes_by_location,
         }
     }
 
-    fn callsite_node_for_binding(
-        &self,
-        builder: &GraphBuilder,
-        callsite_stable_key: &str,
-    ) -> Option<SemanticNodeId> {
+    fn callsite_node_for_binding(&self, callsite_stable_key: &str) -> Option<SemanticNodeId> {
         let identity = TsInventoryStableIdentity::parse(callsite_stable_key)?;
-        let file = self.file_by_relative_path.get(identity.file.as_str())?;
-        self.db
-            .call_sites()
-            .iter()
-            .find(|site| {
-                site.file == *file
-                    && site.span.start_byte == identity.start
-                    && site.span.end_byte == identity.end
-            })
-            .and_then(|site| {
-                let key = node_key_from_identity("callsite", &site.stable_key);
-                builder.node_by_key.get(&key).copied()
-            })
+        let file = self.file_by_relative_path.get(identity.file)?;
+        self.callsite_node_by_location
+            .get(&(*file, identity.start, identity.end))
+            .copied()
     }
 
-    fn function_node_for_binding(
-        &self,
-        builder: &GraphBuilder,
-        function_stable_key: &str,
-    ) -> Option<SemanticNodeId> {
+    fn function_node_for_binding(&self, function_stable_key: &str) -> Option<SemanticNodeId> {
         let identity = TsInventoryStableIdentity::parse(function_stable_key)?;
-        let file = self.file_by_relative_path.get(identity.file.as_str())?;
-        self.db
-            .functions()
+        let file = self.file_by_relative_path.get(identity.file)?;
+        self.function_nodes_by_location
+            .get(&(*file, identity.start, identity.end))?
             .iter()
-            .find(|function| {
-                function.file == *file
-                    && function.span.start_byte == identity.start
-                    && function.span.end_byte == identity.end
-                    && ts_inventory_display_matches_function_name(
-                        identity.display.as_deref(),
-                        &function.name,
-                    )
-            })
-            .and_then(|function| {
-                let key = function_node_key(self.db, function);
-                builder.node_by_key.get(&key).copied()
+            .find_map(|(name, node)| {
+                ts_inventory_display_matches_function_name(identity.display, name).then_some(*node)
             })
     }
 }
@@ -1348,8 +1590,8 @@ struct TsObjectModelNodeContext<'a> {
 }
 
 impl<'a> TsObjectModelNodeContext<'a> {
-    fn new(db: &'a AnalysisDb) -> Self {
-        let direct = TsDirectBindingNodeContext::new(db);
+    fn new(db: &'a AnalysisDb, builder: &GraphBuilder) -> Self {
+        let direct = TsDirectBindingNodeContext::new(db, builder);
         let object_token_by_key = db
             .ts_object_allocations()
             .iter()
@@ -1449,9 +1691,7 @@ impl<'a> TsObjectModelNodeContext<'a> {
             return Some(node);
         }
         if let Some(value_function) = write.value_function_stable_key.as_deref()
-            && let Some(node) = self
-                .direct
-                .function_node_for_binding(builder, value_function)
+            && let Some(node) = self.direct.function_node_for_binding(value_function)
         {
             return Some(node);
         }
@@ -1496,13 +1736,8 @@ impl<'a> TsObjectModelNodeContext<'a> {
             .and_then(|place| self.place_node(builder, place))
     }
 
-    fn callsite_node(
-        &self,
-        builder: &GraphBuilder,
-        callsite_stable_key: Option<&str>,
-    ) -> Option<SemanticNodeId> {
-        self.direct
-            .callsite_node_for_binding(builder, callsite_stable_key?)
+    fn callsite_node(&self, callsite_stable_key: Option<&str>) -> Option<SemanticNodeId> {
+        self.direct.callsite_node_for_binding(callsite_stable_key?)
     }
 
     fn place_node(
@@ -1531,56 +1766,59 @@ fn insert_synthetic_place_key(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct TsInventoryStableIdentity {
-    file: String,
+struct TsInventoryStableIdentity<'a> {
+    file: &'a str,
     start: u32,
     end: u32,
-    display: Option<String>,
+    display: Option<&'a str>,
 }
 
-impl TsInventoryStableIdentity {
-    fn parse(stable_key: &str) -> Option<Self> {
-        let parts = parse_length_prefixed_parts(stable_key)?;
+impl<'a> TsInventoryStableIdentity<'a> {
+    fn parse(stable_key: &'a str) -> Option<Self> {
+        let mut cursor = parse_length_prefixed_token(stable_key, 0)?.1;
+        let mut file = None;
+        let mut start = None;
+        let mut end = None;
+        let mut display = None;
+
+        while cursor < stable_key.len() {
+            if stable_key.as_bytes().get(cursor) != Some(&b'|') {
+                return None;
+            }
+            cursor += 1;
+            let (label, next) = parse_length_prefixed_token(stable_key, cursor)?;
+            cursor = next;
+            if stable_key.as_bytes().get(cursor) != Some(&b'=') {
+                return None;
+            }
+            cursor += 1;
+            let (value, next) = parse_length_prefixed_token(stable_key, cursor)?;
+            cursor = next;
+
+            match label {
+                "file" => file = Some(value),
+                "start" => start = value.parse::<u32>().ok(),
+                "end" => end = value.parse::<u32>().ok(),
+                "display" => display = Some(value),
+                _ => {}
+            }
+        }
+
         Some(Self {
-            file: parts.get("file")?.clone(),
-            start: parts.get("start")?.parse().ok()?,
-            end: parts.get("end")?.parse().ok()?,
-            display: parts.get("display").cloned(),
+            file: file?,
+            start: start?,
+            end: end?,
+            display,
         })
     }
 }
 
-fn parse_length_prefixed_parts(stable_key: &str) -> Option<BTreeMap<String, String>> {
-    let mut cursor = 0;
-    let (_prefix, next) = parse_length_prefixed_token(stable_key, cursor)?;
-    cursor = next;
-    let mut parts = BTreeMap::new();
-
-    while cursor < stable_key.len() {
-        if stable_key.as_bytes().get(cursor) != Some(&b'|') {
-            return None;
-        }
-        cursor += 1;
-        let (label, next) = parse_length_prefixed_token(stable_key, cursor)?;
-        cursor = next;
-        if stable_key.as_bytes().get(cursor) != Some(&b'=') {
-            return None;
-        }
-        cursor += 1;
-        let (value, next) = parse_length_prefixed_token(stable_key, cursor)?;
-        cursor = next;
-        parts.insert(label, value);
-    }
-
-    Some(parts)
-}
-
-fn parse_length_prefixed_token(input: &str, start: usize) -> Option<(String, usize)> {
+fn parse_length_prefixed_token(input: &str, start: usize) -> Option<(&str, usize)> {
     let colon = input[start..].find(':')? + start;
     let len = input[start..colon].parse::<usize>().ok()?;
     let value_start = colon + 1;
     let value_end = value_start.checked_add(len)?;
-    let value = input.get(value_start..value_end)?.to_string();
+    let value = input.get(value_start..value_end)?;
     Some((value, value_end))
 }
 
@@ -1729,6 +1967,7 @@ mod tests {
     };
     use crate::ts::binding::facts::TsDirectBindingReason;
     use crate::ts::inventory::facts::{TsInventoryCallsiteFact, TsInventoryFunctionFact};
+    use crate::ts::scope::extract::extract_ts_scope;
 
     fn span(file: FileId) -> Span {
         Span {

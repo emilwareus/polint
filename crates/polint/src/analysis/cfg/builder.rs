@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::analysis::cfg::facts::{
     BasicBlockFact, BasicBlockKind, CfgEdgeFact, CfgEdgeKind, CfgFunctionFact, CfgNodeFact,
@@ -26,6 +26,10 @@ pub(crate) struct CfgBuilder {
     current_block: Option<BasicBlockId>,
     next_body_block_ordinal: u32,
     next_synthetic_node_ordinal: u32,
+    node_index_by_id: BTreeMap<CfgNodeId, usize>,
+    block_index_by_id: BTreeMap<BasicBlockId, usize>,
+    normal_exit_block_by_function: BTreeMap<CfgFunctionId, BasicBlockId>,
+    exceptional_exit_block_by_function: BTreeMap<CfgFunctionId, BasicBlockId>,
 }
 
 struct CfgNodeDraft {
@@ -53,6 +57,10 @@ impl CfgBuilder {
             current_block: None,
             next_body_block_ordinal: 0,
             next_synthetic_node_ordinal: 0,
+            node_index_by_id: BTreeMap::new(),
+            block_index_by_id: BTreeMap::new(),
+            normal_exit_block_by_function: BTreeMap::new(),
+            exceptional_exit_block_by_function: BTreeMap::new(),
         }
     }
 
@@ -115,7 +123,7 @@ impl CfgBuilder {
                 ],
             ),
         });
-        self.new_block(
+        let normal_exit_block = self.new_block(
             function_id,
             BasicBlockKind::ExitNormal,
             Some(normal_exit_node),
@@ -129,6 +137,8 @@ impl CfgBuilder {
                 ],
             ),
         );
+        self.normal_exit_block_by_function
+            .insert(function_id, normal_exit_block);
 
         let exceptional_exit_node = include_exceptional_exit.then(|| {
             self.new_node(CfgNodeDraft {
@@ -149,7 +159,7 @@ impl CfgBuilder {
             })
         });
         if let Some(node) = exceptional_exit_node {
-            self.new_block(
+            let exceptional_exit_block = self.new_block(
                 function_id,
                 BasicBlockKind::ExitExceptional,
                 Some(node),
@@ -163,6 +173,8 @@ impl CfgBuilder {
                     ],
                 ),
             );
+            self.exceptional_exit_block_by_function
+                .insert(function_id, exceptional_exit_block);
         }
 
         self.output.functions.push(CfgFunctionFact {
@@ -196,25 +208,17 @@ impl CfgBuilder {
 
     pub(crate) fn normal_exit_block(&self) -> BasicBlockId {
         let function = self.expect_function();
-        self.output
-            .blocks
-            .iter()
-            .find(|block| {
-                block.cfg_function == function && block.kind == BasicBlockKind::ExitNormal
-            })
-            .map(|block| block.id)
+        self.normal_exit_block_by_function
+            .get(&function)
+            .copied()
             .expect("CfgBuilder::start_function must create a normal exit block")
     }
 
     pub(crate) fn exceptional_exit_block(&self) -> Option<BasicBlockId> {
         let function = self.expect_function();
-        self.output
-            .blocks
-            .iter()
-            .find(|block| {
-                block.cfg_function == function && block.kind == BasicBlockKind::ExitExceptional
-            })
-            .map(|block| block.id)
+        self.exceptional_exit_block_by_function
+            .get(&function)
+            .copied()
     }
 
     pub(crate) fn start_block(&mut self, kind: BasicBlockKind) -> BasicBlockId {
@@ -283,9 +287,7 @@ impl CfgBuilder {
                 ],
             ),
         });
-        if let Some(node) = self.output.nodes.iter_mut().find(|node| node.id == node_id) {
-            node.block = block;
-        }
+        self.node_mut(node_id).block = block;
 
         {
             let block_fact = self.block_mut(block);
@@ -343,27 +345,46 @@ impl CfgBuilder {
             .iter()
             .map(|function| function.id)
             .collect::<Vec<_>>();
-        for function in functions {
-            let reachable = self.reachable_blocks(function);
-            for block in self
-                .output
-                .blocks
-                .iter_mut()
-                .filter(|block| block.cfg_function == function)
-            {
-                block.reachable = reachable.contains(&block.id);
+        let mut entry_by_function = BTreeMap::new();
+        for block in &self.output.blocks {
+            if block.kind == BasicBlockKind::Entry {
+                entry_by_function.insert(block.cfg_function, block.id);
             }
+        }
+        let mut successors = BTreeMap::<(CfgFunctionId, BasicBlockId), Vec<BasicBlockId>>::new();
+        for edge in &self.output.edges {
+            if edge.view == CfgView::NormalControl && edge.from_block != edge.to_block {
+                successors
+                    .entry((edge.cfg_function, edge.from_block))
+                    .or_default()
+                    .push(edge.to_block);
+            }
+        }
+        for targets in successors.values_mut() {
+            targets.sort();
+            targets.dedup();
+        }
+
+        let mut reachable_by_function = BTreeMap::new();
+        for function in functions {
+            reachable_by_function.insert(
+                function,
+                Self::reachable_blocks(function, &entry_by_function, &successors),
+            );
+        }
+        for block in &mut self.output.blocks {
+            block.reachable = reachable_by_function
+                .get(&block.cfg_function)
+                .is_some_and(|reachable| reachable.contains(&block.id));
         }
     }
 
-    fn reachable_blocks(&self, function: CfgFunctionId) -> BTreeSet<BasicBlockId> {
-        let Some(entry) = self
-            .output
-            .blocks
-            .iter()
-            .find(|block| block.cfg_function == function && block.kind == BasicBlockKind::Entry)
-            .map(|block| block.id)
-        else {
+    fn reachable_blocks(
+        function: CfgFunctionId,
+        entry_by_function: &BTreeMap<CfgFunctionId, BasicBlockId>,
+        successors: &BTreeMap<(CfgFunctionId, BasicBlockId), Vec<BasicBlockId>>,
+    ) -> BTreeSet<BasicBlockId> {
+        let Some(&entry) = entry_by_function.get(&function) else {
             return BTreeSet::new();
         };
         let mut seen = BTreeSet::new();
@@ -372,29 +393,11 @@ impl CfgBuilder {
             if !seen.insert(block) {
                 continue;
             }
-            let mut successors = self.normal_successors(function, block);
-            successors.sort_by(|left, right| right.cmp(left));
-            stack.extend(successors);
+            if let Some(block_successors) = successors.get(&(function, block)) {
+                stack.extend(block_successors.iter().rev().copied());
+            }
         }
         seen
-    }
-
-    fn normal_successors(&self, function: CfgFunctionId, block: BasicBlockId) -> Vec<BasicBlockId> {
-        let mut successors = self
-            .output
-            .edges
-            .iter()
-            .filter(|edge| {
-                edge.cfg_function == function
-                    && edge.view == CfgView::NormalControl
-                    && edge.from_block == block
-                    && edge.to_block != block
-            })
-            .map(|edge| edge.to_block)
-            .collect::<Vec<_>>();
-        successors.sort();
-        successors.dedup();
-        successors
     }
 
     fn add_node_edge(
@@ -441,6 +444,7 @@ impl CfgBuilder {
 
     fn new_node(&mut self, draft: CfgNodeDraft) -> CfgNodeId {
         let id = self.alloc_node_id();
+        let index = self.output.nodes.len();
         self.output.nodes.push(CfgNodeFact {
             id,
             cfg_function: draft.function,
@@ -455,6 +459,7 @@ impl CfgBuilder {
             status: CfgStatus::Resolved,
             precision: CfgPrecision::ExactLowered,
         });
+        self.node_index_by_id.insert(id, index);
         id
     }
 
@@ -469,10 +474,9 @@ impl CfgBuilder {
     ) -> BasicBlockId {
         let id = self.alloc_block_id();
         for node_id in [first_node, last_node].into_iter().flatten() {
-            if let Some(node) = self.output.nodes.iter_mut().find(|node| node.id == node_id) {
-                node.block = id;
-            }
+            self.node_mut(node_id).block = id;
         }
+        let index = self.output.blocks.len();
         self.output.blocks.push(BasicBlockFact {
             id,
             cfg_function: function,
@@ -485,31 +489,44 @@ impl CfgBuilder {
             status: CfgStatus::Resolved,
             precision: CfgPrecision::ExactLowered,
         });
+        self.block_index_by_id.insert(id, index);
         id
     }
 
     fn block(&self, id: BasicBlockId) -> &BasicBlockFact {
-        self.output
-            .blocks
-            .iter()
-            .find(|block| block.id == id)
-            .expect("block id must refer to a builder-owned block")
+        let index = self
+            .block_index_by_id
+            .get(&id)
+            .copied()
+            .expect("block id must refer to a builder-owned block");
+        &self.output.blocks[index]
     }
 
     fn node(&self, id: CfgNodeId) -> &CfgNodeFact {
-        self.output
-            .nodes
-            .iter()
-            .find(|node| node.id == id)
-            .expect("node id must refer to a builder-owned node")
+        let index = self
+            .node_index_by_id
+            .get(&id)
+            .copied()
+            .expect("node id must refer to a builder-owned node");
+        &self.output.nodes[index]
     }
 
     fn block_mut(&mut self, id: BasicBlockId) -> &mut BasicBlockFact {
-        self.output
-            .blocks
-            .iter_mut()
-            .find(|block| block.id == id)
-            .expect("block id must refer to a builder-owned block")
+        let index = self
+            .block_index_by_id
+            .get(&id)
+            .copied()
+            .expect("block id must refer to a builder-owned block");
+        &mut self.output.blocks[index]
+    }
+
+    fn node_mut(&mut self, id: CfgNodeId) -> &mut CfgNodeFact {
+        let index = self
+            .node_index_by_id
+            .get(&id)
+            .copied()
+            .expect("node id must refer to a builder-owned node");
+        &mut self.output.nodes[index]
     }
 
     fn expect_function(&self) -> CfgFunctionId {

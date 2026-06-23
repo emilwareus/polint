@@ -260,7 +260,7 @@ fn run_case(
 
     let mut diagnostics = Vec::new();
     for manifest in &options.rule_host_manifests {
-        match run_rule_host_check(root, temp.path(), manifest, options.no_cache) {
+        match run_rule_host_check(root, temp.path(), manifest, &case.rule, options.no_cache) {
             Ok(mut observed) => diagnostics.append(&mut observed),
             Err(error) => {
                 let mut result = failed_case(
@@ -324,6 +324,7 @@ fn run_rule_host_check(
     root: &Path,
     temp_root: &Path,
     manifest: &Path,
+    rule_id: &str,
     no_cache: bool,
 ) -> Result<Vec<Diagnostic>> {
     let cargo = std::env::var("POLINT_CARGO")
@@ -343,6 +344,8 @@ fn run_rule_host_check(
         "check",
         "--format",
         "json",
+        "--only-rule",
+        rule_id,
         "--fail-on",
         "none",
     ]);

@@ -127,11 +127,25 @@ fn facts_list_json_is_stable_and_public_only() {
             && view["sampling"] == true
             && view["unknowns"] == false
     }));
-    assert!(
+    let view_for = |capability: &str| {
         views
             .iter()
-            .any(|view| { view["capability"] == "dataflow" && view["stability"] == "reserved" })
-    );
+            .find(|view| view["capability"] == capability)
+            .unwrap_or_else(|| panic!("missing facts list view for {capability}: {views:#?}"))
+    };
+    let stability_for = |capability: &str| {
+        view_for(capability)["stability"]
+            .as_str()
+            .unwrap_or_else(|| panic!("missing stability for {capability}: {views:#?}"))
+            .to_string()
+    };
+    for capability in ["events", "calls", "control_flow", "dataflow"] {
+        assert_eq!(stability_for(capability), "preview");
+        assert_eq!(view_for(capability)["unknowns"], true);
+    }
+    for capability in ["cfg", "call_graph"] {
+        assert_eq!(stability_for(capability), "reserved");
+    }
 
     for marker in [
         "polint.data_flow",
@@ -248,20 +262,18 @@ exclude = []
         "{unsupported_stable}"
     );
 
-    let unsupported = output_string(
+    let dataflow = stdout_json(
         polint_cmd()
             .current_dir(temp.path())
             .args(["unknowns", "--cap", "dataflow", "--format", "json"])
             .assert()
-            .code(2),
+            .success(),
     );
-    assert!(
-        unsupported.contains("\"status\": \"unsupported\""),
-        "{unsupported}"
-    );
-    assert!(
-        unsupported.contains("docs/facts/data-flow.md"),
-        "{unsupported}"
+    assert_eq!(dataflow["capability"], "dataflow");
+    assert_eq!(
+        dataflow["rows"].as_array().map(Vec::len),
+        Some(0),
+        "{dataflow:#?}"
     );
 }
 
@@ -290,11 +302,15 @@ exclude = []
     );
     assert_eq!(consolidated["version"], 1);
     assert_eq!(consolidated["capability"], "all");
-    assert_eq!(consolidated["rows"][0]["category"], "missing_fact");
-    assert!(consolidated["rows"][0].get("provider").is_none());
-    assert!(consolidated["rows"][0].get("family").is_none());
-    assert_eq!(consolidated["rows"][0]["reason"], "not_found");
-    assert!(consolidated["rows"][0].get("source_stable_key").is_none());
+    let rows = consolidated["rows"].as_array().expect("unknown rows");
+    let import_row = rows
+        .iter()
+        .find(|row| row["reason"] == "not_found")
+        .unwrap_or_else(|| panic!("missing import-resolution unknown row: {consolidated:#?}"));
+    assert_eq!(import_row["category"], "missing_fact");
+    assert!(import_row.get("provider").is_none());
+    assert!(import_row.get("family").is_none());
+    assert!(import_row.get("source_stable_key").is_none());
 
     let filtered = stdout_json(
         polint_cmd()
@@ -313,20 +329,60 @@ exclude = []
     assert_eq!(filtered["capability"], "resolved_imports");
     assert_eq!(filtered["rows"][0]["category"], "missing_fact");
 
-    let unsupported = output_string(
+    let dataflow = stdout_json(
         polint_cmd()
             .current_dir(temp.path())
             .args([
                 "inspect", "unknowns", "--cap", "dataflow", "--format", "json",
             ])
             .assert()
-            .code(2),
+            .success(),
     );
-    assert!(unsupported.contains("\"category\": \"unsupported_semantic\""));
-    assert!(unsupported.contains("docs/facts/data-flow.md"));
-    assert!(!unsupported.contains("polint.solver"));
-    assert!(!unsupported.contains("RefinedCallEdge"));
-    assert!(!unsupported.contains("source_stable_key"));
+    assert_eq!(dataflow["capability"], "dataflow");
+    assert_eq!(
+        dataflow["rows"].as_array().map(Vec::len),
+        Some(0),
+        "{dataflow:#?}"
+    );
+}
+
+#[test]
+fn inspect_unknowns_default_requests_preview_policy_unknowns() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+"#,
+    );
+    write_file(
+        &temp.path().join("src/app.ts"),
+        r#"export function handler(cb: () => void) {
+  cb();
+}
+"#,
+    );
+
+    let value = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["inspect", "unknowns", "--format", "json"])
+            .assert()
+            .success(),
+    );
+    let rows = value["rows"].as_array().expect("unknown rows");
+
+    assert!(
+        rows.iter().any(|row| {
+            row["docs_path"] == "docs/facts/data-flow.md"
+                && row["reason"]
+                    .as_str()
+                    .is_some_and(|reason| reason.contains("unresolved_calls"))
+        }),
+        "unfiltered inspect unknowns should request preview policy/dataflow facts: {value:#?}"
+    );
 }
 
 #[test]
@@ -546,7 +602,8 @@ exclude = []
 
     let data_flow = fs::read_to_string(repo_root().join("docs/facts/data-flow.md")).unwrap();
     let evidence = fs::read_to_string(repo_root().join("docs/facts/evidence.md")).unwrap();
-    assert!(data_flow.contains("reserved for a future SDK fact view"));
+    assert!(data_flow.contains("v1.4 preview SDK view"));
+    assert!(data_flow.contains("raw data-flow graph APIs remain"));
     assert!(evidence.contains("not a public SDK fact view"));
 }
 
@@ -947,6 +1004,723 @@ pub(crate) fn rule(ctx: &mut RuleCtx<'_>, symbols: Symbols<'_>, references: Refe
             .success(),
     );
     assert_eq!(diagnostics_for_rule(&json, "local/symbol-helper").len(), 1);
+}
+
+#[test]
+fn phase55_preview_rule_syntax_compiles_and_executes_supported_views() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_phase41_rule_pack(
+        temp.path(),
+        r#"use std::process::ExitCode;
+use polint::runner;
+mod rule;
+fn main() -> ExitCode { runner::run_cli(vec![rule::rule()]) }
+"#,
+        r#"use polint::sdk::prelude::*;
+
+#[polint::rule(id = "local/phase55-preview", description = "Phase 55 preview syntax", severity = "warn")]
+pub(crate) fn rule(
+    ctx: &mut RuleCtx<'_>,
+    events: Events<'_>,
+    calls: Calls<'_>,
+    control: ControlFlow<'_>,
+    flow: DataFlow<'_>,
+) -> RuleResult {
+    let mut flow_query = FlowQuery::new(
+        SourcePattern::secret_like(["token", "password", "apiKey"]),
+        SinkPattern::logger(),
+    );
+    flow_query.barriers = BarrierPattern::call_any(["redact", "mask_secret"]);
+    flow_query.minimum_precision = PolicyPrecision::Heuristic;
+    flow_query.max_paths = 20;
+
+    for violation in flow.forbidden(flow_query) {
+        ctx.report(violation.diagnostic(
+            ctx.rule_id(),
+            "secret-like value reaches logging without redaction",
+        ));
+    }
+
+    let _ = events.matching(EventPattern::call("handler"));
+    let _ = calls.forbidden_reachable(ReachQuery::new(EventPattern::call("dangerous_exec")));
+    let _ = control.missing_guard(GuardQuery::new(
+        EventPattern::write_field("account.balance"),
+        GuardPattern::call_any(["authorize", "require_admin"]),
+    ));
+    let mut cleanup_query = LifecycleQuery::new(
+        EventPattern::call("begin_transaction"),
+        EventPattern::call("rollback"),
+    );
+    cleanup_query.minimum_precision = PolicyPrecision::SetupAware;
+    let _ = control.missing_cleanup(cleanup_query);
+
+    Ok(())
+}
+"#,
+    );
+    write_file(
+        &temp.path().join("src/app.ts"),
+        r#"export function handler(token: string) {
+  console.log(token);
+}
+"#,
+    );
+
+    let json = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["check", "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+
+    let diagnostics = diagnostics_for_rule(&json, "local/phase55-preview");
+    assert_eq!(
+        diagnostics.len(),
+        1,
+        "preview rule should execute and report the secret-log data-flow policy: {json:#?}"
+    );
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["message"] == "secret-like value reaches logging without redaction"
+                && diagnostic_has_evidence(diagnostic, "policy", "forbidden_flow")
+                && diagnostic_has_evidence(diagnostic, "sink", "log")
+                && diagnostic_has_evidence(diagnostic, "barrier_status", "uncovered")
+        }),
+        "missing data-flow diagnostic evidence: {json:#?}"
+    );
+    let capability_diagnostics = diagnostics_for_rule(&json, "polint/capability");
+    for capability in ["events", "calls", "control_flow", "dataflow"] {
+        assert!(
+            capability_diagnostics.iter().all(|diagnostic| {
+                !diagnostic_has_evidence(diagnostic, "rule", "local/phase55-preview")
+                    || !diagnostic_has_evidence(diagnostic, "capability", capability)
+            }),
+            "events/calls/control_flow should be supported by Phase 57: {json:#?}"
+        );
+    }
+
+    let manifest = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["inspect", "rule", "--format", "json"])
+            .assert()
+            .success(),
+    );
+    let rule = manifest["rules"]
+        .as_array()
+        .and_then(|rules| {
+            rules
+                .iter()
+                .find(|rule| rule["rule_id"] == "local/phase55-preview")
+        })
+        .unwrap_or_else(|| panic!("missing preview rule manifest row: {manifest:#?}"));
+    let capabilities = rule["capabilities"]
+        .as_array()
+        .unwrap_or_else(|| panic!("rule capabilities should be an array: {rule:#?}"));
+    let capability_names = capabilities
+        .iter()
+        .map(|capability| capability["name"].as_str().unwrap_or_default())
+        .collect::<BTreeSet<_>>();
+    for capability in ["events", "calls", "control_flow", "dataflow"] {
+        assert!(
+            capability_names.contains(capability),
+            "preview rule manifest should include {capability}: {rule:#?}"
+        );
+    }
+    let fact_views = rule["fact_views"]
+        .as_array()
+        .unwrap_or_else(|| panic!("rule fact_views should be an array: {rule:#?}"));
+    for (view_type, capability) in [
+        ("Events", "events"),
+        ("Calls", "calls"),
+        ("ControlFlow", "control_flow"),
+        ("DataFlow", "dataflow"),
+    ] {
+        assert!(
+            fact_views
+                .iter()
+                .any(|view| view["view_type"] == view_type && view["capability"] == capability),
+            "preview fact view metadata should include {view_type}/{capability}: {rule:#?}"
+        );
+    }
+}
+
+#[test]
+fn phase56_events_and_calls_rule_reports_json() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_file(
+        &temp.path().join("go.mod"),
+        "module example.com/policyquery\n\ngo 1.22\n",
+    );
+    write_phase41_rule_pack(
+        temp.path(),
+        r#"use std::process::ExitCode;
+use polint::runner;
+mod rule;
+fn main() -> ExitCode { runner::run_cli(vec![rule::rule()]) }
+"#,
+        r#"use polint::sdk::prelude::*;
+
+#[polint::rule(id = "local/phase56-events-calls", description = "Phase 56 events and calls", severity = "error")]
+pub(crate) fn rule(
+    ctx: &mut RuleCtx<'_>,
+    events: Events<'_>,
+    calls: Calls<'_>,
+) -> RuleResult {
+    for violation in events.matching(EventPattern::call("dangerous")) {
+        ctx.report(violation.diagnostic(
+            ctx.rule_id(),
+            "dangerous call event matched",
+        ));
+    }
+
+    let mut query = ReachQuery::new(EventPattern::call("dangerous"));
+    query.roots = vec![EventPattern::call("main")];
+    query.max_depth = 4;
+    query.max_paths = 4;
+    query.minimum_precision = PolicyPrecision::Conservative;
+    query.minimum_confidence = PolicyConfidence::Low;
+
+    for violation in calls.forbidden_reachable(query) {
+        ctx.report(violation.diagnostic(
+            ctx.rule_id(),
+            "dangerous call is reachable from main",
+        ));
+    }
+
+    Ok(())
+}
+"#,
+    );
+    write_file(
+        &temp.path().join("src/main.go"),
+        r#"package main
+
+func main() {
+	handler()
+}
+
+func handler() {
+	dangerous()
+}
+
+func dangerous() {}
+"#,
+    );
+
+    let json = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["check", "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+
+    let diagnostics = diagnostics_for_rule(&json, "local/phase56-events-calls");
+    assert_eq!(
+        diagnostics.len(),
+        2,
+        "expected event and reach diagnostics: {json:#?}"
+    );
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["message"] == "dangerous call event matched"
+                && diagnostic_has_evidence(
+                    diagnostic,
+                    "target",
+                    "example.com/policyquery/src.dangerous",
+                )
+                && diagnostic_has_evidence(diagnostic, "policy_precision", "setup_aware")
+        }),
+        "missing event diagnostic evidence: {json:#?}"
+    );
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["message"] == "dangerous call is reachable from main"
+                && diagnostic_has_evidence(diagnostic, "root", "main")
+                && diagnostic_has_evidence(
+                    diagnostic,
+                    "target",
+                    "example.com/policyquery/src.dangerous",
+                )
+                && diagnostic_has_evidence(diagnostic, "confidence", "high")
+        }),
+        "missing reachable-call diagnostic evidence: {json:#?}"
+    );
+    assert!(
+        diagnostics_for_rule(&json, "polint/capability")
+            .iter()
+            .all(|diagnostic| {
+                !diagnostic_has_evidence(diagnostic, "capability", "events")
+                    && !diagnostic_has_evidence(diagnostic, "capability", "calls")
+            }),
+        "events/calls should execute without capability diagnostics: {json:#?}"
+    );
+}
+
+#[test]
+fn phase57_control_flow_rule_reports_json() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_file(
+        &temp.path().join("go.mod"),
+        "module example.com/controlflowquery\n\ngo 1.22\n",
+    );
+    write_phase41_rule_pack(
+        temp.path(),
+        r#"use std::process::ExitCode;
+use polint::runner;
+mod rule;
+fn main() -> ExitCode { runner::run_cli(vec![rule::rule()]) }
+"#,
+        r#"use polint::sdk::prelude::*;
+
+#[polint::rule(id = "local/phase57-control-flow", description = "Phase 57 control-flow", severity = "error")]
+pub(crate) fn rule(ctx: &mut RuleCtx<'_>, control: ControlFlow<'_>) -> RuleResult {
+    let mut guard = GuardQuery::new(
+        EventPattern::call("dangerous"),
+        GuardPattern::call_any(["authorize"]),
+    );
+    guard.max_paths = 4;
+
+    for violation in control.missing_guard(guard) {
+        ctx.report(violation.diagnostic(
+            ctx.rule_id(),
+            "dangerous call requires authorization first",
+        ));
+    }
+
+    let mut cleanup = LifecycleQuery::new(
+        EventPattern::call("Begin"),
+        EventPattern::call("Rollback"),
+    );
+    cleanup.max_paths = 4;
+
+    for violation in control.missing_cleanup(cleanup) {
+        ctx.report(violation.diagnostic(
+            ctx.rule_id(),
+            "transaction begin requires cleanup",
+        ));
+    }
+
+    Ok(())
+}
+"#,
+    );
+    write_file(
+        &temp.path().join("src/main.go"),
+        r#"package main
+
+func main() {
+	handler()
+}
+
+func handler() {
+	dangerous()
+	authorize()
+	tx := Begin()
+	_ = tx
+}
+
+type Tx struct{}
+
+func dangerous() {}
+func authorize() {}
+func Begin() *Tx { return &Tx{} }
+func Rollback() {}
+"#,
+    );
+
+    let json = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["check", "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+
+    let diagnostics = diagnostics_for_rule(&json, "local/phase57-control-flow");
+    assert_eq!(
+        diagnostics.len(),
+        2,
+        "expected guard and cleanup diagnostics: {json:#?}"
+    );
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["message"] == "dangerous call requires authorization first"
+                && diagnostic_has_evidence(diagnostic, "policy", "missing_guard")
+                && diagnostic_has_evidence(diagnostic, "required_guard", "authorize")
+                && diagnostic_has_evidence(diagnostic, "control_scope", "same_function")
+                && diagnostic_has_evidence(diagnostic, "policy_precision", "conservative")
+        }),
+        "missing guard diagnostic evidence: {json:#?}"
+    );
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["message"] == "transaction begin requires cleanup"
+                && diagnostic_has_evidence(diagnostic, "policy", "missing_cleanup")
+                && diagnostic_has_evidence(diagnostic, "required_cleanup", "Rollback")
+                && diagnostic_has_evidence(diagnostic, "control_scope", "same_function")
+        }),
+        "missing cleanup diagnostic evidence: {json:#?}"
+    );
+    assert!(
+        diagnostics_for_rule(&json, "polint/capability")
+            .iter()
+            .all(|diagnostic| {
+                !diagnostic_has_evidence(diagnostic, "capability", "control_flow")
+            }),
+        "control_flow should execute without capability diagnostics: {json:#?}"
+    );
+}
+
+#[test]
+fn phase58_data_flow_rule_reports_json() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_phase41_rule_pack(
+        temp.path(),
+        r#"use std::process::ExitCode;
+use polint::runner;
+mod rule;
+fn main() -> ExitCode { runner::run_cli(vec![rule::rule()]) }
+"#,
+        r#"use polint::sdk::prelude::*;
+
+#[polint::rule(id = "local/phase58-data-flow", description = "Phase 58 data-flow", severity = "error")]
+pub(crate) fn rule(ctx: &mut RuleCtx<'_>, flow: DataFlow<'_>) -> RuleResult {
+    let mut query = FlowQuery::new(
+        SourcePattern::secret_like(["token", "password"]),
+        SinkPattern::logger(),
+    );
+    query.barriers = BarrierPattern::call_any(["redact", "mask_secret"]);
+    query.max_depth = 8;
+    query.minimum_precision = PolicyPrecision::Heuristic;
+    query.max_paths = 4;
+
+    for violation in flow.forbidden(query) {
+        ctx.report(violation.diagnostic(
+            ctx.rule_id(),
+            "secret-like value reaches logging without redaction",
+        ));
+    }
+
+    Ok(())
+}
+"#,
+    );
+    write_file(
+        &temp.path().join("src/app.ts"),
+        r#"export function handler(token: string) {
+  console.log(token);
+}
+"#,
+    );
+
+    let json = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["check", "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+
+    let diagnostics = diagnostics_for_rule(&json, "local/phase58-data-flow");
+    assert_eq!(
+        diagnostics.len(),
+        1,
+        "expected one data-flow diagnostic: {json:#?}"
+    );
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["message"] == "secret-like value reaches logging without redaction"
+                && diagnostic_has_evidence(diagnostic, "policy", "forbidden_flow")
+                && diagnostic_has_evidence(diagnostic, "source", "token")
+                && diagnostic_has_evidence(diagnostic, "sink", "log")
+                && diagnostic_has_evidence(diagnostic, "required_barrier", "redact,mask_secret")
+                && diagnostic_has_evidence(diagnostic, "barrier_status", "uncovered")
+                && diagnostic_has_evidence(diagnostic, "path_status", "found")
+        }),
+        "missing data-flow diagnostic evidence: {json:#?}"
+    );
+    assert!(
+        diagnostics_for_rule(&json, "polint/capability")
+            .iter()
+            .all(|diagnostic| { !diagnostic_has_evidence(diagnostic, "capability", "dataflow") }),
+        "dataflow should execute without capability diagnostics: {json:#?}"
+    );
+}
+
+#[test]
+fn phase61_policy_query_docs_cover_preview_contract() {
+    let policy = fs::read_to_string(repo_root().join("docs/facts/policy-queries.md")).unwrap();
+    for required in [
+        "The public style has one shape",
+        "Events<'_>",
+        "Calls<'_>",
+        "ControlFlow<'_>",
+        "DataFlow<'_>",
+        "ReachQuery::new",
+        "GuardQuery::new",
+        "LifecycleQuery::new",
+        "FlowQuery::new",
+        "EventPattern::call",
+        "SourcePattern::http_request",
+        "SourcePattern::secret_like",
+        "SinkPattern::logger",
+        "BarrierPattern::call_any",
+        "policy_query_version",
+        "query_digest",
+        "policy_status",
+        "policy_precision",
+        "budget_exceeded",
+        "unknowns --cap events|calls|control_flow|dataflow",
+        "request-to-shell",
+        "unsafe-deserialization",
+        "not built-in rules enabled",
+    ] {
+        assert!(
+            policy.contains(required),
+            "missing `{required}` in policy docs"
+        );
+    }
+
+    for page in [
+        "docs/facts/README.md",
+        "docs/facts/events.md",
+        "docs/facts/calls.md",
+        "docs/facts/control-flow.md",
+        "docs/facts/data-flow.md",
+        "docs/facts/evidence.md",
+        "docs/facts/capability-plans.md",
+    ] {
+        let source = fs::read_to_string(repo_root().join(page)).unwrap();
+        assert!(
+            source.contains("policy-queries.md"),
+            "{page} should link the shared policy query reference"
+        );
+    }
+}
+
+#[test]
+fn phase61_policy_preview_external_sdk_matrix() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        &temp.path().join(".polint.toml"),
+        r#"
+[workspace]
+include = ["src/**"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_file(
+        &temp.path().join("go.mod"),
+        "module example.com/policyquerymatrix\n\ngo 1.22\n",
+    );
+    write_phase41_rule_pack(
+        temp.path(),
+        r#"use std::process::ExitCode;
+use polint::runner;
+mod rule;
+fn main() -> ExitCode { runner::run_cli(vec![rule::rule()]) }
+"#,
+        r#"use polint::sdk::prelude::*;
+
+#[polint::rule(id = "local/phase61-policy-matrix", description = "Phase 61 policy matrix", severity = "error")]
+pub(crate) fn rule(
+    ctx: &mut RuleCtx<'_>,
+    events: Events<'_>,
+    calls: Calls<'_>,
+    control: ControlFlow<'_>,
+    flow: DataFlow<'_>,
+) -> RuleResult {
+    for violation in events.matching(EventPattern::call("dangerous")) {
+        ctx.report(violation.diagnostic(ctx.rule_id(), "dangerous call event matched"));
+    }
+
+    let mut reach = ReachQuery::new(EventPattern::call("dangerous"));
+    reach.roots = vec![EventPattern::call("main")];
+    reach.max_depth = 4;
+    reach.max_paths = 4;
+
+    for violation in calls.forbidden_reachable(reach) {
+        ctx.report(violation.diagnostic(ctx.rule_id(), "dangerous call is reachable from main"));
+    }
+
+    let mut guard = GuardQuery::new(
+        EventPattern::call("writeBalance"),
+        GuardPattern::call_any(["authorize"]),
+    );
+    guard.max_paths = 4;
+
+    for violation in control.missing_guard(guard) {
+        ctx.report(violation.diagnostic(ctx.rule_id(), "writeBalance requires authorization first"));
+    }
+
+    let mut cleanup = LifecycleQuery::new(
+        EventPattern::call("Begin"),
+        EventPattern::call("Rollback"),
+    );
+    cleanup.max_paths = 4;
+
+    for violation in control.missing_cleanup(cleanup) {
+        ctx.report(violation.diagnostic(ctx.rule_id(), "transaction begin requires cleanup"));
+    }
+
+    let mut flow_query = FlowQuery::new(
+        SourcePattern::secret_like(["token"]),
+        SinkPattern::logger(),
+    );
+    flow_query.barriers = BarrierPattern::call_any(["redact"]);
+    flow_query.minimum_precision = PolicyPrecision::Heuristic;
+    flow_query.max_paths = 4;
+
+    for violation in flow.forbidden(flow_query) {
+        ctx.report(violation.diagnostic(ctx.rule_id(), "secret token reaches logs"));
+    }
+
+    Ok(())
+}
+"#,
+    );
+    write_file(
+        &temp.path().join("src/main.go"),
+        r#"package main
+
+func main() {
+	handler()
+}
+
+func handler() {
+	dangerous()
+	writeBalance()
+	tx := Begin()
+	_ = tx
+}
+
+func dangerous() {}
+func writeBalance() {}
+func authorize() {}
+func Begin() *Tx { return &Tx{} }
+func Rollback() {}
+
+type Tx struct{}
+"#,
+    );
+    write_file(
+        &temp.path().join("src/app.ts"),
+        r#"export function handler(token: string) {
+  console.log(token);
+}
+"#,
+    );
+
+    let source = fs::read_to_string(temp.path().join(".polint/rules/src/rule.rs")).unwrap();
+    assert!(source.contains("use polint::sdk::prelude::*;"));
+    for forbidden in [
+        "polint::core",
+        "crate::core",
+        "Capabilities::new(",
+        "impl Rule",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "external policy rule leaked forbidden API `{forbidden}`:\n{source}"
+        );
+    }
+
+    let json = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["check", "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+
+    let diagnostics = diagnostics_for_rule(&json, "local/phase61-policy-matrix");
+    assert_eq!(
+        diagnostics.len(),
+        5,
+        "expected one result per query: {json:#?}"
+    );
+    for (message, query) in [
+        ("dangerous call event matched", "events.matching"),
+        (
+            "dangerous call is reachable from main",
+            "calls.forbidden_reachable",
+        ),
+        (
+            "writeBalance requires authorization first",
+            "control_flow.missing_guard",
+        ),
+        (
+            "transaction begin requires cleanup",
+            "control_flow.missing_cleanup",
+        ),
+        ("secret token reaches logs", "data_flow.forbidden"),
+    ] {
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic["message"] == message
+                    && diagnostic_has_evidence(diagnostic, "policy_query", query)
+                    && diagnostic_has_evidence(diagnostic, "policy_query_version", "")
+                    && diagnostic_has_evidence(diagnostic, "query_digest", "")
+                    && diagnostic_has_evidence(diagnostic, "policy_status", "")
+                    && diagnostic_has_evidence(diagnostic, "policy_precision", "")
+            }),
+            "missing `{message}` / `{query}` diagnostic: {json:#?}"
+        );
+    }
+    assert!(
+        diagnostics_for_rule(&json, "polint/capability").is_empty(),
+        "supported preview policy views should not emit capability diagnostics: {json:#?}"
+    );
 }
 
 #[test]
@@ -2639,7 +3413,6 @@ fn direct_calls_internals_stay_private() {
     }
     assert_direct_calls_public_surfaces_are_private();
     assert_direct_calls_cli_help_is_private();
-    assert!(!repo_root().join("docs/facts/calls.md").exists());
     assert!(!repo_root().join("docs/facts/call-graph.md").exists());
 
     let source = fs::read_to_string(temp.path().join(".polint/rules/src/main.rs")).unwrap();
@@ -3062,7 +3835,6 @@ const DIRECT_CALLS_INTERNAL_PUBLIC_MARKERS: &[&str] = &[
     "UnresolvedCallFact",
     "analysis::calls",
     "direct-call-facts",
-    "Calls<'_>",
     "CallEdges<'_>",
 ];
 
@@ -6138,11 +6910,309 @@ fn new_rule_generic_uses_sdk_query_helpers() {
     assert!(module.contains("use polint::sdk::prelude::*;"));
     assert!(!module.contains("SourceFiles<'_>"));
     assert!(module.contains("functions: Functions<'_>"));
-    assert!(module.contains("functions.iter().count()"));
+    assert!(module.contains("function.name == \"replaceMe\""));
     assert!(!module.contains("fn capabilities"));
     assert!(!module.contains("impl Rule"));
     let internal_core_path = ["crate", "core"].join("::");
     assert!(!module.contains(&internal_core_path));
+
+    point_generated_rule_pack_at_local_polint(temp.path());
+    let value = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["test", "--no-cache", "--format", "json"])
+            .assert()
+            .success(),
+    );
+    assert_eq!(value["summary"]["total"], 2);
+    assert_eq!(value["summary"]["failed"], 0, "{value:#?}");
+}
+
+#[test]
+fn new_rule_rejects_unknown_language() {
+    let temp = tempfile::tempdir().unwrap();
+
+    polint_cmd()
+        .current_dir(temp.path())
+        .args(["new-rule", "python", "bad-python"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "unsupported rule language `python`",
+        ));
+}
+
+#[test]
+fn new_rule_js_uses_js_fixture_files_for_non_template_rules() {
+    let temp = tempfile::tempdir().unwrap();
+    polint_cmd()
+        .current_dir(temp.path())
+        .args(["new-rule", "js", "no-debug-name"])
+        .assert()
+        .success();
+
+    assert!(
+        temp.path()
+            .join(".polint/tests/rules/no_debug_name/positive/src/example.js")
+            .is_file()
+    );
+    assert!(
+        !temp
+            .path()
+            .join(".polint/tests/rules/no_debug_name/positive/src/example.ts")
+            .exists()
+    );
+}
+
+#[test]
+fn new_rule_policy_templates_reject_unbacked_language_combinations() {
+    let temp = tempfile::tempdir().unwrap();
+
+    polint_cmd()
+        .current_dir(temp.path())
+        .args([
+            "new-rule",
+            "go",
+            "bad-flow",
+            "--template",
+            "request-to-shell",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "template `request-to-shell` is not available for Go yet",
+        ));
+
+    polint_cmd()
+        .current_dir(temp.path())
+        .args(["new-rule", "js", "bad-js", "--template", "secret-to-log"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "policy templates are currently available for `ts` and selected `go` templates",
+        ));
+}
+
+#[test]
+fn new_rule_policy_template_modules_use_public_sdk_only() {
+    let cases = [
+        (
+            "ts",
+            "request-to-shell",
+            "DataFlow<'_>",
+            "FlowQuery::new",
+            "SourcePattern::http_request()",
+            "SinkPattern::call(\"exec\")",
+        ),
+        (
+            "ts",
+            "secret-to-log",
+            "DataFlow<'_>",
+            "FlowQuery::new",
+            "SourcePattern::secret_like",
+            "SinkPattern::logger()",
+        ),
+        (
+            "ts",
+            "pii-to-analytics",
+            "DataFlow<'_>",
+            "FlowQuery::new",
+            "email",
+            "analyticsTrack",
+        ),
+        (
+            "go",
+            "sensitive-write-guard",
+            "ControlFlow<'_>",
+            "GuardQuery::new",
+            "writeBalance",
+            "validate_payment",
+        ),
+        (
+            "go",
+            "transaction-cleanup",
+            "ControlFlow<'_>",
+            "LifecycleQuery::new",
+            "Begin",
+            "Rollback",
+        ),
+        (
+            "go",
+            "raw-reachable-api",
+            "Calls<'_>",
+            "ReachQuery::new",
+            "dangerousAdmin",
+            "EventPattern::call(\"main\")",
+        ),
+        (
+            "ts",
+            "ssrf",
+            "DataFlow<'_>",
+            "FlowQuery::new",
+            "SourcePattern::http_request()",
+            "fetchUrl",
+        ),
+        (
+            "ts",
+            "dangerous-html",
+            "DataFlow<'_>",
+            "FlowQuery::new",
+            "SourcePattern::http_request()",
+            "setInnerHTML",
+        ),
+        (
+            "ts",
+            "unsafe-deserialization",
+            "DataFlow<'_>",
+            "FlowQuery::new",
+            "SourcePattern::http_request()",
+            "unsafeDeserialize",
+        ),
+        (
+            "ts",
+            "user-file-path",
+            "DataFlow<'_>",
+            "FlowQuery::new",
+            "SourcePattern::http_request()",
+            "readFile",
+        ),
+    ];
+
+    for (language, template, view, query, first, second) in cases {
+        let temp = tempfile::tempdir().unwrap();
+        let rule_name = format!("template-{template}");
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["new-rule", language, &rule_name, "--template", template])
+            .assert()
+            .success();
+
+        let module_name = rule_name.replace('-', "_");
+        let module = fs::read_to_string(
+            temp.path()
+                .join(".polint/rules/src")
+                .join(format!("{module_name}.rs")),
+        )
+        .unwrap();
+        assert!(module.contains("use polint::sdk::prelude::*;"), "{module}");
+        assert!(module.contains("#[polint::rule("), "{module}");
+        assert!(module.contains("severity = \"error\""), "{module}");
+        assert!(module.contains(view), "{template}: {module}");
+        assert!(module.contains(query), "{template}: {module}");
+        assert!(module.contains(first), "{template}: {module}");
+        assert!(module.contains(second), "{template}: {module}");
+        if view == "DataFlow<'_>" {
+            assert!(
+                module.contains("query.max_depth = 24;"),
+                "{template}: {module}"
+            );
+            assert!(
+                module.contains("query.max_paths = 128;"),
+                "{template}: {module}"
+            );
+        }
+        assert!(module.contains("violation.diagnostic("), "{module}");
+        assert!(!module.contains("Capabilities::new("), "{module}");
+        assert!(!module.contains("impl Rule"), "{module}");
+        assert!(!module.contains("polint::core"), "{module}");
+        assert!(!module.contains("crate::core"), "{module}");
+    }
+}
+
+#[test]
+fn new_rule_policy_templates_generate_fixture_tests() {
+    let temp = tempfile::tempdir().unwrap();
+    polint_cmd()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success();
+    write_file(
+        &temp.path().join("go.mod"),
+        "module example.com/policytemplates\n\ngo 1.22\n",
+    );
+
+    for (language, template) in [
+        ("ts", "request-to-shell"),
+        ("ts", "secret-to-log"),
+        ("ts", "pii-to-analytics"),
+        ("go", "sensitive-write-guard"),
+        ("go", "transaction-cleanup"),
+        ("go", "raw-reachable-api"),
+        ("ts", "ssrf"),
+        ("ts", "dangerous-html"),
+        ("ts", "unsafe-deserialization"),
+        ("ts", "user-file-path"),
+    ] {
+        let rule_name = format!("template-{template}");
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["new-rule", language, &rule_name, "--template", template])
+            .assert()
+            .success();
+    }
+    point_generated_rule_pack_at_local_polint(temp.path());
+
+    let value = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["test", "--no-cache", "--format", "json"])
+            .assert()
+            .success(),
+    );
+    assert_eq!(value["summary"]["total"], 20);
+    assert_eq!(value["summary"]["failed"], 0, "{value:#?}");
+}
+
+#[test]
+fn new_rule_policy_templates_are_deterministic() {
+    let temp = tempfile::tempdir().unwrap();
+    polint_cmd()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success();
+    write_file(
+        &temp.path().join("go.mod"),
+        "module example.com/policytemplatedeterminism\n\ngo 1.22\n",
+    );
+
+    for (language, template) in [
+        ("ts", "secret-to-log"),
+        ("go", "sensitive-write-guard"),
+        ("go", "raw-reachable-api"),
+    ] {
+        let rule_name = format!("deterministic-{template}");
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["new-rule", language, &rule_name, "--template", template])
+            .assert()
+            .success();
+    }
+    point_generated_rule_pack_at_local_polint(temp.path());
+
+    let first = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["test", "--no-cache", "--format", "json"])
+            .assert()
+            .success(),
+    );
+    let second = stdout_json(
+        polint_cmd()
+            .current_dir(temp.path())
+            .args(["test", "--no-cache", "--format", "json"])
+            .assert()
+            .success(),
+    );
+
+    assert_eq!(
+        first["summary"], second["summary"],
+        "{first:#?}\n{second:#?}"
+    );
+    assert_eq!(first["cases"], second["cases"], "{first:#?}\n{second:#?}");
+    assert_eq!(first["summary"]["total"], 6);
+    assert_eq!(first["summary"]["failed"], 0, "{first:#?}");
 }
 
 #[test]
@@ -8360,6 +9430,47 @@ mod capability_planning {
             "call_graph"
         ));
         assert!(diagnostic_has_evidence(diagnostic, "status", "unsupported"));
+    }
+
+    #[test]
+    fn reserved_cfg_and_call_graph_remain_unsupported() {
+        let cfg_temp = tempfile::tempdir().unwrap();
+        write_plan_capability_rule_repo(cfg_temp.path());
+        let cfg_json = stdout_json(
+            polint_cmd()
+                .current_dir(cfg_temp.path())
+                .args(["check", "--format", "json", "--fail-on", "none"])
+                .assert()
+                .success(),
+        );
+        assert!(
+            diagnostics_for_rule(&cfg_json, "polint/capability")
+                .iter()
+                .any(
+                    |diagnostic| diagnostic_has_evidence(diagnostic, "capability", "cfg")
+                        && diagnostic_has_evidence(diagnostic, "status", "unsupported")
+                ),
+            "Cfg<'_> should stay a reserved raw capability: {cfg_json:#?}"
+        );
+
+        let call_temp = tempfile::tempdir().unwrap();
+        write_call_graph_capability_rule_repo(call_temp.path());
+        let call_json = stdout_json(
+            polint_cmd()
+                .current_dir(call_temp.path())
+                .args(["check", "--format", "json", "--fail-on", "none"])
+                .assert()
+                .success(),
+        );
+        assert!(
+            diagnostics_for_rule(&call_json, "polint/capability")
+                .iter()
+                .any(
+                    |diagnostic| diagnostic_has_evidence(diagnostic, "capability", "call_graph")
+                        && diagnostic_has_evidence(diagnostic, "status", "unsupported")
+                ),
+            "CallGraph<'_> should stay a reserved raw capability: {call_json:#?}"
+        );
     }
 
     #[test]

@@ -283,8 +283,14 @@ Repo-local rules live in **one** Rust package under `.polint/rules/`:
 
 `polint new-rule <lang> <name>` adds `src/<name_with_underscores>.rs`, wires it
 into `src/main.rs`, and creates positive and negative fixture cases under
-`.polint/tests/rules/<name_with_underscores>/`. See `examples/multiple-rules` in
-the polint repo for several rules in one pack.
+`.polint/tests/rules/<name_with_underscores>/`. For v1.4 policy-query starters,
+use `--template <id>` with TypeScript for `request-to-shell`, `secret-to-log`,
+`pii-to-analytics`, `sensitive-write-guard`, `transaction-cleanup`,
+`raw-reachable-api`, `ssrf`, `dangerous-html`, `unsafe-deserialization`, or
+`user-file-path`. Go currently supports `sensitive-write-guard`,
+`transaction-cleanup`, and `raw-reachable-api`. Templates are repo-local
+scaffolds to edit, not built-in rules that polint enables automatically. See
+`examples/multiple-rules` in the polint repo for several rules in one pack.
 
 ## Agent JSON
 
@@ -303,10 +309,11 @@ polint explain --rule local/no-raw-colors --format json
 `facts list` reports stable and reserved fact-view dispositions. `facts sample`
 requires a bounded limit and emits only public fact fields. `inspect unknowns`
 reports the consolidated setup, unsupported, budget, model, and resolution
-queue. `unknowns --cap ...` remains supported for cap-filtered compatibility and
-unsupported rows for reserved capabilities such as dataflow. `explain` reports
-macro-derived fact views and capability support; it does not expose provider execution graphs,
-layer-cache internals, or eval/debug schemas.
+queue. `unknowns --cap ...` remains supported for cap-filtered compatibility,
+including preview policy query capabilities such as `events`, `calls`,
+`control_flow`, and `dataflow`; reserved surfaces still return unsupported rows.
+`explain` reports macro-derived fact views and capability support; it does not
+expose provider execution graphs, layer-cache internals, or eval/debug schemas.
 
 ## Writing A Rule
 
@@ -436,7 +443,7 @@ allow_files = ["src/theme/**"]
 ## Agent Rules
 
 - Do not add project policies to the polint CLI as built-ins.
-- Treat `Cfg<'_>`, `CallGraph<'_>`, `DataFlow<'_>`, `Evidence<'_>`, model packs, provider extensions, and `polint eval` as reserved/preview/internal unless public docs and temp-repo tests explicitly promote them.
+- Treat raw `Cfg<'_>`, raw `CallGraph<'_>`, `Evidence<'_>`, model packs, provider extensions, and `polint eval` as reserved/preview/internal unless public docs and temp-repo tests explicitly promote them. The policy query views `Events<'_>`, `Calls<'_>`, `ControlFlow<'_>`, and `DataFlow<'_>` are preview SDK views backed by the v1.4 policy query surface.
 - Document only stable, supported CLI workflows; keep debug helpers, exploratory analysis surfaces, and future/TBD behavior out of generated skills until they are intentionally promoted.
 - Keep rules small and specific to the repository convention they enforce.
 - State when a rule is heuristic, especially for test evidence or branch coverage.

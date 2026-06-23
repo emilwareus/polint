@@ -6,6 +6,7 @@ use crate::core::{
     Rule, RuleMeta, RuleOptions, SourceFile, rule_id_matches,
 };
 use crate::diagnostics::{Diagnostic, Severity, TextRange};
+use crate::sdk::policy::POLICY_QUERY_VERSION;
 #[cfg(test)]
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -196,11 +197,7 @@ impl AnalysisPlan {
     ) -> Vec<String> {
         self.rules
             .iter()
-            .filter(|rule| {
-                rule.requested_capabilities
-                    .iter()
-                    .any(|requested| requested == capability)
-            })
+            .filter(|rule| rule_requests_capability(rule, capability))
             .filter(|rule| rule_matches_any_file(rule, files))
             .map(|rule| rule.id.clone())
             .collect()
@@ -291,10 +288,7 @@ impl AnalysisPlan {
     #[cfg(test)]
     pub(crate) fn full_pipeline_for_test() -> Self {
         Self::from_capability_names_for_test(&[
-            "resolved_imports",
-            "module_graph",
-            "symbols",
-            "references",
+            "dataflow",
             "file_metrics",
             "function_metrics",
             "complexity_metrics",
@@ -645,10 +639,10 @@ fn plan_capabilities(rules: &[PlannedRule]) -> Vec<PlannedCapability> {
     let mut capabilities = BTreeMap::<String, CapabilityAccumulator>::new();
     for rule in rules {
         for requested in &rule.requested_capabilities {
-            let entry = capabilities
-                .entry(requested.clone())
-                .or_insert_with(|| support_for(requested));
-            entry.rules.insert(rule.id.clone());
+            insert_capability_request(&mut capabilities, requested, &rule.id);
+            for dependency in capability_dependencies(requested) {
+                insert_capability_request(&mut capabilities, dependency, &rule.id);
+            }
         }
     }
 
@@ -664,6 +658,27 @@ fn plan_capabilities(rules: &[PlannedRule]) -> Vec<PlannedCapability> {
             docs_path: accumulator.docs_path,
         })
         .collect()
+}
+
+fn insert_capability_request(
+    capabilities: &mut BTreeMap<String, CapabilityAccumulator>,
+    capability: &str,
+    rule_id: &str,
+) {
+    let entry = capabilities
+        .entry(capability.to_string())
+        .or_insert_with(|| support_for(capability));
+    entry.rules.insert(rule_id.to_string());
+}
+
+fn capability_dependencies(capability: &str) -> &'static [&'static str] {
+    match capability {
+        "calls" | "control_flow" | "dataflow" => {
+            &["resolved_imports", "module_graph", "symbols", "references"]
+        }
+        "references" => &["symbols"],
+        _ => &[],
+    }
 }
 
 #[rustfmt::skip]
@@ -682,17 +697,35 @@ fn support_for(capability: &str) -> CapabilityAccumulator {
             Some("Use go_tests for current Go test evidence.".to_string()),
             Some("docs/facts/capability-plans.md".to_string()),
         ),
+        "events" => (
+            CapabilitySupportStatus::Supported,
+            None,
+            None,
+            None,
+        ),
+        "calls" => (
+            CapabilitySupportStatus::Supported,
+            None,
+            None,
+            None,
+        ),
+        "control_flow" => (
+            CapabilitySupportStatus::Supported,
+            None,
+            None,
+            None,
+        ),
+        "dataflow" => (
+            CapabilitySupportStatus::Supported,
+            None,
+            None,
+            None,
+        ),
         "cfg" | "call_graph" | "coverage_facts" => (
             CapabilitySupportStatus::Unsupported,
             Some("Capability is reserved for a later phase.".to_string()),
             None,
             Some("docs/facts/capability-plans.md".to_string()),
-        ),
-        "dataflow" => (
-            CapabilitySupportStatus::Unsupported,
-            Some("Capability is reserved until bounded public data-flow queries have docs, tests, and setup behavior.".to_string()),
-            None,
-            Some("docs/facts/data-flow.md".to_string()),
         ),
         _ => (
             CapabilitySupportStatus::Unsupported,
@@ -713,6 +746,12 @@ fn support_for(capability: &str) -> CapabilityAccumulator {
 
 fn requested_capabilities(capabilities: Capabilities) -> Vec<String> {
     capabilities.requested_names().map(str::to_string).collect()
+}
+
+fn rule_requests_capability(rule: &PlannedRule, capability: &str) -> bool {
+    rule.requested_capabilities.iter().any(|requested| {
+        requested == capability || capability_dependencies(requested).contains(&capability)
+    })
 }
 
 fn plan_digest(
@@ -757,6 +796,7 @@ fn plan_digest(
             "capability.rules={}",
             encode_str_list(&capability.rules)
         ));
+        push_policy_query_digest_parts(&mut parts, capability);
     }
 
     for check in setup_checks {
@@ -774,6 +814,23 @@ fn plan_digest(
 
     let part_refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
     stable_hash(&part_refs)
+}
+
+fn push_policy_query_digest_parts(parts: &mut Vec<String>, capability: &PlannedCapability) {
+    if let Some(version) = policy_query_version_for_capability(&capability.capability) {
+        parts.push(format!(
+            "capability.policy_query_version.{}={}",
+            encode_str(&capability.capability),
+            encode_str(version)
+        ));
+    }
+}
+
+fn policy_query_version_for_capability(capability: &str) -> Option<&'static str> {
+    match capability {
+        "events" | "calls" | "control_flow" | "dataflow" => Some(POLICY_QUERY_VERSION),
+        _ => None,
+    }
 }
 
 fn encode_str(value: &str) -> String {
@@ -1075,7 +1132,7 @@ mod tests {
         }));
         assert_eq!(
             plan.support_view().status_for("dataflow"),
-            Some(crate::core::CapabilitySupportStatus::Unsupported)
+            Some(crate::core::CapabilitySupportStatus::Supported)
         );
     }
 
@@ -1108,6 +1165,135 @@ mod tests {
             capability.docs_path.as_deref(),
             Some("docs/facts/capability-plans.md")
         );
+    }
+
+    #[test]
+    fn policy_capabilities_report_phase_support_boundaries() {
+        let plan = AnalysisPlan::from_capability_names_for_test(&[
+            "events",
+            "calls",
+            "control_flow",
+            "dataflow",
+        ]);
+
+        for capability in [
+            "calls",
+            "control_flow",
+            "dataflow",
+            "events",
+            "module_graph",
+            "references",
+            "resolved_imports",
+            "symbols",
+        ] {
+            let planned = plan
+                .capabilities()
+                .iter()
+                .find(|planned| planned.capability == capability)
+                .unwrap_or_else(|| panic!("missing planned capability {capability}: {plan:#?}"));
+            assert_eq!(planned.status, CapabilitySupportStatus::Supported);
+            assert_eq!(planned.docs_path.as_deref(), None);
+            assert_eq!(
+                planned.rules,
+                vec!["test/requested-capabilities".to_string()]
+            );
+        }
+
+        let events_only = AnalysisPlan::from_capability_names_for_test(&["events"]);
+        assert_eq!(
+            events_only
+                .capabilities()
+                .iter()
+                .map(|planned| planned.capability.as_str())
+                .collect::<Vec<_>>(),
+            vec!["events"],
+            "events-only rules should stay on the lightweight syntax path"
+        );
+
+        let control_flow_only = AnalysisPlan::from_capability_names_for_test(&["control_flow"]);
+        assert_eq!(
+            control_flow_only
+                .capabilities()
+                .iter()
+                .map(|planned| planned.capability.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "control_flow",
+                "module_graph",
+                "references",
+                "resolved_imports",
+                "symbols",
+            ],
+            "control-flow rules need the same graph prerequisites as call rules"
+        );
+
+        let diagnostics = plan.diagnostics();
+        for capability in ["events", "calls", "control_flow", "dataflow"] {
+            assert!(
+                diagnostics.iter().all(|diagnostic| {
+                    !diagnostic.evidence.iter().any(|evidence| {
+                        evidence.label == "capability" && evidence.value == capability
+                    })
+                }),
+                "supported capability {capability} should not emit diagnostics: {diagnostics:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn policy_capability_dependencies_match_rules_for_setup_gates() {
+        let rules = vec![rule(
+            "local/no-secret-flow",
+            "No secret flow",
+            Severity::Error,
+            Capabilities::new().dataflow(),
+        )];
+        let plan = AnalysisPlan::from_rules(&rules, None, &BTreeMap::new());
+        let file = SourceFile {
+            id: crate::core::FileId(0),
+            path: "src/app.go".into(),
+            relative_path: "src/app.go".to_string(),
+            language: Language::Go,
+            source: "".into(),
+            content_hash: "hash".to_string(),
+        };
+        let files = [&file];
+
+        assert_eq!(
+            plan.rules_for_capability_matching_files("references", &files),
+            vec!["local/no-secret-flow".to_string()]
+        );
+    }
+
+    #[test]
+    fn policy_query_version_digest_parts_apply_only_to_policy_capabilities() {
+        for capability in ["events", "calls", "control_flow", "dataflow"] {
+            assert_eq!(
+                policy_query_version_for_capability(capability),
+                Some(POLICY_QUERY_VERSION)
+            );
+        }
+        for capability in ["resolved_imports", "symbols", "cfg", "call_graph"] {
+            assert_eq!(policy_query_version_for_capability(capability), None);
+        }
+
+        let mut parts = Vec::new();
+        push_policy_query_digest_parts(
+            &mut parts,
+            &PlannedCapability {
+                capability: "dataflow".to_string(),
+                language: None,
+                status: CapabilitySupportStatus::Supported,
+                rules: vec!["local/rule".to_string()],
+                reason: None,
+                hint: None,
+                docs_path: None,
+            },
+        );
+
+        assert_eq!(parts.len(), 1);
+        assert!(parts[0].contains("capability.policy_query_version."));
+        assert!(parts[0].contains(POLICY_QUERY_VERSION));
     }
 
     #[test]

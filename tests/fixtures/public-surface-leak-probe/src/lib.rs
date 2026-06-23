@@ -1,4 +1,4 @@
-//! V1.3 PUBLIC-SURFACE-LEAK PROBE — see Phase 42 D-17, D-18, D-19.
+//! V1.4 PUBLIC-SURFACE-LEAK PROBE — see Phase 42 D-17, D-18, D-19 and Phase 55 D-17.
 //!
 //! This crate is the proxy for an external rule crate. It reaches the polint
 //! supported public surface through the SAME entry point real rule authors use:
@@ -22,17 +22,16 @@
 //! polint prelude glob OR through `::core` / `::std` absolute paths. This makes
 //! identifier-reachability changes deterministic: if a future change drops an
 //! allow-listed name from the prelude, this probe fails to compile and the gate
-//! trips. The whole point is that `polint::analysis::identity::IdentityRecord`
-//! (Plan 01), the Go RelString / Jelly span renderers (Plan 02), and the
-//! identity taxonomy types (Plan 03) are NOT nameable here — they stay
-//! `pub(crate)` and never reach `polint::sdk::prelude` (D-23).
+//! trips. Phase 55 intentionally adds preview policy-query names here; raw CFG,
+//! call graph, solver, provider, parser, `AnalysisDb`, and graph internals remain
+//! unnameable from the supported rule-authoring import path.
 
 #![no_implicit_prelude]
 #![allow(dead_code)]
 
 use ::polint::sdk::prelude::*;
 
-// One witness per allow-listed v1.0-v1.2 prelude identifier. Each line compiles
+// One witness per allow-listed prelude identifier. Each line compiles
 // ONLY because the identifier is reachable through `polint::sdk::prelude::*`.
 // `PhantomData` is written as `::core::marker::PhantomData` (absolute path)
 // because `#![no_implicit_prelude]` disables the std prelude. Lifetime-bearing
@@ -51,7 +50,13 @@ mod allowlist_witness {
     fn _assert_branchobligations() -> ::core::marker::PhantomData<BranchObligations<'static>> {
         ::core::marker::PhantomData
     }
+    fn _assert_barrierpattern() -> ::core::marker::PhantomData<BarrierPattern> {
+        ::core::marker::PhantomData
+    }
     fn _assert_callgraph() -> ::core::marker::PhantomData<CallGraph<'static>> {
+        ::core::marker::PhantomData
+    }
+    fn _assert_calls() -> ::core::marker::PhantomData<Calls<'static>> {
         ::core::marker::PhantomData
     }
     fn _assert_capabilitysupport() -> ::core::marker::PhantomData<CapabilitySupport> {
@@ -81,6 +86,9 @@ mod allowlist_witness {
     fn _assert_complexitymetrics() -> ::core::marker::PhantomData<ComplexityMetrics<'static>> {
         ::core::marker::PhantomData
     }
+    fn _assert_controlflow() -> ::core::marker::PhantomData<ControlFlow<'static>> {
+        ::core::marker::PhantomData
+    }
     fn _assert_coveragefact() -> ::core::marker::PhantomData<CoverageFact> {
         ::core::marker::PhantomData
     }
@@ -105,6 +113,12 @@ mod allowlist_witness {
     fn _assert_diagnosticrange() -> ::core::marker::PhantomData<DiagnosticRange> {
         ::core::marker::PhantomData
     }
+    fn _assert_eventpattern() -> ::core::marker::PhantomData<EventPattern> {
+        ::core::marker::PhantomData
+    }
+    fn _assert_events() -> ::core::marker::PhantomData<Events<'static>> {
+        ::core::marker::PhantomData
+    }
     fn _assert_evidence() -> ::core::marker::PhantomData<Evidence> {
         ::core::marker::PhantomData
     }
@@ -115,6 +129,9 @@ mod allowlist_witness {
         ::core::marker::PhantomData
     }
     fn _assert_filemetrics() -> ::core::marker::PhantomData<FileMetrics<'static>> {
+        ::core::marker::PhantomData
+    }
+    fn _assert_flowquery() -> ::core::marker::PhantomData<FlowQuery> {
         ::core::marker::PhantomData
     }
     fn _assert_fix() -> ::core::marker::PhantomData<Fix> {
@@ -136,6 +153,12 @@ mod allowlist_witness {
         ::core::marker::PhantomData
     }
     fn _assert_gotests() -> ::core::marker::PhantomData<GoTests<'static>> {
+        ::core::marker::PhantomData
+    }
+    fn _assert_guardpattern() -> ::core::marker::PhantomData<GuardPattern> {
+        ::core::marker::PhantomData
+    }
+    fn _assert_guardquery() -> ::core::marker::PhantomData<GuardQuery> {
         ::core::marker::PhantomData
     }
     fn _assert_importfact() -> ::core::marker::PhantomData<ImportFact> {
@@ -160,6 +183,9 @@ mod allowlist_witness {
         ::core::marker::PhantomData
     }
     fn _assert_language() -> ::core::marker::PhantomData<Language> {
+        ::core::marker::PhantomData
+    }
+    fn _assert_lifecyclequery() -> ::core::marker::PhantomData<LifecycleQuery> {
         ::core::marker::PhantomData
     }
     fn _assert_moduleedge() -> ::core::marker::PhantomData<ModuleEdge> {
@@ -207,6 +233,18 @@ mod allowlist_witness {
     fn _assert_polinttoolinfo() -> ::core::marker::PhantomData<PolintToolInfo> {
         ::core::marker::PhantomData
     }
+    fn _assert_policyconfidence() -> ::core::marker::PhantomData<PolicyConfidence> {
+        ::core::marker::PhantomData
+    }
+    fn _assert_policyprecision() -> ::core::marker::PhantomData<PolicyPrecision> {
+        ::core::marker::PhantomData
+    }
+    fn _assert_policystatus() -> ::core::marker::PhantomData<PolicyStatus> {
+        ::core::marker::PhantomData
+    }
+    fn _assert_policyviolation() -> ::core::marker::PhantomData<PolicyViolation> {
+        ::core::marker::PhantomData
+    }
     fn _assert_referencefact() -> ::core::marker::PhantomData<ReferenceFact> {
         ::core::marker::PhantomData
     }
@@ -217,6 +255,9 @@ mod allowlist_witness {
         ::core::marker::PhantomData
     }
     fn _assert_references() -> ::core::marker::PhantomData<References<'static>> {
+        ::core::marker::PhantomData
+    }
+    fn _assert_reachquery() -> ::core::marker::PhantomData<ReachQuery> {
         ::core::marker::PhantomData
     }
     fn _assert_renderopts() -> ::core::marker::PhantomData<RenderOpts<'static>> {
@@ -262,6 +303,12 @@ mod allowlist_witness {
         ::core::marker::PhantomData
     }
     fn _assert_sourcefile() -> ::core::marker::PhantomData<SourceFile> {
+        ::core::marker::PhantomData
+    }
+    fn _assert_sinkpattern() -> ::core::marker::PhantomData<SinkPattern> {
+        ::core::marker::PhantomData
+    }
+    fn _assert_sourcepattern() -> ::core::marker::PhantomData<SourcePattern> {
         ::core::marker::PhantomData
     }
     fn _assert_sourcefiles() -> ::core::marker::PhantomData<SourceFiles<'static>> {

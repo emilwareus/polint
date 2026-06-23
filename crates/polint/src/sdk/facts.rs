@@ -12,6 +12,9 @@ use crate::core::{
     StringLiteralFact, SymbolFact, SymbolId, SymbolKind, SymbolResolutionStatus, TestFact,
     TsClassFact, TsComponentFact,
 };
+use crate::sdk::policy::{
+    EventPattern, FlowQuery, GuardQuery, LifecycleQuery, PolicyViolation, ReachQuery,
+};
 use crate::symbol_graph::query;
 
 /// Public source-file view. Requesting this view maps to the `syntax` capability.
@@ -843,10 +846,81 @@ pub struct CallGraph<'a> {
     _db: &'a AnalysisDb,
 }
 
-/// Reserved dataflow fact view. Requesting this view currently maps to unsupported `dataflow`.
+/// Preview event policy view. Requesting this view maps to lightweight `events`.
+#[derive(Clone, Copy)]
+pub struct Events<'a> {
+    db: &'a AnalysisDb,
+}
+
+impl<'a> Events<'a> {
+    /// Finds events matching `query`.
+    ///
+    /// Supports call-event matching over syntax-derived function calls, upgrading
+    /// to call/refined-call facts when another requested capability already
+    /// builds them. Other event kinds remain preview vocabulary until backed facts land.
+    pub fn matching(self, query: EventPattern) -> Vec<PolicyViolation> {
+        crate::policy_queries::matching_events(self.db, query)
+    }
+}
+
+/// Preview calls policy view. Requesting this view maps to provider-backed `calls`.
+#[derive(Clone, Copy)]
+pub struct Calls<'a> {
+    db: &'a AnalysisDb,
+}
+
+impl<'a> Calls<'a> {
+    /// Finds forbidden reachable calls described by `query`.
+    ///
+    /// Phase 56 answers bounded reachability over private refined-call and
+    /// reachability facts without exposing raw call-graph internals.
+    pub fn forbidden_reachable(self, query: ReachQuery) -> Vec<PolicyViolation> {
+        crate::policy_queries::forbidden_reachable(self.db, query)
+    }
+}
+
+/// Preview control-flow policy view. Requesting this view maps to `control_flow`.
+#[derive(Clone, Copy)]
+pub struct ControlFlow<'a> {
+    db: &'a AnalysisDb,
+}
+
+impl<'a> ControlFlow<'a> {
+    /// Finds events missing a required guard.
+    ///
+    /// Phase 57 supports same-function call-event guard checks over private
+    /// refined call facts and CFG-backed operation order, with MIR/source
+    /// ordering as fallback when CFG facts are absent. Other event families
+    /// remain preview vocabulary until backed facts land.
+    pub fn missing_guard(self, query: GuardQuery) -> Vec<PolicyViolation> {
+        crate::policy_queries::missing_guards(self.db, query)
+    }
+
+    /// Finds lifecycle starts missing required cleanup.
+    ///
+    /// Phase 57 supports same-function call-event lifecycle checks over private
+    /// refined call facts and CFG-backed operation order, with MIR/source
+    /// ordering as fallback when CFG facts are absent. Exact path, error-exit,
+    /// and interprocedural resource proof remains deferred.
+    pub fn missing_cleanup(self, query: LifecycleQuery) -> Vec<PolicyViolation> {
+        crate::policy_queries::missing_cleanup(self.db, query)
+    }
+}
+
+/// Preview data-flow policy view. Requesting this view maps to provider-backed `dataflow`.
 #[derive(Clone, Copy)]
 pub struct DataFlow<'a> {
-    _db: &'a AnalysisDb,
+    db: &'a AnalysisDb,
+}
+
+impl<'a> DataFlow<'a> {
+    /// Finds forbidden source-to-sink flows described by `query`.
+    ///
+    /// Phase 58 answers bounded source-to-sink queries over private data-flow
+    /// facts without exposing raw graph nodes, edges, or solver internals.
+    pub fn forbidden(self, query: FlowQuery) -> Vec<PolicyViolation> {
+        crate::policy_queries::forbidden_flows(self.db, query)
+    }
 }
 
 /// Reserved coverage fact view. Requesting this view currently maps to unsupported `coverage_facts`.
@@ -1023,7 +1097,10 @@ impl_fact_view!(CoverageFacts);
 impl_fact_view!(ChangedFiles);
 impl_fact_view!(Cfg, _db);
 impl_fact_view!(CallGraph, _db);
-impl_fact_view!(DataFlow, _db);
+impl_fact_view!(Events);
+impl_fact_view!(Calls);
+impl_fact_view!(ControlFlow);
+impl_fact_view!(DataFlow);
 impl_fact_view!(TestSuiteMetrics, _db);
 
 #[cfg(test)]

@@ -5,10 +5,16 @@ use super::cache_key::{
     data_flow_provider_parameter_digest, data_flow_provider_parameter_digest_for_snapshot,
 };
 use super::facts::{
-    DataFlowConfidence, DataFlowModelFact, DataFlowModelKind, DataFlowNodeFact, DataFlowNodeKind,
-    DataFlowPrecision, DataFlowProvenance, DataFlowStatus, DataFlowValidation,
+    DataFlowAlgorithm, DataFlowConfidence, DataFlowEdgeFact, DataFlowEdgeKind, DataFlowModelFact,
+    DataFlowModelKind, DataFlowNodeFact, DataFlowNodeKind, DataFlowPrecision, DataFlowProvenance,
+    DataFlowStatus, DataFlowValidation,
 };
-use super::store::{DataFlowOutput, next_data_flow_model_id, next_data_flow_node_id};
+use super::store::{
+    DataFlowOutput, next_data_flow_edge_id, next_data_flow_model_id, next_data_flow_node_id,
+};
+use crate::analysis::entrypoints::facts::TrustBoundaryFact;
+use crate::analysis::ids::{DataFlowModelId, DataFlowNodeId};
+use crate::analysis::places::{PlaceFact, PlaceRoot};
 use crate::analysis_kernel::incremental::{
     CacheStats, Digest, DigestKind, InputComponent, InputSnapshot,
 };
@@ -116,8 +122,9 @@ fn derive_source_models(db: &AnalysisDb, output: &mut DataFlowOutput) {
             ],
             stable_key: stable_key.clone(),
         });
+        let source_node = next_data_flow_node_id(&output.nodes);
         output.nodes.push(DataFlowNodeFact {
-            id: next_data_flow_node_id(&output.nodes),
+            id: source_node,
             kind: DataFlowNodeKind::Source,
             language: boundary.language,
             file: Some(boundary.file),
@@ -136,7 +143,121 @@ fn derive_source_models(db: &AnalysisDb, output: &mut DataFlowOutput) {
                 &[("source_model", stable_key)],
             ),
         });
+        derive_source_introduction_edges(db, output, boundary, source_node, model_id);
     }
+}
+
+fn derive_source_introduction_edges(
+    db: &AnalysisDb,
+    output: &mut DataFlowOutput,
+    boundary: &TrustBoundaryFact,
+    source_node: DataFlowNodeId,
+    model_id: DataFlowModelId,
+) {
+    let Some(target_function) = boundary.target_parameter else {
+        return;
+    };
+    let targets = db
+        .mir_places()
+        .iter()
+        .filter(|place| parameter_matches_boundary(place, target_function, boundary))
+        .filter_map(|place| {
+            let node = output
+                .nodes
+                .iter()
+                .find(|node| node.place == Some(place.id))
+                .map(|node| node.id)?;
+            Some((place, node))
+        })
+        .collect::<Vec<_>>();
+
+    for (place, target_node) in targets {
+        push_source_introduction_edge(output, boundary, place, source_node, target_node, model_id);
+    }
+}
+
+fn parameter_matches_boundary(
+    place: &PlaceFact,
+    target_function: crate::core::FunctionId,
+    boundary: &TrustBoundaryFact,
+) -> bool {
+    let PlaceRoot::Parameter {
+        function, index, ..
+    } = &place.root
+    else {
+        return false;
+    };
+    if *function != target_function {
+        return false;
+    }
+    match boundary.target_parameter_index {
+        Some(target_index) => *index as usize == target_index,
+        None => true,
+    }
+}
+
+fn push_source_introduction_edge(
+    output: &mut DataFlowOutput,
+    boundary: &TrustBoundaryFact,
+    place: &PlaceFact,
+    source_node: DataFlowNodeId,
+    target_node: DataFlowNodeId,
+    model_id: DataFlowModelId,
+) {
+    let stable_key = stable_key_from_parts(
+        FactFamily::DataFlowEdge,
+        &[
+            ("kind", "SourceIntroduction".to_string()),
+            ("trust_boundary", boundary.stable_key.clone()),
+            ("place", place.stable_key.clone()),
+        ],
+    );
+    if output
+        .edges
+        .iter()
+        .any(|edge| edge.stable_key == stable_key)
+    {
+        return;
+    }
+    output.edges.push(DataFlowEdgeFact {
+        id: next_data_flow_edge_id(&output.edges),
+        from: source_node,
+        to: target_node,
+        kind: DataFlowEdgeKind::SourceIntroduction,
+        algorithm: DataFlowAlgorithm::ExtensionModel,
+        status: if boundary.target_parameter_index.is_some() {
+            DataFlowStatus::Present
+        } else {
+            DataFlowStatus::Unknown
+        },
+        precision: if boundary.target_parameter_index.is_some() {
+            DataFlowPrecision::SetupAware
+        } else {
+            DataFlowPrecision::Unknown
+        },
+        validation: DataFlowValidation::ReferentiallyValidated,
+        confidence: if boundary.target_parameter_index.is_some() {
+            DataFlowConfidence::High
+        } else {
+            DataFlowConfidence::Low
+        },
+        provenance: DataFlowProvenance::Native,
+        call_site: None,
+        call_target: None,
+        refined_call: None,
+        model: Some(model_id),
+        budget: None,
+        evidence: vec![
+            "trust_boundary_source_introduction".to_string(),
+            format!("source_kind={:?}", boundary.source_kind),
+            boundary
+                .target_parameter_index
+                .map(|index| format!("target_parameter_index={index}"))
+                .unwrap_or_else(|| "target_parameter_index=unknown".to_string()),
+        ],
+        input_stable_keys: vec![boundary.stable_key.clone(), place.stable_key.clone()],
+        stable_key,
+    });
 }
 
 fn derive_extension_models(db: &AnalysisDb, output: &mut DataFlowOutput) {
@@ -321,4 +442,214 @@ fn provider_error_diagnostic(message: String) -> Diagnostic {
         crate::diagnostics::TextRange::point(1, 1),
         format!("Data-flow provider failed: {message}"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::analysis::entrypoints::facts::{
+        EntrypointConfidence, EntrypointFact, EntrypointKind, EntrypointPrecision,
+        EntrypointProvenance, EntrypointStatus, TriggerMetadata, TrustBoundarySourceKind,
+    };
+    use crate::analysis::entrypoints::store::EntrypointOutput;
+    use crate::analysis::ids::{EntrypointId, MirBodyId, PlaceId, TrustBoundaryId};
+    use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
+    use crate::analysis::places::{PlaceProjection, PlaceStatus};
+    use crate::core::{FileId, FunctionFact, FunctionId, Language, Span};
+    use std::path::PathBuf;
+
+    #[test]
+    fn source_models_create_source_introduction_edges_to_matching_parameters() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/main.ts"),
+            "src/main.ts".to_string(),
+            "export function handler(req: Request) {}\n".to_string(),
+        );
+        let function = db.push_function(FunctionFact {
+            id: FunctionId(0),
+            file,
+            name: "handler".to_string(),
+            span: Span::point(file, 1, 1),
+            language: Language::TypeScript,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+        });
+        db.replace_semantic_mir(MirOutput {
+            bodies: vec![mir_body(file, function)],
+            places: vec![parameter_place(file, function)],
+            operations: Vec::new(),
+            unsupported: Vec::new(),
+        })
+        .expect("valid MIR");
+        db.replace_entrypoint_facts(EntrypointOutput {
+            entrypoints: vec![entrypoint(file, function)],
+            trust_boundaries: vec![trust_boundary(file, function)],
+            dispatch_edges: Vec::new(),
+            unresolved: Vec::new(),
+        })
+        .expect("valid entrypoint facts");
+        let mut output = DataFlowOutput::empty();
+        derive_local_place_nodes(&db, &mut output);
+
+        derive_source_models(&db, &mut output);
+
+        assert!(output.nodes.iter().any(|node| {
+            node.kind == DataFlowNodeKind::Source && node.model == Some(DataFlowModelId(0))
+        }));
+        let edge = output
+            .edges
+            .iter()
+            .find(|edge| edge.kind == DataFlowEdgeKind::SourceIntroduction)
+            .unwrap_or_else(|| panic!("missing source introduction edge: {output:#?}"));
+        assert_eq!(edge.status, DataFlowStatus::Present);
+        assert_eq!(edge.model, Some(DataFlowModelId(0)));
+        assert!(
+            edge.evidence
+                .iter()
+                .any(|value| value == "source_kind=QueryString")
+        );
+    }
+
+    #[test]
+    fn source_models_downgrade_unknown_parameter_index_edges() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/main.ts"),
+            "src/main.ts".to_string(),
+            "export function handler(req: Request, res: Response) {}\n".to_string(),
+        );
+        let function = db.push_function(FunctionFact {
+            id: FunctionId(0),
+            file,
+            name: "handler".to_string(),
+            span: Span::point(file, 1, 1),
+            language: Language::TypeScript,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+        });
+        db.replace_semantic_mir(MirOutput {
+            bodies: vec![mir_body(file, function)],
+            places: vec![
+                parameter_place_with_index(file, function, 0, "req"),
+                parameter_place_with_index(file, function, 1, "res"),
+            ],
+            operations: Vec::new(),
+            unsupported: Vec::new(),
+        })
+        .expect("valid MIR");
+        let mut boundary = trust_boundary(file, function);
+        boundary.target_parameter_index = None;
+        db.replace_entrypoint_facts(EntrypointOutput {
+            entrypoints: vec![entrypoint(file, function)],
+            trust_boundaries: vec![boundary],
+            dispatch_edges: Vec::new(),
+            unresolved: Vec::new(),
+        })
+        .expect("valid entrypoint facts");
+        let mut output = DataFlowOutput::empty();
+        derive_local_place_nodes(&db, &mut output);
+
+        derive_source_models(&db, &mut output);
+
+        let source_edges = output
+            .edges
+            .iter()
+            .filter(|edge| edge.kind == DataFlowEdgeKind::SourceIntroduction)
+            .collect::<Vec<_>>();
+        assert_eq!(source_edges.len(), 2);
+        assert!(source_edges.iter().all(|edge| {
+            edge.status == DataFlowStatus::Unknown
+                && edge.precision == DataFlowPrecision::Unknown
+                && edge.confidence == DataFlowConfidence::Low
+                && edge
+                    .evidence
+                    .iter()
+                    .any(|value| value == "target_parameter_index=unknown")
+        }));
+    }
+
+    fn mir_body(file: FileId, function: FunctionId) -> MirBody {
+        MirBody {
+            id: MirBodyId(0),
+            language: Language::TypeScript,
+            file,
+            function,
+            package: None,
+            module: None,
+            owner_stable_key: "function:handler".to_string(),
+            span: Span::point(file, 1, 1),
+            stable_key: "body:handler".to_string(),
+            status: MirStatus::Resolved,
+        }
+    }
+
+    fn parameter_place(file: FileId, function: FunctionId) -> PlaceFact {
+        parameter_place_with_index(file, function, 0, "req")
+    }
+
+    fn parameter_place_with_index(
+        file: FileId,
+        function: FunctionId,
+        index: u32,
+        name: &str,
+    ) -> PlaceFact {
+        PlaceFact {
+            id: PlaceId(index as u64),
+            language: Language::TypeScript,
+            file: Some(file),
+            function: Some(function),
+            root: PlaceRoot::Parameter {
+                function,
+                index,
+                name: Some(name.to_string()),
+            },
+            projections: Vec::<PlaceProjection>::new(),
+            stable_key: format!("place:{name}"),
+            status: PlaceStatus::Resolved,
+        }
+    }
+
+    fn entrypoint(file: FileId, function: FunctionId) -> EntrypointFact {
+        EntrypointFact {
+            id: EntrypointId(0),
+            language: Language::TypeScript,
+            framework_id: "express".to_string(),
+            kind: EntrypointKind::HttpRoute,
+            target_function: function,
+            target_symbol: None,
+            registration_span: Span::point(file, 1, 1),
+            registration_file: file,
+            trigger_metadata: TriggerMetadata::empty(),
+            trust_boundary_link: None,
+            precision: EntrypointPrecision::ResolvedStatic,
+            provenance: EntrypointProvenance::NativeRecognizer,
+            confidence: EntrypointConfidence::High,
+            status: EntrypointStatus::Resolved,
+            provider_id: "polint.entrypoints".to_string(),
+            stable_key: "entrypoint:handler".to_string(),
+        }
+    }
+
+    fn trust_boundary(file: FileId, function: FunctionId) -> TrustBoundaryFact {
+        TrustBoundaryFact {
+            id: TrustBoundaryId(0),
+            entrypoint_stable_key: "entrypoint:handler".to_string(),
+            source_kind: TrustBoundarySourceKind::QueryString,
+            target_parameter: Some(function),
+            target_parameter_index: Some(0),
+            access_path: None,
+            protocol: None,
+            language: Language::TypeScript,
+            file,
+            span: Span::point(file, 1, 1),
+            precision: EntrypointPrecision::ResolvedStatic,
+            provider_id: "polint.entrypoints".to_string(),
+            stable_key: "trust-boundary:query".to_string(),
+        }
+    }
 }
