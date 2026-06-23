@@ -31,8 +31,15 @@ pub(crate) struct AccessPathStore {
 }
 
 impl AccessPathStore {
+    #[allow(
+        dead_code,
+        reason = "Compatibility callers can still pass unnormalized output; providers use from_normalized_output."
+    )]
     pub(crate) fn from_output(output: AccessPathOutput) -> Self {
-        let output = output.normalized();
+        Self::from_normalized_output(output.normalized())
+    }
+
+    pub(crate) fn from_normalized_output(output: AccessPathOutput) -> Self {
         let mut store = Self {
             output,
             ..Self::default()

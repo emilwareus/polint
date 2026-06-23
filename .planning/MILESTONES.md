@@ -1,5 +1,23 @@
 # Milestones
 
+## v1.3 Graph Engine Precision (Completed: 2026-06-06)
+
+**Phases completed:** 13 phases, Phase 42 through Phase 54
+
+**Artifacts:** [roadmap archive](milestones/v1.3-ROADMAP.md), [requirements archive](milestones/v1.3-REQUIREMENTS.md)
+
+**Key accomplishments:**
+
+- Stable benchmark identity records, renderers, deduplication, and identity-vs-unsupported taxonomy for Go and Jelly scoring.
+- Explicit reachability roots, per-suite scoring modes, and deterministic provider-order gates inherited by solver phases.
+- Private shared semantic graph, constraint vocabulary, unified deterministic solver core, and derived-edge provenance.
+- Go semantic sidecar/frontend and Go RTA driver over the unified solver.
+- JS/TS function/callsite inventory, lexical scope/binding model, function-token propagation, and object/property/prototype/`this` model.
+- Private adaptation model layer with accepted/rejected facts, sandboxed benchmark adaptation reporting, and model provenance.
+- Refined-call projection over solver output plus consolidated unknown taxonomy and `polint inspect unknowns --format json`.
+- Cache and solver-budget consolidation across v1.3 fact families.
+- Benchmark promotion gate extension with precision floors, F0.5 tracking, polyglot canary, and public-surface leak proof.
+
 ## v1.2 Static Analysis Engine Implementation (Shipped: 2026-05-27)
 
 **Phases completed:** 22 phases, 136 plans, 267 tasks

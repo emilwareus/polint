@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use crate::analysis::cfg::derived::{
@@ -12,7 +13,8 @@ use crate::analysis::cfg::lower_ts::lower_ts_cfg;
 use crate::analysis::cfg::store::CfgOutput;
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
-    CacheStats, Digest, DigestKind, InputComponent, InputSnapshot,
+    CacheStats, Digest, DigestBuilder, DigestKind, InputComponent, InputComponentStatus,
+    InputSnapshot,
 };
 use crate::core::AnalysisDb;
 use crate::diagnostics::{Diagnostic, TextRange};
@@ -150,230 +152,270 @@ fn cfg_output_digest(
     upstream_syntax_output_digests: &[Digest],
     output: &CfgOutput,
 ) -> Digest {
-    let mut parts = vec![
-        format!("provider_id={}", manifest.id),
-        format!("provider_version={}", manifest.provider_version()),
-        format!("schema={}", manifest.primary_schema_label()),
-        format!("config={}", input_snapshot.config.digest),
-        format!("semantic_mir={semantic_mir_output_digest}"),
-    ];
-    extend_component_parts(
-        &mut parts,
+    let mut digest = Digest::builder(DigestKind::ProviderOutput, "cfg_output");
+    digest.part("provider_id");
+    digest.part(manifest.id);
+    digest.part("provider_version");
+    digest.part(manifest.provider_version());
+    digest.part("schema");
+    digest.part(&manifest.primary_schema_label());
+    digest.part("config");
+    digest.part(&input_snapshot.config.digest.to_string());
+    digest.part("semantic_mir");
+    digest.part(&semantic_mir_output_digest.to_string());
+    append_component_digest_parts(
+        &mut digest,
         "go_lifecycle",
         &input_snapshot.go_lifecycle.components,
     );
-    extend_component_parts(
-        &mut parts,
+    append_component_digest_parts(
+        &mut digest,
         "ts_js_lifecycle",
         &input_snapshot.ts_js_lifecycle.components,
     );
-    extend_component_parts(&mut parts, "model", &input_snapshot.models);
-    extend_component_parts(&mut parts, "extension", &input_snapshot.extensions);
-    extend_component_parts(&mut parts, "tool", &input_snapshot.tool_invocations);
+    append_component_digest_parts(&mut digest, "model", &input_snapshot.models);
+    append_component_digest_parts(&mut digest, "extension", &input_snapshot.extensions);
+    append_component_digest_parts(&mut digest, "tool", &input_snapshot.tool_invocations);
 
-    parts.extend(
-        upstream_syntax_output_digests
-            .iter()
-            .map(|digest| format!("upstream_syntax={digest}")),
-    );
+    let mut upstream_syntax_output_digests =
+        upstream_syntax_output_digests.iter().collect::<Vec<_>>();
+    upstream_syntax_output_digests.sort();
+    for upstream in upstream_syntax_output_digests {
+        digest.part("upstream_syntax");
+        digest.part(&upstream.to_string());
+    }
+
     let function_keys = function_key_map(output);
     let node_keys = node_key_map(output);
     let block_keys = block_key_map(output);
     let edge_keys = edge_key_map(output);
 
-    parts.extend(output.functions.iter().map(|row| {
-        format!(
-            "cfg_function={} language={:?} span={} entry={} normal_exit={} exceptional_exit={} status={:?} precision={:?}",
-            row.stable_key,
-            row.language,
-            span_part(&row.span),
-            stable_node_key(&node_keys, row.entry_node),
-            stable_node_key(&node_keys, row.normal_exit_node),
-            row.exceptional_exit_node
-                .map(|node| stable_node_key(&node_keys, node))
-                .unwrap_or_else(|| "none".to_string()),
-            row.status,
-            row.precision,
-        )
-    }));
-    parts.extend(output.nodes.iter().map(|row| {
-        format!(
-            "cfg_node={} function={} block={} kind={:?} span={} generated={} ordinal={} status={:?} precision={:?}",
-            row.stable_key,
-            stable_function_key(&function_keys, row.cfg_function),
-            stable_block_key(&block_keys, row.block),
-            row.kind,
-            row.span
-                .as_ref()
-                .map(span_part)
-                .unwrap_or_else(|| "none".to_string()),
-            row.generated,
-            row.operation_ordinal,
-            row.status,
-            row.precision,
-        )
-    }));
-    parts.extend(output.blocks.iter().map(|row| {
-        format!(
-            "basic_block={} function={} kind={:?} first_node={} last_node={} reachable={} rpo={} status={:?} precision={:?}",
-            row.stable_key,
-            stable_function_key(&function_keys, row.cfg_function),
-            row.kind,
-            row.first_node
-                .map(|node| stable_node_key(&node_keys, node))
-                .unwrap_or_else(|| "none".to_string()),
-            row.last_node
-                .map(|node| stable_node_key(&node_keys, node))
-                .unwrap_or_else(|| "none".to_string()),
-            row.reachable,
-            row.reverse_postorder,
-            row.status,
-            row.precision,
-        )
-    }));
-    parts.extend(output.edges.iter().map(|row| {
-        format!(
-            "cfg_edge={} function={} view={:?} from={} to={} from_block={} to_block={} kind={:?} label={} status={:?} precision={:?}",
-            row.stable_key,
-            stable_function_key(&function_keys, row.cfg_function),
-            row.view,
-            stable_node_key(&node_keys, row.from),
-            stable_node_key(&node_keys, row.to),
-            stable_block_key(&block_keys, row.from_block),
-            stable_block_key(&block_keys, row.to_block),
-            row.kind,
-            row.label.as_deref().unwrap_or("none"),
-            row.status,
-            row.precision,
-        )
-    }));
-    parts.extend(output.reachability.iter().map(|row| {
-        format!(
-            "cfg_reachability={} function={} view={:?} block={} reachable={} status={:?} precision={:?}",
-            row.stable_key,
-            stable_function_key(&function_keys, row.cfg_function),
-            row.view,
-            stable_block_key(&block_keys, row.block),
-            row.reachable,
-            row.status,
-            row.precision,
-        )
-    }));
-    parts.extend(output.dominators.iter().map(|row| {
-        format!(
-            "cfg_dominator={} function={} view={:?} dominator={} dominated={} immediate={} status={:?} precision={:?}",
-            row.stable_key,
-            stable_function_key(&function_keys, row.cfg_function),
-            row.view,
-            stable_block_key(&block_keys, row.dominator),
-            stable_block_key(&block_keys, row.dominated),
-            row.immediate,
-            row.status,
-            row.precision,
-        )
-    }));
-    parts.extend(output.postdominators.iter().map(|row| {
-        format!(
-            "cfg_postdominator={} function={} view={:?} postdominator={} postdominated={} immediate={} status={:?} precision={:?}",
-            row.stable_key,
-            stable_function_key(&function_keys, row.cfg_function),
-            row.view,
-            stable_block_key(&block_keys, row.postdominator),
-            stable_block_key(&block_keys, row.postdominated),
-            row.immediate,
-            row.status,
-            row.precision,
-        )
-    }));
-    parts.extend(output.control_dependence.iter().map(|row| {
-        format!(
-            "cfg_control_dependence={} function={} view={:?} edge={} edge_kind={:?} controlled_block={} status={:?} precision={:?}",
-            row.stable_key,
-            stable_function_key(&function_keys, row.cfg_function),
-            row.view,
-            stable_edge_key(&edge_keys, row.controlling_edge),
-            row.controlling_edge_kind,
-            stable_block_key(&block_keys, row.controlled_block),
-            row.status,
-            row.precision,
-        )
-    }));
-    parts.extend(output.unsupported.iter().map(|row| {
-        format!(
-            "unsupported_control_flow={} function={} language={:?} span={} construct={} evidence={} action={:?} status={:?} precision={:?}",
-            row.stable_key,
-            row.cfg_function
-                .map(|function| stable_function_key(&function_keys, function))
-                .unwrap_or_else(|| "none".to_string()),
-            row.language,
-            span_part(&row.span),
-            row.construct,
-            row.source_evidence,
-            row.conservative_action,
-            row.status,
-            row.precision,
-        )
-    }));
+    for row in sorted_refs_by_stable_key(&output.functions) {
+        digest.part("cfg_function");
+        digest.part(&row.stable_key);
+        digest.debug_part(row.language);
+        digest.part(&span_part(&row.span));
+        digest.part(stable_node_key(&node_keys, row.entry_node).as_ref());
+        digest.part(stable_node_key(&node_keys, row.normal_exit_node).as_ref());
+        digest.part(optional_node_key(&node_keys, row.exceptional_exit_node).as_ref());
+        digest.debug_part(row.status);
+        digest.debug_part(row.precision);
+    }
 
-    parts.sort();
-    let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
-    Digest::from_parts(DigestKind::ProviderOutput, "cfg_output", &refs)
+    for row in sorted_refs_by_stable_key(&output.nodes) {
+        digest.part("cfg_node");
+        digest.part(&row.stable_key);
+        digest.part(stable_function_key(&function_keys, row.cfg_function).as_ref());
+        digest.part(stable_block_key(&block_keys, row.block).as_ref());
+        digest.debug_part(row.kind);
+        digest.part(optional_span_part(row.span.as_ref()).as_ref());
+        digest.bool_part(row.generated);
+        digest.part(&row.operation_ordinal.to_string());
+        digest.debug_part(row.status);
+        digest.debug_part(row.precision);
+    }
+
+    for row in sorted_refs_by_stable_key(&output.blocks) {
+        digest.part("basic_block");
+        digest.part(&row.stable_key);
+        digest.part(stable_function_key(&function_keys, row.cfg_function).as_ref());
+        digest.debug_part(row.kind);
+        digest.part(optional_node_key(&node_keys, row.first_node).as_ref());
+        digest.part(optional_node_key(&node_keys, row.last_node).as_ref());
+        digest.bool_part(row.reachable);
+        digest.part(&row.reverse_postorder.to_string());
+        digest.debug_part(row.status);
+        digest.debug_part(row.precision);
+    }
+
+    for row in sorted_refs_by_stable_key(&output.edges) {
+        digest.part("cfg_edge");
+        digest.part(&row.stable_key);
+        digest.part(stable_function_key(&function_keys, row.cfg_function).as_ref());
+        digest.debug_part(row.view);
+        digest.part(stable_node_key(&node_keys, row.from).as_ref());
+        digest.part(stable_node_key(&node_keys, row.to).as_ref());
+        digest.part(stable_block_key(&block_keys, row.from_block).as_ref());
+        digest.part(stable_block_key(&block_keys, row.to_block).as_ref());
+        digest.debug_part(row.kind);
+        digest.part(row.label.as_deref().unwrap_or("none"));
+        digest.debug_part(row.status);
+        digest.debug_part(row.precision);
+    }
+
+    for row in sorted_refs_by_stable_key(&output.reachability) {
+        digest.part("cfg_reachability");
+        digest.part(&row.stable_key);
+        digest.part(stable_function_key(&function_keys, row.cfg_function).as_ref());
+        digest.debug_part(row.view);
+        digest.part(stable_block_key(&block_keys, row.block).as_ref());
+        digest.bool_part(row.reachable);
+        digest.debug_part(row.status);
+        digest.debug_part(row.precision);
+    }
+
+    for row in sorted_refs_by_stable_key(&output.dominators) {
+        digest.part("cfg_dominator");
+        digest.part(&row.stable_key);
+        digest.part(stable_function_key(&function_keys, row.cfg_function).as_ref());
+        digest.debug_part(row.view);
+        digest.part(stable_block_key(&block_keys, row.dominator).as_ref());
+        digest.part(stable_block_key(&block_keys, row.dominated).as_ref());
+        digest.bool_part(row.immediate);
+        digest.debug_part(row.status);
+        digest.debug_part(row.precision);
+    }
+
+    for row in sorted_refs_by_stable_key(&output.postdominators) {
+        digest.part("cfg_postdominator");
+        digest.part(&row.stable_key);
+        digest.part(stable_function_key(&function_keys, row.cfg_function).as_ref());
+        digest.debug_part(row.view);
+        digest.part(stable_block_key(&block_keys, row.postdominator).as_ref());
+        digest.part(stable_block_key(&block_keys, row.postdominated).as_ref());
+        digest.bool_part(row.immediate);
+        digest.debug_part(row.status);
+        digest.debug_part(row.precision);
+    }
+
+    for row in sorted_refs_by_stable_key(&output.control_dependence) {
+        digest.part("cfg_control_dependence");
+        digest.part(&row.stable_key);
+        digest.part(stable_function_key(&function_keys, row.cfg_function).as_ref());
+        digest.debug_part(row.view);
+        digest.part(stable_edge_key(&edge_keys, row.controlling_edge).as_ref());
+        digest.debug_part(row.controlling_edge_kind);
+        digest.part(stable_block_key(&block_keys, row.controlled_block).as_ref());
+        digest.debug_part(row.status);
+        digest.debug_part(row.precision);
+    }
+
+    for row in sorted_refs_by_stable_key(&output.unsupported) {
+        digest.part("unsupported_control_flow");
+        digest.part(&row.stable_key);
+        digest.part(optional_function_key(&function_keys, row.cfg_function).as_ref());
+        digest.debug_part(row.language);
+        digest.part(&span_part(&row.span));
+        digest.part(&row.construct);
+        digest.part(&row.source_evidence);
+        digest.debug_part(row.conservative_action);
+        digest.debug_part(row.status);
+        digest.debug_part(row.precision);
+    }
+
+    digest.finish()
 }
 
-fn function_key_map(output: &CfgOutput) -> BTreeMap<CfgFunctionId, String> {
+trait StableKeyed {
+    fn stable_key(&self) -> &str;
+}
+
+macro_rules! impl_stable_keyed {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            impl StableKeyed for $ty {
+                fn stable_key(&self) -> &str {
+                    &self.stable_key
+                }
+            }
+        )+
+    };
+}
+
+impl_stable_keyed!(
+    crate::analysis::cfg::facts::CfgFunctionFact,
+    crate::analysis::cfg::facts::CfgNodeFact,
+    crate::analysis::cfg::facts::BasicBlockFact,
+    crate::analysis::cfg::facts::CfgEdgeFact,
+    crate::analysis::cfg::facts::ReachabilityFact,
+    crate::analysis::cfg::facts::DominatorFact,
+    crate::analysis::cfg::facts::PostDominatorFact,
+    crate::analysis::cfg::facts::ControlDependenceFact,
+    crate::analysis::cfg::facts::UnsupportedControlFlowFact,
+);
+
+fn sorted_refs_by_stable_key<T: StableKeyed>(rows: &[T]) -> Vec<&T> {
+    let mut refs = rows.iter().collect::<Vec<_>>();
+    refs.sort_by(|left, right| left.stable_key().cmp(right.stable_key()));
+    refs
+}
+
+fn function_key_map(output: &CfgOutput) -> BTreeMap<CfgFunctionId, &str> {
     output
         .functions
         .iter()
-        .map(|row| (row.id, row.stable_key.clone()))
+        .map(|row| (row.id, row.stable_key.as_str()))
         .collect()
 }
 
-fn node_key_map(output: &CfgOutput) -> BTreeMap<CfgNodeId, String> {
+fn node_key_map(output: &CfgOutput) -> BTreeMap<CfgNodeId, &str> {
     output
         .nodes
         .iter()
-        .map(|row| (row.id, row.stable_key.clone()))
+        .map(|row| (row.id, row.stable_key.as_str()))
         .collect()
 }
 
-fn block_key_map(output: &CfgOutput) -> BTreeMap<BasicBlockId, String> {
+fn block_key_map(output: &CfgOutput) -> BTreeMap<BasicBlockId, &str> {
     output
         .blocks
         .iter()
-        .map(|row| (row.id, row.stable_key.clone()))
+        .map(|row| (row.id, row.stable_key.as_str()))
         .collect()
 }
 
-fn edge_key_map(output: &CfgOutput) -> BTreeMap<CfgEdgeId, String> {
+fn edge_key_map(output: &CfgOutput) -> BTreeMap<CfgEdgeId, &str> {
     output
         .edges
         .iter()
-        .map(|row| (row.id, row.stable_key.clone()))
+        .map(|row| (row.id, row.stable_key.as_str()))
         .collect()
 }
 
-fn stable_function_key(keys: &BTreeMap<CfgFunctionId, String>, id: CfgFunctionId) -> String {
+fn stable_function_key<'a>(
+    keys: &'a BTreeMap<CfgFunctionId, &'a str>,
+    id: CfgFunctionId,
+) -> Cow<'a, str> {
     keys.get(&id)
-        .cloned()
-        .unwrap_or_else(|| format!("<missing-function:{}>", id.0))
+        .map(|key| Cow::Borrowed(*key))
+        .unwrap_or_else(|| Cow::Owned(format!("<missing-function:{}>", id.0)))
 }
 
-fn stable_node_key(keys: &BTreeMap<CfgNodeId, String>, id: CfgNodeId) -> String {
+fn stable_node_key<'a>(keys: &'a BTreeMap<CfgNodeId, &'a str>, id: CfgNodeId) -> Cow<'a, str> {
     keys.get(&id)
-        .cloned()
-        .unwrap_or_else(|| format!("<missing-node:{}>", id.0))
+        .map(|key| Cow::Borrowed(*key))
+        .unwrap_or_else(|| Cow::Owned(format!("<missing-node:{}>", id.0)))
 }
 
-fn stable_block_key(keys: &BTreeMap<BasicBlockId, String>, id: BasicBlockId) -> String {
+fn stable_block_key<'a>(
+    keys: &'a BTreeMap<BasicBlockId, &'a str>,
+    id: BasicBlockId,
+) -> Cow<'a, str> {
     keys.get(&id)
-        .cloned()
-        .unwrap_or_else(|| format!("<missing-block:{}>", id.0))
+        .map(|key| Cow::Borrowed(*key))
+        .unwrap_or_else(|| Cow::Owned(format!("<missing-block:{}>", id.0)))
 }
 
-fn stable_edge_key(keys: &BTreeMap<CfgEdgeId, String>, id: CfgEdgeId) -> String {
+fn stable_edge_key<'a>(keys: &'a BTreeMap<CfgEdgeId, &'a str>, id: CfgEdgeId) -> Cow<'a, str> {
     keys.get(&id)
-        .cloned()
-        .unwrap_or_else(|| format!("<missing-edge:{}>", id.0))
+        .map(|key| Cow::Borrowed(*key))
+        .unwrap_or_else(|| Cow::Owned(format!("<missing-edge:{}>", id.0)))
+}
+
+fn optional_function_key<'a>(
+    keys: &'a BTreeMap<CfgFunctionId, &'a str>,
+    id: Option<CfgFunctionId>,
+) -> Cow<'a, str> {
+    id.map(|id| stable_function_key(keys, id))
+        .unwrap_or(Cow::Borrowed("none"))
+}
+
+fn optional_node_key<'a>(
+    keys: &'a BTreeMap<CfgNodeId, &'a str>,
+    id: Option<CfgNodeId>,
+) -> Cow<'a, str> {
+    id.map(|id| stable_node_key(keys, id))
+        .unwrap_or(Cow::Borrowed("none"))
 }
 
 fn span_part(span: &crate::core::Span) -> String {
@@ -388,13 +430,44 @@ fn span_part(span: &crate::core::Span) -> String {
     )
 }
 
-fn extend_component_parts(parts: &mut Vec<String>, prefix: &str, components: &[InputComponent]) {
-    parts.extend(components.iter().map(|component| {
-        format!(
-            "{prefix}:{}:{:?}:{}",
-            component.name, component.status, component.digest
+fn optional_span_part(span: Option<&crate::core::Span>) -> Cow<'_, str> {
+    span.map(|span| Cow::Owned(span_part(span)))
+        .unwrap_or(Cow::Borrowed("none"))
+}
+
+fn append_component_digest_parts(
+    digest: &mut DigestBuilder,
+    prefix: &str,
+    components: &[InputComponent],
+) {
+    let mut components = components.iter().collect::<Vec<_>>();
+    components.sort_by(|left, right| {
+        (
+            left.name.as_str(),
+            component_status_rank(left.status),
+            &left.digest,
         )
-    }));
+            .cmp(&(
+                right.name.as_str(),
+                component_status_rank(right.status),
+                &right.digest,
+            ))
+    });
+    for component in components {
+        digest.part(prefix);
+        digest.part(&component.name);
+        digest.debug_part(component.status);
+        digest.part(&component.digest.to_string());
+    }
+}
+
+fn component_status_rank(status: InputComponentStatus) -> u8 {
+    match status {
+        InputComponentStatus::Present => 0,
+        InputComponentStatus::Absent => 1,
+        InputComponentStatus::Unsupported => 2,
+        InputComponentStatus::SetupMissing => 3,
+    }
 }
 
 fn provider_error_diagnostic(message: String) -> Diagnostic {
@@ -592,6 +665,46 @@ mod cfg_provider {
         );
 
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn cfg_output_digest_is_order_insensitive_for_upstream_syntax_digests() {
+        let temp = tempdir().expect("tempdir");
+        fs::write(temp.path().join(".polint.toml"), "").expect("config");
+        let loaded = load_config(temp.path()).expect("config loads");
+        let db = AnalysisDb::new();
+        let snapshot = InputSnapshot::from_run_inputs(
+            &loaded,
+            &db,
+            "config-a",
+            "rules-a",
+            "plan-a",
+            AnalysisKernel::provider_manifests(),
+        );
+        let manifest = AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.cfg")
+            .expect("cfg manifest");
+        let semantic_mir = Digest::from_parts(DigestKind::ProviderOutput, "mir", &["a"]);
+        let go_syntax = Digest::from_parts(DigestKind::ProviderOutput, "go", &["syntax"]);
+        let ts_syntax = Digest::from_parts(DigestKind::ProviderOutput, "ts", &["syntax"]);
+
+        let first = cfg_output_digest(
+            manifest,
+            &snapshot,
+            &semantic_mir,
+            &[go_syntax.clone(), ts_syntax.clone()],
+            &CfgOutput::empty(),
+        );
+        let second = cfg_output_digest(
+            manifest,
+            &snapshot,
+            &semantic_mir,
+            &[ts_syntax, go_syntax],
+            &CfgOutput::empty(),
+        );
+
+        assert_eq!(first, second);
     }
 
     #[test]

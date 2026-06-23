@@ -1,31 +1,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::analysis::cfg::facts::{BasicBlockKind, CfgPrecision, CfgStatus, CfgView};
+use crate::analysis::cfg::facts::{
+    BasicBlockFact, BasicBlockKind, CfgEdgeFact, CfgFunctionFact, CfgNodeFact, CfgPrecision,
+    CfgStatus, CfgView,
+};
 use crate::analysis::cfg::ids::{BasicBlockId, CfgEdgeId, CfgFunctionId, CfgNodeId};
+use crate::analysis::ids::MirBodyId;
 use crate::core::AnalysisDb;
 use crate::diagnostics::{Diagnostic, TextRange};
 
 pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
-    let functions = db
-        .cfg_functions()
-        .iter()
-        .map(|row| (row.id, row))
-        .collect::<BTreeMap<_, _>>();
-    let nodes = db
-        .cfg_nodes()
-        .iter()
-        .map(|row| (row.id, row))
-        .collect::<BTreeMap<_, _>>();
-    let blocks = db
-        .cfg_blocks()
-        .iter()
-        .map(|row| (row.id, row))
-        .collect::<BTreeMap<_, _>>();
-    let edges = db
-        .cfg_edges()
-        .iter()
-        .map(|row| (row.id, row))
-        .collect::<BTreeMap<_, _>>();
+    let index = CfgValidationIndex::from_db(db);
 
     check_duplicate_stable_keys(
         diagnostics,
@@ -48,10 +33,10 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
         db.cfg_edges().iter().map(|row| row.stable_key.as_str()),
     );
 
-    validate_function_graph_shapes(db, diagnostics);
+    validate_function_graph_shapes(&index, diagnostics);
 
     for function in db.cfg_functions() {
-        if !nodes.contains_key(&function.entry_node) {
+        if !index.nodes.contains_key(&function.entry_node) {
             push_cfg_diagnostic(
                 diagnostics,
                 "CfgFunction",
@@ -60,7 +45,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
                 "dangling entry node",
             );
         }
-        if !nodes.contains_key(&function.normal_exit_node) {
+        if !index.nodes.contains_key(&function.normal_exit_node) {
             push_cfg_diagnostic(
                 diagnostics,
                 "CfgFunction",
@@ -70,7 +55,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
             );
         }
         if let Some(exceptional_exit) = function.exceptional_exit_node
-            && !nodes.contains_key(&exceptional_exit)
+            && !index.nodes.contains_key(&exceptional_exit)
         {
             push_cfg_diagnostic(
                 diagnostics,
@@ -80,7 +65,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
                 "dangling exceptional exit node",
             );
         }
-        if !db.mir_bodies().iter().any(|body| body.id == function.body) {
+        if !index.mir_bodies.contains(&function.body) {
             push_cfg_diagnostic(
                 diagnostics,
                 "CfgFunction",
@@ -92,7 +77,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
     }
 
     for node in db.cfg_nodes() {
-        if !functions.contains_key(&node.cfg_function) {
+        if !index.functions.contains_key(&node.cfg_function) {
             push_cfg_diagnostic(
                 diagnostics,
                 "CfgNode",
@@ -101,7 +86,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
                 "dangling CFG function reference",
             );
         }
-        if !blocks.contains_key(&node.block) {
+        if !index.blocks.contains_key(&node.block) {
             push_cfg_diagnostic(
                 diagnostics,
                 "CfgNode",
@@ -124,7 +109,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
     }
 
     for block in db.cfg_blocks() {
-        if !functions.contains_key(&block.cfg_function) {
+        if !index.functions.contains_key(&block.cfg_function) {
             push_cfg_diagnostic(
                 diagnostics,
                 "BasicBlock",
@@ -146,7 +131,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
         }
         check_optional_node(
             diagnostics,
-            &nodes,
+            &index.nodes,
             block.first_node,
             "BasicBlock",
             &block.stable_key,
@@ -154,7 +139,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
         );
         check_optional_node(
             diagnostics,
-            &nodes,
+            &index.nodes,
             block.last_node,
             "BasicBlock",
             &block.stable_key,
@@ -164,7 +149,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
 
     let mut edge_shapes = BTreeSet::new();
     for edge in db.cfg_edges() {
-        if !functions.contains_key(&edge.cfg_function) {
+        if !index.functions.contains_key(&edge.cfg_function) {
             push_cfg_diagnostic(
                 diagnostics,
                 "CfgEdge",
@@ -175,7 +160,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
         }
         check_edge_node(
             diagnostics,
-            &nodes,
+            &index.nodes,
             edge.from,
             edge.cfg_function,
             "CfgEdge",
@@ -184,7 +169,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
         );
         check_edge_node(
             diagnostics,
-            &nodes,
+            &index.nodes,
             edge.to,
             edge.cfg_function,
             "CfgEdge",
@@ -193,7 +178,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
         );
         check_edge_block(
             diagnostics,
-            &blocks,
+            &index.blocks,
             edge.from_block,
             edge.cfg_function,
             "CfgEdge",
@@ -202,7 +187,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
         );
         check_edge_block(
             diagnostics,
-            &blocks,
+            &index.blocks,
             edge.to_block,
             edge.cfg_function,
             "CfgEdge",
@@ -231,7 +216,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
     for row in db.cfg_reachability() {
         check_block_ref(
             diagnostics,
-            &blocks,
+            &index.blocks,
             row.block,
             row.cfg_function,
             "CfgReachability",
@@ -242,7 +227,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
     for row in db.cfg_dominators() {
         check_block_ref(
             diagnostics,
-            &blocks,
+            &index.blocks,
             row.dominator,
             row.cfg_function,
             "CfgDominator",
@@ -251,7 +236,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
         );
         check_block_ref(
             diagnostics,
-            &blocks,
+            &index.blocks,
             row.dominated,
             row.cfg_function,
             "CfgDominator",
@@ -262,7 +247,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
     for row in db.cfg_postdominators() {
         check_block_ref(
             diagnostics,
-            &blocks,
+            &index.blocks,
             row.postdominator,
             row.cfg_function,
             "CfgPostDominator",
@@ -271,7 +256,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
         );
         check_block_ref(
             diagnostics,
-            &blocks,
+            &index.blocks,
             row.postdominated,
             row.cfg_function,
             "CfgPostDominator",
@@ -282,7 +267,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
     for row in db.cfg_control_dependence() {
         check_edge_ref(
             diagnostics,
-            &edges,
+            &index.edges,
             row.controlling_edge,
             row.cfg_function,
             "CfgControlDependence",
@@ -291,7 +276,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
         );
         check_block_ref(
             diagnostics,
-            &blocks,
+            &index.blocks,
             row.controlled_block,
             row.cfg_function,
             "CfgControlDependence",
@@ -326,13 +311,105 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
     }
 }
 
-fn validate_function_graph_shapes(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
-    for function in db.cfg_functions() {
-        let function_blocks = db
+struct CfgValidationIndex<'a> {
+    functions: BTreeMap<CfgFunctionId, &'a CfgFunctionFact>,
+    nodes: BTreeMap<CfgNodeId, &'a CfgNodeFact>,
+    blocks: BTreeMap<BasicBlockId, &'a BasicBlockFact>,
+    edges: BTreeMap<CfgEdgeId, &'a CfgEdgeFact>,
+    mir_bodies: BTreeSet<MirBodyId>,
+    blocks_by_function: BTreeMap<CfgFunctionId, Vec<&'a BasicBlockFact>>,
+    normal_successors_by_block: BTreeMap<(CfgFunctionId, BasicBlockId), Vec<BasicBlockId>>,
+    unsupported_by_function: BTreeSet<CfgFunctionId>,
+}
+
+impl<'a> CfgValidationIndex<'a> {
+    fn from_db(db: &'a AnalysisDb) -> Self {
+        let functions = db
+            .cfg_functions()
+            .iter()
+            .map(|row| (row.id, row))
+            .collect::<BTreeMap<_, _>>();
+        let nodes = db
+            .cfg_nodes()
+            .iter()
+            .map(|row| (row.id, row))
+            .collect::<BTreeMap<_, _>>();
+        let blocks = db
             .cfg_blocks()
             .iter()
-            .filter(|block| block.cfg_function == function.id)
-            .collect::<Vec<_>>();
+            .map(|row| (row.id, row))
+            .collect::<BTreeMap<_, _>>();
+        let edges = db
+            .cfg_edges()
+            .iter()
+            .map(|row| (row.id, row))
+            .collect::<BTreeMap<_, _>>();
+        let mir_bodies = db.mir_bodies().iter().map(|body| body.id).collect();
+
+        let mut blocks_by_function = BTreeMap::<CfgFunctionId, Vec<&BasicBlockFact>>::new();
+        for block in db.cfg_blocks() {
+            blocks_by_function
+                .entry(block.cfg_function)
+                .or_default()
+                .push(block);
+        }
+
+        let mut normal_successors_by_block =
+            BTreeMap::<(CfgFunctionId, BasicBlockId), Vec<BasicBlockId>>::new();
+        for edge in db.cfg_edges() {
+            if edge.view == CfgView::NormalControl && edge.to_block != edge.from_block {
+                normal_successors_by_block
+                    .entry((edge.cfg_function, edge.from_block))
+                    .or_default()
+                    .push(edge.to_block);
+            }
+        }
+        for successors in normal_successors_by_block.values_mut() {
+            successors.sort();
+            successors.dedup();
+        }
+
+        let unsupported_by_function = db
+            .unsupported_control_flow()
+            .iter()
+            .filter_map(|row| row.cfg_function)
+            .collect();
+
+        Self {
+            functions,
+            nodes,
+            blocks,
+            edges,
+            mir_bodies,
+            blocks_by_function,
+            normal_successors_by_block,
+            unsupported_by_function,
+        }
+    }
+
+    fn blocks_for_function(
+        &self,
+        function: CfgFunctionId,
+    ) -> impl Iterator<Item = &'a BasicBlockFact> + '_ {
+        self.blocks_by_function
+            .get(&function)
+            .into_iter()
+            .flat_map(|blocks| blocks.iter().copied())
+    }
+
+    fn normal_successors(&self, function: CfgFunctionId, block: BasicBlockId) -> &[BasicBlockId] {
+        self.normal_successors_by_block
+            .get(&(function, block))
+            .map_or(&[], Vec::as_slice)
+    }
+}
+
+fn validate_function_graph_shapes(
+    index: &CfgValidationIndex<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for function in index.functions.values().copied() {
+        let function_blocks = index.blocks_for_function(function.id).collect::<Vec<_>>();
         let entry_blocks = function_blocks
             .iter()
             .filter(|block| block.kind == BasicBlockKind::Entry)
@@ -353,13 +430,10 @@ fn validate_function_graph_shapes(db: &AnalysisDb, diagnostics: &mut Vec<Diagnos
                 matches!(
                     block.kind,
                     BasicBlockKind::ExitNormal | BasicBlockKind::ExitExceptional
-                ) || normal_successors(db, function.id, block.id).is_empty()
+                ) || index.normal_successors(function.id, block.id).is_empty()
             })
             .count();
-        let has_unsupported_boundary = db
-            .unsupported_control_flow()
-            .iter()
-            .any(|row| row.cfg_function == Some(function.id));
+        let has_unsupported_boundary = index.unsupported_by_function.contains(&function.id);
         if selected_exits == 0 && !has_unsupported_boundary {
             push_cfg_diagnostic(
                 diagnostics,
@@ -370,7 +444,7 @@ fn validate_function_graph_shapes(db: &AnalysisDb, diagnostics: &mut Vec<Diagnos
             );
         }
 
-        let reachable = reachable_blocks(db, function.id);
+        let reachable = reachable_blocks(index, function.id);
         for block in function_blocks {
             if block.reachable != reachable.contains(&block.id) {
                 push_cfg_diagnostic(
@@ -385,11 +459,13 @@ fn validate_function_graph_shapes(db: &AnalysisDb, diagnostics: &mut Vec<Diagnos
     }
 }
 
-fn reachable_blocks(db: &AnalysisDb, function: CfgFunctionId) -> BTreeSet<BasicBlockId> {
-    let Some(entry) = db
-        .cfg_blocks()
-        .iter()
-        .find(|block| block.cfg_function == function && block.kind == BasicBlockKind::Entry)
+fn reachable_blocks(
+    index: &CfgValidationIndex<'_>,
+    function: CfgFunctionId,
+) -> BTreeSet<BasicBlockId> {
+    let Some(entry) = index
+        .blocks_for_function(function)
+        .find(|block| block.kind == BasicBlockKind::Entry)
         .map(|block| block.id)
     else {
         return BTreeSet::new();
@@ -400,32 +476,15 @@ fn reachable_blocks(db: &AnalysisDb, function: CfgFunctionId) -> BTreeSet<BasicB
         if !seen.insert(block) {
             continue;
         }
-        let mut successors = normal_successors(db, function, block);
-        successors.sort_by(|left, right| right.cmp(left));
-        stack.extend(successors);
+        stack.extend(
+            index
+                .normal_successors(function, block)
+                .iter()
+                .rev()
+                .copied(),
+        );
     }
     seen
-}
-
-fn normal_successors(
-    db: &AnalysisDb,
-    function: CfgFunctionId,
-    block: BasicBlockId,
-) -> Vec<BasicBlockId> {
-    let mut successors = db
-        .cfg_edges()
-        .iter()
-        .filter(|edge| {
-            edge.cfg_function == function
-                && edge.view == CfgView::NormalControl
-                && edge.from_block == block
-                && edge.to_block != block
-        })
-        .map(|edge| edge.to_block)
-        .collect::<Vec<_>>();
-    successors.sort();
-    successors.dedup();
-    successors
 }
 
 fn check_duplicate_stable_keys<'a>(

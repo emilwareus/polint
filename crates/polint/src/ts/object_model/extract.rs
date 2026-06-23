@@ -18,7 +18,7 @@ use oxc_semantic::{AstNodes, NodeId, Scoping, SemanticBuilder, SymbolId as OxcSy
 use oxc_span::{GetSpan, SourceType};
 
 use crate::core::{SourceFile, Span, span_from_byte_range};
-use crate::ts::inventory::extract::extract_ts_inventory;
+use crate::ts::inventory::extract::extract_ts_inventory_from_program;
 use crate::ts::inventory::store::TsInventoryOutput;
 use crate::ts::object_model::facts::{
     TsObjectAllocationFact, TsObjectAllocationId, TsObjectAllocationKind, TsObjectModelStatus,
@@ -38,23 +38,28 @@ pub(crate) fn extract_ts_object_model(file: &SourceFile) -> TsObjectModelOutput 
     }
 
     let semantic = SemanticBuilder::new().build(&parsed.program).semantic;
+    let inventory =
+        extract_ts_inventory_from_program(file, source, &parsed.program, semantic.nodes())
+            .normalized();
     extract_ts_object_model_from_program(
         file,
         source,
         &parsed.program,
         semantic.scoping(),
         semantic.nodes(),
+        &inventory,
     )
 }
 
-fn extract_ts_object_model_from_program(
+pub(crate) fn extract_ts_object_model_from_program(
     file: &SourceFile,
     source: &str,
     _program: &Program<'_>,
     scoping: &Scoping,
     nodes: &AstNodes<'_>,
+    inventory: &TsInventoryOutput,
 ) -> TsObjectModelOutput {
-    let mut extractor = ObjectModelExtractor::new(file, source, scoping, nodes);
+    let mut extractor = ObjectModelExtractor::new(file, source, scoping, nodes, inventory);
     extractor.build()
 }
 
@@ -79,13 +84,14 @@ impl<'a> ObjectModelExtractor<'a> {
         source: &'a str,
         scoping: &'a Scoping,
         nodes: &'a AstNodes<'a>,
+        inventory: &TsInventoryOutput,
     ) -> Self {
         Self {
             file,
             source,
             scoping,
             nodes,
-            inventory: ObjectModelInventoryIndex::from_output(extract_ts_inventory(file)),
+            inventory: ObjectModelInventoryIndex::from_output(inventory),
             objects_by_symbol: BTreeMap::new(),
             objects_by_name: BTreeMap::new(),
             allocation_keys_by_span: BTreeMap::new(),
@@ -991,25 +997,25 @@ struct ObjectModelInventoryIndex {
 }
 
 impl ObjectModelInventoryIndex {
-    fn from_output(output: TsInventoryOutput) -> Self {
+    fn from_output(output: &TsInventoryOutput) -> Self {
         let mut index = Self::default();
-        for function in output.functions {
+        for function in &output.functions {
             index.function_key_by_span.insert(
                 (function.span.start_byte, function.span.end_byte),
                 function.stable_key.clone(),
             );
-            if let Some(name) = function.display_name {
+            if let Some(name) = &function.display_name {
                 insert_unique(
                     &mut index.unique_function_key_by_name,
-                    name,
-                    function.stable_key,
+                    name.clone(),
+                    function.stable_key.clone(),
                 );
             }
         }
-        for callsite in output.callsites {
+        for callsite in &output.callsites {
             index.callsite_key_by_span.insert(
                 (callsite.span.start_byte, callsite.span.end_byte),
-                callsite.stable_key,
+                callsite.stable_key.clone(),
             );
         }
         index

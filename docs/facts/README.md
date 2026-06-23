@@ -8,14 +8,14 @@ Rule authors should treat these facts as the supported building blocks for
 repo-local policies. The examples are only consumers of these facts, not special
 internal entry points.
 
-Phase 41 keeps promotion explicit. Stable public rule-author views are the pages
-listed below. Reserved or internal analysis families such as CFG, call graph,
-data flow, evidence, effects/summaries, type/value/alias facts, benchmarks, and
-eval reports are documented only as limits or future gates until they have
-public SDK views, docs, temp-repo tests, bounded query behavior, setup behavior,
+Promotion is explicit. Stable public rule-author views and Phase 55 preview
+policy views are listed below. Raw CFG, raw call graph, semantic graph,
+solver/provider internals, evidence stores, effects/summaries, type/value/alias
+facts, benchmarks, and eval reports stay private or reserved until they have
+public SDK views, docs, temp-repo tests, bounded behavior, setup behavior,
 cache/input proof, and no-leak proof. See
-[`docs/API-VISIBILITY-PLAN.md`](../API-VISIBILITY-PLAN.md#phase-41-promotion-audit)
-for the disposition table.
+[`docs/API-VISIBILITY-PLAN.md`](../API-VISIBILITY-PLAN.md#phase-55-preview-promotion-audit)
+for the current disposition table.
 
 - [Functions](functions.md)
 - [Metrics](metrics.md)
@@ -28,8 +28,15 @@ for the disposition table.
 - [TypeScript / JavaScript](ts-js.md)
 - [Literals and JSX attributes](literals.md)
 
+Preview policy-query references:
+
+- [Policy query preview](policy-queries.md)
+- [Events](events.md)
+- [Calls](calls.md)
+- [Control-flow policies](control-flow.md)
+- [Data-flow policies](data-flow.md)
+
 Reserved/internal references:
 
 - [Reserved capability plans](capability-plans.md)
-- [Data-flow limits and future gates](data-flow.md)
 - [Diagnostic evidence limits](evidence.md)

@@ -1,11 +1,3 @@
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Layer manifests validate dependency indexes now; some future cache node and shape variants remain reserved."
-    )
-)]
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -82,6 +74,16 @@ pub(crate) struct DependencyIndex {
     pub(crate) reverse: BTreeMap<CacheNode, Vec<DependencyEdge>>,
 }
 
+impl Default for DependencyIndex {
+    fn default() -> Self {
+        Self {
+            schema_version: DEPENDENCY_INDEX_SCHEMA.to_string(),
+            forward: BTreeMap::new(),
+            reverse: BTreeMap::new(),
+        }
+    }
+}
+
 impl DependencyIndex {
     pub(crate) fn from_edges(mut edges: Vec<DependencyEdge>) -> Self {
         edges.sort();
@@ -106,6 +108,7 @@ impl DependencyIndex {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn forward_edges(&self, node: &CacheNode) -> Option<&[DependencyEdge]> {
         self.forward.get(node).map(Vec::as_slice)
     }

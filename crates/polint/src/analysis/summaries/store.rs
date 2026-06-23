@@ -39,36 +39,70 @@ pub(crate) struct SummaryStore {
     summaries_by_callable: BTreeMap<String, Vec<usize>>,
     summaries_by_domain: BTreeMap<SummaryDomainKind, Vec<usize>>,
     summaries_by_function: BTreeMap<FunctionId, Vec<usize>>,
+    summary_by_function_domain: BTreeMap<(FunctionId, SummaryDomainKind), usize>,
 }
 
 impl SummaryStore {
     pub(crate) fn from_output(output: SummaryOutput) -> Result<Self, AnalysisError> {
-        let output = output.normalized();
+        Self::from_normalized_output(output.normalized())
+    }
 
+    pub(crate) fn from_normalized_output(output: SummaryOutput) -> Result<Self, AnalysisError> {
         let mut store = Self {
             output,
             ..Self::default()
         };
 
-        for (index, fact) in store.output.summaries.iter().enumerate() {
-            store
-                .summaries_by_callable
-                .entry(fact.callable_stable_key.clone())
-                .or_default()
-                .push(index);
-            store
-                .summaries_by_domain
-                .entry(fact.domain)
-                .or_default()
-                .push(index);
-            store
-                .summaries_by_function
-                .entry(fact.function)
-                .or_default()
-                .push(index);
-        }
+        store.rebuild_summary_indexes();
 
         Ok(store)
+    }
+
+    pub(crate) fn merge_updates(&mut self, updated: &[SummaryFact], events: &[SummaryEventFact]) {
+        let mut rebuild_summary_indexes = false;
+
+        for fact in updated {
+            let key = (fact.function, fact.domain);
+            let Some(&index) = self.summary_by_function_domain.get(&key) else {
+                self.output.summaries.push(fact.clone());
+                rebuild_summary_indexes = true;
+                continue;
+            };
+
+            let existing = &self.output.summaries[index];
+            let stable_index_fields_changed = existing.stable_key != fact.stable_key
+                || existing.callable_stable_key != fact.callable_stable_key
+                || existing.function != fact.function
+                || existing.domain != fact.domain;
+
+            let mut replacement = fact.clone();
+            replacement.id = existing.id;
+            self.output.summaries[index] = replacement;
+
+            if stable_index_fields_changed {
+                rebuild_summary_indexes = true;
+            }
+        }
+
+        if rebuild_summary_indexes {
+            self.output.summaries = SummaryOutput {
+                summaries: std::mem::take(&mut self.output.summaries),
+                events: Vec::new(),
+            }
+            .normalized()
+            .summaries;
+            self.rebuild_summary_indexes();
+        }
+
+        if !events.is_empty() {
+            self.output.events.extend(events.iter().cloned());
+            self.output.events.sort_by(|left, right| {
+                (left.stable_key.as_str(), left.id).cmp(&(right.stable_key.as_str(), right.id))
+            });
+            for (index, fact) in self.output.events.iter_mut().enumerate() {
+                fact.id = SummaryEventId(index as u64);
+            }
+        }
     }
 
     pub(crate) fn summaries_by_callable(&self, callable_key: &str) -> Vec<&SummaryFact> {
@@ -106,6 +140,30 @@ impl SummaryStore {
                 .map(|&index| &self.output.summaries[index])
                 .collect()
         })
+    }
+
+    fn rebuild_summary_indexes(&mut self) {
+        self.summaries_by_callable.clear();
+        self.summaries_by_domain.clear();
+        self.summaries_by_function.clear();
+        self.summary_by_function_domain.clear();
+
+        for (index, fact) in self.output.summaries.iter().enumerate() {
+            self.summaries_by_callable
+                .entry(fact.callable_stable_key.clone())
+                .or_default()
+                .push(index);
+            self.summaries_by_domain
+                .entry(fact.domain)
+                .or_default()
+                .push(index);
+            self.summaries_by_function
+                .entry(fact.function)
+                .or_default()
+                .push(index);
+            self.summary_by_function_domain
+                .insert((fact.function, fact.domain), index);
+        }
     }
 }
 
@@ -326,6 +384,49 @@ mod tests {
 
         let func99 = store.summaries_by_function(FunctionId(99));
         assert!(func99.is_empty());
+    }
+
+    #[test]
+    fn merge_updates_replaces_existing_rows_without_reordering() {
+        let mut store = SummaryStore::from_output(SummaryOutput {
+            summaries: vec![
+                summary_fact(
+                    1,
+                    "func::a",
+                    1,
+                    SummaryDomainKind::ControlEffects,
+                    "summary:a-control",
+                ),
+                summary_fact(
+                    2,
+                    "func::b",
+                    2,
+                    SummaryDomainKind::MemoryEffects,
+                    "summary:b-memory",
+                ),
+            ],
+            events: Vec::new(),
+        })
+        .expect("valid output");
+
+        let mut updated = summary_fact(
+            99,
+            "func::a",
+            1,
+            SummaryDomainKind::ControlEffects,
+            "summary:a-control",
+        );
+        updated.payload_digest = "updated".to_string();
+
+        store.merge_updates(&[updated], &[]);
+
+        assert_eq!(store.all_summaries()[0].id.0, 0);
+        assert_eq!(store.all_summaries()[0].payload_digest, "updated");
+        assert_eq!(store.all_summaries()[1].id.0, 1);
+        assert_eq!(
+            store.summaries_by_function(FunctionId(1))[0].payload_digest,
+            "updated"
+        );
     }
 
     // -----------------------------------------------------------------------

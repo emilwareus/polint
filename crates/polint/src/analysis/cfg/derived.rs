@@ -4,7 +4,7 @@ use crate::analysis::cfg::facts::{
     BasicBlockKind, CfgEdgeFact, CfgPrecision, CfgStatus, CfgView, ControlDependenceFact,
     DominatorFact, PostDominatorFact, ReachabilityFact,
 };
-use crate::analysis::cfg::graph::CfgGraph;
+use crate::analysis::cfg::graph::{CfgGraph, CfgGraphIndex};
 use crate::analysis::cfg::ids::{
     BasicBlockId, CfgFunctionId, ControlDependenceId, DominatorId, PostDominatorId, ReachabilityId,
 };
@@ -15,11 +15,12 @@ use crate::analysis_kernel::FactFamily;
 pub(crate) fn derive_reachability(output: &CfgOutput, view: CfgView) -> Vec<ReachabilityFact> {
     let mut facts = Vec::new();
     let mut next_id = 1;
-    for function in sorted_functions(output) {
-        let graph = CfgGraph::new(output, function, view);
-        let function_key = function_stable_key(output, function);
+    let index = CfgGraphIndex::new(output);
+    for graph in index.graphs(view) {
+        let function = graph.function_id();
+        let function_key = graph.function_stable_key();
         let reachable = reachable_blocks(&graph);
-        for block in graph.blocks() {
+        for block in graph.block_refs() {
             facts.push(ReachabilityFact {
                 id: ReachabilityId(next_id),
                 cfg_function: function,
@@ -47,9 +48,10 @@ pub(crate) fn derive_reachability(output: &CfgOutput, view: CfgView) -> Vec<Reac
 pub(crate) fn derive_dominators(output: &CfgOutput, view: CfgView) -> Vec<DominatorFact> {
     let mut facts = Vec::new();
     let mut next_id = 1;
-    for function in sorted_functions(output) {
-        let graph = CfgGraph::new(output, function, view);
-        let function_key = function_stable_key(output, function);
+    let index = CfgGraphIndex::new(output);
+    for graph in index.graphs(view) {
+        let function = graph.function_id();
+        let function_key = graph.function_stable_key();
         let block_keys = block_key_map(&graph);
         let Some(entry) = graph.entry_block() else {
             continue;
@@ -89,13 +91,14 @@ pub(crate) fn derive_dominators(output: &CfgOutput, view: CfgView) -> Vec<Domina
 pub(crate) fn derive_postdominators(output: &CfgOutput, view: CfgView) -> Vec<PostDominatorFact> {
     let mut facts = Vec::new();
     let mut next_id = 1;
-    for function in sorted_functions(output) {
-        let graph = CfgGraph::new(output, function, view);
-        let function_key = function_stable_key(output, function);
+    let index = CfgGraphIndex::new(output);
+    for graph in index.graphs(view) {
+        let function = graph.function_id();
+        let function_key = graph.function_stable_key();
         let block_keys = block_key_map(&graph);
         let blocks = graph
-            .blocks()
-            .into_iter()
+            .block_refs()
+            .iter()
             .map(|block| block.id)
             .collect::<BTreeSet<_>>();
         if blocks.is_empty() {
@@ -163,15 +166,16 @@ pub(crate) fn derive_control_dependence(
 ) -> Vec<ControlDependenceFact> {
     let mut facts = Vec::new();
     let mut next_id = 1;
-    for function in sorted_functions(output) {
-        let graph = CfgGraph::new(output, function, view);
-        let function_key = function_stable_key(output, function);
-        let postdominators = postdominator_relation(output, function, view);
+    let index = CfgGraphIndex::new(output);
+    for graph in index.graphs(view) {
+        let function = graph.function_id();
+        let function_key = graph.function_stable_key();
+        let postdominators = postdominator_relation_for_graph(&graph);
         let immediate = immediate_relation(&postdominators);
         let block_keys = block_key_map(&graph);
         let mut seen = BTreeSet::new();
 
-        for edge in graph.edges() {
+        for edge in graph.edge_refs() {
             if edge.from_block == edge.to_block {
                 continue;
             }
@@ -241,32 +245,10 @@ fn control_dependence_fact(
     }
 }
 
-fn sorted_functions(output: &CfgOutput) -> Vec<CfgFunctionId> {
-    let mut functions = output
-        .functions
-        .iter()
-        .map(|function| (function.stable_key.as_str(), function.id))
-        .collect::<Vec<_>>();
-    functions.sort();
-    functions
-        .into_iter()
-        .map(|(_, function)| function)
-        .collect()
-}
-
-fn function_stable_key(output: &CfgOutput, function: CfgFunctionId) -> String {
-    output
-        .functions
-        .iter()
-        .find(|row| row.id == function)
-        .map(|row| row.stable_key.clone())
-        .unwrap_or_else(|| format!("<missing-function:{}>", function.0))
-}
-
 fn block_key_map(graph: &CfgGraph<'_>) -> BTreeMap<BasicBlockId, String> {
     graph
-        .blocks()
-        .into_iter()
+        .block_refs()
+        .iter()
         .map(|block| (block.id, block.stable_key.clone()))
         .collect()
 }
@@ -288,9 +270,7 @@ fn reachable_blocks(graph: &CfgGraph<'_>) -> BTreeSet<BasicBlockId> {
         if !seen.insert(block) {
             continue;
         }
-        let mut successors = graph.successors(block);
-        successors.sort_by(|left, right| right.cmp(left));
-        stack.extend(successors);
+        stack.extend(graph.successor_blocks(block).iter().rev().copied());
     }
     seen
 }
@@ -333,13 +313,28 @@ fn dominator_relation_with_extra_exit(
     while changed {
         changed = false;
         for block in universe.iter().copied().filter(|block| *block != start) {
-            let neighbors = match direction {
-                Direction::Forward => graph.predecessors(block),
-                Direction::Reverse => reversed_predecessors(graph, block, start, selected_exits),
+            let mut neighbors = Vec::new();
+            match direction {
+                Direction::Forward => {
+                    neighbors.extend(
+                        graph
+                            .predecessor_blocks(block)
+                            .iter()
+                            .copied()
+                            .filter(|neighbor| universe.contains(neighbor)),
+                    );
+                }
+                Direction::Reverse => {
+                    collect_reversed_predecessors(
+                        graph,
+                        block,
+                        start,
+                        selected_exits,
+                        universe,
+                        &mut neighbors,
+                    );
+                }
             }
-            .into_iter()
-            .filter(|neighbor| universe.contains(neighbor))
-            .collect::<Vec<_>>();
 
             let mut new_set = if neighbors.is_empty() {
                 BTreeSet::new()
@@ -360,20 +355,27 @@ fn dominator_relation_with_extra_exit(
     relation
 }
 
-fn reversed_predecessors(
+fn collect_reversed_predecessors(
     graph: &CfgGraph<'_>,
     block: BasicBlockId,
     virtual_exit: BasicBlockId,
     selected_exits: &BTreeSet<BasicBlockId>,
-) -> Vec<BasicBlockId> {
+    universe: &BTreeSet<BasicBlockId>,
+    out: &mut Vec<BasicBlockId>,
+) {
     if block == virtual_exit {
-        return Vec::new();
+        return;
     }
-    let mut predecessors = graph.successors(block);
+    out.extend(
+        graph
+            .successor_blocks(block)
+            .iter()
+            .copied()
+            .filter(|neighbor| universe.contains(neighbor)),
+    );
     if selected_exits.contains(&block) {
-        predecessors.push(virtual_exit);
+        out.push(virtual_exit);
     }
-    predecessors
 }
 
 fn intersect_sets<'a>(
@@ -413,26 +415,23 @@ fn immediate_relation(
     immediate
 }
 
-fn postdominator_relation(
-    output: &CfgOutput,
-    function: CfgFunctionId,
-    view: CfgView,
+fn postdominator_relation_for_graph(
+    graph: &CfgGraph<'_>,
 ) -> BTreeMap<BasicBlockId, BTreeSet<BasicBlockId>> {
-    let graph = CfgGraph::new(output, function, view);
     let blocks = graph
-        .blocks()
-        .into_iter()
+        .block_refs()
+        .iter()
         .map(|block| block.id)
         .collect::<BTreeSet<_>>();
-    let exits = selected_exit_blocks(&graph);
+    let exits = selected_exit_blocks(graph);
     if blocks.is_empty() || exits.is_empty() {
         return BTreeMap::new();
     }
-    let virtual_exit = virtual_exit_for(function);
+    let virtual_exit = virtual_exit_for(graph.function_id());
     let mut universe = blocks;
     universe.insert(virtual_exit);
     let mut relation = dominator_relation_with_extra_exit(
-        &graph,
+        graph,
         virtual_exit,
         &universe,
         &exits,
@@ -447,13 +446,13 @@ fn postdominator_relation(
 
 fn selected_exit_blocks(graph: &CfgGraph<'_>) -> BTreeSet<BasicBlockId> {
     let mut exits = graph
-        .blocks()
-        .into_iter()
+        .block_refs()
+        .iter()
         .filter(|block| {
             matches!(
                 block.kind,
                 BasicBlockKind::ExitNormal | BasicBlockKind::ExitExceptional
-            ) || graph.successors(block.id).is_empty()
+            ) || graph.successor_blocks(block.id).is_empty()
         })
         .map(|block| block.id)
         .collect::<BTreeSet<_>>();

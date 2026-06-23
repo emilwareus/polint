@@ -1,13 +1,14 @@
-// V1.3 LEAK GATE — see Phase 42 D-17, D-18, D-19
+// V1.4 LEAK GATE — see Phase 42 D-17, D-18, D-19 and Phase 55 D-17.
 //
 // This test compiles the probe crate at tests/fixtures/public-surface-leak-probe/
-// and asserts that the v1.0–v1.2 polint::sdk::prelude::* allow-list is FROZEN
-// for the v1.3 milestone.
+// and asserts that the public polint::sdk::prelude::* allow-list changes only
+// through documented promotion records.
 //
-// The ALLOWED_PRELUDE constant below is the source of truth. Phases 43–54 MUST NOT
-// extend this list. Extending the list is a deliberate API change that requires
-// milestone-close review and a documented promotion record under
-// docs/API-VISIBILITY-PLAN.md before it can be merged.
+// The ALLOWED_PRELUDE constant below is the source of truth. Extending the list
+// is a deliberate API change that requires a documented promotion record under
+// docs/API-VISIBILITY-PLAN.md before it can be merged. Phase 55 deliberately
+// adds preview policy-query vocabulary while keeping raw CFG/call graph/solver
+// internals private.
 //
 // The gate runs on Linux + macOS in fast CI on every PR (D-18). Both platforms
 // must pass independently — no averaging, no skipping either platform.
@@ -32,13 +33,12 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// The FROZEN v1.0–v1.2 `polint::sdk::prelude` re-export allow-list.
+/// The deliberate public `polint::sdk::prelude` re-export allow-list.
 ///
 /// Source of truth: `crates/polint/src/sdk/mod.rs` `pub mod prelude { ... }`.
 /// `allowlist_matches_prelude_source` asserts the parsed prelude block equals
 /// this set EXACTLY. Any addition (sanctioned or not) trips the gate; sanctioned
-/// additions extend this list in the same PR with a documented promotion record
-/// in `docs/API-VISIBILITY-PLAN.md` (D-19).
+/// additions extend this list in the same PR with a documented promotion record.
 const ALLOWED_PRELUDE: &[&str] = &[
     // crate::core types
     "BranchId",
@@ -119,10 +119,13 @@ const ALLOWED_PRELUDE: &[&str] = &[
     // crate::sdk::facts
     "BranchObligations",
     "CallGraph",
+    "Calls",
     "Cfg",
     "ComplexityMetrics",
+    "ControlFlow",
     "CoverageFacts",
     "DataFlow",
+    "Events",
     "FileMetrics",
     "FunctionMetrics",
     "Functions",
@@ -139,6 +142,20 @@ const ALLOWED_PRELUDE: &[&str] = &[
     "TestSuiteMetrics",
     "TsClasses",
     "TsComponents",
+    // crate::sdk::policy preview vocabulary
+    "BarrierPattern",
+    "EventPattern",
+    "FlowQuery",
+    "GuardPattern",
+    "GuardQuery",
+    "LifecycleQuery",
+    "PolicyConfidence",
+    "PolicyPrecision",
+    "PolicyStatus",
+    "PolicyViolation",
+    "ReachQuery",
+    "SinkPattern",
+    "SourcePattern",
     // crate::sdk::scope
     "file_in_scope",
     "file_matches_globs",
@@ -310,7 +327,7 @@ fn allowlist_matches_prelude_source() {
 
     assert!(
         unsanctioned.is_empty() && missing.is_empty(),
-        "polint::sdk::prelude exports diverged from the v1.3 locked allow-list — \
+        "polint::sdk::prelude exports diverged from the documented public allow-list — \
          see crates/polint/tests/public_surface_leak.rs top comment for the discipline policy.\n\
          UNSANCTIONED additions (in prelude, NOT in ALLOWED_PRELUDE): {unsanctioned:?}\n\
          MISSING (in ALLOWED_PRELUDE, NOT in prelude): {missing:?}"
@@ -330,7 +347,7 @@ fn allowlist_matches_prelude_source() {
     assert!(
         !prelude_block.contains("pub use crate::analysis::")
             && !prelude_block.contains("pub use crate::analysis_kernel::"),
-        "polint::sdk::prelude re-exports a private analysis namespace — this is a v1.3 leak (D-23).\n{prelude_block}"
+        "polint::sdk::prelude re-exports a private analysis namespace — this is a public-surface leak.\n{prelude_block}"
     );
 }
 
@@ -454,11 +471,11 @@ fn allowlist_has_no_duplicates_and_expected_count() {
         ALLOWED_PRELUDE.len(),
         "ALLOWED_PRELUDE contains duplicate entries"
     );
-    // Locked count derived from sdk/mod.rs:28–53 at Phase 42 Plan 04 landing.
+    // Locked count derived from sdk/mod.rs after the Phase 56 PolicyConfidence promotion.
     assert_eq!(
         ALLOWED_PRELUDE.len(),
-        97,
+        113,
         "ALLOWED_PRELUDE count changed — update this assertion ONLY alongside a sanctioned \
-         milestone-close API change (D-19)"
+         API promotion record"
     );
 }

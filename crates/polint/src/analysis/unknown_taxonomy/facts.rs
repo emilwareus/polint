@@ -71,6 +71,7 @@ impl UnknownRow {
             input.file.as_str(),
             input.span.as_ref(),
             input.category,
+            input.capability.as_deref(),
             input.reason.as_deref(),
             input.source_stable_key.as_deref(),
         );
@@ -118,6 +119,7 @@ fn stable_sort_key(
     file: &str,
     span: Option<&UnknownSpan>,
     category: UnknownCategory,
+    capability: Option<&str>,
     reason: Option<&str>,
     source_stable_key: Option<&str>,
 ) -> String {
@@ -129,6 +131,7 @@ fn stable_sort_key(
             ("line", line.to_string()),
             ("column", column.to_string()),
             ("category", category.as_str().to_string()),
+            ("capability", capability.unwrap_or_default().to_string()),
             ("reason", reason.unwrap_or_default().to_string()),
             ("source", source_stable_key.unwrap_or_default().to_string()),
         ],

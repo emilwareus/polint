@@ -55,6 +55,7 @@ Expected output:
 polint init
 polint add-skill
 polint new-rule ts no-raw-colors
+polint new-rule ts no-secret-logs --template secret-to-log
 polint test --format json
 polint inspect rule --format json
 polint check
@@ -65,10 +66,15 @@ polint check
 local rule pack. `polint check` discovers and runs that rule pack.
 Generated rules include positive and negative fixture cases under
 `.polint/tests/rules/`, so `polint test --format json` can verify the local
-policy loop before you run it across the workspace. `polint inspect rule
---format json`, `polint facts list --format json`, `polint unknowns --cap
-references --format json`, and `polint explain --rule <id> --format json` are
-bounded, versioned JSON surfaces for agent workflows.
+policy loop before you run it across the workspace. Use `--template <id>` for a
+repo-local policy starter that you edit to your APIs: `request-to-shell`,
+`secret-to-log`, `pii-to-analytics`, `sensitive-write-guard`,
+`transaction-cleanup`, `raw-reachable-api`, `ssrf`, `dangerous-html`,
+`unsafe-deserialization`, and `user-file-path`. These are scaffolds, not bundled
+rules enabled by polint. `polint inspect rule --format json`, `polint facts list
+--format json`, `polint unknowns --cap references --format json`, and
+`polint explain --rule <id> --format json` are bounded, versioned JSON surfaces
+for agent workflows.
 
 Rule packs live in your repo:
 

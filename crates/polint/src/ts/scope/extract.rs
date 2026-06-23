@@ -47,7 +47,7 @@ pub(crate) fn extract_ts_scope(file: &SourceFile) -> TsScopeOutput {
     .normalized()
 }
 
-fn extract_ts_scope_from_program(
+pub(crate) fn extract_ts_scope_from_program(
     file: &SourceFile,
     source: &str,
     program: &Program<'_>,

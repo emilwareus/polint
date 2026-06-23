@@ -3,9 +3,10 @@ use crate::analysis::entrypoints::facts::{
 };
 use crate::analysis::entrypoints::provider::ENTRYPOINTS_PROVIDER_ID;
 use crate::analysis::ids::TrustBoundaryId;
+use crate::analysis::places::{PlaceFact, PlaceRoot};
 use crate::analysis::stable_key::semantic_stable_key;
 use crate::analysis_kernel::FactFamily;
-use crate::core::AnalysisDb;
+use crate::core::{AnalysisDb, Language};
 
 /// Derive trust boundary facts from recognized entrypoints.
 ///
@@ -14,7 +15,7 @@ use crate::core::AnalysisDb;
 /// entering through an entrypoint. Trust boundary precision follows entrypoint
 /// precision per D-21.
 pub(crate) fn derive_trust_boundaries(
-    _db: &AnalysisDb,
+    db: &AnalysisDb,
     entrypoints: &[EntrypointFact],
 ) -> Vec<TrustBoundaryFact> {
     let mut boundaries = Vec::new();
@@ -31,7 +32,7 @@ pub(crate) fn derive_trust_boundaries(
                 entrypoint_stable_key: entrypoint.stable_key.clone(),
                 source_kind,
                 target_parameter: Some(entrypoint.target_function),
-                target_parameter_index: None,
+                target_parameter_index: target_parameter_index_for_entrypoint(db, entrypoint),
                 access_path: None,
                 protocol: protocol_for_kind(entrypoint.kind),
                 language: entrypoint.language,
@@ -46,6 +47,96 @@ pub(crate) fn derive_trust_boundaries(
 
     boundaries.sort_by(|a, b| a.stable_key.cmp(&b.stable_key));
     boundaries
+}
+
+fn target_parameter_index_for_entrypoint(
+    db: &AnalysisDb,
+    entrypoint: &EntrypointFact,
+) -> Option<usize> {
+    match (entrypoint.kind, entrypoint.language) {
+        (EntrypointKind::HttpRoute, Language::Go) => Some(1),
+        (EntrypointKind::HttpRoute, Language::TypeScript | Language::JavaScript) => {
+            match ts_js_request_parameter_index_from_places(db, entrypoint) {
+                Some(Some(index)) => Some(index),
+                Some(None) | None => Some(0),
+            }
+        }
+        (EntrypointKind::HttpMiddleware, Language::TypeScript | Language::JavaScript) => {
+            match ts_js_request_parameter_index_from_places(db, entrypoint) {
+                Some(index) => index,
+                None => Some(0),
+            }
+        }
+        _ => None,
+    }
+}
+
+fn ts_js_request_parameter_index_from_places(
+    db: &AnalysisDb,
+    entrypoint: &EntrypointFact,
+) -> Option<Option<usize>> {
+    let params = function_parameters(db, entrypoint.target_function);
+    if params.is_empty() {
+        return None;
+    }
+
+    if let Some((index, _)) = params
+        .iter()
+        .find(|(_, name)| name.as_deref().is_some_and(is_request_parameter_name))
+    {
+        return Some(Some(*index as usize));
+    }
+
+    if entrypoint.kind == EntrypointKind::HttpMiddleware && params.len() >= 4 {
+        let first_is_error = params
+            .first()
+            .and_then(|(_, name)| name.as_deref())
+            .is_some_and(is_error_parameter_name);
+        if first_is_error && params.iter().any(|(index, _)| *index == 1) {
+            return Some(Some(1));
+        }
+        return Some(None);
+    }
+
+    None
+}
+
+fn function_parameters(
+    db: &AnalysisDb,
+    function: crate::core::FunctionId,
+) -> Vec<(u32, Option<String>)> {
+    let mut params = db
+        .mir_places()
+        .iter()
+        .filter_map(|place| parameter_index_and_name(place, function))
+        .collect::<Vec<_>>();
+    params.sort();
+    params
+}
+
+fn parameter_index_and_name(
+    place: &PlaceFact,
+    function: crate::core::FunctionId,
+) -> Option<(u32, Option<String>)> {
+    if !place.projections.is_empty() {
+        return None;
+    }
+    match &place.root {
+        PlaceRoot::Parameter {
+            function: place_function,
+            index,
+            name,
+        } if *place_function == function => Some((*index, name.clone())),
+        _ => None,
+    }
+}
+
+fn is_request_parameter_name(name: &str) -> bool {
+    matches!(name, "req" | "request")
+}
+
+fn is_error_parameter_name(name: &str) -> bool {
+    matches!(name, "err" | "error")
 }
 
 /// Determine which trust boundary source kinds apply to a given entrypoint kind.
@@ -201,8 +292,11 @@ mod tests {
         EntrypointConfidence, EntrypointPrecision, EntrypointProvenance, EntrypointStatus,
         TriggerMetadata,
     };
-    use crate::analysis::ids::EntrypointId;
-    use crate::core::{AnalysisDb, FileId, FunctionId, Language, Span};
+    use crate::analysis::ids::{EntrypointId, PlaceId};
+    use crate::analysis::mir::body::MirOutput;
+    use crate::analysis::places::PlaceStatus;
+    use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, Language, Span};
+    use std::path::PathBuf;
 
     fn make_entrypoint(
         kind: EntrypointKind,
@@ -254,6 +348,31 @@ mod tests {
         assert!(source_kinds.contains(&TrustBoundarySourceKind::RequestHeader));
         assert!(!source_kinds.contains(&TrustBoundarySourceKind::PathParam));
         assert!(!source_kinds.contains(&TrustBoundarySourceKind::RequestBody));
+        assert!(
+            boundaries
+                .iter()
+                .all(|boundary| boundary.target_parameter_index == Some(0))
+        );
+    }
+
+    #[test]
+    fn go_http_route_targets_request_parameter_index() {
+        let db = AnalysisDb::new();
+        let mut ep = make_entrypoint(
+            EntrypointKind::HttpRoute,
+            EntrypointPrecision::Heuristic,
+            Some("GET"),
+            Some("/api/users"),
+        );
+        ep.language = Language::Go;
+
+        let boundaries = derive_trust_boundaries(&db, &[ep]);
+
+        assert!(
+            boundaries
+                .iter()
+                .all(|boundary| boundary.target_parameter_index == Some(1))
+        );
     }
 
     #[test]
@@ -316,6 +435,77 @@ mod tests {
         assert!(source_kinds.contains(&TrustBoundarySourceKind::RequestBody));
         assert!(source_kinds.contains(&TrustBoundarySourceKind::RequestHeader));
         assert!(source_kinds.contains(&TrustBoundarySourceKind::QueryString));
+    }
+
+    #[test]
+    fn go_http_middleware_keeps_parameter_index_unknown() {
+        let db = AnalysisDb::new();
+        let mut ep = make_entrypoint(
+            EntrypointKind::HttpMiddleware,
+            EntrypointPrecision::Heuristic,
+            None,
+            None,
+        );
+        ep.language = Language::Go;
+
+        let boundaries = derive_trust_boundaries(&db, &[ep]);
+
+        assert!(
+            boundaries
+                .iter()
+                .all(|boundary| boundary.target_parameter_index.is_none())
+        );
+    }
+
+    #[test]
+    fn ts_http_error_middleware_targets_request_parameter_index() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            "function errorMiddleware(err, req, res, next) {}".to_string(),
+        );
+        let function = db.push_function(FunctionFact {
+            id: FunctionId(0),
+            file,
+            name: "errorMiddleware".to_string(),
+            span: Span::point(file, 1, 1),
+            language: Language::TypeScript,
+            is_test: false,
+            is_exported: false,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+        });
+        db.replace_semantic_mir(MirOutput {
+            bodies: Vec::new(),
+            places: vec![
+                parameter_place(file, function, 0, "err"),
+                parameter_place(file, function, 1, "req"),
+                parameter_place(file, function, 2, "res"),
+                parameter_place(file, function, 3, "next"),
+            ],
+            operations: Vec::new(),
+            unsupported: Vec::new(),
+        })
+        .expect("valid MIR places");
+
+        let mut ep = make_entrypoint(
+            EntrypointKind::HttpMiddleware,
+            EntrypointPrecision::Heuristic,
+            None,
+            None,
+        );
+        ep.target_function = function;
+        ep.registration_file = file;
+        ep.registration_span = Span::point(file, 1, 1);
+
+        let boundaries = derive_trust_boundaries(&db, &[ep]);
+
+        assert!(
+            boundaries
+                .iter()
+                .all(|boundary| boundary.target_parameter_index == Some(1))
+        );
     }
 
     #[test]
@@ -519,6 +709,23 @@ mod tests {
 
         for tb in &boundaries {
             assert_eq!(tb.protocol.as_deref(), Some("http"));
+        }
+    }
+
+    fn parameter_place(file: FileId, function: FunctionId, index: u32, name: &str) -> PlaceFact {
+        PlaceFact {
+            id: PlaceId(index as u64),
+            language: Language::TypeScript,
+            file: Some(file),
+            function: Some(function),
+            root: PlaceRoot::Parameter {
+                function,
+                index,
+                name: Some(name.to_string()),
+            },
+            projections: Vec::new(),
+            stable_key: format!("place:{name}"),
+            status: PlaceStatus::Resolved,
         }
     }
 
