@@ -2910,7 +2910,10 @@ fn review(root: PathBuf, args: &ReviewArgs) -> Result<u8> {
 ///
 /// The file name hashes the JSON so re-runs with the same diff reuse the name.
 /// Returns the absolute path passed to the host as `--changed-files`.
-fn write_review_changeset(root: &Path, changeset: &crate::core::ChangeSetFacts) -> Result<PathBuf> {
+fn write_review_changeset(
+    root: &Path,
+    changeset: &crate::core::ReviewChangeset,
+) -> Result<PathBuf> {
     let json =
         serde_json::to_string(changeset).context("failed to serialize review changeset to JSON")?;
     let cache_layout = CacheLayout::for_repo(root);
@@ -2937,7 +2940,7 @@ fn write_review_changeset(root: &Path, changeset: &crate::core::ChangeSetFacts) 
 /// a deleted file anyway).
 fn gate_to_changeset(
     diagnostics: Vec<Diagnostic>,
-    changeset: &crate::core::ChangeSetFacts,
+    changeset: &crate::core::ReviewChangeset,
     whole_file: bool,
 ) -> Vec<Diagnostic> {
     diagnostics

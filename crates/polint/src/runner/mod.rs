@@ -436,7 +436,7 @@ fn analyze_and_run(
 ///
 /// The file is polint-internal (written by the outer `review` command), so a
 /// missing or malformed file is a loud error rather than a silent empty diff.
-fn read_changeset(path: &Path) -> Result<crate::core::ChangeSetFacts> {
+fn read_changeset(path: &Path) -> Result<crate::core::ReviewChangeset> {
     let raw = std::fs::read_to_string(path).with_context(|| {
         format!(
             "failed to read injected changeset file {} (polint review internal)",

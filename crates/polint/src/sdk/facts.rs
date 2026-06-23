@@ -5,10 +5,10 @@
 //! the matching views at runtime.
 
 use crate::core::{
-    AnalysisDb, BranchObligation, ChangeSetFacts, ChangeStatus, ChangedFile, ComplexityMetricFact,
-    CoverageFact, DefinitionFact, FileId, FileMetricFact, FunctionFact, FunctionId,
-    FunctionMetricFact, ImportFact, ImportId, JsxAttributeFact, Language, ModuleEdge, ModuleNode,
-    ModuleNodeId, PackageFact, ReferenceFact, ResolutionStatus, ResolvedImportFact, SourceFile,
+    AnalysisDb, BranchObligation, ChangeStatus, ChangedFile, ComplexityMetricFact, CoverageFact,
+    DefinitionFact, FileId, FileMetricFact, FunctionFact, FunctionId, FunctionMetricFact,
+    ImportFact, ImportId, JsxAttributeFact, Language, ModuleEdge, ModuleNode, ModuleNodeId,
+    PackageFact, ReferenceFact, ResolutionStatus, ResolvedImportFact, ReviewChangeset, SourceFile,
     StringLiteralFact, SymbolFact, SymbolId, SymbolKind, SymbolResolutionStatus, TestFact,
     TsClassFact, TsComponentFact,
 };
@@ -885,7 +885,7 @@ pub struct ChangedFiles<'a> {
 }
 
 impl<'a> ChangedFiles<'a> {
-    fn facts(self) -> Option<&'a ChangeSetFacts> {
+    fn facts(self) -> Option<&'a ReviewChangeset> {
         self.db.changeset()
     }
 
@@ -1782,10 +1782,10 @@ mod tests {
         );
     }
 
-    fn changeset_fixture() -> ChangeSetFacts {
+    fn changeset_fixture() -> ReviewChangeset {
         // `polint review` injects a path-sorted changeset (the git module sorts
         // before injection), so the fixture mirrors that stored order.
-        ChangeSetFacts {
+        ReviewChangeset {
             files: vec![
                 ChangedFile {
                     path: "db/migrations/0001_init.sql".to_string(),

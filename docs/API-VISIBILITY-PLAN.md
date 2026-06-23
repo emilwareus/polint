@@ -151,7 +151,8 @@ bypassed.
 
 `RuleKind` (the `#[polint::rule(kind = "review")]` designation) is intentionally **not**
 prelude-exported — it rides `polint::sdk::__private` only, like `RuleMeta`, so it does not
-touch `ALLOWED_PRELUDE`. `ChangedFile`, `ChangedFileRef`, and `ChangeSetFacts` are reachable
-through `ChangedFiles` methods and are not prelude names (`ChangedFile`/`ChangeSetFacts` stay
-`pub(crate)`; `ChangedFileRef` stays `pub` but unexported). The `ALLOWED_PRELUDE` count moved
-`97 -> 99` for these two additions, with two probe witnesses added in the same change.
+touch `ALLOWED_PRELUDE`. `ChangedFile`, `ChangedFileRef`, and `ReviewChangeset` (the injected
+diff store) are reachable through `ChangedFiles` methods and are not prelude names
+(`ChangedFile`/`ReviewChangeset` stay `pub(crate)`; `ChangedFileRef` stays `pub` but
+unexported). The `ALLOWED_PRELUDE` count moved `97 -> 99` for these two additions, with two
+probe witnesses added in the same change.

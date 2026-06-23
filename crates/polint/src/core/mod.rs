@@ -821,7 +821,7 @@ pub struct AnalysisDb {
     /// runner via [`AnalysisDb::set_changeset`] after the kernel runs, not
     /// derived by a provider. It is `None` under `polint check` (so the
     /// `ChangedFiles` view is empty there) and excluded from all cache digests.
-    changeset: Option<ChangeSetFacts>,
+    changeset: Option<ReviewChangeset>,
 }
 
 impl Default for AnalysisDb {
@@ -983,12 +983,12 @@ impl AnalysisDb {
             reason = "The host runner wires set_changeset from --changed-files in the polint review command (Task 4)."
         )
     )]
-    pub(crate) fn set_changeset(&mut self, changeset: ChangeSetFacts) {
+    pub(crate) fn set_changeset(&mut self, changeset: ReviewChangeset) {
         self.changeset = Some(changeset);
     }
 
     /// Returns the injected changeset, or `None` under `polint check`.
-    pub(crate) fn changeset(&self) -> Option<&ChangeSetFacts> {
+    pub(crate) fn changeset(&self) -> Option<&ReviewChangeset> {
         self.changeset.as_ref()
     }
 
@@ -6847,7 +6847,7 @@ pub(crate) struct ChangedFile {
 /// `ChangedFiles` SDK fact view. Empty under `polint check`. Crate-internal:
 /// it travels outer→host as a JSON cache file, so it derives `Serialize`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct ChangeSetFacts {
+pub(crate) struct ReviewChangeset {
     /// Changed files, sorted by `path` for deterministic output.
     pub(crate) files: Vec<ChangedFile>,
 }

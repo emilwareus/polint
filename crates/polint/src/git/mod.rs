@@ -7,7 +7,7 @@
 //! than taking a `git2`/`gix` dependency.
 //!
 //! The module is crate-private: there is no `polint::git` public path. The
-//! produced [`ChangeSetFacts`] is injected into the host's `AnalysisDb` so the
+//! produced [`ReviewChangeset`] is injected into the host's `AnalysisDb` so the
 //! `ChangedFiles` SDK fact view can read it.
 //!
 //! Paths are emitted **repo-relative and `/`-normalized**, identical in form to
@@ -26,7 +26,7 @@
     )
 )]
 
-use crate::core::{ChangeSetFacts, ChangeStatus, ChangedFile};
+use crate::core::{ChangeStatus, ChangedFile, ReviewChangeset};
 use anyhow::{Context, Result, bail};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -197,7 +197,7 @@ fn parse_hunk_new_range(rest: &str) -> Option<(u32, u32)> {
     Some((start, start + count - 1))
 }
 
-/// Compute the [`ChangeSetFacts`] between `HEAD` and `target` for `polint review`.
+/// Compute the [`ReviewChangeset`] between `HEAD` and `target` for `polint review`.
 ///
 /// `root` is the repo root; `target` is the user's ref (`origin/main`, a SHA,
 /// or an `a...b` range). Paths are repo-relative and `/`-normalized to match
@@ -207,7 +207,7 @@ fn parse_hunk_new_range(rest: &str) -> Option<(u32, u32)> {
 /// Edge cases: deleted files carry empty `new_line_ranges`; renames carry the
 /// new path with `Renamed`; binary and mode-only changes appear with empty
 /// ranges; an empty diff yields an empty file list. A bad ref is a loud `Err`.
-pub(crate) fn changeset_for_ref(root: &Path, target: &str) -> Result<ChangeSetFacts> {
+pub(crate) fn changeset_for_ref(root: &Path, target: &str) -> Result<ReviewChangeset> {
     let base = resolve_base(root, target)?;
 
     let name_status = run_git(root, &["diff", "--name-status", "-z", &base])?;
@@ -236,7 +236,7 @@ pub(crate) fn changeset_for_ref(root: &Path, target: &str) -> Result<ChangeSetFa
     // contract (path-sorted, deterministic) holds regardless of source.
     files.sort_by(|a, b| a.path.cmp(&b.path));
 
-    Ok(ChangeSetFacts { files })
+    Ok(ReviewChangeset { files })
 }
 
 #[cfg(test)]
@@ -298,7 +298,7 @@ mod tests {
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     }
 
-    fn find<'a>(facts: &'a ChangeSetFacts, path: &str) -> &'a ChangedFile {
+    fn find<'a>(facts: &'a ReviewChangeset, path: &str) -> &'a ChangedFile {
         facts
             .files
             .iter()
