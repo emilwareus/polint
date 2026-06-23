@@ -10758,5 +10758,8 @@ fn review_requires_local_rule_hosts() {
         .args(["review", "HEAD"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("requires repo-local rules"));
+        .stderr(predicate::str::contains("requires repo-local rules"))
+        .stderr(predicate::str::contains(
+            "polint new-rule generic <name> --review",
+        ));
 }

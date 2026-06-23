@@ -2803,7 +2803,7 @@ fn review(root: PathBuf, args: &ReviewArgs) -> Result<u8> {
     if manifests.is_empty() {
         anyhow::bail!(
             "`polint review` requires repo-local rules under `[rules] paths` in .polint.toml; \
-             none were found. Scaffold one with `polint new-rule --review <name>`."
+             none were found. Scaffold one with `polint new-rule generic <name> --review`."
         );
     }
 
