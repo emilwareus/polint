@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::core::{ResolutionPrecision, ResolutionStatus, SymbolPrecision};
 
@@ -354,7 +354,7 @@ impl FactFamilyRows {
 #[derive(Debug, Default, Clone)]
 pub(crate) struct FactMetaStore {
     rows: BTreeMap<FactFamily, FactFamilyRows>,
-    stable_key_owners: BTreeMap<FactFamily, BTreeMap<String, StableKeyOwner>>,
+    stable_key_owners: BTreeMap<FactFamily, HashMap<String, StableKeyOwner>>,
     stable_key_conflicts: BTreeSet<StableKeyConflict>,
 }
 
@@ -416,6 +416,14 @@ impl FactMetaStore {
         for conflict in conflicts {
             self.stable_key_conflicts.remove(&conflict);
         }
+    }
+
+    pub(crate) fn finish_family_insertions(&mut self, family: FactFamily) {
+        self.stable_key_owners.remove(&family);
+    }
+
+    pub(crate) fn finish_all_insertions(&mut self) {
+        self.stable_key_owners.clear();
     }
 
     #[cfg(test)]
@@ -614,6 +622,26 @@ mod tests {
                 .stable_key_owner(FactFamily::Import, "import:key")
                 .map(|owner| owner.reference),
             Some(first_ref)
+        );
+    }
+
+    #[test]
+    fn finish_family_insertions_keeps_rows_and_conflicts_but_drops_owner_index() {
+        let mut store = FactMetaStore::default();
+        let first_ref = FactRef::new(FactFamily::Import, 1);
+        let second_ref = FactRef::new(FactFamily::Import, 2);
+
+        store.insert(first_ref, test_meta("import:key", "payload:a"));
+        store.insert(second_ref, test_meta("import:key", "payload:b"));
+        store.finish_family_insertions(FactFamily::Import);
+
+        assert!(store.get(first_ref).is_some());
+        assert!(store.get(second_ref).is_some());
+        assert_eq!(store.stable_key_conflicts().count(), 1);
+        assert!(
+            store
+                .stable_key_owner(FactFamily::Import, "import:key")
+                .is_none()
         );
     }
 

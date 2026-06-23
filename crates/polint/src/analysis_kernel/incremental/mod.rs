@@ -59,7 +59,7 @@ pub(crate) use demand::{
 pub(crate) use dependency_index::{
     CacheNode, DEPENDENCY_INDEX_SCHEMA, DependencyEdge, DependencyIndex, DependencyKind, ShapeKind,
 };
-pub(crate) use digest::{Digest, DigestKind};
+pub(crate) use digest::{Digest, DigestBuilder, DigestKind};
 #[cfg_attr(
     test,
     allow(

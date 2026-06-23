@@ -41,6 +41,12 @@ pub(crate) struct LocalDomainSolver {
     policy: SolverPolicy,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SolverOutputMode {
+    Full,
+    SummaryInputs,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct QueueKey {
     reverse_postorder: u32,
@@ -80,36 +86,34 @@ impl LocalDomainSolver {
     }
 
     pub(crate) fn solve(&self, input: SolverInput<'_>) -> SolverResult {
+        self.solve_with_output_mode(input, SolverOutputMode::Full)
+    }
+
+    pub(crate) fn solve_summary_inputs(&self, input: SolverInput<'_>) -> SolverResult {
+        self.solve_with_output_mode(input, SolverOutputMode::SummaryInputs)
+    }
+
+    fn solve_with_output_mode(
+        &self,
+        input: SolverInput<'_>,
+        output_mode: SolverOutputMode,
+    ) -> SolverResult {
         let mut results = DomainResults::new();
-        let body_by_id = input
-            .db
-            .mir_bodies()
-            .iter()
-            .map(|body| (body.id, body))
-            .collect::<BTreeMap<_, _>>();
-        let operations_by_id = input
-            .db
-            .mir_operations()
-            .iter()
-            .map(|operation| (operation.id, operation))
-            .collect::<BTreeMap<_, _>>();
+        let facts = SolverFactIndex::new(input.db);
+        let transfer_cx = TransferCx::from_db(input.db);
 
-        let mut functions = input.db.cfg_functions().iter().collect::<Vec<_>>();
-        functions.sort_by(|left, right| {
-            let left_body = body_by_id
-                .get(&left.body)
-                .map_or("", |body| body.stable_key.as_str());
-            let right_body = body_by_id
-                .get(&right.body)
-                .map_or("", |body| body.stable_key.as_str());
-            (left_body, left.stable_key.as_str()).cmp(&(right_body, right.stable_key.as_str()))
-        });
-
-        for function in functions {
-            let Some(body) = body_by_id.get(&function.body).copied() else {
+        for function in &facts.functions {
+            let Some(body) = facts.body_by_id.get(&function.body).copied() else {
                 continue;
             };
-            self.solve_function(input.db, body, function.id, &operations_by_id, &mut results);
+            self.solve_function(
+                body,
+                function.id,
+                &facts,
+                &transfer_cx,
+                output_mode,
+                &mut results,
+            );
         }
 
         SolverResult { results }
@@ -117,17 +121,18 @@ impl LocalDomainSolver {
 
     fn solve_function(
         &self,
-        db: &AnalysisDb,
         body: &MirBody,
         function: CfgFunctionId,
-        operations_by_id: &BTreeMap<MirOpId, &MirOperation>,
+        facts: &SolverFactIndex<'_>,
+        transfer_cx: &TransferCx<'_>,
+        output_mode: SolverOutputMode,
         results: &mut DomainResults,
     ) {
-        let blocks = sorted_blocks(db, function);
-        let nodes = sorted_nodes(db, function);
-        let edges = sorted_edges(db, function);
-        let operations_by_block = operations_by_block(&nodes, operations_by_id);
-        let transfer_cx = TransferCx::from_db(db);
+        let blocks = facts.blocks(function);
+        let nodes = facts.nodes(function);
+        let edges = facts.edges(function);
+        let operations_by_block = operations_by_block(nodes, &facts.operations_by_id);
+        let outgoing_edges = edges_by_source_block(edges);
         let block_keys = blocks
             .iter()
             .map(|block| {
@@ -146,12 +151,18 @@ impl LocalDomainSolver {
             .map(|block| (block.id, ProductState::bottom()))
             .collect::<BTreeMap<_, _>>();
         let mut exit_states = entry_states.clone();
-        let mut operation_states =
-            BTreeMap::<MirOpId, (BasicBlockId, String, ProductState, ProductState)>::new();
+        let mut operation_states = if output_mode.records_operation_states() {
+            Some(BTreeMap::<
+                MirOpId,
+                (BasicBlockId, String, ProductState, ProductState),
+            >::new())
+        } else {
+            None
+        };
         let mut status = SolverStatus::Solved;
         let mut widening_fuel = self.policy.budget.widening_fuel;
 
-        let Some(entry_block) = entry_block(&blocks) else {
+        let Some(entry_block) = entry_block(blocks) else {
             results.insert_function(
                 body.id,
                 body.stable_key.clone(),
@@ -185,25 +196,30 @@ impl LocalDomainSolver {
                 .cloned()
                 .unwrap_or_else(ProductState::bottom);
             for operation in operations_by_block.get(&next.block).into_iter().flatten() {
-                let before = state.clone();
-                OperationTransfer::apply(&transfer_cx, operation, &mut state);
-                state.reduce_value_only(self.policy.reduction_rounds);
-                let after = state.clone();
-                operation_states.insert(
-                    operation.id,
-                    (next.block, operation.stable_key.clone(), before, after),
-                );
+                if let Some(operation_states) = &mut operation_states {
+                    let before = state.clone();
+                    OperationTransfer::apply(transfer_cx, operation, &mut state);
+                    state.reduce_value_only(self.policy.reduction_rounds);
+                    let after = state.clone();
+                    operation_states.insert(
+                        operation.id,
+                        (next.block, operation.stable_key.clone(), before, after),
+                    );
+                } else {
+                    OperationTransfer::apply(transfer_cx, operation, &mut state);
+                    state.reduce_value_only(self.policy.reduction_rounds);
+                }
             }
             state.reduce_value_only(self.policy.reduction_rounds);
             exit_states.insert(next.block, state.clone());
 
-            for edge in edges.iter().filter(|edge| edge.from_block == next.block) {
+            for edge in outgoing_edges.get(&next.block).into_iter().flatten() {
                 let mut candidate = state.clone();
                 if let Some((predicate_place, sense)) =
                     branch_assumption(edge.kind, operations_by_block.get(&next.block))
                 {
                     EdgeTransfer::apply_branch_assumption(
-                        &transfer_cx,
+                        transfer_cx,
                         predicate_place,
                         sense,
                         &mut candidate,
@@ -259,9 +275,143 @@ impl LocalDomainSolver {
             );
         }
 
-        for (operation, (block, stable_key, before, after)) in operation_states {
-            results.insert_operation_state(body.id, block, operation, stable_key, before, after);
+        if let Some(operation_states) = operation_states {
+            for (operation, (block, stable_key, before, after)) in operation_states {
+                results
+                    .insert_operation_state(body.id, block, operation, stable_key, before, after);
+            }
         }
+    }
+}
+
+impl SolverOutputMode {
+    fn records_operation_states(self) -> bool {
+        matches!(self, Self::Full)
+    }
+}
+
+struct SolverFactIndex<'a> {
+    body_by_id: BTreeMap<MirBodyId, &'a MirBody>,
+    operations_by_id: BTreeMap<MirOpId, &'a MirOperation>,
+    functions: Vec<&'a crate::analysis::cfg::facts::CfgFunctionFact>,
+    blocks_by_function: BTreeMap<CfgFunctionId, Vec<&'a BasicBlockFact>>,
+    nodes_by_function: BTreeMap<CfgFunctionId, Vec<&'a CfgNodeFact>>,
+    edges_by_function: BTreeMap<CfgFunctionId, Vec<&'a CfgEdgeFact>>,
+}
+
+impl<'a> SolverFactIndex<'a> {
+    fn new(db: &'a AnalysisDb) -> Self {
+        let body_by_id = db
+            .mir_bodies()
+            .iter()
+            .map(|body| (body.id, body))
+            .collect::<BTreeMap<_, _>>();
+        let operations_by_id = db
+            .mir_operations()
+            .iter()
+            .map(|operation| (operation.id, operation))
+            .collect::<BTreeMap<_, _>>();
+
+        let mut functions = db.cfg_functions().iter().collect::<Vec<_>>();
+        functions.sort_by(|left, right| {
+            let left_body = body_by_id
+                .get(&left.body)
+                .map_or("", |body| body.stable_key.as_str());
+            let right_body = body_by_id
+                .get(&right.body)
+                .map_or("", |body| body.stable_key.as_str());
+            (left_body, left.stable_key.as_str()).cmp(&(right_body, right.stable_key.as_str()))
+        });
+
+        let mut blocks_by_function = BTreeMap::<CfgFunctionId, Vec<&BasicBlockFact>>::new();
+        for block in db.cfg_blocks() {
+            blocks_by_function
+                .entry(block.cfg_function)
+                .or_default()
+                .push(block);
+        }
+        for blocks in blocks_by_function.values_mut() {
+            blocks.sort_by(|left, right| {
+                (left.reverse_postorder, left.stable_key.as_str(), left.id).cmp(&(
+                    right.reverse_postorder,
+                    right.stable_key.as_str(),
+                    right.id,
+                ))
+            });
+        }
+
+        let mut nodes_by_function = BTreeMap::<CfgFunctionId, Vec<&CfgNodeFact>>::new();
+        for node in db.cfg_nodes() {
+            nodes_by_function
+                .entry(node.cfg_function)
+                .or_default()
+                .push(node);
+        }
+        for nodes in nodes_by_function.values_mut() {
+            nodes.sort_by(|left, right| {
+                (left.block, left.operation_ordinal, left.stable_key.as_str()).cmp(&(
+                    right.block,
+                    right.operation_ordinal,
+                    right.stable_key.as_str(),
+                ))
+            });
+        }
+
+        let mut edges_by_function = BTreeMap::<CfgFunctionId, Vec<&CfgEdgeFact>>::new();
+        for edge in db.cfg_edges() {
+            if edge.view == CfgView::NormalControl {
+                edges_by_function
+                    .entry(edge.cfg_function)
+                    .or_default()
+                    .push(edge);
+            }
+        }
+        for edges in edges_by_function.values_mut() {
+            edges.sort_by(|left, right| {
+                (
+                    left.from_block,
+                    left.to_block,
+                    left.kind,
+                    left.stable_key.as_str(),
+                )
+                    .cmp(&(
+                        right.from_block,
+                        right.to_block,
+                        right.kind,
+                        right.stable_key.as_str(),
+                    ))
+            });
+        }
+
+        Self {
+            body_by_id,
+            operations_by_id,
+            functions,
+            blocks_by_function,
+            nodes_by_function,
+            edges_by_function,
+        }
+    }
+
+    fn blocks(&self, function: CfgFunctionId) -> &[&'a BasicBlockFact] {
+        self.blocks_by_function
+            .get(&function)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    fn nodes(&self, function: CfgFunctionId) -> &[&'a CfgNodeFact] {
+        self.nodes_by_function
+            .get(&function)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    fn edges(&self, function: CfgFunctionId) -> &[&'a CfgEdgeFact] {
+        self.edges_by_function
+            .get(&function)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 }
 
@@ -281,61 +431,6 @@ impl SolverResult {
     pub(crate) fn stable_digest_parts(&self) -> Vec<String> {
         self.results.stable_digest_parts()
     }
-}
-
-fn sorted_blocks(db: &AnalysisDb, function: CfgFunctionId) -> Vec<&BasicBlockFact> {
-    let mut blocks = db
-        .cfg_blocks()
-        .iter()
-        .filter(|block| block.cfg_function == function)
-        .collect::<Vec<_>>();
-    blocks.sort_by(|left, right| {
-        (left.reverse_postorder, left.stable_key.as_str(), left.id).cmp(&(
-            right.reverse_postorder,
-            right.stable_key.as_str(),
-            right.id,
-        ))
-    });
-    blocks
-}
-
-fn sorted_nodes(db: &AnalysisDb, function: CfgFunctionId) -> Vec<&CfgNodeFact> {
-    let mut nodes = db
-        .cfg_nodes()
-        .iter()
-        .filter(|node| node.cfg_function == function)
-        .collect::<Vec<_>>();
-    nodes.sort_by(|left, right| {
-        (left.block, left.operation_ordinal, left.stable_key.as_str()).cmp(&(
-            right.block,
-            right.operation_ordinal,
-            right.stable_key.as_str(),
-        ))
-    });
-    nodes
-}
-
-fn sorted_edges(db: &AnalysisDb, function: CfgFunctionId) -> Vec<&CfgEdgeFact> {
-    let mut edges = db
-        .cfg_edges()
-        .iter()
-        .filter(|edge| edge.cfg_function == function && edge.view == CfgView::NormalControl)
-        .collect::<Vec<_>>();
-    edges.sort_by(|left, right| {
-        (
-            left.from_block,
-            left.to_block,
-            left.kind,
-            left.stable_key.as_str(),
-        )
-            .cmp(&(
-                right.from_block,
-                right.to_block,
-                right.kind,
-                right.stable_key.as_str(),
-            ))
-    });
-    edges
 }
 
 fn operations_by_block<'a>(
@@ -362,6 +457,16 @@ fn operations_by_block<'a>(
         });
     }
     operations
+}
+
+fn edges_by_source_block<'a>(
+    edges: &[&'a CfgEdgeFact],
+) -> BTreeMap<BasicBlockId, Vec<&'a CfgEdgeFact>> {
+    let mut by_source = BTreeMap::<BasicBlockId, Vec<&CfgEdgeFact>>::new();
+    for edge in edges {
+        by_source.entry(edge.from_block).or_default().push(*edge);
+    }
+    by_source
 }
 
 fn entry_block(blocks: &[&BasicBlockFact]) -> Option<BasicBlockId> {
@@ -425,6 +530,7 @@ mod tests {
     use crate::analysis::cfg::store::CfgOutput;
     use crate::analysis::domains::core::{ConstantDomain, ConstantLiteral, ReachabilityDomain};
     use crate::analysis::domains::lattice::TopReason;
+    use crate::analysis::domains::store::{DomainMaterialization, DomainOutput};
     use crate::analysis::ids::{MirBodyId, MirOpId, PlaceId};
     use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
     use crate::analysis::mir::op::{AssignMode, MirOperation, MirOperationKind, MirValue};
@@ -531,6 +637,31 @@ mod tests {
         let second = solver.solve(input).stable_digest_parts();
 
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn summary_input_solver_skips_operation_states_without_changing_output_rows() {
+        let input = test_fixture::solver_input(false);
+        let solver = LocalDomainSolver::new(SolverPolicy::for_test(SolverBudget {
+            max_iterations: 16,
+            widening_fuel: 2,
+        }));
+
+        let full = solver.solve(input);
+        let summary = solver.solve_summary_inputs(input);
+        let full_output = DomainOutput::from_results_with_materialization(
+            full.results(),
+            None,
+            DomainMaterialization::SummaryInputs,
+        );
+        let summary_output = DomainOutput::from_results_with_materialization(
+            summary.results(),
+            None,
+            DomainMaterialization::SummaryInputs,
+        );
+
+        assert_eq!(full_output, summary_output);
+        assert!(summary.results().before_operation(MirOpId(0)).is_none());
     }
 
     mod test_fixture {

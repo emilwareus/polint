@@ -7,7 +7,8 @@ use super::facts::{
 };
 use super::store::SummaryOutput;
 use crate::analysis::calls::facts::UnresolvedCallFact;
-use crate::analysis::cfg::facts::{BasicBlockKind, CfgEdgeKind};
+use crate::analysis::cfg::facts::{BasicBlockFact, BasicBlockKind, CfgEdgeFact, CfgEdgeKind};
+use crate::analysis::cfg::ids::CfgFunctionId;
 use crate::analysis::domains::facts::{
     DomainLocation, DomainObservationFact, DomainSlot, DomainValue,
 };
@@ -82,13 +83,24 @@ impl DirectSummaryBuilder {
         let cfg_edges = db.cfg_edges();
         let cfg_functions = db.cfg_functions();
 
-        let cfg_functions_by_body: BTreeMap<
-            MirBodyId,
-            &crate::analysis::cfg::facts::CfgFunctionFact,
-        > = {
+        let cfg_functions_by_body: BTreeMap<MirBodyId, CfgFunctionId> = {
             let mut map = BTreeMap::new();
             for func in cfg_functions {
-                map.insert(func.body, func);
+                map.insert(func.body, func.id);
+            }
+            map
+        };
+        let cfg_blocks_by_function: BTreeMap<CfgFunctionId, Vec<&BasicBlockFact>> = {
+            let mut map = BTreeMap::<CfgFunctionId, Vec<&BasicBlockFact>>::new();
+            for block in cfg_blocks {
+                map.entry(block.cfg_function).or_default().push(block);
+            }
+            map
+        };
+        let cfg_edges_by_function: BTreeMap<CfgFunctionId, Vec<&CfgEdgeFact>> = {
+            let mut map = BTreeMap::<CfgFunctionId, Vec<&CfgEdgeFact>>::new();
+            for edge in cfg_edges {
+                map.entry(edge.cfg_function).or_default().push(edge);
             }
             map
         };
@@ -125,8 +137,8 @@ impl DirectSummaryBuilder {
                 body_observations,
                 has_unresolved,
                 &cfg_functions_by_body,
-                cfg_blocks,
-                cfg_edges,
+                &cfg_blocks_by_function,
+                &cfg_edges_by_function,
             );
 
             let (control_status, control_precision, control_provenance) =
@@ -336,9 +348,9 @@ fn build_control_effects(
     body_ops: &[&crate::analysis::mir::op::MirOperation],
     body_observations: &[&DomainObservationFact],
     has_unresolved: bool,
-    cfg_functions_by_body: &BTreeMap<MirBodyId, &crate::analysis::cfg::facts::CfgFunctionFact>,
-    cfg_blocks: &[crate::analysis::cfg::facts::BasicBlockFact],
-    cfg_edges: &[crate::analysis::cfg::facts::CfgEdgeFact],
+    cfg_functions_by_body: &BTreeMap<MirBodyId, CfgFunctionId>,
+    cfg_blocks_by_function: &BTreeMap<CfgFunctionId, Vec<&BasicBlockFact>>,
+    cfg_edges_by_function: &BTreeMap<CfgFunctionId, Vec<&CfgEdgeFact>>,
 ) -> ControlEffects {
     let mut exits = BTreeSet::new();
     let mut async_kind = AsyncKind::Sync;
@@ -358,12 +370,12 @@ fn build_control_effects(
     }
 
     // Check CFG edges for throw, panic, cleanup evidence
-    if let Some(cfg_func) = cfg_functions_by_body.get(&body.id) {
-        let func_id = cfg_func.id;
-        for edge in cfg_edges {
-            if edge.cfg_function != func_id {
-                continue;
-            }
+    if let Some(func_id) = cfg_functions_by_body.get(&body.id).copied() {
+        let function_edges = cfg_edges_by_function
+            .get(&func_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        for edge in function_edges {
             match edge.kind {
                 CfgEdgeKind::Throw | CfgEdgeKind::ImplicitThrow => {
                     exits.insert(ExitKind::Throws);
@@ -392,11 +404,10 @@ fn build_control_effects(
 
         // Check for does-not-return evidence from domain observations
         // If all exit blocks are unreachable per reachability domain
-        let function_blocks: Vec<_> = cfg_blocks
-            .iter()
-            .filter(|b| b.cfg_function == func_id)
-            .collect();
-
+        let function_blocks = cfg_blocks_by_function
+            .get(&func_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
         let exit_blocks: Vec<_> = function_blocks
             .iter()
             .filter(|b| {

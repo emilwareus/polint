@@ -98,7 +98,7 @@ pub(crate) fn derive_type_value_alias_with_cache_stats(
     let mut cache_stats = CacheStats::default();
     cache_stats.record_recompute();
 
-    db.replace_type_value_alias_facts(output);
+    db.replace_normalized_type_value_alias_facts(output);
     TypeValueAliasProviderOutput {
         diagnostics,
         cache_stats,

@@ -8,8 +8,9 @@ use crate::analysis::adaptation::loader::load_model_file;
 use crate::analysis::adaptation::store::AdaptationModelStore;
 use crate::analysis::adaptation::validate::ValidationUniverse;
 use crate::analysis::semantic_graph::build::{
-    build_semantic_graph_with_ts_direct_bindings,
-    build_semantic_graph_with_ts_direct_bindings_and_adaptation_models, collect_ts_direct_bindings,
+    build_semantic_graph_with_ts_direct_binding_collection,
+    build_semantic_graph_with_ts_direct_binding_collection_and_adaptation_models,
+    collect_ts_direct_binding_collection,
 };
 use crate::analysis::semantic_graph::cache_key::semantic_graph_provider_parameter_digest;
 use crate::analysis::semantic_graph::store::{SEMANTIC_GRAPH_PROVIDER_ID, SemanticGraphOutput};
@@ -24,8 +25,6 @@ use crate::repo_fs::read_repo_file_to_string_with_limit;
 use crate::ts::binding::store::{
     ts_direct_binding_output_digest, ts_direct_binding_provider_parameter_digest,
 };
-use crate::ts::object_model::extract::extract_ts_object_model;
-use crate::ts::object_model::store::TsObjectModelOutput;
 
 const ADAPTATION_MODEL_DIR: &str = ".polint/models";
 const ADAPTATION_MODEL_MAX_BYTES: u64 = 1_048_576;
@@ -81,10 +80,15 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
     let mut cache_stats = CacheStats::default();
     cache_stats.record_recompute();
 
-    // Phase 1: refresh private TS object-model rows. This keeps the projection's
+    // Phase 1: collect the private TS analysis side inputs once. This keeps
+    // direct bindings, object-model rows, and token-source flow projection on
+    // the same parse/semantic pass per TS file.
+    let mut ts_direct_bindings = collect_ts_direct_binding_collection(db);
+
+    // Phase 2: refresh private TS object-model rows. This keeps the projection's
     // consumed object/property facts deterministic and digest-visible without
     // promoting a public object-model provider surface.
-    let object_model = collect_ts_object_model(db);
+    let object_model = ts_direct_bindings.take_object_model_output();
     if let Err(error) = db.replace_ts_object_model_facts(object_model) {
         return SemanticGraphProviderRunOutput {
             diagnostics: vec![provider_error_diagnostic(error.to_string())],
@@ -93,19 +97,20 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
         };
     }
 
-    // Phase 2-3: project + normalize. The build is read-only; normalized() fixes the
+    // Phase 3-4: project + normalize. The build is read-only; normalized() fixes the
     // stable-key order the digest is computed over.
-    let ts_direct_bindings = collect_ts_direct_bindings(db);
-    let ts_direct_binding_output_digest = ts_direct_binding_output_digest(&ts_direct_bindings);
+    let ts_direct_binding_output_digest =
+        ts_direct_binding_output_digest(ts_direct_bindings.output());
     let base_output =
-        build_semantic_graph_with_ts_direct_bindings(db, &ts_direct_bindings.bindings).normalized();
+        build_semantic_graph_with_ts_direct_binding_collection(db, &ts_direct_bindings)
+            .normalized();
     let adaptation_models = collect_adaptation_model_input(loaded, &base_output, adaptation_budget);
     let output = if adaptation_models.store.accepted().is_empty() {
         base_output
     } else {
-        build_semantic_graph_with_ts_direct_bindings_and_adaptation_models(
+        build_semantic_graph_with_ts_direct_binding_collection_and_adaptation_models(
             db,
-            &ts_direct_bindings.bindings,
+            &ts_direct_bindings,
             &adaptation_models.store,
         )
         .normalized()
@@ -424,25 +429,6 @@ fn adaptation_model_diagnostic(
     .with_evidence(evidence_key, evidence_value.into())
 }
 
-fn collect_ts_object_model(db: &AnalysisDb) -> TsObjectModelOutput {
-    let mut output = TsObjectModelOutput::default();
-    for file in db
-        .files()
-        .iter()
-        .filter(|file| file.language.is_ts_family())
-    {
-        let file_output = extract_ts_object_model(file);
-        output.allocations.extend(file_output.allocations);
-        output.property_writes.extend(file_output.property_writes);
-        output.property_reads.extend(file_output.property_reads);
-        output
-            .receiver_bindings
-            .extend(file_output.receiver_bindings);
-        output.prototype_links.extend(file_output.prototype_links);
-    }
-    output
-}
-
 /// Output digest over stable KEYS, never dense IDs (D-17).
 ///
 /// Every node/edge/constraint contribution is composed from content-derived stable
@@ -681,6 +667,7 @@ fn provider_error_diagnostic(message: String) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis::semantic_graph::build::build_semantic_graph_with_ts_direct_bindings;
     use crate::analysis_kernel::AnalysisKernel;
     use crate::analysis_kernel::incremental::{Digest, DigestKind};
     use crate::analysis_plan::AnalysisPlan;

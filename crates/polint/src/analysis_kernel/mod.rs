@@ -939,6 +939,7 @@ impl AnalysisKernel {
         let validation_diagnostics =
             validation::validate_fact_metadata(&db, Self::provider_manifests());
         diagnostics.extend(validation_diagnostics);
+        db.finish_all_fact_meta_insertions();
         let run_report = incremental::KernelRunReport::new(
             input_snapshot,
             provider_outputs,

@@ -83,7 +83,12 @@ fn derive_abstract_domains_with_materialization(
     materialization: DomainMaterialization,
 ) -> AbstractDomainsProviderOutput {
     let solver = LocalDomainSolver::new(SolverPolicy::deterministic());
-    let result = solver.solve(SolverInput::from(&*db));
+    let result = match materialization {
+        DomainMaterialization::Full => solver.solve(SolverInput::from(&*db)),
+        DomainMaterialization::SummaryInputs => {
+            solver.solve_summary_inputs(SolverInput::from(&*db))
+        }
+    };
     let body_keys = body_stable_key_map(db);
     let block_keys = block_stable_key_map(db);
     let operation_keys = operation_stable_key_map(db);

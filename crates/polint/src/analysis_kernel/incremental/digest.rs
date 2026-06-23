@@ -45,6 +45,10 @@ impl Digest {
         }
     }
 
+    pub(crate) fn builder(kind: DigestKind, label: &'static str) -> DigestBuilder {
+        DigestBuilder::new(kind, label)
+    }
+
     pub(crate) fn from_unordered(kind: DigestKind, label: &str, mut digests: Vec<Digest>) -> Self {
         digests.sort();
         let digest_parts = digests.iter().map(ToString::to_string).collect::<Vec<_>>();
@@ -59,6 +63,40 @@ impl Digest {
 
     pub(crate) fn unsupported(kind: DigestKind, label: &str, reason: &str) -> Self {
         Self::from_parts(kind, "unsupported", &[label, reason])
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct DigestBuilder {
+    kind: DigestKind,
+    label: &'static str,
+    hash: u64,
+}
+
+impl DigestBuilder {
+    fn new(kind: DigestKind, label: &'static str) -> Self {
+        let mut hash = FNV_OFFSET_BASIS;
+        fingerprint_length_prefixed_part(&mut hash, "kind", kind.as_str());
+        Self { kind, label, hash }
+    }
+
+    pub(crate) fn part(&mut self, value: &str) {
+        fingerprint_length_prefixed_part(&mut self.hash, self.label, value);
+    }
+
+    pub(crate) fn debug_part(&mut self, value: impl fmt::Debug) {
+        self.part(&format!("{value:?}"));
+    }
+
+    pub(crate) fn bool_part(&mut self, value: bool) {
+        self.part(if value { "true" } else { "false" });
+    }
+
+    pub(crate) fn finish(self) -> Digest {
+        Digest {
+            kind: self.kind,
+            value: format!("{:016x}", self.hash),
+        }
     }
 }
 

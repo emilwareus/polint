@@ -1548,6 +1548,24 @@ impl AnalysisDb {
         self.summary_store = Some(store);
     }
 
+    pub(crate) fn merge_summary_facts_without_metadata(
+        &mut self,
+        summaries: &[SummaryFact],
+        events: &[SummaryEventFact],
+    ) {
+        if let Some(store) = &mut self.summary_store {
+            store.merge_updates(summaries, events);
+            self.summary_facts.clear();
+            self.summary_events.clear();
+            return;
+        }
+
+        self.replace_summary_facts_without_metadata(SummaryOutput {
+            summaries: summaries.to_vec(),
+            events: events.to_vec(),
+        });
+    }
+
     pub(crate) fn refresh_summary_metadata_after_bulk_update(&mut self) {
         self.refresh_summary_metadata();
     }
@@ -1930,13 +1948,23 @@ impl AnalysisDb {
         &self.unresolved_framework_facts
     }
 
+    #[allow(
+        dead_code,
+        reason = "Compatibility callers can still pass unnormalized aggregate output; providers use the normalized fast path."
+    )]
     pub(crate) fn replace_type_value_alias_facts(&mut self, output: TypeValueAliasOutput) {
-        let output = output.normalized();
-        let type_store = TypeStore::from_output(output.types);
-        let value_store = ValueStore::from_output(output.values);
-        let access_path_store = AccessPathStore::from_output(output.access_paths);
-        let points_to_store = PointsToStore::from_output(output.points_to);
-        let alias_store = AliasStore::from_output(output.aliases);
+        self.replace_normalized_type_value_alias_facts(output.normalized());
+    }
+
+    pub(crate) fn replace_normalized_type_value_alias_facts(
+        &mut self,
+        output: TypeValueAliasOutput,
+    ) {
+        let type_store = TypeStore::from_normalized_output(output.types);
+        let value_store = ValueStore::from_normalized_output(output.values);
+        let access_path_store = AccessPathStore::from_normalized_output(output.access_paths);
+        let points_to_store = PointsToStore::from_normalized_output(output.points_to);
+        let alias_store = AliasStore::from_normalized_output(output.aliases);
 
         self.type_facts = type_store.types().to_vec();
         self.narrowed_type_facts = type_store.narrowed().to_vec();
@@ -2079,6 +2107,12 @@ impl AnalysisDb {
             };
             self.record_fact_meta(FactFamily::UnresolvedCall, run_id, metadata);
         }
+
+        self.finish_fact_meta_insertions(&[
+            FactFamily::CallSite,
+            FactFamily::CallTarget,
+            FactFamily::UnresolvedCall,
+        ]);
     }
 
     fn refresh_refined_call_metadata(&mut self) {
@@ -2091,6 +2125,7 @@ impl AnalysisDb {
                 self.record_fact_meta(FactFamily::RefinedCallEdge, run_id, metadata);
             }
             self.refined_call_store = Some(store);
+            self.finish_fact_meta_insertions(&[FactFamily::RefinedCallEdge]);
             return;
         }
 
@@ -2101,6 +2136,7 @@ impl AnalysisDb {
             };
             self.record_fact_meta(FactFamily::RefinedCallEdge, run_id, metadata);
         }
+        self.finish_fact_meta_insertions(&[FactFamily::RefinedCallEdge]);
     }
 
     fn refresh_data_flow_metadata(&mut self) {
@@ -2144,6 +2180,13 @@ impl AnalysisDb {
         for (run_id, metadata) in budget_metadata {
             self.record_fact_meta(FactFamily::DataFlowBudget, run_id, metadata);
         }
+
+        self.finish_fact_meta_insertions(&[
+            FactFamily::DataFlowNode,
+            FactFamily::DataFlowEdge,
+            FactFamily::DataFlowModel,
+            FactFamily::DataFlowBudget,
+        ]);
     }
 
     fn refresh_evidence_metadata(&mut self) {
@@ -2233,6 +2276,17 @@ impl AnalysisDb {
         for (run_id, metadata) in replay_metadata {
             self.record_fact_meta(FactFamily::EvidenceReplayKey, run_id, metadata);
         }
+
+        self.finish_fact_meta_insertions(&[
+            FactFamily::EvidenceNode,
+            FactFamily::EvidenceEdge,
+            FactFamily::EvidenceBundle,
+            FactFamily::EvidencePath,
+            FactFamily::EvidenceSlice,
+            FactFamily::EvidenceUnknown,
+            FactFamily::EvidenceOmittedRegion,
+            FactFamily::EvidenceReplayKey,
+        ]);
     }
 
     fn refresh_abstract_domain_metadata(&mut self) {
@@ -2256,6 +2310,7 @@ impl AnalysisDb {
         }
 
         self.abstract_domain_store = Some(store);
+        self.finish_fact_meta_insertions(&[FactFamily::DomainObservation, FactFamily::DomainEvent]);
     }
 
     fn refresh_summary_metadata(&mut self) {
@@ -2280,6 +2335,13 @@ impl AnalysisDb {
             }
 
             self.summary_store = Some(store);
+            self.finish_fact_meta_insertions(&[
+                FactFamily::SummaryControl,
+                FactFamily::SummaryCall,
+                FactFamily::SummaryMemory,
+                FactFamily::SummaryTito,
+                FactFamily::SummaryEvent,
+            ]);
             return;
         }
 
@@ -2302,6 +2364,13 @@ impl AnalysisDb {
             };
             self.record_fact_meta(FactFamily::SummaryEvent, run_id, metadata);
         }
+        self.finish_fact_meta_insertions(&[
+            FactFamily::SummaryControl,
+            FactFamily::SummaryCall,
+            FactFamily::SummaryMemory,
+            FactFamily::SummaryTito,
+            FactFamily::SummaryEvent,
+        ]);
     }
 
     #[allow(
@@ -2319,6 +2388,7 @@ impl AnalysisDb {
         for (run_id, metadata) in metadata {
             self.record_fact_meta(FactFamily::ExtensionFact, run_id, metadata);
         }
+        self.finish_fact_meta_insertions(&[FactFamily::ExtensionFact]);
     }
 
     fn refresh_adaptation_model_metadata(&mut self) {
@@ -2332,6 +2402,7 @@ impl AnalysisDb {
         for (run_id, metadata) in metadata {
             self.record_fact_meta(FactFamily::AdaptationModel, run_id, metadata);
         }
+        self.finish_fact_meta_insertions(&[FactFamily::AdaptationModel]);
     }
 
     fn refresh_entrypoint_metadata(&mut self) {
@@ -2376,6 +2447,12 @@ impl AnalysisDb {
         for (run_id, metadata) in unresolved_metadata {
             self.record_fact_meta(FactFamily::UnresolvedFramework, run_id, metadata);
         }
+        self.finish_fact_meta_insertions(&[
+            FactFamily::Entrypoint,
+            FactFamily::TrustBoundary,
+            FactFamily::DispatchEdge,
+            FactFamily::UnresolvedFramework,
+        ]);
     }
 
     fn refresh_type_value_alias_metadata(&mut self) {
@@ -2455,6 +2532,17 @@ impl AnalysisDb {
             };
             self.record_fact_meta(FactFamily::AliasAnswer, run_id, metadata);
         }
+
+        self.finish_fact_meta_insertions(&[
+            FactFamily::Type,
+            FactFamily::NarrowedType,
+            FactFamily::Value,
+            FactFamily::AllocationToken,
+            FactFamily::AccessPath,
+            FactFamily::PointsToConstraint,
+            FactFamily::PointsToSet,
+            FactFamily::AliasAnswer,
+        ]);
     }
 
     fn type_fact_metadata(&self, fact: &TypeFact) -> FactMeta {
@@ -2765,86 +2853,89 @@ impl AnalysisDb {
         self.fact_meta
             .remove_family(FactFamily::UnsupportedControlFlow);
 
-        let function_metadata = self
-            .cfg_functions
-            .iter()
-            .map(|fact| (fact.id.0, self.cfg_function_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in function_metadata {
+        for index in 0..self.cfg_functions.len() {
+            let (run_id, metadata) = {
+                let fact = &self.cfg_functions[index];
+                (fact.id.0, self.cfg_function_metadata(fact))
+            };
             self.record_fact_meta(FactFamily::CfgFunction, run_id, metadata);
         }
 
-        let node_metadata = self
-            .cfg_nodes
-            .iter()
-            .map(|fact| (fact.id.0, self.cfg_node_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in node_metadata {
+        for index in 0..self.cfg_nodes.len() {
+            let (run_id, metadata) = {
+                let fact = &self.cfg_nodes[index];
+                (fact.id.0, self.cfg_node_metadata(fact))
+            };
             self.record_fact_meta(FactFamily::CfgNode, run_id, metadata);
         }
 
-        let block_metadata = self
-            .cfg_blocks
-            .iter()
-            .map(|fact| (fact.id.0, self.cfg_block_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in block_metadata {
+        for index in 0..self.cfg_blocks.len() {
+            let (run_id, metadata) = {
+                let fact = &self.cfg_blocks[index];
+                (fact.id.0, self.cfg_block_metadata(fact))
+            };
             self.record_fact_meta(FactFamily::BasicBlock, run_id, metadata);
         }
 
-        let edge_metadata = self
-            .cfg_edges
-            .iter()
-            .map(|fact| (fact.id.0, self.cfg_edge_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in edge_metadata {
+        for index in 0..self.cfg_edges.len() {
+            let (run_id, metadata) = {
+                let fact = &self.cfg_edges[index];
+                (fact.id.0, self.cfg_edge_metadata(fact))
+            };
             self.record_fact_meta(FactFamily::CfgEdge, run_id, metadata);
         }
 
-        let reachability_metadata = self
-            .cfg_reachability
-            .iter()
-            .map(|fact| (fact.id.0, self.cfg_reachability_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in reachability_metadata {
+        for index in 0..self.cfg_reachability.len() {
+            let (run_id, metadata) = {
+                let fact = &self.cfg_reachability[index];
+                (fact.id.0, self.cfg_reachability_metadata(fact))
+            };
             self.record_fact_meta(FactFamily::CfgReachability, run_id, metadata);
         }
 
-        let dominator_metadata = self
-            .cfg_dominators
-            .iter()
-            .map(|fact| (fact.id.0, self.cfg_dominator_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in dominator_metadata {
+        for index in 0..self.cfg_dominators.len() {
+            let (run_id, metadata) = {
+                let fact = &self.cfg_dominators[index];
+                (fact.id.0, self.cfg_dominator_metadata(fact))
+            };
             self.record_fact_meta(FactFamily::CfgDominator, run_id, metadata);
         }
 
-        let postdominator_metadata = self
-            .cfg_postdominators
-            .iter()
-            .map(|fact| (fact.id.0, self.cfg_postdominator_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in postdominator_metadata {
+        for index in 0..self.cfg_postdominators.len() {
+            let (run_id, metadata) = {
+                let fact = &self.cfg_postdominators[index];
+                (fact.id.0, self.cfg_postdominator_metadata(fact))
+            };
             self.record_fact_meta(FactFamily::CfgPostDominator, run_id, metadata);
         }
 
-        let dependence_metadata = self
-            .cfg_control_dependence
-            .iter()
-            .map(|fact| (fact.id.0, self.cfg_control_dependence_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in dependence_metadata {
+        for index in 0..self.cfg_control_dependence.len() {
+            let (run_id, metadata) = {
+                let fact = &self.cfg_control_dependence[index];
+                (fact.id.0, self.cfg_control_dependence_metadata(fact))
+            };
             self.record_fact_meta(FactFamily::CfgControlDependence, run_id, metadata);
         }
 
-        let unsupported_metadata = self
-            .unsupported_control_flow
-            .iter()
-            .map(|fact| (fact.id.0, self.unsupported_control_flow_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in unsupported_metadata {
+        for index in 0..self.unsupported_control_flow.len() {
+            let (run_id, metadata) = {
+                let fact = &self.unsupported_control_flow[index];
+                (fact.id.0, self.unsupported_control_flow_metadata(fact))
+            };
             self.record_fact_meta(FactFamily::UnsupportedControlFlow, run_id, metadata);
         }
+
+        self.finish_fact_meta_insertions(&[
+            FactFamily::CfgFunction,
+            FactFamily::CfgNode,
+            FactFamily::BasicBlock,
+            FactFamily::CfgEdge,
+            FactFamily::CfgReachability,
+            FactFamily::CfgDominator,
+            FactFamily::CfgPostDominator,
+            FactFamily::CfgControlDependence,
+            FactFamily::UnsupportedControlFlow,
+        ]);
     }
 
     fn refresh_semantic_mir_metadata(&mut self) {
@@ -2854,41 +2945,44 @@ impl AnalysisDb {
         self.fact_meta
             .remove_family(FactFamily::UnsupportedSemantic);
 
-        let body_metadata = self
-            .mir_bodies()
-            .iter()
-            .map(|body| (body.id.0, self.mir_body_metadata(body)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in body_metadata {
+        for index in 0..self.mir_bodies().len() {
+            let (run_id, metadata) = {
+                let body = &self.mir_bodies()[index];
+                (body.id.0, self.mir_body_metadata(body))
+            };
             self.record_fact_meta(FactFamily::MirBody, run_id, metadata);
         }
 
-        let operation_metadata = self
-            .mir_operations()
-            .iter()
-            .map(|operation| (operation.id.0, self.mir_operation_metadata(operation)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in operation_metadata {
+        for index in 0..self.mir_operations().len() {
+            let (run_id, metadata) = {
+                let operation = &self.mir_operations()[index];
+                (operation.id.0, self.mir_operation_metadata(operation))
+            };
             self.record_fact_meta(FactFamily::MirOperation, run_id, metadata);
         }
 
-        let place_metadata = self
-            .mir_places()
-            .iter()
-            .map(|place| (place.id.0, self.place_metadata(place)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in place_metadata {
+        for index in 0..self.mir_places().len() {
+            let (run_id, metadata) = {
+                let place = &self.mir_places()[index];
+                (place.id.0, self.place_metadata(place))
+            };
             self.record_fact_meta(FactFamily::Place, run_id, metadata);
         }
 
-        let unsupported_metadata = self
-            .unsupported_semantics()
-            .iter()
-            .map(|row| (row.id.0, self.unsupported_semantic_metadata(row)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in unsupported_metadata {
+        for index in 0..self.unsupported_semantics().len() {
+            let (run_id, metadata) = {
+                let row = &self.unsupported_semantics()[index];
+                (row.id.0, self.unsupported_semantic_metadata(row))
+            };
             self.record_fact_meta(FactFamily::UnsupportedSemantic, run_id, metadata);
         }
+
+        self.finish_fact_meta_insertions(&[
+            FactFamily::MirBody,
+            FactFamily::MirOperation,
+            FactFamily::Place,
+            FactFamily::UnsupportedSemantic,
+        ]);
     }
 
     fn refresh_module_graph_metadata(&mut self) {
@@ -2922,6 +3016,11 @@ impl AnalysisDb {
         for (run_id, metadata) in edge_metadata {
             self.record_fact_meta(FactFamily::ModuleEdge, run_id, metadata);
         }
+        self.finish_fact_meta_insertions(&[
+            FactFamily::ModuleNode,
+            FactFamily::ResolvedImport,
+            FactFamily::ModuleEdge,
+        ]);
     }
 
     fn refresh_topology_metadata(&mut self) {
@@ -3049,6 +3148,14 @@ impl AnalysisDb {
         for (run_id, metadata) in overlay_metadata {
             self.record_fact_meta(FactFamily::RepoTopologyOverlay, run_id, metadata);
         }
+        self.finish_fact_meta_insertions(&[
+            FactFamily::WorkspaceRoot,
+            FactFamily::TopologyPackage,
+            FactFamily::SourceSet,
+            FactFamily::DependencyRequirement,
+            FactFamily::ResolvedDependencyEdge,
+            FactFamily::RepoTopologyOverlay,
+        ]);
     }
 
     fn refresh_import_to_package_metadata(&mut self) {
@@ -3072,6 +3179,7 @@ impl AnalysisDb {
         for (run_id, metadata) in metadata {
             self.record_fact_meta(FactFamily::ImportToPackage, run_id, metadata);
         }
+        self.finish_fact_meta_insertions(&[FactFamily::ImportToPackage]);
     }
 
     fn refresh_semantic_index_metadata(&mut self) {
@@ -3196,6 +3304,15 @@ impl AnalysisDb {
         for (run_id, metadata) in stable_export_metadata {
             self.record_fact_meta(FactFamily::StableExport, run_id, metadata);
         }
+        self.finish_fact_meta_insertions(&[
+            FactFamily::Scope,
+            FactFamily::SemanticImport,
+            FactFamily::Export,
+            FactFamily::Alias,
+            FactFamily::Resolution,
+            FactFamily::GeneratedSymbol,
+            FactFamily::StableExport,
+        ]);
     }
 
     fn refresh_symbol_graph_metadata(&mut self) {
@@ -3226,6 +3343,11 @@ impl AnalysisDb {
             };
             self.record_fact_meta(FactFamily::Reference, run_id, metadata);
         }
+        self.finish_fact_meta_insertions(&[
+            FactFamily::Symbol,
+            FactFamily::Definition,
+            FactFamily::Reference,
+        ]);
     }
 
     fn refresh_metric_metadata(&mut self) {
@@ -3262,6 +3384,11 @@ impl AnalysisDb {
         for (run_id, metadata) in complexity_metadata {
             self.record_fact_meta(FactFamily::ComplexityMetric, run_id, metadata);
         }
+        self.finish_fact_meta_insertions(&[
+            FactFamily::FileMetric,
+            FactFamily::FunctionMetric,
+            FactFamily::ComplexityMetric,
+        ]);
     }
 
     fn rebuild_symbol_graph_indexes(&mut self) {
@@ -4108,6 +4235,16 @@ impl AnalysisDb {
         let reference = FactRef::new(family, run_id);
         let _insert = self.fact_meta.insert(reference, meta);
         debug_assert!(self.metadata_for(reference).is_some());
+    }
+
+    fn finish_fact_meta_insertions(&mut self, families: &[FactFamily]) {
+        for family in families {
+            self.fact_meta.finish_family_insertions(*family);
+        }
+    }
+
+    pub(crate) fn finish_all_fact_meta_insertions(&mut self) {
+        self.fact_meta.finish_all_insertions();
     }
 
     fn package_metadata(&self, fact: &PackageFact) -> FactMeta {

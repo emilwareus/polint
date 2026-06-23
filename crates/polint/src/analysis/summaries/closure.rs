@@ -7,7 +7,6 @@ use super::facts::{
     SummaryStatus,
 };
 use super::scc::{Scc, SccSchedule};
-use super::store::SummaryOutput;
 use crate::analysis::calls::facts::CallTargetStatus;
 use crate::analysis::ids::{SummaryEventId, SummaryId};
 use crate::analysis_kernel::FactFamily;
@@ -756,45 +755,7 @@ fn merge_updated_summaries(
     updated: &[SummaryFact],
     events: &[SummaryEventFact],
 ) {
-    // Read all existing summaries
-    let existing_summaries: Vec<SummaryFact> = match db.summary_store() {
-        Some(store) => store.all_summaries().to_vec(),
-        None => Vec::new(),
-    };
-    let existing_events: Vec<SummaryEventFact> = match db.summary_store() {
-        Some(store) => store.all_events().to_vec(),
-        None => Vec::new(),
-    };
-
-    // Build a map of updated summaries keyed by (function, domain)
-    let mut updated_map: BTreeMap<(FunctionId, SummaryDomainKind), &SummaryFact> = BTreeMap::new();
-    for fact in updated {
-        updated_map.insert((fact.function, fact.domain), fact);
-    }
-
-    // Merge: replace existing facts with updated ones where available
-    let mut merged: Vec<SummaryFact> = Vec::new();
-    for existing in &existing_summaries {
-        if let Some(replacement) = updated_map.remove(&(existing.function, existing.domain)) {
-            merged.push(replacement.clone());
-        } else {
-            merged.push(existing.clone());
-        }
-    }
-
-    // Add any remaining new summaries (shouldn't happen typically)
-    for (_, new_fact) in updated_map {
-        merged.push(new_fact.clone());
-    }
-
-    // Merge events
-    let mut merged_events = existing_events;
-    merged_events.extend(events.iter().cloned());
-
-    db.replace_summary_facts_without_metadata(SummaryOutput {
-        summaries: merged,
-        events: merged_events,
-    });
+    db.merge_summary_facts_without_metadata(updated, events);
 }
 
 // ---------------------------------------------------------------------------

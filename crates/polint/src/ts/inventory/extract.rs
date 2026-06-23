@@ -35,7 +35,7 @@ pub(crate) fn extract_ts_inventory(file: &SourceFile) -> TsInventoryOutput {
     extract_ts_inventory_from_program(file, source, &parsed.program, semantic.nodes()).normalized()
 }
 
-fn extract_ts_inventory_from_program(
+pub(crate) fn extract_ts_inventory_from_program(
     file: &SourceFile,
     source: &str,
     _program: &Program<'_>,
