@@ -6783,12 +6783,30 @@ fn option_string(value: Option<&str>) -> String {
         .unwrap_or_else(|| "none".to_string())
 }
 
+/// Whether a rule runs under `polint check` (`Check`) or `polint review` (`Review`).
+///
+/// Authored via `#[polint::rule(..., kind = "check" | "review")]`. Defaults to
+/// `Check`, so every existing rule keeps its behavior. `polint check` executes
+/// only `Check` rules; `polint review` executes only `Review` rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuleKind {
+    /// A normal rule that runs under `polint check`.
+    #[default]
+    Check,
+    /// A diff-gated rule that runs under `polint review`.
+    Review,
+}
+
 /// Static metadata for a rule as shown in diagnostics, config, and registries.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuleMeta {
     pub id: String,
     pub description: String,
     pub severity: Severity,
+    /// Which command runs this rule (`check` vs `review`); defaults to `check`.
+    #[serde(default)]
+    pub kind: RuleKind,
 }
 
 /// Fact families a rule wants the host to provide.
@@ -7569,6 +7587,7 @@ mod tests {
                 id: self.id.to_string(),
                 description: format!("Test rule {}", self.id),
                 severity: self.severity,
+                kind: RuleKind::Check,
             }
         }
 
@@ -9025,6 +9044,7 @@ mod tests {
                 id: "examples/support".to_string(),
                 description: "Support view constructor test".to_string(),
                 severity: Severity::Warn,
+                kind: RuleKind::Check,
             },
             RuleOptions::default(),
         );
@@ -9039,6 +9059,7 @@ mod tests {
                 id: "examples/support-probe".to_string(),
                 description: "Support probe".to_string(),
                 severity: Severity::Warn,
+                kind: RuleKind::Check,
             },
             || Capabilities::new().imports(),
             |_db, ctx| {

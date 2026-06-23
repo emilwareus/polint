@@ -1807,8 +1807,8 @@ mod semantic_setup_missing {
 mod symbol_graph_go_setup {
     use super::*;
     use crate::core::{
-        Capabilities, CapabilitySupportStatus, Rule, RuleMeta, RuleOptions, SymbolPrecision,
-        SymbolResolutionStatus,
+        Capabilities, CapabilitySupportStatus, Rule, RuleKind, RuleMeta, RuleOptions,
+        SymbolPrecision, SymbolResolutionStatus,
     };
     use crate::diagnostics::Severity;
     use std::collections::BTreeMap;
@@ -1839,6 +1839,7 @@ mod symbol_graph_go_setup {
                 id: "local/needs-symbols".to_string(),
                 description: "Needs symbols".to_string(),
                 severity: Severity::Warn,
+                kind: RuleKind::Check,
             },
             || Capabilities::new().references(),
             |_db, _ctx| Ok(()),

@@ -2730,6 +2730,10 @@ fn run_local_rule_host(
         } else {
             "false"
         },
+        // The outer `check` path always runs Check-kind rules; `polint review`
+        // adds its own call site passing `--kind review`.
+        "--kind",
+        "check",
     ]);
     command
         .env(POLINT_CACHE_DIR_ENV, cache_layout.root())

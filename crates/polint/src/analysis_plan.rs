@@ -823,7 +823,7 @@ fn capability_status_json(status: &CapabilitySupportStatus) -> &'static str {
 mod tests {
     use super::*;
     use crate::core::{
-        Capabilities, Rule, RuleMeta, RuleOptions, run_rules_with_capability_support,
+        Capabilities, Rule, RuleKind, RuleMeta, RuleOptions, run_rules_with_capability_support,
     };
     use crate::diagnostics::{Severity, TextRange as DiagnosticRange};
     use std::collections::{BTreeMap, BTreeSet};
@@ -864,6 +864,7 @@ mod tests {
                 id: self.id.to_string(),
                 description: self.description.to_string(),
                 severity: self.severity,
+                kind: RuleKind::Check,
             }
         }
 

@@ -56,7 +56,7 @@ pub mod prelude {
 /// Hidden implementation details used by generated rule code.
 #[doc(hidden)]
 pub mod __private {
-    pub use crate::core::{AnalysisDb, Capabilities, RuleMeta};
+    pub use crate::core::{AnalysisDb, Capabilities, RuleKind, RuleMeta};
     pub use crate::sdk::facts::FactView;
 
     use crate::core::{Rule, RuleCtx};
