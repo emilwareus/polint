@@ -372,6 +372,7 @@ fn capability_for_type(ty: &Type) -> syn::Result<(Ident, Ident, String, String)>
         "TsClasses" => "ts_classes",
         "StringLiterals" => "string_literals",
         "JsxAttributes" => "jsx_attributes",
+        "ChangedFiles" => "changeset",
         _ => {
             return Err(syn::Error::new(
                 segment.ident.span(),
@@ -560,6 +561,7 @@ mod tests {
             capability("polint::sdk::facts::JsxAttributes<'_>"),
             "jsx_attributes"
         );
+        assert_eq!(capability("ChangedFiles<'_>"), "changeset");
         assert_eq!(
             canonical_path("polint::sdk::prelude::Imports<'_>"),
             "polint::sdk::facts::Imports<'_>"

@@ -46,6 +46,7 @@ const ALLOWED_PRELUDE: &[&str] = &[
     "CapabilitySupport",
     "CapabilitySupportStatus",
     "CapabilitySupportView",
+    "ChangeStatus",
     "ComplexityMetricFact",
     "CoverageFact",
     "DefinitionFact",
@@ -119,6 +120,7 @@ const ALLOWED_PRELUDE: &[&str] = &[
     // crate::sdk::facts
     "BranchObligations",
     "CallGraph",
+    "ChangedFiles",
     "Cfg",
     "ComplexityMetrics",
     "CoverageFacts",
@@ -455,9 +457,12 @@ fn allowlist_has_no_duplicates_and_expected_count() {
         "ALLOWED_PRELUDE contains duplicate entries"
     );
     // Locked count derived from sdk/mod.rs:28–53 at Phase 42 Plan 04 landing.
+    // Bumped 97 -> 99 for the sanctioned review-rules API addition (ChangedFiles +
+    // ChangeStatus); see docs/REVIEW-RULES-PLAN.md T2 and the docs/API-VISIBILITY-PLAN.md
+    // review-rules promotion record (D-19).
     assert_eq!(
         ALLOWED_PRELUDE.len(),
-        97,
+        99,
         "ALLOWED_PRELUDE count changed — update this assertion ONLY alongside a sanctioned \
          milestone-close API change (D-19)"
     );

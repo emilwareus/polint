@@ -27,6 +27,7 @@ for the disposition table.
 - [Capability support](capability-plans.md)
 - [TypeScript / JavaScript](ts-js.md)
 - [Literals and JSX attributes](literals.md)
+- [Changed files (review rules)](changed-files.md)
 
 Reserved/internal references:
 

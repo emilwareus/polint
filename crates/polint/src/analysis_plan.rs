@@ -671,7 +671,7 @@ fn support_for(capability: &str) -> CapabilityAccumulator {
     let (status, reason, hint, docs_path) = match capability {
         "syntax" | "imports" | "go_tests" | "branch_obligations" | "file_metrics"
         | "function_metrics" | "complexity_metrics" | "ts_components" | "ts_classes"
-        | "string_literals" | "jsx_attributes" => {
+        | "string_literals" | "jsx_attributes" | "changeset" => {
             (CapabilitySupportStatus::Supported, None, None, None)
         }
         "resolved_imports" | "module_graph" => (CapabilitySupportStatus::Supported, None, None, None),

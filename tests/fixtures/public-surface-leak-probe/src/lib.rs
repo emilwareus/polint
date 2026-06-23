@@ -63,6 +63,12 @@ mod allowlist_witness {
     fn _assert_capabilitysupportview() -> ::core::marker::PhantomData<CapabilitySupportView> {
         ::core::marker::PhantomData
     }
+    fn _assert_changedfiles() -> ::core::marker::PhantomData<ChangedFiles<'static>> {
+        ::core::marker::PhantomData
+    }
+    fn _assert_changestatus() -> ::core::marker::PhantomData<ChangeStatus> {
+        ::core::marker::PhantomData
+    }
     fn _assert_cfg() -> ::core::marker::PhantomData<Cfg<'static>> {
         ::core::marker::PhantomData
     }
