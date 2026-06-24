@@ -11853,6 +11853,76 @@ fn main() -> ExitCode {
     );
 }
 
+fn write_gorm_review_rule_repo(root: &Path) {
+    fs::create_dir_all(root.join(".polint/rules/src")).unwrap();
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        "[workspace]\ninclude = [\"internal/**/models/**/*.go\"]\n",
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/src/main.rs"),
+        r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "review/gorm-model-read-indexes",
+    description = "GORM model changes require read-index validation.",
+    severity = "error",
+    kind = "review"
+)]
+fn gorm_model_read_indexes(ctx: &mut RuleCtx<'_>, changes: ChangedFiles<'_>) -> RuleResult {
+    let rule_id = ctx.rule_id().to_string();
+    for changed in changes.iter() {
+        let is_gorm_model =
+            changed.path().ends_with(".go") && changed.matches_glob("internal/**/models/**");
+        if changed.is_deleted() || !is_gorm_model {
+            continue;
+        }
+        let line = changed.lines().first().map(|&(lo, _)| lo).unwrap_or(1);
+        ctx.report(
+            Diagnostic::error(
+                rule_id.clone(),
+                changed.path().to_string(),
+                DiagnosticRange::point(line, 1),
+                "GORM model changed: validate the correct read indexes for this model.",
+            )
+            .with_help(
+                "Check the read paths for this model and add or update composite indexes in \
+                 GORM tags or migrations. If no index is needed, explain why in the PR.",
+            ),
+        );
+    }
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![gorm_model_read_indexes()])
+}
+"#,
+    );
+}
+
 #[test]
 fn review_fires_on_changed_path_and_is_diff_gated() {
     if !review_git_available() {
@@ -12112,6 +12182,76 @@ export const value = "new";
     assert!(
         diagnostics_for_rule(&report, "review/changed-ts").is_empty(),
         "review should honor comment ignores by default: {report:#?}"
+    );
+}
+
+#[test]
+fn review_gorm_model_example_requires_read_index_validation() {
+    if !review_git_available() {
+        eprintln!("skipping `polint review` test; `git` not on PATH");
+        return;
+    }
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path();
+    write_gorm_review_rule_repo(root);
+    review_git_init_identity(root);
+
+    write_file(
+        &root.join("internal/billing/models/invoice.go"),
+        r#"package models
+
+import "time"
+
+type Invoice struct {
+	ID        string
+	AccountID string
+	Status    string
+	CreatedAt time.Time
+}
+"#,
+    );
+    write_file(
+        &root.join("internal/billing/service.go"),
+        "package billing\n\nfunc Service() {}\n",
+    );
+    let base = review_git_commit_all(root, "base");
+
+    write_file(
+        &root.join("internal/billing/models/invoice.go"),
+        r#"package models
+
+import "time"
+
+type Invoice struct {
+	ID        string
+	AccountID string `gorm:"index:idx_invoices_account_status_created_at,priority:1"`
+	Status    string `gorm:"index:idx_invoices_account_status_created_at,priority:2"`
+	CreatedAt time.Time `gorm:"index:idx_invoices_account_status_created_at,priority:3"`
+}
+"#,
+    );
+    review_git_commit_all(root, "add invoice read index");
+
+    let report = stdout_json(
+        polint_cmd()
+            .current_dir(root)
+            .args(["review", &base, "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+    let diagnostics = diagnostics_for_rule(&report, "review/gorm-model-read-indexes");
+    assert_eq!(
+        diagnostics.len(),
+        1,
+        "changed GORM model should require read-index validation: {report:#?}"
+    );
+    assert_eq!(
+        diagnostics[0]["file"], "internal/billing/models/invoice.go",
+        "diagnostic should point at the changed GORM model: {report:#?}"
+    );
+    assert_eq!(
+        diagnostics[0]["range"]["start_line"], 7,
+        "diagnostic should anchor on the first changed model line: {report:#?}"
     );
 }
 

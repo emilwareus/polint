@@ -93,6 +93,9 @@ The rule is ordinary Rust in your repo. It is a review gate, not a query-plan
 verifier: it enforces the step your team cares about exactly where the model
 changed.
 
+See the checked-in [GORM review indexes example](examples/gorm-review-indexes/)
+for the runnable rule pack and fixture model.
+
 ## Start
 
 ```bash

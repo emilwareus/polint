@@ -14,6 +14,7 @@ members = [
     "examples/go-import-boundaries/.polint/rules",
     "examples/go-sensitive-writes/.polint/rules",
     "examples/go-test-quality/.polint/rules",
+    "examples/gorm-review-indexes/.polint/rules",
     "examples/multiple-rules/.polint/rules",
     "examples/review-rules/.polint/rules",
     "examples/ts-complexity/.polint/rules",

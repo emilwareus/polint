@@ -1,0 +1,6 @@
+[workspace]
+include = ["internal/**/models/**/*.go"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
