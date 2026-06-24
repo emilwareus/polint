@@ -225,8 +225,17 @@ rule, but mark it `#[polint::rule(..., kind = "review")]` and request the
 #[polint::rule(id = "review/migrations", description = "Migrations changed.",
                severity = "warn", kind = "review")]
 fn migrations(ctx: &mut RuleCtx<'_>, changes: ChangedFiles<'_>) -> RuleResult {
+    let rule_id = ctx.rule_id().to_string();
     for changed in changes.iter() {
-        if changed.matches_glob("db/migrations/**") { /* ctx.report(...) */ }
+        if changed.matches_glob("db/migrations/**") {
+            let line = changed.lines().first().map(|&(lo, _)| lo).unwrap_or(1);
+            ctx.report(Diagnostic::warning(
+                rule_id.clone(),
+                changed.path().to_string(),
+                DiagnosticRange::point(line, 1),
+                "Migration changed: a DB owner must review.",
+            ));
+        }
     }
     Ok(())
 }

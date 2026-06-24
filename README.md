@@ -158,9 +158,16 @@ changed paths, their status, and the changed line ranges) as a typed fact view:
 #[polint::rule(id = "review/migrations", description = "Migrations changed.",
                severity = "warn", kind = "review")]
 fn migrations(ctx: &mut RuleCtx<'_>, changes: ChangedFiles<'_>) -> RuleResult {
+    let rule_id = ctx.rule_id().to_string();
     for changed in changes.iter() {
         if changed.matches_glob("db/migrations/**") {
-            ctx.warn(&Span::point(/* ... */), "A DB owner must review this migration.");
+            let line = changed.lines().first().map(|&(lo, _)| lo).unwrap_or(1);
+            ctx.report(Diagnostic::warning(
+                rule_id.clone(),
+                changed.path().to_string(),
+                DiagnosticRange::point(line, 1),
+                "A DB owner must review this migration.",
+            ));
         }
     }
     Ok(())

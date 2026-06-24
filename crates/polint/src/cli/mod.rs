@@ -3817,7 +3817,8 @@ fn review(root: PathBuf, args: &ReviewArgs) -> Result<u8> {
 
     // Map the review args onto the shared `CheckArgs` shape so the rendering,
     // baseline, and report-filter helpers are reused verbatim. Review has no
-    // baseline/ignore-comment/stat surface; those default off.
+    // baseline/stat surface; those default off. Comment ignores stay enabled by
+    // default, matching `polint check`.
     let check_args = CheckArgs {
         paths: args.paths.clone(),
         profile: args.profile.clone(),
@@ -3831,20 +3832,29 @@ fn review(root: PathBuf, args: &ReviewArgs) -> Result<u8> {
         shortstat: false,
         baseline: false,
         new_only: false,
-        ignore_comments: false,
+        ignore_comments: true,
     };
 
     let config = load_config_for_check(&root, &check_args.paths)?;
+    let enabled = selected_rule_patterns(&config, check_args.profile.as_deref())?;
+    let child_applies_ignores = check_args.ignore_comments && manifests.len() == 1;
     let mut diagnostics = Vec::new();
     for manifest in &manifests {
         diagnostics.extend(run_local_rule_host_kind(
             &root,
             manifest,
             &check_args,
-            false,
+            child_applies_ignores,
             "review",
             Some(changeset_file.as_path()),
         )?);
+    }
+
+    if check_args.ignore_comments && !child_applies_ignores {
+        let rule_scope = config_rule_scope_globset(&config, enabled.as_ref());
+        let mut loaded_db = load_analysis_files_scoped(&config, rule_scope.as_ref())?;
+        backfill_diagnostic_files(&mut loaded_db, &diagnostics, &root);
+        diagnostics = apply_ignores(&loaded_db, diagnostics, &config.config.ignores).diagnostics;
     }
 
     // Default finding-level diff gate: keep only diagnostics that intersect the

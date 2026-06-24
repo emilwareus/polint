@@ -974,13 +974,6 @@ impl AnalysisDb {
     /// execute, so the `ChangedFiles` fact view can read the diff. The
     /// changeset is excluded from all cache digests by construction (it is set
     /// post-kernel), so a changing diff never busts the analysis cache.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "The host runner wires set_changeset from --changed-files in the polint review command (Task 4)."
-        )
-    )]
     pub(crate) fn set_changeset(&mut self, changeset: ReviewChangeset) {
         self.changeset = Some(changeset);
     }

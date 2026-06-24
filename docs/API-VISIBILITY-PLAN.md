@@ -164,7 +164,7 @@ Work in small PRs or commits per area so rebases stay tractable.
 
 ## Review-rules promotion (sanctioned prelude addition)
 
-`polint review` (see [`docs/REVIEW-RULES-PLAN.md`](REVIEW-RULES-PLAN.md)) is `polint check`
+`polint review` (see [`facts/changed-files.md`](facts/changed-files.md)) is `polint check`
 with rules authored in Rust and gated to a diff against a target ref. Review rules read the
 diff as an ordinary typed fact view, exactly like `Imports<'_>` or `Symbols<'_>`. This
 requires two new names on `polint::sdk::prelude`, promoted deliberately and recorded here so

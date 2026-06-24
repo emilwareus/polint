@@ -11792,6 +11792,67 @@ fn main() -> ExitCode {
     );
 }
 
+fn write_ts_review_rule_repo(root: &Path) {
+    fs::create_dir_all(root.join(".polint/rules/src")).unwrap();
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        "[workspace]\ninclude = [\"src/**/*.ts\"]\n",
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/src/main.rs"),
+        r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "review/changed-ts",
+    description = "Changed TypeScript file requires review.",
+    severity = "warn",
+    kind = "review"
+)]
+fn changed_ts(ctx: &mut RuleCtx<'_>, changes: ChangedFiles<'_>) -> RuleResult {
+    let rule_id = ctx.rule_id().to_string();
+    for changed in changes.iter() {
+        if changed.matches_glob("src/**/*.ts") {
+            let line = changed.lines().first().map(|&(lo, _)| lo).unwrap_or(1);
+            ctx.report(Diagnostic::warning(
+                rule_id.clone(),
+                changed.path().to_string(),
+                DiagnosticRange::point(line, 1),
+                "Changed TypeScript file requires review.",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![changed_ts()])
+}
+"#,
+    );
+}
+
 #[test]
 fn review_fires_on_changed_path_and_is_diff_gated() {
     if !review_git_available() {
@@ -12011,6 +12072,46 @@ fn review_whole_file_keeps_fixed_line_finding_on_changed_file() {
         diagnostic_files(&whole_file, "review/migrations"),
         vec!["db/migrations/0001_init.sql".to_string()],
         "--whole-file should keep findings on changed files regardless of line range: {whole_file:#?}"
+    );
+}
+
+#[test]
+fn review_honors_comment_ignores_by_default() {
+    if !review_git_available() {
+        eprintln!("skipping `polint review` test; `git` not on PATH");
+        return;
+    }
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path();
+    write_ts_review_rule_repo(root);
+    review_git_init_identity(root);
+
+    write_file(
+        &root.join("src/component.ts"),
+        r#"// polint-ignore-next-line review/changed-ts -- reviewed separately
+export const value = "old";
+"#,
+    );
+    let base = review_git_commit_all(root, "base");
+
+    write_file(
+        &root.join("src/component.ts"),
+        r#"// polint-ignore-next-line review/changed-ts -- reviewed separately
+export const value = "new";
+"#,
+    );
+    review_git_commit_all(root, "change ignored line");
+
+    let report = stdout_json(
+        polint_cmd()
+            .current_dir(root)
+            .args(["review", &base, "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+    assert!(
+        diagnostics_for_rule(&report, "review/changed-ts").is_empty(),
+        "review should honor comment ignores by default: {report:#?}"
     );
 }
 
