@@ -1252,10 +1252,11 @@ pub(crate) fn {module}(ctx: &mut RuleCtx<'_>, changes: ChangedFiles<'_>) -> Rule
     for changed in changes.iter() {{
         // Replace the glob with the paths your policy cares about.
         if changed.matches_glob("db/migrations/**") {{
+            let line = changed.lines().first().map(|&(lo, _)| lo).unwrap_or(1);
             ctx.report(Diagnostic::warning(
                 rule_id.clone(),
                 changed.path().to_string(),
-                DiagnosticRange::point(1, 1),
+                DiagnosticRange::point(line, 1),
                 "Reviewer attention required: a watched path changed.",
             ));
         }}

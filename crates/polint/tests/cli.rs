@@ -828,6 +828,10 @@ fn new_rule_review_scaffolds_review_kind_with_changed_files() {
         module.contains("ChangedFiles<'_>"),
         "review scaffold must request the ChangedFiles fact view: {module}"
     );
+    assert!(
+        module.contains("changed.lines().first()"),
+        "review scaffold must anchor diagnostics on a changed line: {module}"
+    );
 
     let main_rs = fs::read_to_string(temp.path().join(".polint/rules/src/main.rs"))
         .expect("main.rs should exist");
@@ -11709,6 +11713,67 @@ fn migrations(ctx: &mut RuleCtx<'_>, changes: ChangedFiles<'_>) -> RuleResult {
     let rule_id = ctx.rule_id().to_string();
     for changed in changes.iter() {
         if changed.matches_glob("db/migrations/**") {
+            let line = changed.lines().first().map(|&(lo, _)| lo).unwrap_or(1);
+            ctx.report(Diagnostic::warning(
+                rule_id.clone(),
+                changed.path().to_string(),
+                DiagnosticRange::point(line, 1),
+                "Migration changed: a DB owner must review.",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![migrations()])
+}
+"#,
+    );
+}
+
+fn write_fixed_line_review_rule_repo(root: &Path) {
+    fs::create_dir_all(root.join(".polint/rules/src")).unwrap();
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        "[workspace]\ninclude = [\"**/*.go\", \"db/migrations/**/*.sql\"]\n",
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/src/main.rs"),
+        r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "review/migrations",
+    description = "Migrations changed — a DB owner must review.",
+    severity = "warn",
+    kind = "review"
+)]
+fn migrations(ctx: &mut RuleCtx<'_>, changes: ChangedFiles<'_>) -> RuleResult {
+    let rule_id = ctx.rule_id().to_string();
+    for changed in changes.iter() {
+        if changed.matches_glob("db/migrations/**") {
             ctx.report(Diagnostic::warning(
                 rule_id.clone(),
                 changed.path().to_string(),
@@ -11782,6 +11847,49 @@ fn review_fires_on_changed_path_and_is_diff_gated() {
 }
 
 #[test]
+fn review_line_gate_keeps_watched_path_when_change_is_below_line_one() {
+    if !review_git_available() {
+        eprintln!("skipping `polint review` test; `git` not on PATH");
+        return;
+    }
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path();
+    write_review_rule_repo(root);
+    review_git_init_identity(root);
+
+    write_file(&root.join("app.go"), "package app\n\nfunc main() {}\n");
+    write_file(
+        &root.join("db/migrations/0001_init.sql"),
+        "CREATE TABLE t (\n    id INT\n);\n",
+    );
+    let base = review_git_commit_all(root, "base");
+
+    write_file(
+        &root.join("db/migrations/0001_init.sql"),
+        "CREATE TABLE t (\n    id BIGINT\n);\n",
+    );
+    review_git_commit_all(root, "change migration below first line");
+
+    let report = stdout_json(
+        polint_cmd()
+            .current_dir(root)
+            .args(["review", &base, "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+    let diagnostics = diagnostics_for_rule(&report, "review/migrations");
+    assert_eq!(
+        diagnostics.len(),
+        1,
+        "line-aware review gate should keep a changed-line anchored path watcher: {report:#?}"
+    );
+    assert_eq!(
+        diagnostics[0]["range"]["start_line"], 2,
+        "path watcher should anchor on the first changed line: {report:#?}"
+    );
+}
+
+#[test]
 fn review_diff_gate_drops_off_diff_findings_unless_opted_out() {
     if !review_git_available() {
         eprintln!("skipping `polint review` test; `git` not on PATH");
@@ -11845,6 +11953,64 @@ fn review_diff_gate_drops_off_diff_findings_unless_opted_out() {
         diagnostic_files(&ungated, "review/migrations"),
         vec!["db/migrations/0001_init.sql".to_string()],
         "with --no-diff-gate the review finding is surfaced: {ungated:#?}"
+    );
+}
+
+#[test]
+fn review_whole_file_keeps_fixed_line_finding_on_changed_file() {
+    if !review_git_available() {
+        eprintln!("skipping `polint review` test; `git` not on PATH");
+        return;
+    }
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path();
+    write_fixed_line_review_rule_repo(root);
+    review_git_init_identity(root);
+
+    write_file(&root.join("app.go"), "package app\n\nfunc main() {}\n");
+    write_file(
+        &root.join("db/migrations/0001_init.sql"),
+        "CREATE TABLE t (\n    id INT\n);\n",
+    );
+    let base = review_git_commit_all(root, "base");
+
+    write_file(
+        &root.join("db/migrations/0001_init.sql"),
+        "CREATE TABLE t (\n    id BIGINT\n);\n",
+    );
+    review_git_commit_all(root, "change migration below first line");
+
+    let line_gated = stdout_json(
+        polint_cmd()
+            .current_dir(root)
+            .args(["review", &base, "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+    assert!(
+        diagnostics_for_rule(&line_gated, "review/migrations").is_empty(),
+        "default line-aware gate should drop a fixed line-1 finding: {line_gated:#?}"
+    );
+
+    let whole_file = stdout_json(
+        polint_cmd()
+            .current_dir(root)
+            .args([
+                "review",
+                &base,
+                "--whole-file",
+                "--format",
+                "json",
+                "--fail-on",
+                "none",
+            ])
+            .assert()
+            .success(),
+    );
+    assert_eq!(
+        diagnostic_files(&whole_file, "review/migrations"),
+        vec!["db/migrations/0001_init.sql".to_string()],
+        "--whole-file should keep findings on changed files regardless of line range: {whole_file:#?}"
     );
 }
 

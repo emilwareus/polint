@@ -16,16 +16,6 @@
 //! against these paths, so a normalization mismatch would silently drop
 //! findings.
 
-// The whole module is exercised by its own tests in this task; the `polint
-// review` command wires `changeset_for_ref` into the host in Task 4.
-#![cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "Wired into the polint review command (and thus non-test call sites) in Task 4."
-    )
-)]
-
 use crate::core::{ChangeStatus, ChangedFile, ReviewChangeset};
 use anyhow::{Context, Result, bail};
 use std::collections::BTreeMap;
@@ -208,12 +198,21 @@ fn parse_hunk_new_range(rest: &str) -> Option<(u32, u32)> {
 /// new path with `Renamed`; binary and mode-only changes appear with empty
 /// ranges; an empty diff yields an empty file list. A bad ref is a loud `Err`.
 pub(crate) fn changeset_for_ref(root: &Path, target: &str) -> Result<ReviewChangeset> {
+    let explicit_range = target.contains("...");
     let base = resolve_base(root, target)?;
 
-    let name_status = run_git(root, &["diff", "--name-status", "-z", &base])?;
+    let name_status = if explicit_range {
+        run_git(root, &["diff", "--name-status", "-z", &base])?
+    } else {
+        run_git(root, &["diff", "--name-status", "-z", &base, "HEAD"])?
+    };
     let statuses = parse_name_status(&name_status);
 
-    let unified = run_git(root, &["diff", "--unified=0", &base])?;
+    let unified = if explicit_range {
+        run_git(root, &["diff", "--unified=0", &base])?
+    } else {
+        run_git(root, &["diff", "--unified=0", &base, "HEAD"])?
+    };
     let mut ranges = parse_new_line_ranges(&unified);
 
     let mut files: Vec<ChangedFile> = statuses
@@ -405,6 +404,26 @@ mod tests {
         // Diff HEAD against itself: nothing changed.
         let facts = changeset_for_ref(dir, &head).expect("changeset");
         assert!(facts.files.is_empty());
+    }
+
+    #[test]
+    fn normal_ref_diff_ignores_dirty_worktree_changes() {
+        if !git_available() {
+            eprintln!("skipping git changeset test; `git` not on PATH");
+            return;
+        }
+        let temp = init_repo();
+        let dir = temp.path();
+        write(dir, "a.txt", "one\n");
+        let base = commit_all(dir, "base");
+        write(dir, "a.txt", "one\ntwo\n");
+        commit_all(dir, "head");
+
+        write(dir, "a.txt", "one\ntwo\nthree\n");
+
+        let facts = changeset_for_ref(dir, &base).expect("changeset");
+        let changed = find(&facts, "a.txt");
+        assert_eq!(changed.new_line_ranges, vec![(2, 2)]);
     }
 
     #[test]

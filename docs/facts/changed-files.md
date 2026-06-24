@@ -71,10 +71,11 @@ use polint::sdk::prelude::*;
 fn migrations(ctx: &mut RuleCtx<'_>, changes: ChangedFiles<'_>) -> RuleResult {
     for changed in changes.iter() {
         if changed.matches_glob("db/migrations/**") {
+            let line = changed.lines().first().map(|&(lo, _)| lo).unwrap_or(1);
             ctx.report(Diagnostic::warning(
                 ctx.rule_id(),
                 changed.path().to_string(),
-                DiagnosticRange::point(1, 1),
+                DiagnosticRange::point(line, 1),
                 "Migration changed: a DB owner must review.",
             ));
         }
