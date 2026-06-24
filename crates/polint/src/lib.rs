@@ -25,6 +25,7 @@ pub(crate) mod core;
 pub(crate) mod diagnostics;
 pub(crate) mod eval;
 pub(crate) mod fs;
+pub(crate) mod git;
 pub(crate) mod go;
 #[cfg(test)]
 pub(crate) mod graph;

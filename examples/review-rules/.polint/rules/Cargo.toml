@@ -1,0 +1,11 @@
+[package]
+name = "polint-example-review-rules"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+polint = { workspace = true }
+
+[lints]
+workspace = true

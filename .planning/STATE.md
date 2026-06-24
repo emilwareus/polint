@@ -67,6 +67,7 @@ Add `public surface leak gate (ubuntu-latest)` AND `public surface leak gate (ma
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260623-oy3 | polint review (rules-as-code, diff-gated): kind=review, ChangedFiles fact-view, git changeset, Command::Review + diff gate | 2026-06-23 | a778b8df | [260623-oy3-implement-polint-review-review-rules-as-](./quick/260623-oy3-implement-polint-review-review-rules-as-/) |
 | 260607-bzh | Improve Jelly JS recall through native object/array models and computed property key flow | 2026-06-07 | working tree | [260607-bzh-native-computed-js-recall](./quick/260607-bzh-native-computed-js-recall/) |
 | 260606-qjp | Deeply research Jelly JS semantics gaps and add failing unit probes | 2026-06-06 | working tree | [260606-qjp-deeply-research-jelly-js-semantics-gaps-](./quick/260606-qjp-deeply-research-jelly-js-semantics-gaps-/) |
 | 260606-fkk | Continue recall-focused Jelly JS/TS callgraph improvements from 16.16% F1 to 37.06% F1 | 2026-06-06 | working tree | [260606-fkk-continue-recall-focused-jelly-js-ts-call](./quick/260606-fkk-continue-recall-focused-jelly-js-ts-call/) |
@@ -578,15 +579,16 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 
 ## Session
 
-- Last session: 2026-06-07
-- Last activity: 2026-06-07 - Completed quick task 260607-e7j in the working tree: bounded computed-property object/class flow moved Jelly from 814/609/665 to 840/604/639 and computedProperties from 8/4/18 to 24/3/2.
-- Stopped at: Quick-task implementation committed; push still pending.
+- Last session: 2026-06-23
+- Last activity: 2026-06-23 - Completed quick task 260623-oy3: shipped `polint review` = `polint check` with rules-as-code (`#[polint::rule(kind="review")]`, full SDK/engine) diff-gated to a target branch/commit. New `ChangedFiles<'_>` fact-view + host changeset injection + git shell-out + default finding-level diff gate. Commits b4c66e50..a778b8df; full `cargo test -p polint` green (2450 passed); leak gate honest at 99.
+- Stopped at: `polint review` feature complete and committed (not pushed). Research+plan docs live in the quick dir (a doc-scan test guard objected to them under docs/). Open follow-ups: untracked-file coverage in worktree mode; consider restoring docs to docs/ with the internal type name genericized.
 - Resume file: None
 
 ### Quick Tasks Completed
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260623-oy3 | polint review (rules-as-code, diff-gated): kind=review, ChangedFiles fact-view, git changeset, Command::Review + diff gate | 2026-06-23 | a778b8df | [260623-oy3-implement-polint-review-review-rules-as-](./quick/260623-oy3-implement-polint-review-review-rules-as-/) |
 | 260607-e7j | Improve Jelly computed-property recall with bounded key evaluation and accessor flow | 2026-06-07 | implemented | [260607-e7j-computed-property-recall](./quick/260607-e7j-computed-property-recall/) |
 | 260605-h96 | Review and fix Phase 52 PR findings until two consecutive clean review rounds | 2026-06-05 | implemented | [260605-h96-review-and-fix-phase-52-pr-findings-unti](./quick/260605-h96-review-and-fix-phase-52-pr-findings-unti/) |
 | 260605-gwr | Fix PR review findings: include provider diagnostics in inspect unknowns taxonomy and enforce extension-model invariant value | 2026-06-05 | implemented | [260605-gwr-fix-pr-review-findings-include-provider-](./quick/260605-gwr-fix-pr-review-findings-include-provider-/) |

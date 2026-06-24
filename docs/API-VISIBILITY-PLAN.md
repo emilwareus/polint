@@ -161,3 +161,25 @@ Work in small PRs or commits per area so rebases stay tractable.
 
 - Execute phases in order; merge Phase 1–2 before large adapter edits to reduce conflict surface.
 - Link PRs to this file in the PR description until all phases are checked off.
+
+## Review-rules promotion (sanctioned prelude addition)
+
+`polint review` (see [`facts/changed-files.md`](facts/changed-files.md)) is `polint check`
+with rules authored in Rust and gated to a diff against a target ref. Review rules read the
+diff as an ordinary typed fact view, exactly like `Imports<'_>` or `Symbols<'_>`. This
+requires two new names on `polint::sdk::prelude`, promoted deliberately and recorded here so
+the v1.3 leak gate (`crates/polint/tests/public_surface_leak.rs`) stays honest rather than
+bypassed.
+
+| Surface | Disposition | Required gates and notes |
+|---|---|---|
+| `ChangedFiles<'_>` | stable | Documented in `docs/facts/changed-files.md`; maps to the `changeset` capability; empty under `polint check`; populated only by `polint review`; new public fact-view authoring surface. Probe witness `_assert_changedfiles`. |
+| `ChangeStatus` | stable | Returned by `ChangedFileRef::status()`; review-rule authors match on it (`Added`/`Modified`/`Deleted`/`Renamed`). Probe witness `_assert_changestatus`. |
+
+`RuleKind` (the `#[polint::rule(kind = "review")]` designation) is intentionally **not**
+prelude-exported — it rides `polint::sdk::__private` only, like `RuleMeta`, so it does not
+touch `ALLOWED_PRELUDE`. `ChangedFile`, `ChangedFileRef`, and `ReviewChangeset` (the injected
+diff store) are reachable through `ChangedFiles` methods and are not prelude names
+(`ChangedFile`/`ReviewChangeset` stay `pub(crate)`; `ChangedFileRef` stays `pub` but
+unexported). The `ALLOWED_PRELUDE` count moved `97 -> 99` for these two additions, with two
+probe witnesses added in the same change.

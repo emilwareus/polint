@@ -1514,7 +1514,7 @@ mod tests {
     use crate::core::{
         AnalysisDb, Capabilities, CapabilitySupportStatus, FileId, ImportFact, ImportId, Language,
         ModuleEdgeKind, ModuleNodeId, ModuleNodeKind, ResolutionPrecision, ResolutionStatus,
-        ResolvedImportId, Rule, RuleMeta, RuleOptions, Span, UnresolvedReason,
+        ResolvedImportId, Rule, RuleKind, RuleMeta, RuleOptions, Span, UnresolvedReason,
         run_rules_with_capability_support,
     };
     use crate::diagnostics::{Diagnostic, Severity, TextRange};
@@ -1915,6 +1915,7 @@ mod tests {
                 id: "test/requested-capabilities".to_string(),
                 description: "Resolved import requester".to_string(),
                 severity: Severity::Warn,
+                kind: RuleKind::Check,
             },
             || Capabilities::new().resolved_imports(),
             move |_db, ctx| {

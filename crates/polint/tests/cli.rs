@@ -80,6 +80,7 @@ fn top_level_help_only_lists_supported_public_commands() {
         "explain",
         "test",
         "check",
+        "review",
         "ignores",
     ] {
         assert!(help.contains(command), "help should list {command}: {help}");
@@ -800,6 +801,54 @@ fn new_rule_generates_positive_and_negative_agent_fixtures() {
         temp.path()
             .join(".polint/tests/rules/no_raw_colors/negative/polint-test.toml")
             .is_file()
+    );
+}
+
+#[test]
+fn new_rule_review_scaffolds_review_kind_with_changed_files() {
+    let temp = tempfile::tempdir().unwrap();
+    polint_cmd()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success();
+    polint_cmd()
+        .current_dir(temp.path())
+        .args(["new-rule", "generic", "db-migration-review", "--review"])
+        .assert()
+        .success();
+
+    let module = fs::read_to_string(temp.path().join(".polint/rules/src/db_migration_review.rs"))
+        .expect("review rule module should exist");
+    assert!(
+        module.contains("kind = \"review\""),
+        "review scaffold must set kind = review: {module}"
+    );
+    assert!(
+        module.contains("ChangedFiles<'_>"),
+        "review scaffold must request the ChangedFiles fact view: {module}"
+    );
+    assert!(
+        module.contains("changed.lines().first()"),
+        "review scaffold must anchor diagnostics on a changed line: {module}"
+    );
+
+    let main_rs = fs::read_to_string(temp.path().join(".polint/rules/src/main.rs"))
+        .expect("main.rs should exist");
+    assert!(
+        main_rs.contains("db_migration_review::db_migration_review()")
+            && main_rs.contains("polint::runner::run_cli"),
+        "main.rs should register the review rule via run_cli: {main_rs}"
+    );
+
+    // Review rules are exercised via `polint review` against a diff, so no
+    // static `polint check` fixtures are generated for them.
+    assert!(
+        !temp
+            .path()
+            .join(".polint/tests/rules/db_migration_review")
+            .exists(),
+        "review scaffold should not generate diff-independent check fixtures"
     );
 }
 
@@ -11569,4 +11618,666 @@ export function render(name: string) {
 }
 "#,
     );
+}
+
+// ---------------------------------------------------------------------------
+// `polint review` (review-kind rules, diff-gated).
+// ---------------------------------------------------------------------------
+
+fn review_git_available() -> bool {
+    std::process::Command::new("git")
+        .arg("--version")
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false)
+}
+
+fn review_run_git(dir: &Path, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .current_dir(dir)
+        .args(args)
+        .output()
+        .unwrap_or_else(|e| panic!("git {args:?}: {e}"));
+    assert!(
+        out.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+fn review_git_init_identity(dir: &Path) {
+    review_run_git(dir, &["init", "--quiet"]);
+    review_run_git(dir, &["config", "user.email", "t@example.com"]);
+    review_run_git(dir, &["config", "user.name", "Test"]);
+    review_run_git(dir, &["config", "commit.gpgsign", "false"]);
+}
+
+fn review_git_commit_all(dir: &Path, message: &str) -> String {
+    review_run_git(dir, &["add", "-A"]);
+    review_run_git(dir, &["commit", "--quiet", "-m", message]);
+    let out = std::process::Command::new("git")
+        .current_dir(dir)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .expect("git rev-parse");
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// Write a repo-local review rule pack with one `kind = "review"` rule that
+/// fires for any changed path under `db/migrations/**`.
+fn write_review_rule_repo(root: &Path) {
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        r#"
+[workspace]
+include = ["**/*.go", "db/**/*.sql"]
+exclude = []
+
+[rules]
+paths = [".polint/rules"]
+"#,
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/src/main.rs"),
+        r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "review/migrations",
+    description = "Migrations changed — a DB owner must review.",
+    severity = "warn",
+    kind = "review"
+)]
+fn migrations(ctx: &mut RuleCtx<'_>, changes: ChangedFiles<'_>) -> RuleResult {
+    let rule_id = ctx.rule_id().to_string();
+    for changed in changes.iter() {
+        if changed.matches_glob("db/migrations/**") {
+            let line = changed.lines().first().map(|&(lo, _)| lo).unwrap_or(1);
+            ctx.report(Diagnostic::warning(
+                rule_id.clone(),
+                changed.path().to_string(),
+                DiagnosticRange::point(line, 1),
+                "Migration changed: a DB owner must review.",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![migrations()])
+}
+"#,
+    );
+}
+
+fn write_fixed_line_review_rule_repo(root: &Path) {
+    fs::create_dir_all(root.join(".polint/rules/src")).unwrap();
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        "[workspace]\ninclude = [\"**/*.go\", \"db/migrations/**/*.sql\"]\n",
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/src/main.rs"),
+        r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "review/migrations",
+    description = "Migrations changed — a DB owner must review.",
+    severity = "warn",
+    kind = "review"
+)]
+fn migrations(ctx: &mut RuleCtx<'_>, changes: ChangedFiles<'_>) -> RuleResult {
+    let rule_id = ctx.rule_id().to_string();
+    for changed in changes.iter() {
+        if changed.matches_glob("db/migrations/**") {
+            ctx.report(Diagnostic::warning(
+                rule_id.clone(),
+                changed.path().to_string(),
+                DiagnosticRange::point(1, 1),
+                "Migration changed: a DB owner must review.",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![migrations()])
+}
+"#,
+    );
+}
+
+fn write_ts_review_rule_repo(root: &Path) {
+    fs::create_dir_all(root.join(".polint/rules/src")).unwrap();
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        "[workspace]\ninclude = [\"src/**/*.ts\"]\n",
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/src/main.rs"),
+        r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "review/changed-ts",
+    description = "Changed TypeScript file requires review.",
+    severity = "warn",
+    kind = "review"
+)]
+fn changed_ts(ctx: &mut RuleCtx<'_>, changes: ChangedFiles<'_>) -> RuleResult {
+    let rule_id = ctx.rule_id().to_string();
+    for changed in changes.iter() {
+        if changed.matches_glob("src/**/*.ts") {
+            let line = changed.lines().first().map(|&(lo, _)| lo).unwrap_or(1);
+            ctx.report(Diagnostic::warning(
+                rule_id.clone(),
+                changed.path().to_string(),
+                DiagnosticRange::point(line, 1),
+                "Changed TypeScript file requires review.",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![changed_ts()])
+}
+"#,
+    );
+}
+
+fn write_gorm_review_rule_repo(root: &Path) {
+    fs::create_dir_all(root.join(".polint/rules/src")).unwrap();
+    let polint_path = repo_root()
+        .join("crates/polint")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_file(
+        &root.join(".polint.toml"),
+        "[workspace]\ninclude = [\"internal/**/models/**/*.go\"]\n",
+    );
+    write_file(
+        &root.join(".polint/rules/Cargo.toml"),
+        &format!(
+            r#"[package]
+name = "polint-local-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+polint = {{ path = "{polint_path}" }}
+
+[workspace]
+"#,
+        ),
+    );
+    write_file(
+        &root.join(".polint/rules/src/main.rs"),
+        r#"use std::process::ExitCode;
+
+use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "review/gorm-model-read-indexes",
+    description = "GORM model changes require read-index validation.",
+    severity = "error",
+    kind = "review"
+)]
+fn gorm_model_read_indexes(ctx: &mut RuleCtx<'_>, changes: ChangedFiles<'_>) -> RuleResult {
+    let rule_id = ctx.rule_id().to_string();
+    for changed in changes.iter() {
+        let is_gorm_model =
+            changed.path().ends_with(".go") && changed.matches_glob("internal/**/models/**");
+        if changed.is_deleted() || !is_gorm_model {
+            continue;
+        }
+        let line = changed.lines().first().map(|&(lo, _)| lo).unwrap_or(1);
+        ctx.report(
+            Diagnostic::error(
+                rule_id.clone(),
+                changed.path().to_string(),
+                DiagnosticRange::point(line, 1),
+                "GORM model changed: validate the correct read indexes for this model.",
+            )
+            .with_help(
+                "Check the read paths for this model and add or update composite indexes in \
+                 GORM tags or migrations. If no index is needed, explain why in the PR.",
+            ),
+        );
+    }
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    polint::runner::run_cli(vec![gorm_model_read_indexes()])
+}
+"#,
+    );
+}
+
+#[test]
+fn review_fires_on_changed_path_and_is_diff_gated() {
+    if !review_git_available() {
+        eprintln!("skipping `polint review` test; `git` not on PATH");
+        return;
+    }
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path();
+    write_review_rule_repo(root);
+    review_git_init_identity(root);
+
+    // Base commit: a Go source and a migration.
+    write_file(&root.join("app.go"), "package app\n\nfunc main() {}\n");
+    write_file(
+        &root.join("db/migrations/0001_init.sql"),
+        "CREATE TABLE t (id INT);\n",
+    );
+    let base = review_git_commit_all(root, "base");
+
+    // Change the migration (watched) — the review rule should fire.
+    write_file(
+        &root.join("db/migrations/0001_init.sql"),
+        "CREATE TABLE t (id INT, name TEXT);\n",
+    );
+    review_git_commit_all(root, "change migration");
+
+    let report = stdout_json(
+        polint_cmd()
+            .current_dir(root)
+            .args(["review", &base, "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+    let files = diagnostic_files(&report, "review/migrations");
+    assert_eq!(
+        files,
+        vec!["db/migrations/0001_init.sql".to_string()],
+        "review should fire for the changed migration: {report:#?}"
+    );
+
+    // `polint check` must NOT run the review rule (kind filter).
+    let check_report = stdout_json(
+        polint_cmd()
+            .current_dir(root)
+            .args(["check", "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+    assert!(
+        diagnostics_for_rule(&check_report, "review/migrations").is_empty(),
+        "polint check must not emit review-kind diagnostics: {check_report:#?}"
+    );
+}
+
+#[test]
+fn review_line_gate_keeps_watched_path_when_change_is_below_line_one() {
+    if !review_git_available() {
+        eprintln!("skipping `polint review` test; `git` not on PATH");
+        return;
+    }
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path();
+    write_review_rule_repo(root);
+    review_git_init_identity(root);
+
+    write_file(&root.join("app.go"), "package app\n\nfunc main() {}\n");
+    write_file(
+        &root.join("db/migrations/0001_init.sql"),
+        "CREATE TABLE t (\n    id INT\n);\n",
+    );
+    let base = review_git_commit_all(root, "base");
+
+    write_file(
+        &root.join("db/migrations/0001_init.sql"),
+        "CREATE TABLE t (\n    id BIGINT\n);\n",
+    );
+    review_git_commit_all(root, "change migration below first line");
+
+    let report = stdout_json(
+        polint_cmd()
+            .current_dir(root)
+            .args(["review", &base, "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+    let diagnostics = diagnostics_for_rule(&report, "review/migrations");
+    assert_eq!(
+        diagnostics.len(),
+        1,
+        "line-aware review gate should keep a changed-line anchored path watcher: {report:#?}"
+    );
+    assert_eq!(
+        diagnostics[0]["range"]["start_line"], 2,
+        "path watcher should anchor on the first changed line: {report:#?}"
+    );
+}
+
+#[test]
+fn review_diff_gate_drops_off_diff_findings_unless_opted_out() {
+    if !review_git_available() {
+        eprintln!("skipping `polint review` test; `git` not on PATH");
+        return;
+    }
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path();
+    write_review_rule_repo(root);
+    review_git_init_identity(root);
+
+    write_file(&root.join("app.go"), "package app\n\nfunc main() {}\n");
+    write_file(
+        &root.join("db/migrations/0001_init.sql"),
+        "CREATE TABLE t (id INT);\n",
+    );
+    let base = review_git_commit_all(root, "base");
+
+    // Change ONLY app.go — the migration is unchanged, so the rule's finding on
+    // db/migrations/** is off-diff and must be gated out by default.
+    write_file(
+        &root.join("app.go"),
+        "package app\n\nfunc main() { _ = 1; }\n",
+    );
+    review_git_commit_all(root, "change unrelated file");
+
+    // Default diff gate: the off-diff migration finding is dropped.
+    let gated = stdout_json(
+        polint_cmd()
+            .current_dir(root)
+            .args(["review", &base, "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+    assert!(
+        diagnostics_for_rule(&gated, "review/migrations").is_empty(),
+        "default diff gate should drop the off-diff finding: {gated:#?}"
+    );
+
+    // Now change the migration too and confirm `--no-diff-gate` surfaces it.
+    write_file(
+        &root.join("db/migrations/0001_init.sql"),
+        "CREATE TABLE t (id INT, extra TEXT);\n",
+    );
+    review_git_commit_all(root, "change migration too");
+    let ungated = stdout_json(
+        polint_cmd()
+            .current_dir(root)
+            .args([
+                "review",
+                &base,
+                "--no-diff-gate",
+                "--format",
+                "json",
+                "--fail-on",
+                "none",
+            ])
+            .assert()
+            .success(),
+    );
+    assert_eq!(
+        diagnostic_files(&ungated, "review/migrations"),
+        vec!["db/migrations/0001_init.sql".to_string()],
+        "with --no-diff-gate the review finding is surfaced: {ungated:#?}"
+    );
+}
+
+#[test]
+fn review_whole_file_keeps_fixed_line_finding_on_changed_file() {
+    if !review_git_available() {
+        eprintln!("skipping `polint review` test; `git` not on PATH");
+        return;
+    }
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path();
+    write_fixed_line_review_rule_repo(root);
+    review_git_init_identity(root);
+
+    write_file(&root.join("app.go"), "package app\n\nfunc main() {}\n");
+    write_file(
+        &root.join("db/migrations/0001_init.sql"),
+        "CREATE TABLE t (\n    id INT\n);\n",
+    );
+    let base = review_git_commit_all(root, "base");
+
+    write_file(
+        &root.join("db/migrations/0001_init.sql"),
+        "CREATE TABLE t (\n    id BIGINT\n);\n",
+    );
+    review_git_commit_all(root, "change migration below first line");
+
+    let line_gated = stdout_json(
+        polint_cmd()
+            .current_dir(root)
+            .args(["review", &base, "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+    assert!(
+        diagnostics_for_rule(&line_gated, "review/migrations").is_empty(),
+        "default line-aware gate should drop a fixed line-1 finding: {line_gated:#?}"
+    );
+
+    let whole_file = stdout_json(
+        polint_cmd()
+            .current_dir(root)
+            .args([
+                "review",
+                &base,
+                "--whole-file",
+                "--format",
+                "json",
+                "--fail-on",
+                "none",
+            ])
+            .assert()
+            .success(),
+    );
+    assert_eq!(
+        diagnostic_files(&whole_file, "review/migrations"),
+        vec!["db/migrations/0001_init.sql".to_string()],
+        "--whole-file should keep findings on changed files regardless of line range: {whole_file:#?}"
+    );
+}
+
+#[test]
+fn review_honors_comment_ignores_by_default() {
+    if !review_git_available() {
+        eprintln!("skipping `polint review` test; `git` not on PATH");
+        return;
+    }
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path();
+    write_ts_review_rule_repo(root);
+    review_git_init_identity(root);
+
+    write_file(
+        &root.join("src/component.ts"),
+        r#"// polint-ignore-next-line review/changed-ts -- reviewed separately
+export const value = "old";
+"#,
+    );
+    let base = review_git_commit_all(root, "base");
+
+    write_file(
+        &root.join("src/component.ts"),
+        r#"// polint-ignore-next-line review/changed-ts -- reviewed separately
+export const value = "new";
+"#,
+    );
+    review_git_commit_all(root, "change ignored line");
+
+    let report = stdout_json(
+        polint_cmd()
+            .current_dir(root)
+            .args(["review", &base, "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+    assert!(
+        diagnostics_for_rule(&report, "review/changed-ts").is_empty(),
+        "review should honor comment ignores by default: {report:#?}"
+    );
+}
+
+#[test]
+fn review_gorm_model_example_requires_read_index_validation() {
+    if !review_git_available() {
+        eprintln!("skipping `polint review` test; `git` not on PATH");
+        return;
+    }
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path();
+    write_gorm_review_rule_repo(root);
+    review_git_init_identity(root);
+
+    write_file(
+        &root.join("internal/billing/models/invoice.go"),
+        r#"package models
+
+import "time"
+
+type Invoice struct {
+	ID        string
+	AccountID string
+	Status    string
+	CreatedAt time.Time
+}
+"#,
+    );
+    write_file(
+        &root.join("internal/billing/service.go"),
+        "package billing\n\nfunc Service() {}\n",
+    );
+    let base = review_git_commit_all(root, "base");
+
+    write_file(
+        &root.join("internal/billing/models/invoice.go"),
+        r#"package models
+
+import "time"
+
+type Invoice struct {
+	ID        string
+	AccountID string `gorm:"index:idx_invoices_account_status_created_at,priority:1"`
+	Status    string `gorm:"index:idx_invoices_account_status_created_at,priority:2"`
+	CreatedAt time.Time `gorm:"index:idx_invoices_account_status_created_at,priority:3"`
+}
+"#,
+    );
+    review_git_commit_all(root, "add invoice read index");
+
+    let report = stdout_json(
+        polint_cmd()
+            .current_dir(root)
+            .args(["review", &base, "--format", "json", "--fail-on", "none"])
+            .assert()
+            .success(),
+    );
+    let diagnostics = diagnostics_for_rule(&report, "review/gorm-model-read-indexes");
+    assert_eq!(
+        diagnostics.len(),
+        1,
+        "changed GORM model should require read-index validation: {report:#?}"
+    );
+    assert_eq!(
+        diagnostics[0]["file"], "internal/billing/models/invoice.go",
+        "diagnostic should point at the changed GORM model: {report:#?}"
+    );
+    assert_eq!(
+        diagnostics[0]["range"]["start_line"], 7,
+        "diagnostic should anchor on the first changed model line: {report:#?}"
+    );
+}
+
+#[test]
+fn review_requires_local_rule_hosts() {
+    if !review_git_available() {
+        eprintln!("skipping `polint review` test; `git` not on PATH");
+        return;
+    }
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path();
+    write_file(
+        &root.join(".polint.toml"),
+        "[workspace]\ninclude = [\"**/*.txt\"]\n",
+    );
+    review_git_init_identity(root);
+    write_file(&root.join("a.txt"), "x\n");
+    review_git_commit_all(root, "base");
+
+    polint_cmd()
+        .current_dir(root)
+        .args(["review", "HEAD"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("requires repo-local rules"))
+        .stderr(predicate::str::contains(
+            "polint new-rule generic <name> --review",
+        ));
 }

@@ -686,7 +686,7 @@ fn support_for(capability: &str) -> CapabilityAccumulator {
     let (status, reason, hint, docs_path) = match capability {
         "syntax" | "imports" | "go_tests" | "branch_obligations" | "file_metrics"
         | "function_metrics" | "complexity_metrics" | "ts_components" | "ts_classes"
-        | "string_literals" | "jsx_attributes" => {
+        | "string_literals" | "jsx_attributes" | "changeset" => {
             (CapabilitySupportStatus::Supported, None, None, None)
         }
         "resolved_imports" | "module_graph" => (CapabilitySupportStatus::Supported, None, None, None),
@@ -880,7 +880,7 @@ fn capability_status_json(status: &CapabilitySupportStatus) -> &'static str {
 mod tests {
     use super::*;
     use crate::core::{
-        Capabilities, Rule, RuleMeta, RuleOptions, run_rules_with_capability_support,
+        Capabilities, Rule, RuleKind, RuleMeta, RuleOptions, run_rules_with_capability_support,
     };
     use crate::diagnostics::{Severity, TextRange as DiagnosticRange};
     use std::collections::{BTreeMap, BTreeSet};
@@ -921,6 +921,7 @@ mod tests {
                 id: self.id.to_string(),
                 description: self.description.to_string(),
                 severity: self.severity,
+                kind: RuleKind::Check,
             }
         }
 

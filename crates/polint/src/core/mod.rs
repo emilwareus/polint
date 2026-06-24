@@ -815,6 +815,13 @@ pub struct AnalysisDb {
     points_to_store: Option<PointsToStore>,
     alias_store: Option<AliasStore>,
     path_contexts: Option<crate::path_context::PathContextIndex>,
+    /// Diff-to-target-ref facts, injected by the host for `polint review`.
+    ///
+    /// This is the first externally injected fact family: it is set by the
+    /// runner via [`AnalysisDb::set_changeset`] after the kernel runs, not
+    /// derived by a provider. It is `None` under `polint check` (so the
+    /// `ChangedFiles` view is empty there) and excluded from all cache digests.
+    changeset: Option<ReviewChangeset>,
 }
 
 impl Default for AnalysisDb {
@@ -951,6 +958,7 @@ impl Default for AnalysisDb {
             points_to_store: None,
             alias_store: None,
             path_contexts: None,
+            changeset: None,
         }
     }
 }
@@ -958,6 +966,21 @@ impl Default for AnalysisDb {
 impl AnalysisDb {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Injects diff-to-target-ref facts for `polint review`.
+    ///
+    /// Called by the host runner after the kernel runs and before rules
+    /// execute, so the `ChangedFiles` fact view can read the diff. The
+    /// changeset is excluded from all cache digests by construction (it is set
+    /// post-kernel), so a changing diff never busts the analysis cache.
+    pub(crate) fn set_changeset(&mut self, changeset: ReviewChangeset) {
+        self.changeset = Some(changeset);
+    }
+
+    /// Returns the injected changeset, or `None` under `polint check`.
+    pub(crate) fn changeset(&self) -> Option<&ReviewChangeset> {
+        self.changeset.as_ref()
     }
 
     pub fn add_file(&mut self, path: PathBuf, relative_path: String, source: String) -> FileId {
@@ -7079,12 +7102,69 @@ fn option_string(value: Option<&str>) -> String {
         .unwrap_or_else(|| "none".to_string())
 }
 
+/// How a path changed relative to the target ref, in a `polint review` diff.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChangeStatus {
+    /// The file is new on the working side.
+    Added,
+    /// The file existed on both sides and its content changed.
+    Modified,
+    /// The file was removed on the working side.
+    Deleted,
+    /// The file was renamed; the carried path is the new-side path.
+    Renamed,
+}
+
+/// One changed file in a `polint review` diff against the target ref.
+///
+/// Crate-internal: rule authors read changed files through the `ChangedFiles`
+/// fact view and its `ChangedFileRef` items, never this struct directly.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ChangedFile {
+    /// Repo-relative, `/`-normalized path, identical in form to `Diagnostic.file`.
+    pub(crate) path: String,
+    /// How this file changed relative to the target ref.
+    pub(crate) status: ChangeStatus,
+    /// New-side changed line ranges, inclusive and 1-based; empty for `Deleted`.
+    pub(crate) new_line_ranges: Vec<(u32, u32)>,
+}
+
+/// The set of files changed in a `polint review` diff against the target ref.
+///
+/// Injected on the [`AnalysisDb`] by the host runner; read through the
+/// `ChangedFiles` SDK fact view. Empty under `polint check`. Crate-internal:
+/// it travels outer→host as a JSON cache file, so it derives `Serialize`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ReviewChangeset {
+    /// Changed files, sorted by `path` for deterministic output.
+    pub(crate) files: Vec<ChangedFile>,
+}
+
+/// Whether a rule runs under `polint check` (`Check`) or `polint review` (`Review`).
+///
+/// Authored via `#[polint::rule(..., kind = "check" | "review")]`. Defaults to
+/// `Check`, so every existing rule keeps its behavior. `polint check` executes
+/// only `Check` rules; `polint review` executes only `Review` rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuleKind {
+    /// A normal rule that runs under `polint check`.
+    #[default]
+    Check,
+    /// A diff-gated rule that runs under `polint review`.
+    Review,
+}
+
 /// Static metadata for a rule as shown in diagnostics, config, and registries.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuleMeta {
     pub id: String,
     pub description: String,
     pub severity: Severity,
+    /// Which command runs this rule (`check` vs `review`); defaults to `check`.
+    #[serde(default)]
+    pub kind: RuleKind,
 }
 
 /// Fact families a rule wants the host to provide.
@@ -7142,6 +7222,8 @@ pub struct Capabilities {
     pub string_literals: bool,
     /// Needs JSX attribute facts.
     pub jsx_attributes: bool,
+    /// Needs the `polint review` changeset (diff-to-target-ref facts).
+    pub changeset: bool,
 }
 
 impl Capabilities {
@@ -7265,6 +7347,11 @@ impl Capabilities {
         self
     }
 
+    pub fn changeset(mut self) -> Self {
+        self.changeset = true;
+        self
+    }
+
     pub(crate) fn requested_names(self) -> impl Iterator<Item = &'static str> {
         [
             ("syntax", self.syntax),
@@ -7290,6 +7377,7 @@ impl Capabilities {
             ("ts_classes", self.ts_classes),
             ("string_literals", self.string_literals),
             ("jsx_attributes", self.jsx_attributes),
+            ("changeset", self.changeset),
         ]
         .into_iter()
         .filter_map(|(name, requested)| requested.then_some(name))
@@ -7889,6 +7977,7 @@ mod tests {
                 id: self.id.to_string(),
                 description: format!("Test rule {}", self.id),
                 severity: self.severity,
+                kind: RuleKind::Check,
             }
         }
 
@@ -9418,6 +9507,7 @@ mod tests {
                 id: "examples/support".to_string(),
                 description: "Support view constructor test".to_string(),
                 severity: Severity::Warn,
+                kind: RuleKind::Check,
             },
             RuleOptions::default(),
         );
@@ -9455,6 +9545,7 @@ mod tests {
                 id: "examples/support-probe".to_string(),
                 description: "Support probe".to_string(),
                 severity: Severity::Warn,
+                kind: RuleKind::Check,
             },
             || Capabilities::new().imports(),
             |_db, ctx| {

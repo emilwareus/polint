@@ -16,10 +16,13 @@ pub fn rule(args: TokenStream, input: TokenStream) -> TokenStream {
     }
 }
 
+#[cfg_attr(test, derive(Debug))]
 struct RuleArgs {
     id: String,
     description: String,
     severity: Ident,
+    /// The `RuleKind` variant identifier (`Check` or `Review`); defaults to `Check`.
+    kind: Ident,
 }
 
 struct ViewParam {
@@ -90,6 +93,7 @@ fn expand_rule(args: Vec<Meta>, input: ItemFn) -> syn::Result<proc_macro2::Token
     let id = rule_args.id;
     let description = rule_args.description;
     let severity = rule_args.severity;
+    let kind = rule_args.kind;
 
     Ok(quote! {
         #vis fn #fn_name() -> ::polint::sdk::prelude::Rule {
@@ -99,6 +103,7 @@ fn expand_rule(args: Vec<Meta>, input: ItemFn) -> syn::Result<proc_macro2::Token
                         id: #id.to_string(),
                         description: #description.to_string(),
                         severity: ::polint::sdk::prelude::Severity::#severity,
+                        kind: ::polint::sdk::__private::RuleKind::#kind,
                     }
                 },
                 || {
@@ -140,6 +145,7 @@ fn parse_rule_args(args: Vec<Meta>) -> syn::Result<RuleArgs> {
     let mut id = None;
     let mut description = None;
     let mut severity = None;
+    let mut kind = None;
     for meta in args {
         let Meta::NameValue(name_value) = meta else {
             return Err(syn::Error::new(
@@ -158,6 +164,7 @@ fn parse_rule_args(args: Vec<Meta>) -> syn::Result<RuleArgs> {
             "id" => id = Some(value),
             "description" => description = Some(value),
             "severity" => severity = Some(parse_severity(&value, name_value.value.span())?),
+            "kind" => kind = Some(parse_kind(&value, name_value.value.span())?),
             _ => {
                 return Err(syn::Error::new(
                     name_value.path.span(),
@@ -173,6 +180,7 @@ fn parse_rule_args(args: Vec<Meta>) -> syn::Result<RuleArgs> {
         })?,
         severity: severity
             .ok_or_else(|| syn::Error::new(proc_macro2::Span::call_site(), "missing `severity`"))?,
+        kind: kind.unwrap_or_else(|| format_ident!("Check")),
     })
 }
 
@@ -195,6 +203,14 @@ fn parse_severity(value: &str, span: proc_macro2::Span) -> syn::Result<Ident> {
             span,
             "severity must be one of `error`, `warn`, or `info`",
         )),
+    }
+}
+
+fn parse_kind(value: &str, span: proc_macro2::Span) -> syn::Result<Ident> {
+    match value {
+        "check" => Ok(format_ident!("Check")),
+        "review" => Ok(format_ident!("Review")),
+        _ => Err(syn::Error::new(span, "kind must be `check` or `review`")),
     }
 }
 
@@ -359,6 +375,7 @@ fn capability_for_type(ty: &Type) -> syn::Result<(Ident, Ident, String, String)>
         "TsClasses" => "ts_classes",
         "StringLiterals" => "string_literals",
         "JsxAttributes" => "jsx_attributes",
+        "ChangedFiles" => "changeset",
         _ => {
             return Err(syn::Error::new(
                 segment.ident.span(),
@@ -449,6 +466,47 @@ mod tests {
         syn::parse_str::<syn::Signature>(source).unwrap()
     }
 
+    fn rule_args(source: &str) -> syn::Result<RuleArgs> {
+        use syn::parse::Parser as _;
+        let parser = syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated;
+        let metas = parser.parse_str(source).unwrap();
+        parse_rule_args(metas.into_iter().collect())
+    }
+
+    #[test]
+    fn parse_rule_args_kind_defaults_to_check() {
+        let args = rule_args(r#"id = "local/x", description = "d", severity = "warn""#).unwrap();
+        assert_eq!(args.kind.to_string(), "Check");
+    }
+
+    #[test]
+    fn parse_rule_args_accepts_review_kind() {
+        let args =
+            rule_args(r#"id = "review/x", description = "d", severity = "warn", kind = "review""#)
+                .unwrap();
+        assert_eq!(args.kind.to_string(), "Review");
+    }
+
+    #[test]
+    fn parse_rule_args_accepts_explicit_check_kind() {
+        let args =
+            rule_args(r#"id = "local/x", description = "d", severity = "warn", kind = "check""#)
+                .unwrap();
+        assert_eq!(args.kind.to_string(), "Check");
+    }
+
+    #[test]
+    fn parse_rule_args_rejects_unknown_kind() {
+        let error =
+            rule_args(r#"id = "local/x", description = "d", severity = "warn", kind = "audit""#)
+                .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("kind must be `check` or `review`")
+        );
+    }
+
     #[test]
     fn validate_signature_shape_rejects_non_plain_functions() {
         assert!(validate_signature_shape(&signature("fn rule() -> RuleResult")).is_ok());
@@ -509,6 +567,7 @@ mod tests {
             capability("polint::sdk::facts::JsxAttributes<'_>"),
             "jsx_attributes"
         );
+        assert_eq!(capability("ChangedFiles<'_>"), "changeset");
         assert_eq!(
             canonical_path("polint::sdk::prelude::Imports<'_>"),
             "polint::sdk::facts::Imports<'_>"

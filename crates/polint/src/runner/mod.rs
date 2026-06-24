@@ -1,7 +1,7 @@
 use crate::analysis_kernel::{AnalysisKernel, KernelInput};
 use crate::analysis_plan::{AnalysisPlan, RulePlanInputs};
 use crate::config::{LoadedConfig, load_config};
-use crate::core::{Rule, run_rules_with_capability_support};
+use crate::core::{Rule, RuleKind, run_rules_with_capability_support};
 use crate::diagnostics::{
     ColorChoice, JsonReportMeta, OutputFormat, RenderOpts, Severity, apply_report_filters,
     build_ai_friendly_report, limit_report_diagnostics, render_ai_friendly_stdout,
@@ -89,6 +89,27 @@ struct CheckArgs {
     /// Apply polint comment-ignore directives.
     #[arg(long, default_value_t = true, hide = true, action = clap::ArgAction::Set)]
     ignore_comments: bool,
+    /// Which rule kind to run (internal; set by `polint review`).
+    #[arg(long, value_enum, default_value_t = KindArg::Check, hide = true)]
+    kind: KindArg,
+    /// Internal: path to a JSON changeset injected by `polint review`.
+    #[arg(long, value_name = "FILE", hide = true)]
+    changed_files: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum KindArg {
+    Check,
+    Review,
+}
+
+impl From<KindArg> for RuleKind {
+    fn from(value: KindArg) -> Self {
+        match value {
+            KindArg::Check => RuleKind::Check,
+            KindArg::Review => RuleKind::Review,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -364,6 +385,17 @@ fn analyze_and_run(
     let cache = crate::cache::Cache::default_for_repo(root, !args.no_cache);
     let config_digest = crate::cache::keys::config_hash(&loaded);
     let enabled = selected_rule_patterns(&loaded, args.profile.as_deref())?;
+    // Run only the requested rule kind. `polint check` runs `Check` rules;
+    // `polint review` runs `Review` rules. Filtering here (rather than in the
+    // frozen `run_rules_with_capability_support` signature) keeps capability
+    // planning honest: only the selected kind's facts are planned and built.
+    let wanted_kind: RuleKind = args.kind.into();
+    let rules: Vec<Rule> = rules
+        .iter()
+        .filter(|rule| rule.meta().kind == wanted_kind)
+        .cloned()
+        .collect();
+    let rules: &[Rule] = &rules;
     let mut plan_inputs = RulePlanInputs::collect(rules, enabled.as_ref());
     plan_inputs.retain_rule_pattern(args.only_rule.as_deref());
     let exact_enabled = plan_inputs.exact_rule_ids();
@@ -373,7 +405,7 @@ fn analyze_and_run(
 
     let mut diagnostics = plan_inputs.diagnostics();
     diagnostics.extend(plan.diagnostics());
-    let output = AnalysisKernel::run(KernelInput {
+    let mut output = AnalysisKernel::run(KernelInput {
         loaded: &loaded,
         cache: &cache,
         config_digest: &config_digest,
@@ -381,7 +413,14 @@ fn analyze_and_run(
         plan: &plan,
         parallel: true,
     })?;
-    diagnostics.extend(output.diagnostics);
+    diagnostics.extend(std::mem::take(&mut output.diagnostics));
+    // Inject the `polint review` changeset (if any) AFTER the kernel runs and
+    // BEFORE rules execute, so the `ChangedFiles` fact view sees the diff. The
+    // changeset is set post-kernel, so it never participates in cache identity.
+    if let Some(path) = &args.changed_files {
+        let changeset = read_changeset(path)?;
+        output.db.set_changeset(changeset);
+    }
     diagnostics.extend(run_rules_with_capability_support(
         &output.db,
         rules,
@@ -391,6 +430,25 @@ fn analyze_and_run(
         &output.capability_support,
     ));
     Ok((diagnostics, output.db, loaded))
+}
+
+/// Read a `polint review` changeset JSON file injected via `--changed-files`.
+///
+/// The file is polint-internal (written by the outer `review` command), so a
+/// missing or malformed file is a loud error rather than a silent empty diff.
+fn read_changeset(path: &Path) -> Result<crate::core::ReviewChangeset> {
+    let raw = std::fs::read_to_string(path).with_context(|| {
+        format!(
+            "failed to read injected changeset file {} (polint review internal)",
+            path.display()
+        )
+    })?;
+    serde_json::from_str(&raw).with_context(|| {
+        format!(
+            "failed to parse injected changeset file {} (polint review internal)",
+            path.display()
+        )
+    })
 }
 
 fn selected_rule_patterns(

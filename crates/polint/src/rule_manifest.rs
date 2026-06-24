@@ -318,6 +318,7 @@ fn support_status_json(status: &CapabilitySupportStatus) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::RuleKind;
     use crate::diagnostics::Severity;
     use toml::Value;
 
@@ -326,6 +327,7 @@ mod tests {
             id: "local/rule".to_string(),
             description: "Rule description".to_string(),
             severity: Severity::Warn,
+            kind: RuleKind::Check,
         }
     }
 
@@ -409,6 +411,7 @@ mod tests {
                     id: "local/zeta".to_string(),
                     description: "Zeta".to_string(),
                     severity: Severity::Warn,
+                    kind: RuleKind::Check,
                 },
                 Capabilities::new().imports(),
                 vec![FactViewRequirement::generated(
@@ -428,6 +431,7 @@ mod tests {
                     id: "local/alpha".to_string(),
                     description: "Alpha".to_string(),
                     severity: Severity::Info,
+                    kind: RuleKind::Check,
                 },
                 Capabilities::default(),
                 Vec::new(),

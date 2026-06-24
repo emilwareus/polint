@@ -28,15 +28,15 @@ pub fn collect_go_tests<'a>(tests: GoTests<'a>, file: FileId) -> Vec<&'a TestFac
 pub mod prelude {
     pub use crate::core::{
         BranchId, BranchObligation, CapabilitySupport, CapabilitySupportStatus,
-        CapabilitySupportView, ComplexityMetricFact, CoverageFact, DefinitionFact, DefinitionId,
-        DefinitionKind, FileId, FileMetricFact, FunctionFact, FunctionId, FunctionMetricFact,
-        ImportFact, ImportId, JsxAttributeFact, Language, ModuleEdge, ModuleEdgeId, ModuleEdgeKind,
-        ModuleNode, ModuleNodeId, ModuleNodeKind, NodeId, PackageFact, PackageId, ReferenceFact,
-        ReferenceId, ReferenceKind, ResolutionPrecision, ResolutionStatus, ResolvedImportFact,
-        ResolvedImportId, Rule, RuleConfigValue, RuleCtx, RuleId, RuleOptions, SourceFile, Span,
-        StringLiteralFact, SymbolFact, SymbolId, SymbolKind, SymbolNamespace, SymbolPrecision,
-        SymbolResolutionStatus, TestFact, TextRange, TsClassFact, TsComponentFact,
-        UnresolvedReason,
+        CapabilitySupportView, ChangeStatus, ComplexityMetricFact, CoverageFact, DefinitionFact,
+        DefinitionId, DefinitionKind, FileId, FileMetricFact, FunctionFact, FunctionId,
+        FunctionMetricFact, ImportFact, ImportId, JsxAttributeFact, Language, ModuleEdge,
+        ModuleEdgeId, ModuleEdgeKind, ModuleNode, ModuleNodeId, ModuleNodeKind, NodeId,
+        PackageFact, PackageId, ReferenceFact, ReferenceId, ReferenceKind, ResolutionPrecision,
+        ResolutionStatus, ResolvedImportFact, ResolvedImportId, Rule, RuleConfigValue, RuleCtx,
+        RuleId, RuleOptions, SourceFile, Span, StringLiteralFact, SymbolFact, SymbolId, SymbolKind,
+        SymbolNamespace, SymbolPrecision, SymbolResolutionStatus, TestFact, TextRange, TsClassFact,
+        TsComponentFact, UnresolvedReason,
     };
     pub use crate::diagnostics::{
         ColorChoice, Diagnostic, Evidence, Fix, JsonReportMeta, Label, OutputFormat,
@@ -46,10 +46,10 @@ pub mod prelude {
     pub use crate::rule_error::{RuleError, RuleResult};
     pub use crate::sdk::collect_go_tests;
     pub use crate::sdk::facts::{
-        BranchObligations, CallGraph, Calls, Cfg, ComplexityMetrics, ControlFlow, CoverageFacts,
-        DataFlow, Events, FileMetrics, FunctionMetrics, Functions, GoTests, Imports, JsxAttributes,
-        ModuleGraphFacts, Packages, References, ResolvedImports, SourceFiles, StringLiterals,
-        Symbols, TestSuiteMetrics, TsClasses, TsComponents,
+        BranchObligations, CallGraph, Calls, Cfg, ChangedFiles, ComplexityMetrics, ControlFlow,
+        CoverageFacts, DataFlow, Events, FileMetrics, FunctionMetrics, Functions, GoTests, Imports,
+        JsxAttributes, ModuleGraphFacts, Packages, References, ResolvedImports, SourceFiles,
+        StringLiterals, Symbols, TestSuiteMetrics, TsClasses, TsComponents,
     };
     pub use crate::sdk::policy::{
         BarrierPattern, EventPattern, FlowQuery, GuardPattern, GuardQuery, LifecycleQuery,
@@ -62,7 +62,7 @@ pub mod prelude {
 /// Hidden implementation details used by generated rule code.
 #[doc(hidden)]
 pub mod __private {
-    pub use crate::core::{AnalysisDb, Capabilities, RuleMeta};
+    pub use crate::core::{AnalysisDb, Capabilities, RuleKind, RuleMeta};
     pub use crate::sdk::facts::FactView;
 
     use crate::core::{Rule, RuleCtx};

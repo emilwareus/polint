@@ -1219,7 +1219,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "polint-example-gorm-review-indexes"
+version = "0.1.16"
+dependencies = [
+ "polint",
+]
+
+[[package]]
 name = "polint-example-multiple-rules"
+version = "0.1.16"
+dependencies = [
+ "polint",
+]
+
+[[package]]
+name = "polint-example-review-rules"
 version = "0.1.16"
 dependencies = [
  "polint",

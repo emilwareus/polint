@@ -5,11 +5,12 @@
 //! the matching views at runtime.
 
 use crate::core::{
-    AnalysisDb, BranchObligation, ComplexityMetricFact, CoverageFact, DefinitionFact, FileId,
-    FileMetricFact, FunctionFact, FunctionId, FunctionMetricFact, ImportFact, ImportId,
-    JsxAttributeFact, Language, ModuleEdge, ModuleNode, ModuleNodeId, PackageFact, ReferenceFact,
-    ResolutionStatus, ResolvedImportFact, SourceFile, StringLiteralFact, SymbolFact, SymbolId,
-    SymbolKind, SymbolResolutionStatus, TestFact, TsClassFact, TsComponentFact,
+    AnalysisDb, BranchObligation, ChangeStatus, ChangedFile, ComplexityMetricFact, CoverageFact,
+    DefinitionFact, FileId, FileMetricFact, FunctionFact, FunctionId, FunctionMetricFact,
+    ImportFact, ImportId, JsxAttributeFact, Language, ModuleEdge, ModuleNode, ModuleNodeId,
+    PackageFact, ReferenceFact, ResolutionStatus, ResolvedImportFact, ReviewChangeset, SourceFile,
+    StringLiteralFact, SymbolFact, SymbolId, SymbolKind, SymbolResolutionStatus, TestFact,
+    TsClassFact, TsComponentFact,
 };
 use crate::sdk::policy::{
     EventPattern, FlowQuery, GuardQuery, LifecycleQuery, PolicyViolation, ReachQuery,
@@ -946,6 +947,111 @@ pub struct TestSuiteMetrics<'a> {
     _db: &'a AnalysisDb,
 }
 
+/// Diff-to-target-ref fact view for `polint review` rules.
+///
+/// Requesting this view maps to the `changeset` capability. The view is empty
+/// under `polint check` (no diff is injected) and is populated only when
+/// `polint review <ref>` runs, so a review rule can target changed paths and
+/// changed line ranges as ordinary Rust code.
+#[derive(Clone, Copy)]
+pub struct ChangedFiles<'a> {
+    db: &'a AnalysisDb,
+}
+
+impl<'a> ChangedFiles<'a> {
+    fn facts(self) -> Option<&'a ReviewChangeset> {
+        self.db.changeset()
+    }
+
+    /// Iterates the changed files in stored order.
+    ///
+    /// `polint review` populates the changeset path-sorted (the git module sorts
+    /// before injection), so iteration is deterministic in practice.
+    pub fn iter(self) -> impl Iterator<Item = ChangedFileRef<'a>> {
+        self.facts()
+            .map(|facts| facts.files.as_slice())
+            .unwrap_or(&[])
+            .iter()
+            .map(|file| ChangedFileRef { file })
+    }
+
+    /// Returns true when no files changed (always true under `polint check`).
+    pub fn is_empty(self) -> bool {
+        self.facts().is_none_or(|facts| facts.files.is_empty())
+    }
+
+    /// Returns true when `path` (exact repo-relative, `/`-normalized) changed.
+    pub fn contains_path(self, path: &str) -> bool {
+        self.iter().any(|file| file.path() == path)
+    }
+
+    /// Returns true when any changed path matches the glob pattern.
+    pub fn matches_glob(self, glob: &str) -> bool {
+        self.iter().any(|file| file.matches_glob(glob))
+    }
+
+    /// Returns the new-side changed line ranges for `path`.
+    ///
+    /// Ranges are inclusive and 1-based. Returns `&[]` when the path did not
+    /// change or was deleted (deleted files carry no new-side lines).
+    pub fn lines_for(self, path: &str) -> &'a [(u32, u32)] {
+        self.facts()
+            .and_then(|facts| facts.files.iter().find(|file| file.path == path))
+            .map(|file| file.new_line_ranges.as_slice())
+            .unwrap_or(&[])
+    }
+}
+
+/// A single changed file in a `polint review` diff.
+///
+/// Yielded by [`ChangedFiles::iter`]; a thin borrow over one changed entry.
+#[derive(Clone, Copy)]
+pub struct ChangedFileRef<'a> {
+    file: &'a ChangedFile,
+}
+
+impl<'a> ChangedFileRef<'a> {
+    /// The repo-relative, `/`-normalized path, matching `Diagnostic.file`.
+    pub fn path(self) -> &'a str {
+        &self.file.path
+    }
+
+    /// How this file changed relative to the target ref.
+    pub fn status(self) -> ChangeStatus {
+        self.file.status
+    }
+
+    /// The new-side changed line ranges (inclusive, 1-based); empty if deleted.
+    pub fn lines(self) -> &'a [(u32, u32)] {
+        &self.file.new_line_ranges
+    }
+
+    /// Returns true when this file's path matches the glob pattern.
+    pub fn matches_glob(self, glob: &str) -> bool {
+        crate::sdk::scope::glob_matches(glob, &self.file.path)
+    }
+
+    /// Returns true when this file was added.
+    pub fn is_added(self) -> bool {
+        matches!(self.file.status, ChangeStatus::Added)
+    }
+
+    /// Returns true when this file was modified.
+    pub fn is_modified(self) -> bool {
+        matches!(self.file.status, ChangeStatus::Modified)
+    }
+
+    /// Returns true when this file was deleted.
+    pub fn is_deleted(self) -> bool {
+        matches!(self.file.status, ChangeStatus::Deleted)
+    }
+
+    /// Returns true when this file was renamed.
+    pub fn is_renamed(self) -> bool {
+        matches!(self.file.status, ChangeStatus::Renamed)
+    }
+}
+
 /// Hidden trait used by the `#[polint::rule]` macro to construct fact views.
 #[doc(hidden)]
 pub trait FactView<'a>: Sized {
@@ -988,6 +1094,7 @@ impl_fact_view!(TsClasses);
 impl_fact_view!(StringLiterals);
 impl_fact_view!(JsxAttributes);
 impl_fact_view!(CoverageFacts);
+impl_fact_view!(ChangedFiles);
 impl_fact_view!(Cfg, _db);
 impl_fact_view!(CallGraph, _db);
 impl_fact_view!(Events);
@@ -1750,5 +1857,102 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![ReferenceId(60)]
         );
+    }
+
+    fn changeset_fixture() -> ReviewChangeset {
+        // `polint review` injects a path-sorted changeset (the git module sorts
+        // before injection), so the fixture mirrors that stored order.
+        ReviewChangeset {
+            files: vec![
+                ChangedFile {
+                    path: "db/migrations/0001_init.sql".to_string(),
+                    status: ChangeStatus::Added,
+                    new_line_ranges: vec![(1, 8)],
+                },
+                ChangedFile {
+                    path: "src/legacy.go".to_string(),
+                    status: ChangeStatus::Deleted,
+                    new_line_ranges: vec![],
+                },
+                ChangedFile {
+                    path: "src/router.go".to_string(),
+                    status: ChangeStatus::Modified,
+                    new_line_ranges: vec![(10, 12), (40, 40)],
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn changed_files_view_is_empty_on_a_default_db() {
+        let db = AnalysisDb::new();
+        let changes = ChangedFiles::build(&db);
+        assert!(changes.is_empty());
+        assert_eq!(changes.iter().count(), 0);
+        assert!(!changes.contains_path("src/router.go"));
+        assert!(!changes.matches_glob("**/*.go"));
+        assert!(changes.lines_for("src/router.go").is_empty());
+    }
+
+    #[test]
+    fn changed_files_view_reads_injected_changeset() {
+        let mut db = AnalysisDb::new();
+        db.set_changeset(changeset_fixture());
+        let changes = ChangedFiles::build(&db);
+
+        assert!(!changes.is_empty());
+
+        // iter() preserves the stored (path-sorted) order the producer injects.
+        let paths: Vec<&str> = changes.iter().map(|file| file.path()).collect();
+        assert_eq!(
+            paths,
+            vec![
+                "db/migrations/0001_init.sql",
+                "src/legacy.go",
+                "src/router.go",
+            ]
+        );
+
+        // contains_path is exact repo-relative.
+        assert!(changes.contains_path("src/router.go"));
+        assert!(!changes.contains_path("src/router"));
+        assert!(!changes.contains_path("router.go"));
+
+        // matches_glob over any changed path.
+        assert!(changes.matches_glob("db/migrations/**"));
+        assert!(changes.matches_glob("src/*.go"));
+        assert!(!changes.matches_glob("web/**"));
+
+        // lines_for returns new-side ranges; deleted/absent => empty.
+        assert_eq!(changes.lines_for("src/router.go"), &[(10, 12), (40, 40)]);
+        assert_eq!(changes.lines_for("db/migrations/0001_init.sql"), &[(1, 8)]);
+        assert!(changes.lines_for("src/legacy.go").is_empty());
+        assert!(changes.lines_for("does/not/exist.go").is_empty());
+    }
+
+    #[test]
+    fn changed_file_ref_exposes_status_and_predicates() {
+        let mut db = AnalysisDb::new();
+        db.set_changeset(changeset_fixture());
+        let changes = ChangedFiles::build(&db);
+        let by_path: std::collections::HashMap<&str, ChangedFileRef<'_>> =
+            changes.iter().map(|file| (file.path(), file)).collect();
+
+        let migration = by_path["db/migrations/0001_init.sql"];
+        assert_eq!(migration.status(), ChangeStatus::Added);
+        assert!(migration.is_added());
+        assert!(!migration.is_modified() && !migration.is_deleted() && !migration.is_renamed());
+        assert!(migration.matches_glob("db/migrations/**"));
+        assert_eq!(migration.lines(), &[(1, 8)]);
+
+        let router = by_path["src/router.go"];
+        assert_eq!(router.status(), ChangeStatus::Modified);
+        assert!(router.is_modified());
+        assert!(!router.is_added());
+
+        let legacy = by_path["src/legacy.go"];
+        assert_eq!(legacy.status(), ChangeStatus::Deleted);
+        assert!(legacy.is_deleted());
+        assert!(legacy.lines().is_empty());
     }
 }

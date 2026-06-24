@@ -777,7 +777,7 @@ const unsafePrefix = /^unsafe-/i;
 
 #[test]
 fn denied_literal_rules_can_see_regex_literal_text() {
-    use crate::core::{RuleCtx, RuleMeta, RuleOptions};
+    use crate::core::{RuleCtx, RuleKind, RuleMeta, RuleOptions};
     use crate::diagnostics::Severity;
     use crate::sdk::facts::{FactView, StringLiterals};
 
@@ -793,6 +793,7 @@ const denied = /^unsafe-/i;
             id: "examples/config-query-no-literal".to_string(),
             description: "Deny configured syntax-level literals.".to_string(),
             severity: Severity::Error,
+            kind: RuleKind::Check,
         },
         RuleOptions {
             deny: vec!["unsafe".to_string()],

@@ -1,13 +1,36 @@
 # polint
 
-**AI-agent-native, shadcn-style linting for rules you own.**
+**Repo-local lint rules for the policies only your team knows.**
 
-polint turns repo-specific engineering instructions into executable lint rules.
-AI agents do not always follow prose in `CLAUDE.md`, `AGENTS.md`, prompts, or
-review comments. polint lets you encode the parts that are actually analyzable.
+polint is a Rust framework for writing static-analysis rules that live in your
+repository. It gives those rules fast file discovery, parsers, typed facts,
+diagnostics, caching, CI output, and an SDK. You bring the policy.
 
-Think shadcn, but for linting: you own the rule code in your repository; polint
-brings the scaffolding and infrastructure to create, run, test, and ship it.
+Use it for conventions that generic linters cannot know: internal API usage,
+security guardrails, migration review rules, design-token rules, test-quality
+expectations, and the project-specific checks you keep repeating in prompts and
+review comments.
+
+polint is not a replacement for ESLint, Biome, Ruff, golangci-lint, or
+formatters. It is the layer for rules that belong to your codebase.
+
+There are two ways to run your rules:
+
+- **`polint check`** — run every rule across the repository. This is the core of
+  polint and where most rules live.
+- **`polint review <ref>`** — run rules gated to a diff against a target branch
+  or commit, for review-time policies that should only fire on what changed. See
+  [Review Rules](#review-rules).
+
+## Why
+
+Engineering teams are putting more work through AI coding agents, but agents do
+not reliably remember local conventions from `AGENTS.md`, prompts, or review
+comments. polint turns the parts that are statically checkable into executable
+feedback.
+
+The rule code stays in your repo, next to the code it protects. That makes the
+policy reviewable, testable, versioned, and runnable locally or in CI.
 
 polint ships no built-in policy rules. It gives you the SDK, parsers, facts,
 diagnostics, local rule runner, config, cache, and CI output so your repo can own
@@ -61,7 +84,7 @@ polint inspect rule --format json
 polint check
 ```
 
-`polint init` creates `.polint.toml`, `.polint/rules/src/`, `.polint/cache/`, `.polint/output/`, `.polint/.gitignore` (ignoring `cache/` and `output/`), and root `rust-toolchain.toml` when missing (see [Minimum Rust version](#minimum-rust-version)).
+`polint init` creates `.polint.toml`, `.polint/rules/src/`, `.polint/cache/`, `.polint/output/`, `.polint/.gitignore` (ignoring `cache/` and `output/`), and root `rust-toolchain.toml` when missing.
 `polint new-rule <go|ts|js|generic> <name>` adds a Rust rule module to your
 local rule pack. `polint check` discovers and runs that rule pack.
 Generated rules include positive and negative fixture cases under
@@ -262,44 +285,91 @@ polint baseline update
 `--new-only` emits and fails only on diagnostics not covered by the baseline or
 central ignore list.
 
-## Machine contract (JSON)
+## Review Rules
 
-Stable JSON reports (`polint check --format json`) match the schema at
-[docs/schemas/polint-report-v1.json](docs/schemas/polint-report-v1.json). Emitters
-also set a top-level `schema` URL when using current polint. Diagnostics are
-deduplicated and sorted deterministically; `--only-rule` and `--max-diagnostics`
-apply after that pipeline for emitted reports. `--max-diagnostics` does not hide
-failures from `--fail-on` (see [docs/AGENT-PLAYBOOK.md](docs/AGENT-PLAYBOOK.md)).
+`polint review <ref>` is `polint check` gated to a diff against a target branch or
+commit (`origin/main`, a SHA, or `a...b`). Use it for review-time policies that
+should only fire on what a change touched.
 
-AI-friendly saved reports (`polint check --format ai-friendly`) match
-[docs/schemas/polint-ai-friendly-v1.json](docs/schemas/polint-ai-friendly-v1.json).
-They contain `summary`, `examples`, and `diagnostics`; stdout intentionally stays
-small to avoid overloading coding-agent context.
+A review rule is authored exactly like a check rule, but it is marked
+`kind = "review"` and reads the diff through the `ChangedFiles<'_>` fact view.
+For example, say a PR adds or edits a GORM model:
 
-## Minimum Rust version
+```go
+type Invoice struct {
+    ID        uuid.UUID `gorm:"type:uuid;primaryKey"`
+    AccountID uuid.UUID `gorm:"index:idx_invoices_account_status_created_at,priority:1"`
+    Status    string    `gorm:"index:idx_invoices_account_status_created_at,priority:2"`
+    CreatedAt time.Time `gorm:"index:idx_invoices_account_status_created_at,priority:3"`
+}
+```
 
-Rule packs under `.polint/rules` are normal Rust crates that depend on the **`polint` library**. The published crate declares **`rust-version = "1.95"`** (MSRV). Cargo refuses to build the rule pack if the **active `rustc`** is older, even when the stub uses `edition = "2024"`.
+Your repo can make that a review requirement:
 
-- **`polint init`** writes **`rust-toolchain.toml` at the repository root** only when that file does **not** already exist, aligning the default toolchain with polint’s MSRV so `polint check` (which runs `cargo` with `--manifest-path .polint/rules/Cargo.toml`) succeeds.
-- If your repo already pins an older toolchain, **raise `channel`** in `rust-toolchain.toml` to **1.95** or newer, or run with an override, for example:
-  `RUSTUP_TOOLCHAIN=1.95 polint check`
+```rust
+use polint::sdk::prelude::*;
 
-When the rules crate fails for this reason, the CLI adds a short note on top of Cargo’s stderr.
+#[polint::rule(
+    id = "review/gorm-model-read-indexes",
+    description = "GORM model changes require read-index validation.",
+    severity = "error",
+    kind = "review"
+)]
+pub(crate) fn gorm_model_read_indexes(
+    ctx: &mut RuleCtx<'_>,
+    changes: ChangedFiles<'_>,
+) -> RuleResult {
+    let rule_id = ctx.rule_id().to_string();
 
-**Semver:** generated `Cargo.toml` uses `polint = "0.1.x"` (caret). Patch updates within **0.1** are accepted automatically; a **0.2** release requires updating that dependency line.
+    for changed in changes.iter() {
+        let is_gorm_model =
+            changed.path().ends_with(".go") && changed.matches_glob("internal/**/models/**");
 
-This repository pins Rust **1.95** in [`rust-toolchain.toml`](rust-toolchain.toml) for developing polint itself.
+        if changed.is_deleted() || !is_gorm_model {
+            continue;
+        }
 
-## Versions
+        let line = changed.lines().first().map(|&(lo, _)| lo).unwrap_or(1);
+        ctx.report(
+            Diagnostic::error(
+                rule_id.clone(),
+                changed.path().to_string(),
+                DiagnosticRange::point(line, 1),
+                "GORM model changed: validate the correct read indexes for this model.",
+            )
+            .with_help(
+                "Check the read paths for this model and add or update composite indexes in \
+                 GORM tags or migrations. If no index is needed, explain why in the PR.",
+            ),
+        );
+    }
 
-| Item | Where it is defined |
-|------|---------------------|
-| CLI and `polint` crate version | Workspace `version` in the repo root `Cargo.toml` |
-| Published crate | `polint` on crates.io |
-| Minimum supported Rust | `rust-version` in workspace `Cargo.toml` |
-| Generated rule packs | Rust edition **2024** (`polint new-rule` template) |
+    Ok(())
+}
+```
+
+Run it during review:
+
+```bash
+polint new-rule generic gorm-model-read-indexes --review
+polint review origin/main
+```
+
+`ChangedFiles<'_>` exposes `iter()`, `contains_path()`, `matches_glob()`, and
+`lines_for()`; each entry has `path()`, `status()`, `lines()`, and
+`is_added/is_modified/is_deleted/is_renamed()`. It is empty under `polint check`,
+so review rules are inert there. By default `polint review` surfaces only
+diagnostics intersecting the diff (changed file plus changed line ranges), so any
+rule effectively becomes "check, but only on the diff"; `--no-diff-gate` shows
+all review findings and `--whole-file` gates by file only.
+
+See [docs/facts/changed-files.md](docs/facts/changed-files.md), the
+[review-rules example](examples/review-rules/), and the
+[GORM review indexes example](examples/gorm-review-indexes/).
 
 ## CI
+
+Run `polint check` on push and pull requests:
 
 ```yaml
 name: polint
@@ -315,6 +385,26 @@ jobs:
         with:
           version: latest
           args: check --format github
+```
+
+For diff-gated review rules, run `polint review` on pull requests with full
+history (`fetch-depth: 0`) so the target ref is available:
+
+```yaml
+name: polint-review
+
+on: [pull_request]
+
+jobs:
+  polint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: emilwareus/polint@v1
+        with:
+          args: review origin/main --format github
 ```
 
 Rules that request Go symbol/reference facts use embedded Go sidecars by
@@ -343,7 +433,9 @@ pinning options.
 - [Agent & CI playbook](docs/AGENT-PLAYBOOK.md)
 - [Consumer setup / troubleshooting](docs/CONSUMER-SETUP.md)
 - [GitHub Action](docs/GITHUB-ACTION.md)
+- [Fact reference](docs/facts/)
 - [Comment ignores](docs/IGNORE-COMMENTS.md)
+- [Changed-files facts](docs/facts/changed-files.md)
 - [Metric facts](docs/facts/metrics.md)
 - [Go test facts](docs/facts/go-tests.md)
 - [Analysis roadmap](docs/ANALYSIS-ROADMAP.md)

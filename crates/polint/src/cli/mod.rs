@@ -183,6 +183,8 @@ enum Command {
     Test(TestArgs),
     /// Run enabled rules.
     Check(CheckArgs),
+    /// Run review-kind rules against a diff to a target branch/commit.
+    Review(ReviewArgs),
     /// Inspect polint comment-ignore directives and suppression statistics.
     Ignores(IgnoresArgs),
 }
@@ -193,6 +195,10 @@ struct NewRuleArgs {
     language: String,
     /// Rule directory/name.
     rule_name: String,
+    /// Scaffold a review-kind rule (`kind = "review"`) with a `ChangedFiles<'_>`
+    /// parameter, run via `polint review <ref>` instead of `polint check`.
+    #[arg(long)]
+    review: bool,
     /// Flagship policy template to scaffold.
     #[arg(long, value_enum)]
     template: Option<RuleTemplateKind>,
@@ -491,6 +497,43 @@ struct CheckArgs {
 }
 
 #[derive(Debug, Args, Clone)]
+struct ReviewArgs {
+    /// Target branch or commit to diff against (e.g. origin/main, a SHA, or a...b).
+    #[arg(value_name = "REF")]
+    reff: String,
+    /// Files or directories to review. Defaults to the workspace include config.
+    #[arg(value_name = "PATH")]
+    paths: Vec<PathBuf>,
+    /// Named profile from .polint.toml. When omitted, all discovered rules run.
+    #[arg(long)]
+    profile: Option<String>,
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = FormatArg::Human)]
+    format: FormatArg,
+    /// ANSI colors for human output (no effect on JSON/SARIF). `auto` uses color only for a tty and when `NO_COLOR` is unset.
+    #[arg(long, value_enum, default_value_t = ColorArg::Auto)]
+    color: ColorArg,
+    /// Disable analysis/fact cache reads and writes. Does not disable the repo-local rule-host Cargo target cache.
+    #[arg(long)]
+    no_cache: bool,
+    /// Diagnostic level that fails the process.
+    #[arg(long, value_enum, default_value_t = FailOn::Error)]
+    fail_on: FailOn,
+    /// Only include diagnostics whose `rule_id` matches this pattern (same rules as profiles: exact id, `prefix/*`, or `*`).
+    #[arg(long, value_name = "PATTERN")]
+    only_rule: Option<String>,
+    /// Emit at most this many diagnostics after stable sort (applies after `--only-rule`).
+    #[arg(long, value_name = "N")]
+    max_diagnostics: Option<usize>,
+    /// Surface ALL review-rule findings, not just those intersecting the diff.
+    #[arg(long)]
+    no_diff_gate: bool,
+    /// Gate on changed FILES only (ignore line ranges) when diff-gating.
+    #[arg(long)]
+    whole_file: bool,
+}
+
+#[derive(Debug, Args, Clone)]
 struct IgnoresArgs {
     /// Files or directories to inspect. Defaults to the workspace include config.
     #[arg(value_name = "PATH")]
@@ -604,6 +647,7 @@ pub(crate) fn run() -> Result<u8> {
         Command::Explain(args) => explain(std::env::current_dir()?, &args),
         Command::Test(args) => test(std::env::current_dir()?, &args),
         Command::Check(args) => check(std::env::current_dir()?, &args),
+        Command::Review(args) => review(std::env::current_dir()?, &args),
         Command::Ignores(args) => ignores(std::env::current_dir()?, &args),
     }
 }
@@ -696,6 +740,9 @@ fn gitignore_line_covers(line: &str, entry: &str) -> bool {
 fn new_rule(root: PathBuf, args: &NewRuleArgs) -> Result<()> {
     let rule_name = validate_rule_name(&args.rule_name)?;
     let language = RuleLanguage::parse(&args.language)?;
+    if args.review && args.template.is_some() {
+        anyhow::bail!("`--review` cannot be combined with `--template`");
+    }
     if let Some(template) = args.template {
         validate_rule_template_language(language, template)?;
     }
@@ -728,10 +775,21 @@ fn new_rule(root: PathBuf, args: &NewRuleArgs) -> Result<()> {
 
     fs::write(
         &module_path,
-        rule_module_template(language.as_str(), &rule_name, args.template),
+        rule_module_template(language.as_str(), &rule_name, args.review, args.template),
     )?;
-    write_rule_fixture_skeleton(&root, language, &rule_name, &module, args.template)?;
-    println!("Created rule module {}", module_path.display());
+    if args.review {
+        // A review rule's diagnostics depend on a diff, so the static
+        // positive/negative `polint check` fixtures do not apply. Review rules
+        // are exercised with `polint review <ref>`.
+        println!(
+            "Created review rule module {} (run it with `polint review <ref>`; \
+             no diff-based fixtures were generated)",
+            module_path.display()
+        );
+    } else {
+        write_rule_fixture_skeleton(&root, language, &rule_name, &module, args.template)?;
+        println!("Created rule module {}", module_path.display());
+    }
     Ok(())
 }
 
@@ -1112,8 +1170,12 @@ func replaceMe(err error) error {
 fn rule_module_template(
     language: &str,
     rule_name: &str,
+    review: bool,
     template: Option<RuleTemplateKind>,
 ) -> String {
+    if review {
+        return review_rule_module_template(rule_name);
+    }
     if let Some(template) = template {
         return policy_rule_module_template(language, rule_name, template);
     }
@@ -1163,6 +1225,42 @@ fn rule_module_template(
 pub(crate) fn {module}(ctx: &mut RuleCtx<'_>, {fact_params}) -> RuleResult {{
 {query_example}
     let _ = ctx.options().settings.len();
+    Ok(())
+}}
+"#
+    )
+}
+
+/// Scaffold a review-kind rule: `kind = "review"` plus a `ChangedFiles<'_>`
+/// parameter and a glob-match loop. Run with `polint review <ref>`.
+fn review_rule_module_template(rule_name: &str) -> String {
+    let module = rust_module_name(rule_name);
+
+    format!(
+        r#"use polint::sdk::prelude::*;
+
+#[polint::rule(
+    id = "review/{rule_name}",
+    description = "Review-only policy (heuristic): {rule_name}.",
+    severity = "warn",
+    kind = "review"
+)]
+pub(crate) fn {module}(ctx: &mut RuleCtx<'_>, changes: ChangedFiles<'_>) -> RuleResult {{
+    // `changes` is the diff against the target ref passed to `polint review`.
+    // It is empty under `polint check`, so this rule only fires on a review.
+    let rule_id = ctx.rule_id().to_string();
+    for changed in changes.iter() {{
+        // Replace the glob with the paths your policy cares about.
+        if changed.matches_glob("db/migrations/**") {{
+            let line = changed.lines().first().map(|&(lo, _)| lo).unwrap_or(1);
+            ctx.report(Diagnostic::warning(
+                rule_id.clone(),
+                changed.path().to_string(),
+                DiagnosticRange::point(line, 1),
+                "Reviewer attention required: a watched path changed.",
+            ));
+        }}
+    }}
     Ok(())
 }}
 "#
@@ -3696,11 +3794,212 @@ fn check_local_rule_hosts(root: &Path, args: &CheckArgs, manifests: &[PathBuf]) 
     Ok(exit_code_for(&baseline.failure_diagnostics, args.fail_on))
 }
 
+/// `polint review <ref>`: run review-kind rules against the diff to `<ref>`.
+///
+/// A near-clone of [`check_local_rule_hosts`] with three additions: it requires
+/// repo-local rule hosts, builds + serializes a changeset before running them,
+/// runs each host with `--kind review --changed-files <file>`, and (by default)
+/// gates the findings to the diff. `polint check` is unaffected.
+fn review(root: PathBuf, args: &ReviewArgs) -> Result<u8> {
+    let manifests = discover_local_rule_hosts(&root)?;
+    if manifests.is_empty() {
+        anyhow::bail!(
+            "`polint review` requires repo-local rules under `[rules] paths` in .polint.toml; \
+             none were found. Scaffold one with `polint new-rule generic <name> --review`."
+        );
+    }
+
+    // Build the diff and serialize it to a cache-dir file (a file, not an env
+    // var, so large diffs are not bound by env-size limits). The host reads it
+    // via `--changed-files` and injects it before rules run.
+    let changeset = crate::git::changeset_for_ref(&root, &args.reff)?;
+    let changeset_file = write_review_changeset(&root, &changeset)?;
+
+    // Map the review args onto the shared `CheckArgs` shape so the rendering,
+    // baseline, and report-filter helpers are reused verbatim. Review has no
+    // baseline/stat surface; those default off. Comment ignores stay enabled by
+    // default, matching `polint check`.
+    let check_args = CheckArgs {
+        paths: args.paths.clone(),
+        profile: args.profile.clone(),
+        format: args.format,
+        color: args.color,
+        no_cache: args.no_cache,
+        fail_on: args.fail_on,
+        only_rule: args.only_rule.clone(),
+        max_diagnostics: args.max_diagnostics,
+        stat: false,
+        shortstat: false,
+        baseline: false,
+        new_only: false,
+        ignore_comments: true,
+    };
+
+    let config = load_config_for_check(&root, &check_args.paths)?;
+    let enabled = selected_rule_patterns(&config, check_args.profile.as_deref())?;
+    let child_applies_ignores = check_args.ignore_comments && manifests.len() == 1;
+    let mut diagnostics = Vec::new();
+    for manifest in &manifests {
+        diagnostics.extend(run_local_rule_host_kind(
+            &root,
+            manifest,
+            &check_args,
+            child_applies_ignores,
+            "review",
+            Some(changeset_file.as_path()),
+        )?);
+    }
+
+    if check_args.ignore_comments && !child_applies_ignores {
+        let rule_scope = config_rule_scope_globset(&config, enabled.as_ref());
+        let mut loaded_db = load_analysis_files_scoped(&config, rule_scope.as_ref())?;
+        backfill_diagnostic_files(&mut loaded_db, &diagnostics, &root);
+        diagnostics = apply_ignores(&loaded_db, diagnostics, &config.config.ignores).diagnostics;
+    }
+
+    // Default finding-level diff gate: keep only diagnostics that intersect the
+    // changeset. `--no-diff-gate` surfaces every review finding; `--whole-file`
+    // gates by changed file only, ignoring line ranges.
+    if !args.no_diff_gate {
+        diagnostics = gate_to_changeset(diagnostics, &changeset, args.whole_file);
+    }
+
+    diagnostics = apply_report_filters(diagnostics, check_args.only_rule.as_deref());
+    let baseline = apply_baseline(&root, &check_args, diagnostics)?;
+    diagnostics = baseline.diagnostics;
+    let rendered_diagnostics =
+        limit_report_diagnostics(diagnostics.clone(), check_args.max_diagnostics);
+    let source_map = if matches!(check_args.format, FormatArg::Human) {
+        read_sources_for_diagnostics(&root, &rendered_diagnostics)
+    } else {
+        BTreeMap::new()
+    };
+    let format = match check_args.format {
+        FormatArg::Human => OutputFormat::Human,
+        FormatArg::Github => OutputFormat::Github,
+        FormatArg::Json => OutputFormat::Json,
+        FormatArg::Sarif => OutputFormat::Sarif,
+        FormatArg::AiFriendly => OutputFormat::AiFriendly,
+    };
+    let sources = match check_args.format {
+        FormatArg::Human => Some(&source_map),
+        _ => None,
+    };
+    if matches!(check_args.format, FormatArg::AiFriendly) {
+        let output = write_ai_friendly_report(
+            &root,
+            &diagnostics,
+            &rendered_diagnostics,
+            json_report_meta(),
+        )?;
+        print!(
+            "{}",
+            render_ai_friendly_stdout(&output.report, AI_FRIENDLY_LATEST_OUTPUT)
+        );
+    } else {
+        print!(
+            "{}",
+            render_with_sarif_help(
+                format,
+                &rendered_diagnostics,
+                render_opts(&check_args, sources),
+                sarif_help_map(&config),
+            )
+        );
+    }
+    if matches!(check_args.format, FormatArg::Human)
+        && let Some(summary) = &baseline.summary
+    {
+        print!("{}", render_baseline_summary(summary));
+    }
+    Ok(exit_code_for(
+        &baseline.failure_diagnostics,
+        check_args.fail_on,
+    ))
+}
+
+/// Serialize a review changeset to a stable-named JSON file under the cache dir.
+///
+/// The file name hashes the JSON so re-runs with the same diff reuse the name.
+/// Returns the absolute path passed to the host as `--changed-files`.
+fn write_review_changeset(
+    root: &Path,
+    changeset: &crate::core::ReviewChangeset,
+) -> Result<PathBuf> {
+    let json =
+        serde_json::to_string(changeset).context("failed to serialize review changeset to JSON")?;
+    let cache_layout = CacheLayout::for_repo(root);
+    let review_dir = cache_layout.root().join("review");
+    std::fs::create_dir_all(&review_dir)
+        .with_context(|| format!("failed to create review cache dir {}", review_dir.display()))?;
+    let name = format!(
+        "changeset-{}.json",
+        &crate::cache::stable_hash(&[&json])[..16]
+    );
+    let path = review_dir.join(name);
+    std::fs::write(&path, json)
+        .with_context(|| format!("failed to write review changeset {}", path.display()))?;
+    Ok(path)
+}
+
+/// Retain only diagnostics whose file (and, unless `whole_file`, line span)
+/// intersects the review changeset.
+///
+/// File match is exact against the normalized changeset paths (which share the
+/// `Diagnostic.file` form). Line match overlaps `[start_line, end_line]` with
+/// any new-side range for that file. Deleted files carry no new-side ranges, so
+/// line-gating drops their diagnostics (a review rule normally would not fire on
+/// a deleted file anyway).
+fn gate_to_changeset(
+    diagnostics: Vec<Diagnostic>,
+    changeset: &crate::core::ReviewChangeset,
+    whole_file: bool,
+) -> Vec<Diagnostic> {
+    diagnostics
+        .into_iter()
+        .filter(|diagnostic| {
+            let Some(file) = changeset
+                .files
+                .iter()
+                .find(|file| file.path == diagnostic.file)
+            else {
+                return false;
+            };
+            if whole_file {
+                return true;
+            }
+            let start = diagnostic.range.start_line;
+            let end = diagnostic.range.end_line;
+            file.new_line_ranges
+                .iter()
+                .any(|&(lo, hi)| start <= hi && lo <= end)
+        })
+        .collect()
+}
+
 fn run_local_rule_host(
     root: &Path,
     manifest: &Path,
     args: &CheckArgs,
     apply_ignore_comments: bool,
+) -> Result<Vec<Diagnostic>> {
+    // The outer `check` path always runs Check-kind rules and injects no diff.
+    run_local_rule_host_kind(root, manifest, args, apply_ignore_comments, "check", None)
+}
+
+/// Run a repo-local rule host, selecting the rule `kind` and optionally
+/// injecting a `polint review` changeset file via `--changed-files`.
+///
+/// `check` calls this with `kind = "check"` and `changed_files = None`;
+/// `polint review` calls it with `kind = "review"` and the serialized changeset
+/// path. The host runs the same inner `check` subcommand either way.
+fn run_local_rule_host_kind(
+    root: &Path,
+    manifest: &Path,
+    args: &CheckArgs,
+    apply_ignore_comments: bool,
+    kind: &str,
+    changed_files: Option<&Path>,
 ) -> Result<Vec<Diagnostic>> {
     let cargo = std::env::var("POLINT_CARGO")
         .or_else(|_| std::env::var("CARGO"))
@@ -3726,7 +4025,17 @@ fn run_local_rule_host(
         } else {
             "false"
         },
+        "--kind",
+        kind,
     ]);
+    if let Some(changed_files) = changed_files {
+        command.args([
+            "--changed-files",
+            changed_files.to_str().ok_or_else(|| {
+                anyhow::anyhow!("non-UTF-8 changeset path: {}", changed_files.display())
+            })?,
+        ]);
+    }
     command
         .env(POLINT_CACHE_DIR_ENV, cache_layout.root())
         .env("CARGO_TARGET_DIR", cache_layout.rules_target_dir());

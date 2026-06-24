@@ -62,6 +62,7 @@ Prefer typed fact views in the rule signature:
   reusable quality signals.
 - `StringLiterals<'_>` and `JsxAttributes<'_>` for TS/JS literal and JSX rules.
 - `GoTests<'_>` and `BranchObligations<'_>` for Go branch/test policies.
+- `ChangedFiles<'_>` for review rules (see below).
 - Preview policy query views `Events<'_>` and `Calls<'_>` are provider-backed
   for Phase 56 call-event and reachable-call policies. `ControlFlow<'_>` uses
   CFG-backed operation order plus refined call targets for Phase 57
@@ -75,6 +76,19 @@ Prefer typed fact views in the rule signature:
 Keep `RuleCtx` narrow: diagnostics, options/settings, path helpers, and
 capability/setup metadata. Do not import `polint::core`, parser adapters,
 `AnalysisDb`, provider modules, or eval/debug internals from repo-local rules.
+
+## Review Rules
+
+`polint review <ref>` is `polint check` gated to a diff against a target branch or
+commit. Mark a rule `#[polint::rule(..., kind = "review")]` and request
+`ChangedFiles<'_>` to read the diff (`iter`, `contains_path`, `matches_glob`,
+`lines_for`; per-entry `path`/`status`/`lines`/`is_*`). The view is empty under
+`polint check`. By default `polint review` surfaces only diagnostics intersecting the
+diff (changed file plus changed line ranges); `--no-diff-gate` shows all review
+findings and `--whole-file` gates by file only. Anchor whole-file watchers on a
+changed line so the line-aware gate keeps them. Scaffold with
+`polint new-rule generic <name> --review`. See `docs/facts/changed-files.md` and
+`examples/review-rules/`. Keep heuristic claims heuristic.
 
 Reserved advanced views such as raw `Cfg<'_>`, raw `CallGraph<'_>`,
 `Evidence<'_>`, model packs, provider extensions, and `polint eval` are not
