@@ -14,8 +14,6 @@ review comments.
 polint is not a replacement for ESLint, Biome, Ruff, golangci-lint, or
 formatters. It is the layer for rules that belong to your codebase.
 
-![polint diagnostic for a raw-color literal in Button.tsx](https://raw.githubusercontent.com/emilwareus/polint/main/docs/img/example-no-raw-colors.svg)
-
 ## Why
 
 Engineering teams are putting more work through AI coding agents, but agents do
@@ -28,80 +26,107 @@ policy reviewable, testable, versioned, and runnable locally or in CI.
 
 polint ships no built-in policy rules.
 
-## Start
+## Example
 
-```bash
-cargo install polint --locked
+Say a PR adds or edits a GORM model:
 
-polint init
-polint new-rule ts no-raw-colors
-polint test --format json
-polint check
+```go
+type Invoice struct {
+    ID        uuid.UUID `gorm:"type:uuid;primaryKey"`
+    AccountID uuid.UUID `gorm:"index:idx_invoices_account_status_created_at,priority:1"`
+    Status    string    `gorm:"index:idx_invoices_account_status_created_at,priority:2"`
+    CreatedAt time.Time `gorm:"index:idx_invoices_account_status_created_at,priority:3"`
+}
 ```
 
-`polint init` creates a local rule pack under `.polint/rules`. Rules are normal
-Rust functions that use the public SDK and ask for the fact views they need.
+Your repo can make that a review requirement:
 
 ```rust
 use polint::sdk::prelude::*;
 
 #[polint::rule(
-    id = "local/no-raw-colors",
-    description = "Require design tokens instead of raw color literals.",
-    severity = "error"
+    id = "review/gorm-model-read-indexes",
+    description = "GORM model changes require read-index validation.",
+    severity = "error",
+    kind = "review"
 )]
-pub(crate) fn no_raw_colors(
+pub(crate) fn gorm_model_read_indexes(
     ctx: &mut RuleCtx<'_>,
-    literals: StringLiterals<'_>,
+    changes: ChangedFiles<'_>,
 ) -> RuleResult {
     let rule_id = ctx.rule_id().to_string();
 
-    for literal in literals.iter() {
-        if literal.value.starts_with('#') {
-            ctx.report(Diagnostic::error(
-                rule_id.clone(),
-                ctx.file_path(literal.file),
-                literal.span.diagnostic_range(),
-                "Use a design token instead of a raw color literal.",
-            ));
+    for changed in changes.iter() {
+        let is_gorm_model =
+            changed.path().ends_with(".go") && changed.matches_glob("internal/**/models/**");
+
+        if changed.is_deleted() || !is_gorm_model {
+            continue;
         }
+
+        let line = changed.lines().first().map(|&(lo, _)| lo).unwrap_or(1);
+        ctx.report(
+            Diagnostic::error(
+                rule_id.clone(),
+                changed.path().to_string(),
+                DiagnosticRange::point(line, 1),
+                "GORM model changed: validate the correct read indexes for this model.",
+            )
+            .with_help(
+                "Check the read paths for this model and add or update composite indexes in \
+                 GORM tags or migrations. If no index is needed, explain why in the PR.",
+            ),
+        );
     }
 
     Ok(())
 }
 ```
 
-polint derives the required analysis from the rule signature, runs the relevant
-Go / TypeScript / JavaScript parsers, and emits deterministic diagnostics for
-humans, agents, and CI.
-
-## Review
-
-`polint review <ref>` runs the same rule-as-code setup against a diff:
+Run it during review:
 
 ```bash
 polint review origin/main
 ```
 
-Review rules are useful for policies that should only fire on changed code:
-migration ownership, risky API usage in touched files, generated-code checks, or
-anything else that belongs in code review instead of a full-repo gate.
+The rule is ordinary Rust in your repo. It is a review gate, not a query-plan
+verifier: it enforces the step your team cares about exactly where the model
+changed.
+
+## Start
+
+```bash
+cargo install polint --locked
+
+polint init
+polint new-rule generic gorm-model-read-indexes --review
+polint review origin/main
+```
+
+`polint init` creates a local rule pack under `.polint/rules`. Rules are normal
+Rust functions that use the public SDK and ask for the fact views they need.
+
+polint derives the required analysis from the rule signature, runs the relevant
+Go / TypeScript / JavaScript parsers, and emits deterministic diagnostics for
+humans, agents, and CI.
 
 ## CI
 
 ```yaml
-name: polint
+name: polint-review
 
-on: [push, pull_request]
+on: [pull_request]
 
 jobs:
   polint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - uses: emilwareus/polint@v1
         with:
-          args: check --format github
+          args: review origin/main --format github
 ```
 
 ## Docs
