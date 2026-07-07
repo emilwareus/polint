@@ -1,27 +1,27 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.4
-milestone_name: Policy Query Surface
-status: complete
-last_updated: "2026-06-20T18:30:15.491Z"
-last_activity: 2026-06-20 -- v1.4 Policy Query Surface completed locally with clean full workspace verification
+milestone: v2.0
+milestone_name: Static Analysis 2.0 Implementation
+status: planning
+last_updated: "2026-07-07T00:00:00.000Z"
+last_activity: 2026-07-07 -- Milestone v2.0 started
 progress:
-  total_phases: 8
-  completed_phases: 8
-  total_plans: 24
-  completed_plans: 24
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # State: polint
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (updated 2026-06-20)
+See: `.planning/PROJECT.md` (updated 2026-07-07)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** v1.4 Policy Query Surface complete; clean full workspace verification recorded
+**Current focus:** v2.0 Static Analysis 2.0 Implementation planning
 
 ## Current Status
 
@@ -32,7 +32,8 @@ See: `.planning/PROJECT.md` (updated 2026-06-20)
 - Static-analysis engine research completed on 2026-05-16 in `research/ROADMAP.md`.
 - v1.2 Static Analysis Engine Implementation was audited, archived, and closed on 2026-05-27.
 - v1.3 Graph Engine Precision completed on 2026-06-06 and its requirements/roadmap are archived to `.planning/milestones/`.
-- v1.4 Policy Query Surface requirements and roadmap are complete in `.planning/REQUIREMENTS.md` and `.planning/ROADMAP.md`.
+- v1.4 Policy Query Surface requirements and roadmap are complete in `.planning/REQUIREMENTS.md` and `.planning/ROADMAP.md`; v2.0 planning will replace those active files after requirements and roadmap generation.
+- Static Analysis 2.0 research was locked on 2026-07-07 in `research/static-analysis-2.0/` and `research/local-semantic-store/`.
 - Phase 22 has been shipped for review in PR #22: https://github.com/emilwareus/polint/pull/22.
 - Phase 24 has been shipped for review in PR #25: https://github.com/emilwareus/polint/pull/25.
 - Phase 29 has been shipped for review in PR #34: https://github.com/emilwareus/polint/pull/34.
@@ -41,23 +42,14 @@ See: `.planning/PROJECT.md` (updated 2026-06-20)
 
 ## Current Position
 
-Phase: 62 - Promotion Gate, Boundary Proof, and Closeout
-Plan: 62-03
-Status: Complete
-Last activity: 2026-06-20 -- v1.4 Policy Query Surface completed locally with clean full workspace verification
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-07-07 -- Milestone v2.0 started
 
 ### Active Milestone Phase Progress
 
-| Phase | Status | Notes |
-|-------|--------|-------|
-| 55 | Complete | SDK query vocabulary and preview contract complete; preview compile/manifest/capability/docs/leak-gate behavior verified |
-| 56 | Complete | Events and calls query surface complete; call-event matching and reachable-call policies are provider-backed, with non-call events/package scopes deferred honestly |
-| 57 | Complete | Control-flow guard and lifecycle queries complete for same-function call-event guard and cleanup policies; write events, exact exit proof, and bounded interprocedural search deferred honestly |
-| 58 | Complete | Data-flow forbidden-flow queries complete for HTTP request trust-boundary sources, secret-like names, exact call sinks, logger sinks, call barriers, unknown/budget evidence, and external rule validation |
-| 59 | Complete | Normalized policy evidence header, query digests, deterministic sorting/deduplication, cap-filtered policy unknowns, cache-version digest inputs, docs, skills, and verification complete |
-| 60 | Complete | `polint new-rule --template` selector, ten flagship policy template bodies, generated positive/negative fixtures, README/docs/skill updates, and focused verification complete |
-| 61 | Complete | Consolidated policy-query docs, cross-links, docs coverage test, external SDK matrix test, and verification complete |
-| 62 | Complete | Boundary proof, deterministic flagship-template regression, final local verification, milestone audit, and closeout complete |
+No phases planned yet. Requirements and roadmap are being defined for v2.0.
 
 ### Open repo-admin action (T-42-04-10)
 
@@ -67,8 +59,8 @@ Add `public surface leak gate (ubuntu-latest)` AND `public surface leak gate (ma
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
-| 260707-static-analysis-20-vision | Clarify Static Analysis 2.0 product vision and defer remote registry while preserving registry-ready seams | 2026-07-07 | working tree | [260707-static-analysis-20-product-vision](./quick/260707-static-analysis-20-product-vision/) |
-| 260707-static-analysis-20 | Validate and lock static-analysis-2.0 open-question decisions | 2026-07-07 | working tree | [260707-static-analysis-20-open-question-decisions](./quick/260707-static-analysis-20-open-question-decisions/) |
+| 260707-static-analysis-20-vision | Clarify Static Analysis 2.0 product vision and defer remote registry while preserving registry-ready seams | 2026-07-07 | ec9872b5 | [260707-static-analysis-20-product-vision](./quick/260707-static-analysis-20-product-vision/) |
+| 260707-static-analysis-20 | Validate and lock static-analysis-2.0 open-question decisions | 2026-07-07 | ec9872b5 | [260707-static-analysis-20-open-question-decisions](./quick/260707-static-analysis-20-open-question-decisions/) |
 | 260623-oy3 | polint review (rules-as-code, diff-gated): kind=review, ChangedFiles fact-view, git changeset, Command::Review + diff gate | 2026-06-23 | a778b8df | [260623-oy3-implement-polint-review-review-rules-as-](./quick/260623-oy3-implement-polint-review-review-rules-as-/) |
 | 260607-bzh | Improve Jelly JS recall through native object/array models and computed property key flow | 2026-06-07 | working tree | [260607-bzh-native-computed-js-recall](./quick/260607-bzh-native-computed-js-recall/) |
 | 260606-qjp | Deeply research Jelly JS semantics gaps and add failing unit probes | 2026-06-06 | working tree | [260606-qjp-deeply-research-jelly-js-semantics-gaps-](./quick/260606-qjp-deeply-research-jelly-js-semantics-gaps-/) |
