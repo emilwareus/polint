@@ -23,11 +23,12 @@ Date: 2026-05-16
 - [x] Program slicing, path explanation, and evidence research completed: PDG/SDG slicing, thin slices, chops, path ranking, SARIF/JSON evidence, provenance, extension merges, and native implementation path. See `research/program-slicing-evidence/`.
 - [x] Incremental query engine and caching research completed: native layered cache/query design, input snapshots, shape digests, dependency indexes, invalidation planning, summary SCC caching, extension quarantine, and future red-green/relation paths. See `research/incremental-query-engine/`.
 - [x] Rule SDK, query ergonomics, and AI-agent authoring research completed: typed Rust rule surface, rule manifests, narrow `RuleCtx`, model/provider boundary, `polint test`, inspect/explain/diff tooling, and fixture-first agent workflow. See `research/agent-rule-authoring/`.
+- [x] Local semantic store research completed: SQLite/rusqlite primary store, typed graph adjacency/evidence indexes, registry-ready summary manifests without a registry now, Tantivy lexical search path, sqlite-vec experimental boundary, and validation/benchmark gates. See `research/local-semantic-store/`.
 - [ ] PR 1: Introduce the private analysis kernel facade and provider manifests without changing behavior.
 - [ ] PR 2: Add provenance, precision, validation, and merge metadata for existing fact families.
 - [ ] PR 3: Add the internal evaluation harness MVP and native fixtures.
 - [ ] PR 4: Add `InputSnapshot`, typed cache keys, and layer-cache instrumentation.
-- [ ] PR 5: Persist layer cache entries for existing cheap facts and implement conservative invalidation.
+- [ ] PR 5: Add the SQLite/rusqlite local semantic store skeleton, migrations, store manifest, and persistent layer entries for existing cheap facts with conservative invalidation.
 - [ ] PR 6: Add generated rule manifests, `polint inspect rule`, and the first `polint test` fixture runner.
 - [ ] PR 7: Deepen the semantic index with scopes, imports, resolution status, and explicit unknowns.
 - [ ] PR 8: Ship the first layered module/package/dependency topology graph.
@@ -194,6 +195,7 @@ These sources support the core assumption: the user of polint's advanced analysi
 | R12. Program Slicing, Path Explanation, And Evidence | Done, implement after semantic bootstrap, CFG/control dependence, def-use, direct calls, and summaries exist | `research/program-slicing-evidence/` | Native evidence/slicing recommendation: typed evidence nodes and edges, thin/full slices, chops, context-matched paths, summary expansion, JSON/SARIF rendering, provenance, uncertainty, extension merge validation, and diagnostic evidence bundles. |
 | R13. Incremental Query Engine And Caching | Done, implement minimal dependency-digest/layer-cache slice with semantic bootstrap, then full demand query engine before expensive global analyses | `research/incremental-query-engine/` | Native layered incrementality plan: input snapshots, layer/query/summary/diagnostic keys, shape digests, dependency indexes, invalidation planner, extension-aware cache validation/quarantine, summary SCC backdating, future watch/daemon red-green mode, and optional relation/differential backend. |
 | R14. Rule SDK, Query Ergonomics, And AI-Agent Authoring | Done, implement rule manifests, fact/unknown inspection, and `polint test` with the bootstrap | `research/agent-rule-authoring/` | Typed Rust `#[polint::rule]` surface, macro-derived inspectable manifests, narrow `RuleCtx`, domain query builders, model pack versus provider extension boundary, fixture runner, model/provider delta tests, and agent inspect/explain/diff workflow. |
+| R15. Local Semantic Store, Graph Queries, And Search Boundary | Done, implement before public graph-query CLI and before durable summary-store rollout | `research/local-semantic-store/` | SQLite/rusqlite-backed embedded semantic store, typed graph adjacency/evidence tables, content-addressed summary manifests, registry-ready seams, no remote registry now, Tantivy lexical search path, sqlite-vec experimental vector boundary, and store/query validation gates. |
 
 These tracks are not implementation endpoints. They are inputs to the implementation roadmap below.
 

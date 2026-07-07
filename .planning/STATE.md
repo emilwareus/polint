@@ -67,6 +67,8 @@ Add `public surface leak gate (ubuntu-latest)` AND `public surface leak gate (ma
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260707-static-analysis-20-vision | Clarify Static Analysis 2.0 product vision and defer remote registry while preserving registry-ready seams | 2026-07-07 | working tree | [260707-static-analysis-20-product-vision](./quick/260707-static-analysis-20-product-vision/) |
+| 260707-static-analysis-20 | Validate and lock static-analysis-2.0 open-question decisions | 2026-07-07 | working tree | [260707-static-analysis-20-open-question-decisions](./quick/260707-static-analysis-20-open-question-decisions/) |
 | 260623-oy3 | polint review (rules-as-code, diff-gated): kind=review, ChangedFiles fact-view, git changeset, Command::Review + diff gate | 2026-06-23 | a778b8df | [260623-oy3-implement-polint-review-review-rules-as-](./quick/260623-oy3-implement-polint-review-review-rules-as-/) |
 | 260607-bzh | Improve Jelly JS recall through native object/array models and computed property key flow | 2026-06-07 | working tree | [260607-bzh-native-computed-js-recall](./quick/260607-bzh-native-computed-js-recall/) |
 | 260606-qjp | Deeply research Jelly JS semantics gaps and add failing unit probes | 2026-06-06 | working tree | [260606-qjp-deeply-research-jelly-js-semantics-gaps-](./quick/260606-qjp-deeply-research-jelly-js-semantics-gaps-/) |
