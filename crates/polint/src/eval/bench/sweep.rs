@@ -5,7 +5,10 @@
 //! diff-size sweep (review against a few refs), assembles the results into a
 //! single multi-point [`CurveSeries`] keyed by repo size AND diff size, and
 //! writes both the machine-readable `benchmark-curves.json` and the human
-//! readable `benchmark-report.md`.
+//! readable `benchmark-report.md`. Every point is measured in a dedicated child
+//! process (isolated peak-RSS), so the report's per-point delta column is
+//! order-independent and uses the same methodology as the committed gate
+//! baselines (see [`run_benchmark_sweep`]).
 //!
 //! Absent large-repo checkouts are SKIPPED, not failed, mirroring
 //! `eval::external::tests`, so the sweep is runnable in CI without the multi
@@ -18,7 +21,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::eval::bench::curve::{CurvePoint, CurveSeries};
-use crate::eval::bench::runner::run_repo_perf_point;
+use crate::eval::bench::runner::run_repo_perf_point_isolated;
 use crate::eval::suite::SuiteManifest;
 
 /// File names of the committed CI scale manifests the sweep iterates.
@@ -48,10 +51,24 @@ struct SweepTarget {
 /// Manifests whose `checkout.path` does not exist on disk are skipped (not
 /// failed), so this is runnable without the large clones present — in that case
 /// the returned series is empty but the two artifacts are still written.
+///
+/// Each curve point is measured through [`run_repo_perf_point_isolated`] (a
+/// dedicated child process), not the in-process [`run_repo_perf_point`], because
+/// a sweep measures many points (each repo at baseline + each review ref) and
+/// `peak_rss_bytes` is a process-global, monotonic high-water mark: measuring
+/// multiple points in one process saturates that mark on the first point, so the
+/// LW-09 "Peak RSS delta (bytes)" column would collapse the 2nd+ points to
+/// allocator jitter (the HI-01R confound). Isolating every point gives each its
+/// own unsaturated baseline, so the sweep's delta column is order-independent and
+/// uses the SAME methodology as the committed gate baselines the report frames it
+/// against. (Wall-clock columns were never affected — each run times its own
+/// closure — this only fixes the RSS figures.)
+///
+/// [`run_repo_perf_point`]: crate::eval::bench::runner::run_repo_perf_point
 pub(crate) fn run_benchmark_sweep(output_dir: &Path) -> anyhow::Result<CurveSeries> {
     let targets = committed_sweep_targets()?;
     run_sweep_with(&targets, output_dir, |root, review_ref| {
-        run_repo_perf_point(root, review_ref)
+        run_repo_perf_point_isolated(root, review_ref)
     })
 }
 
@@ -265,8 +282,9 @@ mod tests {
             eprintln!("skipping real-fixture sweep test; `git` not on PATH");
             return;
         }
-        // A real git fixture repo, measured with the real perf runner: baseline
-        // (no diff) + one review ref = 2 measured points, without any large clone.
+        // A real git fixture repo, measured through the isolated child-process
+        // perf runner (the production sweep methodology): baseline (no diff) +
+        // one review ref = 2 measured points, without any large clone.
         let repo = tempdir().unwrap();
         let dir = repo.path();
         git(dir, &["init", "--quiet"]);
@@ -294,7 +312,7 @@ mod tests {
         }];
         let output = tempdir().unwrap();
         let series = run_sweep_with(&targets, output.path(), |root, review_ref| {
-            run_repo_perf_point(root, review_ref)
+            run_repo_perf_point_isolated(root, review_ref)
         })
         .unwrap();
 
