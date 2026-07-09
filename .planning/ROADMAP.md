@@ -40,6 +40,14 @@ Phase numbering continues from v1.4's last phase 62. All new store/query modules
 
 **Requirements:** BENCH-01, BENCH-02, BENCH-03, BENCH-04
 
+**Plans:** 4 plans
+
+Plans:
+- [ ] 63-01-PLAN.md — Real-repo suite manifests (grafana/hugo/excalidraw/devloupe) + perf measurement substrate (peak RSS, cold/warm, curve types)
+- [ ] 63-02-PLAN.md — Whole-repo perf runner (check + review) + curve JSON + markdown benchmark report
+- [ ] 63-03-PLAN.md — Store-disabled check/review baselines + pre-store graph recall/precision accuracy baseline
+- [ ] 63-04-PLAN.md — Regression-gate wiring (+20% peak RSS / +25% cold wall-clock budgets, Fail-not-silent)
+
 **Success Criteria** (what must be TRUE):
 1. A pinned-commit benchmark suite manifest exists covering the locked repo set: `grafana/grafana` (primary large polyglot Go+TS), `gohugoio/hugo` (Go medium), `excalidraw/excalidraw` (TS medium), the existing Jelly and Go x/tools oracle suites (micro + recall), and the private devloupe monorepo documented as a local-only, non-CI reference (known baseline: ~1GB peak RSS, cold 7.4s / warm 4.6s).
 2. The harness produces peak RSS, cold/warm wall-clock, cache/store size, and budget-exhaustion telemetry as machine-readable curves versus repo size and diff size, plus a markdown report.
