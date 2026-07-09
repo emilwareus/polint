@@ -20,6 +20,22 @@ use crate::eval::baseline::{BaselineThresholds, StoreDisabledBaseline};
 use crate::eval::bench::curve::CurvePoint;
 use crate::eval::gates::{GateCheck, GateVerdict};
 
+/// Absolute peak-RSS noise floor (bytes, HI-03). A run may exceed the baseline
+/// peak-RSS delta by up to this many bytes before it Fails, even when that
+/// exceeds the +20% ratio. Without it, a small baseline delta makes the ratio
+/// tolerance a fraction of a megabyte, so ordinary allocator jitter would Fail a
+/// run that did not regress. The locked +20% ratio still governs any baseline
+/// large enough that `baseline * 1.20` exceeds `baseline + this floor`.
+pub(crate) const PEAK_RSS_ABS_FLOOR_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Absolute cold-wall-clock noise floor (milliseconds, HI-03). A run may exceed
+/// the baseline cold wall-clock by up to this many milliseconds before it Fails,
+/// even when that exceeds the +25% ratio. A +25% ratio on a 20 ms baseline is
+/// only 5 ms — below scheduling jitter — so without this floor the gate would
+/// emit false Fails on sub-second baselines. The locked +25% ratio still governs
+/// any baseline large enough that `baseline * 1.25` exceeds `baseline + floor`.
+pub(crate) const COLD_WALL_CLOCK_ABS_FLOOR_MS: u64 = 50;
+
 /// The outcome of comparing a measured run against the store-disabled baseline.
 ///
 /// `verdict` aggregates the per-metric `checks` via `.max()` over the shared
@@ -58,12 +74,14 @@ pub(crate) fn evaluate_regression_budget(
             measured.peak_rss_delta_bytes,
             baseline.peak_rss_delta_bytes,
             thresholds.max_peak_rss_ratio,
+            PEAK_RSS_ABS_FLOOR_BYTES,
         ),
         ratio_budget_check(
             "cold_wall_clock_ratio",
             measured.cold_wall_clock_ms,
             baseline.cold_wall_clock_ms,
             thresholds.max_cold_wall_clock_ratio,
+            COLD_WALL_CLOCK_ABS_FLOOR_MS,
         ),
     ];
     let verdict = checks
@@ -82,10 +100,21 @@ pub(crate) fn is_blocking(report: &RegressionGateReport) -> bool {
     report.verdict == GateVerdict::Fail
 }
 
-/// Build a "measured/baseline ratio must not exceed `budget`" check. A zero
-/// baseline denominator is a Fail with a "missing baseline" observation rather
-/// than a divide-by-zero (threat T-63-04-02).
-fn ratio_budget_check(metric: &str, measured: u64, baseline: u64, budget: f64) -> GateCheck {
+/// Build a "measured must not exceed its budget" check with an absolute noise
+/// floor (HI-03). The measured value may exceed the baseline by up to the LARGER
+/// of the ratio budget (`baseline * budget`) and an absolute tolerance
+/// (`baseline + abs_floor`) before it Fails. The floor keeps the gate robust to
+/// ms/MB jitter against a small baseline, while the locked ratio still governs
+/// any baseline whose ratio headroom already exceeds the floor. A zero baseline
+/// denominator is a Fail with a "missing baseline" observation rather than a
+/// divide-by-zero (threat T-63-04-02).
+fn ratio_budget_check(
+    metric: &str,
+    measured: u64,
+    baseline: u64,
+    budget: f64,
+    abs_floor: u64,
+) -> GateCheck {
     if baseline == 0 {
         return GateCheck {
             metric: metric.to_string(),
@@ -95,11 +124,14 @@ fn ratio_budget_check(metric: &str, measured: u64, baseline: u64, budget: f64) -
         };
     }
     let ratio = measured as f64 / baseline as f64;
+    // Effective ceiling: the larger of the ratio budget and the absolute floor,
+    // so a small baseline still tolerates `abs_floor` of jitter.
+    let allowed = (baseline as f64 * budget).max(baseline as f64 + abs_floor as f64);
     GateCheck {
         metric: metric.to_string(),
         observed: format!("{ratio:.4}"),
-        threshold: format!("<= {budget:.4}"),
-        verdict: if ratio > budget {
+        threshold: format!("<= {budget:.4} (or within +{abs_floor} absolute floor)"),
+        verdict: if measured as f64 > allowed {
             GateVerdict::Fail
         } else {
             GateVerdict::Pass
@@ -209,6 +241,25 @@ mod tests {
             &measured(1.20, 1.25),
             &BaselineThresholds::default(),
         );
+        assert_eq!(report.verdict, GateVerdict::Pass);
+        assert!(!is_blocking(&report));
+    }
+
+    #[test]
+    fn small_baseline_within_absolute_floor_passes_despite_ratio_breach() {
+        // A tiny baseline: 20 ms cold, ~1 MB peak-RSS delta. The naive ratio
+        // budgets (+25% cold = 5 ms, +20% RSS ~= 0.2 MB) would Fail on ordinary
+        // jitter; the absolute floors (HI-03) exempt these sub-threshold deltas.
+        let mut base = baseline();
+        base.cold_wall_clock_ms = 20;
+        base.peak_rss_delta_bytes = 1_000_000;
+
+        let mut point = measured(1.0, 1.0);
+        // Jitter far beyond the ratio budgets but inside the absolute floors.
+        point.cold_wall_clock_ms = 40; // +20 ms < COLD_WALL_CLOCK_ABS_FLOOR_MS
+        point.peak_rss_delta_bytes = 5_000_000; // +4 MB < PEAK_RSS_ABS_FLOOR_BYTES
+
+        let report = evaluate_regression_budget(&base, &point, &BaselineThresholds::default());
         assert_eq!(report.verdict, GateVerdict::Pass);
         assert!(!is_blocking(&report));
     }
