@@ -7,6 +7,7 @@
 //! surface — everything stays `pub(crate)` under `eval`.
 
 pub(crate) mod curve;
+pub(crate) mod gate;
 pub(crate) mod measure;
 pub(crate) mod report;
 pub(crate) mod runner;
