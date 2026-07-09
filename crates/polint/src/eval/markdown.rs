@@ -267,7 +267,9 @@ fn optional_u64_cell(value: Option<u64>) -> String {
 }
 
 fn escape_cell(value: &str) -> String {
-    value.replace('|', "\\|")
+    // Neutralize both the column separator and any CR/LF so a value carrying a
+    // newline cannot break the table structure or inject rows.
+    value.replace('|', "\\|").replace(['\n', '\r'], " ")
 }
 
 #[cfg(test)]

@@ -88,7 +88,10 @@ fn bytes_to_mib(bytes: u64) -> u64 {
 }
 
 fn escape_cell(value: &str) -> String {
-    value.replace('|', "\\|")
+    // Neutralize both the column separator and any CR/LF: a `repo_id` derived
+    // from a checkout directory name can contain newlines on Unix, which would
+    // otherwise break the table structure or inject rows.
+    value.replace('|', "\\|").replace(['\n', '\r'], " ")
 }
 
 /// One suite's pre-store recall/precision row in a [`GraphAccuracyBaseline`].
@@ -452,6 +455,31 @@ mod graph_accuracy_tests {
             suites.contains(&"go-x-tools-rta-callgraph"),
             "Go x/tools suite row must be present"
         );
+
+        // Every row must be internally consistent: either fully measured (both
+        // recall AND precision present) or a consistent null stub (both absent).
+        // A half-measured row (one null, one not) is a corrupt baseline, not a
+        // stub. A null stub is only legitimate under the explicit pre-store
+        // reference label (asserted above), so a stub can be distinguished from
+        // a real reference rather than silently mistaken for one.
+        for row in &baseline.rows {
+            assert_eq!(
+                row.recall.is_none(),
+                row.precision.is_none(),
+                "row {} must be a consistent stub (both null) or fully measured \
+                 (both present), never half-measured",
+                row.suite_id
+            );
+            if row.recall.is_some() {
+                // A measured row must carry a positive expected-edge denominator;
+                // an all-zero measured row would be a mislabeled stub.
+                assert!(
+                    row.graph_edges_expected > 0,
+                    "measured row {} must record a non-zero graph_edges_expected",
+                    row.suite_id
+                );
+            }
+        }
 
         // recall/precision keys are present in the committed JSON, and no
         // absolute host path leaks (threat T-63-03-03).
