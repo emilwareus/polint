@@ -107,6 +107,32 @@ pub(crate) fn run_repo_perf_point(
     })
 }
 
+/// Deterministic digest of the diagnostics a store-disabled (== current)
+/// `polint check` produces over `repo_root`.
+///
+/// This is the diagnostics-parity marker a
+/// [`StoreDisabledBaseline`](crate::eval::baseline::StoreDisabledBaseline)
+/// records (BENCH-02): the durable store landing in Phase 64 must not change the
+/// diagnostics polint emits, so a later run can assert this digest is unchanged.
+/// It is the FNV stable-hash over the sorted, canonical-JSON-serialized
+/// diagnostics of the check-equivalent kernel run. Clean code (no diagnostics)
+/// still yields a stable, non-empty digest (the hash of the empty set).
+pub(crate) fn diagnostics_digest_for_repo(repo_root: &Path) -> anyhow::Result<String> {
+    let output = run_check_kernel(repo_root)?;
+    Ok(digest_diagnostics(&output.diagnostics))
+}
+
+fn digest_diagnostics(diagnostics: &[crate::diagnostics::Diagnostic]) -> String {
+    let mut rows: Vec<String> = diagnostics
+        .iter()
+        .map(|diagnostic| serde_json::to_string(diagnostic).unwrap_or_default())
+        .collect();
+    // Sort so the digest is independent of diagnostic emission order.
+    rows.sort();
+    let refs: Vec<&str> = rows.iter().map(String::as_str).collect();
+    crate::cache::stable_hash(&refs)
+}
+
 /// Drive one `polint check`-equivalent run through the capability-gated kernel.
 ///
 /// This mirrors `crate::eval::observed::run_kernel_for_repo_for_test`: it loads
