@@ -124,6 +124,92 @@ pub(crate) fn run_repo_perf_point(
     })
 }
 
+/// Full libtest path of the child measurement entry [`tests::perf_child_measure_entry`].
+/// `run_repo_perf_point_isolated` re-invokes this binary filtered to exactly this
+/// test; keep it in sync with the module path if the test moves.
+const CHILD_MEASURE_TEST: &str = "eval::bench::runner::tests::perf_child_measure_entry";
+/// Env var carrying the repo path the child measurement entry should measure.
+/// Presence of this var is what switches the child entry from a no-op into a
+/// measuring run.
+const CHILD_REPO_ENV: &str = "POLINT_PERF_CHILD_REPO";
+/// Env var carrying the optional review ref (empty/absent == a `check` point).
+const CHILD_REVIEW_ENV: &str = "POLINT_PERF_CHILD_REVIEW_REF";
+/// Stdout markers the child prints the serialized [`CurvePoint`] JSON between, so
+/// the parent can extract it from libtest's own `--nocapture` output.
+const CHILD_POINT_BEGIN: &str = "<<<POLINT_PERF_POINT_BEGIN>>>";
+const CHILD_POINT_END: &str = "<<<POLINT_PERF_POINT_END>>>";
+
+/// Measure a single [`CurvePoint`] for `repo_root` in a DEDICATED CHILD PROCESS
+/// so its `peak_rss_delta_bytes` is genuinely run-attributable and
+/// order-independent (HI-01R).
+///
+/// `peak_rss_bytes` is `getrusage(RUSAGE_SELF).ru_maxrss` — a process-global,
+/// monotonic, whole-lifetime high-water mark. When several measurements share
+/// one process (as the baseline regenerator does: a digest run, then a check
+/// point, then a review point), the mark saturates on the first run and every
+/// later per-run delta collapses to allocator jitter — the committed review
+/// baseline captured a meaningless 16 KiB exactly this way, while a differently
+/// warmed Phase 64 process would report the true footprint (tens of MiB) and
+/// false-block the gate.
+///
+/// Re-executing the measurement in a fresh child gives each run its own
+/// unsaturated high-water mark, so the child-computed
+/// [`ColdWarm::peak_rss_delta_bytes`](measure::ColdWarm) reflects the kernel
+/// run's marginal footprint over a fixed process baseline regardless of what the
+/// parent already allocated or the order the points are taken in. The child is
+/// this same test binary re-invoked (`current_exe`) filtered to
+/// [`tests::perf_child_measure_entry`], which runs [`run_repo_perf_point`] and
+/// prints the [`CurvePoint`] as JSON between [`CHILD_POINT_BEGIN`]/
+/// [`CHILD_POINT_END`] on stdout, then exits.
+///
+/// The committed store-disabled baselines are regenerated through THIS path; a
+/// Phase 64+ measured run fed to `evaluate_regression_budget` MUST use the same
+/// isolation for the peak-RSS delta to be comparable rather than an artifact of
+/// process warm-up order.
+pub(crate) fn run_repo_perf_point_isolated(
+    repo_root: &Path,
+    review_ref: Option<&str>,
+) -> anyhow::Result<CurvePoint> {
+    let exe = std::env::current_exe().map_err(|error| {
+        anyhow::anyhow!("locating test binary for isolated perf child: {error}")
+    })?;
+    let mut command = std::process::Command::new(&exe);
+    command
+        .arg("--exact")
+        .arg(CHILD_MEASURE_TEST)
+        .arg("--nocapture")
+        .arg("--test-threads=1")
+        .env(CHILD_REPO_ENV, repo_root)
+        // Never let the child inherit the regenerator switch (it would re-enter
+        // regeneration and recurse) or a stale review ref from an outer spawn.
+        .env_remove("POLINT_WRITE_STORE_DISABLED_BASELINE")
+        .env_remove(CHILD_REVIEW_ENV);
+    if let Some(reference) = review_ref {
+        command.env(CHILD_REVIEW_ENV, reference);
+    }
+    let output = command
+        .output()
+        .map_err(|error| anyhow::anyhow!("spawning isolated perf child: {error}"))?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "isolated perf child exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json = stdout
+        .split_once(CHILD_POINT_BEGIN)
+        .and_then(|(_, rest)| rest.split_once(CHILD_POINT_END))
+        .map(|(json, _)| json.trim())
+        .ok_or_else(|| {
+            anyhow::anyhow!("isolated perf child emitted no curve point; stdout: {stdout}")
+        })?;
+    let point: CurvePoint = serde_json::from_str(json)
+        .map_err(|error| anyhow::anyhow!("parsing isolated perf child curve point: {error}"))?;
+    Ok(point)
+}
+
 /// Deterministic digest of the diagnostics a store-disabled (== current)
 /// `polint check` produces over `repo_root`.
 ///
@@ -297,6 +383,56 @@ mod tests {
             "src/util.ts",
             "export function add(a: number, b: number): number {\n  return a + b;\n}\n\nexport function twice(n: number): number {\n  return add(n, n);\n}\n",
         );
+    }
+
+    /// Child-process entry for [`super::run_repo_perf_point_isolated`] (HI-01R).
+    ///
+    /// A normal `cargo test` run executes this as an immediate no-op because
+    /// `POLINT_PERF_CHILD_REPO` is absent. When `run_repo_perf_point_isolated`
+    /// re-invokes this binary it sets that var, so this FRESH process measures
+    /// the repo and prints the [`CurvePoint`] as JSON between the shared markers,
+    /// then `exit(0)`s before libtest prints its summary. Measuring in an
+    /// otherwise-empty process is what makes `peak_rss_delta_bytes`
+    /// order-independent rather than a shared-process high-water artifact.
+    #[test]
+    fn perf_child_measure_entry() {
+        use std::io::Write as _;
+        let Some(repo) = std::env::var_os(super::CHILD_REPO_ENV) else {
+            return;
+        };
+        let review = std::env::var(super::CHILD_REVIEW_ENV).ok();
+        let point = super::run_repo_perf_point(Path::new(&repo), review.as_deref())
+            .expect("isolated perf child measurement");
+        let json = serde_json::to_string(&point).expect("serialize child curve point");
+        println!(
+            "{}{json}{}",
+            super::CHILD_POINT_BEGIN,
+            super::CHILD_POINT_END
+        );
+        std::io::stdout().flush().ok();
+        std::process::exit(0);
+    }
+
+    #[test]
+    fn run_repo_perf_point_isolated_measures_in_a_fresh_child() {
+        let repo = tempdir().unwrap();
+        write_tiny_repo(repo.path());
+
+        let point = run_repo_perf_point_isolated(repo.path(), None).unwrap();
+
+        assert!(
+            point.repo_file_count > 0,
+            "isolated child must measure repo files: {point:?}"
+        );
+        assert!(
+            point.cold_wall_clock_ms > 0,
+            "isolated child must record cold wall-clock: {point:?}"
+        );
+        assert!(
+            point.peak_rss_bytes > 0,
+            "isolated child must record peak RSS: {point:?}"
+        );
+        assert_eq!(point.diff_files, 0, "no review ref -> no diff");
     }
 
     #[test]

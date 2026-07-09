@@ -3,9 +3,9 @@
   "store_disabled": true,
   "repo_id": "polint-tiny-fixture",
   "suite_id": "polint-tiny-fixture-review",
-  "peak_rss_bytes": 47529984,
-  "peak_rss_delta_bytes": 16384,
-  "cold_wall_clock_ms": 20,
-  "warm_wall_clock_ms": 19,
+  "peak_rss_bytes": 46530560,
+  "peak_rss_delta_bytes": 37027840,
+  "cold_wall_clock_ms": 25,
+  "warm_wall_clock_ms": 22,
   "diagnostics_digest": "28cac8a32a5bb2a9"
 }

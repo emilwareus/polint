@@ -708,7 +708,9 @@ mod tests {
         if std::env::var_os("POLINT_WRITE_STORE_DISABLED_BASELINE").is_none() {
             return;
         }
-        use crate::eval::bench::runner::{diagnostics_digest_for_repo, run_repo_perf_point};
+        use crate::eval::bench::runner::{
+            diagnostics_digest_for_repo, run_repo_perf_point_isolated,
+        };
         use std::process::Command;
 
         let temp = tempfile::tempdir().unwrap();
@@ -754,9 +756,17 @@ mod tests {
         git(&["add", "-A"]);
         git(&["commit", "--quiet", "-m", "change"]);
 
+        // The digest run is in-process (it reads diagnostics, not RSS), so its
+        // saturation of this process's peak-RSS high-water mark does not matter.
+        // Each perf point, by contrast, is measured in its OWN fresh child so its
+        // `peak_rss_delta_bytes` is run-attributable and order-independent rather
+        // than a shared-process artifact — the review point in particular must
+        // not collapse to allocator jitter just because it ran after check
+        // (HI-01R). A Phase 64 measured run fed to the gate must use the same
+        // `run_repo_perf_point_isolated` isolation.
         let digest = diagnostics_digest_for_repo(dir).unwrap();
-        let check_point = run_repo_perf_point(dir, None).unwrap();
-        let review_point = run_repo_perf_point(dir, Some(&base)).unwrap();
+        let check_point = run_repo_perf_point_isolated(dir, None).unwrap();
+        let review_point = run_repo_perf_point_isolated(dir, Some(&base)).unwrap();
 
         let out_dir = workspace_root().join("research/evaluation-harness/baselines");
         StoreDisabledBaseline::from_curve_point(
