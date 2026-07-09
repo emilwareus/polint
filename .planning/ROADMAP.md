@@ -40,7 +40,7 @@ Phase numbering continues from v1.4's last phase 62. All new store/query modules
 
 **Requirements:** BENCH-01, BENCH-02, BENCH-03, BENCH-04
 
-**Plans:** 1/4 plans executed
+**Plans:** 2/4 plans executed
 
 Plans:
 **Wave 1**
@@ -49,7 +49,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 63-02-PLAN.md — Whole-repo perf runner (check + review) + curve JSON + markdown benchmark report
+- [x] 63-02-PLAN.md — Whole-repo perf runner (check + review) + curve JSON + markdown benchmark report
 
 **Wave 3** *(blocked on Wave 2 completion)*
 

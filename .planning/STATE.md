@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Static Analysis 2.0 Implementation
 status: executing
-last_updated: "2026-07-09T09:28:57.888Z"
-last_activity: 2026-07-09 -- Phase 63 execution started
+last_updated: "2026-07-09T09:43:50.893Z"
+last_activity: 2026-07-09 -- Completed 63-02-PLAN.md (whole-repo perf runner + curve JSON/markdown report + benchmark sweep)
 progress:
   total_phases: 9
   completed_phases: 0
   total_plans: 4
-  completed_plans: 1
-  percent: 25
+  completed_plans: 2
+  percent: 50
 ---
 
 # State: polint
@@ -43,9 +43,9 @@ See: `.planning/PROJECT.md` (updated 2026-07-07)
 ## Current Position
 
 Phase: 63 (ground-truth-and-performance-baseline) — EXECUTING
-Plan: 2 of 4
+Plan: 3 of 4
 Status: Executing Phase 63
-Last activity: 2026-07-09 -- Completed 63-01-PLAN.md (benchmark suite manifests + getrusage measurement substrate)
+Last activity: 2026-07-09 -- Completed 63-02-PLAN.md (whole-repo perf runner + curve JSON/markdown report + benchmark sweep)
 
 ### Active Milestone Phase Progress
 
@@ -493,6 +493,7 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase 50]: Phase 50-03 derives JS/TS object-model call edges only from callable tokens stored in property buckets, not from property names alone. — This keeps the object model precision-first while still improving recall for justified property-flow cases. Exact and computed buckets stay separate, budget exhaustion is explicit, and prototype/receiver semantics remain deferred to the next plan.
 - [Phase 50]: Phase 50-04 resolves prototype and receiver-sensitive object-model edges only through stable prototype/receiver facts, with dynamic mutation left unsupported. — Prototype chains and `this` binding are high-risk precision surfaces. Stable fact-gated lookup with visited-set/depth termination improves justified recall while preventing name/type guesses, unbounded traversal, and broad native/framework modeling from entering JS-05.
 - [Phase 50]: Phase 50-05 closes JS-05 with crate-private native object-model gates, closed-input determinism, budget evidence, and polyglot non-interference. — Local Jelly-oriented evidence is self-contained and explicitly scoped to `oracle-jelly` and `whole-repo` fixture modes; no external Jelly corpus floor is claimed before the Phase 54 benchmark promotion gate.
+- [Phase ?]: [Phase 63-02] run_repo_perf_point times one capability-gated kernel run (the analysis cost check and review share); the review measurement adds diff-size fields via changeset_for_ref, not a second pipeline. Budget counters folded from live AnalysisDb *::BudgetExceeded: budget_exceeded<-SummaryStatus, tokens_exhausted<-CallTargetStatus, iteration_capped<-DomainStatus. store_bytes explicit 0 until Phase 64. Benchmark sweep skips absent large clones; emission determinism tested via an injected deterministic measurer since real cold/warm timing and peak RSS are volatile.
 
 ## Execution Metrics
 
