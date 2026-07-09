@@ -9,6 +9,7 @@
 pub(crate) mod adaptation;
 pub(crate) mod adapter;
 pub(crate) mod baseline;
+pub(crate) mod bench;
 pub(crate) mod competitors;
 pub(crate) mod delta;
 pub(crate) mod determinism_gate;

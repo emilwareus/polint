@@ -19,6 +19,9 @@ clap.workspace = true
 globset.workspace = true
 ignore.workspace = true
 json-strip-comments.workspace = true
+# Direct promotion of an already-vetted transitive dep (present in Cargo.lock).
+# Used by src/eval/bench/measure.rs for getrusage(RUSAGE_SELF).ru_maxrss.
+libc = "0.2"
 oxc_allocator.workspace = true
 oxc_ast.workspace = true
 oxc_parser.workspace = true
@@ -53,5 +56,20 @@ predicates.workspace = true
 proptest.workspace = true
 tempfile.workspace = true
 
-[lints]
-workspace = true
+# polint owns its lint table (instead of `[lints] workspace = true`) so that the
+# single audited `getrusage` FFI in src/eval/bench/measure.rs can opt in via a
+# per-item `#[allow(unsafe_code)]`. Every workspace lint is mirrored verbatim;
+# ONLY `unsafe_code` is downgraded `forbid` -> `deny`, so unsafe stays denied
+# crate-wide and any use must carry an explicit, greppable allow. See
+# 63-01-SUMMARY.md "Deviations from Plan".
+[lints.rust]
+unsafe_code = "deny"
+unreachable_pub = "deny"
+
+[lints.clippy]
+dbg_macro = "deny"
+todo = "warn"
+unimplemented = "warn"
+redundant_clone = "warn"
+needless_collect = "warn"
+large_enum_variant = "warn"
