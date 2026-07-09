@@ -59,6 +59,14 @@ pub(crate) struct StoreDisabledBaseline {
     /// Warm (second-run) wall-clock in milliseconds.
     pub(crate) warm_wall_clock_ms: u64,
     /// Deterministic diagnostics/output digest — the parity marker.
+    ///
+    /// This is the whole-repo CHECK-scoped digest (the FNV hash over the sorted
+    /// diagnostics of a `polint check`-equivalent kernel run), for BOTH the check
+    /// and review baselines: `polint review` reuses the same check analysis here,
+    /// so its parity marker is the same check digest, not a diff-scoped subset
+    /// (LW-08). A store phase that computes a measured digest to feed
+    /// `evaluate_regression_budget` MUST therefore supply a check-scoped digest
+    /// (or `None`); a review-scoped subset would spuriously fail the parity check.
     pub(crate) diagnostics_digest: String,
 }
 
@@ -781,8 +789,15 @@ mod tests {
             "polint-tiny-fixture",
             "polint-tiny-fixture-review",
             &review_point,
-            // Same digest as check: the diagnostics-parity marker — review shares
-            // the same analysis, so it must agree with check.
+            // Intentionally the whole-repo CHECK digest, not a review-scoped one
+            // (LW-08). `diagnostics_digest_for_repo` only runs `run_check_kernel`;
+            // no review-scoped digest function exists, and a `polint review`
+            // reuses the same check analysis (the diff gate is a cheap
+            // reporting-layer filter over the same diagnostics). This baseline
+            // therefore holds the check digest and MUST be compared against a
+            // check-scoped measured digest (or `None`). Feeding a review-scoped
+            // subset digest to the gate's `digest_parity_check` would spuriously
+            // Fail; the field doc on `diagnostics_digest` records this contract.
             digest,
         )
         .write(&out_dir.join("store-disabled-review.json"))

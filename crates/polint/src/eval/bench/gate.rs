@@ -70,6 +70,11 @@ pub(crate) struct RegressionGateReport {
 /// 63 records the marker but has no run that produces a measured digest to feed
 /// the gate, so callers pass `None` until the store phase that first measures
 /// one; the parity mechanism is wired and tested here so it is not dead surface.
+///
+/// The baseline `diagnostics_digest` is CHECK-scoped for both the check and
+/// review baselines (see [`StoreDisabledBaseline::diagnostics_digest`]), so a
+/// caller that opts into the parity check MUST pass a check-scoped measured
+/// digest; a review-scoped (diff-subset) digest would spuriously Fail (LW-08).
 pub(crate) fn evaluate_regression_budget(
     baseline: &StoreDisabledBaseline,
     measured: &CurvePoint,
