@@ -22,9 +22,12 @@ use crate::eval::gates::{GateCheck, GateVerdict};
 
 /// The outcome of comparing a measured run against the store-disabled baseline.
 ///
-/// `verdict` aggregates the per-metric `checks` via `.max()` (Fail dominates
-/// Warn dominates Pass), matching the existing gate vocabulary in
-/// `eval::gates`.
+/// `verdict` aggregates the per-metric `checks` via `.max()` over the shared
+/// `GateVerdict` ordering (`Pass < Warn < Fail`), matching the vocabulary in
+/// `eval::gates`. This regression gate emits only `Pass` or `Fail`: there is no
+/// soft-warn band for a locked budget, so the aggregate is effectively
+/// Pass-or-Fail. The `Warn` tier exists in the shared enum but is intentionally
+/// unused here.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct RegressionGateReport {
     pub(crate) verdict: GateVerdict,
