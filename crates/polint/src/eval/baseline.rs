@@ -175,6 +175,28 @@ impl EvalBaseline {
     }
 }
 
+/// Locked regression budget (REQUIREMENTS.md, "Locked Milestone Decisions", D):
+/// a store-phase run may use at most +20% peak RSS versus the store-disabled
+/// baseline until warm reuse lands (Phase 67). Revisable only with a recorded
+/// decision — a silent edit here fails the default-value test (threat
+/// T-63-04-01).
+pub(crate) const DEFAULT_MAX_PEAK_RSS_RATIO: f64 = 1.20;
+
+/// Locked regression budget (REQUIREMENTS.md, "Locked Milestone Decisions", D):
+/// a store-phase run may use at most +25% cold wall-clock versus the
+/// store-disabled baseline until warm reuse lands (Phase 67). Revisable only
+/// with a recorded decision — a silent edit here fails the default-value test
+/// (threat T-63-04-01).
+pub(crate) const DEFAULT_MAX_COLD_WALL_CLOCK_RATIO: f64 = 1.25;
+
+fn default_max_peak_rss_ratio() -> f64 {
+    DEFAULT_MAX_PEAK_RSS_RATIO
+}
+
+fn default_max_cold_wall_clock_ratio() -> f64 {
+    DEFAULT_MAX_COLD_WALL_CLOCK_RATIO
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) struct BaselineThresholds {
@@ -186,6 +208,20 @@ pub(crate) struct BaselineThresholds {
     pub(crate) require_same_output_hash: bool,
     pub(crate) max_cache_miss_delta: i64,
     pub(crate) max_rejected_fact_delta: i64,
+    /// Locked +20% peak-RSS regression budget vs the store-disabled baseline.
+    /// A distinct signal from the eval-runner `*_runtime_overhead_ratio`
+    /// fields, which gate the accuracy runner's observed runtime, not the
+    /// whole-repo peak RSS. Serde-defaulted so thresholds serialized before
+    /// this field still deserialize.
+    #[serde(default = "default_max_peak_rss_ratio")]
+    pub(crate) max_peak_rss_ratio: f64,
+    /// Locked +25% cold-wall-clock regression budget vs the store-disabled
+    /// baseline. Cold wall-clock is a distinct signal from the eval-runner
+    /// runtime overhead, so this stays separate from the
+    /// `*_runtime_overhead_ratio` fields. Serde-defaulted for backward-compatible
+    /// deserialization.
+    #[serde(default = "default_max_cold_wall_clock_ratio")]
+    pub(crate) max_cold_wall_clock_ratio: f64,
 }
 
 impl Default for BaselineThresholds {
@@ -199,6 +235,8 @@ impl Default for BaselineThresholds {
             require_same_output_hash: false,
             max_cache_miss_delta: 0,
             max_rejected_fact_delta: 0,
+            max_peak_rss_ratio: DEFAULT_MAX_PEAK_RSS_RATIO,
+            max_cold_wall_clock_ratio: DEFAULT_MAX_COLD_WALL_CLOCK_RATIO,
         }
     }
 }
@@ -507,6 +545,38 @@ mod tests {
                 .verdict,
             GateVerdict::Fail
         );
+    }
+
+    #[test]
+    fn baseline_thresholds_carry_locked_regression_budgets() {
+        // The locked +20% peak-RSS and +25% cold-wall-clock budgets
+        // (REQUIREMENTS.md Locked Milestone Decisions, D). These are exact:
+        // a silent loosening fails this assertion (threat T-63-04-01).
+        let thresholds = BaselineThresholds::default();
+        assert_eq!(thresholds.max_peak_rss_ratio, 1.20);
+        assert_eq!(thresholds.max_cold_wall_clock_ratio, 1.25);
+        // The distinct eval-runner runtime-overhead budgets are unchanged.
+        assert_eq!(thresholds.warn_runtime_overhead_ratio, 1.10);
+        assert_eq!(thresholds.fail_runtime_overhead_ratio, 1.25);
+    }
+
+    #[test]
+    fn baseline_thresholds_deserialize_without_the_new_ratio_fields() {
+        // A thresholds document serialized before the peak-RSS / cold-wall-clock
+        // fields existed must still deserialize, defaulting to the locked budgets.
+        let legacy = r#"{
+            "max_precision_drop": 0.02,
+            "max_recall_drop": 0.02,
+            "warn_runtime_overhead_ratio": 1.10,
+            "fail_runtime_overhead_ratio": 1.25,
+            "max_new_false_positive_traps": 0,
+            "require_same_output_hash": false,
+            "max_cache_miss_delta": 0,
+            "max_rejected_fact_delta": 0
+        }"#;
+        let thresholds: BaselineThresholds = serde_json::from_str(legacy).unwrap();
+        assert_eq!(thresholds.max_peak_rss_ratio, 1.20);
+        assert_eq!(thresholds.max_cold_wall_clock_ratio, 1.25);
     }
 
     #[test]
