@@ -19,9 +19,6 @@ clap.workspace = true
 globset.workspace = true
 ignore.workspace = true
 json-strip-comments.workspace = true
-# Direct promotion of an already-vetted transitive dep (present in Cargo.lock).
-# Used by src/eval/bench/measure.rs for getrusage(RUSAGE_SELF).ru_maxrss.
-libc.workspace = true
 oxc_allocator.workspace = true
 oxc_ast.workspace = true
 oxc_parser.workspace = true
@@ -41,6 +38,12 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 tree-sitter.workspace = true
 tree-sitter-go.workspace = true
+
+# Unix-only: src/eval/bench/measure.rs reads getrusage(RUSAGE_SELF).ru_maxrss for
+# peak RSS. Windows uses K32GetProcessMemoryInfo (kernel32) with no crate dependency.
+# Direct promotion of an already-vetted transitive dep (present in Cargo.lock).
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
 
 [lib]
 path = "src/lib.rs"

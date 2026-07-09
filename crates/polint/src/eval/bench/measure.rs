@@ -2,10 +2,10 @@
 //!
 //! Populates the real measurement that `RuntimeStatsSummary.peak_rss_bytes`
 //! (see `crate::eval::performance`) has always declared but never set in
-//! production. Peak RSS is read from `getrusage(RUSAGE_SELF).ru_maxrss` and
-//! normalized to bytes per-OS: only Darwin (macOS/iOS) reports `ru_maxrss` in
-//! bytes; Linux and every BSD (FreeBSD/OpenBSD/NetBSD/DragonFly) report it in
-//! kilobytes.
+//! production. Peak RSS is read from the process high-water mark the host OS
+//! exposes: `getrusage(RUSAGE_SELF).ru_maxrss` on Unix (normalized to bytes)
+//! and `PeakWorkingSetSize` (already bytes) via `K32GetProcessMemoryInfo` on
+//! Windows. Both are monotonic non-decreasing across a process lifetime.
 
 use std::time::Instant;
 
@@ -18,6 +18,7 @@ use std::time::Instant;
 /// - Darwin (macOS/iOS): `ru_maxrss` is already in bytes.
 /// - Linux and the BSDs (FreeBSD/OpenBSD/NetBSD/DragonFly): `ru_maxrss` is in
 ///   kilobytes -> multiply by 1024.
+#[cfg(unix)]
 #[allow(
     unsafe_code,
     reason = "single audited getrusage FFI; crate denies unsafe_code otherwise"
@@ -41,6 +42,71 @@ pub(crate) fn peak_rss_bytes() -> u64 {
     } else {
         raw.saturating_mul(1024)
     }
+}
+
+/// Current process peak resident-set size in bytes, read from the Windows
+/// `PROCESS_MEMORY_COUNTERS.PeakWorkingSetSize` (already in bytes).
+///
+/// Uses `K32GetProcessMemoryInfo` from `kernel32` (available since Windows 7)
+/// so no `psapi.dll` link or extra crate is required. Like the Unix reading,
+/// the peak working set is a monotonic high-water mark for the process.
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "single audited GetProcessMemoryInfo FFI; crate denies unsafe_code otherwise"
+)]
+pub(crate) fn peak_rss_bytes() -> u64 {
+    // Mirror of the Win32 `PROCESS_MEMORY_COUNTERS` layout: two `DWORD` (u32)
+    // fields followed by eight `SIZE_T` (usize) fields. Only `cb` and
+    // `peak_working_set_size` are read; the rest exist to keep the struct size
+    // (and thus `cb`) correct so the OS fills `PeakWorkingSetSize`.
+    #[repr(C)]
+    #[allow(
+        dead_code,
+        reason = "FFI layout mirror; only cb and peak_working_set_size are read"
+    )]
+    struct ProcessMemoryCounters {
+        cb: u32,
+        page_fault_count: u32,
+        peak_working_set_size: usize,
+        working_set_size: usize,
+        quota_peak_paged_pool_usage: usize,
+        quota_paged_pool_usage: usize,
+        quota_peak_non_paged_pool_usage: usize,
+        quota_non_paged_pool_usage: usize,
+        pagefile_usage: usize,
+        peak_pagefile_usage: usize,
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetCurrentProcess() -> *mut std::ffi::c_void;
+        fn K32GetProcessMemoryInfo(
+            process: *mut std::ffi::c_void,
+            counters: *mut ProcessMemoryCounters,
+            cb: u32,
+        ) -> i32;
+    }
+
+    // SAFETY: `counters` is a fully-owned, zero-initialized POD whose `cb` is
+    // set to its own size; `GetCurrentProcess` returns a valid pseudo-handle;
+    // the call only writes into `counters` and returns nonzero on success.
+    unsafe {
+        let mut counters: ProcessMemoryCounters = std::mem::zeroed();
+        counters.cb = std::mem::size_of::<ProcessMemoryCounters>() as u32;
+        if K32GetProcessMemoryInfo(GetCurrentProcess(), &mut counters, counters.cb) == 0 {
+            return 0;
+        }
+        // `PeakWorkingSetSize` is already in bytes.
+        counters.peak_working_set_size as u64
+    }
+}
+
+/// Fallback for any target that is neither Unix nor Windows: peak RSS is not
+/// available, so the harness reports 0 (the metric is treated as unmeasured).
+#[cfg(not(any(unix, windows)))]
+pub(crate) fn peak_rss_bytes() -> u64 {
+    0
 }
 
 /// Result of executing a closure once: wall-clock elapsed and the peak-RSS
