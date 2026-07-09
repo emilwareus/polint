@@ -245,6 +245,7 @@ mod tests {
             cold_wall_clock_ms: 7400,
             warm_wall_clock_ms: 4600,
             peak_rss_bytes: 3 * 1024 * 1024,
+            peak_rss_delta_bytes: 1024 * 1024,
             size: StoreSizeBytes {
                 cache_bytes: 4096,
                 store_bytes: 0,

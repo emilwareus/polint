@@ -38,6 +38,11 @@ pub(crate) struct RegressionGateReport {
 /// [`StoreDisabledBaseline`] on the two locked regression budgets: peak RSS
 /// (`max_peak_rss_ratio`) and cold wall-clock (`max_cold_wall_clock_ratio`).
 ///
+/// The peak-RSS budget compares the **run-attributable** `peak_rss_delta_bytes`,
+/// not the process-wide absolute `peak_rss_bytes`: the absolute high-water mark
+/// also reflects allocations made by whatever process hosts the measurement, so
+/// gating on it would confound unrelated memory with the analyzed run (HI-01).
+///
 /// Produces one [`GateCheck`] per budget; each Fails if the measured/baseline
 /// ratio exceeds its budget, else Passes. A zero baseline denominator is an
 /// explicit Fail ("missing baseline") rather than a divide-by-zero panic
@@ -49,9 +54,9 @@ pub(crate) fn evaluate_regression_budget(
 ) -> RegressionGateReport {
     let checks = vec![
         ratio_budget_check(
-            "peak_rss_ratio",
-            measured.peak_rss_bytes,
-            baseline.peak_rss_bytes,
+            "peak_rss_delta_ratio",
+            measured.peak_rss_delta_bytes,
+            baseline.peak_rss_delta_bytes,
             thresholds.max_peak_rss_ratio,
         ),
         ratio_budget_check(
@@ -115,15 +120,17 @@ mod tests {
             store_disabled: true,
             repo_id: "polint-tiny-fixture".to_string(),
             suite_id: "polint-tiny-fixture-check".to_string(),
-            peak_rss_bytes: 100_000_000,
+            peak_rss_bytes: 120_000_000,
+            peak_rss_delta_bytes: 100_000_000,
             cold_wall_clock_ms: 1000,
             warm_wall_clock_ms: 500,
             diagnostics_digest: "digest".to_string(),
         }
     }
 
-    /// A measured point at `rss_ratio`x baseline peak RSS and `cold_ratio`x
-    /// baseline cold wall-clock.
+    /// A measured point at `rss_ratio`x baseline peak-RSS delta and `cold_ratio`x
+    /// baseline cold wall-clock. The gate compares the run-attributable delta, so
+    /// the delta (not the absolute peak) is what carries the ratio.
     fn measured(rss_ratio: f64, cold_ratio: f64) -> CurvePoint {
         let base = baseline();
         CurvePoint {
@@ -134,7 +141,8 @@ mod tests {
             diff_hunk_lines: 0,
             cold_wall_clock_ms: (base.cold_wall_clock_ms as f64 * cold_ratio) as u64,
             warm_wall_clock_ms: base.warm_wall_clock_ms,
-            peak_rss_bytes: (base.peak_rss_bytes as f64 * rss_ratio) as u64,
+            peak_rss_bytes: base.peak_rss_bytes,
+            peak_rss_delta_bytes: (base.peak_rss_delta_bytes as f64 * rss_ratio) as u64,
             size: StoreSizeBytes::default(),
             budget: BudgetExhaustionCounters::default(),
         }
@@ -151,7 +159,7 @@ mod tests {
         assert_eq!(report.verdict, GateVerdict::Fail);
         assert!(is_blocking(&report));
         assert!(report.checks.iter().any(|check| {
-            check.metric == "peak_rss_ratio" && check.verdict == GateVerdict::Fail
+            check.metric == "peak_rss_delta_ratio" && check.verdict == GateVerdict::Fail
         }));
     }
 
@@ -189,7 +197,7 @@ mod tests {
         }));
         // The peak-RSS check stays a Pass — the two budgets are independent.
         assert!(report.checks.iter().any(|check| {
-            check.metric == "peak_rss_ratio" && check.verdict == GateVerdict::Pass
+            check.metric == "peak_rss_delta_ratio" && check.verdict == GateVerdict::Pass
         }));
     }
 
@@ -207,16 +215,16 @@ mod tests {
 
     #[test]
     fn zero_baseline_denominator_fails_rather_than_panicking() {
-        // A zero baseline peak RSS is a missing-baseline Fail, not a panic
+        // A zero baseline peak-RSS delta is a missing-baseline Fail, not a panic
         // (threat T-63-04-02).
         let mut base = baseline();
-        base.peak_rss_bytes = 0;
+        base.peak_rss_delta_bytes = 0;
         let report =
             evaluate_regression_budget(&base, &measured(1.0, 1.0), &BaselineThresholds::default());
         assert_eq!(report.verdict, GateVerdict::Fail);
         assert!(is_blocking(&report));
         assert!(report.checks.iter().any(|check| {
-            check.metric == "peak_rss_ratio"
+            check.metric == "peak_rss_delta_ratio"
                 && check.observed.contains("missing baseline")
                 && check.verdict == GateVerdict::Fail
         }));

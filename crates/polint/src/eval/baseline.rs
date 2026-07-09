@@ -43,8 +43,17 @@ pub(crate) struct StoreDisabledBaseline {
     pub(crate) repo_id: String,
     /// Suite/command context (e.g. the check vs review command marker).
     pub(crate) suite_id: String,
-    /// Real OS peak RSS in bytes (from `getrusage`).
+    /// Real OS peak RSS in bytes (from `getrusage`): the process-wide monotonic
+    /// high-water mark. Reporting/reference only — the regression gate compares
+    /// `peak_rss_delta_bytes`, which is not confounded by the host process's own
+    /// allocations.
     pub(crate) peak_rss_bytes: u64,
+    /// Run-attributable peak-RSS growth in bytes (the delta above the pre-run
+    /// high-water mark). This is the confound-free metric the Phase 64+
+    /// regression gate compares against. Serde-defaulted so a baseline
+    /// serialized before this field existed still deserializes.
+    #[serde(default)]
+    pub(crate) peak_rss_delta_bytes: u64,
     /// Cold (first-run) wall-clock in milliseconds.
     pub(crate) cold_wall_clock_ms: u64,
     /// Warm (second-run) wall-clock in milliseconds.
@@ -68,6 +77,7 @@ impl StoreDisabledBaseline {
             repo_id: repo_id.into(),
             suite_id: suite_id.into(),
             peak_rss_bytes: point.peak_rss_bytes,
+            peak_rss_delta_bytes: point.peak_rss_delta_bytes,
             cold_wall_clock_ms: point.cold_wall_clock_ms,
             warm_wall_clock_ms: point.warm_wall_clock_ms,
             diagnostics_digest: diagnostics_digest.into(),
@@ -600,6 +610,7 @@ mod tests {
             cold_wall_clock_ms: 42,
             warm_wall_clock_ms: 21,
             peak_rss_bytes: 128 * 1024 * 1024,
+            peak_rss_delta_bytes: 96 * 1024 * 1024,
             size: StoreSizeBytes {
                 cache_bytes: 4096,
                 store_bytes: 0,
@@ -626,6 +637,7 @@ mod tests {
         assert_eq!(baseline, loaded);
         assert!(loaded.store_disabled);
         assert_eq!(loaded.peak_rss_bytes, point.peak_rss_bytes);
+        assert_eq!(loaded.peak_rss_delta_bytes, point.peak_rss_delta_bytes);
         assert_eq!(loaded.cold_wall_clock_ms, point.cold_wall_clock_ms);
         assert_eq!(loaded.warm_wall_clock_ms, point.warm_wall_clock_ms);
         assert_eq!(

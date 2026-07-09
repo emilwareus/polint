@@ -80,21 +80,31 @@ impl TimedRun {
 pub(crate) struct ColdWarm {
     pub(crate) cold_ms: u64,
     pub(crate) warm_ms: u64,
-    /// Peak RSS (bytes) observed across both runs — the high-water mark is
-    /// monotonic, so the warm run's reading is the overall peak.
+    /// Absolute peak RSS (bytes): the process-wide, monotonic high-water mark
+    /// after the warm run. Because it is whole-process (not attributable to this
+    /// run), it is kept for reporting only and MUST NOT be the gated metric.
     pub(crate) peak_rss_bytes: u64,
+    /// Run-attributable peak-RSS growth (bytes): the larger of the two per-run
+    /// deltas above the high-water mark that existed before each run. This is
+    /// the confound-free metric the regression gate compares — the absolute peak
+    /// also reflects allocations made by whatever process hosts the measurement.
+    pub(crate) peak_rss_delta_bytes: u64,
 }
 
-/// Run `run` twice and report cold (first) and warm (second) wall-clock millis
-/// plus the overall peak RSS.
+/// Run `run` twice and report cold (first) and warm (second) wall-clock millis,
+/// the absolute overall peak RSS (reporting), and the run-attributable peak-RSS
+/// delta (the gated metric).
 pub(crate) fn cold_then_warm<F: FnMut()>(mut run: F) -> ColdWarm {
     let cold = TimedRun::measure(&mut run);
     let warm = TimedRun::measure(&mut run);
     ColdWarm {
         cold_ms: cold.elapsed_ms,
         warm_ms: warm.elapsed_ms,
-        // The high-water mark is monotonic; the warm reading is the overall peak.
-        peak_rss_bytes: warm.peak_rss_bytes.max(cold.peak_rss_bytes),
+        // Absolute mark is monotonic; the warm reading is the overall peak.
+        // Reporting only — not tautological `max()` since the delta below is the
+        // run-attributable value the gate actually compares.
+        peak_rss_bytes: warm.peak_rss_bytes,
+        peak_rss_delta_bytes: warm.peak_rss_delta_bytes.max(cold.peak_rss_delta_bytes),
     }
 }
 

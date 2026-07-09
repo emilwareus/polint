@@ -118,6 +118,7 @@ pub(crate) fn run_repo_perf_point(
         cold_wall_clock_ms: timing.cold_ms,
         warm_wall_clock_ms: timing.warm_ms,
         peak_rss_bytes: timing.peak_rss_bytes,
+        peak_rss_delta_bytes: timing.peak_rss_delta_bytes,
         size,
         budget,
     })
