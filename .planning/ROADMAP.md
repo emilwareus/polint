@@ -40,7 +40,7 @@ Phase numbering continues from v1.4's last phase 62. All new store/query modules
 
 **Requirements:** BENCH-01, BENCH-02, BENCH-03, BENCH-04
 
-**Plans:** 2/4 plans executed
+**Plans:** 3/4 plans executed
 
 Plans:
 **Wave 1**
@@ -53,7 +53,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 63-03-PLAN.md — Store-disabled check/review baselines + pre-store graph recall/precision accuracy baseline
+- [x] 63-03-PLAN.md — Store-disabled check/review baselines + pre-store graph recall/precision accuracy baseline
 
 **Wave 4** *(blocked on Wave 3 completion)*
 

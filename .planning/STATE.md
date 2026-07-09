@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Static Analysis 2.0 Implementation
 status: executing
-last_updated: "2026-07-09T09:43:50.893Z"
-last_activity: 2026-07-09 -- Completed 63-02-PLAN.md (whole-repo perf runner + curve JSON/markdown report + benchmark sweep)
+last_updated: "2026-07-09T10:03:30.848Z"
+last_activity: 2026-07-09 -- Completed 63-03-PLAN.md (store-disabled check/review baselines + pre-store graph accuracy baseline in benchmark report)
 progress:
   total_phases: 9
   completed_phases: 0
   total_plans: 4
-  completed_plans: 2
-  percent: 50
+  completed_plans: 3
+  percent: 75
 ---
 
 # State: polint
@@ -43,7 +43,7 @@ See: `.planning/PROJECT.md` (updated 2026-07-07)
 ## Current Position
 
 Phase: 63 (ground-truth-and-performance-baseline) — EXECUTING
-Plan: 3 of 4
+Plan: 4 of 4
 Status: Executing Phase 63
 Last activity: 2026-07-09 -- Completed 63-02-PLAN.md (whole-repo perf runner + curve JSON/markdown report + benchmark sweep)
 
@@ -494,6 +494,8 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase 50]: Phase 50-04 resolves prototype and receiver-sensitive object-model edges only through stable prototype/receiver facts, with dynamic mutation left unsupported. — Prototype chains and `this` binding are high-risk precision surfaces. Stable fact-gated lookup with visited-set/depth termination improves justified recall while preventing name/type guesses, unbounded traversal, and broad native/framework modeling from entering JS-05.
 - [Phase 50]: Phase 50-05 closes JS-05 with crate-private native object-model gates, closed-input determinism, budget evidence, and polyglot non-interference. — Local Jelly-oriented evidence is self-contained and explicitly scoped to `oracle-jelly` and `whole-repo` fixture modes; no external Jelly corpus floor is claimed before the Phase 54 benchmark promotion gate.
 - [Phase ?]: [Phase 63-02] run_repo_perf_point times one capability-gated kernel run (the analysis cost check and review share); the review measurement adds diff-size fields via changeset_for_ref, not a second pipeline. Budget counters folded from live AnalysisDb *::BudgetExceeded: budget_exceeded<-SummaryStatus, tokens_exhausted<-CallTargetStatus, iteration_capped<-DomainStatus. store_bytes explicit 0 until Phase 64. Benchmark sweep skips absent large clones; emission determinism tested via an injected deterministic measurer since real cold/warm timing and peak RSS are volatile.
+- [Phase ?]: Store-disabled reference baselines use a distinct StoreDisabledBaseline type (own schema constant); shared BASELINE_SCHEMA_VERSION untouched per Plan 04 contract
+- [Phase ?]: Pre-store graph accuracy baseline records recall/precision as null when the gated Jelly/Go x-tools clones are absent; regenerated via POLINT_WRITE_GRAPH_BENCH
 
 ## Execution Metrics
 
