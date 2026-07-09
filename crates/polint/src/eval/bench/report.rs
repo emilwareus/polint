@@ -41,9 +41,16 @@ pub(crate) fn write_curve_series(path: &Path, series: &CurveSeries) -> anyhow::R
 /// Render `series` to a markdown "## Benchmark Curves" table.
 ///
 /// Columns: Repo, Files, Source bytes, Diff files, Diff hunk lines, Cold ms,
-/// Warm ms, Peak RSS (MiB), Cache bytes, Store bytes, Budget exceeded. Rows are
-/// sorted by `(repo_id, repo_file_count, diff_files)` (the leading fields of the
-/// derived `CurvePoint` `Ord`), so the output is deterministic.
+/// Warm ms, Peak RSS (MiB), Peak RSS delta (bytes), Cache bytes, Store bytes,
+/// Budget exceeded. Rows are sorted by `(repo_id, repo_file_count, diff_files)`
+/// (the leading fields of the derived `CurvePoint` `Ord`), so the output is
+/// deterministic.
+///
+/// "Peak RSS (MiB)" is the process-wide absolute high-water mark (reporting
+/// only). "Peak RSS delta (bytes)" is the run-attributable
+/// `peak_rss_delta_bytes` — the metric the regression gate actually fails on
+/// (`gate::evaluate_regression_budget`), rendered in raw bytes so the number a
+/// verdict is computed from is auditable without MiB rounding (LW-09).
 pub(crate) fn render_curve_markdown(series: &CurveSeries) -> String {
     let mut sorted = series.clone();
     sorted.sort();
@@ -52,11 +59,11 @@ pub(crate) fn render_curve_markdown(series: &CurveSeries) -> String {
     out.push_str("## Benchmark Curves\n\n");
     out.push_str(&format!("Schema: `{}`\n\n", sorted.schema_version));
     out.push_str(
-        "| Repo | Files | Source bytes | Diff files | Diff hunk lines | Cold ms | Warm ms | Peak RSS (MiB) | Cache bytes | Store bytes | Budget exceeded |\n",
+        "| Repo | Files | Source bytes | Diff files | Diff hunk lines | Cold ms | Warm ms | Peak RSS (MiB) | Peak RSS delta (bytes) | Cache bytes | Store bytes | Budget exceeded |\n",
     );
-    out.push_str("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n");
+    out.push_str("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n");
     if sorted.points.is_empty() {
-        out.push_str("| _none_ |  |  |  |  |  |  |  |  |  |  |\n");
+        out.push_str("| _none_ |  |  |  |  |  |  |  |  |  |  |  |\n");
     } else {
         for point in &sorted.points {
             out.push_str(&row(point));
@@ -68,7 +75,7 @@ pub(crate) fn render_curve_markdown(series: &CurveSeries) -> String {
 
 fn row(point: &CurvePoint) -> String {
     format!(
-        "| `{}` | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
+        "| `{}` | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
         escape_cell(&point.repo_id),
         point.repo_file_count,
         point.repo_source_bytes,
@@ -77,6 +84,7 @@ fn row(point: &CurvePoint) -> String {
         point.cold_wall_clock_ms,
         point.warm_wall_clock_ms,
         bytes_to_mib(point.peak_rss_bytes),
+        point.peak_rss_delta_bytes,
         point.size.cache_bytes,
         point.size.store_bytes,
         point.budget.budget_exceeded,
@@ -296,7 +304,8 @@ mod tests {
         let markdown = render_curve_markdown(&two_point_series());
 
         for header in [
-            "Peak RSS",
+            "Peak RSS (MiB)",
+            "Peak RSS delta (bytes)",
             "Cold ms",
             "Warm ms",
             "Diff files",
@@ -308,6 +317,14 @@ mod tests {
                 "markdown must contain `{header}` column header:\n{markdown}"
             );
         }
+
+        // The gated `peak_rss_delta_bytes` (1 MiB in the fixture point) must be
+        // rendered in raw bytes so the number a regression verdict is computed
+        // from is auditable (LW-09).
+        assert!(
+            markdown.contains(&(1024 * 1024).to_string()),
+            "markdown must render the raw peak-RSS delta bytes:\n{markdown}"
+        );
 
         // Exactly one data row per point (a two-point series -> two data rows).
         let data_rows = markdown
