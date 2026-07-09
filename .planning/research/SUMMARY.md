@@ -96,6 +96,13 @@ Requirements should be written around user-visible guarantees and validation, no
 
 ### Suggested Phase Structure
 
+Every phase must name which milestone outcome gate it advances (scale, latency, honesty, accuracy visibility). Benchmarks and regression budgets from Phase 0 run at every phase boundary — the store must never silently re-inflate the memory or cold-latency wins already landed (capability-gated pipeline, rule-scoped discovery).
+
+**Phase 0: Ground Truth and Performance Baseline**
+Rationale: the locked research puts measurement first; without baselines, no later phase can prove it moved an outcome gate, and store overhead regressions stay invisible.
+Delivers: real-repo benchmark suite (production-scale monorepo + OSS repos), RSS/latency/store-size curves vs repo and diff size, store-disabled baselines for `check`/`review`, budget-exhaustion telemetry, persisted-graph recall/precision baseline on existing callgraph benchmarks.
+Avoids: benchmarks landing after public surfaces, untracked ingest overhead, unrecorded accuracy baseline.
+
 **Phase 1: Store Foundation and Boundary Proof**
 Rationale: every later feature depends on a private, crash-safe store boundary.
 Delivers: `rusqlite` bundled dependency, private store module, connection policy, migrations, manifest table, no-op integration, no-leak tests.
@@ -112,9 +119,9 @@ Delivers: files, packages/modules, imports/resolutions, symbols/definitions/refe
 Avoids: raw AST/source dumping, unordered output, store row IDs escaping.
 
 **Phase 4: Summary Persistence and Invalidation Frontier**
-Rationale: O(change) `review` is the main practical payoff and must precede broad query promotion.
-Delivers: summary manifests, content-addressed payload seams with `blake3`, dependency summary digests, warm reuse after from-scratch parity, recompute-and-diff hooks.
-Avoids: summary overtrust, stale summaries, remote registry scope creep.
+Rationale: O(change) `review` is the main practical payoff and must precede broad query promotion. This phase carries the milestone's scale and latency gates: once dependency summaries validate, dependency bodies are never re-parsed while their identity matches (O(working set) memory), and warm `review` recomputes only the instrumented invalidation frontier with a measured p50/p95 win over the Phase 0 baseline.
+Delivers: summary manifests, content-addressed payload seams with `blake3`, dependency summary digests, warm reuse after from-scratch parity, recompute-and-diff hooks, frontier instrumentation, warm-review latency gate.
+Avoids: summary overtrust, stale summaries, remote registry scope creep, warm reuse shipping without byte-identical cold/warm review parity.
 
 **Phase 5: Internal Query Engine and Envelope**
 Rationale: query semantics should be proven privately before CLI promotion.
@@ -127,7 +134,7 @@ Delivers: selected `polint graph` commands with JSON/human rendering, structured
 Avoids: SDK raw graph promotion, public query language, unstable internal IDs.
 
 **Phase 7: Lexical Search Boundary**
-Rationale: search should build on stable semantic document IDs and evidence envelopes.
+Rationale: search should build on stable semantic document IDs and evidence envelopes. This phase is the designated scope-cut if the milestone runs long: it advances no scale/latency gate and can move to v2.1 without weakening the keystone (store + summaries + frontier + graph CLI).
 Delivers: `SearchCorpus`, Tantivy manifest, lexical search over symbols/evidence/diagnostics/summaries/snippets, active-store back-references, deterministic rebuild.
 Avoids: Tantivy IDs as semantic IDs, search as fact source, vector creep.
 
