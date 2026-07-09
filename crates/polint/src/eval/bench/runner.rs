@@ -63,7 +63,12 @@ pub(crate) fn run_repo_perf_point(
                 .files
                 .iter()
                 .flat_map(|file| file.new_line_ranges.iter())
-                .map(|(start, end)| u64::from(end.saturating_sub(*start) + 1))
+                // Count inclusive, non-empty ranges only: a degenerate or
+                // inverted `end < start` entry contributes nothing. Widen to
+                // u64 *before* the `+ 1` so a `u32::MAX`-wide range cannot
+                // overflow-panic in a debug build.
+                .filter(|(start, end)| end >= start)
+                .map(|(start, end)| u64::from(end.saturating_sub(*start)) + 1)
                 .sum();
             (files, hunk_lines)
         }
@@ -73,11 +78,22 @@ pub(crate) fn run_repo_perf_point(
     // Drive the check-equivalent kernel run twice (cold then warm) and keep the
     // warm run's output for the fact walk. Caching is enabled so the warm run
     // exercises the persistent layer cache and populates `.polint/cache`.
-    let mut last: Option<anyhow::Result<KernelOutput>> = None;
+    // Keep BOTH runs' results: the closure runs twice, so overwriting a single
+    // slot would let a warm-run success mask a cold-run failure (and
+    // `cold_wall_clock_ms` would then describe a run that actually errored).
+    let mut cold_result: Option<anyhow::Result<KernelOutput>> = None;
+    let mut warm_result: Option<anyhow::Result<KernelOutput>> = None;
     let timing = measure::cold_then_warm(|| {
-        last = Some(run_check_kernel(repo_root));
+        if cold_result.is_none() {
+            cold_result = Some(run_check_kernel(repo_root));
+        } else {
+            warm_result = Some(run_check_kernel(repo_root));
+        }
     });
-    let output = last.expect("cold_then_warm runs the closure at least once")?;
+    // Propagate a cold-run failure before trusting any timing; on success keep
+    // the warm run's output for the fact walk.
+    cold_result.expect("cold_then_warm runs the closure at least once")?;
+    let output = warm_result.expect("cold_then_warm runs the closure twice")?;
 
     // Repo size from the source set the pipeline loaded — not a separate eager
     // whole-repo read (PERF-01 discipline).
