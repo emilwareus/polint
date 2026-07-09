@@ -1,0 +1,39 @@
+# LOCAL-ONLY / NON-CI reference manifest (BENCH-01).
+#
+# This is a private monorepo baseline used only for local scale measurement; it is
+# NOT cloned or resolved in CI. It declares ONLY a `research` tier so the CI
+# fast/nightly/release runs never touch it, and `local_clone_policy = allow_absolute`
+# so a developer can point `checkout.path` at their own absolute checkout.
+#
+# Known baseline on the reference host: ~1GB peak RSS, cold 7.4s / warm 4.6s.
+schema_version = "polint-eval-suite-1"
+id = "devloupe-monorepo-local"
+name = "Devloupe monorepo (local-only reference)"
+kind = "performance"
+languages = ["go", "typescript"]
+adapter_id = "polint_scale_performance"
+scoring_mode = "whole-repo"
+license = "proprietary"
+language_support = "research_only"
+
+[checkout]
+strategy = "local_clone"
+path = "research/evaluation-harness/repos/devloupe-monorepo"
+ignored_by_git = true
+local_clone_policy = "allow_absolute"
+
+[expected]
+format = "suite_native"
+path = "suite-native-devloupe-monorepo-local"
+
+[scoring]
+unified = [
+  "peak_rss_bytes",
+  "cold_wall_clock_ms",
+  "warm_wall_clock_ms",
+]
+
+[tiers.research]
+enabled = true
+selector = "all"
+deterministic_seed = "devloupe-monorepo-local-research"
