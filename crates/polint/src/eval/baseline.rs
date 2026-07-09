@@ -329,11 +329,15 @@ pub(crate) fn compare_to_baseline(
     })
 }
 
-pub(crate) fn deterministic_baseline_json(baseline: &EvalBaseline) -> String {
+pub(crate) fn deterministic_baseline_json(baseline: &EvalBaseline) -> anyhow::Result<String> {
+    // Surface a serialization failure rather than swallowing it into a
+    // valid-looking `"{}"`: this is the determinism/parity marker, so two
+    // failed serializations must never compare equal and be mistaken for a
+    // match.
     let mut normalized = baseline.clone();
     normalized.run = normalize_run(&normalized.run);
     normalized.output_hash = normalized.run.output_hash.clone();
-    serde_json::to_string_pretty(&normalized).unwrap_or_else(|_| "{}".to_string())
+    Ok(serde_json::to_string_pretty(&normalized)?)
 }
 
 fn ensure_real_polint_mode(mode: EvaluationMode) -> anyhow::Result<()> {
@@ -476,8 +480,8 @@ mod tests {
 
         assert_eq!(written, loaded);
         assert_eq!(
-            deterministic_baseline_json(&written),
-            deterministic_baseline_json(&loaded)
+            deterministic_baseline_json(&written).unwrap(),
+            deterministic_baseline_json(&loaded).unwrap()
         );
         assert!(to_deterministic_json_pretty(&loaded.run).contains("baseline-suite"));
     }
