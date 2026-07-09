@@ -195,6 +195,24 @@ pub(crate) fn render_markdown(run: &EvaluationRun) -> String {
     out
 }
 
+/// Render a standalone benchmark report (BENCH-01) from a measured
+/// [`CurveSeries`](crate::eval::bench::curve::CurveSeries).
+///
+/// This is the markdown-report entry-point the benchmark sweep writes to
+/// `benchmark-report.md`. It keeps the existing [`render_markdown`] signature
+/// intact (evaluation reports are unchanged) and composes a report header over
+/// the curve table produced by `crate::eval::bench::report::render_curve_markdown`
+/// so peak RSS, cold/warm wall-clock, cache/store size, and budget-exhaustion
+/// are recorded per curve point. (Plan 03 later appends the persisted-graph
+/// accuracy section.)
+#[cfg(test)]
+pub(crate) fn render_benchmark_report(series: &crate::eval::bench::curve::CurveSeries) -> String {
+    let mut out = String::new();
+    out.push_str("# polint benchmark report\n\n");
+    out.push_str(&crate::eval::bench::report::render_curve_markdown(series));
+    out
+}
+
 fn result_source_label(source: &ResultSource) -> String {
     match source {
         ResultSource::ImportedPublished { source_name, .. } => {
@@ -304,6 +322,36 @@ mod tests {
         let markdown = render_markdown(&report);
 
         assert!(markdown.contains("| - | - | - | - | 2 |"));
+    }
+
+    #[test]
+    fn benchmark_report_composes_header_over_curve_table() {
+        use crate::eval::bench::curve::{
+            BudgetExhaustionCounters, CurvePoint, CurveSeries, StoreSizeBytes,
+        };
+
+        let mut series = CurveSeries::new();
+        series.points.push(CurvePoint {
+            repo_id: "alpha".to_string(),
+            repo_file_count: 10,
+            repo_source_bytes: 20_480,
+            diff_files: 2,
+            diff_hunk_lines: 24,
+            cold_wall_clock_ms: 100,
+            warm_wall_clock_ms: 40,
+            peak_rss_bytes: 3 * 1024 * 1024,
+            size: StoreSizeBytes {
+                cache_bytes: 4096,
+                store_bytes: 0,
+            },
+            budget: BudgetExhaustionCounters::default(),
+        });
+
+        let markdown = render_benchmark_report(&series);
+        assert!(markdown.starts_with("# polint benchmark report"));
+        assert!(markdown.contains("## Benchmark Curves"));
+        assert!(markdown.contains("Peak RSS"));
+        assert!(markdown.contains("`alpha`"));
     }
 
     fn report() -> EvaluationRun {

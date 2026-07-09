@@ -8,4 +8,5 @@
 
 pub(crate) mod curve;
 pub(crate) mod measure;
+pub(crate) mod report;
 pub(crate) mod runner;
