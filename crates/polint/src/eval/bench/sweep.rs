@@ -128,9 +128,16 @@ where
     let json_path = output_dir.join("benchmark-curves.json");
     let markdown_path = output_dir.join("benchmark-report.md");
     crate::eval::bench::report::write_curve_series(&json_path, &series)?;
+    // Surface the committed pre-store persisted-graph accuracy baseline in the
+    // report when it is present (BENCH-04 "appears in the benchmark report").
+    let accuracy = crate::eval::bench::report::load_graph_accuracy_baseline(
+        &workspace_root()
+            .join("research/evaluation-harness/baselines/persisted-graph-accuracy.json"),
+    )
+    .ok();
     std::fs::write(
         &markdown_path,
-        crate::eval::markdown::render_benchmark_report(&series),
+        crate::eval::markdown::render_benchmark_report(&series, accuracy.as_ref()),
     )?;
     Ok(series)
 }

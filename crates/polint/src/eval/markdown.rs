@@ -203,13 +203,22 @@ pub(crate) fn render_markdown(run: &EvaluationRun) -> String {
 /// intact (evaluation reports are unchanged) and composes a report header over
 /// the curve table produced by `crate::eval::bench::report::render_curve_markdown`
 /// so peak RSS, cold/warm wall-clock, cache/store size, and budget-exhaustion
-/// are recorded per curve point. (Plan 03 later appends the persisted-graph
-/// accuracy section.)
+/// are recorded per curve point, and — when an `accuracy` baseline is supplied —
+/// the "## Persisted-Graph Accuracy Baseline" section (BENCH-04) with the
+/// pre-store Jelly + Go x/tools recall/precision.
 #[cfg(test)]
-pub(crate) fn render_benchmark_report(series: &crate::eval::bench::curve::CurveSeries) -> String {
+pub(crate) fn render_benchmark_report(
+    series: &crate::eval::bench::curve::CurveSeries,
+    accuracy: Option<&crate::eval::bench::report::GraphAccuracyBaseline>,
+) -> String {
     let mut out = String::new();
     out.push_str("# polint benchmark report\n\n");
     out.push_str(&crate::eval::bench::report::render_curve_markdown(series));
+    if let Some(accuracy) = accuracy {
+        out.push_str(&crate::eval::bench::report::render_graph_accuracy_markdown(
+            accuracy,
+        ));
+    }
     out
 }
 
@@ -347,11 +356,34 @@ mod tests {
             budget: BudgetExhaustionCounters::default(),
         });
 
-        let markdown = render_benchmark_report(&series);
+        let markdown = render_benchmark_report(&series, None);
         assert!(markdown.starts_with("# polint benchmark report"));
         assert!(markdown.contains("## Benchmark Curves"));
         assert!(markdown.contains("Peak RSS"));
         assert!(markdown.contains("`alpha`"));
+        // Without an accuracy baseline the persisted-graph section is omitted.
+        assert!(!markdown.contains("Persisted-Graph Accuracy"));
+
+        // With an accuracy baseline the report gains the accuracy section.
+        let accuracy = crate::eval::bench::report::GraphAccuracyBaseline {
+            schema_version: crate::eval::bench::report::GRAPH_ACCURACY_BASELINE_SCHEMA_VERSION
+                .to_string(),
+            reference: crate::eval::bench::report::GraphAccuracyBaseline::PRE_STORE_REFERENCE
+                .to_string(),
+            rows: vec![crate::eval::bench::report::GraphAccuracyRow {
+                suite_id: "jelly-callgraph-micro".to_string(),
+                suite_commit: Some("b799ed4".to_string()),
+                recall: Some(0.42),
+                precision: Some(0.90),
+                graph_edges_expected: 100,
+                graph_edges_observed: 50,
+                unknown_count: 7,
+            }],
+        };
+        let with_accuracy = render_benchmark_report(&series, Some(&accuracy));
+        assert!(with_accuracy.contains("## Persisted-Graph Accuracy Baseline"));
+        assert!(with_accuracy.contains("Recall"));
+        assert!(with_accuracy.contains("Precision"));
     }
 
     fn report() -> EvaluationRun {

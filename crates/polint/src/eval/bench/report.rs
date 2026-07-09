@@ -12,7 +12,13 @@
 
 use std::path::Path;
 
+use serde::{Deserialize, Serialize};
+
 use crate::eval::bench::curve::{CurvePoint, CurveSeries};
+use crate::eval::report::EvaluationRun;
+
+/// Wire schema version for a serialized [`GraphAccuracyBaseline`].
+pub(crate) const GRAPH_ACCURACY_BASELINE_SCHEMA_VERSION: &str = "polint-graph-accuracy-baseline-0";
 
 /// Write `series` to `path` as byte-stable pretty JSON.
 ///
@@ -83,6 +89,141 @@ fn bytes_to_mib(bytes: u64) -> u64 {
 
 fn escape_cell(value: &str) -> String {
     value.replace('|', "\\|")
+}
+
+/// One suite's pre-store recall/precision row in a [`GraphAccuracyBaseline`].
+///
+/// `recall`/`precision` are always emitted (even as `null`) so the row records
+/// the metric structurally even when it is unmeasured in an environment lacking
+/// the gated Jelly/Go x/tools benchmark clones.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) struct GraphAccuracyRow {
+    pub(crate) suite_id: String,
+    pub(crate) suite_commit: Option<String>,
+    pub(crate) recall: Option<f64>,
+    pub(crate) precision: Option<f64>,
+    pub(crate) graph_edges_expected: u64,
+    pub(crate) graph_edges_observed: u64,
+    pub(crate) unknown_count: u64,
+}
+
+/// The committed pre-store persisted-graph recall/precision baseline (BENCH-04).
+///
+/// The durable semantic store lands in Phase 64, so this is explicitly the
+/// pre-store reference: it records the recall/precision the Jelly micro suite and
+/// the Go x/tools RTA suite achieve today, sourced from the existing external
+/// adapter runs (scoring is NOT reimplemented here — the rows read
+/// `metrics.recall`/`precision`/`graph_edges_*` off the produced
+/// [`EvaluationRun`]s). It keeps `polint graph` answers honest (the
+/// accuracy-visibility gate) and gives Phase 64 a fixed accuracy reference.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) struct GraphAccuracyBaseline {
+    pub(crate) schema_version: String,
+    /// Explicit pre-store label (BENCH-04 acceptance).
+    pub(crate) reference: String,
+    pub(crate) rows: Vec<GraphAccuracyRow>,
+}
+
+impl GraphAccuracyBaseline {
+    /// The explicit pre-store label recorded on every committed baseline.
+    pub(crate) const PRE_STORE_REFERENCE: &'static str = "pre-store graph, Phase 63 reference; recall/precision are sourced from the Jelly + Go x/tools callgraph adapter runs and regenerated with POLINT_WRITE_GRAPH_BENCH when the gated benchmark clones are present";
+
+    /// Build the baseline from the external adapter [`EvaluationRun`]s, reading
+    /// recall/precision/edge counts off each run (no scoring reimplemented).
+    /// Rows are sorted by `suite_id` for deterministic emission.
+    pub(crate) fn from_runs(runs: &[&EvaluationRun]) -> Self {
+        let mut rows: Vec<GraphAccuracyRow> = runs
+            .iter()
+            .map(|run| GraphAccuracyRow {
+                suite_id: run.suite_id.clone(),
+                suite_commit: run
+                    .suite_manifest
+                    .as_ref()
+                    .and_then(|manifest| manifest.source_commit.clone()),
+                recall: run.metrics.recall,
+                precision: run.metrics.precision,
+                graph_edges_expected: run.metrics.graph_edges_expected,
+                graph_edges_observed: run.metrics.graph_edges_observed,
+                unknown_count: run.metrics.unknown_count,
+            })
+            .collect();
+        rows.sort_by(|left, right| left.suite_id.cmp(&right.suite_id));
+        Self {
+            schema_version: GRAPH_ACCURACY_BASELINE_SCHEMA_VERSION.to_string(),
+            reference: Self::PRE_STORE_REFERENCE.to_string(),
+            rows,
+        }
+    }
+
+    /// A clone with rows sorted deterministically by `suite_id`.
+    fn sorted(&self) -> Self {
+        let mut cloned = self.clone();
+        cloned
+            .rows
+            .sort_by(|left, right| left.suite_id.cmp(&right.suite_id));
+        cloned
+    }
+}
+
+/// Write `baseline` to `path` as byte-stable pretty JSON (rows sorted by
+/// `suite_id`) with a trailing newline. Two calls with the same logical content
+/// produce byte-identical files.
+pub(crate) fn write_graph_accuracy_baseline(
+    path: &Path,
+    baseline: &GraphAccuracyBaseline,
+) -> anyhow::Result<()> {
+    let sorted = baseline.sorted();
+    let json = serde_json::to_string_pretty(&sorted)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, format!("{json}\n"))?;
+    Ok(())
+}
+
+/// Load a committed [`GraphAccuracyBaseline`].
+pub(crate) fn load_graph_accuracy_baseline(path: &Path) -> anyhow::Result<GraphAccuracyBaseline> {
+    let raw = std::fs::read_to_string(path)?;
+    let baseline: GraphAccuracyBaseline = serde_json::from_str(&raw)?;
+    Ok(baseline)
+}
+
+/// Render `baseline` to a markdown "## Persisted-Graph Accuracy Baseline"
+/// section. Columns: Suite, Commit, Recall, Precision, Edges expected, Edges
+/// observed, Unknowns. Rows are sorted by `suite_id` (deterministic).
+pub(crate) fn render_graph_accuracy_markdown(baseline: &GraphAccuracyBaseline) -> String {
+    let sorted = baseline.sorted();
+    let mut out = String::new();
+    out.push_str("## Persisted-Graph Accuracy Baseline\n\n");
+    out.push_str(&format!("_{}_\n\n", escape_cell(&sorted.reference)));
+    out.push_str(
+        "| Suite | Commit | Recall | Precision | Edges expected | Edges observed | Unknowns |\n",
+    );
+    out.push_str("|---|---|---:|---:|---:|---:|---:|\n");
+    if sorted.rows.is_empty() {
+        out.push_str("| _none_ |  |  |  |  |  |  |\n");
+    } else {
+        for row in &sorted.rows {
+            out.push_str(&format!(
+                "| `{}` | `{}` | {} | {} | {} | {} | {} |\n",
+                escape_cell(&row.suite_id),
+                escape_cell(row.suite_commit.as_deref().unwrap_or("-")),
+                metric_cell(row.recall),
+                metric_cell(row.precision),
+                row.graph_edges_expected,
+                row.graph_edges_observed,
+                row.unknown_count,
+            ));
+        }
+    }
+    out.push('\n');
+    out
+}
+
+fn metric_cell(value: Option<f64>) -> String {
+    value.map_or_else(|| "-".to_string(), |value| format!("{value:.4}"))
 }
 
 #[cfg(test)]
@@ -179,5 +320,148 @@ mod tests {
         // No absolute host paths leak into the report (threat T-63-02-04).
         assert!(!markdown.contains("/Users/"));
         assert!(!markdown.contains("/home/"));
+    }
+}
+
+#[cfg(test)]
+mod graph_accuracy_tests {
+    use super::*;
+    use crate::eval::model::EvaluationMode;
+    use crate::eval::report::{MetricSections, MetricSummary};
+    use tempfile::tempdir;
+
+    /// Build a synthetic graph-accuracy [`EvaluationRun`] carrying only the
+    /// fields `GraphAccuracyBaseline::from_runs` reads.
+    fn graph_run(
+        suite_id: &str,
+        recall: f64,
+        precision: f64,
+        expected: u64,
+        observed: u64,
+        unknowns: u64,
+    ) -> EvaluationRun {
+        EvaluationRun {
+            schema_version: crate::eval::report::EVALUATION_SCHEMA_VERSION.to_string(),
+            suite_id: suite_id.to_string(),
+            mode: EvaluationMode::PolintBaseline,
+            suite_manifest: None,
+            cases: Vec::new(),
+            metrics: MetricSummary {
+                true_positives: observed,
+                false_positives: 0,
+                false_negatives: expected.saturating_sub(observed),
+                true_negatives: 0,
+                unconfirmed: 0,
+                false_positive_trap_hits: 0,
+                forbidden_hits: 0,
+                unknown_count: unknowns,
+                facts_present: 0,
+                facts_accepted: 0,
+                facts_rejected: 0,
+                graph_edges_expected: expected,
+                graph_edges_observed: observed,
+                graph_edges_unconfirmed: 0,
+                paths_expected: 0,
+                paths_observed: 0,
+                paths_unconfirmed: 0,
+                runtime_budget_passed: 0,
+                runtime_budget_failed: 0,
+                precision: Some(precision),
+                recall: Some(recall),
+                f1: None,
+                f2: None,
+                f3: None,
+                false_positive_rate: None,
+                sections: MetricSections::default(),
+            },
+            performance: None,
+            comparison_rows: Vec::new(),
+            adaptation: None,
+            adaptation_delta: None,
+            limitations: Vec::new(),
+            output_hash: "graph-accuracy-hash".to_string(),
+        }
+    }
+
+    #[test]
+    fn graph_accuracy_baseline_renders_one_row_per_suite_and_round_trips() {
+        let jelly = graph_run("jelly-callgraph-micro", 0.42, 0.90, 120, 50, 7);
+        let go = graph_run("go-x-tools-rta-callgraph", 0.80, 0.95, 60, 48, 2);
+        // Pass out of sorted order to prove deterministic sorting.
+        let baseline = GraphAccuracyBaseline::from_runs(&[&jelly, &go]);
+
+        assert_eq!(baseline.rows.len(), 2);
+        assert_eq!(baseline.rows[0].suite_id, "go-x-tools-rta-callgraph");
+        assert_eq!(baseline.rows[1].suite_id, "jelly-callgraph-micro");
+
+        let markdown = render_graph_accuracy_markdown(&baseline);
+        assert!(markdown.contains("Persisted-Graph Accuracy"));
+        assert!(markdown.contains("Recall"));
+        assert!(markdown.contains("Precision"));
+        let data_rows = markdown
+            .lines()
+            .filter(|line| line.starts_with("| `"))
+            .count();
+        assert_eq!(data_rows, 2, "one data row per suite");
+
+        // The committed JSON round-trips byte-identically across two emissions.
+        let temp = tempdir().unwrap();
+        let first = temp.path().join("a.json");
+        let second = temp.path().join("b.json");
+        write_graph_accuracy_baseline(&first, &baseline).unwrap();
+        write_graph_accuracy_baseline(&second, &baseline).unwrap();
+        assert_eq!(
+            std::fs::read(&first).unwrap(),
+            std::fs::read(&second).unwrap(),
+            "two writes of the same baseline must be byte-identical"
+        );
+
+        let loaded = load_graph_accuracy_baseline(&first).unwrap();
+        assert_eq!(loaded, baseline.sorted());
+    }
+
+    #[test]
+    fn committed_persisted_graph_accuracy_baseline_has_both_suites() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|path| path.parent())
+            .expect("workspace root")
+            .to_path_buf();
+        let path = root.join("research/evaluation-harness/baselines/persisted-graph-accuracy.json");
+        let baseline = load_graph_accuracy_baseline(&path)
+            .expect("committed persisted-graph-accuracy.json must load");
+
+        assert_eq!(
+            baseline.schema_version,
+            GRAPH_ACCURACY_BASELINE_SCHEMA_VERSION
+        );
+        assert!(
+            baseline.reference.contains("pre-store"),
+            "committed baseline must carry the explicit pre-store label"
+        );
+        let suites: Vec<&str> = baseline
+            .rows
+            .iter()
+            .map(|row| row.suite_id.as_str())
+            .collect();
+        assert!(
+            suites.contains(&"jelly-callgraph-micro"),
+            "Jelly suite row must be present"
+        );
+        assert!(
+            suites.contains(&"go-x-tools-rta-callgraph"),
+            "Go x/tools suite row must be present"
+        );
+
+        // recall/precision keys are present in the committed JSON, and no
+        // absolute host path leaks (threat T-63-03-03).
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("\"recall\""), "recall field must be present");
+        assert!(
+            raw.contains("\"precision\""),
+            "precision field must be present"
+        );
+        assert!(!raw.contains("/Users/"));
+        assert!(!raw.contains("/home/"));
     }
 }
