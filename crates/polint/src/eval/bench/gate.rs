@@ -63,12 +63,20 @@ pub(crate) struct RegressionGateReport {
 /// ratio exceeds its budget, else Passes. A zero baseline denominator is an
 /// explicit Fail ("missing baseline") rather than a divide-by-zero panic
 /// (threat T-63-04-02).
+///
+/// When `measured_diagnostics_digest` is `Some`, a diagnostics-parity check is
+/// added and Fails if it differs from the baseline's `diagnostics_digest` — the
+/// store must not change the diagnostics polint emits (BENCH-03, LW-02). Phase
+/// 63 records the marker but has no run that produces a measured digest to feed
+/// the gate, so callers pass `None` until the store phase that first measures
+/// one; the parity mechanism is wired and tested here so it is not dead surface.
 pub(crate) fn evaluate_regression_budget(
     baseline: &StoreDisabledBaseline,
     measured: &CurvePoint,
     thresholds: &BaselineThresholds,
+    measured_diagnostics_digest: Option<&str>,
 ) -> RegressionGateReport {
-    let checks = vec![
+    let mut checks = vec![
         ratio_budget_check(
             "peak_rss_delta_ratio",
             measured.peak_rss_delta_bytes,
@@ -84,6 +92,12 @@ pub(crate) fn evaluate_regression_budget(
             COLD_WALL_CLOCK_ABS_FLOOR_MS,
         ),
     ];
+    if let Some(measured_digest) = measured_diagnostics_digest {
+        checks.push(digest_parity_check(
+            &baseline.diagnostics_digest,
+            measured_digest,
+        ));
+    }
     let verdict = checks
         .iter()
         .map(|check| check.verdict)
@@ -139,6 +153,28 @@ fn ratio_budget_check(
     }
 }
 
+/// Build a diagnostics-parity check (LW-02, BENCH-03): the store must not change
+/// the diagnostics polint emits, so a measured digest that differs from the
+/// baseline's `diagnostics_digest` is a Fail. Only evaluated when the caller
+/// supplies a measured digest.
+fn digest_parity_check(baseline_digest: &str, measured_digest: &str) -> GateCheck {
+    let same = baseline_digest == measured_digest;
+    GateCheck {
+        metric: "diagnostics_digest_parity".to_string(),
+        observed: if same {
+            "match".to_string()
+        } else {
+            format!("changed ({measured_digest})")
+        },
+        threshold: format!("== {baseline_digest}"),
+        verdict: if same {
+            GateVerdict::Pass
+        } else {
+            GateVerdict::Fail
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,6 +223,7 @@ mod tests {
             &baseline(),
             &measured(1.25, 1.0),
             &BaselineThresholds::default(),
+            None,
         );
         assert_eq!(report.verdict, GateVerdict::Fail);
         assert!(is_blocking(&report));
@@ -202,6 +239,7 @@ mod tests {
             &baseline(),
             &measured(1.10, 1.15),
             &BaselineThresholds::default(),
+            None,
         );
         assert_eq!(report.verdict, GateVerdict::Pass);
         assert!(!is_blocking(&report));
@@ -221,6 +259,7 @@ mod tests {
             &baseline(),
             &measured(1.05, 1.30),
             &BaselineThresholds::default(),
+            None,
         );
         assert_eq!(report.verdict, GateVerdict::Fail);
         assert!(is_blocking(&report));
@@ -240,6 +279,7 @@ mod tests {
             &baseline(),
             &measured(1.20, 1.25),
             &BaselineThresholds::default(),
+            None,
         );
         assert_eq!(report.verdict, GateVerdict::Pass);
         assert!(!is_blocking(&report));
@@ -259,7 +299,8 @@ mod tests {
         point.cold_wall_clock_ms = 40; // +20 ms < COLD_WALL_CLOCK_ABS_FLOOR_MS
         point.peak_rss_delta_bytes = 5_000_000; // +4 MB < PEAK_RSS_ABS_FLOOR_BYTES
 
-        let report = evaluate_regression_budget(&base, &point, &BaselineThresholds::default());
+        let report =
+            evaluate_regression_budget(&base, &point, &BaselineThresholds::default(), None);
         assert_eq!(report.verdict, GateVerdict::Pass);
         assert!(!is_blocking(&report));
     }
@@ -270,8 +311,12 @@ mod tests {
         // (threat T-63-04-02).
         let mut base = baseline();
         base.peak_rss_delta_bytes = 0;
-        let report =
-            evaluate_regression_budget(&base, &measured(1.0, 1.0), &BaselineThresholds::default());
+        let report = evaluate_regression_budget(
+            &base,
+            &measured(1.0, 1.0),
+            &BaselineThresholds::default(),
+            None,
+        );
         assert_eq!(report.verdict, GateVerdict::Fail);
         assert!(is_blocking(&report));
         assert!(report.checks.iter().any(|check| {
@@ -279,5 +324,55 @@ mod tests {
                 && check.observed.contains("missing baseline")
                 && check.verdict == GateVerdict::Fail
         }));
+    }
+
+    #[test]
+    fn changed_diagnostics_digest_fails_the_parity_check() {
+        // A within-budget run whose diagnostics digest differs from the baseline
+        // is a parity Fail: the store must not change the diagnostics polint
+        // emits (LW-02). The parity check is only added when a measured digest is
+        // supplied.
+        let report = evaluate_regression_budget(
+            &baseline(),
+            &measured(1.0, 1.0),
+            &BaselineThresholds::default(),
+            Some("a-different-digest"),
+        );
+        assert_eq!(report.verdict, GateVerdict::Fail);
+        assert!(is_blocking(&report));
+        assert!(report.checks.iter().any(|check| {
+            check.metric == "diagnostics_digest_parity" && check.verdict == GateVerdict::Fail
+        }));
+    }
+
+    #[test]
+    fn matching_diagnostics_digest_passes_the_parity_check() {
+        // The same digest as the baseline passes; a `None` measured digest adds
+        // no parity check at all (the Phase 63 default).
+        let base = baseline();
+        let with_digest = evaluate_regression_budget(
+            &base,
+            &measured(1.0, 1.0),
+            &BaselineThresholds::default(),
+            Some(&base.diagnostics_digest),
+        );
+        assert_eq!(with_digest.verdict, GateVerdict::Pass);
+        assert!(with_digest.checks.iter().any(|check| {
+            check.metric == "diagnostics_digest_parity" && check.verdict == GateVerdict::Pass
+        }));
+
+        let without_digest = evaluate_regression_budget(
+            &base,
+            &measured(1.0, 1.0),
+            &BaselineThresholds::default(),
+            None,
+        );
+        assert!(
+            without_digest
+                .checks
+                .iter()
+                .all(|check| check.metric != "diagnostics_digest_parity"),
+            "no parity check is added when the measured digest is absent"
+        );
     }
 }
