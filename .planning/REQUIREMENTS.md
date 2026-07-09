@@ -62,7 +62,7 @@ Requirements for the v2.0 milestone. Each requirement should map to exactly one 
 
 ### Ground Truth and Performance Baseline
 
-- [ ] **BENCH-01**: Extend the existing benchmark/promotion-gate harness with a real-repo suite (at least one production-scale monorepo plus representative OSS repos per language) that records peak RSS, cold/warm wall-clock, cache/store size, and budget-exhaustion telemetry as curves versus repo size and diff size. This lands before any store phase is considered complete, so the problem stays visible and gateable.
+- [x] **BENCH-01**: Extend the existing benchmark/promotion-gate harness with a real-repo suite (at least one production-scale monorepo plus representative OSS repos per language) that records peak RSS, cold/warm wall-clock, cache/store size, and budget-exhaustion telemetry as curves versus repo size and diff size. This lands before any store phase is considered complete, so the problem stays visible and gateable.
 - [ ] **BENCH-02**: Record the store-disabled baseline for `polint check` and `polint review` (peak RSS, cold/warm latency, diagnostics parity) before persistence is enabled by default. All later phases report deltas against this baseline.
 - [ ] **BENCH-03**: Every store phase runs the scale/latency regression gates from the Milestone Outcome Gates section. Until warm reuse lands, the gate is the regression budget over the store-disabled baseline; after warm reuse lands, warm `review` must beat the baseline on the frontier benchmark.
 - [ ] **BENCH-04**: Persisted-graph recall/precision is measured against the existing real-repo callgraph benchmarks and surfaced in benchmark reports, giving `polint graph` answers a recorded accuracy baseline and the next milestone's accuracy work a starting point.

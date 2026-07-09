@@ -40,12 +40,12 @@ Phase numbering continues from v1.4's last phase 62. All new store/query modules
 
 **Requirements:** BENCH-01, BENCH-02, BENCH-03, BENCH-04
 
-**Plans:** 4 plans
+**Plans:** 1/4 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 63-01-PLAN.md — Real-repo suite manifests (grafana/hugo/excalidraw/devloupe) + perf measurement substrate (peak RSS, cold/warm, curve types)
+- [x] 63-01-PLAN.md — Real-repo suite manifests (grafana/hugo/excalidraw/devloupe) + perf measurement substrate (peak RSS, cold/warm, curve types)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Static Analysis 2.0 Implementation
-status: planning
-last_updated: "2026-07-09T09:14:01.035Z"
-last_activity: 2026-07-09 -- v2.0 requirements approved (outcome gates, BENCH/PERF/REV, locked decisions) and roadmap generated (phases 63-71)
+status: executing
+last_updated: "2026-07-09T09:28:57.888Z"
+last_activity: 2026-07-09 -- Phase 63 execution started
 progress:
   total_phases: 9
   completed_phases: 0
   total_plans: 4
-  completed_plans: 0
-  percent: 0
+  completed_plans: 1
+  percent: 25
 ---
 
 # State: polint
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-07-07)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** v2.0 Static Analysis 2.0 Implementation planning
+**Current focus:** Phase 63 — ground-truth-and-performance-baseline
 
 ## Current Status
 
@@ -42,10 +42,10 @@ See: `.planning/PROJECT.md` (updated 2026-07-07)
 
 ## Current Position
 
-Phase: 63 (Ground Truth and Performance Baseline) — not started
-Plan: — (run plan-phase for Phase 63)
-Status: Roadmap complete; ready for phase planning
-Last activity: 2026-07-09 -- v2.0 requirements approved (outcome gates, BENCH/PERF/REV, locked decisions) and roadmap generated (phases 63-71)
+Phase: 63 (ground-truth-and-performance-baseline) — EXECUTING
+Plan: 2 of 4
+Status: Executing Phase 63
+Last activity: 2026-07-09 -- Completed 63-01-PLAN.md (benchmark suite manifests + getrusage measurement substrate)
 
 ### Active Milestone Phase Progress
 
@@ -214,6 +214,9 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 
 ## Decisions
 
+- [Phase 63-01]: polint owns its lint table (unsafe_code forbid->deny, all other workspace lints mirrored) so one audited getrusage FFI opts in via `#[allow(unsafe_code)]`; unsafe stays denied crate-wide otherwise, and the workspace-wide forbid still applies to every other crate.
+- [Phase 63-01]: Benchmark repos pinned to real release tags (grafana v11.4.0 `b587018...`, hugo v0.140.0 `3f35721...`, excalidraw v0.17.6 `f164071...`); devloupe is a local-only/non-CI reference via a research-only tier + `local_clone_policy = "allow_absolute"` so CI fast/nightly/release never resolve it.
+- [Phase 63-01]: getrusage(RUSAGE_SELF).ru_maxrss is the single source for the previously-never-populated `peak_rss_bytes`, normalized per-OS (macOS bytes / Linux kilobytes); curve-point telemetry (`CurvePoint`/`CurveSeries`) is keyed by repo size + diff size with cache/store size and budget-exhaustion counters, `deny_unknown_fields` + derived `Ord` for deterministic serialization.
 - [Phase 48-03]: The `eval::go_rta` acceptance gate sources RTA edges from the kernel-built db by rebuilding `GoRtaInputs::from_db` + driving `SolverEngine::run_to_solver_output`, NOT through `graph_edges_from_kernel_output` (which reads `refined_call_edges`/`call_targets`, not `solver_derived_edges`; Phase 52/GRAPH-05 wires solver edges into the observable refined-call projection). Self-contained fixtures are the always-runnable, x/tools-clone-free proof. Iteration-cap BudgetExceeded is driven by `max_candidates_per_callsite = 1` (one interface invoke, three instantiated implementers), not `max_rta_rounds`, because all exported Go functions are reachability roots so a multi-round chain cannot be built.
 - [Phase 48-03]: Verification surfaced 3 Rule-1 Go-frontend bugs masked by Plan 02's synthetic unit tests (which used already-bare method names + exact spans): whole-program SET facts (callsite/address_taken/instantiated_type/dynamic_dispatch) must dedup by stable key in `normalized()`; the method-set must carry bare method names (`Obj().Name()`), not signatures; and `GoRtaInputs` must map Go methods to nodes by span-CONTAINMENT (the SSA point-span lies within the tree-sitter declaration span) + index the bare method name. Without all three, RTA derived ZERO real Go interface edges. The go-rta/polyglot manifests carry no `[[expected]]` rows (the solver signal is crate-private, not an observable manifest fact); the gate is the proof.
 - [Phase 48-01]: Go sidecar harvests the RTA rapid-type set from `*ssa.MakeInterface` ONLY — the `*ssa.Alloc`/`MakeMap`/`MakeSlice`/`MakeChan` families are deliberately excluded because allocation alone does not make a type dynamically dispatchable under x/tools RTA (only interface conversion does), so adding them would over-approximate and flood precision. `address_taken` from `*ssa.MakeClosure`/func-value operands; `dynamic_dispatch` detail joins its callsite via `callsite_stable_key`.
