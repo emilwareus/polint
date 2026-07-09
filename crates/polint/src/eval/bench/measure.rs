@@ -3,8 +3,9 @@
 //! Populates the real measurement that `RuntimeStatsSummary.peak_rss_bytes`
 //! (see `crate::eval::performance`) has always declared but never set in
 //! production. Peak RSS is read from `getrusage(RUSAGE_SELF).ru_maxrss` and
-//! normalized to bytes per-OS: macOS/Darwin report `ru_maxrss` in bytes, Linux
-//! reports it in kilobytes.
+//! normalized to bytes per-OS: only Darwin (macOS/iOS) reports `ru_maxrss` in
+//! bytes; Linux and every BSD (FreeBSD/OpenBSD/NetBSD/DragonFly) report it in
+//! kilobytes.
 
 use std::time::Instant;
 
@@ -14,8 +15,9 @@ use std::time::Instant;
 /// `ru_maxrss` is the maximum RSS the process has reached (a high-water mark),
 /// so this is monotonic non-decreasing across a process lifetime. Units differ
 /// per OS and are normalized here:
-/// - Linux: `ru_maxrss` is in kilobytes -> multiply by 1024.
-/// - macOS / other BSDs: `ru_maxrss` is already in bytes.
+/// - Darwin (macOS/iOS): `ru_maxrss` is already in bytes.
+/// - Linux and the BSDs (FreeBSD/OpenBSD/NetBSD/DragonFly): `ru_maxrss` is in
+///   kilobytes -> multiply by 1024.
 #[allow(
     unsafe_code,
     reason = "single audited getrusage FFI; crate denies unsafe_code otherwise"
@@ -32,11 +34,12 @@ pub(crate) fn peak_rss_bytes() -> u64 {
     };
 
     let raw = ru_maxrss.max(0) as u64;
-    if cfg!(target_os = "linux") {
-        raw.saturating_mul(1024)
-    } else {
-        // macOS and other BSDs already report bytes.
+    // Only Darwin (macOS/iOS) reports `ru_maxrss` in bytes. Linux and every BSD
+    // (FreeBSD/OpenBSD/NetBSD/DragonFly) report it in kilobytes.
+    if cfg!(any(target_os = "macos", target_os = "ios")) {
         raw
+    } else {
+        raw.saturating_mul(1024)
     }
 }
 
