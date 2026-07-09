@@ -21,7 +21,7 @@ ignore.workspace = true
 json-strip-comments.workspace = true
 # Direct promotion of an already-vetted transitive dep (present in Cargo.lock).
 # Used by src/eval/bench/measure.rs for getrusage(RUSAGE_SELF).ru_maxrss.
-libc = "0.2"
+libc.workspace = true
 oxc_allocator.workspace = true
 oxc_ast.workspace = true
 oxc_parser.workspace = true
