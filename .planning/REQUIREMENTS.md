@@ -1,200 +1,230 @@
-# Requirements: polint v1.4 Policy Query Surface
+# Requirements: polint v2.0 Static Analysis 2.0 Implementation
 
-**Defined:** 2026-06-20
+**Defined:** 2026-07-07
 **Core Value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Milestone goal:** Promote the useful parts of the private graph, control-flow, and data-flow engine into a small preview SDK for policy queries. Rule authors should express advanced repo-local policies through typed query objects and pattern structs, not raw graph traversal or ad hoc DSLs.
+**Milestone goal:** Build the Static Analysis 2.0 implementation foundation that turns polint's private analysis engine into a durable, queryable local semantic layer for custom Rust rules, agentic review, and future local graph exploration.
 
-**Source context:** v1.2 built private CFG, direct/refined calls, data-flow, path evidence, summaries, demand queries, and promotion gates. v1.3 improved the shared semantic graph, reachability roots, Go/TS call solving, solver budgets, unknown taxonomy, adaptation models, and benchmark gates. v1.4 turns the validated substrate into a user-facing rule-authoring surface while keeping solver internals private.
+**Source context:** v1.2 built the private analysis engine substrate. v1.3 and v1.4 promoted graph precision and policy-query ergonomics. The locked Static Analysis 2.0 research says the next implementation step is a private local semantic store, durable summaries, invalidation, bounded queryability, and search foundations. `polint check` and `polint review` remain the core products. A remote registry of pre-computed package summaries is explicitly deferred.
 
-## API Design Contract
+## Product and Architecture Contract
 
-v1.4 should have one obvious way to write these rules:
+Static Analysis 2.0 is not a replacement for repo-local Rust rules. It is the layer that helps AI agents and developers understand, explore, and enforce code and architecture quality in large codebases.
 
-```rust
-#[polint::rule(
-    id = "local/no-secret-logs",
-    description = "Secret-like values must not flow to logs without redaction.",
-    severity = "error"
-)]
-pub(crate) fn no_secret_logs(ctx: &mut RuleCtx<'_>, flow: DataFlow<'_>) -> RuleResult {
-    let mut query = FlowQuery::new(
-        SourcePattern::secret_like(["token", "password", "apiKey"]),
-        SinkPattern::logger(),
-    );
-    query.barriers = BarrierPattern::call_any(["redact", "mask_secret"]);
-    query.max_paths = 20;
+The long-term promise is that polint becomes a local semantic layer for AI-assisted engineering: an agent can ask what uses an API, why a path exists, whether user-controlled data can reach a sink, which unknowns block certainty, and then turn recurring findings into repo-local Rust rules enforced by `polint check` and `polint review`.
 
-    for violation in flow.forbidden(query) {
-        ctx.report(violation.diagnostic(
-            ctx.rule_id(),
-            "Secret-like value reaches logging without redaction.",
-        ));
-    }
+The v2.0 implementation must therefore optimize for:
 
-    Ok(())
-}
-```
+1. Durable, validated local analysis state.
+2. Honest graph and summary query results with precision, provenance, unknowns, and budgets.
+3. Fast warm `polint review` through summary reuse and invalidation.
+4. Registry-ready package summary manifests without a remote registry.
+5. A future CLI query surface over the program graph without exposing raw internal storage or solver APIs.
 
-The public style is:
+## Milestone Outcome Gates
 
-1. Request a typed preview view in the `#[polint::rule]` function signature.
-2. Construct one plain query object with typed patterns.
-3. Run one query method on the view.
-4. Report each returned violation through its diagnostic helper.
+The locked Static Analysis 2.0 research defines falsifiable goals: scale (memory proportional to working set, not repo), latency (warm runs proportional to change), accuracy (measured real-app callgraph F1), and honesty. v2.0 is the storage-and-reuse slice of that program. It must measurably move scale and latency, not only land infrastructure. Every roadmap phase must name which outcome gate it advances; a phase that advances none is plumbing and should be folded into one that does.
 
-Do not add competing public forms for the same behavior: no fluent builder DSL, no closure-filter DSL, no string query language, no public raw CFG/call/data-flow graph traversal as the normal rule-authoring path.
+1. **Scale gate.** Peak RSS on the large-monorepo benchmark stays proportional to the analyzed working set. Store ingest must not resurrect the eager whole-repo pipeline or whole-repo source loading that previously caused 30GB+ OOM (fixed via capability gating and rule-scoped discovery; current baseline ~1GB peak on the reference monorepo). Initial regression budget until warm reuse lands: at most +20% peak RSS and +25% cold wall-clock versus the store-disabled baseline; budgets are revisable only with a recorded decision.
+2. **Latency gate.** By milestone end, warm `polint review` on a small diff re-analyzes only the invalidation frontier (changed functions/SCCs plus transitive summary dependents), with the recompute set instrumented and a p50/p95 warm-latency target set from the Phase 0 baseline and then enforced.
+3. **Honesty gate.** Unknown, partial, setup-missing, unsupported, and budget-exceeded states remain visible end to end through store, query, review, and CLI surfaces — now durably persisted, never collapsed.
+4. **Accuracy visibility gate.** v2.0 does not have to raise callgraph F1 (that is the type-directed tier workstream in the locked research), but it must measure and surface recall/precision of the persisted graph on real-repo benchmarks so `polint graph` answers are never overtrusted and the next milestone's accuracy work starts from a recorded baseline.
 
-## v1 Requirements
+## Locked Technology Decisions
 
-Requirements for the v1.4 milestone. Each maps to exactly one roadmap phase.
+- Use `rusqlite` with bundled SQLite as the primary embedded local semantic store.
+- Keep the store private under the analysis kernel; `rusqlite` types, SQL, tables, row IDs, provider generation IDs, and parser/solver internals must not become public contracts.
+- Add `blake3` for content-addressed summary and payload identities where strong content IDs are needed. Do not silently replace existing cache keys.
+- Add Tantivy only in the lexical-search phase, after stable semantic document IDs exist.
+- Keep vector search deferred behind an unstable/experimental boundary requiring model, chunker, dimension, metric, normalization, provenance, and content-digest lockfiles.
+- Do not build a remote package-summary registry in v2.0. Build local registry-ready seams only.
+- Do not add public SQL, Cypher, Datalog, QL, SPARQL, a generic graph shell, or public raw graph SDK views.
 
-### Preview SDK Surface
+## Locked Milestone Decisions
 
-- [x] **API-01**: Rule authors can request preview fact views `Events<'_>`, `Calls<'_>`, `ControlFlow<'_>`, and `DataFlow<'_>` from `#[polint::rule]` signatures using only `polint::sdk::prelude::*`.
-- [x] **API-02**: Advanced policy rules use one public query-object style: `Query::new(required...)`, explicit option fields, a single view method, and violation results. Fluent DSLs, closure filters, string mini-languages, and raw graph traversal are not supported public APIs.
-- [x] **API-03**: Query structs exist for `ReachQuery`, `GuardQuery`, `LifecycleQuery`, and `FlowQuery`, with stable required inputs, explicit defaults, deterministic ordering, and documented budget knobs.
-- [x] **API-04**: Pattern structs exist for `EventPattern`, `SourcePattern`, `SinkPattern`, `GuardPattern`, and `BarrierPattern`, covering calls, imports/packages, fields/properties, HTTP/trust boundaries, secrets, PII-like values, loggers, command execution, network requests, HTML sinks, and persistence writes.
-- [x] **API-05**: Macro-derived capabilities, rule manifests, and capability diagnostics understand the new preview views; unsupported setup produces `polint/capability` diagnostics and the rule does not run with placeholder facts.
-- [x] **API-06**: Existing reserved low-level `Cfg<'_>` and `CallGraph<'_>` remain reserved; v1.4 promotes policy-level `ControlFlow<'_>` and `Calls<'_>` instead of exposing raw CFG or call-graph internals.
+Approved 2026-07-09. Changing any of these requires a recorded decision, not a silent edit.
 
-### Events and Calls
+- **Regression budgets:** at most +20% peak RSS and +25% cold wall-clock versus the store-disabled baseline until warm reuse lands (Phase 67); after that, warm `review` must beat the baseline on the frontier benchmark.
+- **Benchmark suite:** pinned-commit manifest with `grafana/grafana` as the primary large polyglot (Go+TS) scale target, `gohugoio/hugo` (Go medium), `excalidraw/excalidraw` (TS medium), the existing Jelly and Go x/tools oracle suites for micro fixtures and the recall/precision baseline, and the private devloupe monorepo as a local-only, non-CI reference point (~1GB peak RSS, cold 7.4s / warm 4.6s known baseline).
+- **Search scope-cut:** Phase 70 (Tantivy lexical search) is the designated cut if the milestone runs long. Cutting it moves SEARCH-01..05 to v2.1 unchanged; no other phase depends on it.
 
-- [x] **CALL-01**: `Events<'_>` can match semantic call events through `EventPattern::call` without exposing raw AST, MIR, CFG, solver, or graph node IDs. Non-call event families remain preview vocabulary until later phases promote backed facts.
-- [x] **CALL-02**: `Calls<'_>` supports `forbidden_reachable(ReachQuery)` for policies such as "no raw API reachable from request handlers" and returns deterministic violations with root, callsite, target, precision, and unknown/budget evidence.
-- [x] **CALL-03**: Reach queries can constrain roots, target patterns, tests inclusion, max depth, max paths, minimum precision, and minimum confidence. Package/module scoping remains intentionally deferred instead of adding a second public query style.
-- [x] **CALL-04**: Call-query behavior is backed by the v1.3 refined-call projection and unknown taxonomy, preserving precision floors and surfacing unresolved or budget-exceeded edges honestly.
+## v2.0 Requirements
 
-### Control-Flow Policies
+Requirements for the v2.0 milestone. Each requirement should map to exactly one roadmap phase after roadmap generation.
 
-- [x] **CTRL-01**: `ControlFlow<'_>` supports same-function call-event `missing_guard(GuardQuery)` for policies such as validation-before-money-move and allowlist-before-dangerous-call. Field/property write events remain preview vocabulary until backed write-event facts land.
-- [x] **CTRL-02**: `ControlFlow<'_>` supports same-function call-event `missing_cleanup(LifecycleQuery)` for policies such as transaction begin followed by rollback/cleanup. Exact resource identity and every-exit cleanup proof remain deferred.
-- [x] **CTRL-03**: Guard and lifecycle queries expose one typed public API for same-function checks without exposing dominance/postdominance graphs directly. Bounded interprocedural execution remains deferred behind the existing `max_depth` shape.
-- [x] **CTRL-04**: Control-flow results include event spans, guard/cleanup candidates, same-function uncovered path evidence, conservative status/precision, and budget status in diagnostic evidence.
+### Product Boundaries
 
-### Data-Flow Policies
+- [ ] **PROD-01**: `polint check` remains the repo-local Rust policy command. Store creation, refresh, corruption, or invalid schema must not silently change diagnostics, output formats, exit semantics, or public rule behavior.
+- [ ] **PROD-02**: `polint review` remains the diff-focused agentic review workflow and should be the first workflow to benefit from warm summary reuse and invalidation-frontier recomputation.
+- [ ] **PROD-03**: `polint graph` is an exploratory local understanding surface for users and agents. It is not a CI pass/fail interface and must not become a second rule system.
+- [ ] **PROD-04**: Recurring graph findings become enforcement by writing repo-local Rust rules consumed by `polint check` and `polint review`, not by making graph queries into hidden policies.
+- [ ] **PROD-05**: Public docs, generated skill text, examples, SDK exports, and CLI output must describe Static Analysis 2.0 as durable local analysis infrastructure, not as a remote registry product or bundled production ruleset.
 
-- [x] **FLOW-01**: `DataFlow<'_>` supports `forbidden(FlowQuery)` for backed source-to-sink policies with optional barriers/sanitizers through `BarrierPattern::call_any`.
-- [x] **FLOW-02**: `DataFlow<'_>` supports required-barrier semantics for call-based policies, including request-to-dangerous-call and secret-to-log patterns, by suppressing paths that cross a matching sanitizer/barrier call and reporting uncovered paths.
-- [x] **FLOW-03**: Built-in Phase 58 patterns cover HTTP request trust-boundary sources, explicit `secret_like` name sources, exact call sinks, logger sinks, and explicit barrier calls. Broader built-in categories such as SQL, raw HTML/JSX, SSRF URLs, file paths, analytics, PII, and outbound network clients remain template/future taxonomy work.
-- [x] **FLOW-04**: Flow queries use the existing private data-flow substrate for bounded path search, source-introduction edges, existing local/direct-call/summary edges, deterministic capped results, and path evidence without exposing raw graph APIs.
-- [x] **FLOW-05**: Data-flow queries distinguish found, heuristic, unknown, and budget-exceeded results in policy diagnostics; unsupported pattern families return no matches until backed, and heuristic patterns are documented honestly.
+### Ground Truth and Performance Baseline
 
-### Violations, Evidence, Cache, and Unknowns
+- [ ] **BENCH-01**: Extend the existing benchmark/promotion-gate harness with a real-repo suite (at least one production-scale monorepo plus representative OSS repos per language) that records peak RSS, cold/warm wall-clock, cache/store size, and budget-exhaustion telemetry as curves versus repo size and diff size. This lands before any store phase is considered complete, so the problem stays visible and gateable.
+- [ ] **BENCH-02**: Record the store-disabled baseline for `polint check` and `polint review` (peak RSS, cold/warm latency, diagnostics parity) before persistence is enabled by default. All later phases report deltas against this baseline.
+- [ ] **BENCH-03**: Every store phase runs the scale/latency regression gates from the Milestone Outcome Gates section. Until warm reuse lands, the gate is the regression budget over the store-disabled baseline; after warm reuse lands, warm `review` must beat the baseline on the frontier benchmark.
+- [ ] **BENCH-04**: Persisted-graph recall/precision is measured against the existing real-repo callgraph benchmarks and surfaced in benchmark reports, giving `polint graph` answers a recorded accuracy baseline and the next milestone's accuracy work a starting point.
 
-- [x] **EVID-01**: All query families return a consistent `PolicyViolation`-style result that can produce a diagnostic with rule ID, message, primary span, labels, suggestions when available, and structured evidence.
-- [x] **EVID-02**: Violation evidence includes query type, matched patterns, root/source/sink/event spans, path steps, precision/confidence/status, budget state, and unknown reasons in stable JSON/SARIF output.
-- [x] **EVID-03**: Results are deterministically sorted and deduplicated across sequential/parallel execution, cache restore, provider ordering, and repeated runs.
-- [x] **EVID-04**: Query parameters, preview API versions, rule options, language lifecycle inputs, solver budgets, and model/adaptation files participate in cache identity with must-invalidate and must-preserve-hit tests.
-- [x] **EVID-05**: Unknown and budget behavior is user-visible and actionable; policy rules must not silently pass when setup gaps, unsupported semantics, or budget exhaustion make the answer incomplete.
+### Pipeline Cost and Memory Discipline
 
-### Flagship Rule Templates
+- [ ] **PERF-01**: Store ingest respects the capability-gated semantic pipeline and rule-scoped discovery. Enabling persistence must not resurrect the eager whole-repo pipeline or whole-repo source loading for runs whose rules do not request deep facts; what the store persists follows what the run legitimately computed.
+- [ ] **PERF-02**: Store ingest streams in bounded, sorted batches. Building a commit plan must not require holding the full generation's rows, payloads, or source text resident at once. Peak ingest memory is measured in the benchmark suite.
+- [ ] **PERF-03**: When persistence is disabled, unavailable, or skipped, `polint check` and `polint review` take a zero-cost path: no store I/O, no schema checks on the hot path, and no behavior drift.
+- [ ] **PERF-04**: Once dependency package summaries persist and validate, dependency bodies are not re-parsed or re-summarized while their (package, version, schema, toolchain, config) identity matches. This is the O(working set) memory property from the locked research, verified by fixture (dependency source removed or altered without identity change is never re-read) and by benchmark.
 
-- [x] **TPL-01**: `polint new-rule` can generate a request-to-shell template using `DataFlow<'_>`, `FlowQuery`, `SourcePattern::http_request`, `SinkPattern::call`, and validation barriers.
-- [x] **TPL-02**: Generated templates cover secret-to-log and PII-to-analytics policies with explicit heuristic wording and redaction/barrier examples.
-- [x] **TPL-03**: Generated templates cover auth/validation-before-sensitive-write, transaction cleanup, and raw reachable API policies using `ControlFlow<'_>` and `Calls<'_>`.
-- [x] **TPL-04**: Generated templates cover SSRF, dangerous HTML sinks, unsafe deserialization from request data, and user-controlled file path policies using the same query-object style.
-- [x] **TPL-05**: README, examples, generated agent skill text, and docs show the flagship templates as repo-local policy examples without presenting polint as a bundled ruleset.
+### Store Foundation
 
-### Validation and Public Boundary
+- [ ] **STORE-01**: Add a private SQLite/rusqlite semantic-store facade owned by the analysis kernel, with `pub(crate)` boundaries and no escaped `rusqlite` connection, statement, row, or SQL-string types.
+- [ ] **STORE-02**: Support migrations, schema versioning through `PRAGMA user_version`, controlled diagnostics for future/invalid schemas, and safe rebuild or skipped-persistence behavior.
+- [ ] **STORE-03**: Use explicit connection policy: foreign keys enabled, WAL where appropriate, bounded busy timeout, one writer boundary, and separate read-only query connections.
+- [ ] **STORE-04**: Persist store manifest, active generation, pending generation, complete generation, schema version, workspace/config identity, and store stats.
+- [ ] **STORE-05**: Commit only complete validated generations. A crash, failed migration, failed payload write, or failed search rebuild must leave either the old complete generation readable or require an explicit rebuild diagnostic.
+- [ ] **STORE-06**: Providers and rule execution do not receive SQL connections. They communicate through typed kernel/store methods and existing provider output structures.
+- [ ] **STORE-07**: Store failure during `polint check` produces controlled internal diagnostics, rebuilds, or skipped persistence; it must not produce partial policy answers with confident output.
+- [ ] **STORE-08**: Two concurrent `polint` processes against the same store serialize safely through a generation lease, or the loser falls back to read-only/skipped persistence with a clear diagnostic. Concurrent invocations must never corrupt, interleave, or partially overwrite generations.
 
-- [x] **VAL-01**: Each preview view and each query family has at least one temp-repo style test where generated `.polint/rules` imports only `polint::sdk::prelude::*`, registers through `polint::runner::run_cli`, consumes real facts, and asserts diagnostics through `polint check --format json`.
-- [x] **VAL-02**: Public docs under `docs/facts/` describe the preview status, syntax, limits, precision tiers, heuristic behavior, unknown/budget semantics, and realistic examples for every new view and query type.
-- [x] **VAL-03**: The public-surface leak gate proves raw CFG, call graph, semantic graph, data-flow graph, solver, provider, `AnalysisDb`, and private IDs are not reachable from the supported SDK, CLI, runner, README, generated skill text, or docs/facts surfaces.
-- [x] **VAL-04**: Milestone exit verification runs full workspace tests, formatting, clippy, temp-repo SDK tests, cache invalidation tests, docs/example smoke tests, and deterministic repeated-run checks for the flagship policies.
+### Metadata, Facts, and Invalidation
+
+- [ ] **META-01**: Mirror existing kernel identity vocabulary in the store: `InputSnapshot`, provider manifests, layer keys, summary keys, query keys, provider output metadata, validation events, and dependency indexes.
+- [ ] **META-02**: Persist normalized validated facts and indexes for files, packages/modules, imports/exports, resolutions, symbols, definitions, references, functions, calls, evidence, summaries, unknown regions, and budget events as they become available. Whole-program data-flow/taint results are never eagerly materialized: persist summaries and graph adjacency, compute path/taint answers demand-driven at query time over those persisted rows, and persist only bounded query results/traces keyed by existing query keys.
+- [ ] **META-03**: Every fact-like row carries stable semantic identity, repository-relative path identity where applicable, fact family, provider/schema identity, precision, confidence/status, provenance, validation state, dependency metadata, and generation.
+- [ ] **META-04**: Invalidation dependencies include source files, packages/projects, provider manifests, requested capabilities, language lifecycle inputs, config, schema, summary keys, query options, budget profiles, search manifests, and future model/extension digests where relevant.
+- [ ] **META-05**: Deterministic public/query output never depends on SQLite `rowid`, insertion order, unordered Rust maps, parallel provider completion order, or Tantivy internal document IDs.
+- [ ] **META-06**: The store does not persist full AST, source, MIR, CFG, or whole raw graph dumps as the product storage model. Persist normalized facts, summaries, indexes, compact evidence, digests, spans, and payload references.
+- [ ] **META-07**: `unknown`, `unsupported`, `setup_missing`, `partial`, and `budget_exceeded` states remain durable and queryable. They must never collapse into `not_found` or an empty result.
+
+### Summary Persistence and Registry-Ready Seams
+
+- [ ] **SUM-01**: Persist summary manifests for dependency package summaries and application function/SCC summaries with package/version identity, schema version, toolchain/frontend identity, config digest, provenance, validation metadata, and precision/status.
+- [ ] **SUM-02**: Use content-addressed payload IDs for summary payloads and registry-ready package summary seams. Introduce typed digest wrappers so cache invalidation keys and content-addressed payload digests cannot be confused.
+- [ ] **SUM-03**: Decide summary payload layout through validation before locking it in: SQLite BLOBs, adjacent content-addressed files, or a hybrid must be benchmarked for DB size, WAL growth, crash behavior, restore behavior, and read latency.
+- [ ] **SUM-04**: Implement the invalidation frontier so warm runs recompute changed functions/SCCs plus transitive summary dependents while reusing valid dependency and unaffected application summaries.
+- [ ] **SUM-05**: Enable summary reuse only after from-scratch parity, recompute-and-diff checks, manifest validation, and stale-reuse prevention fixtures pass.
+- [ ] **SUM-06**: Store summary-derived facts with explicit precision, confidence/status, provenance, digest identity, validation state, and trust placeholders. Heuristic summaries must remain labeled heuristic.
+- [ ] **SUM-07**: Build no remote registry, publish protocol, fetch protocol, auth/signing layer, or central corpus in v2.0. The milestone only preserves local manifest/payload seams that can support a future registry.
+
+### Warm Review Payoff
+
+The invalidation frontier is the practical payoff of this milestone. It is a first-class deliverable with its own falsifiable requirements, not an emergent property of summary persistence.
+
+- [ ] **REV-01**: Warm `polint review` recomputes exactly the invalidation frontier: changed functions/SCCs plus transitive summary dependents, reusing valid dependency and unaffected application summaries. The recompute set is instrumented and asserted in fixtures covering both must-recompute and must-reuse cases.
+- [ ] **REV-02**: Warm `polint review` on the frontier benchmark meets the p50/p95 latency target set from the Phase 0 baseline, and internal diagnostics report summary hit/miss/stale/invalid counts so reuse quality is observable.
+- [ ] **REV-03**: Warm review output is byte-identical to cold review output for the same inputs, including findings, evidence, unknowns, setup gaps, and budget states. Warm reuse ships only behind this parity gate.
+
+### Internal Query Engine
+
+- [ ] **QUERY-01**: Add private internal query services over complete store generations for used-by, neighbors, callers, callees, path, taint-style reachability, and search candidate resolution.
+- [ ] **QUERY-02**: Standardize one internal query result envelope that can later render CLI JSON with `version`, `schema`, `command`, `query`, `status`, `precision`, `nodes`, `edges`, `paths`, `findings`, `unknowns`, `budgets`, and `summary`.
+- [ ] **QUERY-03**: Query status values include at least `complete`, `partial`, `not_found`, `unknown`, `budget_exceeded`, `unsupported`, and `setup_missing`; `not_found` is valid only when the available evidence is complete enough for that claim.
+- [ ] **QUERY-04**: Query filters cover path globs, tests included/excluded, minimum precision, provenance, unknown handling, max depth, max paths, and result limits where relevant.
+- [ ] **QUERY-05**: Path and taint-style queries are bounded, cycle-aware, deterministic, evidence-backed, and explicit about barriers, summaries, unknown regions, and budget exhaustion.
+- [ ] **QUERY-06**: Query results use stable semantic IDs, repository-relative paths, spans, precision, provenance, evidence IDs, and status fields. Raw store row IDs, provider IDs, parser IDs, solver IDs, and SQL names never appear.
+- [ ] **QUERY-07**: Search results are candidates over stable store document IDs. Search does not create semantic facts and must not become an input to deterministic `polint check` behavior.
+- [ ] **QUERY-08**: Query correctness fixtures land before public CLI promotion and cover cross-file refs, cross-package imports, direct/refined calls, cycles, paths, taint barriers, summary boundaries, setup gaps, unknown-preserving no-results, and budget exhaustion.
+
+### Local CLI Graph Surface
+
+- [ ] **CLI-01**: Promote selected `polint graph` commands only after the underlying internal query fixtures, no-leak gates, determinism gates, docs, and benchmark gates pass.
+- [ ] **CLI-02**: Initial graph commands should cover used-by, neighbors, callers, callees, path, taint-style reachability, and lexical search as phase gates allow.
+- [ ] **CLI-03**: Graph commands provide agent-friendly JSON as the design center and human output as a convenience renderer over the same private query envelope.
+- [ ] **CLI-04**: The public graph CLI exposes bounded purpose-built commands and structured filters, not SQL, table inspection, Cypher, Datalog, QL, SPARQL, or a generic graph shell.
+- [ ] **CLI-05**: CLI docs explain limits, precision, unknowns, budgets, summary-backed evidence, and the exploration-to-policy workflow honestly.
+- [ ] **CLI-06**: Promoted CLI JSON schemas have snapshots and compatibility notes. Internal store schema changes must not force public JSON schema changes.
+- [ ] **CLI-07**: Graph command docs and benchmark reports carry the measured recall/precision context from BENCH-04, and unknown counts render by default, so users and agents can calibrate trust in graph answers instead of reading them as complete.
+
+### Search Boundary
+
+- [ ] **SEARCH-01**: Define a `SearchCorpus` over stable semantic-store document IDs before adding a search engine dependency.
+- [ ] **SEARCH-02**: Add Tantivy in the lexical-search phase for symbols, evidence text, diagnostic text, summaries, and selected snippets after store IDs and query envelopes are stable.
+- [ ] **SEARCH-03**: Tantivy internal document IDs, segment state, and index layout remain private. Results map back to stable semantic document IDs and evidence/spans from the store.
+- [ ] **SEARCH-04**: Search indexes are derived artifacts tied to store manifest/content digests and complete generations. Rebuild and swap must be crash-safe.
+- [ ] **SEARCH-05**: Stable vector search is deferred. Any experimental vector work must stay off by default and require explicit model, chunker, dimension, metric, normalization, provenance, and content-digest metadata.
+
+### Validation, Recovery, and Scale
+
+- [ ] **VAL-01**: Cold build, warm build, restored-store build, partial invalidation, process restart, randomized provider order, and different Rayon worker counts produce byte-identical normalized policy and query JSON where semantics are unchanged.
+- [ ] **VAL-02**: Migration tests cover empty DB, previous schema, idempotent migration, future-schema refusal, invalid-schema rebuild path, and controlled diagnostics.
+- [ ] **VAL-03**: Crash/recovery tests kill the process during SQLite ingest transaction, summary payload write, migration, WAL checkpoint, and search rebuild. Recovery must expose only a complete generation or a rebuild-needed diagnostic.
+- [ ] **VAL-04**: Stale-reuse mutation fixtures cover source edits, package/lifecycle config changes, provider manifest changes, requested-capability changes, schema changes, summary dependency changes, query option changes, and budget-profile changes.
+- [ ] **VAL-05**: Unknown, unsupported, setup-missing, partial, and budget-exceeded behavior is covered by fixtures and remains visible in graph/query/review output.
+- [ ] **VAL-06**: Public-boundary leak gates prove SQL, table names, raw row IDs, provider generation IDs, parser IDs, solver IDs, raw graph internals, and store payload formats are absent from SDK prelude, CLI JSON, README, docs/facts, examples, and generated skill text.
+- [ ] **VAL-07**: Scale benchmarks cover ingest/query p50 and p95, DB and WAL size, RSS, pruning/vacuum cost, recursive CTE versus Rust traversal, and payload BLOB versus adjacent file behavior at 100k, 500k, and 1M+ row scales where practical.
+- [ ] **VAL-08**: Cache/status/clean/prune behavior accounts for semantic-store generations, payloads, search indexes, stale rows, WAL/checkpoint policy, and orphaned payload cleanup.
+- [ ] **VAL-09**: External temp-repo tests continue to prove repo-local rules import only `polint::sdk::prelude::*`, register through `polint::runner::run_cli`, consume public typed views, and observe unchanged `polint check --format json` behavior.
 
 ## Future Requirements
 
-Deferred to v1.5+ unless explicitly pulled forward.
+Deferred to later milestones unless explicitly pulled forward.
 
-### Stable Query Surface
+### Remote Registry
 
-- **STABLE-FUT-01**: Promote preview query APIs to stable after at least one milestone of external-rule usage and compatibility review.
-- **STABLE-FUT-02**: Add semver-stable JSON schema for query evidence consumed by agents and IDEs.
-- **STABLE-FUT-03**: Add migration tooling if preview query names or fields change before stabilization.
+- **REG-FUT-01**: Add remote package-summary publish/fetch only after local manifest identity, recompute-and-diff, validation metadata, trust hooks, and poisoning/revocation models are proven.
+- **REG-FUT-02**: Add signing, provenance verification, trust policy, corpus management, and cache-poisoning defenses before any remote registry affects analysis answers.
+- **REG-FUT-03**: Add registry import/export CLI only with explicit user action and clear offline fallback behavior.
 
-### More Precision
+### Stable Query and Agent Surfaces
 
-- **PREC-FUT-01**: Context sensitivity controls for specific flow/call queries.
-- **PREC-FUT-02**: Opt-in bounded Andersen/VTA precision exposed as query options after benchmark gates.
-- **PREC-FUT-03**: Language-specific framework packs for Rails/Django/Spring/etc. after Go and TS/JS policy queries prove the model.
+- **QUERY-FUT-01**: Promote a stable graph/query JSON schema after the exploratory CLI has survived at least one milestone of usage and compatibility review.
+- **QUERY-FUT-02**: Add MCP/LSP/editor integrations over the query envelope once the local CLI schema is stable.
+- **QUERY-FUT-03**: Promote deliberately scoped SDK fact views for graph/security queries only after CLI semantics, evidence, and no-leak gates are stable.
 
-### Interactive Querying
+### Accuracy Program (next milestone headline)
 
-- **QUERY-FUT-01**: Public `polint query` command for exploratory policy queries outside Rust rule code.
-- **QUERY-FUT-02**: IDE/LSP integration that visualizes policy paths and unknowns.
-- **QUERY-FUT-03**: Agent-editable policy templates with guarded auto-fix suggestions.
+The locked research names the type-directed callgraph tier as the largest real-world F1 lever. v2.0 deliberately excludes it so the store foundation stays focused, but it is the default headline for the milestone after v2.0. v2.0's only accuracy obligation is BENCH-04/CLI-07: record the baseline and keep graph answers honest about it.
+
+- **ACC-FUT-01**: Type-directed callgraph tier — Go types and TS types via a type sidecar (XTA-grade, near-linear) resolving call sites through the cheapest sufficient tier, with field-based/value-flow fallback and points-to only for the untyped residue.
+- **ACC-FUT-02**: Selective context sensitivity and demand-driven precision refinement after the type-directed tier lands.
+- **ACC-FUT-03**: Verified ML at the edges (type/callable-shape inference for unresolved sites, callee ranking, LLM package summaries) only with symbolic verification and honesty labels, per the locked ML verdict.
+
+### Security Graph and Higher Precision
+
+- **SEC-FUT-01**: Add deeper security graph analysis for user-controlled data, SQL injection, SSRF, command injection, auth boundaries, and sanitizer/barrier reasoning after path and taint-style query semantics are validated locally.
+- **SEC-FUT-02**: Add higher-precision context sensitivity or solver modes behind explicit budgets and benchmark gates.
+- **SEC-FUT-03**: Add framework/domain packs only after they can emit validated facts or documented heuristic summaries without hiding unknowns.
+
+### Search and Vector
+
+- **SEARCH-FUT-01**: Promote vector search only after deterministic model/chunker/provenance lockfiles, embedding invalidation, privacy controls, and replayable index builds exist.
+- **SEARCH-FUT-02**: Add hybrid lexical/vector search as exploration only; search results must still not be policy truth without graph/provider verification.
 
 ## Out of Scope
 
-Explicitly excluded from v1.4 to prevent scope creep.
+Explicitly excluded from v2.0 to prevent scope creep.
 
 | Feature | Reason |
 |---------|--------|
-| Raw public CFG, call graph, semantic graph, solver, or data-flow graph APIs | The product value is simple policy authoring. Raw graph APIs freeze internals and create many ways to do the same thing. |
-| A string query language | Adds parser, documentation, escaping, and partial-overlap problems with Rust query structs. Rust rules already give users a typed host language. |
-| Fluent builder DSLs for every query option | Creates multiple equivalent spellings and fights the "one good way" API goal. Use `Query::new(...)` plus explicit option fields. |
-| Bundled production ruleset | polint remains a framework for repo-local rules. Templates are examples/scaffolds, not shipped default policy. |
-| Perfect whole-program precision | Preview APIs must expose precision/unknown/budget limits honestly rather than pretending exact coverage. |
-| Auto-fixing advanced policy violations | Most violations require domain judgment. v1.4 can include suggestions/evidence, not automatic rewrites. |
-| Python/Java parity | Go and TS/JS remain the proving languages for this policy query surface. |
-| Public adaptation/model-pack authoring surface | Existing adaptation internals may feed query answers, but v1.4 should not expose a separate model-pack SDK. |
-| Replacing ESLint, Biome, Ruff, golangci-lint, or formatters | These policy queries target repo-specific semantic policies generic linters cannot know. |
+| Remote package-summary registry | The user explicitly deferred it. v2.0 builds local registry-ready seams only. |
+| Public SQL, Cypher, Datalog, QL, SPARQL, or generic graph shell | Exposes unstable internals and creates a large support contract before command-specific semantics are proven. |
+| Public raw graph SDK views | Raw graph APIs freeze internal storage and solver choices. Promote only deliberate typed views later. |
+| `polint graph` as CI gate | Enforcement belongs in Rust rules through `polint check` and `polint review`. |
+| Stable vector search | Requires model/chunker/provenance lockfiles and deterministic invalidation not needed for the first implementation. |
+| Live embeddings or model downloads in deterministic commands | Would compromise offline reproducibility and policy determinism. |
+| Full AST/source/MIR/CFG dumps as the store | Bloats local state, increases privacy/support risk, and exposes the wrong abstraction. |
+| Dual graph store or graph database by default | Risks drift between facts, summaries, and query indexes. SQLite plus bounded Rust traversal is the v2.0 default. |
+| Parser/frontend replacement | Continue using Oxc for TS/JS and tree-sitter-go plus existing semantic providers for Go. |
+| Daemon/server requirement | v2.0 is an offline embedded local CLI foundation. |
 
 ## Traceability
 
-Which phases cover which requirements.
+Mapped in `.planning/ROADMAP.md` (phases 63-71); full per-requirement table lives in the roadmap's Requirement Coverage section.
 
-| Requirement | Phase | Status |
-|-------------|-------|--------|
-| API-01 | Phase 55 | Complete |
-| API-02 | Phase 55 | Complete |
-| API-03 | Phase 55 | Complete |
-| API-04 | Phase 55 | Complete |
-| API-05 | Phase 55 | Complete |
-| API-06 | Phase 55 | Complete |
-| CALL-01 | Phase 56 | Complete |
-| CALL-02 | Phase 56 | Complete |
-| CALL-03 | Phase 56 | Complete |
-| CALL-04 | Phase 56 | Complete |
-| CTRL-01 | Phase 57 | Complete |
-| CTRL-02 | Phase 57 | Complete |
-| CTRL-03 | Phase 57 | Complete |
-| CTRL-04 | Phase 57 | Complete |
-| FLOW-01 | Phase 58 | Complete |
-| FLOW-02 | Phase 58 | Complete |
-| FLOW-03 | Phase 58 | Complete |
-| FLOW-04 | Phase 58 | Complete |
-| FLOW-05 | Phase 58 | Complete |
-| EVID-01 | Phase 59 | Complete |
-| EVID-02 | Phase 59 | Complete |
-| EVID-03 | Phase 59 | Complete |
-| EVID-04 | Phase 59 | Complete |
-| EVID-05 | Phase 59 | Complete |
-| TPL-01 | Phase 60 | Complete |
-| TPL-02 | Phase 60 | Complete |
-| TPL-03 | Phase 60 | Complete |
-| TPL-04 | Phase 60 | Complete |
-| TPL-05 | Phase 60 | Complete |
-| VAL-01 | Phase 61 | Complete |
-| VAL-02 | Phase 61 | Complete |
-| VAL-03 | Phase 62 | Complete |
-| VAL-04 | Phase 62 | Complete |
-
-**Coverage:**
-- v1.4 requirements: 33 total
-- Mapped to phases: 33 (100%)
-- Unmapped: 0
-
-**Phase coverage breakdown:**
-- Phase 55: API-01, API-02, API-03, API-04, API-05, API-06 (6 reqs)
-- Phase 56: CALL-01, CALL-02, CALL-03, CALL-04 (4 reqs)
-- Phase 57: CTRL-01, CTRL-02, CTRL-03, CTRL-04 (4 reqs)
-- Phase 58: FLOW-01, FLOW-02, FLOW-03, FLOW-04, FLOW-05 (5 reqs)
-- Phase 59: EVID-01, EVID-02, EVID-03, EVID-04, EVID-05 (5 reqs)
-- Phase 60: TPL-01, TPL-02, TPL-03, TPL-04, TPL-05 (5 reqs)
-- Phase 61: VAL-01, VAL-02 (2 reqs)
-- Phase 62: VAL-03, VAL-04 (2 reqs)
+| Requirement Area | Phase | Status |
+|------------------|-------|--------|
+| Product Boundaries | 64 (PROD-01), 67 (PROD-02), 69 (PROD-03/04/05) | Mapped |
+| Ground Truth and Performance Baseline | 63 (gates enforced 64-71) | Mapped |
+| Pipeline Cost and Memory Discipline | 64 (PERF-03), 66 (PERF-01/02), 67 (PERF-04) | Mapped |
+| Store Foundation | 64 (STORE-01/02/03/06/07/08), 65 (STORE-04/05) | Mapped |
+| Metadata, Facts, and Invalidation | 65 (META-01/04), 66 (META-02/03/05/06/07) | Mapped |
+| Summary Persistence and Registry-Ready Seams | 67 | Mapped |
+| Warm Review Payoff | 67 | Mapped |
+| Internal Query Engine | 68 | Mapped |
+| Local CLI Graph Surface | 69 | Mapped |
+| Search Boundary | 70 (designated scope-cut) | Mapped |
+| Validation, Recovery, and Scale | 64 (VAL-02), 67 (VAL-04), 68 (VAL-05), 69 (VAL-06), 71 (VAL-01/03/07/08/09) | Mapped |
 
 ---
-*Requirements defined: 2026-06-20*
+*Requirements drafted: 2026-07-07*
+*Outcome gates, BENCH/PERF/REV requirements, and locked decisions added: 2026-07-08/09*
+*Approved and mapped to roadmap phases 63-71: 2026-07-09*

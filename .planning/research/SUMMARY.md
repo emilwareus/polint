@@ -1,243 +1,208 @@
 # Project Research Summary
 
-**Project:** polint v1.3 — Graph Engine Precision
-**Domain:** Multi-language static-analysis engine — shared semantic graph + unified call-graph solver (Go x/tools RTA + JS/TS Jelly oracle alignment)
-**Researched:** 2026-05-27
-**Confidence:** HIGH
+**Project:** polint v2.0 - Static Analysis 2.0 Implementation
+**Domain:** Durable local semantic store, summary persistence, graph query foundation, and search boundary for a repo-local static-analysis framework
+**Researched:** 2026-07-07
+**Confidence:** HIGH for store/architecture/product boundaries; MEDIUM for exact search, payload, and large-scale performance choices until validation benchmarks land
 
 ## Executive Summary
 
-v1.3 is the milestone where polint's v1.2 substrate (kernel facade, MIR, CFG, calls, summaries, type/value/place/alias, data flow, evidence, layer cache, benchmark adapters) is reorganized into a **single shared semantic graph + unified call-graph solver**. Today's isolated fact families produce 2.7% recall on Go x/tools RTA and 0.63% recall on Jelly — not because the substrate is wrong, but because there is no shared identity, reachability layer, language-native Go semantics, or function-token/object-property solver to convert facts into benchmark-grade edges. The v1.3 goal is to lift both suites to >25-30% recall (with the algorithmic ceiling around 70-90% Go RTA / 35-60% Jelly token / 55-80% Jelly object-model) while holding precision as a first-class gate — refusing the "recall by flooding" anti-pattern that would silently destroy the product's repo-local-policy value.
+v2.0 should turn polint's existing private analysis engine into a durable, queryable local semantic layer without changing the core product model. `polint check` remains the repo-local Rust policy engine, and `polint review` remains the diff-focused agentic review workflow. The new foundation is persistence, invalidation, and bounded queryability over already validated facts, summaries, graph edges, evidence, provenance, precision, unknowns, and budgets.
 
-The recommended approach is staged and dependency-ordered, with one architectural keystone: **language frontends emit constraints into a single solver, not a per-language solver each.** Ship identity + benchmark renderers + dedup + reachability roots first (low-cost, high-impact, makes every downstream metric trustworthy). Then JS inventory + scope + module graph (Oxc-backed) and the Go semantic frontend (out-of-process `polint-go-frontend` sidecar over NDJSON, never cgo) land in parallel. After that, build `analysis::solver` as a generalization of v1.2's `points_to::solver` — same deterministic worklist discipline, broader constraint vocabulary (`CopyEdge`, `Alloc`, `FieldLoad`, `FieldStore`, `CallConstraint`, `ModelEdge`). With the solver in place, Go RTA and JS function-token propagation can ship in parallel, JS object/property/`this` modeling follows, then adaptation models (gated behind precision floors and sandboxing), and finally cache + budgets are consolidated as a cross-cutting concern. The v1.2 promotion discipline carries forward: **everything new is `pub(crate)`; no SDK promotion in v1.3** until two-milestone benchmark gates approve.
+The recommended implementation is a private SQLite/rusqlite semantic store under `analysis_kernel`, with bundled SQLite, generation tracking, migrations, crash-safe commits, and typed internal query services. `AnalysisDb` and the provider DAG remain the computation source of truth; the store indexes validated outputs and later enables summary reuse, graph exploration, and lexical search. Add `blake3` for content-addressed payload IDs if new hashing is needed. Add Tantivy only in the lexical-search phase, keep sqlite-vec experimental for later, and do not build a remote registry now.
 
-Key risks are concentrated in three areas: **(1) determinism** — solver iteration over `HashMap` will silently introduce flakes, so `BTreeMap`/`IndexMap`/`FxHashMap` with sorted boundaries are mandatory from day one; **(2) cache invalidation** — RTA and token propagation are whole-program fact families whose dependency indexes must be designed in their first phase, not bolted on later; **(3) benchmark-label leakage and recall flooding** — the adaptation agent must run in a sandbox that cannot see oracle files, and promotion gates must enforce a precision floor, not just recall deltas. The Go sidecar adds process-lifecycle, version-skew, and `SetupMissing` surface area that v1.2 has not yet exercised — these need typed protocols and per-mode `unsupported_taxonomy` categories from the very first Go-semantic phase.
+The main risks are architectural drift: creating a second cache/identity system, letting SQLite insertion order affect public results, reading mixed generations after crash, under-invalidating summaries or graph rows, collapsing `unknown` into `not_found`, and leaking store internals into SDK/CLI/docs. Mitigate by reusing `InputSnapshot`, `LayerKey`, `SummaryKey`, `QueryKey`, provider manifests, and `FactMeta`; committing complete generations through one writer boundary; enforcing stable ordering; adding cold/warm/crash/migration/query parity gates; and proving that SQL, table names, row IDs, provider IDs, parser IDs, and raw graph internals stay private.
 
 ## Key Findings
 
-### Recommended Stack
+### Stack Additions
 
-The v1.2 stack stays (Rust 2024, rustc 1.94.0, Oxc, tree-sitter-go, petgraph, rayon, serde, insta, proptest, assert_cmd, all already pinned). v1.3 adds a small, deterministic, hot-path-oriented set of crates and a Go sidecar binary. **No async runtime, no datalog/Datafrog framework, no cgo, no second graph crate, no broad new public surface.**
+Keep the existing Rust 2024 workspace, Oxc and tree-sitter-go frontends, private analysis kernel, provider manifests, layer cache, typed fact metadata, evaluation harness, and public SDK/query-view boundaries. v2.0 adds persistence and queryability; it does not replace the analyzer stack.
 
-**Core additions (Rust workspace):**
-- `fixedbitset 0.5.7` + `roaring 0.11.4`: dense and sparse bitsets for reachability, points-to membership, token sets, RTA reached-function sets.
-- `hashbrown 0.17.1` + `rustc-hash 2.1.2`: raw-entry SwissTable + `FxHasher` for integer-keyed solver maps.
-- `smallvec 1.15.1` + `indexmap 2.14.0`: inline-store small vectors for `points_to`/`call_targets`/`flow_edges`; insertion-ordered maps for any solver output that gets hashed/snapshotted.
-- `string-interner 0.20.0` + `blake3 1.8.5`: stable property/qualified-name interning; fast cryptographic-strength digests for new cache key families (sidecar input digest, model digest, solver budget digest).
-- `which 8.0.2`: locate `polint-go-frontend` on PATH; emit structured `SetupMissing` if absent.
-- Oxc bump to 0.133.0 (Oxc semantic fidelity is load-bearing for JS scope/binding/`SymbolTable`).
+**Add now:**
+- `rusqlite = { version = "0.40.1", features = ["bundled"] }`: primary embedded SQLite store. Bundled SQLite avoids host drift and supports transactions, WAL, migrations, indexes, and read-only query connections.
+- `blake3 = "1.8.5"`: content-addressed summary/payload IDs and future registry-ready manifest identity. Keep polint's scheduling explicit; do not enable `blake3`'s Rayon feature initially.
 
-**Go sidecar (architectural keystone):**
-- Out-of-process Go helper `polint-go-frontend`, NDJSON over stdio. Pinned `golang.org/x/tools v0.45.0` for `go/packages` + `go/ssa` + `go/callgraph/rta`. Co-shipped binary; sidecar digest participates in cache keys. **Rejected:** cgo-hosted Go runtime (breaks rayon determinism + `unsafe_code = "forbid"`), reimplementation of `go/types` in Rust (multi-engineer-year, diverges from compatibility authority), protobuf/MessagePack/bincode wire (negligible perf win, large debug/tooling cost).
+**Add later, phase-gated:**
+- `tantivy 0.26.1`: lexical search over stable semantic-store document IDs after graph/query IDs exist. Tantivy `DocId`s are never stable semantic IDs.
+- `sqlite-vec 0.1.10-alpha.4`: experimental vector side index only after model, chunker, digest, dimension, metric, normalization, and provenance lockfiles are designed.
+- `redb 4.1.0`: fallback or adjacent content-addressed blob cache only if SQLite distribution or payload performance fails validation. Do not make it a second graph store.
 
-**Conditional / deferred:** `bincode 3.0` and `dashmap 6.2.1` only if profiling demands them. `tokio`/async explicitly forbidden in the solver core for determinism.
+**Do not add first:** remote registry client/server stack, public SQL/Cypher/Datalog/QL/SPARQL, ORM stack, custom JS/TS parser, vector DB, live embedding stack, or public raw graph SDK views.
 
-See `.planning/research/STACK.md`.
+### Feature Table Stakes
 
-### Expected Features
+**Must have:**
+- Private SQLite/rusqlite store facade with migrations, schema versioning, generation tracking, recovery, and no public table/SQL contract.
+- Durable persistence for normalized validated facts: files, modules/packages, imports/exports, resolutions, symbols, definitions, references, functions, calls, flow, evidence, summaries, precision, status, provenance, provider, validation, and dependency metadata.
+- Summary manifests and content-addressed payload seams for dependency package summaries and application function/SCC summaries.
+- Invalidation frontier so warm `review` recomputes changed functions/SCCs plus transitive summary dependents, not the full repo.
+- `polint check` preservation: output, exit semantics, determinism, and public rule behavior do not drift because a local store exists.
+- `polint review` preservation: diff-focused evidence, summaries, unknowns, setup gaps, and budget exhaustion remain honest.
+- Exploratory `polint graph` foundation for used-by, neighbors, callers, callees, paths, taint-style reachability, and search. It is not a CI gate.
+- Stable agent-friendly JSON envelope with status, precision, nodes, edges, paths, findings, unknowns, and summary counts.
+- Structured filters for path glob, tests on/off, minimum precision, provenance, unknown handling, max depth, max paths, and limit.
+- Validation gates for cold/warm parity, restored-store parity, migration, crash/recovery, stale reuse prevention, query correctness, unknown/budget preservation, benchmarks, and public-boundary proof.
 
-The full v1.3 feature inventory is in `.planning/research/FEATURES.md`. Every must-have is a `P1` table-stakes feature without which either the benchmark gates cannot pass or the reported numbers are statistically untrustworthy.
+### Differentiators
 
-**Must have (table stakes — all P1):**
-- **Stable internal identity** for functions, callsites, scopes, packages — the keystone; five other features become noise without it.
-- **Benchmark renderers** (`Go RelString`, `Jelly file:start_line:start_col:end_line:end_col`) — recall is unmeasurable without them.
-- **Observed-edge deduplication** by semantic identity before scoring.
-- **Identity-vs-unsupported taxonomy** (`wrong_identity`, `unsupported_edge`, `unresolved_edge`, `package_load_limitation`, `model_missing`).
-- **Explicit reachability roots** (`main`/`init`/exported/tests/configured) + **reachable-graph scoring mode** (per-suite oracle alignment: `oracle-rta`, `oracle-jelly`, `whole-repo`).
-- **Go semantic frontend** (`go/packages` loader + module-root inference + types + receiver types + method sets + init + generics) — sidecar-backed.
-- **Go RTA provider** (reachable, address-taken, dynamic dispatch by signature, interface invoke by method-set, fixed-point iteration).
-- **JS/TS function and callsite inventory** with **exact-span identity** (1-based line/col, inclusive end, Jelly-shaped).
-- **JS/TS scopes/bindings** + **module graph** (ESM + CJS + tsconfig path aliases).
-- **JS/TS direct binding** (the lowest-precision Jelly recall layer — `f()`, `ns.f()`, imported aliases).
-- **JS/TS function-token propagation** (the main Jelly recall lever).
-- **JS/TS object/property/prototype/class/`this` model** with allocation-site abstraction.
-- **Shared semantic graph + unified call solver** (the architectural keystone).
-- **Per-family caches + solver budgets** (tokens, properties, fanout, package depth, model expansion).
-- **Unsupported / unknown taxonomy** across every provider.
+- Local semantic memory for agents: answer "what uses this?", "what path connects these?", and "what changes if this moves?" with stable IDs and evidence.
+- Honest graph exploration: precision, provenance, unknowns, setup gaps, and budgets are first-class in every query result.
+- O(change) review foundation: persisted summaries and dependency indexes make PR review proportional to changed code and dependent summaries.
+- Registry-ready without registry: content-addressed manifests, package/version identity, schema versions, validation metadata, recompute-and-diff hooks, and trust placeholders exist locally before any networked registry.
+- Exploratory-to-policy workflow: users investigate with `polint graph`, then encode recurring enforcement as Rust rules consumed by `polint check` and `polint review`.
+- Semantic lexical search: Tantivy search points back to stable semantic IDs, evidence spans, symbols, summaries, and selected snippets.
 
-**Should have (differentiators — P2, ship after gates pass):**
-- **Adaptation model layer** with schema validation, accept/reject reporting, prompt-hash + delta — polint's product wedge per the agent-extension research.
-- **Per-edge algorithm provenance ladder** (`syntactic` → `bound` → `direct` → `cha` → `rta` → `vta` → `token` → `points_to` → `repo_model`).
-- **JS native-callable shims** (`Array.prototype.map`, `forEach`, `Promise.then`, ...) loaded through the same adaptation schema (overridable per-repo).
-- **Confidence label tightening** + **demand-driven graph slices** wired to the unified solver.
-- **Cold-vs-warm benchmark runtime + cache hit/miss reporting**.
+### Architecture Direction
 
-**Defer (v1.4+):**
-- Go VTA provider; bounded Andersen-style points-to as a separate opt-in family; context sensitivity (k-CFA / object-sensitive); public SDK surface for the new graph engine (must clear two-milestone promotion gate); Python and Java parity; reflection / dynamic-import auto-modelling.
-
-**Anti-features (rejected; will resurface under recall pressure):**
-- Recall-by-flooding; benchmark-label adaptation; wildcard / broad-pattern models; single monolithic call-graph without algorithm/confidence labels; whole-program closed-world points-to as default; auto-modeled reflection edges; tree-sitter-only Go pipeline; span identity from display names; hiding unresolved/unsupported facts by default; one scoring mode across Go and Jelly suites.
-
-### Architecture Approach
-
-The architectural keystone is a **single `analysis::solver` consuming constraints emitted by language-specific frontends**, sitting on top of the v1.2 substrate (MIR, CFG, calls, summaries, type/value/place/alias, entrypoints, extensions) and feeding the existing `refined_calls`/`data_flow`/`evidence` downstream views unchanged. **No new crate**: everything stays inside `crates/polint` as `pub(crate)` modules, in line with v1.2's promotion discipline.
+Add a private `SemanticStore` under `crates/polint/src/analysis_kernel/store/`. Keep all store types `pub(crate)` and keep `rusqlite` types inside the module. Providers should not receive SQL connections. Build a `StoreCommitPlan` from validated kernel outputs, commit complete generations after existing fact validation, and expose only complete generations to readers.
 
 **Major components:**
+1. Store facade and connection layer: open modes, WAL, foreign keys, busy timeout, read-only query connections, diagnostics.
+2. Migrations and generation tracking: `PRAGMA user_version`, manifest, input snapshots, provider generations, active/complete generation selection.
+3. Ingest: typed extraction from `AnalysisDb`, `FactMetaStore`, provider output metadata, layer entries, and dependency indexes.
+4. Summaries and payloads: summary manifests, payload digests, dependency summary digests, projections, and payload indirection.
+5. Graph and query substrate: typed node/edge adjacency, reverse adjacency, evidence, unknown regions, budget events, and internal used-by/neighbors/callers/callees/path/taint services.
+6. Search manifest: stable semantic document IDs and derived Tantivy/vector metadata. Search indexes are candidates over store IDs, not facts.
+7. Store validation: schema, referential integrity, row metadata, generation completeness, no-leak checks, parity helpers, and recovery fixtures.
 
-1. **`analysis::semantic_graph`** (new) — Shared node/edge store with stable identities for functions, callsites, scopes, places, abstract objects, modules, packages. Typed edges (`Call`, `MemberOf`, `Alloc`, `Flow`). A *projection* over existing facts, not a parallel substrate.
-2. **`analysis::reachability`** (new) — `RootSet` discovery from v1.2 entrypoints + per-suite mode-aware reachable-graph BFS. Drives both Go RTA's reachable-from-roots fixpoint and per-suite scoring filters.
-3. **`analysis::solver`** (new) — Generalization of v1.2's `points_to::solver`. `ConstraintStore` keyed by stable IDs, deterministic `BTreeMap`/`VecDeque` worklist, explicit `SolverBudget`, per-language driver siblings (`go_rta.rs`, `ts_tokens.rs`, `ts_object_model.rs`) that share the same iteration logic. Folds `points_to` in as a sub-domain.
-4. **`analysis::adaptation`** (new) — Validated repo-local model files (`.polint/models/*.toml`) → `ModelEdge` constraints into the solver. Schema requires concrete patterns; validator confirms targets resolve in the semantic graph; accepted/rejected counts + prompt hash + delta reported in `benchmark adapted` mode.
-5. **`analysis::benchmark_identity`** (new) — Per-suite renderers (`go_relstring.rs`, `jelly_span.rs`) + dedup + categorization. Pure functions over identities; never consumed by rules.
-6. **`analysis::unknown_taxonomy`** (new) — `SetupMissing`, `UnsupportedSemantic`, `MissingFact`, `OutOfScope`, plus sidecar-specific failure modes (`GoPackagesLoadFailed`, `GoVersionUnsupported`, `GoSidecarTimeout`). Pervasive across providers.
-7. **Frontend extensions** — `src/go/semantic/` (sidecar client + `lower.rs` mapping NDJSON to constraints) and `src/ts/{inventory,scope,object_model}/` (Oxc-backed constraint emitters). Frontends own identity mapping and constraint emission; they do **not** own solving.
-8. **`polint-go-frontend` sidecar binary** (new, Go) — `go/packages` + `go/ssa` + NDJSON emitter. Co-shipped, sidecar binary digest in cache keys, JSON schema versioned.
-9. **`refined_calls::provider` rework** — Becomes a thin projection over solver output emitting `RefinedCallEdgeFact` unchanged. v1.2's heuristic refiners retire. Downstream `data_flow`/`evidence`/public SDK views see identical facts.
+Recommended build order: store facade and migrations; run manifest/generation tracking; validated semantic index ingest; summary persistence; graph adjacency/evidence indexes; internal query engine; public graph CLI promotion after gates; lexical search boundary; pruning, compaction, and crash hardening.
 
-**Suggested build order (dependency-driven; see `ARCHITECTURE.md` §"Suggested Build Order"):**
+## Watch-Outs and Pitfalls
 
-1. Identity + dedup + benchmark renderers. 2. Reachability + roots + per-suite scoring mode. 3. `semantic_graph` skeleton. 4. JS inventory + exact spans. 5. JS scope + module graph + direct binding. 6. Go semantic frontend (parallel with #4-5). 7. `solver` core. 8. Go RTA driver (parallel with #9). 9. JS function-token driver. 10. JS object/property/`this` model. 11. Adaptation models. 12. `refined_calls::provider` rework. 13. Unknown taxonomy (continuous). 14. Cache + budgets consolidation. 15. Benchmark promotion gate extension.
+1. **Second cache/identity system:** Persist existing kernel concepts instead of inventing store-specific identities. Reuse `InputSnapshot`, provider manifests, fact metadata, layer keys, summary keys, and query keys.
+2. **SQLite order leaking into deterministic output:** Never rely on `rowid`, insertion order, unordered Rust maps, or Tantivy internal IDs. Sort by stable semantic keys before public/query JSON.
+3. **Mixed generations after crash or migration:** Write pending generations transactionally, keep old complete generations readable, verify payload digests, and activate only after integrity checks pass.
+4. **Under-invalidation:** Persist dependency indexes for files, packages, providers, capabilities, lifecycle inputs, config, schema, summary keys, extension/model digests, budget profile, and query options where relevant.
+5. **Unknown hidden as not found:** Persist unknown regions and budget events. Graph/query envelopes must distinguish `complete`, `partial`, `not_found`, `unknown`, `budget_exceeded`, `unsupported`, and `setup_missing`.
+6. **Recursive query explosion:** Use SQL for simple indexed neighbors and Rust scoped traversal for path-heavy queries when cycle, barrier, budget, and evidence semantics are clearer.
+7. **Summary overtrust:** Summary-derived facts must carry precision, confidence, status, provenance, digest identity, and validation metadata. Heuristic summaries stay labeled heuristic.
+8. **Payload bloat:** Do not persist full AST/source/MIR/CFG dumps by default. Benchmark SQLite BLOBs versus adjacent content-addressed files before locking payload layout.
+9. **Writer contention:** Parallel providers produce sorted batches; one writer commits generations. Separate read-only query connections from writes.
+10. **Public surface leaks:** Add leak tests across SDK prelude, CLI JSON, README, docs/facts, examples, and generated skill text before promoting graph/search commands.
 
-See `.planning/research/ARCHITECTURE.md`.
+## Requirement Implications
 
-### Critical Pitfalls
+Requirements should be written around user-visible guarantees and validation, not raw storage implementation details.
 
-The top high-impact pitfalls from `.planning/research/PITFALLS.md` — each is structural to v1.3 and must be prevented design-time, not via policy.
+- The store is private: no SDK or public CLI contract exposes SQL, tables, raw row IDs, provider internals, parser IDs, solver IDs, or raw graph structures.
+- `polint check` behavior is preserved: store corruption or invalid schema causes rebuild, skipped persistence, or controlled internal diagnostics, not changed policy answers.
+- `polint review` should be the first workflow to benefit from warm summary reuse and invalidation frontier behavior.
+- Store rows must carry enough metadata to prove precision, status, provenance, validation state, schema/config/provider identity, and active generation.
+- Query commands must be bounded and honest. `not_found` is allowed only when the query has complete enough evidence; otherwise return `unknown`, `partial`, `unsupported`, `setup_missing`, or `budget_exceeded`.
+- Summary persistence must be registry-ready locally: package/version identity, schema version, content digest, provenance, validation metadata, recompute-and-diff, and future trust hooks. No publish/fetch protocol.
+- Search must be candidate retrieval over stable store document IDs. Search results do not create semantic facts and must not become inputs to deterministic `polint check`.
+- Validation requirements are first-class: parity, migration, crash/recovery, determinism matrix, mutation invalidation fixtures, query correctness, public-boundary proof, and large-scale benchmarks.
 
-1. **Determinism drift from solver iteration order.** `HashMap`/`HashSet` iteration order leaks into solver step counts, widening triggers, and budget cut-off decisions. **Prevent by** using `BTreeMap`/`IndexMap`/`FxHashMap` for all observable solver state, installing a determinism gate (10 runs with shuffled provider order → byte-identical observed JSON) before any solver lands, and totally-ordering every tie-break.
+### Suggested Phase Structure
 
-2. **Cache invalidation gaps with new cross-family fact dependencies.** RTA and token propagation are whole-program — a single function edit must invalidate the unified-graph layer transitively. **Prevent by** designing the dependency index in the `semantic_graph` phase, requiring a single-input-mutation fixture per new fact family, including sidecar binary digest + Go toolchain version + adaptation model digest + solver budgets in cache keys, and adding negative (must-preserve-hit) fixtures alongside positive (must-invalidate) ones.
+Every phase must name which milestone outcome gate it advances (scale, latency, honesty, accuracy visibility). Benchmarks and regression budgets from Phase 0 run at every phase boundary — the store must never silently re-inflate the memory or cold-latency wins already landed (capability-gated pipeline, rule-scoped discovery).
 
-3. **Recall-via-flooding and benchmark-label leakage.** A solver achieves recall by emitting every plausible edge; an adaptation agent reads expected-edge JSON and authors models that mirror oracle labels. **Prevent by** hard precision floors in promotion gates (Go ≥60%, configurable per suite), F-score β=0.5 tracking alongside F1, sandboxing the adaptation agent into a directory that does not contain `research/evaluation-harness/repos/*/expected*` or oracle JSON, hashing the adaptation prompt + asserting no benchmark-suite paths leak in, rejecting model facts whose RHS exactly matches oracle expectations, and held-out subset reporting per suite.
+**Phase 0: Ground Truth and Performance Baseline**
+Rationale: the locked research puts measurement first; without baselines, no later phase can prove it moved an outcome gate, and store overhead regressions stay invisible.
+Delivers: real-repo benchmark suite (production-scale monorepo + OSS repos), RSS/latency/store-size curves vs repo and diff size, store-disabled baselines for `check`/`review`, budget-exhaustion telemetry, persisted-graph recall/precision baseline on existing callgraph benchmarks.
+Avoids: benchmarks landing after public surfaces, untracked ingest overhead, unrecorded accuracy baseline.
 
-4. **Go sidecar FFI lifecycle.** `go/packages` can take minutes, hang under `go list` misbehavior, version-skew across Go toolchains. **Prevent by** wrapping the sidecar in a typed process boundary (length-prefixed framing or strict NDJSON with explicit terminators), enforcing per-request timeouts + cancellation propagation, pinning Go toolchain version in `InputSnapshot`, using a single long-lived sidecar per `polint check`, distinguishing `GoPackagesLoadFailed` / `GoVersionUnsupported` / `GoSidecarTimeout` in the unknown taxonomy, and adding a SIGTERM-cleanup fixture asserting no orphan Go processes survive after 5 seconds.
+**Phase 1: Store Foundation and Boundary Proof**
+Rationale: every later feature depends on a private, crash-safe store boundary.
+Delivers: `rusqlite` bundled dependency, private store module, connection policy, migrations, manifest table, no-op integration, no-leak tests.
+Avoids: public SQL/table contract, second cache identity, direct provider SQL access.
 
-5. **Span identity drift between Oxc and Jelly.** Template literals, JSX whitespace, optional calls, class static blocks, accessors — Oxc and Jelly count differently. **Prevent by** building the Jelly span renderer first, gating ≥99% oracle-span coverage on Jelly fixtures across Linux + macOS CI (CRLF/LF normalization fixture), documenting the chosen outer-span for every known-ambiguous Oxc AST form, and classifying span mismatches as `wrong_identity` (not "missing edge") in the taxonomy.
+**Phase 2: Generation Manifest and Metadata Mirroring**
+Rationale: invalidation and recovery need the existing kernel vocabulary in the store before facts are broadly ingested.
+Delivers: input snapshots, provider manifests, layer entries/dependencies, validation events, provider generations, store stats.
+Avoids: stale reuse, mixed generations, machine-specific path leakage.
 
-6. **Public/private API leak.** **Prevent by** marking every v1.3 new type `pub(crate)` from day one, adding a CI gate that compiles a minimal external rule crate and asserts no v1.3 solver types are reachable from `polint::sdk::prelude::*`, routing the benchmark adapter through `pub(crate) trait BenchmarkInternalView` rather than the public SDK, and reserving SDK promotion for a separate explicit phase after two-milestone benchmark stability.
+**Phase 3: Validated Fact and Graph Index Ingest**
+Rationale: graph/query commands need normalized validated facts and stable semantic IDs before public surfaces exist.
+Delivers: files, packages/modules, imports/resolutions, symbols/definitions/references, FactMeta metadata, adjacency/evidence foundations, internal xref tests.
+Avoids: raw AST/source dumping, unordered output, store row IDs escaping.
 
-7. **Per-language regression masking.** A solver tuning that helps Go RTA precision silently regresses JS recall; aggregate F1 hides it. **Prevent by** per-language solver policy traits (`solver_config.go.*` vs `solver_config.js.*`), per-suite + per-language delta reporting + enforcement in the promotion gate, and a polyglot canary fixture mixing Go and TS files run on every solver change.
+**Phase 4: Summary Persistence and Invalidation Frontier**
+Rationale: O(change) `review` is the main practical payoff and must precede broad query promotion. This phase carries the milestone's scale and latency gates: once dependency summaries validate, dependency bodies are never re-parsed while their identity matches (O(working set) memory), and warm `review` recomputes only the instrumented invalidation frontier with a measured p50/p95 win over the Phase 0 baseline.
+Delivers: summary manifests, content-addressed payload seams with `blake3`, dependency summary digests, warm reuse after from-scratch parity, recompute-and-diff hooks, frontier instrumentation, warm-review latency gate.
+Avoids: summary overtrust, stale summaries, remote registry scope creep, warm reuse shipping without byte-identical cold/warm review parity.
 
-Additional pitfalls covered in PITFALLS.md: token-set memory blowup without per-family budgets (#6), scoring mode conflation between reachable and full-graph (#9), provenance loss across solver-derived edges (#10), and hidden coupling between abstract-domain kernel / summary kernel / unified solver causing dependency cycles (#12).
+**Phase 5: Internal Query Engine and Envelope**
+Rationale: query semantics should be proven privately before CLI promotion.
+Delivers: internal used-by, neighbors, callers, callees, path, and taint services; stable envelope structs; status/precision/unknown/budget propagation; query correctness fixtures.
+Avoids: graph-as-CI, generic query language, unknown collapsed to not found.
 
-## Implications for Roadmap
+**Phase 6: Public Graph CLI Promotion**
+Rationale: only promote commands after determinism, correctness, no-leak, documentation, and benchmark gates are green.
+Delivers: selected `polint graph` commands with JSON/human rendering, structured filters, docs with limits, public schema snapshots.
+Avoids: SDK raw graph promotion, public query language, unstable internal IDs.
 
-Based on research, suggested phase structure for v1.3. Phase boundaries map 1:1 onto the dependency-driven build order; some phases can run in parallel (called out below). v1.3 starts at phase 42 (continues numbering from v1.2's last phase 41).
+**Phase 7: Lexical Search Boundary**
+Rationale: search should build on stable semantic document IDs and evidence envelopes. This phase is the designated scope-cut if the milestone runs long: it advances no scale/latency gate and can move to v2.1 without weakening the keystone (store + summaries + frontier + graph CLI).
+Delivers: `SearchCorpus`, Tantivy manifest, lexical search over symbols/evidence/diagnostics/summaries/snippets, active-store back-references, deterministic rebuild.
+Avoids: Tantivy IDs as semantic IDs, search as fact source, vector creep.
 
-### Phase 42: Benchmark Identity, Renderers, Dedup, and Identity Taxonomy
-**Rationale:** Identity is the keystone; nothing else's metric impact is measurable until renderers + dedup land.
-**Delivers:** `analysis::benchmark_identity` (`go_relstring.rs`, `jelly_span.rs`, `dedupe.rs`, `categorize.rs`); identity record `(file, span, language, package/module, container, display, signature digest)`; identity-vs-unsupported categories surfaced in eval JSON; ≥99% Jelly oracle-span coverage gate; CRLF/LF normalization fixture; public-surface-leak CI gate also lands here.
-
-### Phase 43: Reachability, Roots, and Per-Suite Scoring Mode
-**Rationale:** Per-suite scoring mode is foundational; without it Go precision is invisible. Determinism gate installed here so every subsequent solver phase inherits it.
-**Delivers:** `analysis::reachability` (root discovery from v1.2 entrypoints, BFS over semantic graph skeleton, per-suite policy); `scoring_mode` field in suite manifests; **determinism gate fixture**.
-
-### Phase 44: Semantic Graph Skeleton
-**Rationale:** Skeleton needed before frontends can emit into it. Constraint vocabulary defined here.
-**Delivers:** `analysis::semantic_graph` with typed `NodeKind`/`EdgeKind`, indexes, validation, provider manifest, cache key. `Constraint` enum vocabulary (`CopyEdge`, `Alloc`, `FieldLoad`, `FieldStore`, `CallConstraint`, `ModelEdge`, `TypeConstraint`). Dependency index design lands here.
-
-### Phase 45 (parallel with 46): JS/TS Inventory + Exact Spans + Scope + Module Graph + Direct Binding
-**Rationale:** Each layer roughly doubles recoverable Jelly recall. Can run in parallel with Go semantic frontend.
-**Delivers:** `src/ts/inventory/` (exact callsite/function enumeration with Jelly-shaped spans); `src/ts/scope/` (bindings, imports CJS+ESM+tsconfig aliases, module graph); direct call emission as `CopyEdge` + `CallConstraint`s.
-
-### Phase 46 (parallel with 45): Go Semantic Frontend + Sidecar
-**Rationale:** Largest single Go workstream; gates Go RTA.
-**Delivers:** `crates/polint/go-sidecar/polint-go-frontend/` Go binary; `src/go/semantic/{sidecar_client,facts,lower}.rs`; sidecar process boundary (typed protocol, timeout, cancellation, version pinning); failure-mode categories; sidecar binary digest in cache keys.
-
-### Phase 47: Unified Solver Core
-**Rationale:** Generalization of v1.2's `points_to::solver`. Folds in `points_to` as a sub-domain.
-**Delivers:** `analysis::solver` (`ConstraintStore`, deterministic `VecDeque` worklist, `SolverBudget`, `BudgetStatus`); language-neutral solver iteration; `DerivedEdgeProvenance` contract; per-language `SolverPolicy` trait scaffolding.
-
-### Phase 48 (parallel with 49): Go RTA Driver
-**Rationale:** Main Go recall lever. Hand-rolled RTA in Rust over emitted SSA-like facts (recommended starting point per STACK.md).
-**Delivers:** `analysis::solver::go_rta` (reachability fixpoint, address-taken tracking, dynamic dispatch by signature, interface invoke resolution).
-
-### Phase 49 (parallel with 48): JS/TS Function-Token Propagation Driver
-**Rationale:** Main Jelly recall lever. Token caps + allocation-site abstraction essential from day one.
-**Delivers:** `analysis::solver::ts_tokens`; per-variable token cap with `"too-many-tokens"` sentinel; `BudgetExceeded` reporting; memory-ceiling fixture.
-
-### Phase 50: JS/TS Object/Property/`this` Model + Driver
-**Rationale:** Largest precision/cost tradeoff. Ships behind a capability flag until benchmark gates approve.
-**Delivers:** `src/ts/object_model/` + `analysis::solver::ts_object_model` (allocation-site abstraction, bounded property buckets, prototype-walk termination, `this` for arrow vs. method/constructor/bound/`call`/`apply`).
-
-### Phase 51: Adaptation Model Layer
-**Rationale:** Must come *after* the solver is capable; premature adaptation produces flooding incentives.
-**Delivers:** `analysis::adaptation/` (TOML schema, loader, validator confirming target symbols exist, `ModelEdge` constraint emission); `benchmark adapted` mode with prompt hash + accepted/rejected counts + delta + held-out subset reporting; **sandbox**: adaptation agent runs in a directory containing only the SUT.
-
-### Phase 52: Refined-Calls Provider Rework + Unknown Taxonomy Consolidation
-**Rationale:** Once solver-derived edges are reliable, retire v1.2's heuristic refiners.
-**Delivers:** `refined_calls::provider` rewrite (consumes solver output); `analysis::unknown_taxonomy` consolidation; diagnostic queue via `polint inspect unknowns --format json`.
-
-### Phase 53: Cache + Budgets Consolidation
-**Rationale:** Per-family caches and budgets are designed in each prior phase but consolidated here.
-**Delivers:** Audit of every new provider's `cache_key.rs`; consolidated budget config; cold/warm RSS thresholds in benchmark report.
-
-### Phase 54: Benchmark Promotion Gate Extension
-**Rationale:** Final exit gate for v1.3. Precision floors, per-language deltas, held-out subsets, F-score β=0.5 alongside F1.
-**Delivers:** `polint-bench` extension; hard gates on precision floor + per-language deltas; v1.3 milestone audit.
-
-### Phase Ordering Rationale
-
-- **Identity-first (Phase 42) is non-negotiable.** Every downstream metric is unmeasurable until renderers + dedup are correct.
-- **Reachability (Phase 43) installs the determinism gate.** Subsequent solver phases inherit it automatically.
-- **Semantic graph skeleton (Phase 44) defines the constraint vocabulary** so 45/46/47/48/49/50/51 all emit into a stable shape.
-- **45 and 46 in parallel** because JS frontend work and Go sidecar work share no Rust modules.
-- **47 (solver) needs at least 45's constraints to validate.** Folds in `points_to` as a sub-domain.
-- **48 and 49 in parallel** because Go RTA and JS token solver share the solver but their drivers are independent.
-- **50 after 49** because object/property modeling depends on token propagation being stable.
-- **51 only after at least one driver is functional.** Premature adaptation produces flooding incentives.
-- **52 (refined-calls rework + taxonomy)** preserves v1.2 downstream contracts and finalizes diagnostic queue shape.
-- **53** is the consolidation sweep; **54** enforces the v1.3 exit gates.
+**Phase 8: Recovery, Pruning, and Scale Gates**
+Rationale: default store reuse is only credible after crash, pruning, WAL, payload, and large-repo behavior are measured.
+Delivers: stale-generation pruning, payload garbage collection, WAL/checkpoint policy, BLOB-vs-file decision, 100k/500k/1M+ row benchmarks, CI restore parity.
+Avoids: orphaned payloads, unbounded DB/WAL growth, non-portable cache restore.
 
 ### Research Flags
 
-**Phases likely needing deeper research during plan-phase:**
+Needs deeper phase research:
+- **Phase 4:** payload layout: SQLite BLOBs, adjacent content-addressed files, or hybrid.
+- **Phase 5:** path/taint traversal model, cycle handling, barriers, ranking, and budget semantics.
+- **Phase 6:** first stable public graph JSON schema and promotion checklist per command.
+- **Phase 7:** Tantivy code tokenization, field schema, rebuild lifecycle, and exact candidate wording.
+- **Phase 8:** pruning/vacuum/checkpoint policy and large-store benchmark thresholds.
 
-- **Phase 46 (Go semantic frontend):** Wire-format details for sidecar NDJSON; the open question about whether to consume `rta.Analyze` output directly vs. emit SSA-like facts and reimplement RTA in Rust. Plan-phase research should lock the sidecar JSON schema.
-- **Phase 48 (Go RTA driver):** Algorithmic edge cases — generics edge identity, init-order edges, reflection handling. Plan-phase research should map x/tools' specific test expectations to RTA implementation choices.
-- **Phase 50 (JS object/property model):** Bounded property widening strategy — the largest precision/cost tradeoff space in v1.3.
-- **Phase 51 (adaptation model layer):** Sandboxing mechanism; held-out subset selection per suite; prompt sanitizer specification.
+Standard patterns, likely no extra research needed:
+- **Phase 1:** rusqlite facade, migrations, open modes, and public-boundary tests are well understood.
+- **Phase 2:** mirroring existing kernel metadata follows current `InputSnapshot`, provider manifest, layer cache, and validation patterns.
+- **Phase 3:** normalized fact ingest can reuse existing fact metadata and stable key discipline.
 
-**Phases with standard patterns (skip plan-phase research):**
+## Anti-Features and Non-Goals
 
-- **Phase 42:** Identity + renderers have direct v1.2 precedents in `analysis::ids` + `FactMeta`.
-- **Phase 43:** Reachability + roots are standard graph algorithms.
-- **Phase 44:** Semantic graph skeleton follows v1.2 fact-family layout convention.
-- **Phase 47:** Solver generalizes v1.2 `points_to::solver` directly.
-- **Phase 52:** `refined_calls::provider` rework is pure projection work.
-- **Phase 53, 54:** Consolidation phases — patterns already exist in v1.2.
+- No remote package-summary registry in v2.0. Build only local registry-ready seams.
+- No public raw SQL, Cypher, Datalog, QL, SPARQL, generic graph shell, or table inspection command.
+- No public raw graph SDK views or broad graph internals. Promote only deliberate typed SDK views after validation.
+- No `polint graph` CI pass/fail semantics. Enforce policy through Rust rules and `polint check`/`polint review`.
+- No stable vector search in the first implementation. `sqlite-vec` remains experimental and off by default.
+- No live embedding generation or model downloads in deterministic commands.
+- No replacement parser/frontend stack. Continue using Oxc for TS/JS and tree-sitter-go plus existing semantic providers for Go.
+- No full AST/source/MIR/CFG dumps as the product store.
+- No dual-store graph architecture by default and no redb parity claim unless tests prove it.
+- No search result treated as semantic truth or policy violation without graph/provider verification.
+- No daemon/server requirement for local analysis.
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | HIGH | All new crates verified against crates.io on 2026-05-27; sidecar architecture rationale draws on validated v1.2 precedent (`polint-go-symbols`) and the established gopls/staticcheck pattern. |
-| Features | HIGH | Feature decomposition derived from in-repo research and the v1.2 phase ledger. Anti-features explicitly cataloged with rejection rationale. |
-| Architecture | HIGH | Module layout grounded in existing v1.2 layout. Architectural keystone is the convergent shape of Soufflé/Doop/Wala/OPAL/Unimocg/SVF. Build order matches the source research's Recommended Implementation Order. |
-| Pitfalls | HIGH | 12 pitfalls all grounded in v1.2 phase precedents or explicit warnings in the source GRAPH-ENGINE-BENCHMARK-RESEARCH. Mitigations have direct fixture-design implications and are mapped to specific phases. |
+| Stack | HIGH | SQLite/rusqlite bundled and `blake3` are locked by local research; Tantivy/sqlite-vec/redb are correctly phase-gated. |
+| Features | HIGH | Table stakes, differentiators, anti-features, and workflows are consistent across `FEATURES.md`, project context, and locked local-store research. |
+| Architecture | HIGH | Private `analysis_kernel::store` direction reuses the existing provider DAG, `AnalysisDb`, metadata, cache keys, validation, and public-boundary discipline. |
+| Pitfalls | HIGH | Pitfalls are concrete, phase-mapped, and testable; most correspond to existing polint risks around determinism, invalidation, provenance, and public API leaks. |
 
 **Overall confidence:** HIGH.
 
 ### Gaps to Address
 
-- **Sidecar JSON schema not yet pinned.** Phase 46 plan-phase research must finalize line termination, schema version field shape, partial-output framing, and the consume-`rta.Analyze`-directly vs. emit-SSA-facts decision.
-- **Adaptation model TOML schema not yet pinned.** Phase 51 plan-phase research must finalize required vs. optional fields, confidence enum granularity, target-pattern syntax, external-boundary declaration shape, evidence-field shape.
-- **Sandbox mechanism for adaptation agent not yet specified.** Phase 51 needs a concrete decision on directory isolation, env-var allowlist, filesystem-deny rules.
-- **Per-language solver policy boundary not yet mapped.** Phase 47 should introduce the `SolverPolicy` trait; actual divergence points are decided in Phase 48/49.
-- **JS object-model property widening threshold.** Phase 50 plan-phase research must pick a default `max_property_buckets`.
-- **`x/tools` RTA quirks specific to test fixtures.** Phase 48 plan-phase research should enumerate the specific Go x/tools testdata cases.
+- Payload layout needs benchmark evidence before choosing DB BLOBs, adjacent files, or a hybrid.
+- Exact schema and migration count should evolve with implementation, but the migration harness and `PRAGMA user_version` pattern should land first.
+- First public graph envelope needs command-by-command schema snapshots before promotion.
+- Query performance needs large synthetic and real-repo benchmarks for recursive CTEs versus Rust scoped traversal.
+- Search tokenization for code identifiers needs design during the Tantivy phase.
+- Store cleanup semantics for `polint cache status/clean/prune` need a product decision before default large-repo reuse.
 
 ## Sources
 
-### Primary (HIGH confidence)
-- `.planning/PROJECT.md` — v1.2 phase ledger, v1.3 milestone definition, constraints, key decisions.
-- `research/evaluation-harness/GRAPH-ENGINE-BENCHMARK-RESEARCH.md` — current baselines, target band projections, complexity bounds, Recommended Implementation Order, Adaptation Boundary anti-patterns.
-- `research/call-graphs/{RECOMMENDED_IMPLEMENTATION.md, implementation/BOOTSTRAP-INTEGRATION.md, FINAL-REPORT.md, STANDARD.md}` — native-engine principle, refused dependencies list, fact-model architecture, algorithm provenance ladder.
-- `research/type-alias-points-to/{RECOMMENDED_IMPLEMENTATION,FINAL-REPORT}.md` — bounded Andersen solver shape, type/value/places/alias substrate, "use language tooling as compatibility authority" principle.
-- `research/agent-extension-surface/FINAL-REPORT.md` — adaptation model schema, validated-models-as-data, accept/reject reporting.
-- `research/analysis-kernel/RECOMMENDED_IMPLEMENTATION.md` — kernel facade, provider manifests, scheduling.
-- `research/evaluation-harness/STANDARD.md` — adaptation rule (no expected labels), reporting requirements, scope rule.
-- `research/evaluation-harness/decisions/decision-log.md` — D1–D6 strategy decisions.
-- v1.2 phase artifacts: `crates/polint/src/analysis/{points_to::solver, refined_calls::{provider,cache_key}, ids, calls, summaries}/` — direct precedents being generalized.
-- crates.io API (queried 2026-05-27) — all stack version pins verified.
-- pkg.go.dev `golang.org/x/tools/go/packages` + `go/ssa` (queried 2026-05-27) — sidecar approach validated against gopls/golangci-lint/staticcheck precedent.
+### Primary
 
-### Secondary (MEDIUM confidence)
-- `golang/tools cmd/callgraph/main.go` — per-algorithm selection (Go-side reference).
-- `golang/go issue #61160` — open issue confirming reflection edges remain hard.
-- `cs-au-dk/jelly` repository — JS/TS function-token analyser format.
-- `opalj/JCG` — JVM call-graph benchmark methodology.
+- `.planning/research/STACK.md` - stack additions, versions, rejections, integration points, risks.
+- `.planning/research/FEATURES.md` - feature table stakes, differentiators, workflows, requirement seeds, MVP order.
+- `.planning/research/ARCHITECTURE.md` - module plan, data flow, build order, validation hooks.
+- `.planning/research/PITFALLS.md` - critical and moderate pitfalls, phase placement, must-test matrix.
+- `.planning/PROJECT.md` - current v2.0 milestone goal, constraints, product boundaries, prior validated substrate.
+- `research/static-analysis-2.0/README.md` - locked product vision, goals, rough workstream order, registry deferral.
+- `research/local-semantic-store/README.md` - locked SQLite/rusqlite store decision, search/vector boundaries, excluded first-implementation scope.
 
 ---
-*Research completed: 2026-05-27*
+*Research completed: 2026-07-07*
 *Ready for roadmap: yes*

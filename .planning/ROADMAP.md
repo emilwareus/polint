@@ -6,222 +6,218 @@
 - [x] **v1.1 Capability Fulfillment** - capability planning, resolved imports/module graph, and symbol/reference foundations for Go and TS/JS.
 - [x] **v1.2 Static Analysis Engine Implementation** - private, validated, cache-aware, agent-extensible analysis engine substrate; 22 phases and 136 plans shipped 2026-05-27. Archive: [v1.2 roadmap](milestones/v1.2-ROADMAP.md).
 - [x] **v1.3 Graph Engine Precision** - shared semantic graph, reachability/root semantics, Go RTA, JS/TS token/object models, adaptation, unknown taxonomy, budgets, and benchmark promotion gates. Archive: [v1.3 roadmap](milestones/v1.3-ROADMAP.md).
-- [x] **v1.4 Policy Query Surface** - preview SDK views and typed query objects for realistic repo-local policies over calls, control flow, and data flow. Completed 2026-06-20.
+- [x] **v1.4 Policy Query Surface** - preview SDK views and typed query objects for realistic repo-local policies over calls, control flow, and data flow. Completed 2026-06-20. Archive: [v1.4 roadmap](milestones/v1.4-ROADMAP.md).
+- [ ] **v2.0 Static Analysis 2.0 Implementation** - durable, queryable local semantic layer: private SQLite/rusqlite store, summary persistence and invalidation frontier, warm `polint review` payoff, internal query engine, exploratory `polint graph` CLI, lexical-search boundary, and scale/recovery gates. 9 phases (63-71).
 
 ## Current Status
 
-**Milestone:** v1.4 Policy Query Surface (complete)
-**Phases planned:** 8 (Phase 55 - Phase 62)
-**Requirements coverage:** 33/33 mapped
-**Granularity:** fine
+**Milestone:** v2.0 Static Analysis 2.0 Implementation (active)
+**Phases planned:** 9 (Phase 63 - Phase 71)
+**Requirements coverage:** 67/67 mapped
+**Granularity:** coarse phases; plans generated per phase via plan-phase
 
-Phase numbering continues from v1.3's last phase 54. v1.4 promotes a narrow policy-level SDK surface while keeping raw analysis internals private.
+Phase numbering continues from v1.4's last phase 62. All new store/query modules stay `pub(crate)`; v1.2-v1.4 promotion discipline applies — the only public promotion in this milestone is the gated `polint graph` CLI surface in Phase 69. Every phase names the milestone outcome gate it advances (scale, latency, honesty, accuracy visibility — see `.planning/REQUIREMENTS.md` Milestone Outcome Gates); the BENCH-03 regression gates run at every phase boundary from Phase 64 onward. Phase 70 is the designated scope-cut if the milestone runs long. Phases 69 and 70 may run in parallel after Phase 68.
 
-## Phases (v1.4)
+## Phases (v2.0)
 
-- [x] **Phase 55: SDK Query Vocabulary and Preview Contract** - Define preview views, query structs, pattern structs, capability derivation, and the "one public way" API contract. Completed 2026-06-20.
-- [x] **Phase 56: Events and Calls Query Surface** - Implement `Events<'_>` and `Calls<'_>` policy queries over v1.3 refined calls, reachability roots, and unknown taxonomy. Completed 2026-06-20.
-- [x] **Phase 57: Control-Flow Guard and Lifecycle Queries** - Implement `ControlFlow<'_>` guard and cleanup policies without exposing raw CFG/dominance graphs. Completed 2026-06-20.
-- [x] **Phase 58: Data-Flow Source/Sink/Barrier Queries** - Promote `DataFlow<'_>` preview methods for forbidden flows and required barriers over bounded private path search. Completed 2026-06-20.
-- [x] **Phase 59: Violation Evidence, Unknowns, and Cache Semantics** - Normalize violation results, diagnostic evidence, deterministic ordering, cache keys, and user-visible unknown/budget behavior. Completed 2026-06-20.
-- [x] **Phase 60: Flagship Rule Templates and Agent Ergonomics** - Generate realistic policy templates and update README/examples/skill text around the same query-object syntax. Completed 2026-06-20.
-- [x] **Phase 61: Public Docs and External SDK Validation** - Document every preview view/query and prove external repo-local rule usage through temp-repo tests. Completed 2026-06-20.
-- [x] **Phase 62: Promotion Gate, Boundary Proof, and Closeout** - Enforce public-surface leak gates, full regression, deterministic checks, and milestone exit verification. Completed 2026-06-20.
+- [ ] **Phase 63: Ground Truth and Performance Baseline** - Real-repo benchmark suite, RSS/latency/store-size curves, store-disabled baselines, regression-gate wiring, persisted-graph recall baseline. *(Outcome gates: all — makes them measurable)*
+- [ ] **Phase 64: Store Foundation and Boundary Proof** - rusqlite bundled, private store facade, migrations, connection policy, generation lease, zero-cost disabled path, no-leak gates. *(Outcome gate: scale — zero-overhead discipline)*
+- [ ] **Phase 65: Generation Manifest and Metadata Mirroring** - Input snapshots, provider manifests, layer entries/dependencies, validation events, complete-generation commit discipline, invalidation dependency indexes. *(Outcome gate: latency — invalidation vocabulary)*
+- [ ] **Phase 66: Validated Fact and Graph Index Ingest** - Normalized facts, adjacency/evidence/unknown/budget indexes, streaming bounded-batch ingest, pipeline-gating preservation, deterministic ordering. *(Outcome gates: scale + honesty)*
+- [ ] **Phase 67: Summary Persistence, Invalidation Frontier, and Warm Review** - Summary manifests, blake3 content-addressed payloads, frontier recomputation, warm `polint review` latency win, O(working set) property. *(Outcome gates: scale + latency — the keystone phase)*
+- [ ] **Phase 68: Internal Query Engine and Envelope** - Private used-by/neighbors/callers/callees/path/taint services, status vocabulary, filters, query correctness fixtures. *(Outcome gate: honesty)*
+- [ ] **Phase 69: Public Graph CLI Promotion** - Gated `polint graph` commands, agent-shaped JSON envelopes, honest docs, schema snapshots, recall context, full leak-gate sweep. *(Outcome gates: honesty + accuracy visibility)*
+- [ ] **Phase 70: Lexical Search Boundary** - SearchCorpus, Tantivy index over stable store document IDs, crash-safe rebuild/swap, vector search kept deferred. **Designated scope-cut** if the milestone runs long. *(Outcome gate: none — cut candidate by design)*
+- [ ] **Phase 71: Recovery, Pruning, and Scale Gates** - Full determinism matrix, crash/recovery suite, 100k/500k/1M+ row benchmarks, prune/vacuum/WAL policy, external probe re-proof, milestone outcome-gate report. *(Outcome gates: all — closeout proof)*
 
 ## Phase Details
 
-### Phase 55: SDK Query Vocabulary and Preview Contract
+### Phase 63: Ground Truth and Performance Baseline
 
-**Goal:** Establish the public vocabulary and constraints before implementation so the milestone has one clear rule-authoring shape.
+**Goal:** The scale, latency, and accuracy problems become visible and gateable before any store code lands: baselines are recorded, curves are produced, and regression gates are wired so every later phase can prove it moved an outcome gate.
 
-**Depends on:** v1.2/v1.3 private graph, calls, CFG, data-flow, evidence, unknown taxonomy, capability derivation, rule manifests.
+**Depends on:** Existing internal eval harness and external benchmark adapters (`eval/external`: jelly_callgraph, go_x_tools_callgraph, gosec, secbench_js); v1.3 promotion-gate infrastructure.
 
-**Requirements:** API-01, API-02, API-03, API-04, API-05, API-06
+**Requirements:** BENCH-01, BENCH-02, BENCH-03, BENCH-04
 
-**Success Criteria:**
-1. `Events<'_>`, `Calls<'_>`, `ControlFlow<'_>`, and `DataFlow<'_>` are exported from the SDK prelude as preview views and are constructible only through macro-derived fact-view parameters.
-2. Public query structs exist for `ReachQuery`, `GuardQuery`, `LifecycleQuery`, and `FlowQuery` with `new(required...)`, explicit option fields, deterministic defaults, and no competing fluent/string/closure DSL.
-3. Public pattern structs exist for events, sources, sinks, guards, and barriers with reviewed constructors for the flagship policy examples.
-4. Capability derivation, rule manifests, and support diagnostics understand the new preview views and fail closed when setup is missing.
-5. `Cfg<'_>` and `CallGraph<'_>` remain reserved low-level names; raw graph, solver, provider, and private ID types stay unreachable from supported public surfaces.
+**Success Criteria** (what must be TRUE):
+1. A pinned-commit benchmark suite manifest exists covering the locked repo set: `grafana/grafana` (primary large polyglot Go+TS), `gohugoio/hugo` (Go medium), `excalidraw/excalidraw` (TS medium), the existing Jelly and Go x/tools oracle suites (micro + recall), and the private devloupe monorepo documented as a local-only, non-CI reference (known baseline: ~1GB peak RSS, cold 7.4s / warm 4.6s).
+2. The harness produces peak RSS, cold/warm wall-clock, cache/store size, and budget-exhaustion telemetry as machine-readable curves versus repo size and diff size, plus a markdown report.
+3. Store-disabled baselines for `polint check` and `polint review` are recorded and committed as the reference for the locked regression budgets (≤ +20% peak RSS, ≤ +25% cold wall-clock).
+4. Persisted-graph recall/precision baseline is recorded from the Jelly and Go x/tools callgraph adapters and appears in the benchmark report (accuracy-visibility gate).
+5. Regression-gate wiring exists: a later phase exceeding a budget fails its gate rather than passing silently.
 
-**Implementation notes:**
-- Start with type definitions, docs comments, macro capability mapping, and capability diagnostics before wiring query behavior.
-- Use plain structs and typed constructors. Avoid trait-heavy or generic APIs unless an existing SDK pattern requires them.
-- Treat all preview names as public liabilities even if documented as preview.
-
-### Phase 56: Events and Calls Query Surface
-
-**Goal:** Let rules ask whether important calls/events are reachable from roots or trust boundaries without exposing call-graph internals.
-
-**Depends on:** Phase 55; v1.3 refined-call projection; reachability roots; unknown taxonomy.
-
-**Requirements:** CALL-01, CALL-02, CALL-03, CALL-04
-
-**Success Criteria:**
-1. `Events<'_>::matching(EventPattern)` returns deterministic semantic call-event matches without leaking raw AST/MIR/graph IDs; non-call event patterns remain deterministic preview no-results until backed facts land.
-2. `Calls<'_>::forbidden_reachable(ReachQuery)` returns violations for raw APIs reachable from selected roots with root, path, callsite, target, precision, and unknown evidence.
-3. `ReachQuery` supports root pattern, target pattern, tests inclusion, max depth, max paths, and minimum precision/confidence fields; package/module scoping is deferred rather than exposed as a competing API.
-4. Fixtures cover reachable forbidden calls, selected roots, tests excluded/included, unresolved calls, budget-exceeded paths, and external temp-repo rule usage.
-5. Existing v1.3 precision floors and refined-call contracts remain intact.
-
-**Example policies unlocked:**
-- Raw database admin/client methods must not be reachable from HTTP handlers.
-- Deprecated internal package APIs must not be reachable from production entrypoints.
-- Dangerous shell/network/file APIs must not be reachable from unauthenticated roots.
-
-### Phase 57: Control-Flow Guard and Lifecycle Queries
-
-**Goal:** Let rules express "this call event requires a prior guard" and "this call-acquired resource requires later cleanup" policies without exposing raw CFG facts.
-
-**Depends on:** Phase 55; Phase 56 event patterns; private call/refined-call facts; private CFG operation order.
-
-**Requirements:** CTRL-01, CTRL-02, CTRL-03, CTRL-04
-
-**Success Criteria:**
-1. `ControlFlow<'_>::missing_guard(GuardQuery)` finds missing same-function auth/validation/allowlist guard calls before sensitive call events.
-2. `ControlFlow<'_>::missing_cleanup(LifecycleQuery)` finds missing same-function cleanup calls after acquire/start call events.
-3. Query options preserve one clear public API while Phase 57 honestly limits execution to same-function call-event checks; bounded interprocedural search remains deferred.
-4. Violations include event spans, guard/cleanup candidates, same-function uncovered path evidence, conservative status/precision, and budget status.
-5. Fixtures cover auth/allowlist-before-dangerous-call and transaction-begin cleanup through an external temp-repo rule using only `polint::sdk::prelude::*`.
-
-**Example policies unlocked:**
-- Dangerous calls require an authorization or allowlist guard earlier in the same function.
-- Money movement calls require validation earlier in the same function.
-- Transactions opened with `Begin` require a later `Rollback` or cleanup call in the same function.
-
-### Phase 58: Data-Flow Source/Sink/Barrier Queries
-
-**Goal:** Let rules express source-to-sink and required-sanitizer policies through `DataFlow<'_>` preview methods.
-
-**Depends on:** Phase 55; Phase 56 events/calls; private data-flow facts, summaries, source/sink/model facts, evidence paths.
-
-**Requirements:** FLOW-01, FLOW-02, FLOW-03, FLOW-04, FLOW-05
-
-**Success Criteria:**
-1. `DataFlow<'_>::forbidden(FlowQuery)` reports backed source-to-sink violations with optional call barriers/sanitizers.
-2. Required-barrier semantics cover call-based policies by suppressing found paths that cross a matching `BarrierPattern::call_any` target and reporting uncovered paths.
-3. Built-in Phase 58 source/sink patterns cover HTTP request trust-boundary sources, explicit secret-like source names, exact call sinks, logger sinks, and explicit barrier calls; broader SQL, HTML, SSRF, file path, analytics, PII, and outbound network categories remain future/template work.
-4. Flow queries use bounded private path search over source-introduction, local, direct-call, and summary-projected data-flow facts with deterministic caps and repeated-run stability.
-5. Results expose found/heuristic/unknown/budget-exceeded states honestly, with heuristic wording in diagnostics and docs.
-
-**Example policies unlocked:**
-- Request values must not flow to `exec.Command` unless validated.
-- Secrets must not flow to logs unless redacted.
-- User-controlled URLs must not flow to HTTP clients unless allowlisted.
-- Raw HTML sinks must receive escaped/sanitized values.
-
-### Phase 59: Violation Evidence, Unknowns, and Cache Semantics
-
-**Goal:** Make every query family report results in one diagnostic/evidence shape with deterministic cache-safe behavior.
-
-**Depends on:** Phases 56-58; private evidence, unknown taxonomy, cache identity, diagnostics.
-
-**Requirements:** EVID-01, EVID-02, EVID-03, EVID-04, EVID-05
-
-**Success Criteria:**
-1. Query methods return a consistent violation type with `diagnostic(rule_id, message)` and structured evidence projection to JSON/SARIF.
-2. Evidence records query type, matched patterns, spans, path steps, precision/confidence/status, budgets, and unknown reasons.
-3. Results are sorted/deduped deterministically across parallel execution, cache restore, provider-order shuffles, and repeated runs.
-4. Query parameters, preview API versions, rule options, lifecycle inputs, solver budgets, and model/adaptation files participate in cache identity.
-5. Setup gaps, unsupported semantics, and budget exhaustion are visible to users and do not create silent false negatives.
-
-**Implementation notes:**
-- Keep rule-specific wording in the rule. Keep path/precision/unknown structure in the shared violation evidence.
-- Prefer one shared evidence schema over per-query bespoke JSON.
-
-### Phase 60: Flagship Rule Templates and Agent Ergonomics
-
-**Goal:** Turn the API into concrete value users can copy immediately.
-
-**Depends on:** Phases 56-59.
-
-**Requirements:** TPL-01, TPL-02, TPL-03, TPL-04, TPL-05
-
-**Success Criteria:**
-1. `polint new-rule` can scaffold request-to-shell, secret-log, PII-analytics, sensitive-write-guard, transaction-cleanup, raw-reachable-api, SSRF, dangerous-HTML, unsafe-deserialization, and user-controlled-file-path templates.
-2. Every template uses the same query-object style and imports only `polint::sdk::prelude::*`.
-3. Templates carry honest heuristic wording where source/sink detection is heuristic.
-4. README, examples, generated skill text, and docs position templates as repo-local starting points, not bundled default rules.
-5. Template fixtures prove each scaffold compiles and produces an expected diagnostic in a temp repo.
-
-**Template syntax target:**
-
-```rust
-let mut query = FlowQuery::new(SourcePattern::http_request(), SinkPattern::call("exec.Command"));
-query.barriers = BarrierPattern::call_any(["validate_command"]);
-query.max_paths = 10;
-
-for violation in flow.forbidden(query) {
-    ctx.report(violation.diagnostic(ctx.rule_id(), "Request data reaches shell execution."));
-}
-```
-
-### Phase 61: Public Docs and External SDK Validation
-
-**Goal:** Prove the preview surface is usable by outside rule authors and documented honestly.
-
-**Depends on:** Phases 55-60.
-
-**Requirements:** VAL-01, VAL-02
-
-**Success Criteria:**
-1. `docs/facts/` includes preview pages for events, calls, control-flow, data-flow, patterns, query structs, violation evidence, precision tiers, unknowns, budgets, and limits.
-2. Temp-repo tests cover each preview view and query family through generated `.polint/rules`, public SDK imports only, `polint::runner::run_cli`, real facts, and `polint check --format json` assertions.
-3. Docs include the flagship policy examples and explicitly label heuristic behavior.
-4. Capability support and `polint inspect`/manifest output show preview status consistently.
-
-**Implementation notes:**
-- These tests are the external-consumer contract. They should not reach into `polint::core`, parser adapters, analysis modules, or test helpers.
-
-### Phase 62: Promotion Gate, Boundary Proof, and Closeout
-
-**Goal:** Enforce the v1.4 exit gates and prove the policy query surface is useful without leaking internals.
-
-**Depends on:** All earlier v1.4 phases.
-
-**Requirements:** VAL-03, VAL-04
-
-**Success Criteria:**
-1. Public-surface leak tests prove raw CFG, call graph, semantic graph, data-flow graph, solver, provider, `AnalysisDb`, and private IDs are unreachable from supported SDK/CLI/runner/docs/skill surfaces.
-2. Full workspace formatting, clippy, tests, temp-repo SDK tests, cache invalidation tests, docs/example smoke tests, and deterministic repeated-run checks pass.
-3. A milestone audit records which preview APIs are ready, which remain preview-limited, and which future stabilization items move to v1.5.
-4. `PROJECT.md`, `REQUIREMENTS.md`, `ROADMAP.md`, and `STATE.md` are updated with final traceability and next-step guidance.
-
-## Phase Progress
-
-| Phase | Name | Plans Complete | Status | Completed |
-|-------|------|----------------|--------|-----------|
-| 55 | SDK Query Vocabulary and Preview Contract | 3/3 | Complete | 2026-06-20 |
-| 56 | Events and Calls Query Surface | 3/3 | Complete | 2026-06-20 |
-| 57 | Control-Flow Guard and Lifecycle Queries | 3/3 | Complete | 2026-06-20 |
-| 58 | Data-Flow Source/Sink/Barrier Queries | 3/3 | Complete | 2026-06-20 |
-| 59 | Violation Evidence, Unknowns, and Cache Semantics | 3/3 | Complete | 2026-06-20 |
-| 60 | Flagship Rule Templates and Agent Ergonomics | 3/3 | Complete | 2026-06-20 |
-| 61 | Public Docs and External SDK Validation | 3/3 | Complete | 2026-06-20 |
-| 62 | Promotion Gate, Boundary Proof, and Closeout | 3/3 | Complete | 2026-06-20 |
-
-## Parallel-Eligible Phases
-
-- **Phase 56 -> Phase 57/58:** Events/calls should land before control-flow and data-flow policies because both reuse event/pattern vocabulary.
-- **Phase 57 and Phase 58:** Control-flow and data-flow query implementation may proceed in parallel after Phase 56 if write ownership is split cleanly.
-- **Phase 60 and Phase 61:** Template work and docs/tests can overlap after query semantics stabilize, but temp-repo tests should be the final authority.
-
-## Promotion Discipline
-
-- New public names are preview policy views, not raw analysis internals.
-- `Cfg<'_>` and `CallGraph<'_>` stay reserved unless a separate explicit promotion phase changes that.
-- `DataFlow<'_>` becomes a policy query view, not a raw graph view.
-- Rules continue to consume typed fact-view parameters through `#[polint::rule]`; do not reintroduce broad fact access through `RuleCtx`.
-- Capability names must stay honest: unsupported or setup-missing hard capabilities produce capability diagnostics and the rule does not run with placeholder facts.
-- Query APIs must expose precision, unknown, and budget state rather than claiming exact whole-program coverage.
-
-## Next Up
-
-v1.4 local implementation is complete. Before remote sharing, review the local
-commit stack and decide whether to archive the milestone with
-`/gsd-complete-milestone` or start the next milestone from the v1.5 follow-ups
-recorded in Phase 62's milestone audit.
+**Research flags:** none — extends the existing eval harness and adapters.
 
 ---
-*Roadmap created: 2026-06-20*
+
+### Phase 64: Store Foundation and Boundary Proof
+
+**Goal:** A private, crash-safe SQLite store facade exists with migrations and connection discipline, `polint check` behavior is provably unchanged, and the store costs nothing when disabled.
+
+**Depends on:** Phase 63 (baselines recorded before persistence lands).
+
+**Requirements:** STORE-01, STORE-02, STORE-03, STORE-06, STORE-07, STORE-08, PERF-03, PROD-01, VAL-02
+
+**Success Criteria** (what must be TRUE):
+1. `rusqlite` (bundled) and the `pub(crate)` store facade land under `analysis_kernel/store/`; no `rusqlite` connection, statement, row, or SQL-string type escapes the module (leak test).
+2. Migrations run through `PRAGMA user_version` with fixtures for empty DB, previous schema, idempotent re-run, future-schema refusal, and invalid-schema rebuild diagnostics (VAL-02).
+3. Connection policy is explicit: foreign keys on, WAL, bounded busy timeout, one writer boundary, separate read-only connections; two concurrent `polint` processes serialize through a generation lease or fall back to read-only/skipped persistence with a clear diagnostic (STORE-08).
+4. `polint check` output is byte-identical with the store enabled, disabled, and corrupted; disabled/skip paths perform no store I/O or schema checks on the hot path (PERF-03, PROD-01, STORE-07).
+5. Providers and rule execution receive no SQL connections (STORE-06); the public-surface leak gate is extended to store/SQL/table-name namespaces and runs from this phase onward.
+
+**Research flags:** none — standard rusqlite facade/migration patterns.
+
+---
+
+### Phase 65: Generation Manifest and Metadata Mirroring
+
+**Goal:** The store speaks the kernel's existing identity vocabulary — snapshots, manifests, layer keys, dependency indexes — and commits only complete validated generations, so invalidation and recovery have one source of truth before facts are broadly ingested.
+
+**Depends on:** Phase 64.
+
+**Requirements:** STORE-04, STORE-05, META-01, META-04
+
+**Success Criteria** (what must be TRUE):
+1. Store manifest, input snapshots, provider manifests, provider generations, layer entries/dependencies, validation events, and store stats persist, with active/pending/complete generation selection (STORE-04).
+2. Only complete validated generations become readable; a crash, failed migration, failed payload write, or failed rebuild leaves either the old complete generation readable or an explicit rebuild diagnostic — never mixed rows (STORE-05).
+3. The store mirrors `InputSnapshot`, provider manifests, layer/summary/query keys, and `FactMeta` vocabulary as first-class columns; no second identity or invalidation system appears (META-01).
+4. Invalidation dependency indexes cover source files, packages/projects, provider manifests, requested capabilities, lifecycle inputs, config, schema, summary keys, query options, budget profiles, and future model/extension digests, with must-invalidate and must-preserve-hit fixtures (META-04).
+
+**Research flags:** none — mirrors existing kernel metadata patterns.
+
+---
+
+### Phase 66: Validated Fact and Graph Index Ingest
+
+**Goal:** Normalized validated facts and graph indexes persist with full identity metadata and deterministic ordering, through a streaming ingest that provably does not regress the capability-gated pipeline or the rule-scoped discovery memory wins.
+
+**Depends on:** Phase 65.
+
+**Requirements:** META-02, META-03, META-05, META-06, META-07, PERF-01, PERF-02
+
+**Success Criteria** (what must be TRUE):
+1. Files, packages/modules, imports/exports, resolutions, symbols, definitions, references, functions, calls, evidence, summary metadata, unknown regions, and budget events persist as normalized rows and adjacency/evidence indexes; whole-program data-flow/taint rows are never eagerly materialized (META-02).
+2. Every fact-like row carries stable semantic identity, repo-relative path, fact family, provider/schema identity, precision, confidence/status, provenance, validation state, dependency metadata, and generation (META-03).
+3. Deterministic output never depends on `rowid`, insertion order, unordered maps, or provider completion order — proven by provider-order shuffle and Rayon worker-count permutation tests (META-05).
+4. No full AST/source/MIR/CFG dumps persist (META-06); unknown/unsupported/setup-missing/partial/budget-exceeded states are durable and queryable, never collapsed (META-07).
+5. Ingest follows what the run legitimately computed: capability-gated pipeline and rule-scoped discovery are preserved with the store enabled (PERF-01), ingest streams in bounded sorted batches with measured peak memory (PERF-02), and the Phase 63 regression gates pass on the benchmark suite.
+
+**Research flags:** none — reuses existing fact metadata and stable-key discipline.
+
+---
+
+### Phase 67: Summary Persistence, Invalidation Frontier, and Warm Review
+
+**Goal:** The milestone keystone: summaries persist with registry-ready manifests, warm runs recompute only the invalidation frontier, dependency bodies are never re-parsed once summarized, and `polint review` shows a measured warm-latency win.
+
+**Depends on:** Phase 66; Phase 63 (frontier benchmark and latency targets).
+
+**Requirements:** SUM-01, SUM-02, SUM-03, SUM-04, SUM-05, SUM-06, SUM-07, PERF-04, REV-01, REV-02, REV-03, PROD-02, VAL-04
+
+**Success Criteria** (what must be TRUE):
+1. Summary manifests persist for dependency package summaries and application function/SCC summaries with package/version identity, schema version, toolchain/frontend identity, config digest, provenance, validation metadata, and precision/status (SUM-01); payloads use blake3 content addressing behind typed digest wrappers that cannot be confused with cache invalidation keys (SUM-02).
+2. Payload layout (SQLite BLOBs vs adjacent content-addressed files vs hybrid) is locked by benchmark evidence covering DB size, WAL growth, crash behavior, restore behavior, and read latency (SUM-03).
+3. Warm runs recompute exactly the invalidation frontier — changed functions/SCCs plus transitive summary dependents — with the recompute set instrumented and asserted in must-recompute and must-reuse fixtures (SUM-04, REV-01); stale-reuse mutation fixtures cover every upstream input class (VAL-04).
+4. Summary reuse ships only behind from-scratch parity, recompute-and-diff, manifest validation, and stale-reuse prevention (SUM-05); warm review output is byte-identical to cold (REV-03).
+5. Warm `polint review` on the frontier benchmark meets the p50/p95 target set from the Phase 63 baseline, and internal diagnostics report summary hit/miss/stale/invalid counts (REV-02, PROD-02).
+6. Dependency bodies are not re-parsed or re-summarized while their (package, version, schema, toolchain, config) identity matches — verified by fixture and benchmark (PERF-04); summary-derived facts stay labeled with precision/provenance/trust placeholders (SUM-06); no registry protocol of any kind exists (SUM-07).
+
+**Research flags:** payload layout benchmark design (SUM-03) — needs deeper research during plan-phase.
+
+---
+
+### Phase 68: Internal Query Engine and Envelope
+
+**Goal:** Query semantics are proven privately — used-by, neighbors, callers, callees, path, and taint services over complete generations, with one honest envelope and correctness fixtures — before any public CLI exists.
+
+**Depends on:** Phase 66 (facts/adjacency); Phase 67 (summary-boundary query behavior).
+
+**Requirements:** QUERY-01, QUERY-02, QUERY-03, QUERY-04, QUERY-05, QUERY-06, QUERY-07, QUERY-08, VAL-05
+
+**Success Criteria** (what must be TRUE):
+1. Private query services answer used-by, neighbors, callers, callees, path, taint-style reachability, and search-candidate resolution over complete store generations only (QUERY-01).
+2. One internal envelope carries `version`, `schema`, `command`, `query`, `status`, `precision`, `nodes`, `edges`, `paths`, `findings`, `unknowns`, `budgets`, `summary`; status vocabulary includes `complete`, `partial`, `not_found`, `unknown`, `budget_exceeded`, `unsupported`, `setup_missing`, and `not_found` requires sufficient evidence for the claim (QUERY-02, QUERY-03).
+3. Filters cover path globs, tests on/off, minimum precision, provenance, unknown handling, max depth, max paths, and limits (QUERY-04); path/taint queries are bounded, cycle-aware, deterministic, evidence-backed, and explicit about barriers, summaries, unknowns, and budgets (QUERY-05).
+4. Results carry stable semantic IDs, repo-relative paths, spans, precision, provenance, evidence IDs, and status — never store row IDs, provider/parser/solver IDs, or SQL names (QUERY-06); search results are candidates only and never feed deterministic `check` (QUERY-07).
+5. Correctness fixtures cover cross-file refs, cross-package imports, direct/refined calls, cycles, paths, taint barriers, summary boundaries, setup gaps, unknown-preserving no-results, and budget exhaustion (QUERY-08); unknown/budget behavior remains visible in all query output (VAL-05).
+
+**Research flags:** path/taint traversal model, cycle handling, barriers, ranking, and budget semantics — needs deeper research during plan-phase.
+
+---
+
+### Phase 69: Public Graph CLI Promotion
+
+**Goal:** Selected `polint graph` commands go public behind every gate — determinism, correctness, no-leak, docs, benchmarks — with agent-shaped JSON, honest limits, and measured recall context, without becoming a CI gate or a second rule system.
+
+**Depends on:** Phase 68. May run in parallel with Phase 70.
+
+**Requirements:** CLI-01, CLI-02, CLI-03, CLI-04, CLI-05, CLI-06, CLI-07, PROD-03, PROD-04, PROD-05, VAL-06
+
+**Success Criteria** (what must be TRUE):
+1. `polint graph` commands (used-by, neighbors, callers, callees, path, taint-style reachability; search as Phase 70 allows) are promoted individually, each only after its fixtures, no-leak, determinism, docs, and benchmark gates pass (CLI-01, CLI-02).
+2. JSON is the design center; human output renders from the same private envelope (CLI-03); commands are purpose-built with structured filters — no SQL, table inspection, Cypher, Datalog, QL, SPARQL, or generic graph shell (CLI-04).
+3. Docs explain limits, precision, unknowns, budgets, summary-backed evidence, and the exploration-to-policy workflow; `polint graph` has no CI pass/fail semantics and public docs describe Static Analysis 2.0 as durable local infrastructure, not a registry product (CLI-05, PROD-03, PROD-04, PROD-05).
+4. Promoted JSON schemas have snapshots and compatibility notes; internal store schema changes do not force public schema changes (CLI-06).
+5. Graph docs and benchmark reports carry the measured recall/precision context from Phase 63, and unknown counts render by default (CLI-07).
+6. Leak gates prove SQL, table names, row IDs, provider generation IDs, parser IDs, solver IDs, raw graph internals, and payload formats are absent from SDK prelude, CLI JSON, README, docs/facts, examples, and generated skill text (VAL-06).
+
+**Research flags:** first stable public graph JSON schema and per-command promotion checklist — needs deeper research during plan-phase.
+
+---
+
+### Phase 70: Lexical Search Boundary
+
+**Goal:** Tantivy lexical search lands as a derived artifact over stable semantic-store document IDs — candidates only, crash-safe rebuild, no new public truth source.
+
+**Depends on:** Phase 68 (stable document IDs and envelopes). May run in parallel with Phase 69. **Designated scope-cut:** if the milestone runs long, this phase moves to v2.1 by recorded decision; no other phase depends on it (Phase 71 search-rebuild crash tests apply only if this phase ships).
+
+**Requirements:** SEARCH-01, SEARCH-02, SEARCH-03, SEARCH-04, SEARCH-05
+
+**Success Criteria** (what must be TRUE):
+1. `SearchCorpus` over stable semantic-store document IDs is defined before the Tantivy dependency is added (SEARCH-01).
+2. Tantivy lexical search covers symbols, evidence text, diagnostic text, summaries, and selected snippets (SEARCH-02); Tantivy `DocId`s, segment state, and index layout stay private, and results map back to stable store document IDs and evidence spans (SEARCH-03).
+3. Search indexes are derived artifacts tied to store manifest/content digests and complete generations; rebuild-and-swap is crash-safe and deterministic (SEARCH-04).
+4. Vector search remains deferred and off by default, requiring explicit model/chunker/dimension/metric/normalization/provenance/content-digest lockfiles before any experiment (SEARCH-05).
+
+**Research flags:** Tantivy code tokenization, field schema, rebuild lifecycle, and candidate wording — needs deeper research during plan-phase.
+
+---
+
+### Phase 71: Recovery, Pruning, and Scale Gates
+
+**Goal:** Default store reuse becomes credible: the full determinism matrix, crash/recovery suite, large-scale benchmarks, pruning/WAL policy, and public-boundary re-proof all pass, and the milestone outcome-gate report shows scale, latency, honesty, and accuracy-visibility green.
+
+**Depends on:** Phase 67 (summaries), Phase 69 (public surface); Phase 70 if shipped.
+
+**Requirements:** VAL-01, VAL-03, VAL-07, VAL-08, VAL-09
+
+**Success Criteria** (what must be TRUE):
+1. Cold build, warm build, restored-store build, partial invalidation, process restart, randomized provider order, and different Rayon worker counts produce byte-identical normalized policy and query JSON where semantics are unchanged (VAL-01).
+2. Crash/recovery tests kill the process during ingest transaction, summary payload write, migration, WAL checkpoint, and (if Phase 70 shipped) search rebuild; recovery exposes only a complete generation or a rebuild-needed diagnostic (VAL-03).
+3. Scale benchmarks cover ingest/query p50/p95, DB and WAL size, RSS, pruning/vacuum cost, recursive-CTE-vs-Rust-traversal, and BLOB-vs-file behavior at 100k/500k/1M+ row scales, with decisions recorded (VAL-07).
+4. `polint cache status/clean/prune` accounts for store generations, payloads, search indexes, stale rows, WAL/checkpoint policy, and orphaned payload cleanup (VAL-08).
+5. External temp-repo tests re-prove that repo-local rules import only `polint::sdk::prelude::*`, register through `polint::runner::run_cli`, and observe unchanged `polint check --format json` behavior (VAL-09); the final benchmark report states each milestone outcome gate's status against the Phase 63 baselines.
+
+**Research flags:** pruning/vacuum/checkpoint policy and large-store benchmark thresholds — needs deeper research during plan-phase.
+
+---
+
+## Requirement Coverage
+
+| Phase | Requirements |
+|-------|--------------|
+| 63 | BENCH-01, BENCH-02, BENCH-03, BENCH-04 |
+| 64 | STORE-01, STORE-02, STORE-03, STORE-06, STORE-07, STORE-08, PERF-03, PROD-01, VAL-02 |
+| 65 | STORE-04, STORE-05, META-01, META-04 |
+| 66 | META-02, META-03, META-05, META-06, META-07, PERF-01, PERF-02 |
+| 67 | SUM-01..07, PERF-04, REV-01..03, PROD-02, VAL-04 |
+| 68 | QUERY-01..08, VAL-05 |
+| 69 | CLI-01..07, PROD-03, PROD-04, PROD-05, VAL-06 |
+| 70 | SEARCH-01..05 |
+| 71 | VAL-01, VAL-03, VAL-07, VAL-08, VAL-09 |
+
+67/67 v2.0 requirements mapped; no orphans, no double-mapping. BENCH-03 is owned by Phase 63 (gate wiring) and enforced as a phase-boundary gate from Phase 64 onward.
+
+---
+*Roadmap generated: 2026-07-09 after v2.0 requirements approval*

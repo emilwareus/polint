@@ -20,7 +20,7 @@ Phase 12 of v1.1 completed on 2026-05-11. Syntactic Go and TS/JS imports now flo
 
 Phase 13 of v1.1 completed in May 2026. `Symbols<'_>` and `References<'_>` are available through the SDK, with Go and TS/JS symbol/reference facts, stable IDs, and precision tiers.
 
-Static-analysis engine research completed on 2026-05-16. `research/ROADMAP.md` now defines the next implementation sequence: 22 independently reviewable PR-sized steps that build the private analysis kernel, evaluation harness, cache substrate, semantic backbone, interprocedural engine foundations, extension surface, precision layers, benchmark gates, and final SDK/query promotion path.
+Static-analysis engine research completed on 2026-05-16. `research/ROADMAP.md` defines the long-running implementation sequence for the private analysis kernel, evaluation harness, cache substrate, semantic backbone, interprocedural engine foundations, extension surface, precision layers, benchmark gates, and SDK/query promotion path.
 
 Phase 20 of v1.2 completed on 2026-05-16. Current source, Go syntax, TS/JS syntax, module graph, symbol graph, and metrics orchestration now runs behind a crate-private analysis kernel facade with deterministic internal provider manifests and test-only provider-order inspection, preserving existing public behavior.
 
@@ -42,6 +42,8 @@ v1.2 Static Analysis Engine Implementation shipped on 2026-05-27. It delivered t
 
 v1.3 Graph Engine Precision completed in June 2026. It delivered the private shared semantic graph, reachability/root semantics, Go semantic frontend and RTA driver, JS/TS inventory and function-token/object-model drivers, adaptation models, solver budgets, unknown taxonomy, and promotion gates needed to make graph precision measurable while keeping solver internals out of the public SDK.
 
+Static Analysis 2.0 research was locked on 2026-07-07. It clarifies that the core products remain `polint check` for custom Rust rules and `polint review` for agentic review, while the long-term product promise is a local semantic layer that lets AI agents understand, explore, and improve large codebases. The locked technology direction is an embedded SQLite/rusqlite local semantic store with typed graph indexes, registry-ready summary manifests, Tantivy lexical search, deferred vector search, and no remote package-summary registry in the first implementation.
+
 Archived milestone records:
 
 - `.planning/milestones/v1.0-ROADMAP.md`
@@ -53,29 +55,22 @@ Archived milestone records:
 - `.planning/milestones/v1.2-phases/`
 - `.planning/milestones/v1.3-ROADMAP.md`
 - `.planning/milestones/v1.3-REQUIREMENTS.md`
+- `.planning/milestones/v1.4-ROADMAP.md`
 
-## Current Milestone: v1.4 Policy Query Surface
+## Current Milestone: v2.0 Static Analysis 2.0 Implementation
 
-v1.4 completed locally on 2026-06-20. Phase 62 recorded the milestone audit,
-public-boundary proof, deterministic flagship-template gate, and final local
-verification. The preview policy-query surface is ready for review before
-remote sharing or archival.
-
-**Goal:** Expose the private graph, control-flow, and data-flow engine through a small, clear rule-authoring SDK for repo-specific policy queries without exposing raw solver or graph internals.
+**Goal:** Build the Static Analysis 2.0 implementation foundation that turns polint's existing private analysis engine into a durable, queryable local semantic layer for custom Rust rules, agentic review, and future local graph exploration.
 
 **Target features:**
-- Public preview views for `Events<'_>`, `Calls<'_>`, `ControlFlow<'_>`, and `DataFlow<'_>`.
-- A single clear query-object style for advanced policies: construct query, run query, report violations.
-- Query structs for `ReachQuery`, `GuardQuery`, `LifecycleQuery`, and `FlowQuery`.
-- Pattern structs for semantic events, sources, sinks, guards, and barriers.
-- Violation result types that produce consistent diagnostics, precision/status evidence, path evidence, and budget/unknown context.
-- Flagship generated rule templates for request-to-shell, secret logs, sensitive-write guards, transaction cleanup, raw reachable APIs, PII/analytics, SSRF, and dangerous HTML sinks.
-- Preview/stability gates: docs under `docs/facts/`, temp-repo SDK tests, cache-key participation, unknown/budget diagnostics, generated skill updates, and public-surface leak proof.
-- Strict public-boundary discipline: no raw CFG, call graph, data-flow graph, solver, provider, or `AnalysisDb` exposure.
+- SQLite/rusqlite local semantic store skeleton with migrations, manifest, generation tracking, and private store facade.
+- Durable persistence for validated facts, graph adjacency/evidence indexes, summaries, provenance/status metadata, and invalidation dependencies.
+- Registry-ready package summary manifests and content-addressed payload seams, without building a remote registry yet.
+- Local CLI graph/query foundations for used-by, neighbors, callers/callees, paths, taint-style reachability, filters, and agent-shaped JSON envelopes.
+- Tantivy lexical-search boundary over stable semantic-store document IDs, with vector search deferred behind explicit model/chunker/provenance lockfiles.
+- Deterministic validation gates: cold/warm parity, crash/recovery behavior, query correctness fixtures, budget/unknown preservation, and benchmark coverage.
+- Strict public-boundary discipline: store tables, raw graph internals, provider IDs, parser IDs, and SQL remain private until intentionally promoted.
 
-**Source context:** v1.2 built private CFG, calls, data-flow, slicing/evidence, summaries, and demand-query substrates. v1.3 improved the shared semantic graph and solver precision. v1.4 should convert those internals into a user-facing policy authoring surface that keeps one obvious way to express advanced rules.
-
-The longer-term target remains a complete, agent-consumable static-analysis graph of the codebase: modules, symbols, references, calls, CFGs, summaries, type/value/alias facts, dataflow, taint, evidence, and extension-provided repository knowledge. v1.2 built the private substrate first, v1.3 improved precision, and v1.4 should promote public SDK/CLI contracts only when fixtures and benchmark gates prove them.
+**Source context:** v1.2 built the private analysis substrate, v1.3 improved graph precision, v1.4 promoted policy-query SDK views, and the 2026-07-07 research pass locked the Static Analysis 2.0 product and technology direction. v2.0 starts by making the analysis graph durable and queryable locally while preserving future registry seams.
 
 ## Requirements
 
@@ -138,7 +133,7 @@ The longer-term target remains a complete, agent-consumable static-analysis grap
 
 ### Active
 
-v1.4 Policy Query Surface active requirements are defined in `.planning/REQUIREMENTS.md`. They cover the public preview query views, pattern and query types, violation diagnostics/evidence, flagship generated templates, preview gates, docs, temp-repo tests, cache/unknown behavior, and public-boundary proof.
+v2.0 Static Analysis 2.0 Implementation requirements are approved in `.planning/REQUIREMENTS.md` (67 requirements: product boundaries, ground-truth benchmarks, pipeline cost discipline, store foundation, metadata/invalidation, summary persistence, warm review payoff, internal query engine, graph CLI, search boundary, validation/recovery/scale) and mapped to roadmap phases 63-71 in `.planning/ROADMAP.md`. The milestone is anchored on falsifiable outcome gates: scale (≤ +20% peak RSS / +25% cold wall-clock regression budget over the store-disabled baseline), latency (warm `polint review` recomputes only the instrumented invalidation frontier), honesty (unknown/budget states durable end to end), and accuracy visibility (persisted-graph recall baseline recorded, not raised). Phase 70 (Tantivy lexical search) is the designated scope-cut.
 
 ### Out of Scope
 
@@ -222,7 +217,7 @@ v1.4 Policy Query Surface active requirements are defined in `.planning/REQUIREM
 
 ## Next Milestone Goals
 
-v1.4 Policy Query Surface is the active milestone. See the "Current Milestone" section above and `.planning/REQUIREMENTS.md` / `.planning/ROADMAP.md` for the scoped requirements and phase plan.
+v2.0 Static Analysis 2.0 Implementation is the active milestone. See the "Current Milestone" section above and `.planning/REQUIREMENTS.md` / `.planning/ROADMAP.md` for the scoped requirements and phase plan once generated.
 
 ## Evolution
 
@@ -242,4 +237,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-20 after starting v1.4 Policy Query Surface*
+*Last updated: 2026-07-07 after starting v2.0 Static Analysis 2.0 Implementation*
