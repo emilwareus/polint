@@ -2,11 +2,11 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Static Analysis 2.0 Implementation
-status: planning
-last_updated: "2026-07-07T00:00:00.000Z"
-last_activity: 2026-07-07 -- Milestone v2.0 started
+status: ready-to-execute
+last_updated: "2026-07-09T00:00:00.000Z"
+last_activity: 2026-07-09 -- v2.0 requirements approved and roadmap generated (phases 63-71)
 progress:
-  total_phases: 0
+  total_phases: 9
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -42,14 +42,14 @@ See: `.planning/PROJECT.md` (updated 2026-07-07)
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-07-07 -- Milestone v2.0 started
+Phase: 63 (Ground Truth and Performance Baseline) — not started
+Plan: — (run plan-phase for Phase 63)
+Status: Roadmap complete; ready for phase planning
+Last activity: 2026-07-09 -- v2.0 requirements approved (outcome gates, BENCH/PERF/REV, locked decisions) and roadmap generated (phases 63-71)
 
 ### Active Milestone Phase Progress
 
-No phases planned yet. Requirements and roadmap are being defined for v2.0.
+9 phases planned (63-71), 0 executed. Phase 63 (Ground Truth and Performance Baseline) is next; it establishes store-disabled baselines and regression gates before any store code lands. Phase 70 (Lexical Search) is the designated scope-cut. Locked decisions (regression budgets, benchmark repo set, search cut) are recorded in `.planning/REQUIREMENTS.md`.
 
 ### Open repo-admin action (T-42-04-10)
 

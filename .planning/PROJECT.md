@@ -55,6 +55,7 @@ Archived milestone records:
 - `.planning/milestones/v1.2-phases/`
 - `.planning/milestones/v1.3-ROADMAP.md`
 - `.planning/milestones/v1.3-REQUIREMENTS.md`
+- `.planning/milestones/v1.4-ROADMAP.md`
 
 ## Current Milestone: v2.0 Static Analysis 2.0 Implementation
 
@@ -132,7 +133,7 @@ Archived milestone records:
 
 ### Active
 
-v2.0 Static Analysis 2.0 Implementation active requirements are being defined in `.planning/REQUIREMENTS.md`. They should cover the local semantic store, summary persistence, graph query foundations, search boundary, validation gates, and public-boundary proof.
+v2.0 Static Analysis 2.0 Implementation requirements are approved in `.planning/REQUIREMENTS.md` (67 requirements: product boundaries, ground-truth benchmarks, pipeline cost discipline, store foundation, metadata/invalidation, summary persistence, warm review payoff, internal query engine, graph CLI, search boundary, validation/recovery/scale) and mapped to roadmap phases 63-71 in `.planning/ROADMAP.md`. The milestone is anchored on falsifiable outcome gates: scale (≤ +20% peak RSS / +25% cold wall-clock regression budget over the store-disabled baseline), latency (warm `polint review` recomputes only the instrumented invalidation frontier), honesty (unknown/budget states durable end to end), and accuracy visibility (persisted-graph recall baseline recorded, not raised). Phase 70 (Tantivy lexical search) is the designated scope-cut.
 
 ### Out of Scope
 
