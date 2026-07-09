@@ -20,7 +20,7 @@ Phase numbering continues from v1.4's last phase 62. All new store/query modules
 
 ## Phases (v2.0)
 
-- [ ] **Phase 63: Ground Truth and Performance Baseline** - Real-repo benchmark suite, RSS/latency/store-size curves, store-disabled baselines, regression-gate wiring, persisted-graph recall baseline. *(Outcome gates: all — makes them measurable)*
+- [x] **Phase 63: Ground Truth and Performance Baseline** - Real-repo benchmark suite, RSS/latency/store-size curves, store-disabled baselines, regression-gate wiring, persisted-graph recall baseline. *(Outcome gates: all — makes them measurable)* (completed 2026-07-09)
 - [ ] **Phase 64: Store Foundation and Boundary Proof** - rusqlite bundled, private store facade, migrations, connection policy, generation lease, zero-cost disabled path, no-leak gates. *(Outcome gate: scale — zero-overhead discipline)*
 - [ ] **Phase 65: Generation Manifest and Metadata Mirroring** - Input snapshots, provider manifests, layer entries/dependencies, validation events, complete-generation commit discipline, invalidation dependency indexes. *(Outcome gate: latency — invalidation vocabulary)*
 - [ ] **Phase 66: Validated Fact and Graph Index Ingest** - Normalized facts, adjacency/evidence/unknown/budget indexes, streaming bounded-batch ingest, pipeline-gating preservation, deterministic ordering. *(Outcome gates: scale + honesty)*
@@ -40,7 +40,7 @@ Phase numbering continues from v1.4's last phase 62. All new store/query modules
 
 **Requirements:** BENCH-01, BENCH-02, BENCH-03, BENCH-04
 
-**Plans:** 3/4 plans executed
+**Plans:** 4/4 plans complete
 
 Plans:
 **Wave 1**
@@ -57,7 +57,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 63-04-PLAN.md — Regression-gate wiring (+20% peak RSS / +25% cold wall-clock budgets, Fail-not-silent)
+- [x] 63-04-PLAN.md — Regression-gate wiring (+20% peak RSS / +25% cold wall-clock budgets, Fail-not-silent)
 
 **Success Criteria** (what must be TRUE):
 

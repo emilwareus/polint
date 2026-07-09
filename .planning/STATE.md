@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Static Analysis 2.0 Implementation
 status: executing
-last_updated: "2026-07-09T10:03:30.848Z"
-last_activity: 2026-07-09 -- Completed 63-03-PLAN.md (store-disabled check/review baselines + pre-store graph accuracy baseline in benchmark report)
+last_updated: "2026-07-09T10:10:42.910Z"
+last_activity: 2026-07-09 -- Completed 63-04-PLAN.md (store-phase regression-budget gate enforcing locked +20% peak-RSS / +25% cold-wall-clock budgets)
 progress:
   total_phases: 9
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 4
-  completed_plans: 3
-  percent: 75
+  completed_plans: 4
+  percent: 11
 ---
 
 # State: polint
@@ -43,9 +43,9 @@ See: `.planning/PROJECT.md` (updated 2026-07-07)
 ## Current Position
 
 Phase: 63 (ground-truth-and-performance-baseline) — EXECUTING
-Plan: 4 of 4
-Status: Executing Phase 63
-Last activity: 2026-07-09 -- Completed 63-02-PLAN.md (whole-repo perf runner + curve JSON/markdown report + benchmark sweep)
+Plan: 4 of 4 (all plans complete — ready for phase verification)
+Status: Phase 63 ready for verification
+Last activity: 2026-07-09 -- Completed 63-04-PLAN.md (store-phase regression-budget gate enforcing locked +20% peak-RSS / +25% cold-wall-clock budgets)
 
 ### Active Milestone Phase Progress
 
@@ -496,6 +496,7 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase ?]: [Phase 63-02] run_repo_perf_point times one capability-gated kernel run (the analysis cost check and review share); the review measurement adds diff-size fields via changeset_for_ref, not a second pipeline. Budget counters folded from live AnalysisDb *::BudgetExceeded: budget_exceeded<-SummaryStatus, tokens_exhausted<-CallTargetStatus, iteration_capped<-DomainStatus. store_bytes explicit 0 until Phase 64. Benchmark sweep skips absent large clones; emission determinism tested via an injected deterministic measurer since real cold/warm timing and peak RSS are volatile.
 - [Phase ?]: Store-disabled reference baselines use a distinct StoreDisabledBaseline type (own schema constant); shared BASELINE_SCHEMA_VERSION untouched per Plan 04 contract
 - [Phase ?]: Pre-store graph accuracy baseline records recall/precision as null when the gated Jelly/Go x-tools clones are absent; regenerated via POLINT_WRITE_GRAPH_BENCH
+- [Phase 63-04]: Store-phase regression gate enforces locked +20% peak-RSS / +25% cold-wall-clock budgets vs the committed StoreDisabledBaseline; is_blocking exposes the fail-not-silent signal a Phase 64+ store phase wires to a non-zero exit (BENCH-03)
 
 ## Execution Metrics
 
