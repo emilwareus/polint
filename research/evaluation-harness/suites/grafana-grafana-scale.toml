@@ -1,0 +1,47 @@
+# Locked scale-benchmark manifest (BENCH-01). Large polyglot Go+TypeScript repo.
+# Pinned to grafana/grafana tag v11.4.0. CI-eligible (fast/nightly/release tiers).
+# Clone target is git-ignored and resolved repo-relative only (no absolute paths).
+schema_version = "polint-eval-suite-1"
+id = "grafana-grafana-scale"
+name = "Grafana scale (Go + TypeScript)"
+kind = "performance"
+languages = ["go", "typescript"]
+adapter_id = "polint_scale_performance"
+scoring_mode = "whole-repo"
+source_url = "https://github.com/grafana/grafana"
+source_commit = "b58701869e1a11b696010a6f28bd96b68a2cf0d0"
+license = "AGPL-3.0"
+language_support = "supported"
+
+[checkout]
+strategy = "local_clone"
+path = "research/evaluation-harness/repos/grafana-grafana"
+ignored_by_git = true
+local_clone_policy = "repo_relative_only"
+
+[expected]
+format = "suite_native"
+path = "suite-native-grafana-grafana-scale"
+
+[scoring]
+unified = [
+  "peak_rss_bytes",
+  "cold_wall_clock_ms",
+  "warm_wall_clock_ms",
+]
+
+[tiers.fast]
+enabled = true
+selector = "sample:balanced:6"
+max_cases = 6
+deterministic_seed = "grafana-grafana-scale-fast"
+
+[tiers.nightly]
+enabled = true
+selector = "all"
+deterministic_seed = "grafana-grafana-scale-nightly"
+
+[tiers.release]
+enabled = true
+selector = "all"
+deterministic_seed = "grafana-grafana-scale-release"

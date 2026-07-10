@@ -1110,6 +1110,7 @@ dependencies = [
  "ignore",
  "insta",
  "json-strip-comments",
+ "libc",
  "oxc_allocator",
  "oxc_ast",
  "oxc_parser",

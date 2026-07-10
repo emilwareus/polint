@@ -44,6 +44,8 @@ v1.3 Graph Engine Precision completed in June 2026. It delivered the private sha
 
 Static Analysis 2.0 research was locked on 2026-07-07. It clarifies that the core products remain `polint check` for custom Rust rules and `polint review` for agentic review, while the long-term product promise is a local semantic layer that lets AI agents understand, explore, and improve large codebases. The locked technology direction is an embedded SQLite/rusqlite local semantic store with typed graph indexes, registry-ready summary manifests, Tantivy lexical search, deferred vector search, and no remote package-summary registry in the first implementation.
 
+Phase 63 of v2.0 (Ground Truth and Performance Baseline) completed on 2026-07-09. The scale/latency/accuracy problems are now visible and gateable before any store code lands: pinned-commit real-repo suite manifests for the locked repo set, a crate-private benchmark harness (`getrusage` peak RSS, cold/warm wall-clock, cache/store size, budget-exhaustion telemetry) producing machine-readable curves plus a markdown report, committed store-disabled `check`/`review` baselines, a pre-store persisted-graph recall/precision baseline surfaced in the report, and a fail-not-silent regression gate enforcing the locked budgets (≤ +20% peak RSS, ≤ +25% cold wall-clock). BENCH-01..04 validated. Two environment stubs are honestly labeled and env-gated for maintainer regeneration (`POLINT_WRITE_STORE_DISABLED_BASELINE` against real scale repos; `POLINT_WRITE_GRAPH_BENCH` against the Jelly/Go x/tools oracle clones).
+
 Archived milestone records:
 
 - `.planning/milestones/v1.0-ROADMAP.md`
@@ -237,4 +239,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-07-07 after starting v2.0 Static Analysis 2.0 Implementation*
+*Last updated: 2026-07-09 after completing Phase 63 (Ground Truth and Performance Baseline) of v2.0 Static Analysis 2.0 Implementation*

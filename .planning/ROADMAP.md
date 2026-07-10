@@ -20,7 +20,7 @@ Phase numbering continues from v1.4's last phase 62. All new store/query modules
 
 ## Phases (v2.0)
 
-- [ ] **Phase 63: Ground Truth and Performance Baseline** - Real-repo benchmark suite, RSS/latency/store-size curves, store-disabled baselines, regression-gate wiring, persisted-graph recall baseline. *(Outcome gates: all — makes them measurable)*
+- [x] **Phase 63: Ground Truth and Performance Baseline** - Real-repo benchmark suite, RSS/latency/store-size curves, store-disabled baselines, regression-gate wiring, persisted-graph recall baseline. *(Outcome gates: all — makes them measurable)* (completed 2026-07-09)
 - [ ] **Phase 64: Store Foundation and Boundary Proof** - rusqlite bundled, private store facade, migrations, connection policy, generation lease, zero-cost disabled path, no-leak gates. *(Outcome gate: scale — zero-overhead discipline)*
 - [ ] **Phase 65: Generation Manifest and Metadata Mirroring** - Input snapshots, provider manifests, layer entries/dependencies, validation events, complete-generation commit discipline, invalidation dependency indexes. *(Outcome gate: latency — invalidation vocabulary)*
 - [ ] **Phase 66: Validated Fact and Graph Index Ingest** - Normalized facts, adjacency/evidence/unknown/budget indexes, streaming bounded-batch ingest, pipeline-gating preservation, deterministic ordering. *(Outcome gates: scale + honesty)*
@@ -40,7 +40,27 @@ Phase numbering continues from v1.4's last phase 62. All new store/query modules
 
 **Requirements:** BENCH-01, BENCH-02, BENCH-03, BENCH-04
 
+**Plans:** 4/4 plans complete
+
+Plans:
+**Wave 1**
+
+- [x] 63-01-PLAN.md — Real-repo suite manifests (grafana/hugo/excalidraw/devloupe) + perf measurement substrate (peak RSS, cold/warm, curve types)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 63-02-PLAN.md — Whole-repo perf runner (check + review) + curve JSON + markdown benchmark report
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 63-03-PLAN.md — Store-disabled check/review baselines + pre-store graph recall/precision accuracy baseline
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 63-04-PLAN.md — Regression-gate wiring (+20% peak RSS / +25% cold wall-clock budgets, Fail-not-silent)
+
 **Success Criteria** (what must be TRUE):
+
 1. A pinned-commit benchmark suite manifest exists covering the locked repo set: `grafana/grafana` (primary large polyglot Go+TS), `gohugoio/hugo` (Go medium), `excalidraw/excalidraw` (TS medium), the existing Jelly and Go x/tools oracle suites (micro + recall), and the private devloupe monorepo documented as a local-only, non-CI reference (known baseline: ~1GB peak RSS, cold 7.4s / warm 4.6s).
 2. The harness produces peak RSS, cold/warm wall-clock, cache/store size, and budget-exhaustion telemetry as machine-readable curves versus repo size and diff size, plus a markdown report.
 3. Store-disabled baselines for `polint check` and `polint review` are recorded and committed as the reference for the locked regression budgets (≤ +20% peak RSS, ≤ +25% cold wall-clock).
@@ -60,6 +80,7 @@ Phase numbering continues from v1.4's last phase 62. All new store/query modules
 **Requirements:** STORE-01, STORE-02, STORE-03, STORE-06, STORE-07, STORE-08, PERF-03, PROD-01, VAL-02
 
 **Success Criteria** (what must be TRUE):
+
 1. `rusqlite` (bundled) and the `pub(crate)` store facade land under `analysis_kernel/store/`; no `rusqlite` connection, statement, row, or SQL-string type escapes the module (leak test).
 2. Migrations run through `PRAGMA user_version` with fixtures for empty DB, previous schema, idempotent re-run, future-schema refusal, and invalid-schema rebuild diagnostics (VAL-02).
 3. Connection policy is explicit: foreign keys on, WAL, bounded busy timeout, one writer boundary, separate read-only connections; two concurrent `polint` processes serialize through a generation lease or fall back to read-only/skipped persistence with a clear diagnostic (STORE-08).
@@ -79,6 +100,7 @@ Phase numbering continues from v1.4's last phase 62. All new store/query modules
 **Requirements:** STORE-04, STORE-05, META-01, META-04
 
 **Success Criteria** (what must be TRUE):
+
 1. Store manifest, input snapshots, provider manifests, provider generations, layer entries/dependencies, validation events, and store stats persist, with active/pending/complete generation selection (STORE-04).
 2. Only complete validated generations become readable; a crash, failed migration, failed payload write, or failed rebuild leaves either the old complete generation readable or an explicit rebuild diagnostic — never mixed rows (STORE-05).
 3. The store mirrors `InputSnapshot`, provider manifests, layer/summary/query keys, and `FactMeta` vocabulary as first-class columns; no second identity or invalidation system appears (META-01).
@@ -97,6 +119,7 @@ Phase numbering continues from v1.4's last phase 62. All new store/query modules
 **Requirements:** META-02, META-03, META-05, META-06, META-07, PERF-01, PERF-02
 
 **Success Criteria** (what must be TRUE):
+
 1. Files, packages/modules, imports/exports, resolutions, symbols, definitions, references, functions, calls, evidence, summary metadata, unknown regions, and budget events persist as normalized rows and adjacency/evidence indexes; whole-program data-flow/taint rows are never eagerly materialized (META-02).
 2. Every fact-like row carries stable semantic identity, repo-relative path, fact family, provider/schema identity, precision, confidence/status, provenance, validation state, dependency metadata, and generation (META-03).
 3. Deterministic output never depends on `rowid`, insertion order, unordered maps, or provider completion order — proven by provider-order shuffle and Rayon worker-count permutation tests (META-05).
@@ -116,6 +139,7 @@ Phase numbering continues from v1.4's last phase 62. All new store/query modules
 **Requirements:** SUM-01, SUM-02, SUM-03, SUM-04, SUM-05, SUM-06, SUM-07, PERF-04, REV-01, REV-02, REV-03, PROD-02, VAL-04
 
 **Success Criteria** (what must be TRUE):
+
 1. Summary manifests persist for dependency package summaries and application function/SCC summaries with package/version identity, schema version, toolchain/frontend identity, config digest, provenance, validation metadata, and precision/status (SUM-01); payloads use blake3 content addressing behind typed digest wrappers that cannot be confused with cache invalidation keys (SUM-02).
 2. Payload layout (SQLite BLOBs vs adjacent content-addressed files vs hybrid) is locked by benchmark evidence covering DB size, WAL growth, crash behavior, restore behavior, and read latency (SUM-03).
 3. Warm runs recompute exactly the invalidation frontier — changed functions/SCCs plus transitive summary dependents — with the recompute set instrumented and asserted in must-recompute and must-reuse fixtures (SUM-04, REV-01); stale-reuse mutation fixtures cover every upstream input class (VAL-04).
@@ -136,6 +160,7 @@ Phase numbering continues from v1.4's last phase 62. All new store/query modules
 **Requirements:** QUERY-01, QUERY-02, QUERY-03, QUERY-04, QUERY-05, QUERY-06, QUERY-07, QUERY-08, VAL-05
 
 **Success Criteria** (what must be TRUE):
+
 1. Private query services answer used-by, neighbors, callers, callees, path, taint-style reachability, and search-candidate resolution over complete store generations only (QUERY-01).
 2. One internal envelope carries `version`, `schema`, `command`, `query`, `status`, `precision`, `nodes`, `edges`, `paths`, `findings`, `unknowns`, `budgets`, `summary`; status vocabulary includes `complete`, `partial`, `not_found`, `unknown`, `budget_exceeded`, `unsupported`, `setup_missing`, and `not_found` requires sufficient evidence for the claim (QUERY-02, QUERY-03).
 3. Filters cover path globs, tests on/off, minimum precision, provenance, unknown handling, max depth, max paths, and limits (QUERY-04); path/taint queries are bounded, cycle-aware, deterministic, evidence-backed, and explicit about barriers, summaries, unknowns, and budgets (QUERY-05).
@@ -155,6 +180,7 @@ Phase numbering continues from v1.4's last phase 62. All new store/query modules
 **Requirements:** CLI-01, CLI-02, CLI-03, CLI-04, CLI-05, CLI-06, CLI-07, PROD-03, PROD-04, PROD-05, VAL-06
 
 **Success Criteria** (what must be TRUE):
+
 1. `polint graph` commands (used-by, neighbors, callers, callees, path, taint-style reachability; search as Phase 70 allows) are promoted individually, each only after its fixtures, no-leak, determinism, docs, and benchmark gates pass (CLI-01, CLI-02).
 2. JSON is the design center; human output renders from the same private envelope (CLI-03); commands are purpose-built with structured filters — no SQL, table inspection, Cypher, Datalog, QL, SPARQL, or generic graph shell (CLI-04).
 3. Docs explain limits, precision, unknowns, budgets, summary-backed evidence, and the exploration-to-policy workflow; `polint graph` has no CI pass/fail semantics and public docs describe Static Analysis 2.0 as durable local infrastructure, not a registry product (CLI-05, PROD-03, PROD-04, PROD-05).
@@ -175,6 +201,7 @@ Phase numbering continues from v1.4's last phase 62. All new store/query modules
 **Requirements:** SEARCH-01, SEARCH-02, SEARCH-03, SEARCH-04, SEARCH-05
 
 **Success Criteria** (what must be TRUE):
+
 1. `SearchCorpus` over stable semantic-store document IDs is defined before the Tantivy dependency is added (SEARCH-01).
 2. Tantivy lexical search covers symbols, evidence text, diagnostic text, summaries, and selected snippets (SEARCH-02); Tantivy `DocId`s, segment state, and index layout stay private, and results map back to stable store document IDs and evidence spans (SEARCH-03).
 3. Search indexes are derived artifacts tied to store manifest/content digests and complete generations; rebuild-and-swap is crash-safe and deterministic (SEARCH-04).
@@ -193,6 +220,7 @@ Phase numbering continues from v1.4's last phase 62. All new store/query modules
 **Requirements:** VAL-01, VAL-03, VAL-07, VAL-08, VAL-09
 
 **Success Criteria** (what must be TRUE):
+
 1. Cold build, warm build, restored-store build, partial invalidation, process restart, randomized provider order, and different Rayon worker counts produce byte-identical normalized policy and query JSON where semantics are unchanged (VAL-01).
 2. Crash/recovery tests kill the process during ingest transaction, summary payload write, migration, WAL checkpoint, and (if Phase 70 shipped) search rebuild; recovery exposes only a complete generation or a rebuild-needed diagnostic (VAL-03).
 3. Scale benchmarks cover ingest/query p50/p95, DB and WAL size, RSS, pruning/vacuum cost, recursive-CTE-vs-Rust-traversal, and BLOB-vs-file behavior at 100k/500k/1M+ row scales, with decisions recorded (VAL-07).

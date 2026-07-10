@@ -2,15 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Static Analysis 2.0 Implementation
-status: ready-to-execute
-last_updated: "2026-07-09T00:00:00.000Z"
-last_activity: 2026-07-09 -- v2.0 requirements approved and roadmap generated (phases 63-71)
+status: ready_to_plan
+last_updated: 2026-07-09T10:21:28.838Z
+last_activity: 2026-07-09 -- Completed 63-04-PLAN.md (store-phase regression-budget gate enforcing locked +20% peak-RSS / +25% cold-wall-clock budgets)
 progress:
   total_phases: 9
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
+  completed_phases: 1
+  total_plans: 4
+  completed_plans: 4
+  percent: 11
+stopped_at: Phase 63 complete (4/4) — ready to discuss Phase 64
 ---
 
 # State: polint
@@ -21,7 +22,7 @@ See: `.planning/PROJECT.md` (updated 2026-07-07)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** v2.0 Static Analysis 2.0 Implementation planning
+**Current focus:** Phase 64 — store foundation and boundary proof
 
 ## Current Status
 
@@ -42,10 +43,10 @@ See: `.planning/PROJECT.md` (updated 2026-07-07)
 
 ## Current Position
 
-Phase: 63 (Ground Truth and Performance Baseline) — not started
-Plan: — (run plan-phase for Phase 63)
-Status: Roadmap complete; ready for phase planning
-Last activity: 2026-07-09 -- v2.0 requirements approved (outcome gates, BENCH/PERF/REV, locked decisions) and roadmap generated (phases 63-71)
+Phase: 64
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-07-09
 
 ### Active Milestone Phase Progress
 
@@ -214,6 +215,9 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 
 ## Decisions
 
+- [Phase 63-01]: polint owns its lint table (unsafe_code forbid->deny, all other workspace lints mirrored) so one audited getrusage FFI opts in via `#[allow(unsafe_code)]`; unsafe stays denied crate-wide otherwise, and the workspace-wide forbid still applies to every other crate.
+- [Phase 63-01]: Benchmark repos pinned to real release tags (grafana v11.4.0 `b587018...`, hugo v0.140.0 `3f35721...`, excalidraw v0.17.6 `f164071...`); devloupe is a local-only/non-CI reference via a research-only tier + `local_clone_policy = "allow_absolute"` so CI fast/nightly/release never resolve it.
+- [Phase 63-01]: getrusage(RUSAGE_SELF).ru_maxrss is the single source for the previously-never-populated `peak_rss_bytes`, normalized per-OS (macOS bytes / Linux kilobytes); curve-point telemetry (`CurvePoint`/`CurveSeries`) is keyed by repo size + diff size with cache/store size and budget-exhaustion counters, `deny_unknown_fields` + derived `Ord` for deterministic serialization.
 - [Phase 48-03]: The `eval::go_rta` acceptance gate sources RTA edges from the kernel-built db by rebuilding `GoRtaInputs::from_db` + driving `SolverEngine::run_to_solver_output`, NOT through `graph_edges_from_kernel_output` (which reads `refined_call_edges`/`call_targets`, not `solver_derived_edges`; Phase 52/GRAPH-05 wires solver edges into the observable refined-call projection). Self-contained fixtures are the always-runnable, x/tools-clone-free proof. Iteration-cap BudgetExceeded is driven by `max_candidates_per_callsite = 1` (one interface invoke, three instantiated implementers), not `max_rta_rounds`, because all exported Go functions are reachability roots so a multi-round chain cannot be built.
 - [Phase 48-03]: Verification surfaced 3 Rule-1 Go-frontend bugs masked by Plan 02's synthetic unit tests (which used already-bare method names + exact spans): whole-program SET facts (callsite/address_taken/instantiated_type/dynamic_dispatch) must dedup by stable key in `normalized()`; the method-set must carry bare method names (`Obj().Name()`), not signatures; and `GoRtaInputs` must map Go methods to nodes by span-CONTAINMENT (the SSA point-span lies within the tree-sitter declaration span) + index the bare method name. Without all three, RTA derived ZERO real Go interface edges. The go-rta/polyglot manifests carry no `[[expected]]` rows (the solver signal is crate-private, not an observable manifest fact); the gate is the proof.
 - [Phase 48-01]: Go sidecar harvests the RTA rapid-type set from `*ssa.MakeInterface` ONLY — the `*ssa.Alloc`/`MakeMap`/`MakeSlice`/`MakeChan` families are deliberately excluded because allocation alone does not make a type dynamically dispatchable under x/tools RTA (only interface conversion does), so adding them would over-approximate and flood precision. `address_taken` from `*ssa.MakeClosure`/func-value operands; `dynamic_dispatch` detail joins its callsite via `callsite_stable_key`.
@@ -490,6 +494,10 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase 50]: Phase 50-03 derives JS/TS object-model call edges only from callable tokens stored in property buckets, not from property names alone. — This keeps the object model precision-first while still improving recall for justified property-flow cases. Exact and computed buckets stay separate, budget exhaustion is explicit, and prototype/receiver semantics remain deferred to the next plan.
 - [Phase 50]: Phase 50-04 resolves prototype and receiver-sensitive object-model edges only through stable prototype/receiver facts, with dynamic mutation left unsupported. — Prototype chains and `this` binding are high-risk precision surfaces. Stable fact-gated lookup with visited-set/depth termination improves justified recall while preventing name/type guesses, unbounded traversal, and broad native/framework modeling from entering JS-05.
 - [Phase 50]: Phase 50-05 closes JS-05 with crate-private native object-model gates, closed-input determinism, budget evidence, and polyglot non-interference. — Local Jelly-oriented evidence is self-contained and explicitly scoped to `oracle-jelly` and `whole-repo` fixture modes; no external Jelly corpus floor is claimed before the Phase 54 benchmark promotion gate.
+- [Phase ?]: [Phase 63-02] run_repo_perf_point times one capability-gated kernel run (the analysis cost check and review share); the review measurement adds diff-size fields via changeset_for_ref, not a second pipeline. Budget counters folded from live AnalysisDb *::BudgetExceeded: budget_exceeded<-SummaryStatus, tokens_exhausted<-CallTargetStatus, iteration_capped<-DomainStatus. store_bytes explicit 0 until Phase 64. Benchmark sweep skips absent large clones; emission determinism tested via an injected deterministic measurer since real cold/warm timing and peak RSS are volatile.
+- [Phase ?]: Store-disabled reference baselines use a distinct StoreDisabledBaseline type (own schema constant); shared BASELINE_SCHEMA_VERSION untouched per Plan 04 contract
+- [Phase ?]: Pre-store graph accuracy baseline records recall/precision as null when the gated Jelly/Go x-tools clones are absent; regenerated via POLINT_WRITE_GRAPH_BENCH
+- [Phase 63-04]: Store-phase regression gate enforces locked +20% peak-RSS / +25% cold-wall-clock budgets vs the committed StoreDisabledBaseline; is_blocking exposes the fail-not-silent signal a Phase 64+ store phase wires to a non-zero exit (BENCH-03)
 
 ## Execution Metrics
 

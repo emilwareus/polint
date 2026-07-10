@@ -74,6 +74,16 @@ mod tests {
         assert!(jelly.comparison_rows.len() >= 2);
 
         if std::env::var_os("POLINT_WRITE_GRAPH_BENCH").is_some() {
+            // Refresh the committed pre-store persisted-graph accuracy baseline
+            // (BENCH-04) with the real measured recall/precision. Rows read the
+            // metrics off the produced runs; scoring is not reimplemented here.
+            let baseline =
+                crate::eval::bench::report::GraphAccuracyBaseline::from_runs(&[&go, &jelly]);
+            crate::eval::bench::report::write_graph_accuracy_baseline(
+                &root.join("research/evaluation-harness/baselines/persisted-graph-accuracy.json"),
+                &baseline,
+            )
+            .unwrap();
             write_summary(&output_dir, &[go, jelly]).unwrap();
         }
     }

@@ -1,0 +1,47 @@
+# Locked scale-benchmark manifest (BENCH-01). Large TypeScript repo.
+# Pinned to excalidraw/excalidraw tag v0.17.6. CI-eligible (fast/nightly/release tiers).
+# Clone target is git-ignored and resolved repo-relative only (no absolute paths).
+schema_version = "polint-eval-suite-1"
+id = "excalidraw-excalidraw-scale"
+name = "Excalidraw scale (TypeScript)"
+kind = "performance"
+languages = ["typescript"]
+adapter_id = "polint_scale_performance"
+scoring_mode = "whole-repo"
+source_url = "https://github.com/excalidraw/excalidraw"
+source_commit = "f1640710aae577cafb3c52ab2bf255a460c3ebf1"
+license = "MIT"
+language_support = "supported"
+
+[checkout]
+strategy = "local_clone"
+path = "research/evaluation-harness/repos/excalidraw-excalidraw"
+ignored_by_git = true
+local_clone_policy = "repo_relative_only"
+
+[expected]
+format = "suite_native"
+path = "suite-native-excalidraw-excalidraw-scale"
+
+[scoring]
+unified = [
+  "peak_rss_bytes",
+  "cold_wall_clock_ms",
+  "warm_wall_clock_ms",
+]
+
+[tiers.fast]
+enabled = true
+selector = "sample:balanced:6"
+max_cases = 6
+deterministic_seed = "excalidraw-excalidraw-scale-fast"
+
+[tiers.nightly]
+enabled = true
+selector = "all"
+deterministic_seed = "excalidraw-excalidraw-scale-nightly"
+
+[tiers.release]
+enabled = true
+selector = "all"
+deterministic_seed = "excalidraw-excalidraw-scale-release"

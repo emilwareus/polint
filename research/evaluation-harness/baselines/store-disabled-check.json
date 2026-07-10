@@ -1,0 +1,11 @@
+{
+  "schema_version": "polint-store-disabled-baseline-0",
+  "store_disabled": true,
+  "repo_id": "polint-tiny-fixture",
+  "suite_id": "polint-tiny-fixture-check",
+  "peak_rss_bytes": 46645248,
+  "peak_rss_delta_bytes": 40566784,
+  "cold_wall_clock_ms": 26,
+  "warm_wall_clock_ms": 22,
+  "diagnostics_digest": "28cac8a32a5bb2a9"
+}
