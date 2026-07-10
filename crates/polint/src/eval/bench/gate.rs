@@ -69,16 +69,19 @@ pub(crate) fn evaluate_phase_64_boundary(
     };
 
     let baseline = StoreDisabledBaseline::load(baseline_path)?;
-    // Match the committed baseline generator's order: its check-scoped digest
-    // run primes analysis/toolchain caches before the isolated point. Reversing
-    // this order compares unlike cache states on the tiny fixture.
-    let diagnostics_digest =
-        diagnostics_digest_for_repo_with_store_mode(repo_root, SemanticStoreBenchMode::Enabled)?;
+    // Match the committed baseline generator's cache state without hiding the
+    // first store open: prime analysis/toolchain caches with a disabled digest,
+    // measure enabled mode against an absent store, then compute enabled digest
+    // parity after the measured run.
+    let _priming_digest =
+        diagnostics_digest_for_repo_with_store_mode(repo_root, SemanticStoreBenchMode::Disabled)?;
     let measured = run_repo_perf_point_isolated_with_store_mode(
         repo_root,
         None,
         SemanticStoreBenchMode::Enabled,
     )?;
+    let diagnostics_digest =
+        diagnostics_digest_for_repo_with_store_mode(repo_root, SemanticStoreBenchMode::Enabled)?;
     let regression = evaluate_regression_budget(
         &baseline,
         &measured,

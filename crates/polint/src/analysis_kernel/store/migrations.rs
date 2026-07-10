@@ -1,6 +1,6 @@
 //! Strict, private schema migrations for the durable semantic store.
 
-use rusqlite::Connection;
+use rusqlite::{Connection, ErrorCode};
 use thiserror::Error;
 
 pub(super) const CURRENT_SCHEMA_VERSION: i32 = 1;
@@ -68,31 +68,70 @@ pub(super) fn apply_migrations(
     })
 }
 
+pub(super) fn preflight_schema(connection: &Connection) -> Result<(), MigrationError> {
+    let found = schema_version(connection)?;
+    if found > CURRENT_SCHEMA_VERSION {
+        return Err(MigrationError::FutureSchema {
+            found,
+            supported: CURRENT_SCHEMA_VERSION,
+        });
+    }
+    if found == CURRENT_SCHEMA_VERSION {
+        validate_current_schema(connection)?;
+    }
+    Ok(())
+}
+
 fn schema_version(connection: &Connection) -> Result<i32, rusqlite::Error> {
     connection.pragma_query_value(None, "user_version", |row| row.get(0))
 }
 
 fn validate_current_schema(connection: &Connection) -> Result<(), MigrationError> {
     let version = schema_version(connection)?;
-    let table_count: i64 = connection.query_row(
-        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
-        [BOOTSTRAP_TABLE],
-        |row| row.get(0),
-    )?;
+    let table_count: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            [BOOTSTRAP_TABLE],
+            |row| row.get(0),
+        )
+        .map_err(|error| classify_invariant_error(error, version))?;
     if table_count != 1 {
         return Err(MigrationError::InvalidSchema { version });
     }
 
-    let marker_count: i64 = connection.query_row(
-        "SELECT count(*) FROM _polint_schema_migrations WHERE version = ?1",
-        [CURRENT_SCHEMA_VERSION],
-        |row| row.get(0),
-    )?;
-    if marker_count != 1 || version != CURRENT_SCHEMA_VERSION {
+    let marker_count: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM _polint_schema_migrations WHERE version = ?1",
+            [CURRENT_SCHEMA_VERSION],
+            |row| row.get(0),
+        )
+        .map_err(|error| classify_invariant_error(error, version))?;
+    let total_marker_count: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM _polint_schema_migrations",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| classify_invariant_error(error, version))?;
+    if marker_count != 1 || total_marker_count != 1 || version != CURRENT_SCHEMA_VERSION {
         return Err(MigrationError::InvalidSchema { version });
     }
 
     Ok(())
+}
+
+fn classify_invariant_error(error: rusqlite::Error, version: i32) -> MigrationError {
+    match error.sqlite_error_code() {
+        Some(
+            ErrorCode::DatabaseBusy
+            | ErrorCode::DatabaseLocked
+            | ErrorCode::DatabaseCorrupt
+            | ErrorCode::NotADatabase
+            | ErrorCode::SystemIoFailure
+            | ErrorCode::CannotOpen,
+        ) => MigrationError::Sqlite(error),
+        _ => MigrationError::InvalidSchema { version },
+    }
 }
 
 #[cfg(test)]
@@ -223,6 +262,46 @@ mod tests {
             )
             .expect("table count");
         assert_eq!(table_count, 0);
+    }
+
+    #[test]
+    fn current_version_with_wrong_bootstrap_shape_is_invalid() {
+        let (_temp, mut connection) = open_temp_database();
+        connection
+            .execute_batch(
+                "CREATE TABLE _polint_schema_migrations (wrong_column INTEGER);\
+                 INSERT INTO _polint_schema_migrations (wrong_column) VALUES (1);\
+                 PRAGMA user_version = 1;",
+            )
+            .expect("create wrong-shape fixture");
+
+        let error = apply_migrations(&mut connection).expect_err("wrong shape refused");
+
+        assert!(matches!(
+            error,
+            MigrationError::InvalidSchema { version: 1 }
+        ));
+    }
+
+    #[test]
+    fn current_version_with_extra_marker_row_is_invalid() {
+        let (_temp, mut connection) = open_temp_database();
+        connection
+            .execute_batch(
+                "CREATE TABLE _polint_schema_migrations (\
+                     version INTEGER PRIMARY KEY CHECK (version > 0)\
+                 );\
+                 INSERT INTO _polint_schema_migrations (version) VALUES (1), (2);\
+                 PRAGMA user_version = 1;",
+            )
+            .expect("create extra-marker fixture");
+
+        let error = apply_migrations(&mut connection).expect_err("extra marker refused");
+
+        assert!(matches!(
+            error,
+            MigrationError::InvalidSchema { version: 1 }
+        ));
     }
 
     #[test]

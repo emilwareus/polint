@@ -190,6 +190,7 @@ mod recovery {
             )
             .expect("create future fixture");
         drop(future);
+        let original_bytes = fs::read(&path).expect("read original future store");
         let config = StoreConfig::new(&path, true);
         let future_status = StoreStatus::Skipped(StoreSkipReason::FutureSchema {
             found: 2,
@@ -197,6 +198,10 @@ mod recovery {
         });
 
         assert_eq!(SemanticStore::maintain(&config), future_status);
+        assert_eq!(
+            fs::read(&path).expect("read future store after maintenance"),
+            original_bytes
+        );
         assert_eq!(rebuild_owned_cache_store(&config, &path), future_status);
         assert!(path.exists());
 

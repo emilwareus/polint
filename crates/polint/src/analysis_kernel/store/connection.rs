@@ -8,7 +8,7 @@ use rusqlite::{Connection, ErrorCode, OpenFlags, TransactionBehavior};
 #[cfg(test)]
 use rusqlite::Transaction;
 
-use super::migrations::{MigrationError, apply_migrations};
+use super::migrations::{MigrationError, apply_migrations, preflight_schema};
 
 const BUSY_TIMEOUT: Duration = Duration::from_millis(250);
 
@@ -51,6 +51,7 @@ pub(super) fn open_writer(path: &Path) -> Result<WriterConnection, ConnectionErr
     connection
         .busy_timeout(BUSY_TIMEOUT)
         .map_err(classify_sqlite_error)?;
+    preflight_schema(&connection).map_err(classify_migration_error)?;
     connection
         .pragma_update(None, "foreign_keys", true)
         .map_err(classify_sqlite_error)?;
