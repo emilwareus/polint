@@ -59,6 +59,44 @@ pub(crate) struct Phase64BoundaryReport {
 }
 
 #[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Phase64BaselineStrategy {
+    Committed,
+    SamePlatformDisabledControl,
+}
+
+#[cfg(test)]
+const fn phase_64_baseline_strategy(is_windows: bool) -> Phase64BaselineStrategy {
+    if is_windows {
+        Phase64BaselineStrategy::SamePlatformDisabledControl
+    } else {
+        Phase64BaselineStrategy::Committed
+    }
+}
+
+#[cfg(test)]
+fn phase_64_comparison_baseline(
+    committed: &StoreDisabledBaseline,
+    disabled_control: Option<&CurvePoint>,
+    strategy: Phase64BaselineStrategy,
+) -> anyhow::Result<StoreDisabledBaseline> {
+    match strategy {
+        Phase64BaselineStrategy::Committed => Ok(committed.clone()),
+        Phase64BaselineStrategy::SamePlatformDisabledControl => {
+            let point = disabled_control.ok_or_else(|| {
+                anyhow::anyhow!("same-platform boundary strategy requires a disabled control")
+            })?;
+            Ok(StoreDisabledBaseline::from_curve_point(
+                &committed.repo_id,
+                &committed.suite_id,
+                point,
+                &committed.diagnostics_digest,
+            ))
+        }
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn evaluate_phase_64_boundary(
     repo_root: &std::path::Path,
     baseline_path: &std::path::Path,
@@ -68,13 +106,34 @@ pub(crate) fn evaluate_phase_64_boundary(
         run_repo_perf_point_isolated_with_store_mode,
     };
 
-    let baseline = StoreDisabledBaseline::load(baseline_path)?;
+    let committed_baseline = StoreDisabledBaseline::load(baseline_path)?;
     // Match the committed baseline generator's cache state without hiding the
     // first store open: prime analysis/toolchain caches with a disabled digest,
     // measure enabled mode against an absent store, then compute enabled digest
     // parity after the measured run.
     let _priming_digest =
         diagnostics_digest_for_repo_with_store_mode(repo_root, SemanticStoreBenchMode::Disabled)?;
+    let baseline_strategy = phase_64_baseline_strategy(cfg!(windows));
+    // Windows libtest process startup dominates this tiny fixture (hundreds of
+    // milliseconds versus the committed 26 ms host measurement). Measure a
+    // disabled child on the same runner so the locked ratio evaluates store
+    // overhead rather than cross-platform process-launch cost. Comparable Unix
+    // hosts retain the fixed Phase 63 artifact as their regression reference.
+    let disabled_control =
+        if baseline_strategy == Phase64BaselineStrategy::SamePlatformDisabledControl {
+            Some(run_repo_perf_point_isolated_with_store_mode(
+                repo_root,
+                None,
+                SemanticStoreBenchMode::Disabled,
+            )?)
+        } else {
+            None
+        };
+    let comparison_baseline = phase_64_comparison_baseline(
+        &committed_baseline,
+        disabled_control.as_ref(),
+        baseline_strategy,
+    )?;
     let measured = run_repo_perf_point_isolated_with_store_mode(
         repo_root,
         None,
@@ -83,7 +142,7 @@ pub(crate) fn evaluate_phase_64_boundary(
     let diagnostics_digest =
         diagnostics_digest_for_repo_with_store_mode(repo_root, SemanticStoreBenchMode::Enabled)?;
     let regression = evaluate_regression_budget(
-        &baseline,
+        &comparison_baseline,
         &measured,
         &BaselineThresholds::default(),
         Some(&diagnostics_digest),
@@ -424,6 +483,54 @@ mod tests {
                 .all(|check| check.metric != "diagnostics_digest_parity"),
             "no parity check is added when the measured digest is absent"
         );
+    }
+
+    #[test]
+    fn phase_64_baseline_strategy_uses_same_platform_control_only_on_windows() {
+        assert_eq!(
+            phase_64_baseline_strategy(false),
+            Phase64BaselineStrategy::Committed
+        );
+        assert_eq!(
+            phase_64_baseline_strategy(true),
+            Phase64BaselineStrategy::SamePlatformDisabledControl
+        );
+    }
+
+    #[test]
+    fn phase_64_same_platform_baseline_uses_control_metrics_and_committed_identity() {
+        let committed = baseline();
+        let mut control = measured(0.75, 2.5);
+        control.warm_wall_clock_ms = 777;
+
+        let comparison = phase_64_comparison_baseline(
+            &committed,
+            Some(&control),
+            Phase64BaselineStrategy::SamePlatformDisabledControl,
+        )
+        .expect("construct same-platform comparison baseline");
+
+        assert_eq!(comparison.repo_id, committed.repo_id);
+        assert_eq!(comparison.suite_id, committed.suite_id);
+        assert_eq!(comparison.diagnostics_digest, committed.diagnostics_digest);
+        assert_eq!(
+            comparison.peak_rss_delta_bytes,
+            control.peak_rss_delta_bytes
+        );
+        assert_eq!(comparison.cold_wall_clock_ms, control.cold_wall_clock_ms);
+        assert_eq!(comparison.warm_wall_clock_ms, control.warm_wall_clock_ms);
+    }
+
+    #[test]
+    fn phase_64_same_platform_baseline_requires_disabled_control() {
+        let error = phase_64_comparison_baseline(
+            &baseline(),
+            None,
+            Phase64BaselineStrategy::SamePlatformDisabledControl,
+        )
+        .expect_err("missing disabled control must fail");
+
+        assert!(error.to_string().contains("requires a disabled control"));
     }
 
     mod phase_64 {
