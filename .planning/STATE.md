@@ -2,8 +2,8 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Static Analysis 2.0 Implementation
-status: verifying
-last_updated: "2026-07-10T11:21:11.575Z"
+status: ready
+last_updated: "2026-07-10T11:54:08.664Z"
 last_activity: 2026-07-10
 progress:
   total_phases: 9
@@ -17,11 +17,11 @@ progress:
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (updated 2026-07-07)
+See: `.planning/PROJECT.md` (updated 2026-07-10)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 64 — Store Foundation and Boundary Proof
+**Current focus:** Phase 65 — Generation Manifest and Metadata Mirroring
 
 ## Current Status
 
@@ -42,14 +42,14 @@ See: `.planning/PROJECT.md` (updated 2026-07-07)
 
 ## Current Position
 
-Phase: 64 (Store Foundation and Boundary Proof) — EXECUTING
-Plan: 4 of 4
-Status: Phase complete — ready for verification
+Phase: 65
+Plan: Not started
+Status: Ready for discussion
 Last activity: 2026-07-10
 
 ### Active Milestone Phase Progress
 
-9 phases planned (63-71), 0 executed. Phase 63 (Ground Truth and Performance Baseline) is next; it establishes store-disabled baselines and regression gates before any store code lands. Phase 70 (Lexical Search) is the designated scope-cut. Locked decisions (regression budgets, benchmark repo set, search cut) are recorded in `.planning/REQUIREMENTS.md`.
+9 phases planned (63-71), 2 complete. Phase 65 (Generation Manifest and Metadata Mirroring) is next; it adds complete-generation discipline and mirrors the kernel's existing identity/invalidation vocabulary behind Phase 64's private store boundary. Phase 70 (Lexical Search) remains the designated scope-cut. Locked decisions (regression budgets, benchmark repo set, search cut) are recorded in `.planning/REQUIREMENTS.md`.
 
 ### Open repo-admin action (T-42-04-10)
 

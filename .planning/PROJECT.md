@@ -46,6 +46,8 @@ Static Analysis 2.0 research was locked on 2026-07-07. It clarifies that the cor
 
 Phase 63 of v2.0 (Ground Truth and Performance Baseline) completed on 2026-07-09. The scale/latency/accuracy problems are now visible and gateable before any store code lands: pinned-commit real-repo suite manifests for the locked repo set, a crate-private benchmark harness (`getrusage` peak RSS, cold/warm wall-clock, cache/store size, budget-exhaustion telemetry) producing machine-readable curves plus a markdown report, committed store-disabled `check`/`review` baselines, a pre-store persisted-graph recall/precision baseline surfaced in the report, and a fail-not-silent regression gate enforcing the locked budgets (≤ +20% peak RSS, ≤ +25% cold wall-clock). BENCH-01..04 validated. Two environment stubs are honestly labeled and env-gated for maintainer regeneration (`POLINT_WRITE_STORE_DISABLED_BASELINE` against real scale repos; `POLINT_WRITE_GRAPH_BENCH` against the Jelly/Go x/tools oracle clones).
 
+Phase 64 of v2.0 (Store Foundation and Boundary Proof) completed on 2026-07-10. polint now has a bundled-rusqlite, cache-owned, crate-private semantic-store facade with strict transactional `PRAGMA user_version` migrations, future/invalid/corrupt-store refusal and safe recovery, WAL/foreign-key/bounded-timeout connection policy, a `BEGIN IMMEDIATE` writer lease, and separate read-only connections. Production activation remains disabled and zero-I/O; six store states preserve byte-identical policy output and exit behavior. Public leak gates keep SQLite/store internals out of the SDK, CLI, docs, examples, JSON, and generated skill text, while the real tiny-fixture boundary passes the locked RSS/cold/digest gates. STORE-01/02/03/06/07/08, PERF-03, PROD-01, and VAL-02 validated; manifests, generations, facts, and queries remain assigned to later phases.
+
 Archived milestone records:
 
 - `.planning/milestones/v1.0-ROADMAP.md`
@@ -216,6 +218,7 @@ v2.0 Static Analysis 2.0 Implementation requirements are approved in `.planning/
 | Keep Go and TS/JS as full-coverage targets before Python and Java parity | The current adapters are the proving ground for the complete capability model; Python and Java should enter through explicit subsets and expand after the model is proven. | Accepted for v1.2 sequencing |
 | Own the public fact model even when adapters use language-native tooling | Rule authors should consume normalized polint facts while adapters may use Oxc, `go/packages`, Python tooling, javac, JavaParser, coverage.py, LCOV, or JaCoCo behind the boundary. | Accepted for v1.2 sequencing |
 | Build the static-analysis substrate before promoting broad public graph/query APIs | The research roadmap shows kernel, provenance, evaluation, cache, MIR, CFG, summaries, extensions, and benchmark gates must precede stable public advanced query surfaces. | Accepted for v1.2 |
+| Keep the semantic store private and disabled until it has complete validated generations to serve | Phase 64 proves SQLite lifecycle, safety, parity, and cost boundaries without adding a premature CLI/config contract or persisting partial product data. | Accepted in Phase 64; Phase 65 owns manifests and complete-generation metadata |
 
 ## Next Milestone Goals
 
@@ -239,4 +242,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-07-09 after completing Phase 63 (Ground Truth and Performance Baseline) of v2.0 Static Analysis 2.0 Implementation*
+*Last updated: 2026-07-10 after completing Phase 64 (Store Foundation and Boundary Proof) of v2.0 Static Analysis 2.0 Implementation*
