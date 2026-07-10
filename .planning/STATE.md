@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Static Analysis 2.0 Implementation
 status: executing
-last_updated: "2026-07-10T10:21:24.215Z"
+last_updated: "2026-07-10T10:34:04.778Z"
 last_activity: 2026-07-10
 progress:
   total_phases: 9
   completed_phases: 1
   total_plans: 8
-  completed_plans: 5
+  completed_plans: 6
   percent: 11
 ---
 
@@ -43,7 +43,7 @@ See: `.planning/PROJECT.md` (updated 2026-07-07)
 ## Current Position
 
 Phase: 64 (Store Foundation and Boundary Proof) — EXECUTING
-Plan: 2 of 4
+Plan: 3 of 4
 Status: Ready to execute
 Last activity: 2026-07-10
 
@@ -499,6 +499,8 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase 63-04]: Store-phase regression gate enforces locked +20% peak-RSS / +25% cold-wall-clock budgets vs the committed StoreDisabledBaseline; is_blocking exposes the fail-not-silent signal a Phase 64+ store phase wires to a non-zero exit (BENCH-03)
 - [Phase 64]: Production cache constructors keep semantic-store activation off; only cfg(test) code can enable it during Phase 64. — Preserves the zero-cost disabled path while integration proof is developed.
 - [Phase 64]: Schema v1 contains only migration bookkeeping and strictly refuses malformed or future versions. — Keeps Phase 65 ownership intact and prevents destructive downgrade behavior.
+- [Phase 64]: Store writers use WAL, foreign keys, a 250 ms busy timeout, and BEGIN IMMEDIATE; contention becomes BusySkipped. — Serializes writers without indefinite blocking or changing policy answers.
+- [Phase 64]: Normal maintenance preserves corrupt, invalid, future, and unsafe stores; only an exact verified cache-owned path can be explicitly rebuilt. — Prevents destructive fallback and symlink/path escape.
 
 ## Execution Metrics
 
@@ -655,3 +657,4 @@ intentionally avoided during autonomous local commits.
 | Phase | Plan | Duration | Notes |
 |-------|------|----------|-------|
 | Phase 64 P01 | 35min | 3 tasks | 7 files |
+| Phase 64 P02 | 13min | 3 tasks | 4 files |
