@@ -71,13 +71,13 @@ Requirements for the v2.0 milestone. Each requirement should map to exactly one 
 
 - [ ] **PERF-01**: Store ingest respects the capability-gated semantic pipeline and rule-scoped discovery. Enabling persistence must not resurrect the eager whole-repo pipeline or whole-repo source loading for runs whose rules do not request deep facts; what the store persists follows what the run legitimately computed.
 - [ ] **PERF-02**: Store ingest streams in bounded, sorted batches. Building a commit plan must not require holding the full generation's rows, payloads, or source text resident at once. Peak ingest memory is measured in the benchmark suite.
-- [ ] **PERF-03**: When persistence is disabled, unavailable, or skipped, `polint check` and `polint review` take a zero-cost path: no store I/O, no schema checks on the hot path, and no behavior drift.
+- [x] **PERF-03**: When persistence is disabled, unavailable, or skipped, `polint check` and `polint review` take a zero-cost path: no store I/O, no schema checks on the hot path, and no behavior drift.
 - [ ] **PERF-04**: Once dependency package summaries persist and validate, dependency bodies are not re-parsed or re-summarized while their (package, version, schema, toolchain, config) identity matches. This is the O(working set) memory property from the locked research, verified by fixture (dependency source removed or altered without identity change is never re-read) and by benchmark.
 
 ### Store Foundation
 
-- [ ] **STORE-01**: Add a private SQLite/rusqlite semantic-store facade owned by the analysis kernel, with `pub(crate)` boundaries and no escaped `rusqlite` connection, statement, row, or SQL-string types.
-- [ ] **STORE-02**: Support migrations, schema versioning through `PRAGMA user_version`, controlled diagnostics for future/invalid schemas, and safe rebuild or skipped-persistence behavior.
+- [x] **STORE-01**: Add a private SQLite/rusqlite semantic-store facade owned by the analysis kernel, with `pub(crate)` boundaries and no escaped `rusqlite` connection, statement, row, or SQL-string types.
+- [x] **STORE-02**: Support migrations, schema versioning through `PRAGMA user_version`, controlled diagnostics for future/invalid schemas, and safe rebuild or skipped-persistence behavior.
 - [ ] **STORE-03**: Use explicit connection policy: foreign keys enabled, WAL where appropriate, bounded busy timeout, one writer boundary, and separate read-only query connections.
 - [ ] **STORE-04**: Persist store manifest, active generation, pending generation, complete generation, schema version, workspace/config identity, and store stats.
 - [ ] **STORE-05**: Commit only complete validated generations. A crash, failed migration, failed payload write, or failed search rebuild must leave either the old complete generation readable or require an explicit rebuild diagnostic.

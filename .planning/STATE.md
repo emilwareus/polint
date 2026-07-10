@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Static Analysis 2.0 Implementation
 status: executing
-last_updated: "2026-07-10T09:59:30.067Z"
-last_activity: 2026-07-10 -- Phase 64 planning complete
+last_updated: "2026-07-10T10:21:24.215Z"
+last_activity: 2026-07-10
 progress:
   total_phases: 9
   completed_phases: 1
   total_plans: 8
-  completed_plans: 4
+  completed_plans: 5
   percent: 11
 ---
 
@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (updated 2026-07-07)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 64 — store foundation and boundary proof
+**Current focus:** Phase 64 — Store Foundation and Boundary Proof
 
 ## Current Status
 
@@ -42,10 +42,10 @@ See: `.planning/PROJECT.md` (updated 2026-07-07)
 
 ## Current Position
 
-Phase: 64
-Plan: Not started
+Phase: 64 (Store Foundation and Boundary Proof) — EXECUTING
+Plan: 2 of 4
 Status: Ready to execute
-Last activity: 2026-07-10 -- Phase 64 planning complete
+Last activity: 2026-07-10
 
 ### Active Milestone Phase Progress
 
@@ -497,6 +497,8 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase ?]: Store-disabled reference baselines use a distinct StoreDisabledBaseline type (own schema constant); shared BASELINE_SCHEMA_VERSION untouched per Plan 04 contract
 - [Phase ?]: Pre-store graph accuracy baseline records recall/precision as null when the gated Jelly/Go x-tools clones are absent; regenerated via POLINT_WRITE_GRAPH_BENCH
 - [Phase 63-04]: Store-phase regression gate enforces locked +20% peak-RSS / +25% cold-wall-clock budgets vs the committed StoreDisabledBaseline; is_blocking exposes the fail-not-silent signal a Phase 64+ store phase wires to a non-zero exit (BENCH-03)
+- [Phase 64]: Production cache constructors keep semantic-store activation off; only cfg(test) code can enable it during Phase 64. — Preserves the zero-cost disabled path while integration proof is developed.
+- [Phase 64]: Schema v1 contains only migration bookkeeping and strictly refuses malformed or future versions. — Keeps Phase 65 ownership intact and prevents destructive downgrade behavior.
 
 ## Execution Metrics
 
@@ -647,3 +649,9 @@ intentionally avoided during autonomous local commits.
 
 - Review `.planning/phases/62-promotion-gate-boundary-proof-and-closeout/62-MILESTONE-AUDIT.md`.
 - Preserve the current boundary: `Events<'_>`, `Calls<'_>`, `ControlFlow<'_>`, and `DataFlow<'_>` are provider-backed for documented preview scopes; raw `Cfg<'_>`, raw `CallGraph<'_>`, and raw data-flow graph traversal remain private/reserved.
+
+## Performance Metrics
+
+| Phase | Plan | Duration | Notes |
+|-------|------|----------|-------|
+| Phase 64 P01 | 35min | 3 tasks | 7 files |
