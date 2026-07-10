@@ -61,6 +61,7 @@ mod connection_policy {
 
         assert_eq!(policy.foreign_keys, 1);
         assert_eq!(policy.journal_mode, "wal");
+        assert_eq!(policy.synchronous, 1);
         assert_eq!(policy.busy_timeout_ms, 250);
         assert_eq!(
             connection::try_writer_lease(&mut writer).expect("writer lease"),

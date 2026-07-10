@@ -11,6 +11,7 @@ use rusqlite::Transaction;
 use super::migrations::{MigrationError, apply_migrations_in_transaction, preflight_schema};
 
 const BUSY_TIMEOUT: Duration = Duration::from_millis(250);
+const SYNCHRONOUS_NORMAL: i64 = 1;
 
 pub(super) struct WriterConnection {
     connection: Connection,
@@ -63,6 +64,15 @@ fn open_uninitialized_writer(path: &Path) -> Result<WriterConnection, Connection
     preflight_schema(&connection).map_err(classify_migration_error)?;
     connection
         .pragma_update(None, "foreign_keys", true)
+        .map_err(classify_sqlite_error)?;
+    // This database is a recoverable analysis cache, so WAL's NORMAL policy is
+    // the right safety/performance boundary: SQLite keeps the database
+    // consistent and preserves transactions across application crashes, while
+    // avoiding FULL's extra durable WAL flush on every commit. A power or OS
+    // failure may roll back the newest cache transaction, which the normal
+    // schema validation/rebuild path already treats as disposable cache state.
+    connection
+        .pragma_update(None, "synchronous", SYNCHRONOUS_NORMAL)
         .map_err(classify_sqlite_error)?;
     let journal_mode: String = connection
         .query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))
@@ -157,6 +167,7 @@ fn is_busy(error: &rusqlite::Error) -> bool {
 pub(super) struct ConnectionPolicySnapshot {
     pub(super) foreign_keys: i64,
     pub(super) journal_mode: String,
+    pub(super) synchronous: i64,
     pub(super) busy_timeout_ms: i64,
 }
 
@@ -172,6 +183,10 @@ pub(super) fn writer_policy(
         .connection
         .pragma_query_value(None, "journal_mode", |row| row.get(0))
         .map_err(classify_sqlite_error)?;
+    let synchronous = writer
+        .connection
+        .pragma_query_value(None, "synchronous", |row| row.get(0))
+        .map_err(classify_sqlite_error)?;
     let busy_timeout_ms = writer
         .connection
         .pragma_query_value(None, "busy_timeout", |row| row.get(0))
@@ -179,6 +194,7 @@ pub(super) fn writer_policy(
     Ok(ConnectionPolicySnapshot {
         foreign_keys,
         journal_mode,
+        synchronous,
         busy_timeout_ms,
     })
 }
