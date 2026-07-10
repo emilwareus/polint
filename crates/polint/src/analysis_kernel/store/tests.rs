@@ -127,3 +127,168 @@ mod writer_contention {
         );
     }
 }
+
+mod recovery {
+    use std::fs;
+
+    use rusqlite::Connection;
+
+    use super::*;
+
+    fn store_path(temp: &tempfile::TempDir) -> std::path::PathBuf {
+        temp.path().join("cache/semantic-store/store.sqlite3")
+    }
+
+    #[test]
+    fn corrupt_and_invalid_stores_are_preserved_as_rebuild_needed() {
+        let corrupt_temp = tempfile::tempdir().expect("temp directory");
+        let corrupt_path = store_path(&corrupt_temp);
+        fs::create_dir_all(corrupt_path.parent().expect("store parent"))
+            .expect("create store directory");
+        let corrupt_bytes = b"not a sqlite database";
+        fs::write(&corrupt_path, corrupt_bytes).expect("write corrupt store");
+        let corrupt_config = StoreConfig::new(&corrupt_path, true);
+
+        assert_eq!(
+            SemanticStore::maintain(&corrupt_config),
+            StoreStatus::RebuildNeeded(StoreRebuildReason::Corrupt)
+        );
+        assert_eq!(
+            fs::read(&corrupt_path).expect("read corrupt store"),
+            corrupt_bytes
+        );
+
+        let invalid_temp = tempfile::tempdir().expect("temp directory");
+        let invalid_path = store_path(&invalid_temp);
+        fs::create_dir_all(invalid_path.parent().expect("store parent"))
+            .expect("create store directory");
+        let invalid = Connection::open(&invalid_path).expect("open invalid store");
+        invalid
+            .pragma_update(None, "user_version", migrations::CURRENT_SCHEMA_VERSION)
+            .expect("set current version without marker");
+        drop(invalid);
+        let invalid_config = StoreConfig::new(&invalid_path, true);
+
+        assert_eq!(
+            SemanticStore::maintain(&invalid_config),
+            StoreStatus::RebuildNeeded(StoreRebuildReason::InvalidSchema)
+        );
+        assert!(invalid_path.exists());
+    }
+
+    #[test]
+    fn future_store_is_preserved_and_explicit_rebuild_refuses_it() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let path = store_path(&temp);
+        fs::create_dir_all(path.parent().expect("store parent")).expect("create store directory");
+        let future = Connection::open(&path).expect("open future store");
+        future
+            .execute_batch(
+                "CREATE TABLE sentinel (value TEXT NOT NULL);\
+                 INSERT INTO sentinel (value) VALUES ('future-data');\
+                 PRAGMA user_version = 2;",
+            )
+            .expect("create future fixture");
+        drop(future);
+        let config = StoreConfig::new(&path, true);
+        let future_status = StoreStatus::Skipped(StoreSkipReason::FutureSchema {
+            found: 2,
+            supported: migrations::CURRENT_SCHEMA_VERSION,
+        });
+
+        assert_eq!(SemanticStore::maintain(&config), future_status);
+        assert_eq!(rebuild_owned_cache_store(&config, &path), future_status);
+        assert!(path.exists());
+
+        let preserved =
+            Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .expect("reopen future store");
+        let version: i32 = preserved
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .expect("future version");
+        let value: String = preserved
+            .query_row("SELECT value FROM sentinel", [], |row| row.get(0))
+            .expect("sentinel value");
+        assert_eq!(version, 2);
+        assert_eq!(value, "future-data");
+    }
+
+    #[test]
+    fn rebuild_refuses_outside_candidate_and_rebuilds_exact_corrupt_owned_file() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let path = store_path(&temp);
+        fs::create_dir_all(path.parent().expect("store parent")).expect("create store directory");
+        fs::write(&path, b"corrupt owned store").expect("write corrupt owned store");
+        let config = StoreConfig::new(&path, true);
+        let outside = temp.path().join("outside.sqlite3");
+        fs::write(&outside, b"outside data").expect("write outside file");
+
+        assert_eq!(
+            rebuild_owned_cache_store(&config, &outside),
+            StoreStatus::Skipped(StoreSkipReason::UnsafePath)
+        );
+        assert_eq!(
+            fs::read(&outside).expect("read outside file"),
+            b"outside data"
+        );
+
+        assert_eq!(
+            rebuild_owned_cache_store(&config, &path),
+            StoreStatus::Ready
+        );
+        let rebuilt = connection::open_writer(&path).expect("open rebuilt store");
+        assert_eq!(
+            connection::integrity_check(&rebuilt).expect("integrity check"),
+            "ok"
+        );
+        drop(rebuilt);
+        let reader = connection::open_read_only(&path).expect("open rebuilt reader");
+        assert_eq!(
+            connection::read_schema_version(&reader).expect("schema version"),
+            migrations::CURRENT_SCHEMA_VERSION
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rebuild_refuses_symlink_target_and_symlinked_store_directory() {
+        let target_temp = tempfile::tempdir().expect("target temp directory");
+        let target_path = store_path(&target_temp);
+        fs::create_dir_all(target_path.parent().expect("store parent"))
+            .expect("create store directory");
+        let outside = target_temp.path().join("outside.sqlite3");
+        fs::write(&outside, b"outside target").expect("write outside target");
+        std::os::unix::fs::symlink(&outside, &target_path).expect("symlink store target");
+        let target_config = StoreConfig::new(&target_path, true);
+
+        assert_eq!(
+            rebuild_owned_cache_store(&target_config, &target_path),
+            StoreStatus::Skipped(StoreSkipReason::UnsafePath)
+        );
+        assert_eq!(
+            fs::read(&outside).expect("read outside target"),
+            b"outside target"
+        );
+
+        let ancestor_temp = tempfile::tempdir().expect("ancestor temp directory");
+        let cache_root = ancestor_temp.path().join("cache");
+        fs::create_dir_all(&cache_root).expect("create cache root");
+        let outside_dir = ancestor_temp.path().join("outside-store");
+        fs::create_dir_all(&outside_dir).expect("create outside store");
+        let outside_db = outside_dir.join("store.sqlite3");
+        fs::write(&outside_db, b"outside ancestor target").expect("write outside database");
+        std::os::unix::fs::symlink(&outside_dir, cache_root.join("semantic-store"))
+            .expect("symlink store directory");
+        let ancestor_path = cache_root.join("semantic-store/store.sqlite3");
+        let ancestor_config = StoreConfig::new(&ancestor_path, true);
+
+        assert_eq!(
+            rebuild_owned_cache_store(&ancestor_config, &ancestor_path),
+            StoreStatus::Skipped(StoreSkipReason::UnsafePath)
+        );
+        assert_eq!(
+            fs::read(&outside_db).expect("read outside database"),
+            b"outside ancestor target"
+        );
+    }
+}

@@ -62,8 +62,8 @@ impl SemanticStore {
             return StoreStatus::Disabled;
         }
 
-        if prepare_store_path(config.path()).is_err() {
-            return StoreStatus::Skipped(StoreSkipReason::UnsafePath);
+        if let Err(status) = prepare_store_path(config.path()) {
+            return status;
         }
 
         let mut writer = match connection::open_writer(config.path()) {
@@ -78,14 +78,66 @@ impl SemanticStore {
     }
 }
 
-fn prepare_store_path(path: &Path) -> Result<(), ()> {
-    let parent = path.parent().ok_or(())?;
-    crate::repo_fs::create_dir_all_no_symlink(parent).map_err(|_| ())?;
+pub(crate) fn rebuild_owned_cache_store(config: &StoreConfig, candidate: &Path) -> StoreStatus {
+    if !config.is_enabled() {
+        return StoreStatus::Disabled;
+    }
+    if candidate != config.path() {
+        return StoreStatus::Skipped(StoreSkipReason::UnsafePath);
+    }
+
+    let status = SemanticStore::maintain(config);
+    if !matches!(status, StoreStatus::RebuildNeeded(_)) {
+        return status;
+    }
+
+    let Some((cache_root, store_dir)) = store_ownership(config.path()) else {
+        return StoreStatus::Skipped(StoreSkipReason::UnsafePath);
+    };
+    let Some(owned_path) =
+        crate::repo_fs::managed_existing_file(cache_root, store_dir, config.path())
+    else {
+        return StoreStatus::Skipped(StoreSkipReason::UnsafePath);
+    };
+    if std::fs::remove_file(owned_path).is_err() {
+        return StoreStatus::Skipped(StoreSkipReason::OpenFailed);
+    }
+
+    SemanticStore::maintain(config)
+}
+
+fn prepare_store_path(path: &Path) -> Result<(), StoreStatus> {
+    let Some((cache_root, store_dir)) = store_ownership(path) else {
+        return Err(StoreStatus::Skipped(StoreSkipReason::UnsafePath));
+    };
+    crate::repo_fs::ensure_managed_path(cache_root, store_dir).map_err(map_path_error)?;
+    crate::repo_fs::create_dir_all_no_symlink(store_dir).map_err(map_path_error)?;
+    crate::repo_fs::ensure_managed_path(cache_root, path).map_err(map_path_error)?;
     match std::fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => Err(()),
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            Err(StoreStatus::Skipped(StoreSkipReason::UnsafePath))
+        }
         Ok(_) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(_) => Err(()),
+        Err(_) => Err(StoreStatus::Skipped(StoreSkipReason::OpenFailed)),
+    }
+}
+
+fn store_ownership(path: &Path) -> Option<(&Path, &Path)> {
+    let store_dir = path.parent()?;
+    let cache_root = store_dir.parent()?;
+    Some((cache_root, store_dir))
+}
+
+fn map_path_error(error: crate::repo_fs::RepoFileReadError) -> StoreStatus {
+    use crate::repo_fs::RepoFileReadError;
+
+    match error {
+        RepoFileReadError::AbsolutePath
+        | RepoFileReadError::EscapesRepo
+        | RepoFileReadError::NotFile
+        | RepoFileReadError::NotDirectory => StoreStatus::Skipped(StoreSkipReason::UnsafePath),
+        _ => StoreStatus::Skipped(StoreSkipReason::OpenFailed),
     }
 }
 
