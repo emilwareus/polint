@@ -21,7 +21,7 @@ Phase numbering continues from v1.4's last phase 62. All new store/query modules
 ## Phases (v2.0)
 
 - [x] **Phase 63: Ground Truth and Performance Baseline** - Real-repo benchmark suite, RSS/latency/store-size curves, store-disabled baselines, regression-gate wiring, persisted-graph recall baseline. *(Outcome gates: all — makes them measurable)* (completed 2026-07-09)
-- [ ] **Phase 64: Store Foundation and Boundary Proof** - rusqlite bundled, private store facade, migrations, connection policy, generation lease, zero-cost disabled path, no-leak gates. *(Outcome gate: scale — zero-overhead discipline)*
+- [x] **Phase 64: Store Foundation and Boundary Proof** - rusqlite bundled, private store facade, migrations, connection policy, generation lease, zero-cost disabled path, no-leak gates. *(Outcome gate: scale — zero-overhead discipline)* (completed 2026-07-10)
 - [ ] **Phase 65: Generation Manifest and Metadata Mirroring** - Input snapshots, provider manifests, layer entries/dependencies, validation events, complete-generation commit discipline, invalidation dependency indexes. *(Outcome gate: latency — invalidation vocabulary)*
 - [ ] **Phase 66: Validated Fact and Graph Index Ingest** - Normalized facts, adjacency/evidence/unknown/budget indexes, streaming bounded-batch ingest, pipeline-gating preservation, deterministic ordering. *(Outcome gates: scale + honesty)*
 - [ ] **Phase 67: Summary Persistence, Invalidation Frontier, and Warm Review** - Summary manifests, blake3 content-addressed payloads, frontier recomputation, warm `polint review` latency win, O(working set) property. *(Outcome gates: scale + latency — the keystone phase)*

@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Static Analysis 2.0 Implementation
-status: executing
-last_updated: "2026-07-10T10:50:24.955Z"
+status: verifying
+last_updated: "2026-07-10T11:21:11.575Z"
 last_activity: 2026-07-10
 progress:
   total_phases: 9
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 8
-  completed_plans: 7
-  percent: 11
+  completed_plans: 8
+  percent: 22
 ---
 
 # State: polint
@@ -44,7 +44,7 @@ See: `.planning/PROJECT.md` (updated 2026-07-07)
 
 Phase: 64 (Store Foundation and Boundary Proof) — EXECUTING
 Plan: 4 of 4
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-07-10
 
 ### Active Milestone Phase Progress
@@ -503,6 +503,8 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase 64]: Normal maintenance preserves corrupt, invalid, future, and unsafe stores; only an exact verified cache-owned path can be explicitly rebuilt. — Prevents destructive fallback and symlink/path escape.
 - [Phase 64]: Semantic store maintenance runs after validation/finalization and records only private StoreStatus telemetry. — Store availability cannot influence policy facts, diagnostics, capability support, or exit semantics.
 - [Phase 64]: The cfg(test) isolated benchmark selects store mode through a private child environment key and excludes store bytes from cache_bytes. — Measures real overhead without a public activation contract or double-counting.
+- [Phase 64]: Phase boundary measurements compute the diagnostics digest before the isolated point, matching the committed baseline generator's cache-priming order. — Prevents unlike toolchain/cache states from masquerading as store regressions without changing locked budgets.
+- [Phase 64]: Public leak scanning bans curated store-specific namespaces, types, crate/schema/SQL identifiers while leaving generic store/row/connection prose legal. — Protects supported contracts with negative-controlled precision.
 
 ## Execution Metrics
 
@@ -661,3 +663,4 @@ intentionally avoided during autonomous local commits.
 | Phase 64 P01 | 35min | 3 tasks | 7 files |
 | Phase 64 P02 | 13min | 3 tasks | 4 files |
 | Phase 64 P03 | 16min | 3 tasks | 7 files |
+| Phase 64 P04 | 31min | 3 tasks | 4 files |
