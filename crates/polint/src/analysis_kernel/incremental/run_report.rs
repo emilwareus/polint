@@ -2,6 +2,7 @@ use super::demand::DemandQueryTrace;
 use super::{CacheStats, Digest, DigestKind, InputSnapshot, PrecisionTier, ProviderOutputMeta};
 #[cfg(test)]
 use crate::analysis::summaries::provider::SccClosureDebugSnapshot;
+use crate::analysis_kernel::StoreStatus;
 use crate::analysis_kernel::{PrecisionCeiling, ProviderManifest};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -10,6 +11,7 @@ pub(crate) struct KernelRunReport {
     pub(crate) provider_outputs: Vec<ProviderOutputMeta>,
     pub(crate) cache_stats: CacheStats,
     pub(crate) demand_query_trace: DemandQueryTrace,
+    store_status: StoreStatus,
     #[cfg(test)]
     pub(crate) scc_closure_debug: Option<SccClosureDebugSnapshot>,
 }
@@ -19,6 +21,7 @@ impl KernelRunReport {
         input_snapshot: InputSnapshot,
         provider_outputs: Vec<ProviderOutputMeta>,
         demand_query_trace: DemandQueryTrace,
+        store_status: StoreStatus,
     ) -> Self {
         let mut cache_stats = aggregate_cache_stats(&provider_outputs);
         aggregate_demand_query_stats(&demand_query_trace, &mut cache_stats);
@@ -28,6 +31,7 @@ impl KernelRunReport {
             provider_outputs,
             cache_stats,
             demand_query_trace,
+            store_status,
             #[cfg(test)]
             scc_closure_debug: None,
         }
@@ -53,6 +57,11 @@ impl KernelRunReport {
     #[cfg(test)]
     pub(crate) fn scc_closure_debug(&self) -> Option<&SccClosureDebugSnapshot> {
         self.scc_closure_debug.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn store_status(&self) -> &StoreStatus {
+        &self.store_status
     }
 }
 

@@ -311,8 +311,8 @@ pub(crate) fn managed_existing_file(
     managed_dir: &Path,
     path: &Path,
 ) -> Option<PathBuf> {
-    ensure_no_symlink_ancestors(root).ok()?;
-    ensure_no_symlink_ancestors(managed_dir).ok()?;
+    ensure_managed_path(root, managed_dir).ok()?;
+    ensure_managed_path(root, path).ok()?;
     let metadata = fs::symlink_metadata(path).ok()?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return None;
@@ -327,6 +327,50 @@ pub(crate) fn managed_existing_file(
     } else {
         None
     }
+}
+
+pub(crate) fn ensure_managed_path(root: &Path, path: &Path) -> Result<PathBuf, RepoFileReadError> {
+    let root = normalize_path(root).ok_or(RepoFileReadError::EscapesRepo)?;
+    let path = normalize_path(path).ok_or(RepoFileReadError::EscapesRepo)?;
+    let relative = path
+        .strip_prefix(&root)
+        .map_err(|_| RepoFileReadError::EscapesRepo)?;
+    create_dir_all_no_symlink(&root)?;
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|_| RepoFileReadError::RootUnavailable)?;
+    let mut current = root;
+    let component_count = relative.components().count();
+
+    for (index, component) in relative.components().enumerate() {
+        let Component::Normal(segment) = component else {
+            return Err(RepoFileReadError::EscapesRepo);
+        };
+        current.push(segment);
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(RepoFileReadError::EscapesRepo);
+            }
+            Ok(metadata) if index + 1 < component_count && !metadata.is_dir() => {
+                return Err(RepoFileReadError::NotDirectory);
+            }
+            Ok(_) => {
+                let canonical_current = current
+                    .canonicalize()
+                    .map_err(|_| RepoFileReadError::Metadata)?;
+                if !canonical_current.starts_with(&canonical_root) {
+                    return Err(RepoFileReadError::EscapesRepo);
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotADirectory => {
+                return Err(RepoFileReadError::NotDirectory);
+            }
+            Err(_) => return Err(RepoFileReadError::Metadata),
+        }
+    }
+
+    Ok(current)
 }
 
 pub(crate) fn ensure_no_symlink_ancestors(path: &Path) -> Result<(), RepoFileReadError> {

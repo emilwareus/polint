@@ -50,6 +50,75 @@ pub(crate) struct RegressionGateReport {
     pub(crate) checks: Vec<GateCheck>,
 }
 
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Phase64BoundaryReport {
+    pub(crate) regression: RegressionGateReport,
+    pub(crate) measured: CurvePoint,
+    pub(crate) diagnostics_digest: String,
+}
+
+#[cfg(test)]
+fn phase_64_comparison_baseline(
+    committed: &StoreDisabledBaseline,
+    disabled_control: &CurvePoint,
+) -> StoreDisabledBaseline {
+    StoreDisabledBaseline::from_curve_point(
+        &committed.repo_id,
+        &committed.suite_id,
+        disabled_control,
+        &committed.diagnostics_digest,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn evaluate_phase_64_boundary(
+    repo_root: &std::path::Path,
+    baseline_path: &std::path::Path,
+) -> anyhow::Result<Phase64BoundaryReport> {
+    use crate::eval::bench::runner::{
+        SemanticStoreBenchMode, diagnostics_digest_for_repo_with_store_mode,
+        run_repo_perf_point_isolated_with_store_mode,
+    };
+
+    let committed_baseline = StoreDisabledBaseline::load(baseline_path)?;
+    // Match the committed baseline generator's cache state without hiding the
+    // first store open: prime analysis/toolchain caches with a disabled digest,
+    // measure enabled mode against an absent store, then compute enabled digest
+    // parity after the measured run.
+    let _priming_digest =
+        diagnostics_digest_for_repo_with_store_mode(repo_root, SemanticStoreBenchMode::Disabled)?;
+    // The committed tiny-fixture artifact locks the fixture identity and
+    // diagnostics marker, but its millisecond values have no host, target, or
+    // toolchain provenance. Pair disabled and enabled isolated children on the
+    // same runner so the locked ratios evaluate semantic-store overhead rather
+    // than process-launch and filesystem differences between machines.
+    let disabled_control = run_repo_perf_point_isolated_with_store_mode(
+        repo_root,
+        None,
+        SemanticStoreBenchMode::Disabled,
+    )?;
+    let comparison_baseline = phase_64_comparison_baseline(&committed_baseline, &disabled_control);
+    let measured = run_repo_perf_point_isolated_with_store_mode(
+        repo_root,
+        None,
+        SemanticStoreBenchMode::Enabled,
+    )?;
+    let diagnostics_digest =
+        diagnostics_digest_for_repo_with_store_mode(repo_root, SemanticStoreBenchMode::Enabled)?;
+    let regression = evaluate_regression_budget(
+        &comparison_baseline,
+        &measured,
+        &BaselineThresholds::default(),
+        Some(&diagnostics_digest),
+    );
+    Ok(Phase64BoundaryReport {
+        regression,
+        measured,
+        diagnostics_digest,
+    })
+}
+
 /// Evaluate a measured [`CurvePoint`] against the committed store-disabled
 /// [`StoreDisabledBaseline`] on the two locked regression budgets: peak RSS
 /// (`max_peak_rss_ratio`) and cold wall-clock (`max_cold_wall_clock_ratio`).
@@ -379,5 +448,114 @@ mod tests {
                 .all(|check| check.metric != "diagnostics_digest_parity"),
             "no parity check is added when the measured digest is absent"
         );
+    }
+
+    #[test]
+    fn phase_64_same_platform_baseline_uses_control_metrics_and_committed_identity() {
+        let committed = baseline();
+        let mut control = measured(0.75, 2.5);
+        control.warm_wall_clock_ms = 777;
+
+        let comparison = phase_64_comparison_baseline(&committed, &control);
+
+        assert_eq!(comparison.repo_id, committed.repo_id);
+        assert_eq!(comparison.suite_id, committed.suite_id);
+        assert_eq!(comparison.diagnostics_digest, committed.diagnostics_digest);
+        assert_eq!(
+            comparison.peak_rss_delta_bytes,
+            control.peak_rss_delta_bytes
+        );
+        assert_eq!(comparison.cold_wall_clock_ms, control.cold_wall_clock_ms);
+        assert_eq!(comparison.warm_wall_clock_ms, control.warm_wall_clock_ms);
+    }
+
+    mod phase_64 {
+        use std::path::{Path, PathBuf};
+        use std::process::Command;
+
+        use super::*;
+
+        fn workspace_root() -> PathBuf {
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .and_then(Path::parent)
+                .expect("workspace root")
+                .to_path_buf()
+        }
+
+        fn git(root: &Path, args: &[&str]) {
+            let output = Command::new("git")
+                .current_dir(root)
+                .args(args)
+                .output()
+                .expect("git invocation");
+            assert!(
+                output.status.success(),
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        fn write_committed_baseline_fixture(root: &Path) {
+            git(root, &["init", "--quiet"]);
+            git(root, &["config", "user.email", "t@example.com"]);
+            git(root, &["config", "user.name", "Test"]);
+            git(root, &["config", "commit.gpgsign", "false"]);
+            std::fs::create_dir_all(root.join("src")).expect("create source directory");
+            std::fs::write(
+                root.join("src/router.go"),
+                "package app\n\nfunc handle() { helper() }\n\nfunc helper() { println(1) }\n",
+            )
+            .expect("write Go fixture");
+            std::fs::write(
+                root.join("src/util.ts"),
+                "export function add(a: number, b: number): number {\n  return a + b;\n}\n",
+            )
+            .expect("write TS fixture");
+            git(root, &["add", "-A"]);
+            git(root, &["commit", "--quiet", "-m", "base"]);
+            std::fs::write(
+                root.join("src/util.ts"),
+                "export function add(a: number, b: number): number {\n  return a + b + 0;\n}\n",
+            )
+            .expect("write changed TS fixture");
+            git(root, &["add", "-A"]);
+            git(root, &["commit", "--quiet", "-m", "change"]);
+        }
+
+        #[test]
+        fn real_store_enabled_measurement_passes_locked_boundary() {
+            let repo = tempfile::tempdir().expect("phase 64 fixture repo");
+            write_committed_baseline_fixture(repo.path());
+            let baseline_path = workspace_root()
+                .join("research/evaluation-harness/baselines/store-disabled-check.json");
+
+            let boundary = evaluate_phase_64_boundary(repo.path(), &baseline_path)
+                .expect("evaluate real Phase 64 boundary");
+
+            eprintln!(
+                "phase64 boundary: rss_delta={} cold_ms={} store_bytes={} checks={:?}",
+                boundary.measured.peak_rss_delta_bytes,
+                boundary.measured.cold_wall_clock_ms,
+                boundary.measured.size.store_bytes,
+                boundary.regression.checks
+            );
+
+            assert!(boundary.measured.size.store_bytes > 0);
+            assert!(!boundary.diagnostics_digest.is_empty());
+            assert!(!is_blocking(&boundary.regression), "{boundary:#?}");
+            for metric in [
+                "peak_rss_delta_ratio",
+                "cold_wall_clock_ratio",
+                "diagnostics_digest_parity",
+            ] {
+                assert!(
+                    boundary.regression.checks.iter().any(|check| {
+                        check.metric == metric && check.verdict == GateVerdict::Pass
+                    }),
+                    "missing passing check {metric}: {boundary:#?}"
+                );
+            }
+        }
     }
 }

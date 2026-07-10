@@ -2,27 +2,26 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Static Analysis 2.0 Implementation
-status: ready_to_plan
-last_updated: 2026-07-09T10:21:28.838Z
-last_activity: 2026-07-09 -- Completed 63-04-PLAN.md (store-phase regression-budget gate enforcing locked +20% peak-RSS / +25% cold-wall-clock budgets)
+status: ready
+last_updated: "2026-07-10T11:54:08.664Z"
+last_activity: 2026-07-10
 progress:
   total_phases: 9
-  completed_phases: 1
-  total_plans: 4
-  completed_plans: 4
-  percent: 11
-stopped_at: Phase 63 complete (4/4) — ready to discuss Phase 64
+  completed_phases: 2
+  total_plans: 8
+  completed_plans: 8
+  percent: 22
 ---
 
 # State: polint
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (updated 2026-07-07)
+See: `.planning/PROJECT.md` (updated 2026-07-10)
 
 **Core value:** Make it easy to express a repo-specific engineering policy as a small rule and run it locally, in CI, and with AI coding agents.
 
-**Current focus:** Phase 64 — store foundation and boundary proof
+**Current focus:** Phase 65 — Generation Manifest and Metadata Mirroring
 
 ## Current Status
 
@@ -43,14 +42,14 @@ See: `.planning/PROJECT.md` (updated 2026-07-07)
 
 ## Current Position
 
-Phase: 64
+Phase: 65
 Plan: Not started
-Status: Ready to plan
-Last activity: 2026-07-09
+Status: Ready for discussion
+Last activity: 2026-07-10
 
 ### Active Milestone Phase Progress
 
-9 phases planned (63-71), 0 executed. Phase 63 (Ground Truth and Performance Baseline) is next; it establishes store-disabled baselines and regression gates before any store code lands. Phase 70 (Lexical Search) is the designated scope-cut. Locked decisions (regression budgets, benchmark repo set, search cut) are recorded in `.planning/REQUIREMENTS.md`.
+9 phases planned (63-71), 2 complete. Phase 65 (Generation Manifest and Metadata Mirroring) is next; it adds complete-generation discipline and mirrors the kernel's existing identity/invalidation vocabulary behind Phase 64's private store boundary. Phase 70 (Lexical Search) remains the designated scope-cut. Locked decisions (regression budgets, benchmark repo set, search cut) are recorded in `.planning/REQUIREMENTS.md`.
 
 ### Open repo-admin action (T-42-04-10)
 
@@ -498,6 +497,14 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase ?]: Store-disabled reference baselines use a distinct StoreDisabledBaseline type (own schema constant); shared BASELINE_SCHEMA_VERSION untouched per Plan 04 contract
 - [Phase ?]: Pre-store graph accuracy baseline records recall/precision as null when the gated Jelly/Go x-tools clones are absent; regenerated via POLINT_WRITE_GRAPH_BENCH
 - [Phase 63-04]: Store-phase regression gate enforces locked +20% peak-RSS / +25% cold-wall-clock budgets vs the committed StoreDisabledBaseline; is_blocking exposes the fail-not-silent signal a Phase 64+ store phase wires to a non-zero exit (BENCH-03)
+- [Phase 64]: Production cache constructors keep semantic-store activation off; only cfg(test) code can enable it during Phase 64. — Preserves the zero-cost disabled path while integration proof is developed.
+- [Phase 64]: Schema v1 contains only migration bookkeeping and strictly refuses malformed or future versions. — Keeps Phase 65 ownership intact and prevents destructive downgrade behavior.
+- [Phase 64]: Store writers use WAL, foreign keys, a 250 ms busy timeout, and BEGIN IMMEDIATE; contention becomes BusySkipped. — Serializes writers without indefinite blocking or changing policy answers.
+- [Phase 64]: Normal maintenance preserves corrupt, invalid, future, and unsafe stores; only an exact verified cache-owned path can be explicitly rebuilt. — Prevents destructive fallback and symlink/path escape.
+- [Phase 64]: Semantic store maintenance runs after validation/finalization and records only private StoreStatus telemetry. — Store availability cannot influence policy facts, diagnostics, capability support, or exit semantics.
+- [Phase 64]: The cfg(test) isolated benchmark selects store mode through a private child environment key and excludes store bytes from cache_bytes. — Measures real overhead without a public activation contract or double-counting.
+- [Phase 64]: Phase boundary measurements compute the diagnostics digest before the isolated point, matching the committed baseline generator's cache-priming order. — Prevents unlike toolchain/cache states from masquerading as store regressions without changing locked budgets.
+- [Phase 64]: Public leak scanning bans curated store-specific namespaces, types, crate/schema/SQL identifiers while leaving generic store/row/connection prose legal. — Protects supported contracts with negative-controlled precision.
 
 ## Execution Metrics
 
@@ -648,3 +655,12 @@ intentionally avoided during autonomous local commits.
 
 - Review `.planning/phases/62-promotion-gate-boundary-proof-and-closeout/62-MILESTONE-AUDIT.md`.
 - Preserve the current boundary: `Events<'_>`, `Calls<'_>`, `ControlFlow<'_>`, and `DataFlow<'_>` are provider-backed for documented preview scopes; raw `Cfg<'_>`, raw `CallGraph<'_>`, and raw data-flow graph traversal remain private/reserved.
+
+## Performance Metrics
+
+| Phase | Plan | Duration | Notes |
+|-------|------|----------|-------|
+| Phase 64 P01 | 35min | 3 tasks | 7 files |
+| Phase 64 P02 | 13min | 3 tasks | 4 files |
+| Phase 64 P03 | 16min | 3 tasks | 7 files |
+| Phase 64 P04 | 31min | 3 tasks | 4 files |

@@ -12,6 +12,7 @@
 //! `use polint::core::*`, `use polint::cache::*`, `use polint::config::*`,
 //! `use polint::cli::*`, `use polint::go::*`, `use polint::ts::*`,
 //! `use polint::graph::*`, `use polint::eval::*`, or `use polint::rule_manifest::*`
+//! — nor any semantic-store module, raw SQLite connection, or SQL schema type —
 //! defeats the entire purpose of the probe — the leak gate test
 //! (`crates/polint/tests/public_surface_leak.rs`) reads this file as text and
 //! fails if any such import (or any second `use polint::` line) appears.

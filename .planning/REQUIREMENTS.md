@@ -54,7 +54,7 @@ Requirements for the v2.0 milestone. Each requirement should map to exactly one 
 
 ### Product Boundaries
 
-- [ ] **PROD-01**: `polint check` remains the repo-local Rust policy command. Store creation, refresh, corruption, or invalid schema must not silently change diagnostics, output formats, exit semantics, or public rule behavior.
+- [x] **PROD-01**: `polint check` remains the repo-local Rust policy command. Store creation, refresh, corruption, or invalid schema must not silently change diagnostics, output formats, exit semantics, or public rule behavior.
 - [ ] **PROD-02**: `polint review` remains the diff-focused agentic review workflow and should be the first workflow to benefit from warm summary reuse and invalidation-frontier recomputation.
 - [ ] **PROD-03**: `polint graph` is an exploratory local understanding surface for users and agents. It is not a CI pass/fail interface and must not become a second rule system.
 - [ ] **PROD-04**: Recurring graph findings become enforcement by writing repo-local Rust rules consumed by `polint check` and `polint review`, not by making graph queries into hidden policies.
@@ -71,19 +71,19 @@ Requirements for the v2.0 milestone. Each requirement should map to exactly one 
 
 - [ ] **PERF-01**: Store ingest respects the capability-gated semantic pipeline and rule-scoped discovery. Enabling persistence must not resurrect the eager whole-repo pipeline or whole-repo source loading for runs whose rules do not request deep facts; what the store persists follows what the run legitimately computed.
 - [ ] **PERF-02**: Store ingest streams in bounded, sorted batches. Building a commit plan must not require holding the full generation's rows, payloads, or source text resident at once. Peak ingest memory is measured in the benchmark suite.
-- [ ] **PERF-03**: When persistence is disabled, unavailable, or skipped, `polint check` and `polint review` take a zero-cost path: no store I/O, no schema checks on the hot path, and no behavior drift.
+- [x] **PERF-03**: When persistence is disabled, unavailable, or skipped, `polint check` and `polint review` take a zero-cost path: no store I/O, no schema checks on the hot path, and no behavior drift.
 - [ ] **PERF-04**: Once dependency package summaries persist and validate, dependency bodies are not re-parsed or re-summarized while their (package, version, schema, toolchain, config) identity matches. This is the O(working set) memory property from the locked research, verified by fixture (dependency source removed or altered without identity change is never re-read) and by benchmark.
 
 ### Store Foundation
 
-- [ ] **STORE-01**: Add a private SQLite/rusqlite semantic-store facade owned by the analysis kernel, with `pub(crate)` boundaries and no escaped `rusqlite` connection, statement, row, or SQL-string types.
-- [ ] **STORE-02**: Support migrations, schema versioning through `PRAGMA user_version`, controlled diagnostics for future/invalid schemas, and safe rebuild or skipped-persistence behavior.
-- [ ] **STORE-03**: Use explicit connection policy: foreign keys enabled, WAL where appropriate, bounded busy timeout, one writer boundary, and separate read-only query connections.
+- [x] **STORE-01**: Add a private SQLite/rusqlite semantic-store facade owned by the analysis kernel, with `pub(crate)` boundaries and no escaped `rusqlite` connection, statement, row, or SQL-string types.
+- [x] **STORE-02**: Support migrations, schema versioning through `PRAGMA user_version`, controlled diagnostics for future/invalid schemas, and safe rebuild or skipped-persistence behavior.
+- [x] **STORE-03**: Use explicit connection policy: foreign keys enabled, WAL where appropriate, bounded busy timeout, one writer boundary, and separate read-only query connections.
 - [ ] **STORE-04**: Persist store manifest, active generation, pending generation, complete generation, schema version, workspace/config identity, and store stats.
 - [ ] **STORE-05**: Commit only complete validated generations. A crash, failed migration, failed payload write, or failed search rebuild must leave either the old complete generation readable or require an explicit rebuild diagnostic.
-- [ ] **STORE-06**: Providers and rule execution do not receive SQL connections. They communicate through typed kernel/store methods and existing provider output structures.
-- [ ] **STORE-07**: Store failure during `polint check` produces controlled internal diagnostics, rebuilds, or skipped persistence; it must not produce partial policy answers with confident output.
-- [ ] **STORE-08**: Two concurrent `polint` processes against the same store serialize safely through a generation lease, or the loser falls back to read-only/skipped persistence with a clear diagnostic. Concurrent invocations must never corrupt, interleave, or partially overwrite generations.
+- [x] **STORE-06**: Providers and rule execution do not receive SQL connections. They communicate through typed kernel/store methods and existing provider output structures.
+- [x] **STORE-07**: Store failure during `polint check` produces controlled internal diagnostics, rebuilds, or skipped persistence; it must not produce partial policy answers with confident output.
+- [x] **STORE-08**: Two concurrent `polint` processes against the same store serialize safely through a generation lease, or the loser falls back to read-only/skipped persistence with a clear diagnostic. Concurrent invocations must never corrupt, interleave, or partially overwrite generations.
 
 ### Metadata, Facts, and Invalidation
 
@@ -145,7 +145,7 @@ The invalidation frontier is the practical payoff of this milestone. It is a fir
 ### Validation, Recovery, and Scale
 
 - [ ] **VAL-01**: Cold build, warm build, restored-store build, partial invalidation, process restart, randomized provider order, and different Rayon worker counts produce byte-identical normalized policy and query JSON where semantics are unchanged.
-- [ ] **VAL-02**: Migration tests cover empty DB, previous schema, idempotent migration, future-schema refusal, invalid-schema rebuild path, and controlled diagnostics.
+- [x] **VAL-02**: Migration tests cover empty DB, previous schema, idempotent migration, future-schema refusal, invalid-schema rebuild path, and controlled diagnostics.
 - [ ] **VAL-03**: Crash/recovery tests kill the process during SQLite ingest transaction, summary payload write, migration, WAL checkpoint, and search rebuild. Recovery must expose only a complete generation or a rebuild-needed diagnostic.
 - [ ] **VAL-04**: Stale-reuse mutation fixtures cover source edits, package/lifecycle config changes, provider manifest changes, requested-capability changes, schema changes, summary dependency changes, query option changes, and budget-profile changes.
 - [ ] **VAL-05**: Unknown, unsupported, setup-missing, partial, and budget-exceeded behavior is covered by fixtures and remains visible in graph/query/review output.

@@ -189,6 +189,67 @@ fn probe_lib_source() -> String {
         .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
 }
 
+const STORE_PRIVATE_MARKERS: &[&str] = &[
+    "polint::analysis_kernel::store",
+    "polint::store",
+    "SemanticStore",
+    "StoreConfig",
+    "StoreStatus",
+    "rusqlite",
+    "_polint_schema_migrations",
+    "SQLITE_OPEN_READ_WRITE",
+    "SQLITE_OPEN_READ_ONLY",
+    "TransactionBehavior::Immediate",
+    "PRAGMA user_version",
+    "raw_row_id",
+    "sqlite_row_id",
+];
+
+fn store_private_marker_hits(source: &str) -> Vec<&'static str> {
+    STORE_PRIVATE_MARKERS
+        .iter()
+        .copied()
+        .filter(|marker| source.contains(marker))
+        .collect()
+}
+
+fn collect_public_tree(path: &Path, texts: &mut Vec<(PathBuf, String)>) {
+    let Ok(metadata) = std::fs::symlink_metadata(path) else {
+        return;
+    };
+    if metadata.file_type().is_symlink() {
+        return;
+    }
+    if metadata.is_file() {
+        let supported = matches!(
+            path.extension().and_then(|extension| extension.to_str()),
+            Some("rs" | "md")
+        );
+        if supported {
+            let source = std::fs::read_to_string(path)
+                .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+            texts.push((path.to_path_buf(), source));
+        }
+        return;
+    }
+    let mut entries = std::fs::read_dir(path)
+        .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()))
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap_or_else(|error| panic!("failed to enumerate {}: {error}", path.display()));
+    entries.sort_by_key(std::fs::DirEntry::path);
+    for entry in entries {
+        collect_public_tree(&entry.path(), texts);
+    }
+}
+
+fn assert_no_store_private_markers(label: &str, source: &str) {
+    let hits = store_private_marker_hits(source);
+    assert!(
+        hits.is_empty(),
+        "{label} leaks private semantic-store vocabulary: {hits:?}"
+    );
+}
+
 /// Parses the `pub mod prelude { ... }` block of `sdk/mod.rs` and returns the
 /// set of identifier names re-exported through it.
 ///
@@ -408,6 +469,12 @@ fn ensure_no_private_namespace_in_probe() {
         "polint::graph",
         "polint::eval",
         "polint::rule_manifest",
+        "polint::store",
+        "SemanticStore",
+        "StoreConfig",
+        "StoreStatus",
+        "rusqlite",
+        "_polint_schema_migrations",
     ] {
         assert!(
             !code_only.contains(forbidden),
@@ -415,6 +482,87 @@ fn ensure_no_private_namespace_in_probe() {
              is that private types are NOT nameable here (D-23). Remove it."
         );
     }
+}
+
+#[test]
+fn semantic_store_markers_do_not_leak_into_supported_public_surfaces() {
+    let root = repo_root();
+    let mut texts = Vec::new();
+    for relative in [
+        "crates/polint/src/sdk",
+        "crates/polint/src/runner/mod.rs",
+        "crates/polint/src/cli/mod.rs",
+        "crates/polint/src/lib.rs",
+        "README.md",
+        "docs/API-VISIBILITY-PLAN.md",
+        "docs/facts",
+        "examples",
+    ] {
+        collect_public_tree(&root.join(relative), &mut texts);
+    }
+    assert!(!texts.is_empty(), "public surface scan collected no files");
+    for (path, source) in &texts {
+        assert_no_store_private_markers(&path.display().to_string(), source);
+    }
+
+    let repo = tempfile::tempdir().expect("temporary public-output repo");
+    std::fs::write(
+        repo.path().join("main.go"),
+        "package main\n\nfunc main() {}\n",
+    )
+    .expect("write public-output source");
+    let check = Command::new(env!("CARGO_BIN_EXE_polint"))
+        .current_dir(repo.path())
+        .args(["check", "--format", "json", "--fail-on", "none"])
+        .output()
+        .expect("run public check JSON");
+    assert!(
+        check.status.success(),
+        "public check failed: {}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let check_json = String::from_utf8(check.stdout).expect("check JSON is UTF-8");
+    serde_json::from_str::<serde_json::Value>(&check_json).expect("check output is JSON");
+    assert_no_store_private_markers("polint check --format json", &check_json);
+
+    let skill = Command::new(env!("CARGO_BIN_EXE_polint"))
+        .current_dir(repo.path())
+        .args(["add-skill", "--agent", "claude"])
+        .output()
+        .expect("generate supported skill text");
+    assert!(
+        skill.status.success(),
+        "skill generation failed: {}",
+        String::from_utf8_lossy(&skill.stderr)
+    );
+    let skill_path = repo.path().join(".claude/skills/polint/SKILL.md");
+    let skill_text = std::fs::read_to_string(&skill_path)
+        .unwrap_or_else(|error| panic!("failed to read {}: {error}", skill_path.display()));
+    assert_no_store_private_markers("generated polint skill", &skill_text);
+}
+
+#[test]
+fn semantic_store_marker_scanner_negative_controls_cover_every_family() {
+    let controls = [
+        ("private module", "use polint::analysis_kernel::store;"),
+        ("private type", "let _: SemanticStore;"),
+        ("sqlite crate", "use rusqlite::Connection;"),
+        ("private table", "SELECT * FROM _polint_schema_migrations"),
+        ("raw database flag", "SQLITE_OPEN_READ_WRITE"),
+        ("migration statement", "PRAGMA user_version"),
+        ("raw identifier", "sqlite_row_id"),
+    ];
+
+    for (family, source) in controls {
+        assert!(
+            !store_private_marker_hits(source).is_empty(),
+            "negative control for {family} was not detected"
+        );
+    }
+    assert!(
+        store_private_marker_hits("ordinary row/store/connection policy text").is_empty(),
+        "scanner must not ban generic public prose"
+    );
 }
 
 #[test]

@@ -368,6 +368,7 @@ mod tests {
             },
             provider_outputs,
             trace,
+            crate::analysis_kernel::StoreStatus::Disabled,
         )
     }
 
