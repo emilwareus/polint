@@ -1,6 +1,6 @@
 ---
 phase: 64-store-foundation-and-boundary-proof
-reviewed: 2026-07-10T13:50:56Z
+reviewed: 2026-07-10T14:16:02Z
 depth: standard
 files_reviewed: 15
 files_reviewed_list:
@@ -22,97 +22,97 @@ files_reviewed_list:
 findings:
   blocker: 0
   critical: 0
-  warning: 2
+  warning: 0
   info: 0
-  total: 2
-status: issues_found
+  total: 0
+status: clean
 ---
 
 # Phase 64 Code Review Report
 
 **Depth:** standard
 **Diff base:** `origin/main`
-**Status:** issues found
+**Fix commits reviewed:** `b3b4823e`, `e9c11275`
+**Status:** clean
 
-## Findings
+## Result
 
-### WR-01 — Fresh-store migrations run before the immediate writer lease
+No blocker, critical, warning, or informational findings remain in the fixed
+15-file Phase 64 scope.
 
-**Severity:** Warning
-**Files:** `crates/polint/src/analysis_kernel/store/connection.rs:45-64`, `crates/polint/src/analysis_kernel/store/migrations.rs:38-63`, `crates/polint/src/analysis_kernel/store/mod.rs:99-106`, `crates/polint/src/analysis_kernel/store/tests.rs:93-102`
+## Prior Warning Resolution
 
-`open_writer` calls `apply_migrations` before `SemanticStore::maintain` calls
-`try_writer_lease`. The migration runner reads `PRAGMA user_version` before
-starting its own transaction, and `rusqlite::Connection::transaction()` uses a
-deferred transaction by default. Two processes can therefore both observe an
-absent store as version 0. If the first creates and commits the bootstrap table
-before the second executes its migration SQL, the second receives
-`SQLITE_ERROR: table _polint_schema_migrations already exists`, not
-`SQLITE_BUSY`/`SQLITE_LOCKED`. `classify_sqlite_error` maps that to `Other`, and
-the facade reports `Skipped(OpenFailed)` instead of the bounded
-`BusySkipped`/serialized outcome required by D-07, D-08, and STORE-08.
+### WR-01 — Resolved: fresh-store migrations are serialized
 
-The current contention test cannot catch this schedule because it initializes
-the schema with `SemanticStore::maintain` before opening the two contending
-connections. A two-connection SQL reproduction in this review confirmed that
-the stale version-0 schedule ends with `SQLITE_ERROR` after the first migration
-commits.
+- `open_writer` applies the connection policy and then acquires an immediate
+  transaction before the migration runner re-reads `PRAGMA user_version`.
+- Migration selection, SQL writes, version updates, current-schema validation,
+  and commit all use that same transaction; the runner does not open a nested
+  transaction.
+- Any migration or validation error drops the still-owned transaction, so
+  uncommitted schema work rolls back. A successful initialization commits before
+  the writer is returned.
+- Immediate-transaction contention is classified as the typed `Busy` outcome,
+  which the store facade maps to `BusySkipped` within the 250 ms policy bound.
+- The absent-store fixture opens two version-zero connections before the first
+  initialization lease, holds that lease, proves the second initializer returns
+  `Busy`, then releases and proves the second re-reads the committed schema as
+  current. The final marker count is one and `integrity_check` is `ok`, covering
+  the stale-v0 schedule that motivated the finding.
+- Existing future-schema preflight still occurs before persistent pragma setup,
+  and the in-transaction version check remains authoritative. Refused future
+  fixtures retain their version, sentinel data, and original bytes.
 
-**Recommendation:** acquire `BEGIN IMMEDIATE` before migration writes and re-read
-the schema version while that lease is held. Refactor migration execution so it
-uses the already-held immediate transaction instead of opening a nested deferred
-transaction. Add a deterministic absent-database contention fixture that forces
-both connections through first-open initialization and asserts a typed bounded
-outcome plus one valid bootstrap marker.
+### WR-02 — Resolved: WAL negotiation is required
 
-### WR-02 — Writer readiness does not verify that SQLite actually entered WAL mode
+- The value returned by `PRAGMA journal_mode = WAL` is retained and validated
+  with ASCII case-insensitive comparison.
+- `wal` in mixed case is accepted; every other successful result becomes the
+  private typed `Policy` error.
+- `Policy` maps to the controlled `Skipped(OpenFailed)` store status and cannot
+  produce `Ready` or affect public diagnostics/exit behavior.
+- Focused tests exercise both the mixed-case acceptance branch and the non-WAL
+  rejection branch. The normal-filesystem policy test additionally proves the
+  live writer reports WAL.
 
-**Severity:** Warning
-**File:** `crates/polint/src/analysis_kernel/store/connection.rs:54-64`
+## Cross-File Review
 
-`PRAGMA journal_mode = WAL` returns the journal mode SQLite actually selected,
-but `open_writer` discards that string with `let _: String`. SQLite may return
-the previous mode without raising an error when a WAL transition is unavailable
-(for example, when the VFS cannot support shared memory). The code then applies
-migrations, acquires the lease, and can return `StoreStatus::Ready` even though
-the D-07 connection policy is not in force. The policy test proves WAL on the
-normal test filesystem only; it does not protect the production classification
-path from a successful non-`wal` result.
-
-**Recommendation:** retain and validate the returned mode case-insensitively.
-Treat any non-`wal` result as a controlled open/policy failure rather than
-returning `Ready`, and cover the result-validation branch with a focused test.
-
-## Verified Behavior
-
-- Store activation remains crate-private and every production `Cache`
-  constructor leaves it disabled.
-- The disabled kernel path computes a path only in memory and performs no store
-  filesystem or SQLite I/O.
-- Future and malformed current schemas are preflighted before persistent WAL
-  setup; future fixture bytes, version, and sentinel data are preserved.
-- Corrupt, invalid, future, unsafe-path, and established-schema contention paths
-  map to controlled private statuses without affecting policy diagnostics.
-- Store maintenance runs after fact validation/finalization and only enters the
-  private `KernelRunReport` telemetry.
-- The enabled/disabled/failure parity helper preserves rendered JSON bytes and
-  exit semantics for its six covered modes.
-- Rusqlite handles, SQL vocabulary, store types, and schema identifiers do not
-  leak through SDK, runner, CLI, generated skill, examples, or public JSON.
-- The SDK prelude remains exactly 115 names.
-- The Phase 64 measurement includes first-open/migration cost after disabled
-  analysis-cache priming and keeps semantic-store bytes separate from cache
-  bytes.
+- Store activation remains crate-private and test-only. All ordinary `Cache`
+  constructors keep the store disabled, and the disabled kernel hook performs
+  no store filesystem or SQLite I/O.
+- Store maintenance remains after fact validation and metadata finalization.
+  Its status is private run-report telemetry and is not an input to providers,
+  rules, diagnostics, JSON rendering, or exit-code calculation.
+- Corrupt and invalid stores are preserved for controlled rebuild; future stores
+  are refused without replacement. Explicit rebuild remains restricted to the
+  verified cache-owned path and rejects symlink targets/ancestors.
+- Writer connections enforce foreign keys, WAL, a 250 ms busy timeout, and
+  immediate transactions. Read-only connections use a separate
+  `SQLITE_OPEN_READ_ONLY` handle and reject writes.
+- Store and migration errors are typed and non-panicking in production paths.
+  Transaction commit/drop behavior does not leave partial migrations.
+- The six-mode kernel parity proof keeps normalized JSON bytes and exit semantics
+  identical across disabled, ready, corrupt, future, invalid, and busy states.
+- Rusqlite handles, SQL/table vocabulary, store status/configuration, and raw row
+  identifiers remain absent from the supported SDK, runner, CLI, generated
+  skill, examples, documentation surface, and public JSON. The external probe
+  still imports only `polint::sdk::prelude::*`, whose allow-list remains 115
+  names.
+- The isolated Phase 64 measurement retains first-open/migration cost, separates
+  store bytes from cache bytes, and passes the committed regression and
+  diagnostics-digest gates.
+- The fixed code follows the repository's Rust practices: narrow visibility,
+  borrowed inputs, typed `Result` propagation, no production `unwrap`/`expect`,
+  and no new lint suppression.
 
 ## Verification Performed
 
-- `cargo test -p polint --lib analysis_kernel::store --locked -- --test-threads=1` — 20 passed.
+- `cargo test -p polint --lib analysis_kernel::store --locked -- --test-threads=1` — 23 passed.
 - `cargo test -p polint --lib analysis_kernel::tests::semantic_store --locked -- --test-threads=1` — 3 passed.
-- `cargo test -p polint --lib eval::bench::gate::tests::phase_64 --locked -- --test-threads=1` — 1 passed.
 - `cargo test -p polint --test public_surface_leak --locked -- --test-threads=1` — 7 passed.
+- `cargo test -p polint --lib eval::bench::gate::tests::phase_64 --locked -- --test-threads=1` — 1 passed.
 - `cargo clippy -p polint --all-targets --all-features --locked -- -D warnings` — passed.
-- Related workspace dependency inspection confirmed `rusqlite 0.40.1` with only
-  the `bundled` feature and no public feature/re-export.
+- `git diff --check origin/main...HEAD` — passed.
 
 ## Scope Notes
 
