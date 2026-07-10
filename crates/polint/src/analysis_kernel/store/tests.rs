@@ -86,6 +86,7 @@ mod connection_policy {
 }
 
 mod writer_contention {
+    use std::fs;
     use std::time::{Duration, Instant};
 
     use super::*;
@@ -124,6 +125,46 @@ mod writer_contention {
         assert_eq!(
             connection::bootstrap_marker_count(&second).expect("marker count"),
             1
+        );
+    }
+
+    #[test]
+    fn absent_store_initialization_is_serialized_by_the_immediate_lease() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let path = temp.path().join("semantic-store/store.sqlite3");
+        fs::create_dir_all(path.parent().expect("store parent")).expect("create store directory");
+        assert!(!path.exists());
+
+        let mut first = connection::open_uninitialized_writer_for_test(&path)
+            .expect("prepare first absent-store writer");
+        let mut second = connection::open_uninitialized_writer_for_test(&path)
+            .expect("prepare second absent-store writer");
+        let first_lease = connection::hold_initialization_lease(&mut first)
+            .expect("hold first initialization lease");
+
+        let started = Instant::now();
+        let losing_status = connection::try_initialize_writer_for_test(&mut second)
+            .expect("bounded initialization result");
+        let elapsed = started.elapsed();
+
+        assert_eq!(losing_status, connection::LeaseStatus::Busy);
+        assert!(elapsed < Duration::from_secs(1), "elapsed: {elapsed:?}");
+
+        first_lease
+            .initialize_and_release()
+            .expect("finish first initialization");
+        assert_eq!(
+            connection::try_initialize_writer_for_test(&mut second)
+                .expect("second initialization after release"),
+            connection::LeaseStatus::Acquired
+        );
+        assert_eq!(
+            connection::bootstrap_marker_count(&second).expect("marker count"),
+            1
+        );
+        assert_eq!(
+            connection::integrity_check(&second).expect("integrity check"),
+            "ok"
         );
     }
 }

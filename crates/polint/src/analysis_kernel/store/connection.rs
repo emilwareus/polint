@@ -8,7 +8,7 @@ use rusqlite::{Connection, ErrorCode, OpenFlags, TransactionBehavior};
 #[cfg(test)]
 use rusqlite::Transaction;
 
-use super::migrations::{MigrationError, apply_migrations, preflight_schema};
+use super::migrations::{MigrationError, apply_migrations_in_transaction, preflight_schema};
 
 const BUSY_TIMEOUT: Duration = Duration::from_millis(250);
 
@@ -43,6 +43,14 @@ pub(super) enum ConnectionError {
 }
 
 pub(super) fn open_writer(path: &Path) -> Result<WriterConnection, ConnectionError> {
+    let mut writer = open_uninitialized_writer(path)?;
+    match try_initialize_writer(&mut writer)? {
+        LeaseStatus::Acquired => Ok(writer),
+        LeaseStatus::Busy => Err(ConnectionError::Busy),
+    }
+}
+
+fn open_uninitialized_writer(path: &Path) -> Result<WriterConnection, ConnectionError> {
     let connection = Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
@@ -58,10 +66,7 @@ pub(super) fn open_writer(path: &Path) -> Result<WriterConnection, ConnectionErr
     let _: String = connection
         .query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))
         .map_err(classify_sqlite_error)?;
-
-    let mut writer = WriterConnection { connection };
-    apply_migrations(&mut writer.connection).map_err(classify_migration_error)?;
-    Ok(writer)
+    Ok(WriterConnection { connection })
 }
 
 #[cfg_attr(
@@ -94,6 +99,20 @@ pub(super) fn try_writer_lease(
         Err(error) if is_busy(&error) => return Ok(LeaseStatus::Busy),
         Err(error) => return Err(classify_sqlite_error(error)),
     };
+    transaction.commit().map_err(classify_sqlite_error)?;
+    Ok(LeaseStatus::Acquired)
+}
+
+fn try_initialize_writer(writer: &mut WriterConnection) -> Result<LeaseStatus, ConnectionError> {
+    let transaction = match writer
+        .connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+    {
+        Ok(transaction) => transaction,
+        Err(error) if is_busy(&error) => return Ok(LeaseStatus::Busy),
+        Err(error) => return Err(classify_sqlite_error(error)),
+    };
+    apply_migrations_in_transaction(&transaction).map_err(classify_migration_error)?;
     transaction.commit().map_err(classify_sqlite_error)?;
     Ok(LeaseStatus::Acquired)
 }
@@ -191,6 +210,44 @@ pub(super) fn hold_writer_lease(
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(classify_sqlite_error)?;
     Ok(HeldWriterLease { transaction })
+}
+
+#[cfg(test)]
+pub(super) struct HeldInitializationLease<'connection> {
+    transaction: Transaction<'connection>,
+}
+
+#[cfg(test)]
+impl HeldInitializationLease<'_> {
+    pub(super) fn initialize_and_release(self) -> Result<(), ConnectionError> {
+        apply_migrations_in_transaction(&self.transaction).map_err(classify_migration_error)?;
+        self.transaction.commit().map_err(classify_sqlite_error)
+    }
+}
+
+#[cfg(test)]
+pub(super) fn open_uninitialized_writer_for_test(
+    path: &Path,
+) -> Result<WriterConnection, ConnectionError> {
+    open_uninitialized_writer(path)
+}
+
+#[cfg(test)]
+pub(super) fn try_initialize_writer_for_test(
+    writer: &mut WriterConnection,
+) -> Result<LeaseStatus, ConnectionError> {
+    try_initialize_writer(writer)
+}
+
+#[cfg(test)]
+pub(super) fn hold_initialization_lease(
+    writer: &mut WriterConnection,
+) -> Result<HeldInitializationLease<'_>, ConnectionError> {
+    let transaction = writer
+        .connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(classify_sqlite_error)?;
+    Ok(HeldInitializationLease { transaction })
 }
 
 #[cfg(test)]

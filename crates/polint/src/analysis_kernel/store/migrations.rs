@@ -1,6 +1,8 @@
 //! Strict, private schema migrations for the durable semantic store.
 
-use rusqlite::{Connection, ErrorCode};
+#[cfg(test)]
+use rusqlite::TransactionBehavior;
+use rusqlite::{Connection, ErrorCode, Transaction};
 use thiserror::Error;
 
 pub(super) const CURRENT_SCHEMA_VERSION: i32 = 1;
@@ -35,10 +37,20 @@ pub(super) enum MigrationError {
     Sqlite(#[from] rusqlite::Error),
 }
 
+#[cfg(test)]
 pub(super) fn apply_migrations(
     connection: &mut Connection,
 ) -> Result<MigrationStatus, MigrationError> {
-    let found = schema_version(connection)?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let status = apply_migrations_in_transaction(&transaction)?;
+    transaction.commit()?;
+    Ok(status)
+}
+
+pub(super) fn apply_migrations_in_transaction(
+    transaction: &Transaction<'_>,
+) -> Result<MigrationStatus, MigrationError> {
+    let found = schema_version(transaction)?;
     if found > CURRENT_SCHEMA_VERSION {
         return Err(MigrationError::FutureSchema {
             found,
@@ -47,11 +59,10 @@ pub(super) fn apply_migrations(
     }
 
     if found == CURRENT_SCHEMA_VERSION {
-        validate_current_schema(connection)?;
+        validate_current_schema(transaction)?;
         return Ok(MigrationStatus::Current);
     }
 
-    let transaction = connection.transaction()?;
     for migration in MIGRATIONS
         .iter()
         .filter(|migration| migration.version > found)
@@ -59,8 +70,7 @@ pub(super) fn apply_migrations(
         transaction.execute_batch(migration.sql)?;
         transaction.pragma_update(None, "user_version", migration.version)?;
     }
-    validate_current_schema(&transaction)?;
-    transaction.commit()?;
+    validate_current_schema(transaction)?;
 
     Ok(MigrationStatus::Migrated {
         from: found,
