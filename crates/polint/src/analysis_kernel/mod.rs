@@ -9,13 +9,6 @@ use crate::diagnostics::Diagnostic;
 pub(crate) mod incremental;
 mod metadata;
 mod provider;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Phase 64 builds the private store foundation before the kernel integration plan consumes it."
-    )
-)]
 mod store;
 pub(crate) mod validation;
 
@@ -29,6 +22,7 @@ pub(crate) use provider::ProviderKind;
 pub(crate) use provider::{
     CachePolicy, LanguageScope, PrecisionCeiling, ProviderManifest, SchemaVersion,
 };
+pub(crate) use store::StoreStatus;
 
 /// Capabilities that require whole-repo discovery even when the deep semantic
 /// pipeline is skipped. Resolved imports, module graph, symbols, and references
@@ -948,10 +942,19 @@ impl AnalysisKernel {
             validation::validate_fact_metadata(&db, Self::provider_manifests());
         diagnostics.extend(validation_diagnostics);
         db.finish_all_fact_meta_insertions();
+        // Persistence is deliberately last: store availability must not change
+        // provider execution, validated facts, diagnostics, or capability
+        // support. Phase 64 stores only this private maintenance status.
+        let store_config = store::StoreConfig::new(
+            input.cache.semantic_store_path(),
+            input.cache.semantic_store_enabled(),
+        );
+        let store_status = store::SemanticStore::maintain(&store_config);
         let run_report = incremental::KernelRunReport::new(
             input_snapshot,
             provider_outputs,
             scc_closure.demand_query_trace,
+            store_status,
         );
         #[cfg(test)]
         let run_report = run_report.with_scc_closure_debug(scc_closure_debug);
@@ -1349,6 +1352,58 @@ mod tests {
         assert!(output.db.files().is_empty());
         assert!(output.diagnostics.is_empty());
         assert_eq!(&output.capability_support, plan.support_view());
+    }
+
+    mod semantic_store {
+        use super::*;
+
+        #[test]
+        fn disabled_full_kernel_run_is_filesystem_free_and_records_status() {
+            let temp = tempfile::tempdir().expect("temp directory");
+            let loaded = load_config(temp.path()).expect("default config loads");
+            let cache = Cache::default_for_repo(temp.path(), true);
+            let store_path = cache.semantic_store_path();
+            let plan = AnalysisPlan::empty();
+
+            let output = AnalysisKernel::run(KernelInput {
+                loaded: &loaded,
+                cache: &cache,
+                config_digest: "config",
+                rule_digest: "rules",
+                plan: &plan,
+                parallel: false,
+            })
+            .expect("kernel should run");
+
+            assert_eq!(output.run_report.store_status(), &StoreStatus::Disabled);
+            assert!(!store_path.exists());
+            assert!(!store_path.parent().expect("store directory").exists());
+        }
+
+        #[test]
+        fn enabled_maintenance_runs_after_validated_fact_finalization() {
+            let temp = tempfile::tempdir().expect("temp directory");
+            std::fs::write(temp.path().join("main.go"), "package main\n").expect("write source");
+            let loaded = load_config(temp.path()).expect("default config loads");
+            let cache =
+                Cache::default_for_repo(temp.path(), true).with_semantic_store_enabled_for_test();
+            let store_path = cache.semantic_store_path();
+            let plan = AnalysisPlan::empty();
+
+            let output = AnalysisKernel::run(KernelInput {
+                loaded: &loaded,
+                cache: &cache,
+                config_digest: "config",
+                rule_digest: "rules",
+                plan: &plan,
+                parallel: false,
+            })
+            .expect("kernel should run");
+
+            assert!(AnalysisKernel::missing_fact_metadata_for_test(&output.db).is_empty());
+            assert_eq!(output.run_report.store_status(), &StoreStatus::Ready);
+            assert!(store_path.is_file());
+        }
     }
 
     #[test]

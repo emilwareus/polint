@@ -78,6 +78,13 @@ impl SemanticStore {
     }
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Explicit store rebuild is retained for a later controlled recovery entry point."
+    )
+)]
 pub(crate) fn rebuild_owned_cache_store(config: &StoreConfig, candidate: &Path) -> StoreStatus {
     if !config.is_enabled() {
         return StoreStatus::Disabled;

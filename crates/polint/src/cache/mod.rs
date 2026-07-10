@@ -133,24 +133,10 @@ impl Cache {
         &self.root
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Phase 64 establishes the private store path before kernel integration consumes it."
-        )
-    )]
     pub(crate) fn semantic_store_path(&self) -> PathBuf {
         self.semantic_store_dir().join("store.sqlite3")
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Phase 64 establishes disabled-by-default activation before the kernel consumes it."
-        )
-    )]
     pub(crate) fn semantic_store_enabled(&self) -> bool {
         self.semantic_store_enabled
     }
