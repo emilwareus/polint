@@ -54,7 +54,7 @@ Requirements for the v2.0 milestone. Each requirement should map to exactly one 
 
 ### Product Boundaries
 
-- [ ] **PROD-01**: `polint check` remains the repo-local Rust policy command. Store creation, refresh, corruption, or invalid schema must not silently change diagnostics, output formats, exit semantics, or public rule behavior.
+- [x] **PROD-01**: `polint check` remains the repo-local Rust policy command. Store creation, refresh, corruption, or invalid schema must not silently change diagnostics, output formats, exit semantics, or public rule behavior.
 - [ ] **PROD-02**: `polint review` remains the diff-focused agentic review workflow and should be the first workflow to benefit from warm summary reuse and invalidation-frontier recomputation.
 - [ ] **PROD-03**: `polint graph` is an exploratory local understanding surface for users and agents. It is not a CI pass/fail interface and must not become a second rule system.
 - [ ] **PROD-04**: Recurring graph findings become enforcement by writing repo-local Rust rules consumed by `polint check` and `polint review`, not by making graph queries into hidden policies.
@@ -81,7 +81,7 @@ Requirements for the v2.0 milestone. Each requirement should map to exactly one 
 - [x] **STORE-03**: Use explicit connection policy: foreign keys enabled, WAL where appropriate, bounded busy timeout, one writer boundary, and separate read-only query connections.
 - [ ] **STORE-04**: Persist store manifest, active generation, pending generation, complete generation, schema version, workspace/config identity, and store stats.
 - [ ] **STORE-05**: Commit only complete validated generations. A crash, failed migration, failed payload write, or failed search rebuild must leave either the old complete generation readable or require an explicit rebuild diagnostic.
-- [ ] **STORE-06**: Providers and rule execution do not receive SQL connections. They communicate through typed kernel/store methods and existing provider output structures.
+- [x] **STORE-06**: Providers and rule execution do not receive SQL connections. They communicate through typed kernel/store methods and existing provider output structures.
 - [x] **STORE-07**: Store failure during `polint check` produces controlled internal diagnostics, rebuilds, or skipped persistence; it must not produce partial policy answers with confident output.
 - [x] **STORE-08**: Two concurrent `polint` processes against the same store serialize safely through a generation lease, or the loser falls back to read-only/skipped persistence with a clear diagnostic. Concurrent invocations must never corrupt, interleave, or partially overwrite generations.
 
