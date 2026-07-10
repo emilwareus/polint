@@ -3,6 +3,7 @@
 use std::path::Path;
 use std::time::Duration;
 
+use rusqlite::config::DbConfig;
 use rusqlite::{Connection, ErrorCode, OpenFlags, TransactionBehavior};
 
 #[cfg(test)]
@@ -61,6 +62,16 @@ fn open_uninitialized_writer(path: &Path) -> Result<WriterConnection, Connection
     connection
         .busy_timeout(BUSY_TIMEOUT)
         .map_err(classify_sqlite_error)?;
+    // Checks use short-lived connections. Keep WAL's automatic size-based
+    // checkpoints, but do not make every connection close synchronously flush
+    // the WAL back into the database; that close-time I/O dominates tiny
+    // repositories on Windows. The WAL remains recoverable on the next open.
+    let no_checkpoint_on_close = connection
+        .set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true)
+        .map_err(classify_sqlite_error)?;
+    if !no_checkpoint_on_close {
+        return Err(ConnectionError::Policy);
+    }
     preflight_schema(&connection).map_err(classify_migration_error)?;
     connection
         .pragma_update(None, "foreign_keys", true)
@@ -168,6 +179,7 @@ pub(super) struct ConnectionPolicySnapshot {
     pub(super) foreign_keys: i64,
     pub(super) journal_mode: String,
     pub(super) synchronous: i64,
+    pub(super) no_checkpoint_on_close: bool,
     pub(super) busy_timeout_ms: i64,
 }
 
@@ -187,6 +199,10 @@ pub(super) fn writer_policy(
         .connection
         .pragma_query_value(None, "synchronous", |row| row.get(0))
         .map_err(classify_sqlite_error)?;
+    let no_checkpoint_on_close = writer
+        .connection
+        .db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE)
+        .map_err(classify_sqlite_error)?;
     let busy_timeout_ms = writer
         .connection
         .pragma_query_value(None, "busy_timeout", |row| row.get(0))
@@ -195,6 +211,7 @@ pub(super) fn writer_policy(
         foreign_keys,
         journal_mode,
         synchronous,
+        no_checkpoint_on_close,
         busy_timeout_ms,
     })
 }

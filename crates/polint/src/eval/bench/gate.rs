@@ -63,12 +63,21 @@ fn phase_64_comparison_baseline(
     committed: &StoreDisabledBaseline,
     disabled_control: &CurvePoint,
 ) -> StoreDisabledBaseline {
-    StoreDisabledBaseline::from_curve_point(
+    let mut comparison = StoreDisabledBaseline::from_curve_point(
         &committed.repo_id,
         &committed.suite_id,
         disabled_control,
         &committed.diagnostics_digest,
-    )
+    );
+    // A fresh child can legitimately finish without raising its process peak
+    // above the startup high-water mark, yielding a zero run-attributable RSS
+    // delta. Keep zero-denominator rejection in the generic gate, but use the
+    // committed non-zero RSS reference for this paired boundary measurement.
+    if comparison.peak_rss_delta_bytes == 0 {
+        comparison.peak_rss_bytes = committed.peak_rss_bytes;
+        comparison.peak_rss_delta_bytes = committed.peak_rss_delta_bytes;
+    }
+    comparison
 }
 
 #[cfg(test)]
@@ -467,6 +476,23 @@ mod tests {
         );
         assert_eq!(comparison.cold_wall_clock_ms, control.cold_wall_clock_ms);
         assert_eq!(comparison.warm_wall_clock_ms, control.warm_wall_clock_ms);
+    }
+
+    #[test]
+    fn phase_64_same_platform_baseline_falls_back_from_zero_rss_delta() {
+        let committed = baseline();
+        let mut control = measured(0.75, 2.5);
+        control.peak_rss_bytes = 0;
+        control.peak_rss_delta_bytes = 0;
+
+        let comparison = phase_64_comparison_baseline(&committed, &control);
+
+        assert_eq!(comparison.peak_rss_bytes, committed.peak_rss_bytes);
+        assert_eq!(
+            comparison.peak_rss_delta_bytes,
+            committed.peak_rss_delta_bytes
+        );
+        assert_eq!(comparison.cold_wall_clock_ms, control.cold_wall_clock_ms);
     }
 
     mod phase_64 {
