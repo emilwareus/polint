@@ -1,135 +1,128 @@
 ---
 phase: 64-store-foundation-and-boundary-proof
-reviewed: 2026-07-10T11:31:00Z
+reviewed: 2026-07-10T13:50:56Z
 depth: standard
-re_review: true
-pass: 2
-prior_findings: { critical: 0, warning: 3, info: 1, total: 4 }
-files_reviewed: 17
+files_reviewed: 15
 files_reviewed_list:
-  - Cargo.toml
   - crates/polint/Cargo.toml
-  - crates/polint/src/cache/mod.rs
-  - crates/polint/src/repo_fs.rs
-  - crates/polint/src/analysis_kernel/mod.rs
   - crates/polint/src/analysis_kernel/incremental/run_report.rs
-  - crates/polint/src/analysis_kernel/store/mod.rs
+  - crates/polint/src/analysis_kernel/mod.rs
   - crates/polint/src/analysis_kernel/store/connection.rs
   - crates/polint/src/analysis_kernel/store/migrations.rs
+  - crates/polint/src/analysis_kernel/store/mod.rs
   - crates/polint/src/analysis_kernel/store/tests.rs
-  - crates/polint/src/eval/performance.rs
-  - crates/polint/src/eval/bench/runner.rs
+  - crates/polint/src/cache/mod.rs
   - crates/polint/src/eval/bench/gate.rs
+  - crates/polint/src/eval/bench/runner.rs
+  - crates/polint/src/eval/performance.rs
+  - crates/polint/src/repo_fs.rs
   - crates/polint/tests/public_surface_leak.rs
+  - tests/fixtures/public-surface-leak-probe/Cargo.lock
   - tests/fixtures/public-surface-leak-probe/src/lib.rs
 findings:
   blocker: 0
   critical: 0
-  warning: 0
+  warning: 2
   info: 0
-  total: 0
-status: clean
+  total: 2
+status: issues_found
 ---
 
-# Phase 64 Code Review Report — Second Pass
+# Phase 64 Code Review Report
 
-**Depth:** standard  
-**Scope:** Phase 64 product, test, external-probe, and benchmark-gate changes  
-**Status:** clean
+**Depth:** standard
+**Diff base:** `origin/main`
+**Status:** issues found
 
-## Re-review Summary
+## Findings
 
-Commit `8ac63000` resolves all three warnings. The sole informational hard-link
-note is accepted as a documented same-user/local-cache limitation: it does not
-cross OS permissions, and a portable handle-level defense would exceed Phase
-64's narrow boundary without improving the stated symlink threat contract.
-No actionable finding remains.
+### WR-01 — Fresh-store migrations run before the immediate writer lease
 
-## Confirmed Fixed / Disposition
+**Severity:** Warning
+**Files:** `crates/polint/src/analysis_kernel/store/connection.rs:45-64`, `crates/polint/src/analysis_kernel/store/migrations.rs:38-63`, `crates/polint/src/analysis_kernel/store/mod.rs:99-106`, `crates/polint/src/analysis_kernel/store/tests.rs:93-102`
 
-### WR-01 — Future/invalid stores are switched to WAL before compatibility refusal
+`open_writer` calls `apply_migrations` before `SemanticStore::maintain` calls
+`try_writer_lease`. The migration runner reads `PRAGMA user_version` before
+starting its own transaction, and `rusqlite::Connection::transaction()` uses a
+deferred transaction by default. Two processes can therefore both observe an
+absent store as version 0. If the first creates and commits the bootstrap table
+before the second executes its migration SQL, the second receives
+`SQLITE_ERROR: table _polint_schema_migrations already exists`, not
+`SQLITE_BUSY`/`SQLITE_LOCKED`. `classify_sqlite_error` maps that to `Other`, and
+the facade reports `Skipped(OpenFailed)` instead of the bounded
+`BusySkipped`/serialized outcome required by D-07, D-08, and STORE-08.
 
-**Prior severity:** Warning — **RESOLVED**
-**File:** `crates/polint/src/analysis_kernel/store/connection.rs:45`
+The current contention test cannot catch this schedule because it initializes
+the schema with `SemanticStore::maintain` before opening the two contending
+connections. A two-connection SQL reproduction in this review confirmed that
+the stale version-0 schedule ends with `SQLITE_ERROR` after the first migration
+commits.
 
-`open_writer` executes `PRAGMA journal_mode = WAL` before `apply_migrations`
-reads and validates `PRAGMA user_version`. Journal mode is persistent database
-state, so a newer or malformed store can be mutated before the code returns
-`FutureSchema`/`InvalidSchema`. The fixtures currently assert version and
-sentinel preservation, but not byte/journal-mode preservation.
+**Recommendation:** acquire `BEGIN IMMEDIATE` before migration writes and re-read
+the schema version while that lease is held. Refactor migration execution so it
+uses the already-held immediate transaction instead of opening a nested deferred
+transaction. Add a deterministic absent-database contention fixture that forces
+both connections through first-open initialization and asserts a typed bounded
+outcome plus one valid bootstrap marker.
 
-**Resolution:** `preflight_schema` now runs after the bounded timeout but before
-foreign-key/WAL setup. Future, malformed-current, and corrupt stores are refused
-before persistent pragmas; the recovery fixture asserts byte identity across
-future maintenance and explicit rebuild refusal.
+### WR-02 — Writer readiness does not verify that SQLite actually entered WAL mode
 
-### WR-02 — Malformed bootstrap shapes can escape the typed invalid-schema path
+**Severity:** Warning
+**File:** `crates/polint/src/analysis_kernel/store/connection.rs:54-64`
 
-**Prior severity:** Warning — **RESOLVED**
-**File:** `crates/polint/src/analysis_kernel/store/migrations.rs:75`
+`PRAGMA journal_mode = WAL` returns the journal mode SQLite actually selected,
+but `open_writer` discards that string with `let _: String`. SQLite may return
+the previous mode without raising an error when a WAL transition is unavailable
+(for example, when the VFS cannot support shared memory). The code then applies
+migrations, acquires the lease, and can return `StoreStatus::Ready` even though
+the D-07 connection policy is not in force. The policy test proves WAL on the
+normal test filesystem only; it does not protect the production classification
+path from a successful non-`wal` result.
 
-The invariant check verifies that the table exists, then queries its `version`
-column. A v1 database with `_polint_schema_migrations` present but a wrong
-column shape returns a raw SQLite `Unknown` error, which connection
-classification maps to `OpenFailed`, not `RebuildNeeded(InvalidSchema)`.
-Additionally, a valid version-1 marker plus extra version rows is accepted
-because only `count(version = 1)` is checked.
+**Recommendation:** retain and validate the returned mode case-insensitively.
+Treat any non-`wal` result as a controlled open/policy failure rather than
+returning `Ready`, and cover the result-validation branch with a focused test.
 
-**Resolution:** Bootstrap-shape query failures now classify as
-`InvalidSchema` while busy/corrupt/I/O codes retain their operational classes.
-Validation requires exactly one total marker, and dedicated wrong-shape and
-extra-row fixtures pass.
+## Verified Behavior
 
-### WR-03 — Phase boundary priming uses enabled mode and excludes first-open cost
+- Store activation remains crate-private and every production `Cache`
+  constructor leaves it disabled.
+- The disabled kernel path computes a path only in memory and performs no store
+  filesystem or SQLite I/O.
+- Future and malformed current schemas are preflighted before persistent WAL
+  setup; future fixture bytes, version, and sentinel data are preserved.
+- Corrupt, invalid, future, unsafe-path, and established-schema contention paths
+  map to controlled private statuses without affecting policy diagnostics.
+- Store maintenance runs after fact validation/finalization and only enters the
+  private `KernelRunReport` telemetry.
+- The enabled/disabled/failure parity helper preserves rendered JSON bytes and
+  exit semantics for its six covered modes.
+- Rusqlite handles, SQL vocabulary, store types, and schema identifiers do not
+  leak through SDK, runner, CLI, generated skill, examples, or public JSON.
+- The SDK prelude remains exactly 115 names.
+- The Phase 64 measurement includes first-open/migration cost after disabled
+  analysis-cache priming and keeps semantic-store bytes separate from cache
+  bytes.
 
-**Prior severity:** Warning — **RESOLVED**
-**File:** `crates/polint/src/eval/bench/gate.rs:71`
+## Verification Performed
 
-The digest priming run uses `SemanticStoreBenchMode::Enabled`, creating and
-migrating the database before the isolated measurement. This stabilizes the
-tiny fixture, but the measured point no longer includes Phase 64's first-open
-schema cost, unlike the plan's store-enabled child requirement. The committed
-baseline generator primes analysis/toolchain caches with a store-disabled
-digest run.
+- `cargo test -p polint --lib analysis_kernel::store --locked -- --test-threads=1` — 20 passed.
+- `cargo test -p polint --lib analysis_kernel::tests::semantic_store --locked -- --test-threads=1` — 3 passed.
+- `cargo test -p polint --lib eval::bench::gate::tests::phase_64 --locked -- --test-threads=1` — 1 passed.
+- `cargo test -p polint --test public_surface_leak --locked -- --test-threads=1` — 7 passed.
+- `cargo clippy -p polint --all-targets --all-features --locked -- -D warnings` — passed.
+- Related workspace dependency inspection confirmed `rusqlite 0.40.1` with only
+  the `bundled` feature and no public feature/re-export.
 
-**Resolution:** The boundary now primes with a disabled digest, measures enabled
-mode against the absent store, then computes the enabled parity digest. Three
-consecutive runs passed at 37–38 ms cold, ~41.7–42.0 MB RSS delta, and 8 KiB
-store size without threshold changes.
+## Scope Notes
 
-### IN-01 — Managed containment does not distinguish hard-linked files
-
-**Prior severity:** Info — **ACCEPTED / NON-ACTIONABLE**
-**File:** `crates/polint/src/repo_fs.rs:309`
-
-Canonical containment and symlink checks accept a regular hard link whose inode
-also has a name outside the cache. SQLite writes through that link would mutate
-the shared inode. This does not cross OS user permissions, but it weakens the
-claim that the existing database is exclusively cache-owned.
-
-**Disposition:** A hard link can only target a file the same OS user may already
-modify and does not bypass the documented symlink/containment boundary. A
-portable no-follow/open-handle redesign is deferred; Phase 64 does not claim
-protection from a malicious same-user process racing or relinking cache files.
-
-## Positive Observations
-
-- Disabled mode returns before filesystem or SQLite work and is proven through a full kernel run.
-- Writer contention is bounded and deterministic; future/corrupt/symlink fixtures are non-panicking.
-- Raw rusqlite/SQL types stay under `analysis_kernel/store/`; the prelude remains exactly 115 items.
-- The full all-feature workspace suite and focused Phase 64 matrix pass.
-
-## Re-review Verification
-
-- Migration fixtures: 9 passed, including wrong-shape and extra-marker current schemas.
-- Recovery fixtures: 4 passed, including future database byte preservation.
-- Writer contention: passed.
-- Real Phase 64 boundary: three consecutive passes with first-open store creation.
-- Workspace clippy pre-commit gate: passed with `-D warnings`.
-
-No additional issue was introduced by the fixes.
+- The hard-link alias case remains a same-user/local-cache limitation rather
+  than a cross-permission path escape; symlink targets and ancestors are
+  rejected as required.
+- The regression fixture is intentionally tiny and does not constitute a
+  large-repository performance claim.
 
 ---
-_Re-reviewed: 2026-07-10_
-_Reviewer: Codex (inline gsd-code-reviewer fallback; sub-agents not authorized)_  
+_Reviewed: 2026-07-10_
+_Reviewer: Codex GSD code reviewer_
 _Depth: standard_
