@@ -322,3 +322,11 @@ pub(super) fn fixture_snapshot_for_test(
         sentinel,
     })
 }
+
+#[cfg(test)]
+pub(super) fn current_schema_is_valid_for_test(path: &Path) -> bool {
+    fixture_snapshot_for_test(path).is_ok_and(|snapshot| {
+        snapshot.version == super::migrations::CURRENT_SCHEMA_VERSION
+            && snapshot.bootstrap_markers == Some(1)
+    })
+}

@@ -38,13 +38,27 @@ use crate::eval::bench::measure;
 ///    review-kind (diff-gated) measurement — the analysis cost the review shares
 ///    with `check` is what the timing captures, and the diff gate itself is a
 ///    cheap reporting-layer filter;
-/// 4. reads the on-disk `.polint/cache` size into [`StoreSizeBytes`] (the durable
-///    store lands in Phase 64, so `store_bytes` is an explicit 0 here);
+/// 4. reads layer-cache and semantic-store sizes into [`StoreSizeBytes`]
+///    without double-counting store bytes;
 /// 5. folds budget-exhaustion telemetry from the live `AnalysisDb` (see
 ///    [`budget_counters`]).
 pub(crate) fn run_repo_perf_point(
     repo_root: &Path,
     review_ref: Option<&str>,
+) -> anyhow::Result<CurvePoint> {
+    run_repo_perf_point_with_store_mode(repo_root, review_ref, SemanticStoreBenchMode::Disabled)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SemanticStoreBenchMode {
+    Disabled,
+    Enabled,
+}
+
+fn run_repo_perf_point_with_store_mode(
+    repo_root: &Path,
+    review_ref: Option<&str>,
+    store_mode: SemanticStoreBenchMode,
 ) -> anyhow::Result<CurvePoint> {
     // Key the point by the repo directory name only — never an absolute host
     // path (threat T-63-02-04: curve JSON must not leak `/Users/` or `/home/`).
@@ -85,9 +99,9 @@ pub(crate) fn run_repo_perf_point(
     let mut warm_result: Option<anyhow::Result<KernelOutput>> = None;
     let timing = measure::cold_then_warm(|| {
         if cold_result.is_none() {
-            cold_result = Some(run_check_kernel(repo_root));
+            cold_result = Some(run_check_kernel_with_store_mode(repo_root, store_mode));
         } else {
-            warm_result = Some(run_check_kernel(repo_root));
+            warm_result = Some(run_check_kernel_with_store_mode(repo_root, store_mode));
         }
     });
     // Propagate a cold-run failure before trusting any timing; on success keep
@@ -101,10 +115,15 @@ pub(crate) fn run_repo_perf_point(
     let repo_file_count = files.len() as u64;
     let repo_source_bytes: u64 = files.iter().map(|file| file.source.len() as u64).sum();
 
+    let cache_layout = crate::cache::CacheLayout::for_repo(repo_root);
+    let semantic_store_bytes = dir_size_bytes(&cache_layout.semantic_store_dir());
     let size = StoreSizeBytes {
-        cache_bytes: dir_size_bytes(&repo_root.join(".polint").join("cache")),
-        // The durable semantic store lands in Phase 64; explicitly 0 until then.
-        store_bytes: 0,
+        cache_bytes: dir_size_bytes(cache_layout.root()).saturating_sub(semantic_store_bytes),
+        store_bytes: if store_mode == SemanticStoreBenchMode::Enabled {
+            semantic_store_bytes
+        } else {
+            0
+        },
     };
 
     let budget = budget_counters(&output.db);
@@ -134,6 +153,8 @@ const CHILD_MEASURE_TEST: &str = "eval::bench::runner::tests::perf_child_measure
 const CHILD_REPO_ENV: &str = "POLINT_PERF_CHILD_REPO";
 /// Env var carrying the optional review ref (empty/absent == a `check` point).
 const CHILD_REVIEW_ENV: &str = "POLINT_PERF_CHILD_REVIEW_REF";
+/// Internal libtest-only mode selector, not a supported CLI/config contract.
+const CHILD_SEMANTIC_STORE_ENV: &str = "POLINT_PERF_CHILD_SEMANTIC_STORE";
 /// Stdout markers the child prints the serialized [`CurvePoint`] JSON between, so
 /// the parent can extract it from libtest's own `--nocapture` output.
 const CHILD_POINT_BEGIN: &str = "<<<POLINT_PERF_POINT_BEGIN>>>";
@@ -170,6 +191,18 @@ pub(crate) fn run_repo_perf_point_isolated(
     repo_root: &Path,
     review_ref: Option<&str>,
 ) -> anyhow::Result<CurvePoint> {
+    run_repo_perf_point_isolated_with_store_mode(
+        repo_root,
+        review_ref,
+        SemanticStoreBenchMode::Disabled,
+    )
+}
+
+pub(crate) fn run_repo_perf_point_isolated_with_store_mode(
+    repo_root: &Path,
+    review_ref: Option<&str>,
+    store_mode: SemanticStoreBenchMode,
+) -> anyhow::Result<CurvePoint> {
     let exe = std::env::current_exe().map_err(|error| {
         anyhow::anyhow!("locating test binary for isolated perf child: {error}")
     })?;
@@ -183,9 +216,13 @@ pub(crate) fn run_repo_perf_point_isolated(
         // Never let the child inherit the regenerator switch (it would re-enter
         // regeneration and recurse) or a stale review ref from an outer spawn.
         .env_remove("POLINT_WRITE_STORE_DISABLED_BASELINE")
-        .env_remove(CHILD_REVIEW_ENV);
+        .env_remove(CHILD_REVIEW_ENV)
+        .env_remove(CHILD_SEMANTIC_STORE_ENV);
     if let Some(reference) = review_ref {
         command.env(CHILD_REVIEW_ENV, reference);
+    }
+    if store_mode == SemanticStoreBenchMode::Enabled {
+        command.env(CHILD_SEMANTIC_STORE_ENV, "enabled");
     }
     let output = command
         .output()
@@ -221,7 +258,14 @@ pub(crate) fn run_repo_perf_point_isolated(
 /// diagnostics of the check-equivalent kernel run. Clean code (no diagnostics)
 /// still yields a stable, non-empty digest (the hash of the empty set).
 pub(crate) fn diagnostics_digest_for_repo(repo_root: &Path) -> anyhow::Result<String> {
-    let output = run_check_kernel(repo_root)?;
+    diagnostics_digest_for_repo_with_store_mode(repo_root, SemanticStoreBenchMode::Disabled)
+}
+
+pub(crate) fn diagnostics_digest_for_repo_with_store_mode(
+    repo_root: &Path,
+    store_mode: SemanticStoreBenchMode,
+) -> anyhow::Result<String> {
+    let output = run_check_kernel_with_store_mode(repo_root, store_mode)?;
     Ok(digest_diagnostics(&output.diagnostics))
 }
 
@@ -242,11 +286,19 @@ fn digest_diagnostics(diagnostics: &[crate::diagnostics::Diagnostic]) -> String 
 /// the repo config, requests the full pipeline (so the deep providers whose
 /// budget counters we fold actually run), and enables caching so the warm run
 /// of [`measure::cold_then_warm`] exercises the persistent layer cache.
-fn run_check_kernel(repo_root: &Path) -> anyhow::Result<KernelOutput> {
+fn run_check_kernel_with_store_mode(
+    repo_root: &Path,
+    store_mode: SemanticStoreBenchMode,
+) -> anyhow::Result<KernelOutput> {
     let loaded = crate::config::load_config(repo_root)?;
     let config_digest = crate::cache::keys::config_hash(&loaded);
     let rule_digest = crate::cache::keys::rule_hash(&[], None, &BTreeMap::new());
     let cache = crate::cache::Cache::default_for_repo(repo_root, true);
+    let cache = if store_mode == SemanticStoreBenchMode::Enabled {
+        cache.with_semantic_store_enabled_for_test()
+    } else {
+        cache
+    };
     let plan = crate::analysis_plan::AnalysisPlan::full_pipeline_for_test();
     AnalysisKernel::run(KernelInput {
         loaded: &loaded,
@@ -401,8 +453,17 @@ mod tests {
             return;
         };
         let review = std::env::var(super::CHILD_REVIEW_ENV).ok();
-        let point = super::run_repo_perf_point(Path::new(&repo), review.as_deref())
-            .expect("isolated perf child measurement");
+        let store_mode = if std::env::var_os(super::CHILD_SEMANTIC_STORE_ENV).is_some() {
+            super::SemanticStoreBenchMode::Enabled
+        } else {
+            super::SemanticStoreBenchMode::Disabled
+        };
+        let point = super::run_repo_perf_point_with_store_mode(
+            Path::new(&repo),
+            review.as_deref(),
+            store_mode,
+        )
+        .expect("isolated perf child measurement");
         let json = serde_json::to_string(&point).expect("serialize child curve point");
         println!(
             "{}{json}{}",
@@ -509,5 +570,61 @@ mod tests {
         );
         assert!(point.cold_wall_clock_ms > 0);
         assert!(point.peak_rss_bytes > 0);
+    }
+
+    mod semantic_store {
+        use super::*;
+
+        #[test]
+        fn isolated_modes_report_real_store_bytes_and_equal_diagnostics_digest() {
+            let disabled_repo = tempdir().expect("disabled repo");
+            write_tiny_repo(disabled_repo.path());
+            let disabled = run_repo_perf_point_isolated_with_store_mode(
+                disabled_repo.path(),
+                None,
+                SemanticStoreBenchMode::Disabled,
+            )
+            .expect("disabled isolated measurement");
+            let disabled_store_path =
+                crate::cache::CacheLayout::for_repo(disabled_repo.path()).semantic_store_path();
+
+            assert_eq!(disabled.size.store_bytes, 0);
+            assert!(!disabled_store_path.exists());
+
+            let enabled_repo = tempdir().expect("enabled repo");
+            write_tiny_repo(enabled_repo.path());
+            let enabled = run_repo_perf_point_isolated_with_store_mode(
+                enabled_repo.path(),
+                None,
+                SemanticStoreBenchMode::Enabled,
+            )
+            .expect("enabled isolated measurement");
+            let enabled_store_path =
+                crate::cache::CacheLayout::for_repo(enabled_repo.path()).semantic_store_path();
+
+            assert!(enabled.size.store_bytes > 0);
+            assert!(enabled_store_path.is_file());
+            assert!(AnalysisKernel::semantic_store_schema_is_current_for_test(
+                &enabled_store_path
+            ));
+            assert_eq!(
+                serde_json::to_string(&enabled).expect("serialize point"),
+                serde_json::to_string(&enabled).expect("serialize point again")
+            );
+
+            let digest_repo = tempdir().expect("digest repo");
+            write_tiny_repo(digest_repo.path());
+            let disabled_digest = diagnostics_digest_for_repo_with_store_mode(
+                digest_repo.path(),
+                SemanticStoreBenchMode::Disabled,
+            )
+            .expect("disabled digest");
+            let enabled_digest = diagnostics_digest_for_repo_with_store_mode(
+                digest_repo.path(),
+                SemanticStoreBenchMode::Enabled,
+            )
+            .expect("enabled digest");
+            assert_eq!(enabled_digest, disabled_digest);
+        }
     }
 }

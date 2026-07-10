@@ -1001,6 +1001,11 @@ impl AnalysisKernel {
         output.run_report.provider_outputs.clone()
     }
 
+    #[cfg(test)]
+    pub(crate) fn semantic_store_schema_is_current_for_test(path: &std::path::Path) -> bool {
+        store::current_schema_is_valid_for_test(path)
+    }
+
     fn provider_output_for(
         provider_id: &'static str,
         db: &AnalysisDb,

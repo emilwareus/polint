@@ -34,6 +34,11 @@ pub(crate) fn hold_writer_connection_for_test(path: &Path) -> Result<HeldWriterC
     connection::hold_writer_connection_for_test(path).map_err(|_| ())
 }
 
+#[cfg(test)]
+pub(crate) fn current_schema_is_valid_for_test(path: &Path) -> bool {
+    connection::current_schema_is_valid_for_test(path)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct StoreConfig {
     path: PathBuf,
