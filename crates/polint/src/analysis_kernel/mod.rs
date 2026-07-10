@@ -1406,6 +1406,158 @@ mod tests {
         }
     }
 
+    mod semantic_store_check_parity {
+        use super::*;
+        use crate::diagnostics::{
+            ColorChoice, JsonReportMeta, OutputFormat, RenderOpts, Severity, render,
+            sort_diagnostics,
+        };
+
+        #[derive(Clone, Copy)]
+        enum StoreMode {
+            Disabled,
+            Enabled,
+            Corrupt,
+            Future,
+            Invalid,
+            Busy,
+        }
+
+        fn run_mode(mode: StoreMode) -> (String, u8, StoreStatus) {
+            let temp = tempfile::tempdir().expect("temp directory");
+            std::fs::write(
+                temp.path().join("main.go"),
+                "package main\n\nfunc main() { println(\"hello\") }\n",
+            )
+            .expect("write source");
+            let loaded = load_config(temp.path()).expect("default config loads");
+            let cache = Cache::default_for_repo(temp.path(), true);
+            let cache = if matches!(mode, StoreMode::Disabled) {
+                cache
+            } else {
+                cache.with_semantic_store_enabled_for_test()
+            };
+            let path = cache.semantic_store_path();
+            let config = store::StoreConfig::new(&path, true);
+
+            let mut corrupt_before = None;
+            let mut fixture_before = None;
+            let mut held_writer = None;
+            match mode {
+                StoreMode::Disabled | StoreMode::Enabled => {}
+                StoreMode::Corrupt => {
+                    std::fs::create_dir_all(path.parent().expect("store directory"))
+                        .expect("create store directory");
+                    let bytes = b"parity corrupt sqlite bytes".to_vec();
+                    std::fs::write(&path, &bytes).expect("write corrupt fixture");
+                    corrupt_before = Some(bytes);
+                }
+                StoreMode::Future => {
+                    std::fs::create_dir_all(path.parent().expect("store directory"))
+                        .expect("create store directory");
+                    store::install_future_fixture_for_test(&path).expect("install future fixture");
+                    fixture_before = Some(
+                        store::fixture_snapshot_for_test(&path).expect("snapshot future fixture"),
+                    );
+                }
+                StoreMode::Invalid => {
+                    std::fs::create_dir_all(path.parent().expect("store directory"))
+                        .expect("create store directory");
+                    store::install_invalid_fixture_for_test(&path)
+                        .expect("install invalid fixture");
+                    fixture_before = Some(
+                        store::fixture_snapshot_for_test(&path).expect("snapshot invalid fixture"),
+                    );
+                }
+                StoreMode::Busy => {
+                    assert_eq!(store::SemanticStore::maintain(&config), StoreStatus::Ready);
+                    fixture_before = Some(
+                        store::fixture_snapshot_for_test(&path).expect("snapshot current fixture"),
+                    );
+                    held_writer = Some(
+                        store::hold_writer_connection_for_test(&path).expect("hold writer lease"),
+                    );
+                }
+            }
+
+            let plan = AnalysisPlan::empty();
+            let mut output = AnalysisKernel::run(KernelInput {
+                loaded: &loaded,
+                cache: &cache,
+                config_digest: "config",
+                rule_digest: "rules",
+                plan: &plan,
+                parallel: false,
+            })
+            .expect("kernel run");
+            let status = output.run_report.store_status().clone();
+            sort_diagnostics(&mut output.diagnostics);
+            let exit_code = u8::from(
+                output
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.severity.is_at_least(Severity::Warn)),
+            );
+            let json = render(
+                OutputFormat::Json,
+                &output.diagnostics,
+                RenderOpts {
+                    json: JsonReportMeta {
+                        tool_name: "polint",
+                        tool_version: env!("CARGO_PKG_VERSION"),
+                    },
+                    color: ColorChoice::Never,
+                    sources: None,
+                },
+            );
+
+            if let Some(bytes) = corrupt_before {
+                assert_eq!(std::fs::read(&path).expect("read corrupt fixture"), bytes);
+            }
+            if let Some(before) = fixture_before {
+                assert_eq!(
+                    store::fixture_snapshot_for_test(&path).expect("snapshot fixture after run"),
+                    before
+                );
+            }
+            drop(held_writer);
+            (json, exit_code, status)
+        }
+
+        #[test]
+        fn all_store_modes_preserve_byte_identical_json_and_exit_semantics() {
+            let (disabled_json, disabled_exit, disabled_status) = run_mode(StoreMode::Disabled);
+            assert_eq!(disabled_status, StoreStatus::Disabled);
+
+            let cases = [
+                (StoreMode::Enabled, StoreStatus::Ready),
+                (
+                    StoreMode::Corrupt,
+                    StoreStatus::RebuildNeeded(store::StoreRebuildReason::Corrupt),
+                ),
+                (
+                    StoreMode::Future,
+                    StoreStatus::Skipped(store::StoreSkipReason::FutureSchema {
+                        found: 2,
+                        supported: store::CURRENT_SCHEMA_VERSION_FOR_TEST,
+                    }),
+                ),
+                (
+                    StoreMode::Invalid,
+                    StoreStatus::RebuildNeeded(store::StoreRebuildReason::InvalidSchema),
+                ),
+                (StoreMode::Busy, StoreStatus::BusySkipped),
+            ];
+
+            for (mode, expected_status) in cases {
+                let (json, exit_code, status) = run_mode(mode);
+                assert_eq!(status, expected_status);
+                assert_eq!(json.as_bytes(), disabled_json.as_bytes());
+                assert_eq!(exit_code, disabled_exit);
+            }
+        }
+    }
+
     #[test]
     fn kernel_run_report_records_input_snapshot_and_provider_outputs() {
         let temp = tempfile::tempdir().expect("tempdir");

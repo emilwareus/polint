@@ -9,6 +9,31 @@ use std::path::{Path, PathBuf};
 mod connection;
 mod migrations;
 
+#[cfg(test)]
+pub(crate) use connection::{HeldWriterConnection, StoreFixtureSnapshot};
+#[cfg(test)]
+pub(crate) const CURRENT_SCHEMA_VERSION_FOR_TEST: i32 = migrations::CURRENT_SCHEMA_VERSION;
+
+#[cfg(test)]
+pub(crate) fn install_future_fixture_for_test(path: &Path) -> Result<(), ()> {
+    connection::install_future_fixture_for_test(path).map_err(|_| ())
+}
+
+#[cfg(test)]
+pub(crate) fn install_invalid_fixture_for_test(path: &Path) -> Result<(), ()> {
+    connection::install_invalid_fixture_for_test(path).map_err(|_| ())
+}
+
+#[cfg(test)]
+pub(crate) fn fixture_snapshot_for_test(path: &Path) -> Result<StoreFixtureSnapshot, ()> {
+    connection::fixture_snapshot_for_test(path).map_err(|_| ())
+}
+
+#[cfg(test)]
+pub(crate) fn hold_writer_connection_for_test(path: &Path) -> Result<HeldWriterConnection, ()> {
+    connection::hold_writer_connection_for_test(path).map_err(|_| ())
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct StoreConfig {
     path: PathBuf,

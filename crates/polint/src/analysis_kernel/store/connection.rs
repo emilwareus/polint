@@ -211,3 +211,114 @@ pub(super) fn integrity_check(writer: &WriterConnection) -> Result<String, Conne
         .pragma_query_value(None, "integrity_check", |row| row.get(0))
         .map_err(classify_sqlite_error)
 }
+
+#[cfg(test)]
+pub(crate) struct HeldWriterConnection {
+    connection: Connection,
+}
+
+#[cfg(test)]
+pub(super) fn hold_writer_connection_for_test(
+    path: &Path,
+) -> Result<HeldWriterConnection, ConnectionError> {
+    let writer = open_writer(path)?;
+    writer
+        .connection
+        .execute_batch("BEGIN IMMEDIATE")
+        .map_err(classify_sqlite_error)?;
+    Ok(HeldWriterConnection {
+        connection: writer.connection,
+    })
+}
+
+#[cfg(test)]
+impl Drop for HeldWriterConnection {
+    fn drop(&mut self) {
+        let _ = self.connection.execute_batch("ROLLBACK");
+    }
+}
+
+#[cfg(test)]
+pub(super) fn install_future_fixture_for_test(path: &Path) -> Result<(), ConnectionError> {
+    let connection = Connection::open(path).map_err(classify_sqlite_error)?;
+    connection
+        .execute_batch(
+            "CREATE TABLE sentinel (value TEXT NOT NULL);\
+             INSERT INTO sentinel (value) VALUES ('future-data');\
+             PRAGMA user_version = 2;",
+        )
+        .map_err(classify_sqlite_error)
+}
+
+#[cfg(test)]
+pub(super) fn install_invalid_fixture_for_test(path: &Path) -> Result<(), ConnectionError> {
+    let connection = Connection::open(path).map_err(classify_sqlite_error)?;
+    connection
+        .pragma_update(
+            None,
+            "user_version",
+            super::migrations::CURRENT_SCHEMA_VERSION,
+        )
+        .map_err(classify_sqlite_error)
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct StoreFixtureSnapshot {
+    version: i32,
+    bootstrap_markers: Option<i64>,
+    sentinel: Option<String>,
+}
+
+#[cfg(test)]
+pub(super) fn fixture_snapshot_for_test(
+    path: &Path,
+) -> Result<StoreFixtureSnapshot, ConnectionError> {
+    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(classify_sqlite_error)?;
+    let version = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .map_err(classify_sqlite_error)?;
+    let bootstrap_table_count: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM sqlite_master \
+             WHERE type = 'table' AND name = '_polint_schema_migrations'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(classify_sqlite_error)?;
+    let bootstrap_markers = if bootstrap_table_count == 1 {
+        Some(
+            connection
+                .query_row(
+                    "SELECT count(*) FROM _polint_schema_migrations",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(classify_sqlite_error)?,
+        )
+    } else {
+        None
+    };
+    let sentinel_table_count: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'sentinel'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(classify_sqlite_error)?;
+    let sentinel = if sentinel_table_count == 1 {
+        Some(
+            connection
+                .query_row("SELECT value FROM sentinel", [], |row| row.get(0))
+                .map_err(classify_sqlite_error)?,
+        )
+    } else {
+        None
+    };
+    Ok(StoreFixtureSnapshot {
+        version,
+        bootstrap_markers,
+        sentinel,
+    })
+}
