@@ -190,7 +190,9 @@ fn map_connection_error(error: connection::ConnectionError) -> StoreStatus {
         connection::ConnectionError::Corrupt => {
             StoreStatus::RebuildNeeded(StoreRebuildReason::Corrupt)
         }
-        connection::ConnectionError::Other => StoreStatus::Skipped(StoreSkipReason::OpenFailed),
+        connection::ConnectionError::Policy | connection::ConnectionError::Other => {
+            StoreStatus::Skipped(StoreSkipReason::OpenFailed)
+        }
     }
 }
 

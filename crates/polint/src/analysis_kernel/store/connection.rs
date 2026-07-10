@@ -39,6 +39,7 @@ pub(super) enum ConnectionError {
     FutureSchema { found: i32, supported: i32 },
     InvalidSchema,
     Corrupt,
+    Policy,
     Other,
 }
 
@@ -63,10 +64,19 @@ fn open_uninitialized_writer(path: &Path) -> Result<WriterConnection, Connection
     connection
         .pragma_update(None, "foreign_keys", true)
         .map_err(classify_sqlite_error)?;
-    let _: String = connection
+    let journal_mode: String = connection
         .query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))
         .map_err(classify_sqlite_error)?;
+    validate_journal_mode(&journal_mode)?;
     Ok(WriterConnection { connection })
+}
+
+pub(super) fn validate_journal_mode(journal_mode: &str) -> Result<(), ConnectionError> {
+    if journal_mode.eq_ignore_ascii_case("wal") {
+        Ok(())
+    } else {
+        Err(ConnectionError::Policy)
+    }
 }
 
 #[cfg_attr(

@@ -83,6 +83,19 @@ mod connection_policy {
         );
         assert!(connection::read_only_write_is_rejected(&reader));
     }
+
+    #[test]
+    fn journal_mode_validation_accepts_wal_case_insensitively() {
+        assert_eq!(connection::validate_journal_mode("WaL"), Ok(()));
+    }
+
+    #[test]
+    fn journal_mode_validation_rejects_a_successful_non_wal_result() {
+        assert_eq!(
+            connection::validate_journal_mode("delete"),
+            Err(connection::ConnectionError::Policy)
+        );
+    }
 }
 
 mod writer_contention {
