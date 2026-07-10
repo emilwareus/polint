@@ -6,6 +6,8 @@
 
 use std::path::{Path, PathBuf};
 
+mod migrations;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct StoreConfig {
     path: PathBuf,
