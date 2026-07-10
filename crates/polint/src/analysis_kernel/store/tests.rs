@@ -84,3 +84,46 @@ mod connection_policy {
         assert!(connection::read_only_write_is_rejected(&reader));
     }
 }
+
+mod writer_contention {
+    use std::time::{Duration, Instant};
+
+    use super::*;
+
+    #[test]
+    fn losing_writer_skips_within_bound_then_acquires_after_release() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let path = temp.path().join("semantic-store/store.sqlite3");
+        let config = StoreConfig::new(&path, true);
+        assert_eq!(SemanticStore::maintain(&config), StoreStatus::Ready);
+
+        let mut first = connection::open_writer(&path).expect("open first writer");
+        let mut second = connection::open_writer(&path).expect("open second writer");
+        let first_lease = connection::hold_writer_lease(&mut first).expect("hold first lease");
+
+        let started = Instant::now();
+        let losing_status = connection::try_writer_lease(&mut second).expect("bounded result");
+        let elapsed = started.elapsed();
+
+        assert_eq!(losing_status, connection::LeaseStatus::Busy);
+        assert!(elapsed < Duration::from_secs(1), "elapsed: {elapsed:?}");
+        assert_eq!(
+            connection::bootstrap_marker_count(&second).expect("marker count"),
+            1
+        );
+
+        first_lease.release().expect("release first lease");
+        assert_eq!(
+            connection::try_writer_lease(&mut second).expect("second acquisition"),
+            connection::LeaseStatus::Acquired
+        );
+        assert_eq!(
+            connection::integrity_check(&second).expect("integrity check"),
+            "ok"
+        );
+        assert_eq!(
+            connection::bootstrap_marker_count(&second).expect("marker count"),
+            1
+        );
+    }
+}

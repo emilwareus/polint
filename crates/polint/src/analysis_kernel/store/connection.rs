@@ -5,6 +5,9 @@ use std::time::Duration;
 
 use rusqlite::{Connection, ErrorCode, OpenFlags, TransactionBehavior};
 
+#[cfg(test)]
+use rusqlite::Transaction;
+
 use super::migrations::{MigrationError, apply_migrations};
 
 const BUSY_TIMEOUT: Duration = Duration::from_millis(250);
@@ -150,4 +153,47 @@ pub(super) fn read_only_write_is_rejected(reader: &ReadOnlyConnection) -> bool {
         .connection
         .execute("CREATE TABLE forbidden_write (id INTEGER)", [])
         .is_err()
+}
+
+#[cfg(test)]
+pub(super) struct HeldWriterLease<'connection> {
+    transaction: Transaction<'connection>,
+}
+
+#[cfg(test)]
+impl HeldWriterLease<'_> {
+    pub(super) fn release(self) -> Result<(), ConnectionError> {
+        self.transaction.commit().map_err(classify_sqlite_error)
+    }
+}
+
+#[cfg(test)]
+pub(super) fn hold_writer_lease(
+    writer: &mut WriterConnection,
+) -> Result<HeldWriterLease<'_>, ConnectionError> {
+    let transaction = writer
+        .connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(classify_sqlite_error)?;
+    Ok(HeldWriterLease { transaction })
+}
+
+#[cfg(test)]
+pub(super) fn bootstrap_marker_count(writer: &WriterConnection) -> Result<i64, ConnectionError> {
+    writer
+        .connection
+        .query_row(
+            "SELECT count(*) FROM _polint_schema_migrations",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(classify_sqlite_error)
+}
+
+#[cfg(test)]
+pub(super) fn integrity_check(writer: &WriterConnection) -> Result<String, ConnectionError> {
+    writer
+        .connection
+        .pragma_query_value(None, "integrity_check", |row| row.get(0))
+        .map_err(classify_sqlite_error)
 }
