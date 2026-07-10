@@ -96,6 +96,7 @@ pub struct Cache {
     root: PathBuf,
     repo_root: Option<PathBuf>,
     enabled: bool,
+    semantic_store_enabled: bool,
 }
 
 impl Cache {
@@ -104,6 +105,7 @@ impl Cache {
             root: root.as_ref().to_path_buf(),
             repo_root: None,
             enabled,
+            semantic_store_enabled: false,
         }
     }
 
@@ -129,6 +131,43 @@ impl Cache {
     #[cfg(test)]
     pub(crate) fn root(&self) -> &Path {
         &self.root
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Phase 64 establishes the private store path before kernel integration consumes it."
+        )
+    )]
+    pub(crate) fn semantic_store_path(&self) -> PathBuf {
+        self.semantic_store_dir().join("store.sqlite3")
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Phase 64 establishes disabled-by-default activation before the kernel consumes it."
+        )
+    )]
+    pub(crate) fn semantic_store_enabled(&self) -> bool {
+        self.semantic_store_enabled
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_semantic_store_enabled_for_test(mut self) -> Self {
+        self.semantic_store_enabled = true;
+        self
+    }
+
+    fn semantic_store_dir(&self) -> PathBuf {
+        if self.root.file_name().and_then(|name| name.to_str()) == Some("analysis")
+            && let Some(parent) = self.root.parent()
+        {
+            return parent.join("semantic-store");
+        }
+        self.root.join("semantic-store")
     }
 
     pub(crate) fn layer_cache_dir(&self) -> PathBuf {
@@ -353,6 +392,21 @@ impl CacheLayout {
 
     pub(crate) fn layer_cache_dir(&self) -> PathBuf {
         self.root.join("layers")
+    }
+
+    pub(crate) fn semantic_store_dir(&self) -> PathBuf {
+        self.root.join("semantic-store")
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Phase 64 establishes the store layout before the kernel opens it."
+        )
+    )]
+    pub(crate) fn semantic_store_path(&self) -> PathBuf {
+        self.semantic_store_dir().join("store.sqlite3")
     }
 
     pub(crate) fn status(&self) -> Result<CacheStatus> {
@@ -866,6 +920,48 @@ mod tests {
         assert!(!cache.root().exists());
         assert!(!temp.path().join(".polint/cache").exists());
         assert!(!cache.is_enabled());
+    }
+
+    #[test]
+    fn semantic_store_is_disabled_and_filesystem_free_by_default() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache = Cache::default_for_repo(temp.path(), false);
+
+        assert!(!cache.semantic_store_enabled());
+        assert_eq!(
+            cache.semantic_store_path(),
+            temp.path()
+                .join(".polint/cache/semantic-store/store.sqlite3")
+        );
+        assert!(!temp.path().join(".polint/cache").exists());
+    }
+
+    #[test]
+    fn semantic_store_test_enablement_changes_only_activation_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache =
+            Cache::default_for_repo(temp.path(), false).with_semantic_store_enabled_for_test();
+
+        assert!(cache.semantic_store_enabled());
+        assert_eq!(
+            cache.semantic_store_path(),
+            temp.path()
+                .join(".polint/cache/semantic-store/store.sqlite3")
+        );
+        assert!(!temp.path().join(".polint/cache").exists());
+    }
+
+    #[test]
+    fn cache_layout_semantic_store_path_stays_under_configured_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("custom-cache");
+        let layout = CacheLayout::from_root(&root);
+
+        assert_eq!(
+            layout.semantic_store_path(),
+            root.join("semantic-store/store.sqlite3")
+        );
+        assert!(!root.exists());
     }
 
     #[test]

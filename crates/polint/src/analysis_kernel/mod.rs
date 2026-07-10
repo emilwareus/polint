@@ -9,6 +9,14 @@ use crate::diagnostics::Diagnostic;
 pub(crate) mod incremental;
 mod metadata;
 mod provider;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Phase 64 builds the private store foundation before the kernel integration plan consumes it."
+    )
+)]
+mod store;
 pub(crate) mod validation;
 
 pub(crate) use metadata::{
