@@ -6,6 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
+mod connection;
 mod migrations;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -55,42 +56,54 @@ pub(crate) enum StoreRebuildReason {
 
 pub(crate) struct SemanticStore;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+impl SemanticStore {
+    pub(crate) fn maintain(config: &StoreConfig) -> StoreStatus {
+        if !config.is_enabled() {
+            return StoreStatus::Disabled;
+        }
 
-    #[test]
-    fn config_preserves_path_and_disabled_state() {
-        let config = StoreConfig::new("cache/semantic-store/store.sqlite3", false);
+        if prepare_store_path(config.path()).is_err() {
+            return StoreStatus::Skipped(StoreSkipReason::UnsafePath);
+        }
 
-        assert_eq!(
-            config.path(),
-            Path::new("cache/semantic-store/store.sqlite3")
-        );
-        assert!(!config.is_enabled());
-    }
-
-    #[test]
-    fn status_vocabulary_is_typed_and_comparable() {
-        let statuses = [
-            StoreStatus::Disabled,
-            StoreStatus::Ready,
-            StoreStatus::BusySkipped,
-            StoreStatus::Skipped(StoreSkipReason::FutureSchema {
-                found: 2,
-                supported: 1,
-            }),
-            StoreStatus::Skipped(StoreSkipReason::UnsafePath),
-            StoreStatus::Skipped(StoreSkipReason::OpenFailed),
-            StoreStatus::RebuildNeeded(StoreRebuildReason::Corrupt),
-            StoreStatus::RebuildNeeded(StoreRebuildReason::InvalidSchema),
-        ];
-
-        assert_eq!(statuses.len(), 8);
-    }
-
-    #[test]
-    fn semantic_store_is_zero_sized_facade() {
-        assert_eq!(std::mem::size_of::<SemanticStore>(), 0);
+        let mut writer = match connection::open_writer(config.path()) {
+            Ok(writer) => writer,
+            Err(error) => return map_connection_error(error),
+        };
+        match connection::try_writer_lease(&mut writer) {
+            Ok(connection::LeaseStatus::Acquired) => StoreStatus::Ready,
+            Ok(connection::LeaseStatus::Busy) => StoreStatus::BusySkipped,
+            Err(error) => map_connection_error(error),
+        }
     }
 }
+
+fn prepare_store_path(path: &Path) -> Result<(), ()> {
+    let parent = path.parent().ok_or(())?;
+    crate::repo_fs::create_dir_all_no_symlink(parent).map_err(|_| ())?;
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => Err(()),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(()),
+    }
+}
+
+fn map_connection_error(error: connection::ConnectionError) -> StoreStatus {
+    match error {
+        connection::ConnectionError::Busy => StoreStatus::BusySkipped,
+        connection::ConnectionError::FutureSchema { found, supported } => {
+            StoreStatus::Skipped(StoreSkipReason::FutureSchema { found, supported })
+        }
+        connection::ConnectionError::InvalidSchema => {
+            StoreStatus::RebuildNeeded(StoreRebuildReason::InvalidSchema)
+        }
+        connection::ConnectionError::Corrupt => {
+            StoreStatus::RebuildNeeded(StoreRebuildReason::Corrupt)
+        }
+        connection::ConnectionError::Other => StoreStatus::Skipped(StoreSkipReason::OpenFailed),
+    }
+}
+
+#[cfg(test)]
+mod tests;

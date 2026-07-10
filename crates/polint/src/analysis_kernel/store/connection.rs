@@ -1,0 +1,153 @@
+//! SQLite connection policy and the single-writer lease.
+
+use std::path::Path;
+use std::time::Duration;
+
+use rusqlite::{Connection, ErrorCode, OpenFlags, TransactionBehavior};
+
+use super::migrations::{MigrationError, apply_migrations};
+
+const BUSY_TIMEOUT: Duration = Duration::from_millis(250);
+
+pub(super) struct WriterConnection {
+    connection: Connection,
+}
+
+pub(super) struct ReadOnlyConnection {
+    connection: Connection,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum LeaseStatus {
+    Acquired,
+    Busy,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ConnectionError {
+    Busy,
+    FutureSchema { found: i32, supported: i32 },
+    InvalidSchema,
+    Corrupt,
+    Other,
+}
+
+pub(super) fn open_writer(path: &Path) -> Result<WriterConnection, ConnectionError> {
+    let connection = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
+    )
+    .map_err(classify_sqlite_error)?;
+    connection
+        .busy_timeout(BUSY_TIMEOUT)
+        .map_err(classify_sqlite_error)?;
+    connection
+        .pragma_update(None, "foreign_keys", true)
+        .map_err(classify_sqlite_error)?;
+    let _: String = connection
+        .query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))
+        .map_err(classify_sqlite_error)?;
+
+    let mut writer = WriterConnection { connection };
+    apply_migrations(&mut writer.connection).map_err(classify_migration_error)?;
+    Ok(writer)
+}
+
+pub(super) fn open_read_only(path: &Path) -> Result<ReadOnlyConnection, ConnectionError> {
+    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(classify_sqlite_error)?;
+    connection
+        .busy_timeout(BUSY_TIMEOUT)
+        .map_err(classify_sqlite_error)?;
+    connection
+        .pragma_update(None, "foreign_keys", true)
+        .map_err(classify_sqlite_error)?;
+    Ok(ReadOnlyConnection { connection })
+}
+
+pub(super) fn try_writer_lease(
+    writer: &mut WriterConnection,
+) -> Result<LeaseStatus, ConnectionError> {
+    let transaction = match writer
+        .connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+    {
+        Ok(transaction) => transaction,
+        Err(error) if is_busy(&error) => return Ok(LeaseStatus::Busy),
+        Err(error) => return Err(classify_sqlite_error(error)),
+    };
+    transaction.commit().map_err(classify_sqlite_error)?;
+    Ok(LeaseStatus::Acquired)
+}
+
+fn classify_migration_error(error: MigrationError) -> ConnectionError {
+    match error {
+        MigrationError::FutureSchema { found, supported } => {
+            ConnectionError::FutureSchema { found, supported }
+        }
+        MigrationError::InvalidSchema { .. } => ConnectionError::InvalidSchema,
+        MigrationError::Sqlite(error) => classify_sqlite_error(error),
+    }
+}
+
+fn classify_sqlite_error(error: rusqlite::Error) -> ConnectionError {
+    match error.sqlite_error_code() {
+        Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked) => ConnectionError::Busy,
+        Some(ErrorCode::DatabaseCorrupt | ErrorCode::NotADatabase) => ConnectionError::Corrupt,
+        _ => ConnectionError::Other,
+    }
+}
+
+fn is_busy(error: &rusqlite::Error) -> bool {
+    matches!(
+        error.sqlite_error_code(),
+        Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
+    )
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ConnectionPolicySnapshot {
+    pub(super) foreign_keys: i64,
+    pub(super) journal_mode: String,
+    pub(super) busy_timeout_ms: i64,
+}
+
+#[cfg(test)]
+pub(super) fn writer_policy(
+    writer: &WriterConnection,
+) -> Result<ConnectionPolicySnapshot, ConnectionError> {
+    let foreign_keys = writer
+        .connection
+        .pragma_query_value(None, "foreign_keys", |row| row.get(0))
+        .map_err(classify_sqlite_error)?;
+    let journal_mode = writer
+        .connection
+        .pragma_query_value(None, "journal_mode", |row| row.get(0))
+        .map_err(classify_sqlite_error)?;
+    let busy_timeout_ms = writer
+        .connection
+        .pragma_query_value(None, "busy_timeout", |row| row.get(0))
+        .map_err(classify_sqlite_error)?;
+    Ok(ConnectionPolicySnapshot {
+        foreign_keys,
+        journal_mode,
+        busy_timeout_ms,
+    })
+}
+
+#[cfg(test)]
+pub(super) fn read_schema_version(reader: &ReadOnlyConnection) -> Result<i32, ConnectionError> {
+    reader
+        .connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .map_err(classify_sqlite_error)
+}
+
+#[cfg(test)]
+pub(super) fn read_only_write_is_rejected(reader: &ReadOnlyConnection) -> bool {
+    reader
+        .connection
+        .execute("CREATE TABLE forbidden_write (id INTEGER)", [])
+        .is_err()
+}
