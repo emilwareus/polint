@@ -105,6 +105,11 @@ mod writer_contention {
 
     use super::*;
 
+    // The exact SQLite policy is asserted as 250 ms in `connection_policy`.
+    // This wall-clock check is only an anti-hang guard, so leave headroom for a
+    // loaded CI runner to deschedule the test around the busy-handler sleeps.
+    const CONTENTION_ANTI_HANG_LIMIT: Duration = Duration::from_secs(2);
+
     #[test]
     fn losing_writer_skips_within_bound_then_acquires_after_release() {
         let temp = tempfile::tempdir().expect("temp directory");
@@ -121,7 +126,7 @@ mod writer_contention {
         let elapsed = started.elapsed();
 
         assert_eq!(losing_status, connection::LeaseStatus::Busy);
-        assert!(elapsed < Duration::from_secs(1), "elapsed: {elapsed:?}");
+        assert!(elapsed < CONTENTION_ANTI_HANG_LIMIT, "elapsed: {elapsed:?}");
         assert_eq!(
             connection::bootstrap_marker_count(&second).expect("marker count"),
             1
@@ -162,7 +167,7 @@ mod writer_contention {
         let elapsed = started.elapsed();
 
         assert_eq!(losing_status, connection::LeaseStatus::Busy);
-        assert!(elapsed < Duration::from_secs(1), "elapsed: {elapsed:?}");
+        assert!(elapsed < CONTENTION_ANTI_HANG_LIMIT, "elapsed: {elapsed:?}");
 
         first_lease
             .initialize_and_release()
