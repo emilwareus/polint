@@ -22,7 +22,7 @@ tech-stack:
   added: []
   patterns:
     - "Public-boundary scanners use curated implementation-specific markers plus per-family negative controls"
-    - "Phase boundary measurements mirror the committed baseline generator's cache-priming order before isolated measurement"
+  - "Phase boundary measurements prime analysis caches in disabled mode, then include the enabled store's first-open/migration cost"
 
 key-files:
   created: []
@@ -33,7 +33,7 @@ key-files:
     - crates/polint/src/eval/bench/gate.rs
 
 key-decisions:
-  - "The Phase 64 gate computes the check-scoped digest before the isolated point, matching the committed baseline generator rather than comparing unlike toolchain/cache states"
+  - "The Phase 64 gate primes with a disabled digest, measures enabled first-open cost, then computes the enabled parity digest"
   - "Generic words such as store, row, and connection remain allowed; only exact internal namespaces/types/crate/schema/SQL identifiers are banned publicly"
   - "No threshold, absolute floor, prelude item, product activation path, or public contract changed"
 
@@ -65,7 +65,7 @@ completed: 2026-07-10
 - Expanded the external/public leak gate to scan SDK, runner, CLI, crate root, README, API visibility plan, facts docs, examples, real check JSON, and generated skill text for curated store implementation markers.
 - Kept `ALLOWED_PRELUDE` unchanged at exactly 115 names and compiled the excluded external probe using only `polint::sdk::prelude::*`.
 - Added negative controls for private module/type, rusqlite crate, bootstrap table, SQLite flags, migration statement, and raw identifier marker families while proving generic prose does not false-positive.
-- Evaluated a real store-enabled isolated fixture against `store-disabled-check.json`; three repeat runs measured ~41.5–41.6 MB RSS delta (about 1.02× baseline), 58–65 ms cold time, 8 KiB store size, and an unchanged `28cac8a32a5bb2a9` diagnostics digest.
+- Evaluated a real store-enabled isolated fixture against `store-disabled-check.json`; after review hardening, three repeat runs measured ~41.7–42.0 MB RSS delta (about 1.03× baseline), 37–38 ms cold time, 8 KiB first-open store size, and an unchanged `28cac8a32a5bb2a9` diagnostics digest.
 - Ran every focused Phase 64 fixture and the complete all-feature workspace suite with zero failures.
 
 ## Task Commits
@@ -83,7 +83,7 @@ completed: 2026-07-10
 
 ## Decisions Made
 
-- Matched the committed baseline generator's ordering: compute the check-scoped digest first to prime analysis/toolchain caches, then run the isolated measurement. Reversing the order produced 72–135 ms cold-cache/toolchain variance against a baseline generated after priming; matching order produced three consecutive 58–65 ms passes without changing thresholds.
+- Matched the committed baseline generator's analysis-cache state without hiding store creation: a disabled check digest primes analysis/toolchain caches, the isolated enabled point then creates/migrates the absent store, and an enabled digest afterward proves parity. This produced three consecutive 37–38 ms passes without changing thresholds.
 - Retained the locked `1.20` RSS ratio, `1.25` cold ratio, 16 MiB RSS floor, and 50 ms cold floor exactly. On this tiny fixture the existing absolute cold floor yields a 76 ms effective ceiling; production-scale baselines remain ratio-governed.
 - Included the probe lockfile refresh because building the excluded external consumer now legitimately resolves polint's private bundled SQLite dependency; it does not expose rusqlite through Rust APIs.
 
@@ -97,7 +97,7 @@ completed: 2026-07-10
 - **Issue:** Measuring before the digest run compared an unprimed enabled point to a baseline whose generator explicitly ran the digest first, producing timing-only false failures (72–135 ms) while disabled control runs showed the same toolchain variance.
 - **Fix:** Reordered Phase 64 boundary evaluation to the baseline generator's documented digest-then-isolated-measurement sequence.
 - **Files modified:** `crates/polint/src/eval/bench/gate.rs`
-- **Verification:** Three consecutive real boundary runs passed at 58, 63, and 65 ms cold time; no threshold/floor changed.
+- **Verification:** The initial cache-order correction passed at 58–65 ms; code review then refined it to retain first-open cost, with three consecutive 37–38 ms passes. No threshold/floor changed.
 - **Committed in:** `2ffcf4ad`
 
 **2. [Rule 3 - Blocking] Refreshed external probe lockfile**
@@ -125,7 +125,7 @@ None - the store remains disabled in production and all new activation/gate plum
 ## Verification
 
 - Focused cache tests: 36 passed.
-- Migration fixtures: 7 passed.
+- Migration fixtures: 9 passed after review hardening (including wrong-shape and extra-marker current schemas).
 - Store connection/contention/recovery suite: 11 passed.
 - Kernel store/parity tests: 3 matching tests passed; dedicated six-mode parity test passed.
 - Isolated store benchmark test: passed.
@@ -133,7 +133,7 @@ None - the store remains disabled in production and all new activation/gate plum
 - Real Phase 64 boundary: passed; RSS, cold-time, and diagnostics checks all present and Pass.
 - `make lint`: passed.
 - `cargo test --workspace --all-features --locked`:
-  - polint library: 2,421 passed, 1 intentional ignore.
+  - polint library: 2,421 passed, 1 intentional ignore; the separate slow cargo-install smoke test remained intentionally ignored.
   - CLI integration: 166 passed.
   - public leak integration: 7 passed.
   - polint-bench: 2 passed.
@@ -146,6 +146,11 @@ None - the store remains disabled in production and all new activation/gate plum
 - Phase 64 is implementation-complete and ready for code review plus requirements verification.
 - Phase 65 can add manifest/generation/fact persistence behind the established private boundary; production activation remains intentionally off.
 - No blockers and no large-repo measurement claim: this phase gate uses the committed deterministic tiny fixture. The locked real-repo suite remains the later scale-validation path.
+
+## Post-Plan Code Review Fixes
+
+- `8ac63000` adds a compatibility preflight before WAL, maps malformed bootstrap shapes to typed invalid-schema outcomes, requires exactly one marker row, and changes the boundary to include real first-open/migration cost after disabled cache priming.
+- Phase 64's second review pass is clean with zero remaining findings.
 
 ---
 *Phase: 64-store-foundation-and-boundary-proof*
