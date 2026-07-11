@@ -578,6 +578,7 @@ mod tests {
         }
 
         #[test]
+        #[ignore = "runs as a dedicated serialized CI performance gate"]
         fn real_store_enabled_measurement_passes_locked_boundary() {
             let repo = tempfile::tempdir().expect("phase 64 fixture repo");
             write_phase_64_boundary_fixture(repo.path());

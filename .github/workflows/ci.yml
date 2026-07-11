@@ -93,6 +93,12 @@ jobs:
       - name: cargo test
         run: cargo test --workspace --all-features --locked
 
+      - name: Phase 64 semantic-store regression gate (serialized)
+        run: >-
+          cargo test -p polint --lib --all-features --locked
+          eval::bench::gate::tests::phase_64::real_store_enabled_measurement_passes_locked_boundary
+          -- --exact --ignored --test-threads=1 --nocapture
+
   test-platform:
     name: ${{ matrix.os }} — platform library tests
     runs-on: ${{ matrix.os }}
@@ -118,6 +124,12 @@ jobs:
 
       - name: cargo test
         run: cargo test -p polint --lib --all-features --locked
+
+      - name: Phase 64 semantic-store regression gate (serialized)
+        run: >-
+          cargo test -p polint --lib --all-features --locked
+          eval::bench::gate::tests::phase_64::real_store_enabled_measurement_passes_locked_boundary
+          -- --exact --ignored --test-threads=1 --nocapture
 
   leak-gate:
     # V1.3 PUBLIC-SURFACE-LEAK GATE — see Phase 42 D-17, D-18, D-19.
