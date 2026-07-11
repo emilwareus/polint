@@ -3,9 +3,9 @@
 //! [`build_semantic_graph`] projects a real-but-minimal semantic graph from the
 //! already-available v1.2 fact families — functions, packages, scopes, call sites,
 //! and values — emitting nodes, `Call`/`MemberOf` edges, and
-//! `CopyEdge`/`CallConstraint` constraints, plus Phase 50's private TS object-model
-//! rows as `Alloc`/`FieldStore`/`FieldLoad`/receiver constraints and accepted Phase
-//! 51 adaptation-model facts as `ModelEdge` constraints. It is a
+//! `CopyEdge`/`CallConstraint` constraints, plus the private TS object-model
+//! rows as `Alloc`/`FieldStore`/`FieldLoad`/receiver constraints and accepted
+//! adaptation-model facts as `ModelEdge` constraints. It is a
 //! **read-only projection**: it reads `db` and returns a fresh
 //! [`SemanticGraphOutput`], mutating no upstream fact family (D-13). All
 //! node/edge/constraint stable keys are composed from the
@@ -433,8 +433,8 @@ impl GraphBuilder {
             id: Default::default(),
             kind,
             status: PointsToStatus::Present,
-            // FlowInsensitive: these are projected, not solved (the solver lands in
-            // Phase 47); never an exact precision.
+            // FlowInsensitive: these are projected rather than solved, so they
+            // never have exact precision.
             precision: PointsToPrecision::FlowInsensitive,
             stable_key,
         });
@@ -518,7 +518,7 @@ impl GraphBuilder {
     // -- TS direct binding constraints -------------------------------------
 
     fn project_ts_direct_bindings(&mut self, db: &AnalysisDb, bindings: &[TsDirectBindingFact]) {
-        // Phase 45 semantic-graph-only projection: TS direct binding rows emit
+        // Semantic-graph-only projection: TS direct binding rows emit
         // CopyEdge/CallConstraint rows here and do not create CallTargetFact rows.
         // The calls/refined-calls contract remains owned by analysis::calls until a
         // later plan deliberately promotes direct TS bindings into that fact family.
@@ -824,7 +824,7 @@ impl GraphBuilder {
     fn project_value_constraints(&mut self, db: &AnalysisDb) {
         // `PlaceId` -> the place's own content-stable key. Keying a Place node by the
         // *place* identity (not the owning value fact) means the SAME place referenced
-        // by different value facts maps to ONE node, so the Phase 47 solver can unify
+        // by different value facts maps to ONE node, so the solver can unify
         // copy chains through a shared place. A place absent from the MIR place table
         // has no honest stable identity at this layer, so its copy is skipped rather
         // than fabricated (D-07), mirroring the Alloc/Field deferrals.
@@ -2487,10 +2487,10 @@ function run() {
         }
 
         #[test]
-        fn source_documents_semantic_graph_only_projection_for_phase_45() {
+        fn source_documents_semantic_graph_only_projection() {
             let source = include_str!("build.rs");
 
-            assert!(source.contains("Phase 45 semantic-graph-only projection"));
+            assert!(source.contains("semantic-graph-only projection"));
             assert!(source.contains("do not create CallTargetFact rows"));
         }
 

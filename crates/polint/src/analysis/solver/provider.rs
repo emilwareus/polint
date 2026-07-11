@@ -71,7 +71,7 @@ pub(crate) fn derive_solver_with_cache_stats(
 ) -> SolverProviderRunOutput {
     debug_assert_eq!(manifest.id, SOLVER_PROVIDER_ID);
 
-    // Phase 1-2: drive the unified solver ENGINE over the closed input snapshot (D-02,
+    // Step: drive the unified solver ENGINE over the closed input snapshot (D-02,
     // the reserved seam). The points-to CopyEdge closure (`derive_edges`, byte-
     // identical) AND the Go RTA policy's resolved call edges converge into one
     // SolverOutput under one SolverBudget. The build is read-only; the engine
@@ -90,7 +90,7 @@ pub(crate) fn derive_solver_with_cache_stats(
     let engine = SolverEngine::new(solver_policies_for_db(db, &budget), budget);
     let output = engine.run_to_solver_output(&constraints);
 
-    // Phase 3: digest over the stored stable KEYS + upstream digests + the budget.
+    // Step: digest over the stored stable KEYS + upstream digests + the budget.
     let output_digest = solver_output_digest(
         manifest,
         input_snapshot,
@@ -101,7 +101,7 @@ pub(crate) fn derive_solver_with_cache_stats(
         &output,
     );
 
-    // Phase 4: validate the derived edges + the D-12 cycle-detection check. These are
+    // Step: validate the derived edges + the D-12 cycle-detection check. These are
     // surfaced as diagnostics; the store performs the hard referential rejection.
     let mut diagnostics = Vec::new();
     let node_ids: BTreeSet<SemanticNodeId> =
@@ -118,7 +118,7 @@ pub(crate) fn derive_solver_with_cache_stats(
     let mut cache_stats = CacheStats::default();
     cache_stats.record_recompute();
 
-    // Phase 5-6: store (assigns dense IDs + referentially validates inside
+    // Step: store (assigns dense IDs + referentially validates inside
     // from_output). On store error the db keeps its prior state and the facts the
     // digest certifies were not persisted, so return output_digest: None.
     match db.replace_solver_facts(output) {
@@ -233,8 +233,8 @@ fn solver_output_digest(
 }
 
 /// Honest budget-exhaustion signal (D-06): emitted when the solver truncated a
-/// source's transitive closure under the per-source step budget. Downstream (Phase 52
-/// unknown taxonomy) categorizes it; surviving derived edges keep their own honest
+/// source's transitive closure under the per-source step budget. The downstream
+/// unknown taxonomy categorizes it; surviving derived edges keep their own honest
 /// status and precision.
 fn budget_exceeded_diagnostic(budget_reasons: &BTreeSet<String>) -> Diagnostic {
     let mut diagnostic = Diagnostic::warning(

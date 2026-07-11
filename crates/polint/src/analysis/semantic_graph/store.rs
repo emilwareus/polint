@@ -13,7 +13,7 @@ pub(crate) const SEMANTIC_GRAPH_PROVIDER_ID: &str = "polint.semantic_graph";
 /// constraint sets.
 ///
 /// The constraint vocabulary (GRAPH-02) arrives in Plan 02 via the `constraints`
-/// field: the closed `ConstraintKind`/`ConstraintFact` rows that the Phase 47
+/// field: the closed `ConstraintKind`/`ConstraintFact` rows that the
 /// unified solver folds over.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct SemanticGraphOutput {
@@ -125,7 +125,7 @@ impl SemanticGraphOutput {
 
 /// Typed semantic-graph store with the deterministic read indexes consumers use
 /// (D-14): nodes-by-kind, edges-by-kind, outgoing (forward) adjacency, and incoming
-/// (backward) adjacency. The incoming index is the one the Phase 47 unified solver's
+/// (backward) adjacency. The incoming index is the one the unified solver's
 /// reachability/RTA fixpoint traverses; it is built alongside the outgoing index in
 /// the same post-normalization pass, never on demand.
 #[derive(Debug, Clone, Default)]

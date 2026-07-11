@@ -1,4 +1,4 @@
-//! V1.4 PUBLIC-SURFACE-LEAK PROBE — see Phase 42 D-17, D-18, D-19 and Phase 55 D-17.
+//! Compile-time probe that locks the supported public surface.
 //!
 //! This crate is the proxy for an external rule crate. It reaches the polint
 //! supported public surface through the SAME entry point real rule authors use:
@@ -23,7 +23,7 @@
 //! polint prelude glob OR through `::core` / `::std` absolute paths. This makes
 //! identifier-reachability changes deterministic: if a future change drops an
 //! allow-listed name from the prelude, this probe fails to compile and the gate
-//! trips. Phase 55 intentionally adds preview policy-query names here; raw CFG,
+//! trips. Preview policy-query names are intentional; raw CFG,
 //! call graph, solver, provider, parser, `AnalysisDb`, and graph internals remain
 //! unnameable from the supported rule-authoring import path.
 

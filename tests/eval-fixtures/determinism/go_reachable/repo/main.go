@@ -16,7 +16,7 @@ func orphanHelper() {
 
 // orphan is never called from main (or any other root). The call site
 // orphan -> orphanHelper is therefore OUTSIDE the reachable graph
-// (in_reachable_graph = false) — the unreachable mark the Phase 43 determinism
+// (in_reachable_graph = false) — the unreachable mark the determinism
 // gate asserts each fixture produces.
 func orphan() {
 	orphanHelper()

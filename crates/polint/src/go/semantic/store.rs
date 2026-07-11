@@ -82,7 +82,7 @@ impl GoSemanticFactsOutput {
         // SAME set member, not a conflict — dedup by stable key (keep first) after the
         // stable-key sort, mirroring the solver fixpoint's stable-key dedup. This keeps
         // the whole-program set honest and `validate_unique` green without dropping any
-        // distinct fact (Phase 48 verification surfaced this on same-named interface
+        // distinct fact (verification surfaced this on same-named interface
         // methods + shared callees). Packages/functions/method-sets are keyed by unique
         // declaration identity and are intentionally NOT deduped (a real duplicate there
         // is a genuine conflict the validator must still reject).
@@ -797,8 +797,8 @@ mod tests {
         // (e.g. `f := handler` in two places, or `handler` stored into two slices) yields
         // two address-taken rows for the same `ssa.Function.String()`. These are SET facts
         // keyed by official identity, so an identity-duplicate row is the SAME member and
-        // must dedup (keep first) — NOT be rejected by `validate_unique`. Phase 48
-        // verification surfaced this. (We deliberately use a genuine value-use function, not
+        // must dedup (keep first) — NOT be rejected by `validate_unique`. Verification
+        // surfaced this. (We deliberately use a genuine value-use function, not
         // a statically-called one like `fmt.Println`: FINDING 2 establishes that a
         // statically-called function is NOT address-taken at all.)
         let output = GoSemanticFactsOutput {

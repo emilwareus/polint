@@ -2,8 +2,8 @@
 //!
 //! [`SolverOutput`] carries the derived-edge rows the unified solver emits;
 //! [`SolverOutput::normalized`] sorts them by `(stable_key, id)` THEN assigns dense
-//! [`DerivedEdgeId`]s by index — dense IDs only after the stable-key sort (the
-//! Phase 43/44 discipline), which is what makes the output byte-stable under input
+//! [`DerivedEdgeId`]s by index — dense IDs only after the stable-key sort, which
+//! makes the output byte-stable under input
 //! shuffle. [`SolverStore::from_output`] builds the deterministic by-constraint-kind
 //! index and referentially validates the rows (duplicate stable keys, precision
 //! ceiling).

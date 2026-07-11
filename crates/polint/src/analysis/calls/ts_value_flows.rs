@@ -11426,7 +11426,7 @@ x.cb();
 
     #[test]
     fn real_ts_pipeline_resolves_destructuring_forms() {
-        // Phase B: object destructuring with nested patterns, getter-valued
+        // stage B: object destructuring with nested patterns, getter-valued
         // sources, defaults used when the property is absent, set destructuring,
         // and destructuring from a function that returns an object.
         let source = r#"var src = {
@@ -11487,7 +11487,7 @@ m2.m3();
 
     #[test]
     fn real_ts_pipeline_resolves_this_flow() {
-        // Phase C this-flow: a method returning `this.member`, function-object
+        // stage C this-flow: a method returning `this.member`, function-object
         // `this` (`f.h = function(){ this.g() }`), and a returned arrow that
         // captures `this` lexically.
         let source = r#"var obj = {

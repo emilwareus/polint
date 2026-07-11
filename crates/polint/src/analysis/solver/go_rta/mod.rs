@@ -1,10 +1,10 @@
 //! Private Go Rapid Type Analysis (RTA) driver (GO-05, D-01, D-04, D-06..D-13).
 //!
 //! This module is the second real [`super::policy::SolverPolicy`] implementation
-//! (after `PointsToPolicy`), replacing the Phase 47 `GoRtaPolicy` honest stub. It
+//! (after `PointsToPolicy`), replacing the `GoRtaPolicy` honest stub. It
 //! runs a hand-rolled RTA fixpoint over a closed snapshot of the Go-frontend facts
 //! (Plan 1's address-taken / instantiated-type / dynamic-dispatch facts plus the
-//! Phase 46 method-sets, callsites, and reachability roots) and emits resolved Go
+//! current method-set facts, callsites, and reachability roots) and emits resolved Go
 //! call edges as [`super::facts::DerivedEdgeFact`]s in the unified vocabulary
 //! (D-04) — never a parallel Go edge family. Every type here is `pub(crate)`
 //! (D-01/D-17); nothing reaches the public SDK surface.
@@ -35,7 +35,7 @@
 //! ## RTA model (D-06)
 //!
 //! RTA = CHA filtered by the instantiated runtime-type set, seeded from roots:
-//! - the reachable function set is seeded from the Phase 43 reachability roots and
+//! - the reachable function set is seeded from the reachability roots and
 //!   expanded as dispatch is resolved (D-07);
 //! - an interface invoke at a reachable callsite resolves to the callees whose
 //!   receiver type is in the instantiated-type set AND whose method-set contains the

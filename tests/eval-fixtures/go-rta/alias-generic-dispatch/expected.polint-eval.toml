@@ -2,7 +2,7 @@ schema_version = "polint-eval-fixture-1"
 case_id = "go-rta-alias-generic-dispatch"
 area = "go-rta"
 
-# Phase 48 review #4 — same-package alias-to-generic-instantiation method_set collision.
+# Same-package alias-to-generic-instantiation method_set collision fixture.
 #
 # repo/main.go declares a Speaker interface satisfied by a method on a GENERIC type Box[T],
 # plus `type IntBox = Box[int]` (a SAME-PACKAGE alias to the generic INSTANTIATION) AND a
@@ -20,7 +20,7 @@ area = "go-rta"
 # The executable proof lives in `eval::go_rta` (it asserts the Go semantic functions are
 # NON-empty and >= 1 RTA-resolved derived edge targets (Box[int]).Speak); this manifest
 # documents the contract. No `[[expected]]` row is captured because the solver-derived edges
-# are crate-private and not observable manifest facts (Phase 52 wires them into the
+# are crate-private and not observable manifest facts (the refined-call projection exposes them in the
 # observable refined-call projection).
 
 [repo]

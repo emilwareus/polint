@@ -12,8 +12,8 @@ pub(crate) const SEMANTIC_GRAPH_SCHEMA_LABEL: &str = "semantic-graph-facts-1";
 ///
 /// # SC3 dependency-index inputs — PRESENT-NOW vs DEFERRED-AND-WHY (D-17)
 ///
-/// ROADMAP Phase 44 Success Criterion 3 enumerates the dependency-index inputs the
-/// unified semantic graph will eventually digest. Phase 44 has producers for only a
+/// The dependency-index contract enumerates the inputs that the unified semantic
+/// graph will eventually digest. Producers exist for only a
 /// subset; the rest have no producer yet and are documented here as RESERVED rather
 /// than silently omitted, so the partial coverage reads as intentional. Each
 /// deferred input enters this digest (and the manifest `inputs` slice) only when its
@@ -30,20 +30,20 @@ pub(crate) const SEMANTIC_GRAPH_SCHEMA_LABEL: &str = "semantic-graph-facts-1";
 /// - MIR places (`polint.semantic_mir`)
 ///
 /// ALSO-FOLDED, NOT-YET-READ (digests folded so the keystone over-invalidates rather
-/// than risks a stale graph as later phases begin consuming them, but the projection
+/// than risks a stale graph as later stages begin consuming them, but the projection
 /// does NOT read these families yet, so they are NOT in the manifest `inputs` slice):
 /// `polint.identity`, `polint.abstract_domains`, `polint.entrypoints`,
 /// `polint.reachability`, `polint.module_topology`.
 ///
-/// DEFERRED-AND-WHY (no producer exists yet; emitted/digested as ZERO until the named
-/// phase lands a producer — NOT a silent omission):
-/// - CFG — reserved for Phase 47's budgeted solver consumption.
-/// - summaries — reserved for Phase 47/50 (interprocedural summary folding).
-/// - accepted adaptation models — Phase 51 adds the private model producer and
+/// DEFERRED-AND-WHY (no producer exists yet, so these inputs are not silently
+/// treated as present):
+/// - CFG — reserved for the budgeted solver consumption.
+/// - summaries — reserved for interprocedural summary folding.
+/// - accepted adaptation models — require the private model producer and
 ///   digest recipe; semantic-graph lowering starts once accepted facts feed
 ///   `ConstraintKind::ModelEdge`.
-/// - solver budgets — Phase 51 starts adaptation-model budget threading; Phase 53
-///   owns the milestone-wide cache/budget sweep.
+/// - solver budgets — require adaptation-model budget threading and a complete
+///   cache/budget sweep.
 ///
 /// This is a comment/doc addition only: ZERO deferred inputs are digested here, and
 /// the runtime behavior is unchanged.

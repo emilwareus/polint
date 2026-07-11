@@ -19,10 +19,7 @@ pub(super) struct WriterConnection {
 
 #[cfg_attr(
     not(test),
-    expect(
-        dead_code,
-        reason = "Read-only queries are established before Phase 65 introduces persisted facts."
-    )
+    expect(dead_code, reason = "kept for private internal consumers")
 )]
 pub(super) struct ReadOnlyConnection {
     connection: Connection,
@@ -91,10 +88,7 @@ pub(super) fn validate_journal_mode(journal_mode: &str) -> Result<(), Connection
 
 #[cfg_attr(
     not(test),
-    expect(
-        dead_code,
-        reason = "Read-only queries are established before Phase 65 introduces persisted facts."
-    )
+    expect(dead_code, reason = "kept for private internal consumers")
 )]
 pub(super) fn open_read_only(path: &Path) -> Result<ReadOnlyConnection, ConnectionError> {
     let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)

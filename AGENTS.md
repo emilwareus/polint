@@ -93,6 +93,16 @@ Before writing, reviewing, or refactoring Rust code, consult and apply
 rule authoring, SDK contracts, generated agent skills, examples, or rule-pack
 ergonomics, also consult `.claude/skills/polint/SKILL.md`.
 
+## Shipped-Code Comment Policy
+
+Keep delivery history in `.planning/`, commit messages, and pull requests. Do not
+put GSD phase numbers, milestone numbers, plan/task identifiers, roadmap chronology,
+or similar project-management references in source comments, doc comments, tests,
+fixtures, lint-suppression reasons, build files, CI names/comments, generated text,
+or product-facing output. Comments must explain enduring behavior, constraints, and
+invariants in domain terms. Describe algorithm sequencing as steps or stages, never
+as delivery phases.
+
 ## Git Branch Policy
 
 Do not push directly to `main` unless the user explicitly instructs you to push

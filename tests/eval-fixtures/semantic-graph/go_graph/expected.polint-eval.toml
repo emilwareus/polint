@@ -2,7 +2,7 @@ schema_version = "polint-eval-fixture-1"
 case_id = "semantic-graph-go-graph"
 area = "facts"
 
-# Phase 44 Plan 03 semantic-graph Go snapshot fixture (GRAPH-02, D-12).
+# semantic-graph Go snapshot fixture (GRAPH-02, D-12).
 #
 # `main` calls `greet` (a direct call site -> Call edge + CallConstraint) and
 # assigns the call result into a local (a value copy -> CopyEdge constraint). The

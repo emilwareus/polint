@@ -86,7 +86,7 @@ pub(crate) fn record_sort_key(record: &IdentityRecord) -> SortKey {
 /// remaining tuple `(originating_call_site_id, originating_call_target_id,
 /// signature_digest)` so the comparison is a literal total order — making both
 /// canonical selection on collision and the final output sort byte-stable
-/// regardless of input order (the contract Phase 43's determinism gate inherits).
+/// regardless of input order (the contract the determinism gate inherits).
 ///
 /// `CallSiteId` / `CallTargetId` are `Ord`; `Option<T: Ord>` is `Ord`;
 /// `SignatureDigest` is `Ord` — so the whole tuple is `Ord`.
@@ -300,7 +300,7 @@ mod tests {
     fn identity_dedup_fixture_determinism_is_byte_stable_across_orders() {
         // Byte-stability across run order, file order, and provider order: the
         // serialized dedup output must be identical regardless of input order
-        // (D-11). This is the determinism contract Phase 43's gate inherits.
+        // (D-11). This is the determinism contract the gate inherits.
         let records = vec![
             record(IdentityKind::Function, 1, 10, None, "src/main.go", "main"),
             record(IdentityKind::Function, 0, 20, None, "src/util.go", "helper"),
@@ -327,7 +327,7 @@ mod tests {
         // retained record would be whichever arrived first — its
         // originating_call_site_id would flip between input orders. The total-order
         // tie-break makes canonical selection (and the final sort) order-independent,
-        // which is what Phase 43's byte-stability gate depends on.
+        // which is what the byte-stability gate depends on.
         let a = record(IdentityKind::Callsite, 0, 10, Some(1), "pkg", "pkg.Func");
         let b = record(IdentityKind::Callsite, 0, 10, Some(2), "pkg", "pkg.Func");
         let forward = serde_json::to_string(&dedup_identity_records(vec![a.clone(), b.clone()]))

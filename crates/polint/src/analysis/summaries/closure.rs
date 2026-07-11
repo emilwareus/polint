@@ -553,7 +553,7 @@ fn apply_callee_effects(
             }
             SummaryDomainKind::DataFlowTito => {
                 // TITO: unchanged for now, callee TITO composition requires
-                // argument-to-parameter mapping from Phase 36/38
+                // argument-to-parameter mapping from the summary builder
                 updated_fact.precision = SummaryPrecision::SetupAware;
             }
         }

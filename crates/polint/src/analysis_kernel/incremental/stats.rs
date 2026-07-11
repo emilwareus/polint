@@ -46,10 +46,7 @@ impl CacheStats {
 
     #[cfg_attr(
         not(test),
-        expect(
-            dead_code,
-            reason = "Cache quarantine is a Phase 34+ counter; Phase 23 records it as an explicit zero unless tests exercise it."
-        )
+        expect(dead_code, reason = "kept for private internal consumers")
     )]
     pub(crate) fn record_quarantine(&mut self) {
         self.quarantines += 1;

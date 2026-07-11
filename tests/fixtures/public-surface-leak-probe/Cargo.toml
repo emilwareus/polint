@@ -1,8 +1,8 @@
-# V1.3 PUBLIC-SURFACE-LEAK PROBE — see Phase 42 D-17, D-18, D-19.
+# This probe is compiled separately to lock the supported public surface.
 #
 # Do NOT add dependencies. Do NOT add features. This crate exists ONLY to
 # compile against `polint::sdk::prelude::*` and prove the supported public
-# surface stays frozen for the v1.3 milestone. It is excluded from the
+# surface stays frozen for the v1.3 release. It is excluded from the
 # workspace (`[workspace] exclude` in the root Cargo.toml) so it never
 # participates in normal `cargo build --workspace` / lint / test runs; it is
 # compiled in isolation only by the leak-gate test at

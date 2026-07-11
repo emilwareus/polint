@@ -379,7 +379,7 @@ impl EvidenceStore {
 
     #[allow(
         dead_code,
-        reason = "Private evidence query helpers are consumed by subsequent Phase 39 path/rendering plans."
+        reason = "Private evidence query helpers are consumed by subsequent path/rendering plans."
     )]
     pub(crate) fn node(&self, node: EvidenceNodeId) -> Option<&EvidenceNodeFact> {
         self.output.nodes.get(node.0 as usize)
@@ -387,7 +387,7 @@ impl EvidenceStore {
 
     #[allow(
         dead_code,
-        reason = "Private evidence query helpers are consumed by subsequent Phase 39 path/rendering plans."
+        reason = "Private evidence query helpers are consumed by subsequent path/rendering plans."
     )]
     pub(crate) fn edge(&self, edge: EvidenceEdgeId) -> Option<&EvidenceEdgeFact> {
         self.output.edges.get(edge.0 as usize)
@@ -403,7 +403,7 @@ impl EvidenceStore {
 
     #[allow(
         dead_code,
-        reason = "Private evidence query helpers are consumed by subsequent Phase 39 path/rendering plans."
+        reason = "Private evidence query helpers are consumed by subsequent path/rendering plans."
     )]
     pub(crate) fn by_edge_kind(&self, kind: EvidenceEdgeKind) -> Vec<&EvidenceEdgeFact> {
         self.edge_refs(self.by_edge_kind.get(&kind))
@@ -735,7 +735,7 @@ where
 
 #[allow(
     dead_code,
-    reason = "Evidence construction helpers are consumed by subsequent Phase 39 slice/path plans."
+    reason = "Evidence construction helpers are consumed by subsequent slice/path plans."
 )]
 pub(crate) fn next_evidence_node_id(nodes: &[EvidenceNodeFact]) -> EvidenceNodeId {
     EvidenceNodeId(nodes.len() as u64)
@@ -743,7 +743,7 @@ pub(crate) fn next_evidence_node_id(nodes: &[EvidenceNodeFact]) -> EvidenceNodeI
 
 #[allow(
     dead_code,
-    reason = "Evidence construction helpers are consumed by subsequent Phase 39 slice/path plans."
+    reason = "Evidence construction helpers are consumed by subsequent slice/path plans."
 )]
 pub(crate) fn next_evidence_edge_id(edges: &[EvidenceEdgeFact]) -> EvidenceEdgeId {
     EvidenceEdgeId(edges.len() as u64)
@@ -751,7 +751,7 @@ pub(crate) fn next_evidence_edge_id(edges: &[EvidenceEdgeFact]) -> EvidenceEdgeI
 
 #[allow(
     dead_code,
-    reason = "Evidence construction helpers are consumed by subsequent Phase 39 diagnostic bundle plans."
+    reason = "Evidence construction helpers are consumed by subsequent diagnostic bundle plans."
 )]
 pub(crate) fn next_evidence_bundle_id(bundles: &[EvidenceBundleFact]) -> EvidenceBundleId {
     EvidenceBundleId(bundles.len() as u64)
@@ -759,7 +759,7 @@ pub(crate) fn next_evidence_bundle_id(bundles: &[EvidenceBundleFact]) -> Evidenc
 
 #[allow(
     dead_code,
-    reason = "Evidence construction helpers are consumed by subsequent Phase 39 path plans."
+    reason = "Evidence construction helpers are consumed by subsequent path plans."
 )]
 pub(crate) fn next_evidence_path_id(paths: &[EvidencePathFact]) -> EvidencePathId {
     EvidencePathId(paths.len() as u64)
@@ -767,7 +767,7 @@ pub(crate) fn next_evidence_path_id(paths: &[EvidencePathFact]) -> EvidencePathI
 
 #[allow(
     dead_code,
-    reason = "Evidence construction helpers are consumed by subsequent Phase 39 slice plans."
+    reason = "Evidence construction helpers are consumed by subsequent slice plans."
 )]
 pub(crate) fn next_evidence_slice_id(slices: &[EvidenceSliceFact]) -> EvidenceSliceId {
     EvidenceSliceId(slices.len() as u64)
@@ -775,7 +775,7 @@ pub(crate) fn next_evidence_slice_id(slices: &[EvidenceSliceFact]) -> EvidenceSl
 
 #[allow(
     dead_code,
-    reason = "Evidence construction helpers are consumed by subsequent Phase 39 bounded rendering plans."
+    reason = "Evidence construction helpers are consumed by subsequent bounded rendering plans."
 )]
 pub(crate) fn next_evidence_omitted_region_id(
     omitted_regions: &[EvidenceOmittedRegionFact],

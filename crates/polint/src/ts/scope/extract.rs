@@ -1,7 +1,4 @@
-#![allow(
-    dead_code,
-    reason = "Phase 45 wires private TS scope extraction into direct binding across sequential plans"
-)]
+#![allow(dead_code, reason = "kept for private internal consumers")]
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -824,12 +821,12 @@ fn boundary_reason(
         {
             Some((
                 identifier.name.to_string(),
-                "parameter callback requires function-token phase",
+                "parameter callback requires function-token analysis",
             ))
         }
         Expression::ComputedMemberExpression(_) => Some((
             "<computed-member>".to_string(),
-            "computed property requires property-flow phase",
+            "computed property requires property-flow analysis",
         )),
         Expression::StaticMemberExpression(_)
             if expression_text(callee)
@@ -838,7 +835,7 @@ fn boundary_reason(
         {
             Some((
                 expression_text(callee).unwrap_or_else(|| "<prototype>".to_string()),
-                "prototype dispatch requires later prototype phase",
+                "prototype dispatch requires prototype analysis",
             ))
         }
         Expression::StaticMemberExpression(member)

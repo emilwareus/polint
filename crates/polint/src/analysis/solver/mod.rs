@@ -1,14 +1,14 @@
 //! Private unified solver core (GRAPH-03; provider `polint.solver` lands in Plan 03).
 //!
 //! This module is the structural heart of v1.3's graph engine: a single shared,
-//! deterministic constraint solver that consumes the Phase 44 frontend constraint
+//! deterministic constraint solver that consumes the frontend constraint
 //! vocabulary (`crate::analysis::semantic_graph::constraints::ConstraintKind`) and
 //! derives edges with explicit budgets, per-language [`policy::SolverPolicy`]
 //! scaffolding, and (in Plan 02) full provenance. v1.2's `points_to::solver`
 //! fixpoint is folded in **by composition** as the first sub-domain policy
 //! (D-03) — its observable behavior, snapshots, and determinism fixtures stay
 //! byte-identical. Every type here is `pub(crate)` (D-01/D-16); nothing is
-//! promoted to the public SDK (the Phase 42 public-surface-leak gate must stay
+//! promoted to the public SDK (the public-surface-leak gate must stay
 //! green).
 //!
 //! ## D-04 naming-collision guard (MANDATORY)

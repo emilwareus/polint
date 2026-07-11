@@ -121,13 +121,13 @@ pub(crate) struct GraphAccuracyRow {
 
 /// The committed pre-store persisted-graph recall/precision baseline (BENCH-04).
 ///
-/// The durable semantic store lands in Phase 64, so this is explicitly the
-/// pre-store reference: it records the recall/precision the Jelly micro suite and
+/// This is explicitly the pre-store reference: it records the recall/precision
+/// the Jelly micro suite and
 /// the Go x/tools RTA suite achieve today, sourced from the existing external
 /// adapter runs (scoring is NOT reimplemented here — the rows read
 /// `metrics.recall`/`precision`/`graph_edges_*` off the produced
 /// [`EvaluationRun`]s). It keeps `polint graph` answers honest (the
-/// accuracy-visibility gate) and gives Phase 64 a fixed accuracy reference.
+/// accuracy-visibility gate) and provides a fixed accuracy reference.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) struct GraphAccuracyBaseline {
@@ -139,7 +139,7 @@ pub(crate) struct GraphAccuracyBaseline {
 
 impl GraphAccuracyBaseline {
     /// The explicit pre-store label recorded on every committed baseline.
-    pub(crate) const PRE_STORE_REFERENCE: &'static str = "pre-store graph, Phase 63 reference; recall/precision are sourced from the Jelly + Go x/tools callgraph adapter runs and regenerated with POLINT_WRITE_GRAPH_BENCH when the gated benchmark clones are present";
+    pub(crate) const PRE_STORE_REFERENCE: &'static str = "pre-store graph reference; recall/precision are sourced from the Jelly + Go x/tools callgraph adapter runs and regenerated with POLINT_WRITE_GRAPH_BENCH when the gated benchmark clones are present";
 
     /// Build the baseline from the external adapter [`EvaluationRun`]s, reading
     /// recall/precision/edge counts off each run (no scoring reimplemented).

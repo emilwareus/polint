@@ -2,7 +2,7 @@ schema_version = "polint-eval-fixture-1"
 case_id = "determinism-ts-reachable"
 area = "facts"
 
-# Phase 43 Plan 03 determinism-gate TS/JS fixture (REACH-03, D-20/D-21/D-24).
+# determinism-gate TS/JS fixture (REACH-03, D-20/D-21/D-24).
 #
 # `entry` is exported, so it is a reachability root (RootKind::Exported). entry ->
 # usedHelper is a root-seeded call site (in_reachable_graph = true); orphanFn ->

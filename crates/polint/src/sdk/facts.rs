@@ -872,7 +872,7 @@ pub struct Calls<'a> {
 impl<'a> Calls<'a> {
     /// Finds forbidden reachable calls described by `query`.
     ///
-    /// Phase 56 answers bounded reachability over private refined-call and
+    /// Answers bounded reachability over private refined-call and
     /// reachability facts without exposing raw call-graph internals.
     pub fn forbidden_reachable(self, query: ReachQuery) -> Vec<PolicyViolation> {
         crate::policy_queries::forbidden_reachable(self.db, query)
@@ -888,7 +888,7 @@ pub struct ControlFlow<'a> {
 impl<'a> ControlFlow<'a> {
     /// Finds events missing a required guard.
     ///
-    /// Phase 57 supports same-function call-event guard checks over private
+    /// Supports same-function call-event guard checks over private
     /// refined call facts and CFG-backed operation order, with MIR/source
     /// ordering as fallback when CFG facts are absent. Other event families
     /// remain preview vocabulary until backed facts land.
@@ -898,7 +898,7 @@ impl<'a> ControlFlow<'a> {
 
     /// Finds lifecycle starts missing required cleanup.
     ///
-    /// Phase 57 supports same-function call-event lifecycle checks over private
+    /// Supports same-function call-event lifecycle checks over private
     /// refined call facts and CFG-backed operation order, with MIR/source
     /// ordering as fallback when CFG facts are absent. Exact path, error-exit,
     /// and interprocedural resource proof remains deferred.
@@ -916,7 +916,7 @@ pub struct DataFlow<'a> {
 impl<'a> DataFlow<'a> {
     /// Finds forbidden source-to-sink flows described by `query`.
     ///
-    /// Phase 58 answers bounded source-to-sink queries over private data-flow
+    /// Answers bounded source-to-sink queries over private data-flow
     /// facts without exposing raw graph nodes, edges, or solver internals.
     pub fn forbidden(self, query: FlowQuery) -> Vec<PolicyViolation> {
         crate::policy_queries::forbidden_flows(self.db, query)

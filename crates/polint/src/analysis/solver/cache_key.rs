@@ -5,9 +5,9 @@
 //! [`solver_provider_parameter_digest`], which lists the frozen solver
 //! algorithm-version strings AND — per D-15 — the [`SolverBudget`] knobs, so a
 //! budget-default change deterministically invalidates the solver cache (budgets
-//! participate in the digest, forward-compatible with CACHE-01/02, Phase 53).
+//! participate in the digest and remain forward-compatible with CACHE-01/02).
 //!
-//! Two locked tests pin the recipe (the established Phase 43/44 trip-wire pattern):
+//! Two locked tests pin the recipe (the established trip-wire pattern):
 //! a "parts list" assertion (adding/bumping an algorithm version requires extending
 //! the list) and an "algorithm-version bump invalidates" assertion. A third proves
 //! that a SolverBudget change changes the parameter digest (D-15).
@@ -29,7 +29,7 @@ pub(crate) const SOLVER_SCHEMA_LABEL: &str = "solver-run-output-2";
 /// [`budget_parts`]), so a budget-default change — or a config-driven budget
 /// override — changes the parameter digest and invalidates downstream. This is the
 /// "solver budgets participate in the cache key" contract (forward-compatible with
-/// CACHE-01/02, Phase 53).
+/// CACHE-01/02).
 pub(crate) fn solver_provider_parameter_digest(budget: &SolverBudget) -> Digest {
     let budget_parts = solver_budget_digest_parts(budget);
     let mut parts: Vec<&str> = vec![
@@ -39,19 +39,19 @@ pub(crate) fn solver_provider_parameter_digest(budget: &SolverBudget) -> Digest 
         "transitive_copy_closure_v1",
         "provenance_projection_v1",
         "precision_ceiling_v1",
-        // Go RTA fixpoint algorithm version (Phase 48, D-12): a change to the RTA
+        // Go RTA fixpoint algorithm version (D-12): a change to the RTA
         // reachability ⊗ instantiated-types ⊗ dispatch derivation bumps this and
         // deterministically invalidates the solver cache.
         "go_rta_fixpoint_v1",
-        // TS function-token fixpoint algorithm version (Phase 49, JS-04): a change
+        // TS function-token fixpoint algorithm version (JS-04): a change
         // to token propagation, callable-token admission, or token-to-call derivation
         // bumps this and deterministically invalidates the solver cache.
         "ts_tokens_fixpoint_v1",
-        // TS object/property/prototype/receiver model algorithm version (Phase 50,
+        // TS object/property/prototype/receiver model algorithm version (
         // JS-05): the control plane is present before the real policy lands, so the
         // future driver cannot reuse a pre-object-model solver cache.
         "ts_object_model_fixpoint_v3",
-        // Repo-local adaptation model facts (Phase 51, ADAPT-01): accepted facts and
+        // Repo-local adaptation model facts (ADAPT-01): accepted facts and
         // budget knobs affect future model-derived solver edges.
         "adaptation_model_v1",
     ];

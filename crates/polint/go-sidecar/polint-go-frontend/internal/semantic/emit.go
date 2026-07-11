@@ -448,7 +448,7 @@ func (e *emitter) emitCallsites(pkg *ssa.Package, fn *ssa.Function) {
 // resolve an UnresolvedDynamic callsite by method-set matching (D-05). For an interface
 // invoke it carries the interface type + invoked method name; for a func-value call it
 // carries the called value's signature. The row joins back to its sibling callsite row
-// via callsite_stable_key. Honest representation (Phase 46 D-15): if no discriminant can
+// via callsite_stable_key. Honest representation (D-15): if no discriminant can
 // be derived, no dispatch-detail row is emitted rather than a fabricated identity.
 func (e *emitter) emitDynamicDispatch(pkg *ssa.Package, fn *ssa.Function, common *ssa.CallCommon, callsiteKey string) {
 	if common == nil {
@@ -494,7 +494,7 @@ func (e *emitter) emitDynamicDispatch(pkg *ssa.Package, fn *ssa.Function, common
 // does not by itself make its type dynamically dispatchable under RTA — only an
 // interface conversion does — so adding them would over-approximate the rapid-type set and
 // flood precision without lifting recall. Types lacking a stable .String() identity emit an
-// "unsupported" row rather than a fabricated identity (Phase 46 D-15). De-duplicated within
+// "unsupported" row rather than a fabricated identity (D-15). De-duplicated within
 // a function by the concrete type identity.
 func (e *emitter) emitInstantiatedTypes(pkg *ssa.Package, fn *ssa.Function) {
 	if fn == nil {
@@ -542,7 +542,7 @@ func (e *emitter) emitInstantiatedTypes(pkg *ssa.Package, fn *ssa.Function) {
 // GENUINE value operand of an instruction (function references passed as args, stored to
 // globals, returned, or assigned). De-duplicated within a function by the function identity;
 // builtins/synthetic functions without stable identity are skipped rather than fabricated
-// (Phase 46 D-15).
+// (D-15).
 //
 // FINDING 2: a STATICALLY-called function is NOT address-taken. For a *ssa.Call / Go / Defer
 // the callee is the call's `common.Value` operand, and when that is the static callee it
@@ -709,8 +709,8 @@ func (e *emitter) emitMethodSets(pkg *ssa.Package) {
 			// "Speak"), not the full signature string. RTA interface-invoke
 			// resolution intersects the INVOKED method name (the dynamic-dispatch
 			// discriminant) with this set, so a signature string would never match
-			// the invoked name and interface dispatch would resolve nothing (Phase 48
-			// verification surfaced this). `Obj().Name()` is the method identifier.
+			// the invoked name and interface dispatch would resolve nothing. Verification
+			// surfaced this. `Obj().Name()` is the method identifier.
 			methods = append(methods, methodSet.At(i).Obj().Name())
 		}
 		sort.Strings(methods)
@@ -737,7 +737,7 @@ func (e *emitter) emitMethodSets(pkg *ssa.Package) {
 // and (b) the concrete method VALUES as `method` rows (via `emitFunction`) so the resolved
 // edge has a target node. Both use the POINTER method set (mirroring `emitMethodSets`), so
 // each method appears exactly once (no value/pointer-wrapper duplication). Methods without a
-// stable source identity are skipped rather than fabricated (Phase 46 D-15). De-duplicated
+// stable source identity are skipped rather than fabricated (D-15). De-duplicated
 // by the instantiated type identity so a type instantiated in two functions is harvested
 // once.
 func (e *emitter) emitInstantiatedMethodSets(pkg *ssa.Package) {

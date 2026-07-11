@@ -8,10 +8,10 @@
 //!    projection genuinely populated a graph, not an empty observation), and
 //! 2. the observed debug JSON is byte-stable and total-ordered by stable key across
 //!    repeated runs AND across N seeded provider-order / row-order permutations — the
-//!    same cross-platform / cross-shuffle determinism contract the Phase 43
+//!    same cross-platform / cross-shuffle determinism contract the
 //!    determinism gate enforces.
 //!
-//! The semantic-graph provider auto-enrolls into the Phase 43 determinism gate via
+//! The semantic-graph provider auto-enrolls into the determinism gate via
 //! `provider_manifests()` (D-22), so no determinism-gate harness edit is required;
 //! this snapshot gate is the GRAPH-02-specific byte-stable constraint-emission proof.
 

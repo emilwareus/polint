@@ -1,8 +1,8 @@
 //! JS/TS object-model acceptance gates (JS-05).
 //!
 //! These tests intentionally inspect crate-private object-model and solver rows.
-//! Phase 52 later projects solver output into observable refined-call facts; Phase
-//! 50 proves the private object/property/prototype/receiver driver itself.
+//! These tests prove the private object/property/prototype/receiver driver before
+//! refined-call projection.
 
 #![cfg(test)]
 

@@ -86,9 +86,9 @@ impl From<ComputedMetrics> for MetricSummary {
             jelly_oracle_coverage: JellyOracleCoverageSection::default(),
             categorized_failures: CategorizedFailureSection::default(),
             // RESERVED (D-23): defaulted to step_count = 0 / empty reasons in
-            // Phase 43 so the observed/report JSON surfaces the `solver` section
-            // now and the N=10 determinism gate stays byte-stable across the
-            // milestone. Phase 47+ populates real values without changing shape.
+            // zero so observed/report JSON always surfaces the `solver` section
+            // and the N=10 determinism gate stays byte-stable. Real values can
+            // populate the existing shape without changing it.
             solver: SolverMetricSection::default(),
         };
         Self {

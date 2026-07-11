@@ -2,7 +2,7 @@ schema_version = "polint-eval-fixture-1"
 case_id = "go-rta-interface-dispatch"
 area = "go-rta"
 
-# Phase 48 Plan 03 — native interface-dispatch RTA fixture (D-15, GO-05 criterion 4).
+# — native interface-dispatch RTA fixture (D-15, GO-05 criterion 4).
 #
 # repo/main.go declares a Speaker interface with two implementers:
 #   - Dog  — INSTANTIATED (Dog{} -> Speaker in main) → RTA resolves main -> (Dog).Speak
@@ -14,7 +14,7 @@ area = "go-rta"
 # and the instantiated-type node identities, asserting the instantiated_filter
 # invariant); this manifest documents the contract. No `[[expected]]` row is
 # captured because the solver-derived edges are crate-private and not observable
-# manifest facts (Phase 52 wires them into the observable refined-call projection).
+# manifest facts (the refined-call projection makes them observable).
 
 [repo]
 path = "repo"

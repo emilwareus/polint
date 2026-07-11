@@ -1,7 +1,4 @@
-#![expect(
-    dead_code,
-    reason = "Phase 31 adds private transfer hooks before later provider/debug plans consume every path."
-)]
+#![expect(dead_code, reason = "kept for private internal consumers")]
 
 use std::collections::BTreeMap;
 

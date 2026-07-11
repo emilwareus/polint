@@ -4,7 +4,7 @@ use crate::analysis::ids::EvidenceNodeId;
 
 #[allow(
     dead_code,
-    reason = "Private evidence query helpers are consumed by subsequent Phase 39 path/rendering plans."
+    reason = "Private evidence query helpers are consumed by subsequent path/rendering plans."
 )]
 pub(crate) fn incoming_edges(
     store: &EvidenceStore,
@@ -20,7 +20,7 @@ pub(crate) fn incoming_edges(
 
 #[allow(
     dead_code,
-    reason = "Private evidence query helpers are consumed by subsequent Phase 39 path/rendering plans."
+    reason = "Private evidence query helpers are consumed by subsequent path/rendering plans."
 )]
 pub(crate) fn outgoing_edges(
     store: &EvidenceStore,
@@ -36,7 +36,7 @@ pub(crate) fn outgoing_edges(
 
 #[allow(
     dead_code,
-    reason = "Private evidence query helpers are consumed by subsequent Phase 39 path/rendering plans."
+    reason = "Private evidence query helpers are consumed by subsequent path/rendering plans."
 )]
 pub(crate) fn nodes_by_edge_kind(
     store: &EvidenceStore,

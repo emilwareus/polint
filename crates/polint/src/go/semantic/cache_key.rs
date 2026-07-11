@@ -21,7 +21,7 @@ pub(crate) fn go_semantic_provider_parameter_digest() -> String {
         "x_tools_version",
         "lifecycle_v1",
         "upstream_digest",
-        // Phase 48 GO-05: the RTA-signal fact families grew the row vocabulary; a
+        // GO-05: the RTA-signal fact families grew the row vocabulary; a
         // vocabulary change must invalidate the downstream solver cache key (D-12).
         "address_taken_v1",
         "instantiated_type_v1",
@@ -101,7 +101,7 @@ mod tests {
 
     #[test]
     fn provider_parameter_digest_locks_schema_label_and_rta_vocabulary() {
-        // Trip-wire (Phase 48 GO-05 D-12): the schema label is bumped to -2 and the
+        // Trip-wire (GO-05 D-12): the schema label is bumped to -2 and the
         // RTA-signal fact families are folded into the parameter digest. If this fails,
         // the row vocabulary changed without a schema-label bump — that is a regression,
         // not a snapshot to bless. Reconstruct the exact locked parts list.
@@ -123,8 +123,8 @@ mod tests {
 
     #[test]
     fn provider_parameter_digest_differs_from_pre_phase48_recipe() {
-        // The pre-Phase-48 recipe (schema -1, no RTA vocabulary) must not collide with
-        // the bumped recipe, so a cache built before this phase is invalidated.
+        // The previous recipe (schema -1, no RTA vocabulary) must not collide with
+        // the bumped recipe, so a cache built before this stage is invalidated.
         let pre_phase48 = crate::cache::stable_hash(&[
             "go-semantic-facts-1",
             GO_SEMANTIC_PROVIDER_ID,

@@ -105,7 +105,7 @@ pub(crate) enum AccessKind {
     ReadWrite,
 }
 
-// Per-resource external effects replace the coarse bool in Phase 36/38.
+// Per-resource external effects replace the coarse boolean.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) enum ExternalEffectKind {

@@ -17,7 +17,7 @@ func (Dog) Greet() string {
 
 // orphanHelper is only called from orphan, which is never reached from any root, so its
 // call site is OUTSIDE the reachable graph (in_reachable_graph = false) — the
-// unreachable mark the Phase 43 determinism gate's marking invariant asserts.
+// unreachable mark the determinism gate's marking invariant asserts.
 func orphanHelper() {
 	fmt.Println("orphan helper")
 }

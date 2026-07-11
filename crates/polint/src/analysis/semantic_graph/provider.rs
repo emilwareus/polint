@@ -38,7 +38,7 @@ pub(crate) struct SemanticGraphProviderRunOutput {
 
 /// `polint.semantic_graph` provider entry point (D-16/D-17).
 ///
-/// 8-phase pipeline mirroring `polint.reachability` (S5):
+/// 8-stage pipeline mirroring `polint.reachability` (S5):
 /// 1. refresh the private TS object-model store from TS/JS source files,
 /// 2. project a real-but-minimal graph from existing facts via `build_semantic_graph`
 ///    (the build itself is read-only, mutating no upstream family),
@@ -80,12 +80,12 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
     let mut cache_stats = CacheStats::default();
     cache_stats.record_recompute();
 
-    // Phase 1: collect the private TS analysis side inputs once. This keeps
+    // Step: collect the private TS analysis side inputs once. This keeps
     // direct bindings, object-model rows, and token-source flow projection on
     // the same parse/semantic pass per TS file.
     let mut ts_direct_bindings = collect_ts_direct_binding_collection(db);
 
-    // Phase 2: refresh private TS object-model rows. This keeps the projection's
+    // Step: refresh private TS object-model rows. This keeps the projection's
     // consumed object/property facts deterministic and digest-visible without
     // promoting a public object-model provider surface.
     let object_model = ts_direct_bindings.take_object_model_output();
@@ -97,7 +97,7 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
         };
     }
 
-    // Phase 3-4: project + normalize. The build is read-only; normalized() fixes the
+    // Step: project + normalize. The build is read-only; normalized() fixes the
     // stable-key order the digest is computed over.
     let ts_direct_binding_output_digest =
         ts_direct_binding_output_digest(ts_direct_bindings.output());
@@ -116,7 +116,7 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
         .normalized()
     };
 
-    // Phase 4: digest over the stored stable KEYS (never dense IDs — see
+    // Step: digest over the stored stable KEYS (never dense IDs — see
     // `semantic_graph_output_digest`), with the empty-output sentinel.
     let output_digest = semantic_graph_output_digest(
         db,
@@ -139,7 +139,7 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
         &output,
     );
 
-    // Phase 5-8: store (assigns dense IDs + referentially validates inside
+    // Step: store (assigns dense IDs + referentially validates inside
     // from_output). On store error the db keeps its prior state and the facts the
     // digest certifies were not persisted, so return output_digest: None.
     match db.replace_normalized_semantic_graph_facts(output) {
@@ -445,7 +445,7 @@ fn adaptation_model_diagnostic(
 /// graph (scopes), calls (call sites), type/value/alias (value facts) and semantic
 /// MIR (places). `identity`/`abstract_domains`/`entrypoints`/`reachability`/
 /// `module_topology` are folded as well so the keystone over-invalidates rather than
-/// risks a stale graph as later phases begin consuming them.
+/// risks a stale graph as later stages begin consuming them.
 #[allow(clippy::too_many_arguments)]
 fn semantic_graph_output_digest(
     db: &AnalysisDb,

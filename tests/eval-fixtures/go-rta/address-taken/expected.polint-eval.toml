@@ -2,7 +2,7 @@ schema_version = "polint-eval-fixture-1"
 case_id = "go-rta-address-taken"
 area = "go-rta"
 
-# Phase 48 Plan 03 — native address-taken / func-value RTA fixture (D-15, criterion 4).
+# — native address-taken / func-value RTA fixture (D-15, criterion 4).
 #
 # repo/main.go takes the addresses of `handler` and `other` (both func(), in a
 # []func()) and invokes a func() element indirectly. RTA resolves the func-value

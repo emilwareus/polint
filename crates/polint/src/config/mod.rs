@@ -56,7 +56,7 @@ pub(crate) struct ReachabilityConfig {
 /// solver — NOT an SDK promotion. Sits beside [`ReachabilityConfig`].
 ///
 /// Today it threads the per-language Go RTA caps (`solver.go.*`) and JS/TS token
-/// caps (`solver.js.*`) into their solver sub-budgets; later phases extend it with
+/// caps (`solver.js.*`) into their solver sub-budgets; later stages extend it with
 /// cross-language knobs.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct SolverConfig {

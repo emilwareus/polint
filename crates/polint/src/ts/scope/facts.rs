@@ -1,7 +1,4 @@
-#![allow(
-    dead_code,
-    reason = "Phase 45 wires private TS scope facts into extraction/store/direct binding across sequential plans"
-)]
+#![allow(dead_code, reason = "kept for private internal consumers")]
 
 use serde::{Deserialize, Serialize};
 

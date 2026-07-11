@@ -1,4 +1,4 @@
-// Determinism-gate TS fixture (Phase 43 Plan 03, D-24).
+// Determinism-gate TS fixture (, D-24).
 //
 // `entry` is exported, so it is a reachability root (RootKind::Exported). It
 // directly calls usedHelper (a reachable call site). orphanFn is neither

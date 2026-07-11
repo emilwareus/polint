@@ -274,7 +274,7 @@ fn call_status_to_observed(
 #[cfg(test)]
 #[allow(
     dead_code,
-    reason = "Phase 39 evidence delta rows are consumed by eval fixtures that assert extension merge behavior."
+    reason = "current evidence delta rows are consumed by eval fixtures that assert extension merge behavior."
 )]
 pub(crate) fn observed_extension_evidence_delta_rows(
     delta: &crate::analysis::evidence::validate::ExtensionEvidenceDelta,
@@ -671,7 +671,7 @@ fn identity_categorized_failure_invariants(db: &crate::core::AnalysisDb) -> Vec<
     // Exact per-category counts (rehydrated into the report's
     // `categorized_failures` section by `categorized_failures_from_observed`) plus
     // byte-stable `.nonzero` booleans the fixture asserts (exact counts are
-    // brittle for the Phase 43 determinism gate; the boolean is order-stable).
+    // brittle for the determinism gate; the boolean is order-stable).
     let counters = [
         ("wrong_identity", section.wrong_identity),
         ("unsupported_edge", section.unsupported_edge),
@@ -696,7 +696,7 @@ fn identity_categorized_failure_invariants(db: &crate::core::AnalysisDb) -> Vec<
 }
 
 /// Renders every identity record through the single-source-of-truth renderers
-/// (Phase 42 D-05) and surfaces deterministic render invariants:
+/// (D-05) and surfaces deterministic render invariants:
 ///
 /// - `identity.render.jelly.no_absolute_path` proves the Jelly renderer emits
 ///   only workspace-relative forward-slash paths (T-42-02-02);
@@ -1588,7 +1588,7 @@ mod public_boundary_no_leak {
         for marker in INTERNAL_MARKERS {
             assert!(
                 !source.contains(marker),
-                "{label} leaked Phase 33 internal marker `{marker}`"
+                "{label} leaked internal implementation marker `{marker}`"
             );
         }
     }

@@ -2441,16 +2441,16 @@ fn explain(root: PathBuf, args: &ExplainArgs) -> Result<u8> {
 /// Internal (NON-public) view of a derived edge's provenance, surfaced through the
 /// existing private plumbing reached from the [`explain`] command (D-10). This is
 /// deliberately NOT added to the public `ExplainReport`/`ExplainRuleRow` JSON schema
-/// — the only new public CLI surface in v1.3 is `polint inspect unknowns` (Phase 52).
+/// — the only new public CLI surface in v1.3 is `polint inspect unknowns`.
 /// All fields mirror the `pub(crate)` `DerivedEdgeProvenance`; nothing here reaches
-/// `polint::sdk::prelude` (the Phase 42 leak gate stays green).
+/// `polint::sdk::prelude` (the leak gate stays green).
 ///
 /// Today this is a `cfg(test)`-facing internal accessor: no PRODUCTION explain path
-/// consumes derived edges yet (the unified-solver provider lands in Plan 03; the
-/// unknown-taxonomy public surface is Phase 52). D-10 explicitly sanctions a
+/// consumes derived edges yet. The test-exercised internal seam keeps the
+/// unknown-taxonomy public surface unchanged. D-10 explicitly sanctions a
 /// test-exercised internal seam — the plumbing exists and is locked by a unit test.
 // `allow` (not `expect`): the struct is only constructed by the test-exercised
-// `explain_derived_edge_provenance` seam (Phase 47 D-10); whether dead_code fires
+// `explain_derived_edge_provenance` seam (D-10); whether dead_code fires
 // varies by build config, so an `expect` would be reported unfulfilled.
 #[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2476,8 +2476,8 @@ pub(crate) struct DerivedEdgeProvenanceView {
 //
 // `allow` (not `expect`): whether dead_code fires for this `pub(crate)` fn varies by
 // build config (it is live under `cfg(test)`), so an `expect` would be reported
-// unfulfilled in test builds. Phase 47 D-10 sanctions a test-exercised internal seam
-// until the Plan 03 provider / Phase 52 surface consumes it in production.
+// unfulfilled in test builds. D-10 sanctions a test-exercised internal seam
+// until a production explain path consumes it.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn explain_derived_edge_provenance(
     store: &crate::analysis::solver::store::SolverStore,
@@ -4385,7 +4385,7 @@ mod tests {
         ] {
             assert!(
                 !help.contains(marker.as_str()),
-                "public help leaked Phase 33 internal marker `{marker}`"
+                "public help leaked internal implementation marker `{marker}`"
             );
         }
     }

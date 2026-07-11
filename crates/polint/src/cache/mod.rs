@@ -386,10 +386,7 @@ impl CacheLayout {
 
     #[cfg_attr(
         not(test),
-        expect(
-            dead_code,
-            reason = "Phase 64 establishes the store layout before the kernel opens it."
-        )
+        expect(dead_code, reason = "kept for private internal consumers")
     )]
     pub(crate) fn semantic_store_path(&self) -> PathBuf {
         self.semantic_store_dir().join("store.sqlite3")

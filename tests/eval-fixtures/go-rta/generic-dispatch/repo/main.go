@@ -14,7 +14,7 @@ type Speaker interface {
 // `(Box[int]).Speak`, while the syntactic declaration is `Box[T any]`. The frontend must
 // emit the method-set + concrete method keyed by the INSTANTIATED identity `Box[int]`,
 // or `method_sets.get("Box[int]")` misses and the interface invoke loses the edge
-// (Phase 48 FINDING A — dispatch through generic types silently under-resolves).
+// Dispatch through generic types must not silently under-resolve.
 type Box[T any] struct{ v T }
 
 func (b Box[T]) Speak() string {

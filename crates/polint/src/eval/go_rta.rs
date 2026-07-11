@@ -25,8 +25,8 @@
 //!   two halves never reach across the language boundary through the shared core.
 //!
 //! The RTA edges are sourced from the kernel-built `AnalysisDb` (`solver_derived_edges`
-//! /`GoRtaInputs`), NOT through the call-graph projection — Phase 52 (GRAPH-05) wires
-//! solver edges into `refined_calls`; until then the self-contained engine drive here
+//! /`GoRtaInputs`), NOT through the call-graph projection. GRAPH-05 wires solver
+//! edges into `refined_calls`; until then the self-contained engine drive here
 //! is the always-runnable proof. A two-run byte-stability check guards determinism.
 //!
 //! All types stay `pub(crate)`; no `ALLOWED_PRELUDE` entry is added (D-17).

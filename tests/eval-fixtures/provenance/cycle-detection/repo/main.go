@@ -1,4 +1,4 @@
-// Cycle-detection fixture (Phase 47, D-11/D-12).
+// Cycle-detection fixture (D-11/D-12).
 //
 // `ping` and `pong` are mutually recursive: ping -> pong -> ping. Each call site
 // also threads a value through the return (a place-to-place value copy), so the

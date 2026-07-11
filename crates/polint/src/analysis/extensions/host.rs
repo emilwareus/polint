@@ -1,7 +1,4 @@
-#![allow(
-    dead_code,
-    reason = "Phase 34 introduces the extension host before the later kernel orchestration plan consumes every path."
-)]
+#![allow(dead_code, reason = "kept for private internal consumers")]
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};

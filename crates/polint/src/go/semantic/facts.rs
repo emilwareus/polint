@@ -105,7 +105,7 @@ pub(crate) struct GoSemanticPackageErrorFact {
 /// An address-taken Go function — the RTA dispatch-candidate set for func-value
 /// callsites (D-05). Harvested from `*ssa.MakeClosure` and `*ssa.Function` value
 /// operands in the sidecar. `function` is the official `ssa.Function` `.String()`
-/// identity; `stable_key` is length-prefixed from that identity (Phase 46 D-12/D-13).
+/// identity; `stable_key` is length-prefixed from that identity (D-12/D-13).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GoSemanticAddressTakenFact {
     pub(crate) id: GoSemanticAddressTakenId,

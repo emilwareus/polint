@@ -20,9 +20,8 @@ pub(crate) const STORE_DISABLED_BASELINE_SCHEMA_VERSION: &str = "polint-store-di
 /// The committed pre-store reference baseline for a `polint check` / `polint
 /// review` run (BENCH-02).
 ///
-/// The durable semantic store lands in Phase 64, so "store-disabled" is simply
-/// current polint. This baseline is the fixed reference the Phase 64+ regression
-/// gates (Plan 04's `evaluate_regression_budget`) compare against: it records the
+/// This baseline is the fixed pre-store reference that
+/// `evaluate_regression_budget` compares against: it records the
 /// real OS peak RSS and cold/warm wall-clock of the measured run, a
 /// `store_disabled` marker, and a deterministic `diagnostics_digest` that is the
 /// diagnostics-parity marker — the store must not change the diagnostics polint
@@ -49,8 +48,8 @@ pub(crate) struct StoreDisabledBaseline {
     /// allocations.
     pub(crate) peak_rss_bytes: u64,
     /// Run-attributable peak-RSS growth in bytes (the delta above the pre-run
-    /// high-water mark). This is the confound-free metric the Phase 64+
-    /// regression gate compares against. Serde-defaulted so a baseline
+    /// high-water mark). This is the confound-free metric the regression gate
+    /// compares against. Serde-defaulted so a baseline
     /// serialized before this field existed still deserializes.
     #[serde(default)]
     pub(crate) peak_rss_delta_bytes: u64,
@@ -64,7 +63,7 @@ pub(crate) struct StoreDisabledBaseline {
     /// diagnostics of a `polint check`-equivalent kernel run), for BOTH the check
     /// and review baselines: `polint review` reuses the same check analysis here,
     /// so its parity marker is the same check digest, not a diff-scoped subset
-    /// (LW-08). A store phase that computes a measured digest to feed
+    /// (LW-08). A store measurement that computes a digest to feed
     /// `evaluate_regression_budget` MUST therefore supply a check-scoped digest
     /// (or `None`); a review-scoped subset would spuriously fail the parity check.
     pub(crate) diagnostics_digest: String,
@@ -193,16 +192,14 @@ impl EvalBaseline {
     }
 }
 
-/// Locked regression budget (REQUIREMENTS.md, "Locked Milestone Decisions", D):
-/// a store-phase run may use at most +20% peak RSS versus the store-disabled
-/// baseline until warm reuse lands (Phase 67). Revisable only with a recorded
+/// A store-enabled run may use at most +20% peak RSS versus the store-disabled
+/// baseline. Revisable only with a recorded
 /// decision — a silent edit here fails the default-value test (threat
 /// T-63-04-01).
 pub(crate) const DEFAULT_MAX_PEAK_RSS_RATIO: f64 = 1.20;
 
-/// Locked regression budget (REQUIREMENTS.md, "Locked Milestone Decisions", D):
-/// a store-phase run may use at most +25% cold wall-clock versus the
-/// store-disabled baseline until warm reuse lands (Phase 67). Revisable only
+/// A store-enabled run may use at most +25% cold wall-clock versus the
+/// store-disabled baseline. Revisable only
 /// with a recorded decision — a silent edit here fails the default-value test
 /// (threat T-63-04-01).
 pub(crate) const DEFAULT_MAX_COLD_WALL_CLOCK_RATIO: f64 = 1.25;
@@ -572,7 +569,7 @@ mod tests {
     #[test]
     fn baseline_thresholds_carry_locked_regression_budgets() {
         // The locked +20% peak-RSS and +25% cold-wall-clock budgets
-        // (REQUIREMENTS.md Locked Milestone Decisions, D). These are exact:
+        // (REQUIREMENTS.md Locked release Decisions, D). These are exact:
         // a silent loosening fails this assertion (threat T-63-04-01).
         let thresholds = BaselineThresholds::default();
         assert_eq!(thresholds.max_peak_rss_ratio, 1.20);
@@ -770,7 +767,7 @@ mod tests {
         // `peak_rss_delta_bytes` is run-attributable and order-independent rather
         // than a shared-process artifact — the review point in particular must
         // not collapse to allocator jitter just because it ran after check
-        // (HI-01R). A Phase 64 measured run fed to the gate must use the same
+        // (HI-01R). A measured run fed to the gate must use the same
         // `run_repo_perf_point_isolated` isolation.
         let digest = diagnostics_digest_for_repo(dir).unwrap();
         let check_point = run_repo_perf_point_isolated(dir, None).unwrap();

@@ -1,4 +1,4 @@
-// Semantic-graph TS/JS snapshot fixture (Phase 44 Plan 03, GRAPH-02, D-12).
+// Semantic-graph TS/JS snapshot fixture (, GRAPH-02, D-12).
 //
 // `entry` calls `greet` (a direct call site -> Call edge + CallConstraint) and
 // copies the result into locals (value copies -> CopyEdge constraints), exercising

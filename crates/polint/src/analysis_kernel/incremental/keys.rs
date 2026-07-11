@@ -1,9 +1,6 @@
 #![cfg_attr(
     not(test),
-    expect(
-        dead_code,
-        reason = "Phase 23 establishes query, summary, diagnostic, and layer key vocabulary before later cache consumers use every type."
-    )
+    expect(dead_code, reason = "kept for private internal consumers")
 )]
 
 use serde::{Deserialize, Serialize};
@@ -675,8 +672,8 @@ impl LayerKey {
         )
     }
 
-    // Layer cache reuse for direct summaries is wired in Phase 33 (demand queries + SCC cache).
-    #[expect(dead_code, reason = "reserved for Phase 33 persistent layer cache")]
+    // Layer cache reuse for direct summaries supports demand queries and SCC caching.
+    #[expect(dead_code, reason = "kept for private internal consumers")]
     #[expect(
         clippy::too_many_arguments,
         reason = "Direct summaries layer cache identity is intentionally explicit so every upstream digest input remains visible."

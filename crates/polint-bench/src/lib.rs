@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 pub struct PipelineBreakdown {
     /// Config load + digest + empty rule/options setup.
     pub config_and_hashes: Duration,
-    /// File discovery, parallel read, and DB/hash (`polint_fs::load_analysis_files` sub-phases).
+    /// File discovery, parallel read, and DB/hash (`polint_fs::load_analysis_files` sub-stages).
     pub load_sources: LoadSourcesTimings,
     /// `polint_go::analyze_with_options` (parse + facts; cache disabled).
     pub go_analysis: Duration,
@@ -149,7 +149,7 @@ mod tests {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
     }
 
-    /// Every checked-in example completes a cold pass; phases are sequential slices of work.
+    /// Every checked-in example completes a cold pass; stages are sequential slices of work.
     #[test]
     fn all_examples_cold_pipeline_succeeds_and_phases_sum() {
         let root = repo_root();

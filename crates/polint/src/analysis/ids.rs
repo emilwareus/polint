@@ -181,7 +181,7 @@ pub(crate) struct SemanticConstraintId(pub(crate) u64);
 // fact (`crate::analysis::solver::facts::DerivedEdgeFact`) carries `#[serde(skip)]`
 // (dense IDs must never enter a serialized stable-payload / digest part, D-06);
 // serde reconstructs the skipped field via `Default`, yielding `DerivedEdgeId(0)`.
-// The dense IDs are assigned only after the stable-key sort (Phase 47 D-08),
+// The dense IDs are assigned only after the stable-key sort (D-08),
 // mirroring `SemanticConstraintId`/`SemanticNodeId`/`SemanticEdgeId`.
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,

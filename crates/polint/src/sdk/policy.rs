@@ -41,7 +41,7 @@ pub enum PolicyStatus {
     Heuristic,
     /// The query could not be answered with the available analysis support.
     Unknown,
-    /// The query family is known but not supported in the current phase.
+    /// The query family is known but not supported in the current stage.
     Unsupported,
     /// The query exceeded its configured budget.
     BudgetExceeded,

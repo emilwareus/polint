@@ -181,16 +181,16 @@ impl CategorizedFailureSection {
     }
 }
 
-/// RESERVED solver metrics, defaulted to zero/empty in Phase 43 (D-23).
+/// Reserved solver metrics, defaulted to zero/empty (D-23).
 ///
 /// `solver_step_count` (default `0`) and `budget_exceeded_reasons` (default
-/// empty) reserve the JSON shape the unified call-graph solver introduced in
-/// **Phase 47+** will populate. They live here on [`MetricSections`] — a
+/// empty) reserve the JSON shape populated by the unified call-graph solver.
+/// They live here on [`MetricSections`] — a
 /// `#[serde(default)]` sibling of [`CategorizedFailureSection`] — and NOT on the
 /// frozen [`MetricSummary`] (which is layout-locked by
 /// `metric_summary_layout_unchanged`). Reserving the shape now keeps the N=10
 /// byte-identical determinism gate (`eval::determinism_gate`) stable across the
-/// whole v1.3 milestone: when Phase 47+ starts emitting real values, the
+/// whole v1.3 release: when the solver emits real values, the
 /// observed-JSON shape does not change, only the values, so no fixture or gate
 /// breaks merely because the section appeared. `#[serde(default)]` on the
 /// `MetricSections` field keeps older v1.2 report JSON (which lacks the `solver`
@@ -822,7 +822,7 @@ mod tests {
 
     #[test]
     fn v1_2_metric_sections_json_without_solver_section_reverse_compat() {
-        // A v1.2 (and Phase 42) MetricSections JSON carries no `solver` section at
+        // Older MetricSections JSON carries no `solver` section at
         // all; #[serde(default)] on the MetricSections field must default it in so
         // older report JSON still deserializes (Pattern M, threat T-43-03-02).
         let older_json = serde_json::json!({

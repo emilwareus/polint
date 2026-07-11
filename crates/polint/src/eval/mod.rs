@@ -2,7 +2,7 @@
     not(test),
     expect(
         dead_code,
-        reason = "Phase 22 plan 01 defines the internal eval schema before later harness plans consume it"
+        reason = " defines the internal eval schema before later harness plans consume it"
     )
 )]
 

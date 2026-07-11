@@ -2,7 +2,7 @@ schema_version = "polint-eval-fixture-1"
 case_id = "provenance-cycle-detection"
 area = "provenance"
 
-# Phase 47 Plan 03 cycle-detection fixture (D-11, D-12).
+# cycle-detection fixture (D-11, D-12).
 #
 # `ping` <-> `pong` are mutually recursive, so the projected semantic graph carries a
 # call/value-flow cycle that passes through the call (summary) constraints. This is

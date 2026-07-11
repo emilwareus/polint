@@ -763,7 +763,7 @@ mod tests {
     #[test]
     fn identity_categorized_failures_fixture_determinism() {
         // The taxonomy snapshot must be byte-stable across repeated runs (D-11) so
-        // the Phase 43 determinism gate inherits it unchanged.
+        // the determinism gate inherits it unchanged.
         let fixture_dir = repo_root().join("tests/eval-fixtures/identity/categorized_failures");
         let first = crate::eval::fixtures::run_native_fixture_for_test(&fixture_dir).unwrap();
         let second = crate::eval::fixtures::run_native_fixture_for_test(&fixture_dir).unwrap();
@@ -773,7 +773,7 @@ mod tests {
     #[test]
     fn identity_dedup_fixture_determinism() {
         // The dedup snapshot must be byte-stable across repeated runs (D-11): the
-        // determinism gate Phase 43 inherits relies on this invariant.
+        // determinism gate relies on this invariant.
         let fixture_dir = repo_root().join("tests/eval-fixtures/identity/dedup");
         let first = crate::eval::fixtures::run_native_fixture_for_test(&fixture_dir).unwrap();
         let second = crate::eval::fixtures::run_native_fixture_for_test(&fixture_dir).unwrap();

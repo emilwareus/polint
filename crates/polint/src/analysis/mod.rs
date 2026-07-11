@@ -2,7 +2,7 @@
     not(test),
     expect(
         dead_code,
-        reason = "Private semantic contracts are introduced before lowering/provider integration in later Phase 28 plans."
+        reason = "Private semantic contracts are introduced before lowering/provider integration in later plans."
     )
 )]
 

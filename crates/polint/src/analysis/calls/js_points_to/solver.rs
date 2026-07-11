@@ -3,13 +3,13 @@
 //!
 //! This is the solver CORE: tokens, cells, inclusion constraints, and a
 //! delta-driven worklist fixpoint. It is deliberately decoupled from the AST —
-//! the harvest layer (a later phase) translates JS/TS into the [`Constraint`]
+//! the harvest layer (a later stage) translates JS/TS into the [`Constraint`]
 //! vocabulary here, exactly as `ts_value_flows` already decodes every construct.
 //!
 //! ## Why a private heap, and why not the semantic-graph solver
 //!
-//! Phase-0 spike finding (recorded in the plan): the kernel's `semantic_graph`
-//! builder runs under the benchmark's empty plan, but it is LOSSY for the shapes
+//! The kernel's `semantic_graph` builder runs under the benchmark's empty plan,
+//! but it is LOSSY for the shapes
 //! that fail — it lumps constant computed keys (`obj["q" + "we"]`) into a single
 //! `computed_bucket`, mis-attributes the base object, and under-models
 //! function-objects and `new`-instances as allocation sites. Fixing that builder

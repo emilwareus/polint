@@ -792,7 +792,7 @@ impl AnalysisKernel {
             });
 
         // polint.solver runs between polint.semantic_graph and polint.refined_calls
-        // (D-13, the slot Phase 44 reserved). It drives the unified solver engine over
+        // (D-13). It drives the unified solver engine over
         // the closed input snapshot (the stored semantic-graph constraints), emits
         // derived edges + provenance, and folds the semantic_graph + points-to source
         // (type_value_alias) + go.semantic output digests plus the SolverBudget into its
@@ -802,7 +802,7 @@ impl AnalysisKernel {
         // edit touching ONLY those families changes the RTA-resolved edges and must
         // invalidate the solver cache (FIX 4 — without this the provider docstring's "any
         // upstream change invalidates the solver cache" was false). Auto-enrolls in the
-        // Phase 43 determinism gate (D-14). Thread the per-language solver config into
+        // the determinism gate (D-14). Thread the per-language solver config into
         // SolverBudget (D-10/D-11).
         let solver = if run_full_refinement_pipeline {
             crate::analysis::solver::provider::derive_solver_with_cache_stats(
@@ -944,7 +944,7 @@ impl AnalysisKernel {
         db.finish_all_fact_meta_insertions();
         // Persistence is deliberately last: store availability must not change
         // provider execution, validated facts, diagnostics, or capability
-        // support. Phase 64 stores only this private maintenance status.
+        // support. Only this private maintenance status is stored.
         let store_config = store::StoreConfig::new(
             input.cache.semantic_store_path(),
             input.cache.semantic_store_enabled(),
@@ -2798,7 +2798,7 @@ function setup() {
         for marker in markers {
             assert!(
                 !source.contains(marker),
-                "{label} leaked Phase 37 refined-call internal marker `{marker}`"
+                "{label} leaked refined-call internal marker `{marker}`"
             );
         }
     }
@@ -2807,7 +2807,7 @@ function setup() {
         for marker in markers {
             assert!(
                 !source.contains(marker),
-                "{label} leaked Phase 35 framework internal marker `{marker}`"
+                "{label} leaked framework internal marker `{marker}`"
             );
         }
     }
@@ -2816,7 +2816,7 @@ function setup() {
         for marker in markers {
             assert!(
                 !source.contains(marker),
-                "{label} leaked Phase 38 data-flow internal marker `{marker}`"
+                "{label} leaked data-flow internal marker `{marker}`"
             );
         }
     }

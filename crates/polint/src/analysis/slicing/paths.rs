@@ -17,7 +17,7 @@ pub(crate) struct PathQuery {
 pub(crate) enum PathMode {
     #[allow(
         dead_code,
-        reason = "Local path mode is part of the private Phase 39 query contract and is exercised by later bundle rendering plans."
+        reason = "Local path mode is part of the private query contract and is exercised by later bundle rendering plans."
     )]
     Local,
     SourceToSink,
@@ -276,7 +276,7 @@ pub(crate) mod summary {
 
     #[allow(
         dead_code,
-        reason = "Private compressed summary rendering is consumed by Phase 39 bundle renderers."
+        reason = "Private compressed summary rendering is consumed by current bundle renderers."
     )]
     pub(crate) fn compressed_steps(store: &EvidenceStore) -> Vec<EvidenceSummaryStep> {
         let mut steps = store

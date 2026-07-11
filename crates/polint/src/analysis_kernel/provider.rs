@@ -677,7 +677,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
         // `semantic_graph::provider::semantic_graph_output_digest` (D-17).
         //
         // SC3 inputs with NO producer yet are intentionally ABSENT until their
-        // producer lands (not silently dropped): CFG / summaries (Phase 47). When
+        // producer lands (not silently dropped): CFG / summaries. When
         // the projection begins reading a new family, add it here AND fold its
         // producer digest in the same change.
         inputs: &[
@@ -717,14 +717,14 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
         precision_ceiling: PrecisionCeiling::SetupAware,
     },
     ProviderManifest {
-        // polint.solver runs in the slot Phase 44 reserved: AFTER polint.semantic_graph
-        // and BEFORE polint.refined_calls (D-13). It consumes the unified
+        // polint.solver runs AFTER polint.semantic_graph and BEFORE
+        // polint.refined_calls (D-13). It consumes the unified
         // semantic-graph constraint vocabulary (`semantic_constraints`) and emits
         // derived edges with provenance. Its output digest folds the consumed
         // upstream provider digests (`polint.semantic_graph`, `polint.type_value_alias`,
         // and `polint.go.semantic`) plus the SolverBudget (D-15); those digest-only
         // dependencies are not declared here as direct fact reads. The provider
-        // auto-enrolls in the Phase 43 determinism gate (D-14).
+        // auto-enrolls in the determinism gate (D-14).
         id: "polint.solver",
         kind: ProviderKind::WholeRepoDerived,
         inputs: &[
