@@ -4,7 +4,7 @@
 //! reachability *roots* (`main`/`init`, exported functions, the framework/test
 //! entrypoint bridge, and configured `.polint.toml` roots) and — in later v1.3
 //! plans — marks the call graph reachable from those roots. It is the input every
-//! subsequent solver phase (44-54) consumes.
+//! subsequent solver stage (44-54) consumes.
 //!
 //! D-02 naming-collision guard (MANDATORY): this whole-program module must NOT be
 //! conflated with the **block-level** abstract domain `polint.domain.reachability`

@@ -744,7 +744,7 @@ pub struct AnalysisDb {
     extension_facts: Vec<AcceptedExtensionFact>,
     #[allow(
         dead_code,
-        reason = "Rejected extension audit rows are surfaced by the extension provider/debug wiring in the next Phase 34 plan."
+        reason = "Rejected extension audit rows are surfaced by the extension provider/debug wiring in the next plan."
     )]
     rejected_extension_facts: Vec<RejectedExtensionFact>,
     adaptation_model_facts: Vec<AcceptedModelFact>,
@@ -761,32 +761,32 @@ pub struct AnalysisDb {
     semantic_constraints: Vec<ConstraintFact>,
     #[allow(
         dead_code,
-        reason = "Phase 50 task 3 stores TS object-model rows before semantic-graph lowering consumes them in task 4."
+        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
     )]
     ts_object_allocations: Vec<TsObjectAllocationFact>,
     #[allow(
         dead_code,
-        reason = "Phase 50 task 3 stores TS object-model rows before semantic-graph lowering consumes them in task 4."
+        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
     )]
     ts_property_writes: Vec<TsPropertyWriteFact>,
     #[allow(
         dead_code,
-        reason = "Phase 50 task 3 stores TS object-model rows before semantic-graph lowering consumes them in task 4."
+        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
     )]
     ts_property_reads: Vec<TsPropertyReadFact>,
     #[allow(
         dead_code,
-        reason = "Phase 50 task 3 stores TS object-model rows before semantic-graph lowering consumes them in task 4."
+        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
     )]
     ts_receiver_bindings: Vec<TsReceiverBindingFact>,
     #[allow(
         dead_code,
-        reason = "Phase 50 task 3 stores TS object-model rows before semantic-graph lowering consumes them in task 4."
+        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
     )]
     ts_prototype_links: Vec<TsPrototypeLinkFact>,
     #[allow(
         dead_code,
-        reason = "Phase 50 task 3 stores TS object-model rows before semantic-graph lowering consumes them in task 4."
+        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
     )]
     ts_object_model_store: Option<TsObjectModelStore>,
     solver_derived_edges: Vec<DerivedEdgeFact>,
@@ -1595,7 +1595,7 @@ impl AnalysisDb {
 
     #[allow(
         dead_code,
-        reason = "Extension fact replacement is wired into the kernel provider in the next Phase 34 plan."
+        reason = "Extension fact replacement is wired into the kernel provider in the next plan."
     )]
     pub(crate) fn replace_extension_facts(&mut self, output: ExtensionOutput) {
         let output = output.normalized();
@@ -1636,7 +1636,7 @@ impl AnalysisDb {
 
     #[allow(
         dead_code,
-        reason = "Rejected extension audit rows are surfaced by the extension provider/debug wiring in the next Phase 34 plan."
+        reason = "Rejected extension audit rows are surfaced by the extension provider/debug wiring in the next plan."
     )]
     pub(crate) fn rejected_extension_facts(&self) -> &[RejectedExtensionFact] {
         &self.rejected_extension_facts
@@ -1684,7 +1684,7 @@ impl AnalysisDb {
 
     #[allow(
         dead_code,
-        reason = "Reachability fact replacement is wired into the kernel provider in the next Phase 43 plan-01 task (provider/kernel splice)."
+        reason = "Reachability fact replacement is wired into the kernel provider in the next  task (provider/kernel splice)."
     )]
     pub(crate) fn replace_reachability_facts(
         &mut self,
@@ -1701,7 +1701,7 @@ impl AnalysisDb {
 
     #[allow(
         dead_code,
-        reason = "Reachability roots are consumed by validation, debug, and the kernel provider wiring in Phase 43 plan-01."
+        reason = "Reachability roots are consumed by validation, debug, and the kernel provider wiring in ."
     )]
     pub(crate) fn reachability_roots(&self) -> &[ReachabilityRootFact] {
         &self.reachability_roots
@@ -1709,7 +1709,7 @@ impl AnalysisDb {
 
     #[allow(
         dead_code,
-        reason = "Reachability marks are populated by the marking traversal in Phase 43 plan-02 and read by debug/eval."
+        reason = "Reachability marks are populated by the marking traversal in  and read by debug/eval."
     )]
     pub(crate) fn reachability_marks(&self) -> &[CallReachabilityFact] {
         &self.reachability_marks
@@ -1756,12 +1756,12 @@ impl AnalysisDb {
     }
 
     /// Stores the private TS object/property/prototype/receiver rows used by the
-    /// Phase 50 semantic-graph lowering. Construction runs through
+    /// current semantic-graph lowering. Construction runs through
     /// [`TsObjectModelStore::try_from_output`], which preserves deterministic
     /// normalization and rejects duplicate stable keys before stale rows are replaced.
     #[allow(
         dead_code,
-        reason = "Phase 50 task 3 stores TS object-model rows before semantic-graph lowering consumes them in task 4."
+        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
     )]
     pub(crate) fn replace_ts_object_model_facts(
         &mut self,
@@ -1779,7 +1779,7 @@ impl AnalysisDb {
 
     #[allow(
         dead_code,
-        reason = "Phase 50 task 3 stores TS object-model rows before semantic-graph lowering consumes them in task 4."
+        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
     )]
     pub(crate) fn ts_object_allocations(&self) -> &[TsObjectAllocationFact] {
         &self.ts_object_allocations
@@ -1787,7 +1787,7 @@ impl AnalysisDb {
 
     #[allow(
         dead_code,
-        reason = "Phase 50 task 3 stores TS object-model rows before semantic-graph lowering consumes them in task 4."
+        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
     )]
     pub(crate) fn ts_property_writes(&self) -> &[TsPropertyWriteFact] {
         &self.ts_property_writes
@@ -1795,7 +1795,7 @@ impl AnalysisDb {
 
     #[allow(
         dead_code,
-        reason = "Phase 50 task 3 stores TS object-model rows before semantic-graph lowering consumes them in task 4."
+        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
     )]
     pub(crate) fn ts_property_reads(&self) -> &[TsPropertyReadFact] {
         &self.ts_property_reads
@@ -1803,7 +1803,7 @@ impl AnalysisDb {
 
     #[allow(
         dead_code,
-        reason = "Phase 50 task 3 stores TS object-model rows before semantic-graph lowering consumes them in task 4."
+        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
     )]
     pub(crate) fn ts_receiver_bindings(&self) -> &[TsReceiverBindingFact] {
         &self.ts_receiver_bindings
@@ -1811,7 +1811,7 @@ impl AnalysisDb {
 
     #[allow(
         dead_code,
-        reason = "Phase 50 task 3 stores TS object-model rows before semantic-graph lowering consumes them in task 4."
+        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
     )]
     pub(crate) fn ts_prototype_links(&self) -> &[TsPrototypeLinkFact] {
         &self.ts_prototype_links
@@ -1819,7 +1819,7 @@ impl AnalysisDb {
 
     #[allow(
         dead_code,
-        reason = "Phase 50 task 3 stores TS object-model rows before semantic-graph lowering consumes them in task 4."
+        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
     )]
     pub(crate) fn ts_object_model_store(&self) -> Option<&TsObjectModelStore> {
         self.ts_object_model_store.as_ref()
@@ -1843,7 +1843,7 @@ impl AnalysisDb {
     }
 
     /// The stored solver-derived edges. Consumed by the provider tests today and by
-    /// Phase 52's GRAPH-05 refined_calls rework (which projects over solver output);
+    /// the GRAPH-05 refined_calls rework (which projects over solver output);
     /// no production read exists yet, so the accessor is dead-code in a non-test build
     /// until that consumer lands (the facts are stored unconditionally so the
     /// determinism gate observes them).
@@ -1916,7 +1916,7 @@ impl AnalysisDb {
 
     #[allow(
         dead_code,
-        reason = "Method-set facts are stored privately for Phase 48 receiver/RTA expansion."
+        reason = "Method-set facts are stored privately for receiver/RTA expansion."
     )]
     pub(crate) fn go_semantic_method_sets(&self) -> &[GoSemanticMethodSetFact] {
         &self.go_semantic_method_sets
@@ -2398,7 +2398,7 @@ impl AnalysisDb {
 
     #[allow(
         dead_code,
-        reason = "Extension metadata refresh is reached through extension provider wiring in the next Phase 34 plan."
+        reason = "Extension metadata refresh is reached through extension provider wiring in the next plan."
     )]
     fn refresh_extension_metadata(&mut self) {
         self.fact_meta.remove_family(FactFamily::ExtensionFact);
@@ -5865,7 +5865,7 @@ fn source_file_metadata(relative_path: &str, language: Language, content_hash: &
 
 #[allow(
     dead_code,
-    reason = "Extension fact metadata is reached through extension provider wiring in the next Phase 34 plan."
+    reason = "Extension fact metadata is reached through extension provider wiring in the next plan."
 )]
 fn extension_fact_metadata(fact: &AcceptedExtensionFact) -> FactMeta {
     let producer_id = leaked_extension_producer_id(&fact.extension_id, &fact.provider_id);
@@ -5916,7 +5916,7 @@ fn adaptation_model_fact_metadata(fact: &AcceptedModelFact) -> FactMeta {
 
 #[allow(
     dead_code,
-    reason = "Extension producer ids are reached through extension provider wiring in the next Phase 34 plan."
+    reason = "Extension producer ids are reached through extension provider wiring in the next plan."
 )]
 fn leaked_extension_producer_id(extension_id: &str, provider_id: &str) -> &'static str {
     Box::leak(format!("polint.extension.{extension_id}.{provider_id}").into_boxed_str())
@@ -5924,7 +5924,7 @@ fn leaked_extension_producer_id(extension_id: &str, provider_id: &str) -> &'stat
 
 #[allow(
     dead_code,
-    reason = "Extension precision mapping is reached through extension provider wiring in the next Phase 34 plan."
+    reason = "Extension precision mapping is reached through extension provider wiring in the next plan."
 )]
 fn extension_precision_metadata(precision: ExtensionFactPrecision) -> FactPrecision {
     match precision {
@@ -5937,7 +5937,7 @@ fn extension_precision_metadata(precision: ExtensionFactPrecision) -> FactPrecis
 
 #[allow(
     dead_code,
-    reason = "Extension confidence mapping is reached through extension provider wiring in the next Phase 34 plan."
+    reason = "Extension confidence mapping is reached through extension provider wiring in the next plan."
 )]
 fn extension_confidence_metadata(confidence: ExtensionFactConfidence) -> FactConfidence {
     match confidence {

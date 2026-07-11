@@ -1,7 +1,4 @@
-#![allow(
-    dead_code,
-    reason = "Phase 45 wires private TS direct binding facts into semantic graph consumers across sequential plans"
-)]
+#![allow(dead_code, reason = "kept for private internal consumers")]
 
 use serde::{Deserialize, Serialize};
 
@@ -61,7 +58,7 @@ impl TsDirectBindingReason {
         }
     }
 
-    /// Whether this unresolved direct-binding reason is eligible for the Phase 49
+    /// Whether this unresolved direct-binding reason is eligible for the
     /// function-token solver handoff. Property/prototype/receiver modeling stays
     /// honestly unresolved until its own analysis family exists.
     pub(crate) fn is_function_token_handoff(self) -> bool {

@@ -221,7 +221,7 @@ mod tests {
                         enabled: true,
                         selector: "sample:balanced:5".to_string(),
                         max_cases: Some(5),
-                        deterministic_seed: Some("phase-40".to_string()),
+                        deterministic_seed: Some("determinism-seed".to_string()),
                     },
                 ),
                 (

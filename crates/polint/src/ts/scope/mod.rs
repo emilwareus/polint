@@ -41,9 +41,9 @@ Box.prototype.extra();
             })
             .collect::<Vec<_>>();
 
-        assert!(reasons.contains(&"parameter callback requires function-token phase"));
-        assert!(reasons.contains(&"computed property requires property-flow phase"));
-        assert!(reasons.contains(&"prototype dispatch requires later prototype phase"));
+        assert!(reasons.contains(&"parameter callback requires function-token analysis"));
+        assert!(reasons.contains(&"computed property requires property-flow analysis"));
+        assert!(reasons.contains(&"prototype dispatch requires prototype analysis"));
         assert!(reasons.contains(&"this-dependent call requires receiver modeling"));
     }
 

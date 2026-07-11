@@ -2,7 +2,7 @@ schema_version = "polint-eval-fixture-1"
 case_id = "determinism-go-rta"
 area = "facts"
 
-# Phase 48 Plan 03 determinism-gate Go RTA fixture (D-17; REACH-03 D-20/D-21/D-24).
+# determinism-gate Go RTA fixture (D-17; REACH-03 D-20/D-21/D-24).
 #
 # `main` is the Go root (RootKind::Main). It instantiates Dog, converts it to the
 # Greeter interface, and dispatches `g.Greet()` — the Go RTA driver derives the

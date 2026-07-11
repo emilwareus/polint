@@ -1,7 +1,4 @@
-#![allow(
-    dead_code,
-    reason = "Phase 45 expands private TS direct binding store indexes across sequential plans"
-)]
+#![allow(dead_code, reason = "kept for private internal consumers")]
 
 use std::collections::BTreeMap;
 

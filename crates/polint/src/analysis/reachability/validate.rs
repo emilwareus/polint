@@ -61,7 +61,7 @@ fn validate_root(
     // design (it resolved to no real function/file). Skip the referential dangling
     // checks for it — the sentinels are intentional, not dangling references.
     // (These roots are filtered out before storage today; this keeps validation
-    // correct if a later phase chooses to store them.)
+    // correct if a later stage chooses to store them.)
     let is_unresolved = root.status == RootStatus::Unresolved;
     if !is_unresolved && !functions.contains(&root.target_function) {
         push_diagnostic(

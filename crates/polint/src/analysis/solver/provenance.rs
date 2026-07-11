@@ -3,7 +3,7 @@
 //! Every solver-derived edge carries a [`DerivedEdgeProvenance`] recording the
 //! three roadmap-named fields:
 //!
-//! 1. the **contributing fact IDs**, TOTALLY ORDERED BY STABLE ID (the Phase 42
+//! 1. the **contributing fact IDs**, TOTALLY ORDERED BY STABLE ID (the
 //!    dedup total-order rule). Provenance references EXISTING stable identities by
 //!    their stable key (composition over duplication — it does not mint a parallel
 //!    identity space); the total order is the `stable_key_from_parts`
@@ -41,7 +41,7 @@ use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
 /// length-prefixes and embeds the originating [`FactFamily`] label, so the family is
 /// captured INSIDE the stable key (no separate non-serializable `FactFamily` field
 /// is carried). The total order over a set of these is the lexicographic order of
-/// `stable_key` (the Phase 42 dedup total-order rule).
+/// `stable_key` (the dedup total-order rule).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) struct ContributingFact {
     /// The contributing fact's stable key — its EXISTING stable identity, built via
@@ -92,7 +92,7 @@ impl DerivedEdgeProvenance {
     ///
     /// The contributing facts are sorted by `(stable_key, family)` and de-duplicated
     /// so the result is byte-stable regardless of the order facts were discovered in
-    /// (the Phase 42 total-order rule). The constraint kind is captured as its stable
+    /// (the total-order rule). The constraint kind is captured as its stable
     /// label via [`ConstraintKind::as_str`] — referencing the existing vocabulary
     /// rather than duplicating it.
     pub(crate) fn new(

@@ -1,7 +1,4 @@
-#![allow(
-    dead_code,
-    reason = "Phase 45 wires private TS direct binding analysis into semantic graph across sequential plans"
-)]
+#![allow(dead_code, reason = "kept for private internal consumers")]
 
 use std::collections::BTreeMap;
 

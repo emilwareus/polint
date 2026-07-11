@@ -428,7 +428,7 @@ mod tests {
 
         let suite = EvaluationSuite {
             schema_version: "polint-eval-internal-1".to_string(),
-            suite_id: "phase-22".to_string(),
+            suite_id: "eval-schema".to_string(),
             cases: vec![EvaluationCase {
                 case_id: "all-item-kinds".to_string(),
                 area: FixtureArea::Kernel,

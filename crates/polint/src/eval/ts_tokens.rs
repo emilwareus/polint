@@ -1,8 +1,7 @@
 //! JS/TS function-token acceptance gates (JS-04).
 //!
-//! These tests intentionally inspect crate-private solver rows. Phase 52 later
-//! projects solver output into observable refined-call facts; Phase 49 proves the
-//! private solver driver itself.
+//! These tests intentionally inspect crate-private solver rows to prove the
+//! private solver driver itself before refined-call projection.
 
 #![cfg(test)]
 

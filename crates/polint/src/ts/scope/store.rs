@@ -1,7 +1,4 @@
-#![allow(
-    dead_code,
-    reason = "Phase 45 wires private TS scope stores into direct binding across sequential plans"
-)]
+#![allow(dead_code, reason = "kept for private internal consumers")]
 
 use crate::analysis::ids::{TsBindingId, TsScopeId};
 use crate::core::FileId;

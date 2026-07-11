@@ -170,7 +170,7 @@ const CHILD_POINT_END: &str = "<<<POLINT_PERF_POINT_END>>>";
 /// point, then a review point), the mark saturates on the first run and every
 /// later per-run delta collapses to allocator jitter — the committed review
 /// baseline captured a meaningless 16 KiB exactly this way, while a differently
-/// warmed Phase 64 process would report the true footprint (tens of MiB) and
+/// a warmed process would report the true footprint (tens of MiB) and
 /// false-block the gate.
 ///
 /// Re-executing the measurement in a fresh child gives each run its own
@@ -184,7 +184,7 @@ const CHILD_POINT_END: &str = "<<<POLINT_PERF_POINT_END>>>";
 /// [`CHILD_POINT_END`] on stdout, then exits.
 ///
 /// The committed store-disabled baselines are regenerated through THIS path; a
-/// Phase 64+ measured run fed to `evaluate_regression_budget` MUST use the same
+/// A measured run fed to `evaluate_regression_budget` MUST use the same
 /// isolation for the peak-RSS delta to be comparable rather than an artifact of
 /// process warm-up order.
 pub(crate) fn run_repo_perf_point_isolated(
@@ -252,7 +252,7 @@ pub(crate) fn run_repo_perf_point_isolated_with_store_mode(
 ///
 /// This is the diagnostics-parity marker a
 /// [`StoreDisabledBaseline`](crate::eval::baseline::StoreDisabledBaseline)
-/// records (BENCH-02): the durable store landing in Phase 64 must not change the
+/// records (BENCH-02): enabling the durable store must not change the
 /// diagnostics polint emits, so a later run can assert this digest is unchanged.
 /// It is the FNV stable-hash over the sorted, canonical-JSON-serialized
 /// diagnostics of the check-equivalent kernel run. Clean code (no diagnostics)

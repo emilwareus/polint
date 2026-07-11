@@ -1,7 +1,4 @@
-#![allow(
-    dead_code,
-    reason = "Phase 50 introduces TS object-model extraction before all provider consumers land"
-)]
+#![allow(dead_code, reason = "kept for private internal consumers")]
 
 use std::collections::BTreeMap;
 use std::path::Path;

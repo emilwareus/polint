@@ -22,7 +22,7 @@ use crate::analysis::identity::facts::{IdentityKind, IdentityRecord};
 /// The five variants are declared in a **pinned source order** that is
 /// cross-platform byte-stable (D-25): the declaration order defines both the
 /// serde discriminant order and the `Ord` derive ordering. Reordering the
-/// variants is a deliberate milestone-review change (BLOCKER #5) and is guarded
+/// variants is a deliberate release-review change (BLOCKER #5) and is guarded
 /// by the `identity_category_variants_in_source_order` test below.
 ///
 /// `#[repr(u8)]` pins each variant's discriminant to its CONTEXT-pinned ordinal

@@ -1,6 +1,6 @@
 //! Curve-point telemetry types keyed by repo size and diff size (BENCH-01).
 //!
-//! These types are the durable measurement contract every later Phase 63 plan
+//! These types are the durable measurement contract every later plan
 //! consumes: each `CurvePoint` keys a single measurement by repo size
 //! (`repo_file_count`, `repo_source_bytes`) and diff size (`diff_files`,
 //! `diff_hunk_lines`) so downstream can plot cost curves versus size, and it

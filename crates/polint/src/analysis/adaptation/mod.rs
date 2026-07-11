@@ -1,6 +1,6 @@
 //! Private repo-local adaptation model substrate.
 //!
-//! The public SDK does not expose this module. Phase 51 uses it to load, validate,
+//! The public SDK does not expose this module. It loads, validates,
 //! sort, budget, and digest source-evident model facts before later plans lower
 //! accepted facts to semantic-graph `ModelEdge` constraints.
 

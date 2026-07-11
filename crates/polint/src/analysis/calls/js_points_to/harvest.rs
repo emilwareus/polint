@@ -3,7 +3,7 @@
 //! Walks the oxc AST of one file, resolving lexical bindings through a scope
 //! chain into solver cells and emitting inclusion constraints. The call sites it
 //! records are mapped back to the kernel's `CallSiteFact`s by span in
-//! [`super::provider`]. v1 is single-file (modules are wired in a later phase);
+//! [`super::provider`]. v1 is single-file (modules are wired in a later stage);
 //! it deliberately resolves only what it can prove — an identifier with no
 //! binding becomes a fresh empty cell (no tokens, no edges), never a guess.
 
@@ -466,7 +466,7 @@ impl<'a> Harvester<'a> {
                         // INVOKES it, it does not load/store the function. Modeling
                         // them as plain properties resolves `t1 = obj.foo; t1()` to
                         // the getter (a false positive). Accessor semantics are a
-                        // later phase; for now we drop them to protect precision.
+                        // later stage; for now we drop them to protect precision.
                         && prop.kind == oxc_ast::ast::PropertyKind::Init
                         && let Some(field) = property_key_name(&prop.key)
                     {

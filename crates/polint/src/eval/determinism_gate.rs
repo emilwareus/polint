@@ -25,22 +25,20 @@
 //! to `provider_manifests().len()`, so dropping the manifest list out of sync
 //! with the gate is impossible.
 //!
-//! # Per-phase inheritance obligation — phases 44 through 54 (D-25)
+//! # Provider inheritance obligation
 //!
-//! This gate is the REACH-03 "inherited by every subsequent solver phase"
-//! requirement. Every subsequent solver-introducing phase (**phases 44, 45, 46,
-//! 47, 48, 49, 50, 51, 52, 53, and 54**) MUST do two things.
+//! Every solver-introducing provider must do two things.
 //!
 //! First, ensure its new provider is part of the shuffled set — this is
 //! AUTOMATIC via D-22 because the set is driven by `provider_manifests()`, so no
-//! per-phase harness edit is required.
+//! per-stage harness edit is required.
 //!
 //! Second, keep the determinism-gate fixtures (`tests/eval-fixtures/determinism/*`)
-//! GREEN as a NAMED acceptance gate in that phase's verification, on both Linux
+//! GREEN as a NAMED acceptance gate in that stage's verification, on both Linux
 //! and macOS independently (the fast-CI `determinism-gate` job).
 //!
-//! A phase that introduces non-determinism in any provider fails this gate, and
-//! the failure is a blocking precondition for that phase landing.
+//! A stage that introduces non-determinism in any provider fails this gate, and
+//! the failure is a blocking precondition for that stage landing.
 
 #![cfg(test)]
 
@@ -298,10 +296,10 @@ fn ts_reachable_fixture_exercises_reachable_graph_marking() {
 
 #[test]
 fn go_rta_fixture_is_byte_identical_under_ten_seeded_permutations() {
-    // FINDING F4 (docstring correction): this gate covers the Phase-43
+    // FINDING F4 (docstring correction): this gate covers the
     // reachability/normalization order-stability of the OBSERVED projection only. The Go
-    // RTA driver's derived SOLVER edges are NOT in the observed projection yet (Phase 52 /
-    // GRAPH-05 wires solver edges into the observable `refined_calls`), and
+    // RTA driver's derived SOLVER edges are NOT in the observed projection; GRAPH-05
+    // wires solver edges into the observable `refined_calls`, and
     // `assert_n10_byte_identical` re-normalizes already-observed rows rather than re-running
     // the kernel under permuted input order — so this assertion does NOT itself exercise RTA
     // determinism. The RTA path's input-order determinism is covered explicitly by

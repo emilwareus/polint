@@ -36,7 +36,7 @@ area = "facts"
 # counter reaches non-zero, so D-15 is honored with no silent scope reduction.
 #
 # Non-zero booleans (not exact counts) are asserted here so the snapshot stays
-# byte-stable across run / file / provider order for the Phase 43 determinism gate.
+# byte-stable across run / file / provider order for the determinism gate.
 
 [repo]
 path = "repo"

@@ -596,7 +596,7 @@ exclude = []
     ] {
         assert!(
             !surface.contains(marker),
-            "stable public surface leaked Phase 41 private marker `{marker}`"
+            "stable public surface leaked private implementation marker `{marker}`"
         );
     }
 
@@ -1033,7 +1033,7 @@ fn main() -> ExitCode { runner::run_cli(vec![rule::rule()]) }
 "#,
         r#"use polint::sdk::prelude::*;
 
-#[polint::rule(id = "local/phase55-preview", description = "Phase 55 preview syntax", severity = "warn")]
+#[polint::rule(id = "local/policy-preview", description = "Policy preview syntax", severity = "warn")]
 pub(crate) fn rule(
     ctx: &mut RuleCtx<'_>,
     events: Events<'_>,
@@ -1089,7 +1089,7 @@ pub(crate) fn rule(
             .success(),
     );
 
-    let diagnostics = diagnostics_for_rule(&json, "local/phase55-preview");
+    let diagnostics = diagnostics_for_rule(&json, "local/policy-preview");
     assert_eq!(
         diagnostics.len(),
         1,
@@ -1108,10 +1108,10 @@ pub(crate) fn rule(
     for capability in ["events", "calls", "control_flow", "dataflow"] {
         assert!(
             capability_diagnostics.iter().all(|diagnostic| {
-                !diagnostic_has_evidence(diagnostic, "rule", "local/phase55-preview")
+                !diagnostic_has_evidence(diagnostic, "rule", "local/policy-preview")
                     || !diagnostic_has_evidence(diagnostic, "capability", capability)
             }),
-            "events/calls/control_flow should be supported by Phase 57: {json:#?}"
+            "events/calls/control_flow should be supported by the analysis engine: {json:#?}"
         );
     }
 
@@ -1127,7 +1127,7 @@ pub(crate) fn rule(
         .and_then(|rules| {
             rules
                 .iter()
-                .find(|rule| rule["rule_id"] == "local/phase55-preview")
+                .find(|rule| rule["rule_id"] == "local/policy-preview")
         })
         .unwrap_or_else(|| panic!("missing preview rule manifest row: {manifest:#?}"));
     let capabilities = rule["capabilities"]
@@ -1188,7 +1188,7 @@ fn main() -> ExitCode { runner::run_cli(vec![rule::rule()]) }
 "#,
         r#"use polint::sdk::prelude::*;
 
-#[polint::rule(id = "local/phase56-events-calls", description = "Phase 56 events and calls", severity = "error")]
+#[polint::rule(id = "local/events-calls", description = "Events and calls", severity = "error")]
 pub(crate) fn rule(
     ctx: &mut RuleCtx<'_>,
     events: Events<'_>,
@@ -1243,7 +1243,7 @@ func dangerous() {}
             .success(),
     );
 
-    let diagnostics = diagnostics_for_rule(&json, "local/phase56-events-calls");
+    let diagnostics = diagnostics_for_rule(&json, "local/events-calls");
     assert_eq!(
         diagnostics.len(),
         2,
@@ -1312,7 +1312,7 @@ fn main() -> ExitCode { runner::run_cli(vec![rule::rule()]) }
 "#,
         r#"use polint::sdk::prelude::*;
 
-#[polint::rule(id = "local/phase57-control-flow", description = "Phase 57 control-flow", severity = "error")]
+#[polint::rule(id = "local/control-flow", description = "Control-flow", severity = "error")]
 pub(crate) fn rule(ctx: &mut RuleCtx<'_>, control: ControlFlow<'_>) -> RuleResult {
     let mut guard = GuardQuery::new(
         EventPattern::call("dangerous"),
@@ -1376,7 +1376,7 @@ func Rollback() {}
             .success(),
     );
 
-    let diagnostics = diagnostics_for_rule(&json, "local/phase57-control-flow");
+    let diagnostics = diagnostics_for_rule(&json, "local/control-flow");
     assert_eq!(
         diagnostics.len(),
         2,
@@ -1434,7 +1434,7 @@ fn main() -> ExitCode { runner::run_cli(vec![rule::rule()]) }
 "#,
         r#"use polint::sdk::prelude::*;
 
-#[polint::rule(id = "local/phase58-data-flow", description = "Phase 58 data-flow", severity = "error")]
+#[polint::rule(id = "local/data-flow", description = "Data-flow", severity = "error")]
 pub(crate) fn rule(ctx: &mut RuleCtx<'_>, flow: DataFlow<'_>) -> RuleResult {
     let mut query = FlowQuery::new(
         SourcePattern::secret_like(["token", "password"]),
@@ -1472,7 +1472,7 @@ pub(crate) fn rule(ctx: &mut RuleCtx<'_>, flow: DataFlow<'_>) -> RuleResult {
             .success(),
     );
 
-    let diagnostics = diagnostics_for_rule(&json, "local/phase58-data-flow");
+    let diagnostics = diagnostics_for_rule(&json, "local/data-flow");
     assert_eq!(
         diagnostics.len(),
         1,
@@ -1576,7 +1576,7 @@ fn main() -> ExitCode { runner::run_cli(vec![rule::rule()]) }
 "#,
         r#"use polint::sdk::prelude::*;
 
-#[polint::rule(id = "local/phase61-policy-matrix", description = "Phase 61 policy matrix", severity = "error")]
+#[polint::rule(id = "local/policy-matrix", description = "Policy matrix", severity = "error")]
 pub(crate) fn rule(
     ctx: &mut RuleCtx<'_>,
     events: Events<'_>,
@@ -1687,7 +1687,7 @@ type Tx struct{}
             .success(),
     );
 
-    let diagnostics = diagnostics_for_rule(&json, "local/phase61-policy-matrix");
+    let diagnostics = diagnostics_for_rule(&json, "local/policy-matrix");
     assert_eq!(
         diagnostics.len(),
         5,
@@ -2053,7 +2053,7 @@ fn assert_no_phase33_internal_markers(surface: &str, output: &str) {
     ] {
         assert!(
             !output.contains(marker),
-            "{surface} leaked Phase 33 internal marker `{marker}`:\n{output}"
+            "{surface} leaked internal implementation marker `{marker}`:\n{output}"
         );
     }
 }
@@ -11254,7 +11254,7 @@ fn phase3_check_json(root: &Path) -> serde_json::Value {
     )
 }
 
-// --- Phase 32 Plan 07: Direct summary internals stay private ---
+// Direct summary internals stay private.
 
 #[test]
 fn direct_summaries_internals_stay_private() {

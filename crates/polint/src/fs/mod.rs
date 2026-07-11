@@ -89,7 +89,7 @@ pub struct LoadSourcesTimings {
 }
 
 impl LoadSourcesTimings {
-    /// Sum of all sub-phase durations for `polint-bench`.
+    /// Sum of all sub-stage durations for `polint-bench`.
     #[cfg(feature = "bench")]
     pub fn total(&self) -> Duration {
         self.discover + self.read_parallel + self.fingerprint_and_push

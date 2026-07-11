@@ -2,7 +2,7 @@ schema_version = "polint-eval-fixture-1"
 case_id = "ts-object-model-object-literal"
 area = "facts"
 
-# Phase 50 Plan 05 TS object-model fixture.
+# TS object-model fixture.
 #
 # The executable gate in `eval::ts_object_model` reads private solver rows. This
 # fixture proves exact dot, exact string-literal, cross-form exact property, and

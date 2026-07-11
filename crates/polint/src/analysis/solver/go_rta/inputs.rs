@@ -72,7 +72,7 @@ pub(crate) struct GoRtaInputs {
     /// Every `UnresolvedDynamic` callsite that maps to a `CallConstraint` node, with
     /// its dispatch detail joined by `callsite_stable_key`.
     pub(crate) callsites: Vec<GoRtaCallsite>,
-    /// `type_name -> method names` (the Phase 46 method-set input).
+    /// `type_name -> method names` (the method-set input).
     pub(crate) method_sets: BTreeMap<String, BTreeSet<String>>,
     /// `type_name -> the method-set fact's stable key` (a contributing fact).
     pub(crate) method_set_keys: BTreeMap<String, String>,
@@ -1014,7 +1014,7 @@ mod tests {
 
     #[test]
     fn from_db_maps_method_when_ssa_point_span_lies_within_core_declaration_span() {
-        // Regression for the Phase 48 verification finding: the SSA frontend reports a
+        // Regression for the verification finding: the SSA frontend reports a
         // zero-width POINT span for a method (`func` token), while tree-sitter reports
         // the FULL declaration span. `matching_core_function` must map the method by
         // file + name + span-CONTAINMENT, or interface dispatch resolves nothing.

@@ -1,7 +1,4 @@
-#![allow(
-    dead_code,
-    reason = "Phase 50 introduces private TS object-model facts before all solver consumers land"
-)]
+#![allow(dead_code, reason = "kept for private internal consumers")]
 
 use serde::{Deserialize, Serialize};
 

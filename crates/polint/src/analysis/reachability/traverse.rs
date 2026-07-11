@@ -14,8 +14,8 @@
 //! SEPARATE fact family — `analysis::calls` (and `analysis::entrypoints`) are
 //! never mutated (composition over mutation, D-18).
 //!
-//! Forward-compatibility (D-18): Phases 47/48 will swap this direct-call edge set
-//! for solver-derived edges behind this SAME marking contract — the
+//! Forward-compatibility (D-18): solver-derived edges can replace this direct-call
+//! edge set behind the SAME marking contract — the
 //! `CallReachabilityFact` shape, the call-site-stable-key keying, and the
 //! reachable-from-roots semantics stay fixed; only the adjacency source changes.
 
@@ -134,7 +134,7 @@ pub(crate) fn mark_call_reachability(
 
 /// A direct-call edge participates in the reachable-set frontier only when its
 /// target is resolved. (Ambiguous targets are conservatively excluded — the
-/// pre-solver edge set marks only edges it is confident about; later solver phases
+/// pre-solver edge set marks only edges it is confident about; later solver stages
 /// widen this behind the same contract.)
 fn is_resolved_direct_edge(status: CallTargetStatus) -> bool {
     matches!(status, CallTargetStatus::Resolved)

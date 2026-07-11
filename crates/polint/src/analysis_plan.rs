@@ -556,7 +556,7 @@ fn capability_diagnostic(capability: &PlannedCapability, rule_id: &str) -> Diagn
     let help = match capability.status {
         CapabilitySupportStatus::Supported => unreachable!("supported capabilities are filtered"),
         CapabilitySupportStatus::Unsupported => format!(
-            "Capability `{}` is not supported in this phase; see {docs_path}.",
+            "Capability `{}` is not currently supported; see {docs_path}.",
             capability.capability
         ),
         CapabilitySupportStatus::SetupMissing => format!(
@@ -693,7 +693,7 @@ fn support_for(capability: &str) -> CapabilityAccumulator {
         "symbols" | "references" => (CapabilitySupportStatus::Supported, None, None, None),
         "test_suite_metrics" => (
             CapabilitySupportStatus::Unsupported,
-            Some("Normalized test suite metrics are reserved for a later phase.".to_string()),
+            Some("Normalized test suite metrics are not currently supported.".to_string()),
             Some("Use go_tests for current Go test evidence.".to_string()),
             Some("docs/facts/capability-plans.md".to_string()),
         ),
@@ -723,7 +723,7 @@ fn support_for(capability: &str) -> CapabilityAccumulator {
         ),
         "cfg" | "call_graph" | "coverage_facts" => (
             CapabilitySupportStatus::Unsupported,
-            Some("Capability is reserved for a later phase.".to_string()),
+            Some("Capability is not currently supported.".to_string()),
             None,
             Some("docs/facts/capability-plans.md".to_string()),
         ),
@@ -1143,7 +1143,7 @@ mod tests {
         assert_eq!(accumulator.status, CapabilitySupportStatus::Unsupported);
         assert_eq!(
             accumulator.reason.as_deref(),
-            Some("Capability is reserved for a later phase.")
+            Some("Capability is not currently supported.")
         );
         assert_eq!(
             accumulator.docs_path.as_deref(),
@@ -1159,7 +1159,7 @@ mod tests {
         assert_eq!(capability.status, CapabilitySupportStatus::Unsupported);
         assert_eq!(
             capability.reason.as_deref(),
-            Some("Capability is reserved for a later phase.")
+            Some("Capability is not currently supported.")
         );
         assert_eq!(
             capability.docs_path.as_deref(),

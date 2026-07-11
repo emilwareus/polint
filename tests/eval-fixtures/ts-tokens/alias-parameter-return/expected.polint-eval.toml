@@ -2,7 +2,7 @@ schema_version = "polint-eval-fixture-1"
 case_id = "ts-tokens-alias-parameter-return"
 area = "facts"
 
-# Phase 49 Plan 03 TS token fixture.
+# TS token fixture.
 #
 # The executable gate in `eval::ts_tokens` reads the private solver-derived rows.
 # Semantic-graph producers emit TS token CopyEdges for direct aliases plus simple

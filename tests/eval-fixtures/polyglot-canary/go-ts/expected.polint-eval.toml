@@ -2,7 +2,7 @@ schema_version = "polint-eval-fixture-1"
 case_id = "polyglot-canary-go-ts"
 area = "polyglot-canary"
 
-# Phase 49 Plan 03 — polyglot Go+TS canary.
+# — polyglot Go+TS canary.
 #
 # The mixed repo proves the shared solver core can run Go RTA, TS token dispatch,
 # and opt-in TS object-model dispatch together without cross-language interference:
@@ -17,7 +17,7 @@ area = "polyglot-canary"
 #
 # The executable proof lives in `eval::go_rta::polyglot_go_ts_canary_*` and
 # `eval::ts_tokens::polyglot_canary_*`. No `[[expected]]` row is captured here
-# because solver-derived edges are crate-private until Phase 52 projects them into
+# because solver-derived edges remain crate-private until projected into
 # observable refined-call rows.
 
 [repo]

@@ -2,7 +2,7 @@ schema_version = "polint-eval-fixture-1"
 case_id = "go-rta-iteration-cap"
 area = "go-rta"
 
-# Phase 48 Plan 03 — the GO-05 success-criterion-2 acceptance artifact (D-14).
+# — the GO-05 success-criterion-2 acceptance artifact (D-14).
 #
 # repo/main.go declares a Shape interface with THREE instantiated implementers
 # (Circle, Square, Triangle), all converted to the Shape interface in the reachable

@@ -23,8 +23,7 @@ use crate::analysis::points_to::solver::PointsToBudget;
 /// Per-sub-domain budget knobs carried alongside the unified cross-domain knobs.
 ///
 /// This is the "channel for per-sub-domain knobs" D-05 prescribes. Today it holds
-/// the points-to-specific caps; Phase 48 (Go RTA) and Phase 49 (TS tokens) extend
-/// it as their drivers land.
+/// the points-to-specific caps plus the Go RTA and TS token controls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PointsToSubBudget {
     pub(crate) max_objects_per_var: usize,
@@ -65,7 +64,7 @@ impl Default for PointsToSubBudget {
 ///   a policy-drain count): the RTA fixpoint can resolve thousands of dynamic
 ///   callsite-visits across rounds on a real repo, so reusing the policy-count cap
 ///   here would spuriously latch [`BudgetStatus::BudgetExceeded`] and drop real edges
-///   (Phase 48 review CR-01). Exceeding it is honest run-level exhaustion.
+///   (CR-01). Exceeding it is honest run-level exhaustion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct GoRtaSubBudget {
     pub(crate) address_taken_threshold: usize,
@@ -91,8 +90,8 @@ impl Default for GoRtaSubBudget {
 
 /// Per-sub-domain budget knobs for the JS/TS function-token driver (JS-04).
 ///
-/// These caps bound the private `analysis::solver::ts_tokens` fixpoint planned for
-/// Phase 49. They are intentionally crate-private: rule authors consume the final
+/// These caps bound the private `analysis::solver::ts_tokens` fixpoint. They are
+/// intentionally crate-private: rule authors consume the final
 /// derived facts through SDK views, not these internal propagation controls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct JsTokensSubBudget {
@@ -135,8 +134,8 @@ pub(crate) struct JsObjectModelSubBudget {
 impl Default for JsObjectModelSubBudget {
     fn default() -> Self {
         // Finite, strictly-positive defaults. They are sized to admit ordinary local
-        // object/property flows while bounding fan-out until Phase 54 benchmark gates
-        // decide whether this model should be on by default.
+        // object/property flows while bounding fan-out; benchmark gates decide
+        // whether this model should be on by default.
         Self {
             max_objects_per_place: 128,
             max_properties_per_object: 128,
@@ -182,10 +181,10 @@ impl Default for SolverBudget {
             // existing fields' values — `solver_budget_default_matches_points_to_defaults`
             // pins 10_000 / 64 / points-to defaults byte-identically.
             go: GoRtaSubBudget::default(),
-            // JS token sub-budget (Phase 49/JS-04). Adding this field MUST NOT perturb
+            // JS token sub-budget (JS-04). Adding this field MUST NOT perturb
             // any existing cross-domain, points-to, or Go default.
             js: JsTokensSubBudget::default(),
-            // JS object/property/prototype/receiver model (Phase 50/JS-05). It is
+            // JS object/property/prototype/receiver model (JS-05). It is
             // explicitly opt-in until benchmark gates approve default enablement.
             object_model_enabled: false,
             object: JsObjectModelSubBudget::default(),
@@ -224,7 +223,7 @@ pub(crate) enum BudgetStatus {
     #[default]
     WithinBudget,
     /// A budget ceiling (steps, outer iterations, or a per-sub-domain cap) was
-    /// hit; downstream (Phase 52 unknown taxonomy) categorizes this honestly.
+    /// hit; the unknown taxonomy categorizes this honestly downstream.
     BudgetExceeded,
     /// The solver did not run for this input.
     NotRun,

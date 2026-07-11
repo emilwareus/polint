@@ -2,7 +2,7 @@ schema_version = "polint-eval-fixture-1"
 case_id = "go-rta-static-reachability"
 area = "go-rta"
 
-# Phase 48 FINDING 1 — native static-reachability RTA fixture (GO-05, standard RTA).
+# Native static-reachability RTA fixture (GO-05, standard RTA).
 #
 # repo/main.go makes a DIRECT (static) call from the root `main` to an UNEXPORTED
 # helper `runDispatch` (NOT itself a reachability root). The interface dispatch
@@ -16,7 +16,7 @@ area = "go-rta"
 # dropped while the run still reported WithinBudget. The executable proof lives in
 # `eval::go_rta` (it reads db.solver_derived_edges() and asserts the (Dog).Speak edge
 # IS present and budget_status == WithinBudget). No `[[expected]]` row is captured
-# because solver-derived edges are crate-private (Phase 52 wires them into the
+# because solver-derived edges are crate-private (the refined-call projection exposes them in the
 # observable refined-call projection).
 
 [repo]

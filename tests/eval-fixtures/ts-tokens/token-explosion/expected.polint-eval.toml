@@ -2,7 +2,7 @@ schema_version = "polint-eval-fixture-1"
 case_id = "ts-tokens-token-explosion"
 area = "facts"
 
-# Phase 49 Plan 03 token-explosion fixture.
+# token-explosion fixture.
 #
 # The eval gate derives a closed token input from these real fixture function nodes,
 # then fans several function tokens into one synthetic callsite under a tight JS token

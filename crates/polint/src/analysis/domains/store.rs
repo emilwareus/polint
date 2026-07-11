@@ -1,7 +1,4 @@
-#![expect(
-    dead_code,
-    reason = "Phase 31 stores domain rows before provider/debug/eval plans consume every index."
-)]
+#![expect(dead_code, reason = "kept for private internal consumers")]
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;

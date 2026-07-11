@@ -1,7 +1,4 @@
-#![allow(
-    dead_code,
-    reason = "Phase 45 wires private inventory extraction into DB/graph consumers across sequential plans"
-)]
+#![allow(dead_code, reason = "kept for private internal consumers")]
 
 use oxc_allocator::Allocator;
 use oxc_ast::AstKind;

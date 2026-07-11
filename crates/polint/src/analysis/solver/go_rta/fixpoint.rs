@@ -9,7 +9,7 @@
 //!
 //! The fixpoint iterates **reachability ⊗ dispatch**:
 //!
-//! 1. Seed the reachable function set from the Phase 43 reachability roots (D-07).
+//! 1. Seed the reachable function set from the reachability roots (D-07).
 //! 2. Seed the instantiated runtime-type set and the address-taken set from the
 //!    Go-frontend facts. These are the WHOLE reachable program's rapid-type /
 //!    address-taken sets (the sidecar built SSA over `ssautil.AllPackages` and

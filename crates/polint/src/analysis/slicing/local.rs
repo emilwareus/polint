@@ -17,7 +17,7 @@ pub(crate) struct SliceQuery {
 
 #[allow(
     dead_code,
-    reason = "Forward slicing is part of the private Phase 39 query contract before public callers exist."
+    reason = "Forward slicing is part of the private query contract before public callers exist."
 )]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SliceDirection {
@@ -27,7 +27,7 @@ pub(crate) enum SliceDirection {
 
 #[allow(
     dead_code,
-    reason = "All slice modes are part of the private Phase 39 query contract before public callers exist."
+    reason = "All slice modes are part of the private query contract before public callers exist."
 )]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SliceMode {
@@ -196,7 +196,7 @@ pub(crate) fn local_slice(store: &EvidenceStore, query: SliceQuery) -> SliceResu
 impl SliceMode {
     #[allow(
         dead_code,
-        reason = "Mode-to-evidence-key mapping is consumed by subsequent Phase 39 cache/debug plans."
+        reason = "Mode-to-evidence-key mapping is consumed by subsequent cache/debug plans."
     )]
     pub(crate) fn query_mode(self) -> EvidenceQueryMode {
         match self {

@@ -22,13 +22,11 @@ use crate::analysis::points_to::facts::{PointsToPrecision, PointsToStatus};
 ///
 /// This enum is the unified frontend vocabulary that sits *above* the points-to
 /// sub-domain's internal `crate::analysis::points_to::facts::PointsToConstraintKind`.
-/// The two are distinct enums and Phase 44 does NOT merge, rename, import, or
-/// otherwise couple them — folding the points-to constraint language into this
-/// unified vocabulary is explicitly deferred to Phase 47. The conceptual
-/// relationship (documented here for Phase 47's later folding) is:
+/// The two are distinct enums and are not merged, renamed, imported, or otherwise
+/// coupled. Their conceptual relationship is:
 ///
-/// - `ConstraintKind::CopyEdge`  <-> `PointsToConstraintKind::Copy`
-/// - `ConstraintKind::Alloc`     <-> `PointsToConstraintKind::AddressOf`
+/// - `ConstraintKind::CopyEdge` <-> `PointsToConstraintKind::Copy`
+/// - `ConstraintKind::Alloc` <-> `PointsToConstraintKind::AddressOf`
 /// - `ConstraintKind::FieldLoad` <-> `PointsToConstraintKind::FieldLoad`
 /// - `ConstraintKind::FieldStore`<-> `PointsToConstraintKind::FieldStore`
 ///
@@ -64,7 +62,7 @@ pub(crate) enum ConstraintKind {
         field: String,
         src: SemanticNodeId,
     },
-    /// A call obligation anchored at a callsite node, consumed by the Phase 47
+    /// A call obligation anchored at a callsite node, consumed by the
     /// unified solver to resolve dynamic dispatch / refine targets.
     CallConstraint { callsite: SemanticNodeId },
     /// Accepted repo-local adaptation model edge. Only validated model facts produce

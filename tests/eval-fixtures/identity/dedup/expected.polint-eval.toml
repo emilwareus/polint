@@ -14,7 +14,7 @@ area = "facts"
 # deterministically by the co-located Rust tests in `analysis::identity::dedup`
 # (`identity_dedup_fixture_manifest_asserts_multiplicity_two`) and by the
 # provider pipeline tests in `analysis::identity::provider`. This snapshot is
-# intentionally free of order-dependent assertions so the Phase 43 determinism
+# intentionally free of order-dependent assertions so the determinism
 # gate can inherit it unchanged: the asserted `multiplicity` value is identical
 # regardless of run order, file order, and provider order.
 

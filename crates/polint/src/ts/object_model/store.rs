@@ -1,7 +1,4 @@
-#![allow(
-    dead_code,
-    reason = "Phase 50 introduces the private TS object-model store before all solver consumers land"
-)]
+#![allow(dead_code, reason = "kept for private internal consumers")]
 
 use std::collections::{BTreeMap, BTreeSet};
 

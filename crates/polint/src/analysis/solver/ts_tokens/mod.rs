@@ -3,7 +3,7 @@
 //! This module models callable function values only. It intentionally does **not**
 //! model object properties, prototypes, receivers/`this`, native callbacks, or
 //! framework dispatch. Those families remain honest unresolved reasons until their
-//! own object-model/adaptation phases land.
+//! own object-model/adaptation stages land.
 
 pub(crate) mod dispatch;
 pub(crate) mod fixpoint;

@@ -1,4 +1,4 @@
-// V1.4 LEAK GATE — see Phase 42 D-17, D-18, D-19 and Phase 55 D-17.
+// Compile-time gate that locks the supported public surface.
 //
 // This test compiles the probe crate at tests/fixtures/public-surface-leak-probe/
 // and asserts that the public polint::sdk::prelude::* allow-list changes only
@@ -6,7 +6,7 @@
 //
 // The ALLOWED_PRELUDE constant below is the source of truth. Extending the list
 // is a deliberate API change that requires a documented promotion record under
-// docs/API-VISIBILITY-PLAN.md before it can be merged. Phase 55 deliberately
+// docs/API-VISIBILITY-PLAN.md before it can be merged. The probe deliberately
 // adds preview policy-query vocabulary while keeping raw CFG/call graph/solver
 // internals private.
 //
@@ -22,12 +22,11 @@
 //
 // If you are reading this comment because the test failed:
 //   1. Did you accidentally add `pub` to a v1.3 type? Make it `pub(crate)`.
-//   2. Did you add a sanctioned new public type via milestone-close review?
+//   2. Did you add a sanctioned new public type via release-close review?
 //      Extend ALLOWED_PRELUDE in the same PR and reference the review record,
 //      and add a witness for it in the probe crate's allowlist_witness module.
-//   3. Did the probe crate's dependency on polint break? Re-read Plan 04 of
-//      Phase 42 and restore the probe's `#![no_implicit_prelude]` + single
-//      `use ::polint::sdk::prelude::*;` import.
+//   3. Did the probe crate's dependency on polint break? Restore the probe's
+//      `#![no_implicit_prelude]` and single `use ::polint::sdk::prelude::*;` import.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -339,7 +338,7 @@ fn probe_crate_compiles_against_prelude_only() {
     let manifest = probe_manifest_path();
     assert!(
         manifest.exists(),
-        "probe manifest missing at {} — see Phase 42 Plan 04",
+        "probe manifest missing at {} — restore the checked-in leak-gate fixture",
         manifest.display()
     );
 
@@ -423,7 +422,7 @@ fn ensure_no_private_namespace_in_probe() {
         src.lines().any(|l| l.trim() == "#![no_implicit_prelude]"),
         "probe lib.rs is missing `#![no_implicit_prelude]` — removing it lets std's \
          prelude mask accidental polint-prelude additions (T-42-04-04). \
-         Restore it per Phase 42 Plan 04."
+         Restore it to preserve the leak-gate isolation contract."
     );
 
     // (b) EXACTLY one `use polint::` line, and it is the prelude glob
@@ -621,7 +620,7 @@ fn allowlist_has_no_duplicates_and_expected_count() {
         ALLOWED_PRELUDE.len(),
         "ALLOWED_PRELUDE contains duplicate entries"
     );
-    // Locked count derived from sdk/mod.rs after the Phase 56 PolicyConfidence
+    // Locked count derived from sdk/mod.rs after the PolicyConfidence
     // promotion plus the sanctioned review-rules API addition (ChangedFiles +
     // ChangeStatus); see docs/API-VISIBILITY-PLAN.md.
     assert_eq!(

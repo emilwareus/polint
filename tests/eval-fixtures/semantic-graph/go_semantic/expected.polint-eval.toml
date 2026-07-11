@@ -2,7 +2,7 @@ schema_version = "polint-eval-fixture-1"
 case_id = "semantic-graph-go-semantic"
 area = "facts"
 
-# Phase 46 Go semantic frontend fixture. The source covers package/module
+# Go semantic frontend fixture. The source covers package/module
 # identity, init, function, method/receiver, a direct static call, and an
 # interface-shaped call that must remain unresolved until the Go RTA driver.
 

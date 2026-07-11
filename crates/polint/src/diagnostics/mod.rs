@@ -919,7 +919,7 @@ impl Diagnostic {
 
     #[allow(
         dead_code,
-        reason = "Internal bundle refs are attached by Phase 39 render plumbing; tests verify fingerprint compatibility before rule-facing APIs exist."
+        reason = "Internal bundle refs are attached by current render plumbing; tests verify fingerprint compatibility before rule-facing APIs exist."
     )]
     pub(crate) fn with_evidence_bundle_ref(
         mut self,
@@ -931,7 +931,7 @@ impl Diagnostic {
 
     #[allow(
         dead_code,
-        reason = "Structured evidence attachment is wired for Phase 39 renderers and exercised through diagnostics tests before production call sites attach bundles."
+        reason = "Structured evidence attachment is wired for current renderers and exercised through diagnostics tests before production call sites attach bundles."
     )]
     pub(crate) fn with_structured_evidence_v1(mut self, value: StructuredEvidenceV1) -> Self {
         self.evidence_v1 = Some(value);
@@ -940,7 +940,7 @@ impl Diagnostic {
 
     #[allow(
         dead_code,
-        reason = "Internal bundle refs are read by Phase 39 render plumbing; tests verify the side-table bridge without making it public SDK."
+        reason = "Internal bundle refs are read by current render plumbing; tests verify the side-table bridge without making it public SDK."
     )]
     pub(crate) fn evidence_bundle_ref(&self) -> Option<EvidenceBundleRef> {
         self.evidence_bundle

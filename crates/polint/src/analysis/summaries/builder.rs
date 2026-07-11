@@ -468,7 +468,7 @@ fn build_call_effects(
 ) -> CallEffects {
     let mut direct_callees = BTreeSet::new();
     let mut has_callback_invoked = false;
-    // Callback-stored detection requires value-flow tracking (Phase 38)
+    // Callback-stored detection requires value-flow tracking
     let has_callback_stored = false;
     let unresolved_count = function_unresolved.len() as u32;
 
@@ -708,7 +708,7 @@ fn build_memory_effects(
     }
 }
 
-// receiver, return_access, module are reserved for Phase 36 (type/value/place/alias substrate)
+// receiver, return_access, and module are reserved for the type/value/place/alias substrate.
 // when PlaceRoot gains Receiver/Module variants and return-place tracking improves.
 #[allow(clippy::too_many_arguments)]
 fn track_access(

@@ -1,9 +1,6 @@
 #![cfg_attr(
     not(test),
-    expect(
-        dead_code,
-        reason = "Extension-aware cache quarantine infrastructure is established before Phase 34 wires real extension providers."
-    )
+    expect(dead_code, reason = "kept for private internal consumers")
 )]
 
 use std::collections::BTreeMap;

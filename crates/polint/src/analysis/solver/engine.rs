@@ -59,7 +59,7 @@ pub(crate) struct PolicyRunRecord {
 /// deterministic worklist drain.
 ///
 /// Reserved orchestration: production calls [`derive_edges`] directly; this engine is
-/// the seam Phases 48/49 route through once Go/TS policies exist (see module docs).
+/// the seam concrete policies route through once Go/TS policies exist (see module docs).
 pub(crate) struct SolverEngine {
     policies: Vec<Box<dyn SolverPolicy>>,
     budget: SolverBudget,
@@ -131,7 +131,7 @@ impl SolverEngine {
 
     /// Drive every registered policy AND the points-to `CopyEdge` closure into ONE
     /// merged [`SolverOutput`] under one [`SolverBudget`] (D-02, the reserved-seam
-    /// composition Phase 48 realizes).
+    /// composition concrete policies realize).
     ///
     /// Composition, NOT rewrite (the acceptance bar is points-to byte-identity):
     /// 1. the points-to transitive `CopyEdge` closure is computed via the existing

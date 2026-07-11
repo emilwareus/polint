@@ -47,9 +47,9 @@ pub(crate) fn derive_reachability_with_cache_stats(
 ) -> ReachabilityProviderRunOutput {
     debug_assert_eq!(manifest.id, REACHABILITY_PROVIDER_ID);
 
-    // Phase 1: extract roots from existing facts + configured input.
+    // Step: extract roots from existing facts + configured input.
     let roots = discover_reachability_roots(db, configured_roots);
-    // Phase 2: partition into the storable (real-target) set and the
+    // Step: partition into the storable (real-target) set and the
     // configured-unresolvable set. Configured-unresolvable roots carry a sentinel
     // target the referential store rejects, so they never reach the validated
     // store; we keep their stable keys to (a) fold into the digest and (b) report
@@ -62,7 +62,7 @@ pub(crate) fn derive_reachability_with_cache_stats(
         .iter()
         .map(|root| root.stable_key.clone())
         .collect();
-    // Phase 3: mark call reachability — BFS/DFS over resolved direct-call edges
+    // Step: mark call reachability — BFS/DFS over resolved direct-call edges
     // from the storable roots, keyed by call-site stable key (composition, never
     // mutating analysis::calls; D-18).
     //
@@ -71,12 +71,12 @@ pub(crate) fn derive_reachability_with_cache_stats(
     // `filter_scored_edges_by_scoring_mode`, `scored_call_graph_edges_for_db`) are
     // `#[cfg(test)]` — the eval harness that consumes them is internal/test-facing
     // with no public CLI/SDK surface. The production marking is INTENTIONAL per D-18
-    // (the REACH-02 deliverable): phases 47/48 swap the direct-call edge set for
-    // solver-derived edges behind this SAME marking contract and read the marks in
+    // (the REACH-02 deliverable): a solver-derived edge set can replace the
+    // direct-call edges behind this SAME marking contract and read the marks in
     // production. Do NOT remove the production marking to chase "dead computation" —
     // the produced-but-unread state in v1.3 production is deliberate forward-compat.
     let marks = mark_call_reachability(db, &real_roots);
-    // Phase 4: normalize the STORABLE set (real roots + marks). The digest is
+    // Step: normalize the STORABLE set (real roots + marks). The digest is
     // computed over exactly this set so it certifies what actually lands in the db;
     // `ReachabilityRootFact.id` carries `#[serde(skip)]`, so the digest payload
     // never folds in run-local dense IDs (D-06/D-19).
@@ -85,7 +85,7 @@ pub(crate) fn derive_reachability_with_cache_stats(
         marks,
     }
     .normalized();
-    // Phase 5: digest over the stored stable payloads, plus a dedicated stable-key
+    // Step: digest over the stored stable payloads, plus a dedicated stable-key
     // part for configured-unresolvable roots so the cache invalidates when they
     // change without serializing whole facts (with dense IDs) into the `root=`
     // parts.
@@ -100,7 +100,7 @@ pub(crate) fn derive_reachability_with_cache_stats(
         &storable,
         &unresolved_stable_keys,
     );
-    // Phase 6: assign dense IDs as a post-digest read concern only (never before /
+    // Step: assign dense IDs as a post-digest read concern only (never before /
     // independent of the digest). normalized() above fixed the order; the dense IDs
     // simply enumerate that order for any in-memory reader and are stripped from
     // serialization (D-06/D-19).
@@ -118,7 +118,7 @@ pub(crate) fn derive_reachability_with_cache_stats(
         .map(unresolved_configured_root_diagnostic)
         .collect();
 
-    // Phase 7: store the storable set.
+    // Step: store the storable set.
     match db.replace_reachability_facts(storable) {
         Ok(()) => ReachabilityProviderRunOutput {
             diagnostics,

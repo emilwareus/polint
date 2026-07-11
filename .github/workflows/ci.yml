@@ -93,10 +93,10 @@ jobs:
       - name: cargo test
         run: cargo test --workspace --all-features --locked
 
-      - name: Phase 64 semantic-store regression gate (serialized)
+      - name: semantic-store regression gate (serialized)
         run: >-
           cargo test -p polint --lib --all-features --locked
-          eval::bench::gate::tests::phase_64::real_store_enabled_measurement_passes_locked_boundary
+          eval::bench::gate::tests::semantic_store_boundary::real_store_enabled_measurement_passes_locked_boundary
           -- --exact --ignored --test-threads=1 --nocapture
 
   test-platform:
@@ -125,18 +125,17 @@ jobs:
       - name: cargo test
         run: cargo test -p polint --lib --all-features --locked
 
-      - name: Phase 64 semantic-store regression gate (serialized)
+      - name: semantic-store regression gate (serialized)
         run: >-
           cargo test -p polint --lib --all-features --locked
-          eval::bench::gate::tests::phase_64::real_store_enabled_measurement_passes_locked_boundary
+          eval::bench::gate::tests::semantic_store_boundary::real_store_enabled_measurement_passes_locked_boundary
           -- --exact --ignored --test-threads=1 --nocapture
 
   leak-gate:
-    # V1.3 PUBLIC-SURFACE-LEAK GATE — see Phase 42 D-17, D-18, D-19.
+    # Blocks accidental expansion of the supported public API on Linux and macOS.
     # Runs on every PR on Linux AND macOS. fail-fast: false means each platform
     # reports independently — a Linux pass + macOS fail still blocks the PR (no
-    # averaging, no skipping either platform, D-18). Every subsequent v1.3 phase
-    # (43-54) inherits this gate as a precondition for landing public types.
+    # averaging or skipping either platform). New public types must pass this gate.
     name: public surface leak gate (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -155,14 +154,12 @@ jobs:
         run: cargo test --package polint --test public_surface_leak --locked
 
   determinism-gate:
-    # V1.3 DETERMINISM GATE — see Phase 43 Plan 03, D-20, D-21, D-22, D-24, D-25.
+    # Blocks provider-order nondeterminism on Linux and macOS.
     # Runs the N=10 seeded-permutation byte-identity gate on every PR on Linux AND
     # macOS. fail-fast: false means each platform reports INDEPENDENTLY — a Linux
     # pass + macOS fail still blocks the PR (no averaging, no skipping either
-    # platform, D-24, mirroring the leak-gate contract). Every subsequent
-    # solver-introducing phase (44-54) INHERITS this gate as a precondition for
-    # landing: a new provider auto-enrolls via provider_manifests() (D-22), and
-    # the determinism fixtures must stay green as a named acceptance gate (D-25).
+    # platform, mirroring the leak-gate contract). New providers auto-enroll via
+    # provider_manifests(), and the determinism fixtures must stay green.
     # This is a fast-CI (PR-blocking) job, not nightly.
     name: determinism gate (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -190,7 +187,7 @@ jobs:
         run: cargo test -p polint --lib eval::determinism_gate --locked
 
   promotion-gate:
-    # V1.3 PROMOTION GATE — see Phase 54 BENCH-01.
+    # Combines the polyglot canary with public-surface and determinism checks.
     # Runs the polyglot Go+TS canary, public-surface leak gate, and determinism
     # gate together on Linux AND macOS. fail-fast: false keeps platform verdicts
     # independent: a pass on one platform never hides a failure on the other.

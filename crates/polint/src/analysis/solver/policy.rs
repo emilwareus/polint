@@ -2,7 +2,7 @@
 //!
 //! A [`SolverPolicy`] is the abstraction the unified [`super::engine`] core drives:
 //! a policy contributes propagation/derivation over a **closed constraint
-//! snapshot** (D-11) and reports its budget outcome. Phase 47 introduced
+//! snapshot** (D-11) and reports its budget outcome.
 //! [`PointsToPolicy`], which folds v1.2's
 //! `points_to::solver` fixpoint in **by composition** (D-03): it invokes the
 //! existing `solve_points_to` engine in place, so the points-to snapshot and
@@ -30,7 +30,7 @@ use super::ts_tokens::{TsTokenInputs, solve_ts_tokens};
 ///
 /// `points_to` carries the folded points-to sub-domain result (D-03) when the
 /// policy is the points-to domain; `derived_edges` carries a policy's derived edges
-/// (D-03, Phases 48/49) — the Go RTA and TS token policies produce
+/// (D-03) — the Go RTA and TS token policies produce
 /// `CallConstraint`-derived call edges here. Empty input snapshots leave both empty
 /// and report [`BudgetStatus::WithinBudget`] over zero derivation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,7 +83,7 @@ pub(crate) trait SolverPolicy {
     fn solve(&self, budget: &SolverBudget) -> PolicyOutcome;
 }
 
-/// The one real Phase 47 policy: the points-to sub-domain folded in by
+/// The points-to policy folds in the points-to sub-domain by
 /// composition (D-03). It owns a closed snapshot of points-to constraints and
 /// delegates to the existing `solve_points_to` fixpoint unchanged.
 pub(crate) struct PointsToPolicy {
@@ -120,7 +120,7 @@ impl SolverPolicy for PointsToPolicy {
     }
 }
 
-/// The real Go RTA policy (Phase 48, GO-05). Owns a CLOSED snapshot of the Go RTA
+/// The real Go RTA policy (GO-05). Owns a CLOSED snapshot of the Go RTA
 /// inputs (reachability roots + the Go-frontend address-taken / instantiated-type /
 /// dispatch facts + method-sets + callsites), mirroring how [`PointsToPolicy`] owns
 /// its constraints. [`SolverPolicy::solve`] runs the RTA fixpoint
@@ -154,7 +154,7 @@ impl SolverPolicy for GoRtaPolicy {
     }
 }
 
-/// JS/TS function-token policy (Phase 49, JS-04). It owns a closed token snapshot
+/// JS/TS function-token policy (JS-04). It owns a closed token snapshot
 /// and emits conservative token-derived call edges.
 pub(crate) struct TsTokensPolicy {
     inputs: TsTokenInputs,
@@ -183,7 +183,7 @@ impl SolverPolicy for TsTokensPolicy {
     }
 }
 
-/// JS/TS object/property policy (Phase 50, JS-05). It owns a closed object-model
+/// JS/TS object/property policy (JS-05). It owns a closed object-model
 /// snapshot and emits conservative property-backed call edges.
 pub(crate) struct TsObjectModelPolicy {
     inputs: TsObjectModelInputs,

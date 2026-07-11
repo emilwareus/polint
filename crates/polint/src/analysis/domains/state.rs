@@ -1,7 +1,4 @@
-#![expect(
-    dead_code,
-    reason = "Phase 31 introduces private product state before later solver/provider plans consume it."
-)]
+#![expect(dead_code, reason = "kept for private internal consumers")]
 
 use std::collections::{BTreeMap, BTreeSet};
 

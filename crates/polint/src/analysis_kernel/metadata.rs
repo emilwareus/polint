@@ -87,7 +87,7 @@ pub(crate) enum FactFamily {
     PointsToSet,
     AliasAnswer,
     AdaptationModel,
-    /// Unified-solver derived-edge facts (GRAPH-04, Phase 47). Each row tags a
+    /// Unified-solver derived-edge facts (GRAPH-04). Each row tags a
     /// solver-derived edge whose `DerivedEdgeProvenance` records its contributing
     /// fact IDs (total-ordered by stable ID), producing `ConstraintKind`, and the
     /// monotonic solver step. The provider that emits these into the kernel lands in
@@ -95,17 +95,17 @@ pub(crate) enum FactFamily {
     SolverDerivedEdge,
     #[expect(
         dead_code,
-        reason = "Type/value alias event rows are reserved for later Phase 36 plans."
+        reason = "Type/value alias event rows are reserved for later plans."
     )]
     TypeValueAliasEvent,
     #[expect(
         dead_code,
-        reason = "MIR metadata families are introduced before provider wiring in later Phase 28 plans."
+        reason = "MIR metadata families are introduced before provider wiring in later plans."
     )]
     MirStatement,
     #[expect(
         dead_code,
-        reason = "MIR metadata families are introduced before provider wiring in later Phase 28 plans."
+        reason = "MIR metadata families are introduced before provider wiring in later plans."
     )]
     MirTerminator,
     UnsupportedSemantic,

@@ -1,7 +1,4 @@
-#![expect(
-    dead_code,
-    reason = "Phase 31 adds private result cursors before provider/debug plans consume every iterator."
-)]
+#![expect(dead_code, reason = "kept for private internal consumers")]
 
 use std::collections::BTreeMap;
 

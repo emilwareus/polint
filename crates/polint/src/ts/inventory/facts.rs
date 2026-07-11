@@ -5,7 +5,7 @@ use crate::core::{FileId, Span};
 
 #[allow(
     dead_code,
-    reason = "Phase 45 Task 1 defines private inventory rows before extraction/store consumers land"
+    reason = " defines private inventory rows before extraction/store consumers land"
 )]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) enum TsFunctionInventoryKind {
@@ -20,7 +20,7 @@ pub(crate) enum TsFunctionInventoryKind {
 
 #[allow(
     dead_code,
-    reason = "Phase 45 Task 1 defines private inventory rows before extraction/store consumers land"
+    reason = " defines private inventory rows before extraction/store consumers land"
 )]
 impl TsFunctionInventoryKind {
     pub(crate) fn as_str(self) -> &'static str {
@@ -38,7 +38,7 @@ impl TsFunctionInventoryKind {
 
 #[allow(
     dead_code,
-    reason = "Phase 45 Task 1 defines private inventory rows before extraction/store consumers land"
+    reason = " defines private inventory rows before extraction/store consumers land"
 )]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) enum TsCallsiteInventoryKind {
@@ -52,7 +52,7 @@ pub(crate) enum TsCallsiteInventoryKind {
 
 #[allow(
     dead_code,
-    reason = "Phase 45 Task 1 defines private inventory rows before extraction/store consumers land"
+    reason = " defines private inventory rows before extraction/store consumers land"
 )]
 impl TsCallsiteInventoryKind {
     pub(crate) fn as_str(self) -> &'static str {
@@ -69,7 +69,7 @@ impl TsCallsiteInventoryKind {
 
 #[allow(
     dead_code,
-    reason = "Phase 45 Task 1 defines private inventory rows before extraction/store consumers land"
+    reason = " defines private inventory rows before extraction/store consumers land"
 )]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) enum TsInventoryStatus {
@@ -80,7 +80,7 @@ pub(crate) enum TsInventoryStatus {
 
 #[allow(
     dead_code,
-    reason = "Phase 45 Task 1 defines private inventory rows before extraction/store consumers land"
+    reason = " defines private inventory rows before extraction/store consumers land"
 )]
 impl TsInventoryStatus {
     pub(crate) fn resolved() -> Self {
@@ -102,7 +102,7 @@ impl TsInventoryStatus {
 
 #[allow(
     dead_code,
-    reason = "Phase 45 Task 1 defines private inventory rows before extraction/store consumers land"
+    reason = " defines private inventory rows before extraction/store consumers land"
 )]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct TsInventoryFunctionFact {
@@ -118,7 +118,7 @@ pub(crate) struct TsInventoryFunctionFact {
 
 #[allow(
     dead_code,
-    reason = "Phase 45 Task 1 defines private inventory rows before extraction/store consumers land"
+    reason = " defines private inventory rows before extraction/store consumers land"
 )]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct TsInventoryCallsiteFact {

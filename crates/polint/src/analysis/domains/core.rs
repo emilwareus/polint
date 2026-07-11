@@ -1,7 +1,4 @@
-#![expect(
-    dead_code,
-    reason = "Phase 31 introduces P0 abstract domains before later plans wire transfer and provider consumption."
-)]
+#![expect(dead_code, reason = "kept for private internal consumers")]
 
 use std::collections::BTreeSet;
 

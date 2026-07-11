@@ -24,7 +24,7 @@ pub(crate) struct IdentityProviderRunOutput {
 
 /// Identity provider entry point (Pattern E).
 ///
-/// Five-phase pipeline: extract identity records by projecting existing
+/// Five-stage pipeline: extract identity records by projecting existing
 /// `analysis::calls` and function facts (no mutation, D-04) -> dedup (D-09) ->
 /// assign dense IDs after sort+dedup -> normalize -> compute output digest over
 /// stable payloads (Pattern F) and replace identity facts.
@@ -36,18 +36,18 @@ pub(crate) fn derive_identity_with_cache_stats(
     calls_provider_output_digest: Digest,
     go_semantic_output_digest: Digest,
 ) -> IdentityProviderRunOutput {
-    // Phase 1: extract.
+    // Step: extract.
     let mut records = extract_identity_records(db);
-    // Phase 2: dedup.
+    // Step: dedup.
     records = dedup_identity_records(records);
-    // Phase 3: assign dense IDs after sort+dedup.
+    // Step: assign dense IDs after sort+dedup.
     for (index, record) in records.iter_mut().enumerate() {
         record.id = IdentityRecordId(index as u64);
     }
-    // Phase 4: normalize (dedup already sorts, but normalize keeps the contract
+    // Step: normalize (dedup already sorts, but normalize keeps the contract
     // single-sourced through IdentityProviderOutput).
     let output = IdentityProviderOutput { records }.normalized();
-    // Phase 5: digest.
+    // Step: digest.
     let output_digest = identity_output_digest(
         manifest,
         input_snapshot,
@@ -203,7 +203,7 @@ fn callsite_display_name(site: &CallSiteFact) -> String {
 
 /// Resolves the `package_or_module` string for a record's language and file.
 ///
-/// For `Language::Go` records this prefers the Phase 46 semantic frontend's full
+/// For `Language::Go` records this prefers the semantic frontend's full
 /// Go package import path when a validated package row covers the file. It falls
 /// back to the Go package-clause name, then the workspace-relative file path, so
 /// missing semantic setup preserves the earlier panic-free behavior.

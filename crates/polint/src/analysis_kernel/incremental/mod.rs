@@ -69,10 +69,7 @@ pub(crate) use digest::{Digest, DigestBuilder, DigestKind};
 )]
 #[cfg_attr(
     not(test),
-    expect(
-        unused_imports,
-        reason = "Phase 23 establishes this crate-private vocabulary before later kernel consumers wire it in."
-    )
+    expect(unused_imports, reason = "kept for private internal consumers")
 )]
 pub(crate) use input_snapshot::{
     FileSnapshot, GoLifecycleSnapshot, INPUT_SNAPSHOT_SCHEMA_VERSION, InputComponent,
@@ -105,10 +102,7 @@ pub(crate) use invalidation::{
 )]
 #[cfg_attr(
     not(test),
-    expect(
-        unused_imports,
-        reason = "Phase 23 establishes this crate-private vocabulary before later kernel consumers wire it in."
-    )
+    expect(unused_imports, reason = "kept for private internal consumers")
 )]
 pub(crate) use keys::{
     DiagnosticKey, LayerKey, LayerKind, MODULE_GRAPH_TOPOLOGY_INPUT_FILE_NAMES, PrecisionTier,
@@ -124,10 +118,7 @@ pub(crate) use keys::{
 )]
 #[cfg_attr(
     not(test),
-    expect(
-        unused_imports,
-        reason = "Phase 24 establishes layer-cache persistence before providers consume every helper."
-    )
+    expect(unused_imports, reason = "kept for private internal consumers")
 )]
 pub(crate) use layer_cache::{
     LAYER_CACHE_MANIFEST_SCHEMA, LayerCacheManifest, LayerCacheReadOutcome, LayerCacheReadStatus,
@@ -142,10 +133,7 @@ pub(crate) use layer_cache::{
 )]
 #[cfg_attr(
     not(test),
-    expect(
-        unused_imports,
-        reason = "Extension-aware cache quarantine infrastructure is established before Phase 34 wires real extension providers."
-    )
+    expect(unused_imports, reason = "kept for private internal consumers")
 )]
 pub(crate) use quarantine::{QuarantineEntry, QuarantinePolicy, QuarantineStore};
 pub(crate) use run_report::{
