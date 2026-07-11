@@ -504,6 +504,7 @@ mod tests {
     }
 
     mod phase_64 {
+        use std::fmt::Write as _;
         use std::path::{Path, PathBuf};
         use std::process::Command;
 
@@ -531,6 +532,7 @@ mod tests {
         }
 
         const PHASE_64_SCALE_FILE_PAIRS: usize = 256;
+        const PHASE_64_FUNCTIONS_PER_SCALE_FILE: usize = 12;
 
         fn write_phase_64_boundary_fixture(root: &Path) {
             git(root, &["init", "--quiet"]);
@@ -555,16 +557,22 @@ mod tests {
             // deterministic medium-size working set so the paired boundary
             // measures the locked +25% overhead budget at a meaningful scale.
             for index in 0..PHASE_64_SCALE_FILE_PAIRS {
-                std::fs::write(
-                    root.join(format!("src/scale_{index:04}.go")),
-                    format!("package app\n\nfunc scale_{index}() int {{ return {index} }}\n"),
-                )
-                .expect("write scale Go fixture");
-                std::fs::write(
-                    root.join(format!("src/scale_{index:04}.ts")),
-                    format!("export function scale{index}(): number {{ return {index}; }}\n"),
-                )
-                .expect("write scale TS fixture");
+                let mut go_source = String::from("package app\n\n");
+                let mut ts_source = String::new();
+                for member in 0..PHASE_64_FUNCTIONS_PER_SCALE_FILE {
+                    let symbol = index * PHASE_64_FUNCTIONS_PER_SCALE_FILE + member;
+                    writeln!(go_source, "func scale_{symbol}() int {{ return {symbol} }}")
+                        .expect("format scale Go fixture");
+                    writeln!(
+                        ts_source,
+                        "export function scale{symbol}(): number {{ return {symbol}; }}"
+                    )
+                    .expect("format scale TS fixture");
+                }
+                std::fs::write(root.join(format!("src/scale_{index:04}.go")), go_source)
+                    .expect("write scale Go fixture");
+                std::fs::write(root.join(format!("src/scale_{index:04}.ts")), ts_source)
+                    .expect("write scale TS fixture");
             }
             git(root, &["add", "-A"]);
             git(root, &["commit", "--quiet", "-m", "base"]);
