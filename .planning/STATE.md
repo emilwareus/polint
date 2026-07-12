@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-07-12T20:46:04.523Z"
+last_updated: "2026-07-12T21:19:02.518Z"
 last_activity: 2026-07-12
 progress:
   total_phases: 9
   completed_phases: 2
   total_plans: 27
-  completed_plans: 13
+  completed_plans: 14
   percent: 22
 ---
 
@@ -43,7 +43,7 @@ See: `.planning/PROJECT.md` (updated 2026-07-10)
 ## Current Position
 
 Phase: 65 (Generation Manifest and Metadata Mirroring) — EXECUTING
-Plan: 6 of 19
+Plan: 7 of 19
 Status: Ready to execute
 Last activity: 2026-07-12
 
@@ -517,6 +517,7 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase 65]: Keep the input snapshot wire schema at v1 while production starts carrying the borrowed AnalysisPlan. — The semantic source seam can land before serialized row migration without claiming fields that v1 does not contain.
 - [Phase 65]: Preserve exact non-empty plans for capability fixtures and use asserted empty plans only for capability-free provider fixtures. — This keeps requested-capability and analysis-requirement identity semantically honest without inferring capabilities from provider IDs.
 - [Phase 65]: Keep the sole input snapshot construction path plan-aware, while capability-free provider fixtures prove canonical empty identity sources. — Prevents opaque digests from erasing requested capability or analysis-setting state before schema migration.
+- [Phase 65]: Publish InputSnapshot v2 with typed full identities and scoped capability/settings rows, while its semantic digest excludes mtime hints, rendered details, ordering, and telemetry. — Preserves complete manifest truth without broadening provider invalidation or leaking machine-local inputs.
 
 ## Execution Metrics
 
@@ -681,3 +682,4 @@ intentionally avoided during autonomous local commits.
 | Phase 65 P03 | 25min | 2 tasks | 4 files |
 | Phase 65 P04 | 9min | 1 tasks | 8 files |
 | Phase 65 P05 | 17min | 1 tasks | 9 files |
+| Phase 65 P06 | 22min | 1 tasks | 11 files |
