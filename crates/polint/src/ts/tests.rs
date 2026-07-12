@@ -1,6 +1,9 @@
 use super::*;
 use crate::analysis_plan::AnalysisPlan;
-use crate::core::{AnalysisDb, TS_JS_MODULE_FUNCTION_NAME};
+use crate::cache::CacheReadStatus;
+use crate::cache::keys::{AnalysisSettingsScope, analysis_settings_hash, config_hash};
+use crate::config::{LoadedConfig, PolintConfig, RuleConfig};
+use crate::core::{AnalysisDb, CachedFileAnalysis, TS_JS_MODULE_FUNCTION_NAME};
 use crate::diagnostics::Diagnostic;
 use crate::graph::ImportGraph;
 use std::fs;
@@ -33,6 +36,55 @@ fn unique_cache_root() -> PathBuf {
         "polint-ts-cache-{}-{nanos}-{sequence}",
         std::process::id()
     ))
+}
+
+fn loaded_config_with_rule() -> LoadedConfig {
+    let mut config = PolintConfig::default();
+    config.rules.config.push(RuleConfig {
+        id: "local/cache-identity".to_string(),
+        severity: None,
+        files: Vec::new(),
+        allow_files: Vec::new(),
+        allow: Vec::new(),
+        max: None,
+        deny: Vec::new(),
+        forbidden_imports: Default::default(),
+        settings: Default::default(),
+    });
+    LoadedConfig {
+        root: Default::default(),
+        config,
+        missing: false,
+        respect_gitignore: true,
+    }
+}
+
+fn rule_only_config_mutations(baseline: &LoadedConfig) -> Vec<(&'static str, LoadedConfig)> {
+    let mut severity = baseline.clone();
+    severity.config.rules.config[0].severity = Some("error".to_string());
+
+    let mut files = baseline.clone();
+    files.config.rules.config[0].files = vec!["src/**".to_string()];
+
+    let mut allow_files = baseline.clone();
+    allow_files.config.rules.config[0].allow_files = vec!["src/generated/**".to_string()];
+
+    let mut max = baseline.clone();
+    max.config.rules.config[0].max = Some(7);
+
+    let mut settings = baseline.clone();
+    settings.config.rules.config[0].settings.insert(
+        "message".to_string(),
+        toml::Value::String("custom".to_string()),
+    );
+
+    vec![
+        ("severity", severity),
+        ("files", files),
+        ("allow_files", allow_files),
+        ("max", max),
+        ("custom settings", settings),
+    ]
 }
 
 fn collect_files(root: &Path) -> Vec<PathBuf> {
@@ -151,9 +203,8 @@ export function Button() {
 "#;
     let mut first = db_with_ts_file("component.ts", source);
 
-    let first_result = analyze_with_plan_options_and_cache_stats(
-        &mut first, &cache, "config", "rule", &plan, false,
-    );
+    let first_result =
+        analyze_with_plan_options_and_cache_stats(&mut first, &cache, "config", &plan, false);
 
     assert_no_parser_diagnostics(&first_result.diagnostics);
     assert_eq!(first_result.cache_stats.misses, 1);
@@ -164,20 +215,121 @@ export function Button() {
     assert!(cache_root.join("layers").exists());
 
     let mut second = db_with_ts_file("component.ts", source);
-    let second_result = analyze_with_plan_options_and_cache_stats(
-        &mut second,
-        &cache,
-        "config",
-        "rule",
-        &plan,
-        false,
-    );
+    let second_result =
+        analyze_with_plan_options_and_cache_stats(&mut second, &cache, "config", &plan, false);
 
     assert_no_parser_diagnostics(&second_result.diagnostics);
     assert_eq!(second_result.cache_stats.hits, 1);
     assert_eq!(second_result.cache_stats.verified_reuse, 1);
     assert_eq!(second_result.cache_stats.recomputes, 0);
     assert_eq!(second_result.cache_stats.writes, 0);
+
+    fs::remove_dir_all(cache_root).ok();
+}
+
+#[test]
+fn ts_syntax_caches_use_only_declared_analysis_settings() {
+    let cache_root = unique_cache_root();
+    let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
+    let plan = AnalysisPlan::empty();
+    let source = "export function main() { return 'ok'; }\n";
+    let baseline = loaded_config_with_rule();
+    let baseline_config_hash = config_hash(&baseline);
+    let baseline_settings = analysis_settings_hash(&baseline, AnalysisSettingsScope::TsSyntax);
+    let mut first = db_with_ts_file("main.ts", source);
+
+    let cold = analyze_with_plan_options_and_cache_stats(
+        &mut first,
+        &cache,
+        &baseline_settings.value,
+        &plan,
+        false,
+    );
+    assert_eq!(cold.cache_stats.misses, 1);
+    assert_eq!(cold.cache_stats.recomputes, 1);
+    let first_key = super::adapter::ts_syntax_file_cache_key(
+        first.files().first().expect("TS source file"),
+        &baseline_settings.value,
+    );
+    assert_eq!(first_key.config_hash, baseline_settings.value);
+    assert!(first_key.rule_hash.is_empty());
+    assert!(first_key.plan_hash.is_empty());
+    assert_eq!(
+        cache
+            .read_json_with_status::<CachedFileAnalysis>(&first_key)
+            .status,
+        CacheReadStatus::Hit
+    );
+
+    for (field, mutated) in rule_only_config_mutations(&baseline) {
+        let mutated_settings = analysis_settings_hash(&mutated, AnalysisSettingsScope::TsSyntax);
+        assert_ne!(baseline_config_hash, config_hash(&mutated), "{field}");
+        assert_eq!(baseline_settings, mutated_settings, "{field}");
+
+        let mut db = db_with_ts_file("main.ts", source);
+        let warm = analyze_with_plan_options_and_cache_stats(
+            &mut db,
+            &cache,
+            &mutated_settings.value,
+            &plan,
+            false,
+        );
+        assert_eq!(warm.cache_stats.hits, 1, "{field}");
+        assert_eq!(warm.cache_stats.recomputes, 0, "{field}");
+
+        let file_key = super::adapter::ts_syntax_file_cache_key(
+            db.files().first().expect("TS source file"),
+            &mutated_settings.value,
+        );
+        assert_eq!(first_key.stable_id(), file_key.stable_id(), "{field}");
+        assert_eq!(
+            cache
+                .read_json_with_status::<CachedFileAnalysis>(&file_key)
+                .status,
+            CacheReadStatus::Hit,
+            "{field}"
+        );
+    }
+
+    let mut unrelated = baseline.clone();
+    unrelated.config.solver.go.max_rta_rounds = Some(9);
+    let unrelated_settings = analysis_settings_hash(&unrelated, AnalysisSettingsScope::TsSyntax);
+    assert_ne!(baseline_config_hash, config_hash(&unrelated));
+    assert_eq!(baseline_settings, unrelated_settings);
+    let mut unrelated_db = db_with_ts_file("main.ts", source);
+    let unrelated_hit = analyze_with_plan_options_and_cache_stats(
+        &mut unrelated_db,
+        &cache,
+        &unrelated_settings.value,
+        &plan,
+        false,
+    );
+    assert_eq!(unrelated_hit.cache_stats.hits, 1);
+    assert_eq!(unrelated_hit.cache_stats.recomputes, 0);
+
+    let mut parser_changed = baseline;
+    parser_changed.config.languages.ts.insert(
+        "parser_mode".to_string(),
+        toml::Value::String("strict".to_string()),
+    );
+    let changed_settings = analysis_settings_hash(&parser_changed, AnalysisSettingsScope::TsSyntax);
+    assert_ne!(baseline_settings, changed_settings);
+    let mut changed_db = db_with_ts_file("main.ts", source);
+    let invalidated = analyze_with_plan_options_and_cache_stats(
+        &mut changed_db,
+        &cache,
+        &changed_settings.value,
+        &plan,
+        false,
+    );
+    assert_eq!(invalidated.cache_stats.misses, 1);
+    assert_eq!(invalidated.cache_stats.recomputes, 1);
+
+    let adapter_source = include_str!("adapter.rs");
+    assert!(!adapter_source.contains("config_hash"));
+    assert!(!adapter_source.contains("plan.digest()"));
+    assert!(!adapter_source.contains("DigestKind::Config"));
+    assert!(adapter_source.contains("_rule_hash: &str"));
 
     fs::remove_dir_all(cache_root).ok();
 }
@@ -190,23 +342,16 @@ fn ts_syntax_layer_cache_corrupt() {
     let source = "// console.log('secret')\nexport function main() { return 'ok'; }\n";
     let mut first = db_with_ts_file("main.ts", source);
 
-    let first_result = analyze_with_plan_options_and_cache_stats(
-        &mut first, &cache, "config", "rule", &plan, false,
-    );
+    let first_result =
+        analyze_with_plan_options_and_cache_stats(&mut first, &cache, "config", &plan, false);
     assert_no_parser_diagnostics(&first_result.diagnostics);
 
     let payload = first_layer_file(&cache_root, "blobs");
     fs::write(payload, "{not-json").expect("corrupt payload");
 
     let mut second = db_with_ts_file("main.ts", source);
-    let second_result = analyze_with_plan_options_and_cache_stats(
-        &mut second,
-        &cache,
-        "config",
-        "changed-rule",
-        &plan,
-        false,
-    );
+    let second_result =
+        analyze_with_plan_options_and_cache_stats(&mut second, &cache, "config", &plan, false);
 
     assert_no_parser_diagnostics(&second_result.diagnostics);
     assert_eq!(second_result.cache_stats.invalid_evicted_reads, 1);
@@ -224,21 +369,14 @@ fn ts_syntax_layer_cache_output_digest_mismatch_recomputes() {
     let source = "// console.log('secret')\nexport function main() { return 'ok'; }\n";
     let mut first = db_with_ts_file("main.ts", source);
 
-    let first_result = analyze_with_plan_options_and_cache_stats(
-        &mut first, &cache, "config", "rule", &plan, false,
-    );
+    let first_result =
+        analyze_with_plan_options_and_cache_stats(&mut first, &cache, "config", &plan, false);
     assert_no_parser_diagnostics(&first_result.diagnostics);
     corrupt_first_manifest_output_digest(&cache_root);
 
     let mut second = db_with_ts_file("main.ts", source);
-    let second_result = analyze_with_plan_options_and_cache_stats(
-        &mut second,
-        &cache,
-        "config",
-        "rule",
-        &plan,
-        false,
-    );
+    let second_result =
+        analyze_with_plan_options_and_cache_stats(&mut second, &cache, "config", &plan, false);
 
     assert_no_parser_diagnostics(&second_result.diagnostics);
     assert_eq!(second_result.cache_stats.invalid_evicted_reads, 1);
@@ -265,8 +403,7 @@ fn ts_syntax_layer_cache_disabled_bypass() {
         "export const two = 2;\n".to_string(),
     );
 
-    let result =
-        analyze_with_plan_options_and_cache_stats(&mut db, &cache, "config", "rule", &plan, false);
+    let result = analyze_with_plan_options_and_cache_stats(&mut db, &cache, "config", &plan, false);
 
     assert_no_parser_diagnostics(&result.diagnostics);
     assert_eq!(result.cache_stats.bypasses_disabled, 1);
@@ -283,8 +420,7 @@ fn ts_syntax_layer_cache_payload_excludes_source_and_temp_paths() {
     let source = "// console.log('secret')\nexport function main() { return 'ok'; }\n";
     let mut db = db_with_ts_file("main.ts", source);
 
-    let result =
-        analyze_with_plan_options_and_cache_stats(&mut db, &cache, "config", "rule", &plan, false);
+    let result = analyze_with_plan_options_and_cache_stats(&mut db, &cache, "config", &plan, false);
 
     assert_no_parser_diagnostics(&result.diagnostics);
     assert!(

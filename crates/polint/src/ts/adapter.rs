@@ -69,10 +69,10 @@ pub(crate) fn analyze(db: &mut AnalysisDb) -> Vec<Diagnostic> {
 pub(crate) fn analyze_with_cache(
     db: &mut AnalysisDb,
     cache: &crate::cache::Cache,
-    config_hash: &str,
+    analysis_settings_hash: &str,
     rule_hash: &str,
 ) -> Vec<Diagnostic> {
-    analyze_with_options(db, cache, config_hash, rule_hash, false)
+    analyze_with_options(db, cache, analysis_settings_hash, rule_hash, false)
 }
 
 // `pub` for `polint::_bench::ts` / `polint-bench`, not for direct downstream use.
@@ -80,23 +80,22 @@ pub(crate) fn analyze_with_cache(
 pub fn analyze_with_options(
     db: &mut AnalysisDb,
     cache: &crate::cache::Cache,
-    config_hash: &str,
-    rule_hash: &str,
+    analysis_settings_hash: &str,
+    _rule_hash: &str,
     parallel: bool,
 ) -> Vec<Diagnostic> {
     let plan = AnalysisPlan::empty();
-    analyze_with_plan_options(db, cache, config_hash, rule_hash, &plan, parallel)
+    analyze_with_plan_options(db, cache, analysis_settings_hash, &plan, parallel)
 }
 
 pub(crate) fn analyze_with_plan_options(
     db: &mut AnalysisDb,
     cache: &crate::cache::Cache,
-    config_hash: &str,
-    rule_hash: &str,
+    analysis_settings_hash: &str,
     plan: &AnalysisPlan,
     parallel: bool,
 ) -> Vec<Diagnostic> {
-    analyze_with_plan_options_and_cache_stats(db, cache, config_hash, rule_hash, plan, parallel)
+    analyze_with_plan_options_and_cache_stats(db, cache, analysis_settings_hash, plan, parallel)
         .diagnostics
 }
 
@@ -110,9 +109,8 @@ pub(crate) struct ProviderAnalysisResult {
 pub(crate) fn analyze_with_plan_options_and_cache_stats(
     db: &mut AnalysisDb,
     cache: &crate::cache::Cache,
-    config_hash: &str,
-    rule_hash: &str,
-    plan: &AnalysisPlan,
+    analysis_settings_hash: &str,
+    _plan: &AnalysisPlan,
     parallel: bool,
 ) -> ProviderAnalysisResult {
     let files: Vec<&SourceFile> = db
@@ -131,7 +129,7 @@ pub(crate) fn analyze_with_plan_options_and_cache_stats(
     }
 
     let layer_store = cache.layer_cache_store();
-    let layer_key = ts_syntax_layer_key(&files, config_hash);
+    let layer_key = ts_syntax_layer_key(&files, analysis_settings_hash);
     let read = layer_store.read_json_validated::<SyntaxLayerPayload, _>(
         &layer_key,
         |payload, manifest| {
@@ -155,14 +153,8 @@ pub(crate) fn analyze_with_plan_options_and_cache_stats(
         LayerCacheReadStatus::BypassedDisabled => {
             cache_stats.record_disabled_bypass();
             cache_stats.record_recompute();
-            let payload = parse_ts_syntax_layer_payload(
-                &files,
-                cache,
-                config_hash,
-                rule_hash,
-                plan,
-                parallel,
-            );
+            let payload =
+                parse_ts_syntax_layer_payload(&files, cache, analysis_settings_hash, parallel);
             ProviderAnalysisResult {
                 diagnostics: restore_syntax_layer_payload(db, payload),
                 cache_stats,
@@ -176,14 +168,8 @@ pub(crate) fn analyze_with_plan_options_and_cache_stats(
                 cache_stats.record_invalid_evicted_read();
             }
             cache_stats.record_recompute();
-            let payload = parse_ts_syntax_layer_payload(
-                &files,
-                cache,
-                config_hash,
-                rule_hash,
-                plan,
-                parallel,
-            );
+            let payload =
+                parse_ts_syntax_layer_payload(&files, cache, analysis_settings_hash, parallel);
             let mut write_diagnostics = Vec::new();
             let output_digest = write_syntax_layer_payload(
                 &layer_store,
@@ -224,14 +210,18 @@ struct SyntaxLayerFile {
     facts: Option<crate::core::CachedFileFacts>,
 }
 
-fn ts_syntax_layer_key(files: &[&SourceFile], config_hash: &str) -> LayerKey {
+fn ts_syntax_layer_key(files: &[&SourceFile], analysis_settings_hash: &str) -> LayerKey {
     LayerKey::syntax_layer_key(
         LayerKind::TsSyntax,
         TS_PROVIDER_ID,
         env!("CARGO_PKG_VERSION"),
         TS_CACHE_SCHEMA,
         files.iter().map(|file| source_text_digest(file)).collect(),
-        Digest::from_parts(DigestKind::Config, "config_hash", &[config_hash]),
+        Digest::from_parts(
+            DigestKind::AnalysisSettings,
+            "provider_analysis_settings",
+            &[TS_PROVIDER_ID, analysis_settings_hash],
+        ),
         Digest::absent(DigestKind::TsJsLifecycle, "ts_syntax_lifecycle_absent"),
         Digest::from_parts(
             DigestKind::ToolInvocation,
@@ -296,20 +286,18 @@ fn validate_syntax_layer_payload(
 fn parse_ts_syntax_layer_payload(
     files: &[&SourceFile],
     cache: &crate::cache::Cache,
-    config_hash: &str,
-    rule_hash: &str,
-    plan: &AnalysisPlan,
+    analysis_settings_hash: &str,
     parallel: bool,
 ) -> SyntaxLayerPayload {
     let mut results = if parallel {
         files
             .par_iter()
-            .map(|file| analyze_ts_source_file(file, cache, config_hash, rule_hash, plan.digest()))
+            .map(|file| analyze_ts_source_file(file, cache, analysis_settings_hash))
             .collect::<Vec<_>>()
     } else {
         files
             .iter()
-            .map(|file| analyze_ts_source_file(file, cache, config_hash, rule_hash, plan.digest()))
+            .map(|file| analyze_ts_source_file(file, cache, analysis_settings_hash))
             .collect::<Vec<_>>()
     };
     results.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
@@ -400,18 +388,9 @@ fn ts_syntax_output_digest(payload_digest: &Digest) -> Digest {
 fn analyze_ts_source_file(
     file: &SourceFile,
     cache: &crate::cache::Cache,
-    config_hash: &str,
-    rule_hash: &str,
-    plan_hash: &str,
+    analysis_settings_hash: &str,
 ) -> TsFileAnalysis {
-    let key = crate::cache::CacheKey::for_file(
-        file.relative_path.as_str(),
-        file.content_hash.as_str(),
-        config_hash,
-        rule_hash,
-        plan_hash,
-        TS_CACHE_SCHEMA,
-    );
+    let key = ts_syntax_file_cache_key(file, analysis_settings_hash);
     let read = cache.read_json_with_status::<CachedFileAnalysis>(&key);
     if read.status == CacheReadStatus::Hit
         && let Some(cached) = read.value
@@ -464,6 +443,20 @@ fn analyze_ts_source_file(
         diagnostics,
         facts: Some(facts),
     }
+}
+
+pub(super) fn ts_syntax_file_cache_key(
+    file: &SourceFile,
+    analysis_settings_hash: &str,
+) -> crate::cache::CacheKey {
+    crate::cache::CacheKey::for_file(
+        file.relative_path.as_str(),
+        file.content_hash.as_str(),
+        analysis_settings_hash,
+        "",
+        "",
+        TS_CACHE_SCHEMA,
+    )
 }
 
 fn cache_write_diagnostic(path: &str, error: anyhow::Error) -> Diagnostic {
