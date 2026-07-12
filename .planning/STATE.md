@@ -1,9 +1,9 @@
 ---
 gsd_state_version: 1.0
 milestone: v2.0
-milestone_name: Static Analysis 2.0 Implementation
-status: ready
-last_updated: "2026-07-10T11:54:08.664Z"
+milestone_name: milestone
+status: planning
+last_updated: "2026-07-12T07:21:48.367Z"
 last_activity: 2026-07-10
 progress:
   total_phases: 9
@@ -44,7 +44,7 @@ See: `.planning/PROJECT.md` (updated 2026-07-10)
 
 Phase: 65
 Plan: Not started
-Status: Ready for discussion
+Status: Ready for planning
 Last activity: 2026-07-10
 
 ### Active Milestone Phase Progress
