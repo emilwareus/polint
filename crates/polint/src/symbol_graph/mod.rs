@@ -1205,12 +1205,24 @@ mod symbol_graph_derivation {
         plan: &AnalysisPlan,
         config_digest: &str,
     ) -> InputSnapshot {
-        InputSnapshot::from_run_inputs(
+        let identity_sources = InputSnapshot::identity_sources_from_plan(loaded, plan);
+        let requested_capabilities = plan.requested_capability_snapshots();
+        assert!(!requested_capabilities.is_empty());
+        assert_eq!(
+            identity_sources.requested_capabilities,
+            requested_capabilities
+        );
+        assert_eq!(
+            identity_sources.analysis_requirements_identity,
+            plan.analysis_requirements_digest()
+        );
+
+        InputSnapshot::from_run_inputs_with_plan(
             loaded,
             db,
             config_digest,
             "rule-digest",
-            plan.digest(),
+            plan,
             crate::analysis_kernel::AnalysisKernel::provider_manifests(),
         )
     }
@@ -1958,12 +1970,23 @@ export function answer() {
         let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
         let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
         let mut db = fixture_db(temp.path());
-        let snapshot = InputSnapshot::from_run_inputs(
+        let identity_sources = InputSnapshot::identity_sources_from_plan(&loaded, &plan);
+        let requested_capabilities = plan.requested_capability_snapshots();
+        assert!(!requested_capabilities.is_empty());
+        assert_eq!(
+            identity_sources.requested_capabilities,
+            requested_capabilities
+        );
+        assert_eq!(
+            identity_sources.analysis_requirements_identity,
+            plan.analysis_requirements_digest()
+        );
+        let snapshot = InputSnapshot::from_run_inputs_with_plan(
             &loaded,
             &db,
             "config",
             "rule-digest",
-            plan.digest(),
+            &plan,
             crate::analysis_kernel::AnalysisKernel::provider_manifests(),
         );
         let derivation = derive_requested_symbols_with_cache_stats(

@@ -497,14 +497,27 @@ mod semantic_mir_provider {
             .iter()
             .find(|manifest| manifest.id == "polint.semantic_mir")
             .expect("semantic MIR manifest");
-        let input_snapshot = crate::analysis_kernel::incremental::InputSnapshot::from_run_inputs(
-            &loaded,
-            &db,
-            "config",
-            "rules",
-            "plan",
-            AnalysisKernel::provider_manifests(),
+        let empty_plan = AnalysisPlan::empty();
+        assert!(empty_plan.requested_capability_snapshots().is_empty());
+        let identity_sources =
+            crate::analysis_kernel::incremental::InputSnapshot::identity_sources_from_plan(
+                &loaded,
+                &empty_plan,
+            );
+        assert!(identity_sources.requested_capabilities.is_empty());
+        assert_eq!(
+            identity_sources.analysis_requirements_identity,
+            Digest::absent(DigestKind::AnalysisRequirements, "requested_capabilities")
         );
+        let input_snapshot =
+            crate::analysis_kernel::incremental::InputSnapshot::from_run_inputs_with_plan(
+                &loaded,
+                &db,
+                "config",
+                "rules",
+                &empty_plan,
+                AnalysisKernel::provider_manifests(),
+            );
         let module_topology = Digest::from_parts(
             DigestKind::ProviderOutput,
             "module_topology",

@@ -2263,12 +2263,24 @@ mod tests {
         plan: &AnalysisPlan,
         config_digest: &str,
     ) -> InputSnapshot {
-        InputSnapshot::from_run_inputs(
+        let identity_sources = InputSnapshot::identity_sources_from_plan(loaded, plan);
+        let requested_capabilities = plan.requested_capability_snapshots();
+        assert!(!requested_capabilities.is_empty());
+        assert_eq!(
+            identity_sources.requested_capabilities,
+            requested_capabilities
+        );
+        assert_eq!(
+            identity_sources.analysis_requirements_identity,
+            plan.analysis_requirements_digest()
+        );
+
+        InputSnapshot::from_run_inputs_with_plan(
             loaded,
             db,
             config_digest,
             "rule-digest",
-            plan.digest(),
+            plan,
             crate::analysis_kernel::AnalysisKernel::provider_manifests(),
         )
     }
@@ -5175,6 +5187,33 @@ mod module_topology_layer_cache {
             .expect("module topology provider manifest exists")
     }
 
+    fn module_topology_input_snapshot(
+        loaded: &crate::config::LoadedConfig,
+        db: &AnalysisDb,
+        plan: &AnalysisPlan,
+    ) -> InputSnapshot {
+        let identity_sources = InputSnapshot::identity_sources_from_plan(loaded, plan);
+        let requested_capabilities = plan.requested_capability_snapshots();
+        assert!(!requested_capabilities.is_empty());
+        assert_eq!(
+            identity_sources.requested_capabilities,
+            requested_capabilities
+        );
+        assert_eq!(
+            identity_sources.analysis_requirements_identity,
+            plan.analysis_requirements_digest()
+        );
+
+        InputSnapshot::from_run_inputs_with_plan(
+            loaded,
+            db,
+            "config",
+            "rules",
+            plan,
+            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
+        )
+    }
+
     fn span(file: FileId) -> Span {
         Span {
             file,
@@ -5350,14 +5389,7 @@ mod module_topology_layer_cache {
             precision: TopologyPrecision::Unknown,
             status: ImportToPackageStatus::Unresolved,
         }]);
-        let snapshot = InputSnapshot::from_run_inputs(
-            &loaded,
-            &db,
-            "config",
-            "rules",
-            plan.digest(),
-            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
-        );
+        let snapshot = module_topology_input_snapshot(&loaded, &db, &plan);
 
         let result = derive_module_topology_with_cache_stats(
             &mut db,
@@ -5379,14 +5411,7 @@ mod module_topology_layer_cache {
         let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
         let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
         let mut first = db_with_import_to_package_inputs();
-        let first_snapshot = InputSnapshot::from_run_inputs(
-            &loaded,
-            &first,
-            "config",
-            "rules",
-            plan.digest(),
-            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
-        );
+        let first_snapshot = module_topology_input_snapshot(&loaded, &first, &plan);
 
         let first_result = derive_module_topology_with_cache_stats(
             &mut first,
@@ -5403,14 +5428,7 @@ mod module_topology_layer_cache {
             .collect::<Vec<_>>();
 
         let mut second = db_with_import_to_package_inputs();
-        let second_snapshot = InputSnapshot::from_run_inputs(
-            &loaded,
-            &second,
-            "config",
-            "rules",
-            plan.digest(),
-            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
-        );
+        let second_snapshot = module_topology_input_snapshot(&loaded, &second, &plan);
         let second_result = derive_module_topology_with_cache_stats(
             &mut second,
             &cache,
@@ -5440,14 +5458,7 @@ mod module_topology_layer_cache {
         let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
         let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
         let mut first = db_with_import_to_package_inputs();
-        let snapshot = InputSnapshot::from_run_inputs(
-            &loaded,
-            &first,
-            "config",
-            "rules",
-            plan.digest(),
-            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
-        );
+        let snapshot = module_topology_input_snapshot(&loaded, &first, &plan);
         let module_digest =
             Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]);
         let symbol_digest =
@@ -5513,14 +5524,7 @@ mod module_topology_layer_cache {
         .expect("corrupt module topology payload writes");
 
         let mut second = db_with_import_to_package_inputs();
-        let second_snapshot = InputSnapshot::from_run_inputs(
-            &loaded,
-            &second,
-            "config",
-            "rules",
-            plan.digest(),
-            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
-        );
+        let second_snapshot = module_topology_input_snapshot(&loaded, &second, &plan);
         let second_result = derive_module_topology_with_cache_stats(
             &mut second,
             &cache,

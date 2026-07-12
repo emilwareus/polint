@@ -579,14 +579,7 @@ mod tests {
             "package main\nfunc main() {}\n".into(),
             "hash".to_string(),
         );
-        let input_snapshot = InputSnapshot::from_run_inputs(
-            &loaded,
-            &db,
-            "config",
-            "rules",
-            AnalysisPlan::empty().digest(),
-            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
-        );
+        let input_snapshot = input_snapshot_for(&loaded, &db);
         let manifest = crate::analysis_kernel::AnalysisKernel::provider_manifests()
             .iter()
             .find(|manifest| manifest.id == "polint.go.semantic")
@@ -883,12 +876,21 @@ mod tests {
     }
 
     fn input_snapshot_for(loaded: &LoadedConfig, db: &AnalysisDb) -> InputSnapshot {
-        InputSnapshot::from_run_inputs(
+        let empty_plan = AnalysisPlan::empty();
+        assert!(empty_plan.requested_capability_snapshots().is_empty());
+        let identity_sources = InputSnapshot::identity_sources_from_plan(loaded, &empty_plan);
+        assert!(identity_sources.requested_capabilities.is_empty());
+        assert_eq!(
+            identity_sources.analysis_requirements_identity,
+            Digest::absent(DigestKind::AnalysisRequirements, "requested_capabilities")
+        );
+
+        InputSnapshot::from_run_inputs_with_plan(
             loaded,
             db,
             "config",
             "rules",
-            AnalysisPlan::empty().digest(),
+            &empty_plan,
             crate::analysis_kernel::AnalysisKernel::provider_manifests(),
         )
     }
