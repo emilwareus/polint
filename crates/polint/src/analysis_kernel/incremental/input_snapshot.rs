@@ -145,6 +145,44 @@ pub(crate) struct InputSnapshotIdentitySources {
 }
 
 impl InputSnapshot {
+    pub(crate) fn from_run_inputs_with_plan(
+        loaded: &LoadedConfig,
+        db: &AnalysisDb,
+        config_digest: &str,
+        rule_digest: &str,
+        plan: &AnalysisPlan,
+        provider_manifests: &[ProviderManifest],
+    ) -> Self {
+        let identity_sources = Self::identity_sources_from_plan(loaded, plan);
+        debug_assert_eq!(
+            identity_sources.analysis_requirements_identity.kind,
+            DigestKind::AnalysisRequirements
+        );
+        debug_assert!(
+            identity_sources
+                .analysis_settings
+                .iter()
+                .all(|source| source.digest.kind == DigestKind::AnalysisSettings)
+        );
+        debug_assert!(
+            identity_sources
+                .requested_capabilities
+                .iter()
+                .all(|source| {
+                    source.analysis_dependency_digest.kind == DigestKind::AnalysisRequirements
+                })
+        );
+
+        Self::from_run_input_digests(
+            loaded,
+            db,
+            config_digest,
+            rule_digest,
+            plan.digest(),
+            provider_manifests,
+        )
+    }
+
     pub(crate) fn identity_sources_from_plan(
         loaded: &LoadedConfig,
         plan: &AnalysisPlan,
@@ -165,7 +203,27 @@ impl InputSnapshot {
         }
     }
 
+    /// Capability-erasing fixture seam for tests that supply only an opaque plan digest.
+    #[cfg(test)]
     pub(crate) fn from_run_inputs(
+        loaded: &LoadedConfig,
+        db: &AnalysisDb,
+        config_digest: &str,
+        rule_digest: &str,
+        plan_digest: &str,
+        provider_manifests: &[ProviderManifest],
+    ) -> Self {
+        Self::from_run_input_digests(
+            loaded,
+            db,
+            config_digest,
+            rule_digest,
+            plan_digest,
+            provider_manifests,
+        )
+    }
+
+    fn from_run_input_digests(
         loaded: &LoadedConfig,
         db: &AnalysisDb,
         config_digest: &str,
@@ -1266,12 +1324,14 @@ mod source_config_rule_model_extension {
         db: &AnalysisDb,
         provider_manifests: &[ProviderManifest],
     ) -> InputSnapshot {
+        let plan = AnalysisPlan::empty();
+        assert!(plan.requested_capability_snapshots().is_empty());
         InputSnapshot::from_run_inputs(
             loaded,
             db,
             "config-digest",
             "rule-digest",
-            "plan-digest",
+            plan.digest(),
             provider_manifests,
         )
     }
@@ -1313,12 +1373,12 @@ mod source_config_rule_model_extension {
         let plan = AnalysisPlan::from_capability_names_for_test(&["calls"]);
 
         let sources = InputSnapshot::identity_sources_from_plan(&loaded, &plan);
-        let snapshot = InputSnapshot::from_run_inputs(
+        let snapshot = InputSnapshot::from_run_inputs_with_plan(
             &loaded,
             &db,
             "config-digest",
             "rule-digest",
-            plan.digest(),
+            &plan,
             crate::analysis_kernel::AnalysisKernel::provider_manifests(),
         );
         let wire = serde_json::to_value(snapshot).expect("serialize v1 snapshot");
@@ -1551,6 +1611,7 @@ mod source_config_rule_model_extension {
 mod lifecycle {
     use super::*;
     use crate::analysis_kernel::ProviderManifest;
+    use crate::analysis_plan::AnalysisPlan;
     use crate::config::{LoadedConfig, PolintConfig};
     use crate::core::AnalysisDb;
     use std::path::Path;
@@ -1595,12 +1656,14 @@ mod lifecycle {
         db: &AnalysisDb,
         provider_manifests: &[ProviderManifest],
     ) -> InputSnapshot {
+        let plan = AnalysisPlan::empty();
+        assert!(plan.requested_capability_snapshots().is_empty());
         InputSnapshot::from_run_inputs(
             loaded,
             db,
             "config-digest",
             "rule-digest",
-            "plan-digest",
+            plan.digest(),
             provider_manifests,
         )
     }

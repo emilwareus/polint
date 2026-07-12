@@ -184,33 +184,12 @@ impl AnalysisKernel {
                 "phase: source files loaded"
             );
         }
-        let input_identity_sources =
-            incremental::InputSnapshot::identity_sources_from_plan(input.loaded, input.plan);
-        debug_assert_eq!(
-            input_identity_sources.analysis_requirements_identity.kind,
-            incremental::DigestKind::AnalysisRequirements
-        );
-        debug_assert!(
-            input_identity_sources
-                .analysis_settings
-                .iter()
-                .all(|source| source.digest.kind == incremental::DigestKind::AnalysisSettings)
-        );
-        debug_assert!(
-            input_identity_sources
-                .requested_capabilities
-                .iter()
-                .all(|source| {
-                    source.analysis_dependency_digest.kind
-                        == incremental::DigestKind::AnalysisRequirements
-                })
-        );
-        let input_snapshot = incremental::InputSnapshot::from_run_inputs(
+        let input_snapshot = incremental::InputSnapshot::from_run_inputs_with_plan(
             input.loaded,
             &db,
             input.config_digest,
             input.rule_digest,
-            input.plan.digest(),
+            input.plan,
             Self::provider_manifests(),
         );
         let mut diagnostics = Vec::new();
