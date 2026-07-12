@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-07-12T18:42:31.324Z"
+last_updated: "2026-07-12T19:27:39.139Z"
 last_activity: 2026-07-12
 progress:
   total_phases: 9
   completed_phases: 2
   total_plans: 27
-  completed_plans: 9
+  completed_plans: 10
   percent: 22
 ---
 
@@ -43,7 +43,7 @@ See: `.planning/PROJECT.md` (updated 2026-07-10)
 ## Current Position
 
 Phase: 65 (Generation Manifest and Metadata Mirroring) — EXECUTING
-Plan: 2 of 19
+Plan: 3 of 19
 Status: Ready to execute
 Last activity: 2026-07-12
 
@@ -508,6 +508,10 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase 65]: ConfigIdentity accepts only the complete Config digest; provider-scoped settings retain a separate digest purpose. — Prevents the complete manifest and diagnostic identity from becoming an accidental provider analysis key.
 - [Phase 65]: Stable fact conflicts are keyed by family plus stable key and reject any differing semantic metadata. — Durable identity must deduplicate exact semantic repeats without silently choosing between conflicting rows.
 - [Phase 65]: Provider-output identity hashes explicit canonical row fields and payload_digest, never run IDs, Debug text, or payload bytes. — Keeps persistence identity deterministic, semantic, and independent of transient handles or sensitive payload bodies.
+- [Phase 65]: Provider metadata uses exactly native_trusted and provider_failed validation states; metadata conflicts map to provider_failed. — A closed typed vocabulary prevents open-label drift while preserving the existing serialized contract.
+- [Phase 65]: Provider cache counters and query cache outcome or duration never enter semantic rows or semantic digests. — Execution telemetry must not alter deterministic identity or invalidation behavior.
+- [Phase 65]: Legacy debug and eval schemas explicitly render typed values while preserving established field names and strings. — Internal typing can strengthen invariants without breaking compatibility fixtures.
+- [Phase 65]: Cross-module demand trace fixtures construct QueryKey only through dependency_free_test_query_key. — One cfg(test) seam prevents test consumers from duplicating internal identity construction.
 
 ## Execution Metrics
 
@@ -668,3 +672,4 @@ intentionally avoided during autonomous local commits.
 | Phase 64 P03 | 16min | 3 tasks | 7 files |
 | Phase 64 P04 | 31min | 3 tasks | 4 files |
 | Phase 65 P01 | 37 min | 1 tasks | 10 files |
+| Phase 65 P02 | 29min | 2 tasks | 9 files |
