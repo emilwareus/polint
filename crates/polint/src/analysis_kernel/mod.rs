@@ -14,13 +14,26 @@ pub(crate) mod validation;
 
 pub(crate) use metadata::{
     FactConfidence, FactFamily, FactMeta, FactMetaStore, FactPrecision, FactRef, MissingFactMeta,
-    ValidationStatus, resolution_metadata, resolution_status_metadata, stable_key_from_parts,
-    symbol_metadata,
+    StableFactMetaConflict, StableFactMetaRow, ValidationStatus, resolution_metadata,
+    resolution_status_metadata, stable_key_from_parts, symbol_metadata,
 };
-#[cfg(test)]
-pub(crate) use provider::ProviderKind;
+#[cfg_attr(
+    test,
+    allow(
+        unused_imports,
+        reason = "unit tests exercise the borrowed cache-policy codec in its defining module"
+    )
+)]
+#[cfg_attr(
+    not(test),
+    expect(
+        unused_imports,
+        reason = "canonical provider codecs are shared with private metadata projection and readers"
+    )
+)]
 pub(crate) use provider::{
-    CachePolicy, LanguageScope, PrecisionCeiling, ProviderManifest, SchemaVersion,
+    CachePolicy, CachePolicyView, LanguageScope, PrecisionCeiling, ProviderKind, ProviderManifest,
+    SchemaVersion,
 };
 pub(crate) use store::StoreStatus;
 
@@ -1027,13 +1040,20 @@ impl AnalysisKernel {
                 incremental::Digest::absent(incremental::DigestKind::ProviderOutput, provider_id),
                 "provider_failed",
             ),
-            None => (
-                incremental::provider_output_digest_from_manifest(
-                    manifest,
-                    &provider_output_summary_parts(db, manifest),
+            None => match provider_output_summary_parts(db, manifest) {
+                Ok(rows) => (
+                    incremental::provider_output_digest_from_manifest(manifest, &rows),
+                    "native_trusted",
                 ),
-                "native_trusted",
-            ),
+                Err(_) => (
+                    incremental::Digest::unsupported(
+                        incremental::DigestKind::ProviderOutput,
+                        manifest.id,
+                        "conflicting stable fact metadata",
+                    ),
+                    "metadata_conflict",
+                ),
+            },
         };
         let mut meta =
             incremental::provider_output_from_manifest(manifest, output_digest, cache_stats);
@@ -1076,30 +1096,16 @@ impl AnalysisKernel {
     }
 }
 
-fn provider_output_summary_parts(db: &AnalysisDb, manifest: &ProviderManifest) -> Vec<String> {
-    let mut parts = db
+fn provider_output_summary_parts(
+    db: &AnalysisDb,
+    manifest: &ProviderManifest,
+) -> Result<Vec<StableFactMetaRow>, StableFactMetaConflict> {
+    Ok(db
         .fact_meta()
-        .rows()
-        .filter(|(_reference, metadata)| {
-            metadata.producer_id == manifest.id || metadata.layer_id == manifest.id
-        })
-        .flat_map(|(reference, metadata)| {
-            [
-                format!("fact_family={}", reference.family.label()),
-                format!("run_id={}", reference.run_id),
-                format!("stable_key={}", metadata.stable_key),
-                format!("payload_digest={}", metadata.payload_digest),
-                format!("precision={:?}", metadata.precision),
-                format!("validation={:?}", metadata.validation),
-            ]
-        })
-        .collect::<Vec<_>>();
-
-    if parts.is_empty() {
-        parts.push("fact_summary=empty".to_string());
-    }
-    parts.sort();
-    parts
+        .stable_rows()?
+        .into_iter()
+        .filter(|row| row.producer_id == manifest.id || row.layer_id == manifest.id)
+        .collect())
 }
 
 #[cfg(test)]
@@ -1643,7 +1649,8 @@ mod tests {
         let manifest = AnalysisKernel::provider_manifest("polint.direct_summaries");
         let generic = incremental::provider_output_digest_from_manifest(
             manifest,
-            &provider_output_summary_parts(&output.db, manifest),
+            &provider_output_summary_parts(&output.db, manifest)
+                .expect("final metadata has canonical stable rows"),
         );
         let direct_summaries = provider_output(&output, "polint.direct_summaries");
 

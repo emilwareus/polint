@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::fmt;
 
 use crate::core::{ResolutionPrecision, ResolutionStatus, SymbolPrecision};
 
@@ -87,29 +88,57 @@ pub(crate) enum FactFamily {
     PointsToSet,
     AliasAnswer,
     AdaptationModel,
-    /// Unified-solver derived-edge facts (GRAPH-04). Each row tags a
+    /// Unified-solver derived-edge facts. Each row tags a
     /// solver-derived edge whose `DerivedEdgeProvenance` records its contributing
     /// fact IDs (total-ordered by stable ID), producing `ConstraintKind`, and the
-    /// monotonic solver step. The provider that emits these into the kernel lands in
-    /// Plan 03; the fact family + stable-key tagging are produced here in Plan 02.
+    /// monotonic solver step.
     SolverDerivedEdge,
-    #[expect(
-        dead_code,
-        reason = "Type/value alias event rows are reserved for later plans."
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "type/value alias event metadata remains reserved kernel vocabulary"
+        )
     )]
     TypeValueAliasEvent,
-    #[expect(
-        dead_code,
-        reason = "MIR metadata families are introduced before provider wiring in later plans."
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "statement-level MIR metadata remains reserved kernel vocabulary"
+        )
     )]
     MirStatement,
-    #[expect(
-        dead_code,
-        reason = "MIR metadata families are introduced before provider wiring in later plans."
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "terminator-level MIR metadata remains reserved kernel vocabulary"
+        )
     )]
     MirTerminator,
     UnsupportedSemantic,
 }
+
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "canonical fact-family decoding is consumed by private metadata readers"
+    )
+)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct UnknownFactFamilyLabel {
+    label: String,
+}
+
+impl fmt::Display for UnknownFactFamilyLabel {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "unknown fact family label `{}`", self.label)
+    }
+}
+
+impl std::error::Error for UnknownFactFamilyLabel {}
 
 impl FactFamily {
     pub(crate) fn label(self) -> &'static str {
@@ -204,6 +233,109 @@ impl FactFamily {
             Self::UnsupportedSemantic => "UnsupportedSemantic",
         }
     }
+
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "canonical fact-family codecs stay symmetric for durable row decoding"
+        )
+    )]
+    pub(crate) fn parse_label(label: &str) -> Result<Self, UnknownFactFamilyLabel> {
+        match label {
+            "SourceFile" => Ok(Self::SourceFile),
+            "Package" => Ok(Self::Package),
+            "Function" => Ok(Self::Function),
+            "Import" => Ok(Self::Import),
+            "BranchObligation" => Ok(Self::BranchObligation),
+            "Test" => Ok(Self::Test),
+            "Coverage" => Ok(Self::Coverage),
+            "TsComponent" => Ok(Self::TsComponent),
+            "TsClass" => Ok(Self::TsClass),
+            "StringLiteral" => Ok(Self::StringLiteral),
+            "JsxAttribute" => Ok(Self::JsxAttribute),
+            "ResolvedImport" => Ok(Self::ResolvedImport),
+            "ModuleNode" => Ok(Self::ModuleNode),
+            "ModuleEdge" => Ok(Self::ModuleEdge),
+            "WorkspaceRoot" => Ok(Self::WorkspaceRoot),
+            "TopologyPackage" => Ok(Self::TopologyPackage),
+            "SourceSet" => Ok(Self::SourceSet),
+            "DependencyRequirement" => Ok(Self::DependencyRequirement),
+            "ResolvedDependencyEdge" => Ok(Self::ResolvedDependencyEdge),
+            "ImportToPackage" => Ok(Self::ImportToPackage),
+            "RepoTopologyOverlay" => Ok(Self::RepoTopologyOverlay),
+            "Scope" => Ok(Self::Scope),
+            "SemanticImport" => Ok(Self::SemanticImport),
+            "Export" => Ok(Self::Export),
+            "Alias" => Ok(Self::Alias),
+            "Resolution" => Ok(Self::Resolution),
+            "GeneratedSymbol" => Ok(Self::GeneratedSymbol),
+            "StableExport" => Ok(Self::StableExport),
+            "Symbol" => Ok(Self::Symbol),
+            "Definition" => Ok(Self::Definition),
+            "Reference" => Ok(Self::Reference),
+            "FileMetric" => Ok(Self::FileMetric),
+            "FunctionMetric" => Ok(Self::FunctionMetric),
+            "ComplexityMetric" => Ok(Self::ComplexityMetric),
+            "Place" => Ok(Self::Place),
+            "MirBody" => Ok(Self::MirBody),
+            "MirOperation" => Ok(Self::MirOperation),
+            "CfgFunction" => Ok(Self::CfgFunction),
+            "CfgNode" => Ok(Self::CfgNode),
+            "BasicBlock" => Ok(Self::BasicBlock),
+            "CfgEdge" => Ok(Self::CfgEdge),
+            "CfgReachability" => Ok(Self::CfgReachability),
+            "CfgDominator" => Ok(Self::CfgDominator),
+            "CfgPostDominator" => Ok(Self::CfgPostDominator),
+            "CfgControlDependence" => Ok(Self::CfgControlDependence),
+            "UnsupportedControlFlow" => Ok(Self::UnsupportedControlFlow),
+            "CallSite" => Ok(Self::CallSite),
+            "CallTarget" => Ok(Self::CallTarget),
+            "UnresolvedCall" => Ok(Self::UnresolvedCall),
+            "RefinedCallEdge" => Ok(Self::RefinedCallEdge),
+            "DataFlowNode" => Ok(Self::DataFlowNode),
+            "DataFlowEdge" => Ok(Self::DataFlowEdge),
+            "DataFlowModel" => Ok(Self::DataFlowModel),
+            "DataFlowBudget" => Ok(Self::DataFlowBudget),
+            "EvidenceNode" => Ok(Self::EvidenceNode),
+            "EvidenceEdge" => Ok(Self::EvidenceEdge),
+            "EvidenceBundle" => Ok(Self::EvidenceBundle),
+            "EvidencePath" => Ok(Self::EvidencePath),
+            "EvidenceSlice" => Ok(Self::EvidenceSlice),
+            "EvidenceUnknown" => Ok(Self::EvidenceUnknown),
+            "EvidenceOmittedRegion" => Ok(Self::EvidenceOmittedRegion),
+            "EvidenceReplayKey" => Ok(Self::EvidenceReplayKey),
+            "DomainObservation" => Ok(Self::DomainObservation),
+            "DomainEvent" => Ok(Self::DomainEvent),
+            "SummaryControl" => Ok(Self::SummaryControl),
+            "SummaryCall" => Ok(Self::SummaryCall),
+            "SummaryMemory" => Ok(Self::SummaryMemory),
+            "SummaryTito" => Ok(Self::SummaryTito),
+            "SummaryEvent" => Ok(Self::SummaryEvent),
+            "ExtensionFact" => Ok(Self::ExtensionFact),
+            "Entrypoint" => Ok(Self::Entrypoint),
+            "TrustBoundary" => Ok(Self::TrustBoundary),
+            "DispatchEdge" => Ok(Self::DispatchEdge),
+            "UnresolvedFramework" => Ok(Self::UnresolvedFramework),
+            "Type" => Ok(Self::Type),
+            "NarrowedType" => Ok(Self::NarrowedType),
+            "Value" => Ok(Self::Value),
+            "AllocationToken" => Ok(Self::AllocationToken),
+            "AccessPath" => Ok(Self::AccessPath),
+            "PointsToConstraint" => Ok(Self::PointsToConstraint),
+            "PointsToSet" => Ok(Self::PointsToSet),
+            "AliasAnswer" => Ok(Self::AliasAnswer),
+            "AdaptationModel" => Ok(Self::AdaptationModel),
+            "SolverDerivedEdge" => Ok(Self::SolverDerivedEdge),
+            "TypeValueAliasEvent" => Ok(Self::TypeValueAliasEvent),
+            "MirStatement" => Ok(Self::MirStatement),
+            "MirTerminator" => Ok(Self::MirTerminator),
+            "UnsupportedSemantic" => Ok(Self::UnsupportedSemantic),
+            _ => Err(UnknownFactFamilyLabel {
+                label: label.to_string(),
+            }),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -235,7 +367,7 @@ pub(crate) struct FactMeta {
     pub(crate) payload_digest: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum FactPrecision {
     Exact,
     Syntax,
@@ -247,17 +379,20 @@ pub(crate) enum FactPrecision {
     Unsupported,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum FactConfidence {
     High,
     Medium,
     Low,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[expect(
-    dead_code,
-    reason = "The validation vocabulary is broader than the native trusted path used before extension providers land."
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "closed validation metadata retains reader-only statuses"
+    )
 )]
 pub(crate) enum ValidationStatus {
     NativeTrusted,
@@ -267,6 +402,190 @@ pub(crate) enum ValidationStatus {
     StableKeyValidated,
     ConflictRejected,
 }
+
+macro_rules! define_unknown_label_error {
+    ($name:ident, $description:literal) => {
+        #[cfg_attr(
+            not(test),
+            allow(
+                dead_code,
+                reason = "canonical fact metadata decoding is consumed by private metadata readers"
+            )
+        )]
+        #[derive(Clone, Debug, PartialEq, Eq)]
+        pub(crate) struct $name {
+            label: String,
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(
+                    formatter,
+                    concat!("unknown ", $description, " label `{}`"),
+                    self.label
+                )
+            }
+        }
+
+        impl std::error::Error for $name {}
+    };
+}
+
+define_unknown_label_error!(UnknownFactPrecisionLabel, "fact precision");
+define_unknown_label_error!(UnknownFactConfidenceLabel, "fact confidence");
+define_unknown_label_error!(UnknownValidationStatusLabel, "validation status");
+
+impl FactPrecision {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Exact => "exact",
+            Self::Syntax => "syntax",
+            Self::SetupAware => "setup_aware",
+            Self::Heuristic => "heuristic",
+            Self::Unresolved => "unresolved",
+            Self::Ambiguous => "ambiguous",
+            Self::SetupMissing => "setup_missing",
+            Self::Unsupported => "unsupported",
+        }
+    }
+
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "canonical fact metadata codecs stay symmetric for durable row decoding"
+        )
+    )]
+    pub(crate) fn parse_label(label: &str) -> Result<Self, UnknownFactPrecisionLabel> {
+        match label {
+            "exact" => Ok(Self::Exact),
+            "syntax" => Ok(Self::Syntax),
+            "setup_aware" => Ok(Self::SetupAware),
+            "heuristic" => Ok(Self::Heuristic),
+            "unresolved" => Ok(Self::Unresolved),
+            "ambiguous" => Ok(Self::Ambiguous),
+            "setup_missing" => Ok(Self::SetupMissing),
+            "unsupported" => Ok(Self::Unsupported),
+            _ => Err(UnknownFactPrecisionLabel {
+                label: label.to_string(),
+            }),
+        }
+    }
+}
+
+impl FactConfidence {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::High => "high",
+            Self::Medium => "medium",
+            Self::Low => "low",
+        }
+    }
+
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "canonical fact metadata codecs stay symmetric for durable row decoding"
+        )
+    )]
+    pub(crate) fn parse_label(label: &str) -> Result<Self, UnknownFactConfidenceLabel> {
+        match label {
+            "high" => Ok(Self::High),
+            "medium" => Ok(Self::Medium),
+            "low" => Ok(Self::Low),
+            _ => Err(UnknownFactConfidenceLabel {
+                label: label.to_string(),
+            }),
+        }
+    }
+}
+
+impl ValidationStatus {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::NativeTrusted => "native_trusted",
+            Self::SchemaValidated => "schema_validated",
+            Self::ReferentiallyValidated => "referentially_validated",
+            Self::SpanValidated => "span_validated",
+            Self::StableKeyValidated => "stable_key_validated",
+            Self::ConflictRejected => "conflict_rejected",
+        }
+    }
+
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "canonical fact metadata codecs stay symmetric for durable row decoding"
+        )
+    )]
+    pub(crate) fn parse_label(label: &str) -> Result<Self, UnknownValidationStatusLabel> {
+        match label {
+            "native_trusted" => Ok(Self::NativeTrusted),
+            "schema_validated" => Ok(Self::SchemaValidated),
+            "referentially_validated" => Ok(Self::ReferentiallyValidated),
+            "span_validated" => Ok(Self::SpanValidated),
+            "stable_key_validated" => Ok(Self::StableKeyValidated),
+            "conflict_rejected" => Ok(Self::ConflictRejected),
+            _ => Err(UnknownValidationStatusLabel {
+                label: label.to_string(),
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct StableFactMetaRow {
+    pub(crate) family: FactFamily,
+    pub(crate) stable_key: String,
+    pub(crate) producer_id: String,
+    pub(crate) layer_id: String,
+    pub(crate) precision: FactPrecision,
+    pub(crate) confidence: FactConfidence,
+    pub(crate) validation: ValidationStatus,
+    pub(crate) payload_digest: String,
+}
+
+impl StableFactMetaRow {
+    fn from_metadata(family: FactFamily, metadata: &FactMeta) -> Self {
+        Self {
+            family,
+            stable_key: metadata.stable_key.clone(),
+            producer_id: metadata.producer_id.to_string(),
+            layer_id: metadata.layer_id.to_string(),
+            precision: metadata.precision,
+            confidence: metadata.confidence,
+            validation: metadata.validation,
+            payload_digest: metadata.payload_digest.clone(),
+        }
+    }
+
+    fn has_same_identity(&self, other: &Self) -> bool {
+        self.family == other.family && self.stable_key == other.stable_key
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StableFactMetaConflict {
+    pub(crate) family: FactFamily,
+    pub(crate) stable_key: String,
+    pub(crate) existing: Box<StableFactMetaRow>,
+    pub(crate) incoming: Box<StableFactMetaRow>,
+}
+
+impl fmt::Display for StableFactMetaConflict {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "conflicting stable fact metadata for {} `{}`",
+            self.family.label(),
+            self.stable_key
+        )
+    }
+}
+
+impl std::error::Error for StableFactMetaConflict {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StableKeyOwner {
@@ -460,6 +779,37 @@ impl FactMetaStore {
                 .map(move |(run_id, metadata)| (FactRef::new(*family, run_id), metadata))
         })
     }
+
+    pub(crate) fn stable_rows(&self) -> Result<Vec<StableFactMetaRow>, StableFactMetaConflict> {
+        canonical_stable_rows(self.rows().map(|(reference, metadata)| {
+            StableFactMetaRow::from_metadata(reference.family, metadata)
+        }))
+    }
+}
+
+fn canonical_stable_rows(
+    rows: impl IntoIterator<Item = StableFactMetaRow>,
+) -> Result<Vec<StableFactMetaRow>, StableFactMetaConflict> {
+    let mut rows = rows.into_iter().collect::<Vec<_>>();
+    rows.sort();
+    let mut canonical = Vec::<StableFactMetaRow>::with_capacity(rows.len());
+    for row in rows {
+        if let Some(existing) = canonical.last()
+            && existing.has_same_identity(&row)
+        {
+            if existing == &row {
+                continue;
+            }
+            return Err(StableFactMetaConflict {
+                family: row.family,
+                stable_key: row.stable_key.clone(),
+                existing: Box::new(existing.clone()),
+                incoming: Box::new(row),
+            });
+        }
+        canonical.push(row);
+    }
+    Ok(canonical)
 }
 
 pub(crate) fn stable_key_from_parts(family: FactFamily, parts: &[(&str, String)]) -> String {
@@ -532,6 +882,144 @@ fn length_prefixed(value: &str) -> String {
 mod tests {
     use super::*;
 
+    const ALL_FACT_FAMILIES: &[FactFamily] = &[
+        FactFamily::SourceFile,
+        FactFamily::Package,
+        FactFamily::Function,
+        FactFamily::Import,
+        FactFamily::BranchObligation,
+        FactFamily::Test,
+        FactFamily::Coverage,
+        FactFamily::TsComponent,
+        FactFamily::TsClass,
+        FactFamily::StringLiteral,
+        FactFamily::JsxAttribute,
+        FactFamily::ResolvedImport,
+        FactFamily::ModuleNode,
+        FactFamily::ModuleEdge,
+        FactFamily::WorkspaceRoot,
+        FactFamily::TopologyPackage,
+        FactFamily::SourceSet,
+        FactFamily::DependencyRequirement,
+        FactFamily::ResolvedDependencyEdge,
+        FactFamily::ImportToPackage,
+        FactFamily::RepoTopologyOverlay,
+        FactFamily::Scope,
+        FactFamily::SemanticImport,
+        FactFamily::Export,
+        FactFamily::Alias,
+        FactFamily::Resolution,
+        FactFamily::GeneratedSymbol,
+        FactFamily::StableExport,
+        FactFamily::Symbol,
+        FactFamily::Definition,
+        FactFamily::Reference,
+        FactFamily::FileMetric,
+        FactFamily::FunctionMetric,
+        FactFamily::ComplexityMetric,
+        FactFamily::Place,
+        FactFamily::MirBody,
+        FactFamily::MirOperation,
+        FactFamily::CfgFunction,
+        FactFamily::CfgNode,
+        FactFamily::BasicBlock,
+        FactFamily::CfgEdge,
+        FactFamily::CfgReachability,
+        FactFamily::CfgDominator,
+        FactFamily::CfgPostDominator,
+        FactFamily::CfgControlDependence,
+        FactFamily::UnsupportedControlFlow,
+        FactFamily::CallSite,
+        FactFamily::CallTarget,
+        FactFamily::UnresolvedCall,
+        FactFamily::RefinedCallEdge,
+        FactFamily::DataFlowNode,
+        FactFamily::DataFlowEdge,
+        FactFamily::DataFlowModel,
+        FactFamily::DataFlowBudget,
+        FactFamily::EvidenceNode,
+        FactFamily::EvidenceEdge,
+        FactFamily::EvidenceBundle,
+        FactFamily::EvidencePath,
+        FactFamily::EvidenceSlice,
+        FactFamily::EvidenceUnknown,
+        FactFamily::EvidenceOmittedRegion,
+        FactFamily::EvidenceReplayKey,
+        FactFamily::DomainObservation,
+        FactFamily::DomainEvent,
+        FactFamily::SummaryControl,
+        FactFamily::SummaryCall,
+        FactFamily::SummaryMemory,
+        FactFamily::SummaryTito,
+        FactFamily::SummaryEvent,
+        FactFamily::ExtensionFact,
+        FactFamily::Entrypoint,
+        FactFamily::TrustBoundary,
+        FactFamily::DispatchEdge,
+        FactFamily::UnresolvedFramework,
+        FactFamily::Type,
+        FactFamily::NarrowedType,
+        FactFamily::Value,
+        FactFamily::AllocationToken,
+        FactFamily::AccessPath,
+        FactFamily::PointsToConstraint,
+        FactFamily::PointsToSet,
+        FactFamily::AliasAnswer,
+        FactFamily::AdaptationModel,
+        FactFamily::SolverDerivedEdge,
+        FactFamily::TypeValueAliasEvent,
+        FactFamily::MirStatement,
+        FactFamily::MirTerminator,
+        FactFamily::UnsupportedSemantic,
+    ];
+
+    #[test]
+    fn fact_metadata_codecs_round_trip_every_variant() {
+        for family in ALL_FACT_FAMILIES {
+            assert_eq!(FactFamily::parse_label(family.label()), Ok(*family));
+        }
+        for precision in [
+            FactPrecision::Exact,
+            FactPrecision::Syntax,
+            FactPrecision::SetupAware,
+            FactPrecision::Heuristic,
+            FactPrecision::Unresolved,
+            FactPrecision::Ambiguous,
+            FactPrecision::SetupMissing,
+            FactPrecision::Unsupported,
+        ] {
+            assert_eq!(FactPrecision::parse_label(precision.label()), Ok(precision));
+        }
+        for confidence in [
+            FactConfidence::High,
+            FactConfidence::Medium,
+            FactConfidence::Low,
+        ] {
+            assert_eq!(
+                FactConfidence::parse_label(confidence.label()),
+                Ok(confidence)
+            );
+        }
+        for status in [
+            ValidationStatus::NativeTrusted,
+            ValidationStatus::SchemaValidated,
+            ValidationStatus::ReferentiallyValidated,
+            ValidationStatus::SpanValidated,
+            ValidationStatus::StableKeyValidated,
+            ValidationStatus::ConflictRejected,
+        ] {
+            assert_eq!(ValidationStatus::parse_label(status.label()), Ok(status));
+        }
+    }
+
+    #[test]
+    fn fact_metadata_codecs_reject_unknown_labels() {
+        assert!(FactFamily::parse_label("source_file").is_err());
+        assert!(FactPrecision::parse_label("setup-aware").is_err());
+        assert!(FactConfidence::parse_label("certain").is_err());
+        assert!(ValidationStatus::parse_label("trusted").is_err());
+    }
+
     #[test]
     fn fact_ref_keeps_run_local_id_separate_from_stable_key() {
         let reference = FactRef::new(FactFamily::Import, 7);
@@ -584,6 +1072,76 @@ mod tests {
 
         assert_eq!(rows[0].0, earlier);
         assert_eq!(rows[1].0, later);
+    }
+
+    #[test]
+    fn stable_rows_ignore_run_id_and_insertion_permutations() {
+        let mut first = FactMetaStore::default();
+        first.insert(
+            FactRef::new(FactFamily::Import, 10),
+            test_meta("import:b", "payload:b"),
+        );
+        first.insert(
+            FactRef::new(FactFamily::Import, 2),
+            test_meta("import:a", "payload:a"),
+        );
+
+        let mut second = FactMetaStore::default();
+        second.insert(
+            FactRef::new(FactFamily::Import, 90),
+            test_meta("import:a", "payload:a"),
+        );
+        second.insert(
+            FactRef::new(FactFamily::Import, 1),
+            test_meta("import:b", "payload:b"),
+        );
+
+        assert_eq!(
+            first.stable_rows().expect("first stable rows"),
+            second.stable_rows().expect("second stable rows")
+        );
+    }
+
+    #[test]
+    fn stable_rows_deduplicate_identical_semantic_rows() {
+        let mut store = FactMetaStore::default();
+        store.insert(
+            FactRef::new(FactFamily::Import, 1),
+            test_meta("import:key", "payload:a"),
+        );
+        store.insert(
+            FactRef::new(FactFamily::Import, 99),
+            test_meta("import:key", "payload:a"),
+        );
+
+        let rows = store.stable_rows().expect("identical rows deduplicate");
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].payload_digest, "payload:a");
+    }
+
+    #[test]
+    fn stable_rows_reject_conflicting_semantic_rows() {
+        let mut store = FactMetaStore::default();
+        store.insert(
+            FactRef::new(FactFamily::Import, 1),
+            test_meta("import:key", "payload:a"),
+        );
+        store.insert(
+            FactRef::new(FactFamily::Import, 2),
+            test_meta("import:key", "payload:b"),
+        );
+
+        let conflict = store
+            .stable_rows()
+            .expect_err("different payload digests conflict");
+
+        assert_eq!(conflict.family, FactFamily::Import);
+        assert_eq!(conflict.stable_key, "import:key");
+        assert_ne!(
+            conflict.existing.payload_digest,
+            conflict.incoming.payload_digest
+        );
     }
 
     #[test]

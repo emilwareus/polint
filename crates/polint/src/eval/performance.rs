@@ -90,7 +90,7 @@ impl ProviderStatsRow {
             provider_version: output.provider_version.clone(),
             schema_version: output.schema_version.clone(),
             output_digest: output.output_digest.value.clone(),
-            precision: format!("{:?}", output.precision).to_ascii_lowercase(),
+            precision: output.precision.label().to_string(),
             validation: output.validation.clone(),
             dependency_input_count: output.dependency_inputs.len(),
             facts_emitted: None,
@@ -198,6 +198,10 @@ mod tests {
         GoLifecycleSnapshot, InputComponent, InputComponentStatus, InputSnapshot, KernelRunReport,
         ProviderOutputMeta, TsJsLifecycleSnapshot, provider_output_digest_from_manifest,
         provider_output_from_manifest,
+    };
+    use crate::analysis_kernel::{
+        FactConfidence, FactFamily, FactPrecision, ProviderManifest, StableFactMetaRow,
+        ValidationStatus,
     };
 
     #[test]
@@ -321,16 +325,31 @@ mod tests {
         assert_eq!(performance.rss.peak_rss_observed_mb, Some(99));
     }
 
+    #[test]
+    fn eval_provider_digest_fixture_is_permutation_stable_and_semantic() {
+        let manifest = &AnalysisKernel::provider_manifests()[0];
+        let rows = stable_fact_rows(manifest);
+        let mut reversed = rows.clone();
+        reversed.reverse();
+
+        let first = provider_output_digest_from_manifest(manifest, &rows);
+        let second = provider_output_digest_from_manifest(manifest, &reversed);
+        let mut changed = rows;
+        changed[0].payload_digest = "payload:changed".to_string();
+        let changed = provider_output_digest_from_manifest(manifest, &changed);
+
+        assert_eq!(first, second);
+        assert_ne!(first, changed);
+    }
+
     fn kernel_report_with_stats(stats: CacheStats) -> KernelRunReport {
         let manifests = AnalysisKernel::provider_manifests();
         let provider_outputs = manifests
             .iter()
             .take(2)
             .map(|manifest| {
-                let output_digest = provider_output_digest_from_manifest(
-                    manifest,
-                    &[format!("provider={}", manifest.id)],
-                );
+                let stable_rows = stable_fact_rows(manifest);
+                let output_digest = provider_output_digest_from_manifest(manifest, &stable_rows);
                 provider_output_from_manifest(manifest, output_digest, stats.clone())
             })
             .collect::<Vec<ProviderOutputMeta>>();
@@ -370,6 +389,31 @@ mod tests {
             trace,
             crate::analysis_kernel::StoreStatus::Disabled,
         )
+    }
+
+    fn stable_fact_rows(manifest: &ProviderManifest) -> Vec<StableFactMetaRow> {
+        vec![
+            StableFactMetaRow {
+                family: FactFamily::SourceFile,
+                stable_key: format!("{}:source", manifest.id),
+                producer_id: manifest.id.to_string(),
+                layer_id: manifest.id.to_string(),
+                precision: FactPrecision::Syntax,
+                confidence: FactConfidence::High,
+                validation: ValidationStatus::NativeTrusted,
+                payload_digest: "payload:source".to_string(),
+            },
+            StableFactMetaRow {
+                family: FactFamily::Function,
+                stable_key: format!("{}:function", manifest.id),
+                producer_id: manifest.id.to_string(),
+                layer_id: manifest.id.to_string(),
+                precision: FactPrecision::SetupAware,
+                confidence: FactConfidence::Medium,
+                validation: ValidationStatus::SchemaValidated,
+                payload_digest: "payload:function".to_string(),
+            },
+        ]
     }
 
     fn input_component(name: &str) -> InputComponent {

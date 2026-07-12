@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{Digest, DigestKind};
 use crate::analysis::extensions::discovery::{DiscoveredExtension, discover_local_extensions};
-use crate::analysis_kernel::{CachePolicy, LanguageScope, PrecisionCeiling, ProviderManifest};
+use crate::analysis_kernel::ProviderManifest;
 use crate::config::LoadedConfig;
 use crate::core::{AnalysisDb, Language, SourceFile};
 use crate::module_graph::paths::{
@@ -11,6 +11,7 @@ use crate::module_graph::paths::{
     repo_file_exists, repo_file_path, repo_relative_existing_path,
 };
 use std::collections::BTreeSet;
+use std::fmt;
 use std::path::{Path as FsPath, PathBuf};
 
 pub(crate) const INPUT_SNAPSHOT_SCHEMA_VERSION: &str = "polint-input-snapshot-1";
@@ -48,12 +49,66 @@ pub(crate) struct TsJsLifecycleSnapshot {
     pub(crate) components: Vec<InputComponent>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) enum InputComponentStatus {
     Present,
     Absent,
     Unsupported,
     SetupMissing,
+}
+
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "canonical status decoding is consumed by private metadata readers"
+    )
+)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct UnknownInputComponentStatusLabel {
+    label: String,
+}
+
+impl fmt::Display for UnknownInputComponentStatusLabel {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "unknown input component status label `{}`",
+            self.label
+        )
+    }
+}
+
+impl std::error::Error for UnknownInputComponentStatusLabel {}
+
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "canonical status codecs stay symmetric for durable row decoding"
+    )
+)]
+impl InputComponentStatus {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Present => "present",
+            Self::Absent => "absent",
+            Self::Unsupported => "unsupported",
+            Self::SetupMissing => "setup_missing",
+        }
+    }
+
+    pub(crate) fn parse_label(label: &str) -> Result<Self, UnknownInputComponentStatusLabel> {
+        match label {
+            "present" => Ok(Self::Present),
+            "absent" => Ok(Self::Absent),
+            "unsupported" => Ok(Self::Unsupported),
+            "setup_missing" => Ok(Self::SetupMissing),
+            _ => Err(UnknownInputComponentStatusLabel {
+                label: label.to_string(),
+            }),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -294,14 +349,16 @@ impl InputComponent {
 impl ProviderSchemaSnapshot {
     fn from_manifest(manifest: &ProviderManifest) -> Self {
         let schema_versions = sorted_schema_labels(manifest.schema_versions);
-        let language_scope = language_scope_label(manifest.language_scope).to_string();
-        let cache_policy = cache_policy_label(manifest.cache_policy);
-        let precision_ceiling = precision_ceiling_label(manifest.precision_ceiling).to_string();
+        let language_scope = manifest.language_scope.label().to_string();
+        let cache_policy = manifest.cache_policy.label().into_owned();
+        let precision_ceiling = manifest.precision_ceiling.label().to_string();
         let sorted_inputs = sorted_static_strings(manifest.inputs);
         let sorted_outputs = sorted_static_strings(manifest.outputs);
 
         let mut digest_parts = vec![
             format!("provider_id={}", manifest.id),
+            format!("provider_version={}", manifest.provider_version()),
+            format!("provider_kind={}", manifest.kind.label()),
             format!("language_scope={language_scope}"),
             format!("cache_policy={cache_policy}"),
             format!("precision_ceiling={precision_ceiling}"),
@@ -326,7 +383,7 @@ impl ProviderSchemaSnapshot {
             cache_policy,
             precision_ceiling,
             provider_manifest_digest: Digest::from_parts(
-                DigestKind::ProviderParameters,
+                DigestKind::ProviderManifest,
                 "provider_manifest",
                 &digest_refs,
             ),
@@ -1091,33 +1148,6 @@ fn stable_hash_bytes(bytes: &[u8]) -> String {
     format!("{hash:016x}")
 }
 
-fn language_scope_label(scope: LanguageScope) -> &'static str {
-    match scope {
-        LanguageScope::Workspace => "workspace",
-        LanguageScope::Go => "go",
-        LanguageScope::TypeScriptJavaScript => "typescript_javascript",
-        LanguageScope::MultiLanguage => "multi_language",
-    }
-}
-
-fn cache_policy_label(policy: CachePolicy) -> String {
-    match policy {
-        CachePolicy::NoCache => "no_cache".to_string(),
-        CachePolicy::ExistingFileFactCache { schema } => {
-            format!("existing_file_fact_cache:{schema}")
-        }
-        CachePolicy::InMemoryDerived => "in_memory_derived".to_string(),
-    }
-}
-
-fn precision_ceiling_label(precision: PrecisionCeiling) -> &'static str {
-    match precision {
-        PrecisionCeiling::Exact => "exact",
-        PrecisionCeiling::Syntax => "syntax",
-        PrecisionCeiling::SetupAware => "setup_aware",
-    }
-}
-
 fn extension_activation_status_label(
     status: crate::analysis::extensions::manifest::ExtensionActivationStatus,
 ) -> &'static str {
@@ -1137,6 +1167,28 @@ fn extension_activation_status_label(
             "validation_failed"
         }
         crate::analysis::extensions::manifest::ExtensionActivationStatus::Disabled => "disabled",
+    }
+}
+
+#[cfg(test)]
+mod input_component_status_codec {
+    use super::*;
+
+    #[test]
+    fn round_trips_every_variant_and_rejects_unknown_labels() {
+        for status in [
+            InputComponentStatus::Present,
+            InputComponentStatus::Absent,
+            InputComponentStatus::Unsupported,
+            InputComponentStatus::SetupMissing,
+        ] {
+            assert_eq!(
+                InputComponentStatus::parse_label(status.label()),
+                Ok(status)
+            );
+        }
+
+        assert!(InputComponentStatus::parse_label("setup-missing").is_err());
     }
 }
 
@@ -1280,7 +1332,7 @@ mod source_config_rule_model_extension {
             DigestKind::ExtensionCode
         );
         assert!(snapshot.provider_schemas.iter().all(|provider| {
-            provider.provider_manifest_digest.kind == DigestKind::ProviderParameters
+            provider.provider_manifest_digest.kind == DigestKind::ProviderManifest
         }));
     }
 

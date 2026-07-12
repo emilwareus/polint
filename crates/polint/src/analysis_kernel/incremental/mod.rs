@@ -59,7 +59,24 @@ pub(crate) use demand::{
 pub(crate) use dependency_index::{
     CacheNode, DEPENDENCY_INDEX_SCHEMA, DependencyEdge, DependencyIndex, DependencyKind, ShapeKind,
 };
-pub(crate) use digest::{Digest, DigestBuilder, DigestKind};
+#[cfg_attr(
+    test,
+    allow(
+        unused_imports,
+        reason = "unit tests exercise identities in their defining module"
+    )
+)]
+#[cfg_attr(
+    not(test),
+    expect(
+        unused_imports,
+        reason = "opaque identities are shared by private validated-run metadata projections"
+    )
+)]
+pub(crate) use digest::{
+    ConfigIdentity, Digest, DigestBuilder, DigestKind, GenerationIdentity, RunIdentity,
+    WorkspaceIdentity,
+};
 #[cfg_attr(
     test,
     allow(

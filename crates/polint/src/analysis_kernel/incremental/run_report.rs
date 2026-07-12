@@ -2,8 +2,7 @@ use super::demand::DemandQueryTrace;
 use super::{CacheStats, Digest, DigestKind, InputSnapshot, PrecisionTier, ProviderOutputMeta};
 #[cfg(test)]
 use crate::analysis::summaries::provider::SccClosureDebugSnapshot;
-use crate::analysis_kernel::StoreStatus;
-use crate::analysis_kernel::{PrecisionCeiling, ProviderManifest};
+use crate::analysis_kernel::{ProviderManifest, StableFactMetaRow, StoreStatus};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct KernelRunReport {
@@ -75,7 +74,7 @@ pub(crate) fn provider_output_from_manifest(
         manifest.provider_version(),
         manifest.primary_schema_label(),
         output_digest,
-        precision_tier(manifest.precision_ceiling),
+        PrecisionTier::from_ceiling(manifest.precision_ceiling),
         "native_trusted",
         dependency_inputs_from_manifest(manifest),
         cache_stats,
@@ -84,35 +83,42 @@ pub(crate) fn provider_output_from_manifest(
 
 pub(crate) fn provider_output_digest_from_manifest(
     manifest: &ProviderManifest,
-    summary_parts: &[String],
+    stable_rows: &[StableFactMetaRow],
 ) -> Digest {
     let schema_label = manifest.primary_schema_label();
     let language_scope = manifest.language_scope_label();
     let cache_policy = manifest.cache_policy_label();
-    let precision = precision_label(manifest.precision_ceiling);
+    let precision = manifest.precision_ceiling.label();
 
-    let mut output_families = manifest
-        .outputs
-        .iter()
-        .map(|output| format!("output_family={output}"))
-        .collect::<Vec<_>>();
+    let mut output_families = manifest.outputs.to_vec();
     output_families.sort();
+    output_families.dedup();
 
-    let mut metadata_fact_summary_parts = summary_parts.to_vec();
-    metadata_fact_summary_parts.sort();
+    let mut metadata_rows = stable_rows.to_vec();
+    metadata_rows.sort();
+    metadata_rows.dedup();
 
-    let mut digest_parts = vec![
-        format!("provider_id={}", manifest.id),
-        format!("schema_version={schema_label}"),
-        format!("language_scope={language_scope}"),
-        format!("cache_policy={cache_policy}"),
-        format!("precision={precision}"),
-    ];
-    digest_parts.extend(output_families);
-    digest_parts.extend(metadata_fact_summary_parts);
+    let mut builder = Digest::builder(DigestKind::ProviderOutput, "provider_output");
+    builder.labeled_part("provider_id", manifest.id);
+    builder.labeled_part("schema_version", &schema_label);
+    builder.labeled_part("language_scope", language_scope);
+    builder.labeled_part("cache_policy", &cache_policy);
+    builder.labeled_part("precision", precision);
+    for output_family in output_families {
+        builder.labeled_part("output_family", output_family);
+    }
+    for row in metadata_rows {
+        builder.labeled_part("fact_family", row.family.label());
+        builder.labeled_part("stable_key", &row.stable_key);
+        builder.labeled_part("producer_id", &row.producer_id);
+        builder.labeled_part("layer_id", &row.layer_id);
+        builder.labeled_part("fact_precision", row.precision.label());
+        builder.labeled_part("fact_confidence", row.confidence.label());
+        builder.labeled_part("validation", row.validation.label());
+        builder.labeled_part("payload_digest", &row.payload_digest);
+    }
 
-    let digest_refs = digest_parts.iter().map(String::as_str).collect::<Vec<_>>();
-    Digest::from_parts(DigestKind::ProviderOutput, "provider_output", &digest_refs)
+    builder.finish()
 }
 
 fn dependency_inputs_from_manifest(manifest: &ProviderManifest) -> Vec<Digest> {
@@ -122,22 +128,6 @@ fn dependency_inputs_from_manifest(manifest: &ProviderManifest) -> Vec<Digest> {
         .into_iter()
         .map(|input| Digest::from_parts(DigestKind::DependencyLayer, "dependency_input", &[input]))
         .collect()
-}
-
-fn precision_tier(precision: PrecisionCeiling) -> PrecisionTier {
-    match precision {
-        PrecisionCeiling::Exact => PrecisionTier::Exact,
-        PrecisionCeiling::Syntax => PrecisionTier::Syntax,
-        PrecisionCeiling::SetupAware => PrecisionTier::SetupAware,
-    }
-}
-
-fn precision_label(precision: PrecisionCeiling) -> &'static str {
-    match precision {
-        PrecisionCeiling::Exact => "exact",
-        PrecisionCeiling::Syntax => "syntax",
-        PrecisionCeiling::SetupAware => "setup_aware",
-    }
 }
 
 /// Aggregates demand query cache statistics into an existing `CacheStats`.
@@ -174,18 +164,34 @@ mod tests {
     use super::*;
     use crate::analysis_kernel::incremental::{CacheStats, DigestKind, PrecisionTier};
     use crate::analysis_kernel::{
-        CachePolicy, LanguageScope, PrecisionCeiling, ProviderKind, ProviderManifest, SchemaVersion,
+        CachePolicy, FactConfidence, FactFamily, FactPrecision, LanguageScope, PrecisionCeiling,
+        ProviderKind, ProviderManifest, SchemaVersion, StableFactMetaRow, ValidationStatus,
     };
+
+    fn stable_fact_row(
+        manifest: &ProviderManifest,
+        stable_key: &str,
+        payload_digest: &str,
+    ) -> StableFactMetaRow {
+        StableFactMetaRow {
+            family: FactFamily::Import,
+            stable_key: stable_key.to_string(),
+            producer_id: manifest.id.to_string(),
+            layer_id: manifest.id.to_string(),
+            precision: FactPrecision::Syntax,
+            confidence: FactConfidence::High,
+            validation: ValidationStatus::NativeTrusted,
+            payload_digest: payload_digest.to_string(),
+        }
+    }
 
     #[test]
     fn provider_outputs_are_constructed_in_manifest_order() {
         let provider_outputs = crate::analysis_kernel::AnalysisKernel::provider_manifests()
             .iter()
             .map(|manifest| {
-                let output_digest = provider_output_digest_from_manifest(
-                    manifest,
-                    &[format!("provider={}", manifest.id)],
-                );
+                let row = stable_fact_row(manifest, "fixture:fact", "fixture:payload");
+                let output_digest = provider_output_digest_from_manifest(manifest, &[row]);
                 provider_output_from_manifest(manifest, output_digest, CacheStats::default())
             })
             .collect::<Vec<_>>();
@@ -231,10 +237,8 @@ mod tests {
         stats.record_write();
 
         for manifest in crate::analysis_kernel::AnalysisKernel::provider_manifests() {
-            let output_digest = provider_output_digest_from_manifest(
-                manifest,
-                &[format!("provider={}", manifest.id)],
-            );
+            let row = stable_fact_row(manifest, "fixture:fact", "fixture:payload");
+            let output_digest = provider_output_digest_from_manifest(manifest, &[row]);
             let row = provider_output_from_manifest(manifest, output_digest, stats.clone());
 
             assert_eq!(row.provider_id, manifest.id);
@@ -254,16 +258,53 @@ mod tests {
     #[test]
     fn provider_output_digest_is_deterministic_for_identical_inputs() {
         let manifest = &crate::analysis_kernel::AnalysisKernel::provider_manifests()[1];
-        let first = provider_output_digest_from_manifest(
-            manifest,
-            &["fact=b".to_string(), "fact=a".to_string()],
-        );
-        let second = provider_output_digest_from_manifest(
-            manifest,
-            &["fact=a".to_string(), "fact=b".to_string()],
-        );
+        let a = stable_fact_row(manifest, "fact:a", "payload:a");
+        let b = stable_fact_row(manifest, "fact:b", "payload:b");
+        let first = provider_output_digest_from_manifest(manifest, &[b.clone(), a.clone()]);
+        let second = provider_output_digest_from_manifest(manifest, &[a, b]);
 
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn provider_output_digest_changes_for_every_semantic_fact_field() {
+        let manifest = &crate::analysis_kernel::AnalysisKernel::provider_manifests()[1];
+        let base = stable_fact_row(manifest, "fact:base", "payload:base");
+        let base_digest =
+            provider_output_digest_from_manifest(manifest, std::slice::from_ref(&base));
+        let mut mutations = Vec::new();
+
+        let mut row = base.clone();
+        row.family = FactFamily::Function;
+        mutations.push(row);
+        let mut row = base.clone();
+        row.stable_key = "fact:changed".to_string();
+        mutations.push(row);
+        let mut row = base.clone();
+        row.producer_id = "polint.changed.producer".to_string();
+        mutations.push(row);
+        let mut row = base.clone();
+        row.layer_id = "polint.changed.layer".to_string();
+        mutations.push(row);
+        let mut row = base.clone();
+        row.precision = FactPrecision::Heuristic;
+        mutations.push(row);
+        let mut row = base.clone();
+        row.confidence = FactConfidence::Low;
+        mutations.push(row);
+        let mut row = base.clone();
+        row.validation = ValidationStatus::SchemaValidated;
+        mutations.push(row);
+        let mut row = base;
+        row.payload_digest = "payload:changed".to_string();
+        mutations.push(row);
+
+        for mutation in mutations {
+            assert_ne!(
+                provider_output_digest_from_manifest(manifest, &[mutation]),
+                base_digest
+            );
+        }
     }
 
     #[test]
@@ -294,15 +335,16 @@ mod tests {
             ..base
         };
 
-        let base_digest = provider_output_digest_from_manifest(&base, &["facts=1".to_string()]);
+        let row = stable_fact_row(&base, "fact:one", "payload:one");
+        let base_digest = provider_output_digest_from_manifest(&base, std::slice::from_ref(&row));
 
         assert_ne!(
             base_digest,
-            provider_output_digest_from_manifest(&scope_changed, &["facts=1".to_string()])
+            provider_output_digest_from_manifest(&scope_changed, std::slice::from_ref(&row))
         );
         assert_ne!(
             base_digest,
-            provider_output_digest_from_manifest(&policy_changed, &["facts=1".to_string()])
+            provider_output_digest_from_manifest(&policy_changed, &[row])
         );
     }
 }

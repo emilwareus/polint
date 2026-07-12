@@ -6,12 +6,13 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeSet;
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::digest::{Digest, DigestKind};
-use crate::analysis_kernel::ProviderManifest;
+use crate::analysis_kernel::{PrecisionCeiling, ProviderManifest};
 use crate::cache::{CACHE_VERSION, CacheKey};
 use crate::core::AnalysisDb;
 use crate::module_graph::formats::pnpm_workspace::parse_pnpm_workspace_packages;
@@ -63,6 +64,32 @@ pub(crate) enum PrecisionTier {
     Exact,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct UnknownLayerKindLabel {
+    label: String,
+}
+
+impl fmt::Display for UnknownLayerKindLabel {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "unknown layer kind label `{}`", self.label)
+    }
+}
+
+impl std::error::Error for UnknownLayerKindLabel {}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct UnknownPrecisionTierLabel {
+    label: String,
+}
+
+impl fmt::Display for UnknownPrecisionTierLabel {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "unknown precision tier label `{}`", self.label)
+    }
+}
+
+impl std::error::Error for UnknownPrecisionTierLabel {}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) struct LayerKey {
     pub(crate) layer_kind: LayerKind,
@@ -106,6 +133,80 @@ pub(crate) struct DiagnosticKey {
     pub(crate) options_digest: Digest,
     pub(crate) requested_view_digests: Vec<Digest>,
     pub(crate) evidence_digest: Digest,
+}
+
+impl LayerKind {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::SourceFiles => "source_files",
+            Self::GoSyntax => "go_syntax",
+            Self::TsSyntax => "ts_syntax",
+            Self::ModuleGraph => "module_graph",
+            Self::SymbolGraph => "symbol_graph",
+            Self::ModuleTopology => "module_topology",
+            Self::SemanticMir => "semantic_mir",
+            Self::Cfg => "cfg",
+            Self::Calls => "calls",
+            Self::AbstractDomains => "abstract_domains",
+            Self::DirectSummaries => "direct_summaries",
+            Self::TypeValueAlias => "type_value_alias",
+            Self::DemandQuery => "demand_query",
+            Self::Metrics => "metrics",
+            Self::Extension => "extension",
+        }
+    }
+
+    pub(crate) fn parse_label(label: &str) -> Result<Self, UnknownLayerKindLabel> {
+        match label {
+            "source_files" => Ok(Self::SourceFiles),
+            "go_syntax" => Ok(Self::GoSyntax),
+            "ts_syntax" => Ok(Self::TsSyntax),
+            "module_graph" => Ok(Self::ModuleGraph),
+            "symbol_graph" => Ok(Self::SymbolGraph),
+            "module_topology" => Ok(Self::ModuleTopology),
+            "semantic_mir" => Ok(Self::SemanticMir),
+            "cfg" => Ok(Self::Cfg),
+            "calls" => Ok(Self::Calls),
+            "abstract_domains" => Ok(Self::AbstractDomains),
+            "direct_summaries" => Ok(Self::DirectSummaries),
+            "type_value_alias" => Ok(Self::TypeValueAlias),
+            "demand_query" => Ok(Self::DemandQuery),
+            "metrics" => Ok(Self::Metrics),
+            "extension" => Ok(Self::Extension),
+            _ => Err(UnknownLayerKindLabel {
+                label: label.to_string(),
+            }),
+        }
+    }
+}
+
+impl PrecisionTier {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Syntax => "syntax",
+            Self::SetupAware => "setup_aware",
+            Self::Exact => "exact",
+        }
+    }
+
+    pub(crate) fn parse_label(label: &str) -> Result<Self, UnknownPrecisionTierLabel> {
+        match label {
+            "syntax" => Ok(Self::Syntax),
+            "setup_aware" => Ok(Self::SetupAware),
+            "exact" => Ok(Self::Exact),
+            _ => Err(UnknownPrecisionTierLabel {
+                label: label.to_string(),
+            }),
+        }
+    }
+
+    pub(crate) fn from_ceiling(ceiling: PrecisionCeiling) -> Self {
+        match ceiling {
+            PrecisionCeiling::Exact => Self::Exact,
+            PrecisionCeiling::Syntax => Self::Syntax,
+            PrecisionCeiling::SetupAware => Self::SetupAware,
+        }
+    }
 }
 
 impl LayerKey {
@@ -1300,6 +1401,44 @@ mod tests {
     use crate::core::AnalysisDb;
     use std::fs;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn layer_kind_and_precision_tier_codecs_round_trip_every_variant() {
+        let layer_kinds = [
+            LayerKind::SourceFiles,
+            LayerKind::GoSyntax,
+            LayerKind::TsSyntax,
+            LayerKind::ModuleGraph,
+            LayerKind::SymbolGraph,
+            LayerKind::ModuleTopology,
+            LayerKind::SemanticMir,
+            LayerKind::Cfg,
+            LayerKind::Calls,
+            LayerKind::AbstractDomains,
+            LayerKind::DirectSummaries,
+            LayerKind::TypeValueAlias,
+            LayerKind::DemandQuery,
+            LayerKind::Metrics,
+            LayerKind::Extension,
+        ];
+        for kind in layer_kinds {
+            assert_eq!(LayerKind::parse_label(kind.label()), Ok(kind));
+        }
+
+        for tier in [
+            PrecisionTier::Syntax,
+            PrecisionTier::SetupAware,
+            PrecisionTier::Exact,
+        ] {
+            assert_eq!(PrecisionTier::parse_label(tier.label()), Ok(tier));
+        }
+    }
+
+    #[test]
+    fn layer_kind_and_precision_tier_codecs_reject_unknown_labels() {
+        assert!(LayerKind::parse_label("go-syntax").is_err());
+        assert!(PrecisionTier::parse_label("setup-aware").is_err());
+    }
 
     fn digest(label: &str, value: &str) -> Digest {
         Digest::from_parts(DigestKind::SourceText, label, &[value])

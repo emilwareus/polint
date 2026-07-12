@@ -114,6 +114,7 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -190,6 +191,26 @@ pub enum Language {
     Unknown,
 }
 
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "canonical language decoding is consumed by private metadata readers"
+    )
+)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct UnknownLanguageLabel {
+    label: String,
+}
+
+impl fmt::Display for UnknownLanguageLabel {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "unknown language label `{}`", self.label)
+    }
+}
+
+impl std::error::Error for UnknownLanguageLabel {}
+
 impl Language {
     pub fn from_path(path: &Path) -> Self {
         match path
@@ -211,6 +232,38 @@ impl Language {
             self,
             Self::TypeScript | Self::Tsx | Self::JavaScript | Self::Jsx
         )
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Go => "go",
+            Self::TypeScript => "typescript",
+            Self::Tsx => "tsx",
+            Self::JavaScript => "javascript",
+            Self::Jsx => "jsx",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "the canonical language codec stays symmetric for durable row decoding"
+        )
+    )]
+    pub(crate) fn parse_label(label: &str) -> Result<Self, UnknownLanguageLabel> {
+        match label {
+            "go" => Ok(Self::Go),
+            "typescript" => Ok(Self::TypeScript),
+            "tsx" => Ok(Self::Tsx),
+            "javascript" => Ok(Self::JavaScript),
+            "jsx" => Ok(Self::Jsx),
+            "unknown" => Ok(Self::Unknown),
+            _ => Err(UnknownLanguageLabel {
+                label: label.to_string(),
+            }),
+        }
     }
 }
 
@@ -6178,14 +6231,7 @@ fn option_span_metadata_value(span: Option<&Span>) -> String {
 }
 
 fn language_label(language: Language) -> &'static str {
-    match language {
-        Language::Go => "go",
-        Language::TypeScript => "typescript",
-        Language::Tsx => "tsx",
-        Language::JavaScript => "javascript",
-        Language::Jsx => "jsx",
-        Language::Unknown => "unknown",
-    }
+    language.label()
 }
 
 fn module_node_kind_label(kind: ModuleNodeKind) -> &'static str {
@@ -7848,6 +7894,24 @@ mod tests {
     use proptest::prelude::*;
     use std::thread;
     use std::time::Duration;
+
+    #[test]
+    fn language_stable_codec_round_trips_every_exact_label() {
+        let languages = [
+            Language::Go,
+            Language::TypeScript,
+            Language::Tsx,
+            Language::JavaScript,
+            Language::Jsx,
+            Language::Unknown,
+        ];
+
+        for language in languages {
+            assert_eq!(Language::parse_label(language.label()), Ok(language));
+        }
+        assert!(Language::parse_label("ts").is_err());
+        assert!(Language::parse_label("TypeScript").is_err());
+    }
 
     #[derive(Clone, Copy)]
     enum TestRuleBehavior {

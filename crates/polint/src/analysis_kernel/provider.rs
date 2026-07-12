@@ -1,3 +1,6 @@
+use std::borrow::Cow;
+use std::fmt;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ProviderManifest {
     pub(crate) id: &'static str,
@@ -26,22 +29,11 @@ impl ProviderManifest {
     }
 
     pub(crate) fn language_scope_label(&self) -> &'static str {
-        match self.language_scope {
-            LanguageScope::Workspace => "workspace",
-            LanguageScope::Go => "go",
-            LanguageScope::TypeScriptJavaScript => "typescript_javascript",
-            LanguageScope::MultiLanguage => "multi_language",
-        }
+        self.language_scope.label()
     }
 
     pub(crate) fn cache_policy_label(&self) -> String {
-        match self.cache_policy {
-            CachePolicy::NoCache => "no_cache".to_string(),
-            CachePolicy::ExistingFileFactCache { schema } => {
-                format!("existing_file_fact_cache:{schema}")
-            }
-            CachePolicy::InMemoryDerived => "in_memory_derived".to_string(),
-        }
+        self.cache_policy.label().into_owned()
     }
 }
 
@@ -81,6 +73,189 @@ pub(crate) enum PrecisionCeiling {
     SetupAware,
 }
 
+macro_rules! define_unknown_label_error {
+    ($name:ident, $description:literal) => {
+        #[cfg_attr(
+            not(test),
+            allow(
+                dead_code,
+                reason = "canonical provider decoding is consumed by private metadata readers"
+            )
+        )]
+        #[derive(Clone, Debug, PartialEq, Eq)]
+        pub(crate) struct $name {
+            label: String,
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(
+                    formatter,
+                    concat!("unknown ", $description, " label `{}`"),
+                    self.label
+                )
+            }
+        }
+
+        impl std::error::Error for $name {}
+    };
+}
+
+define_unknown_label_error!(UnknownProviderKindLabel, "provider kind");
+define_unknown_label_error!(UnknownLanguageScopeLabel, "language scope");
+define_unknown_label_error!(UnknownCachePolicyLabel, "cache policy");
+define_unknown_label_error!(UnknownPrecisionCeilingLabel, "precision ceiling");
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CachePolicyView<'a> {
+    NoCache,
+    ExistingFileFactCache { schema: &'a str },
+    InMemoryDerived,
+}
+
+impl ProviderKind {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::SourceDiscovery => "source_discovery",
+            Self::LanguageSyntax => "language_syntax",
+            Self::WholeRepoDerived => "whole_repo_derived",
+            Self::MetricsDerived => "metrics_derived",
+        }
+    }
+
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "canonical provider codecs stay symmetric for durable row decoding"
+        )
+    )]
+    pub(crate) fn parse_label(label: &str) -> Result<Self, UnknownProviderKindLabel> {
+        match label {
+            "source_discovery" => Ok(Self::SourceDiscovery),
+            "language_syntax" => Ok(Self::LanguageSyntax),
+            "whole_repo_derived" => Ok(Self::WholeRepoDerived),
+            "metrics_derived" => Ok(Self::MetricsDerived),
+            _ => Err(UnknownProviderKindLabel {
+                label: label.to_string(),
+            }),
+        }
+    }
+}
+
+impl LanguageScope {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Workspace => "workspace",
+            Self::Go => "go",
+            Self::TypeScriptJavaScript => "typescript_javascript",
+            Self::MultiLanguage => "multi_language",
+        }
+    }
+
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "canonical provider codecs stay symmetric for durable row decoding"
+        )
+    )]
+    pub(crate) fn parse_label(label: &str) -> Result<Self, UnknownLanguageScopeLabel> {
+        match label {
+            "workspace" => Ok(Self::Workspace),
+            "go" => Ok(Self::Go),
+            "typescript_javascript" => Ok(Self::TypeScriptJavaScript),
+            "multi_language" => Ok(Self::MultiLanguage),
+            _ => Err(UnknownLanguageScopeLabel {
+                label: label.to_string(),
+            }),
+        }
+    }
+}
+
+impl CachePolicy {
+    pub(crate) fn label(self) -> Cow<'static, str> {
+        self.borrowed().label()
+    }
+
+    pub(crate) fn borrowed(self) -> CachePolicyView<'static> {
+        match self {
+            Self::NoCache => CachePolicyView::NoCache,
+            Self::ExistingFileFactCache { schema } => {
+                CachePolicyView::ExistingFileFactCache { schema }
+            }
+            Self::InMemoryDerived => CachePolicyView::InMemoryDerived,
+        }
+    }
+
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "canonical provider codecs stay symmetric for durable row decoding"
+        )
+    )]
+    pub(crate) fn parse_label(label: &str) -> Result<CachePolicyView<'_>, UnknownCachePolicyLabel> {
+        match label {
+            "no_cache" => Ok(CachePolicyView::NoCache),
+            "in_memory_derived" => Ok(CachePolicyView::InMemoryDerived),
+            _ => {
+                let Some(schema) = label.strip_prefix("existing_file_fact_cache:") else {
+                    return Err(UnknownCachePolicyLabel {
+                        label: label.to_string(),
+                    });
+                };
+                if schema.is_empty() {
+                    return Err(UnknownCachePolicyLabel {
+                        label: label.to_string(),
+                    });
+                }
+                Ok(CachePolicyView::ExistingFileFactCache { schema })
+            }
+        }
+    }
+}
+
+impl CachePolicyView<'_> {
+    pub(crate) fn label(self) -> Cow<'static, str> {
+        match self {
+            Self::NoCache => Cow::Borrowed("no_cache"),
+            Self::ExistingFileFactCache { schema } => {
+                Cow::Owned(format!("existing_file_fact_cache:{schema}"))
+            }
+            Self::InMemoryDerived => Cow::Borrowed("in_memory_derived"),
+        }
+    }
+}
+
+impl PrecisionCeiling {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Exact => "exact",
+            Self::Syntax => "syntax",
+            Self::SetupAware => "setup_aware",
+        }
+    }
+
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "canonical provider codecs stay symmetric for durable row decoding"
+        )
+    )]
+    pub(crate) fn parse_label(label: &str) -> Result<Self, UnknownPrecisionCeilingLabel> {
+        match label {
+            "exact" => Ok(Self::Exact),
+            "syntax" => Ok(Self::Syntax),
+            "setup_aware" => Ok(Self::SetupAware),
+            _ => Err(UnknownPrecisionCeilingLabel {
+                label: label.to_string(),
+            }),
+        }
+    }
+}
+
 pub(crate) fn provider_manifests() -> &'static [ProviderManifest] {
     PROVIDER_MANIFESTS
 }
@@ -99,8 +274,8 @@ pub(crate) fn provider_order_report_for_test() -> Vec<ProviderOrderRow> {
         .iter()
         .map(|manifest| ProviderOrderRow {
             id: manifest.id,
-            kind: provider_kind_label(manifest.kind),
-            language_scope: language_scope_label(manifest.language_scope),
+            kind: manifest.kind.label(),
+            language_scope: manifest.language_scope.label(),
             inputs: manifest.inputs.to_vec(),
             outputs: manifest.outputs.to_vec(),
         })
@@ -115,26 +290,6 @@ pub(crate) struct ProviderOrderRow {
     pub(crate) language_scope: &'static str,
     pub(crate) inputs: Vec<&'static str>,
     pub(crate) outputs: Vec<&'static str>,
-}
-
-#[cfg(test)]
-fn provider_kind_label(kind: ProviderKind) -> &'static str {
-    match kind {
-        ProviderKind::SourceDiscovery => "source_discovery",
-        ProviderKind::LanguageSyntax => "language_syntax",
-        ProviderKind::WholeRepoDerived => "whole_repo_derived",
-        ProviderKind::MetricsDerived => "metrics_derived",
-    }
-}
-
-#[cfg(test)]
-fn language_scope_label(scope: LanguageScope) -> &'static str {
-    match scope {
-        LanguageScope::Workspace => "workspace",
-        LanguageScope::Go => "go",
-        LanguageScope::TypeScriptJavaScript => "typescript_javascript",
-        LanguageScope::MultiLanguage => "multi_language",
-    }
 }
 
 const SOURCE_SCHEMA: &[SchemaVersion] = &[SchemaVersion {
@@ -888,6 +1043,71 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn provider_manifest_enum_codecs_round_trip_every_variant() {
+        for kind in [
+            ProviderKind::SourceDiscovery,
+            ProviderKind::LanguageSyntax,
+            ProviderKind::WholeRepoDerived,
+            ProviderKind::MetricsDerived,
+        ] {
+            assert_eq!(ProviderKind::parse_label(kind.label()), Ok(kind));
+        }
+        for scope in [
+            LanguageScope::Workspace,
+            LanguageScope::Go,
+            LanguageScope::TypeScriptJavaScript,
+            LanguageScope::MultiLanguage,
+        ] {
+            assert_eq!(LanguageScope::parse_label(scope.label()), Ok(scope));
+        }
+        for precision in [
+            PrecisionCeiling::Exact,
+            PrecisionCeiling::Syntax,
+            PrecisionCeiling::SetupAware,
+        ] {
+            assert_eq!(
+                PrecisionCeiling::parse_label(precision.label()),
+                Ok(precision)
+            );
+        }
+    }
+
+    #[test]
+    fn cache_policy_codec_returns_a_borrowed_schema_view() {
+        let policies = [
+            CachePolicy::NoCache,
+            CachePolicy::ExistingFileFactCache {
+                schema: "go-facts-v2",
+            },
+            CachePolicy::InMemoryDerived,
+        ];
+
+        for policy in policies {
+            let label = policy.label();
+            let parsed = CachePolicy::parse_label(label.as_ref()).expect("canonical label parses");
+            assert_eq!(parsed, policy.borrowed());
+            assert_eq!(parsed.label(), label);
+        }
+
+        let label = String::from("existing_file_fact_cache:borrowed-schema");
+        let parsed = CachePolicy::parse_label(&label).expect("schema-bearing label parses");
+        assert_eq!(
+            parsed,
+            CachePolicyView::ExistingFileFactCache {
+                schema: "borrowed-schema"
+            }
+        );
+    }
+
+    #[test]
+    fn provider_manifest_enum_codecs_reject_unknown_labels() {
+        assert!(ProviderKind::parse_label("syntax").is_err());
+        assert!(LanguageScope::parse_label("ts_js").is_err());
+        assert!(CachePolicy::parse_label("existing_file_fact_cache:").is_err());
+        assert!(PrecisionCeiling::parse_label("setup-aware").is_err());
+    }
 
     #[test]
     fn provider_manifests_have_required_metadata() {
