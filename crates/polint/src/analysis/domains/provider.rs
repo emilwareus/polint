@@ -294,12 +294,20 @@ mod abstract_domains_provider {
         let temp = tempdir().expect("tempdir");
         fs::write(temp.path().join(".polint.toml"), "").expect("config");
         let loaded = load_config(temp.path()).expect("config loads");
-        let input_snapshot = InputSnapshot::from_run_inputs(
+        let empty_plan = AnalysisPlan::empty();
+        assert!(empty_plan.requested_capability_snapshots().is_empty());
+        let identity_sources = InputSnapshot::identity_sources_from_plan(&loaded, &empty_plan);
+        assert!(identity_sources.requested_capabilities.is_empty());
+        assert_eq!(
+            identity_sources.analysis_requirements_identity,
+            Digest::absent(DigestKind::AnalysisRequirements, "requested_capabilities")
+        );
+        let input_snapshot = InputSnapshot::from_run_inputs_with_plan(
             &loaded,
             &db,
             "config",
             "rules",
-            AnalysisPlan::empty().digest(),
+            &empty_plan,
             AnalysisKernel::provider_manifests(),
         );
         let output = derive_abstract_domains_with_cache_stats(

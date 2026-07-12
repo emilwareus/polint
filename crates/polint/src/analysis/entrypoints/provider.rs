@@ -179,7 +179,31 @@ fn entrypoints_output_digest_for_test(parts: &[&str]) -> Digest {
 #[cfg(test)]
 mod entrypoints_provider {
     use crate::analysis_kernel::AnalysisKernel;
-    use crate::analysis_kernel::incremental::Digest;
+    use crate::analysis_kernel::incremental::{Digest, DigestKind, InputSnapshot};
+    use crate::analysis_plan::AnalysisPlan;
+
+    fn empty_plan_snapshot(
+        loaded: &crate::config::LoadedConfig,
+        db: &crate::core::AnalysisDb,
+    ) -> InputSnapshot {
+        let empty_plan = AnalysisPlan::empty();
+        assert!(empty_plan.requested_capability_snapshots().is_empty());
+        let identity_sources = InputSnapshot::identity_sources_from_plan(loaded, &empty_plan);
+        assert!(identity_sources.requested_capabilities.is_empty());
+        assert_eq!(
+            identity_sources.analysis_requirements_identity,
+            Digest::absent(DigestKind::AnalysisRequirements, "requested_capabilities")
+        );
+
+        InputSnapshot::from_run_inputs_with_plan(
+            loaded,
+            db,
+            "config-a",
+            "rules-a",
+            &empty_plan,
+            AnalysisKernel::provider_manifests(),
+        )
+    }
 
     #[test]
     fn entrypoints_provider_accepts_empty_output_with_deterministic_digest() {
@@ -226,8 +250,7 @@ mod entrypoints_provider {
         };
         use crate::analysis::entrypoints::store::EntrypointOutput;
         use crate::analysis::ids::EntrypointId;
-        use crate::analysis_kernel::incremental::{DigestKind, InputSnapshot};
-        use crate::analysis_plan::AnalysisPlan;
+        use crate::analysis_kernel::incremental::DigestKind;
         use crate::config::load_config;
         use crate::core::{FileId, FunctionId, Language, Span};
 
@@ -235,14 +258,7 @@ mod entrypoints_provider {
         let temp = tempfile::tempdir().expect("tempdir");
         std::fs::write(temp.path().join(".polint.toml"), "").expect("config");
         let loaded = load_config(temp.path()).expect("config loads");
-        let snapshot = InputSnapshot::from_run_inputs(
-            &loaded,
-            &db,
-            "config-a",
-            "rules-a",
-            AnalysisPlan::empty().digest(),
-            AnalysisKernel::provider_manifests(),
-        );
+        let snapshot = empty_plan_snapshot(&loaded, &db);
         let manifest = AnalysisKernel::provider_manifests()
             .iter()
             .find(|m| m.id == "polint.entrypoints")
@@ -307,8 +323,7 @@ mod entrypoints_provider {
         };
         use crate::analysis::entrypoints::store::EntrypointOutput;
         use crate::analysis::ids::EntrypointId;
-        use crate::analysis_kernel::incremental::{DigestKind, InputSnapshot};
-        use crate::analysis_plan::AnalysisPlan;
+        use crate::analysis_kernel::incremental::DigestKind;
         use crate::config::load_config;
         use crate::core::{FileId, FunctionId, Language, Span};
 
@@ -316,14 +331,7 @@ mod entrypoints_provider {
         let temp = tempfile::tempdir().expect("tempdir");
         std::fs::write(temp.path().join(".polint.toml"), "").expect("config");
         let loaded = load_config(temp.path()).expect("config loads");
-        let snapshot = InputSnapshot::from_run_inputs(
-            &loaded,
-            &db,
-            "config-a",
-            "rules-a",
-            AnalysisPlan::empty().digest(),
-            AnalysisKernel::provider_manifests(),
-        );
+        let snapshot = empty_plan_snapshot(&loaded, &db);
         let manifest = AnalysisKernel::provider_manifests()
             .iter()
             .find(|m| m.id == "polint.entrypoints")
@@ -402,8 +410,7 @@ mod entrypoints_provider {
         };
         use crate::analysis::entrypoints::store::EntrypointOutput;
         use crate::analysis::ids::EntrypointId;
-        use crate::analysis_kernel::incremental::{DigestKind, InputSnapshot};
-        use crate::analysis_plan::AnalysisPlan;
+        use crate::analysis_kernel::incremental::DigestKind;
         use crate::config::load_config;
         use crate::core::{FileId, FunctionId, Language, Span};
 
@@ -411,14 +418,7 @@ mod entrypoints_provider {
         let temp = tempfile::tempdir().expect("tempdir");
         std::fs::write(temp.path().join(".polint.toml"), "").expect("config");
         let loaded = load_config(temp.path()).expect("config loads");
-        let snapshot = InputSnapshot::from_run_inputs(
-            &loaded,
-            &db,
-            "config-a",
-            "rules-a",
-            AnalysisPlan::empty().digest(),
-            AnalysisKernel::provider_manifests(),
-        );
+        let snapshot = empty_plan_snapshot(&loaded, &db);
         let manifest = AnalysisKernel::provider_manifests()
             .iter()
             .find(|m| m.id == "polint.entrypoints")
@@ -504,8 +504,7 @@ mod entrypoints_provider {
         };
         use crate::analysis::entrypoints::store::EntrypointOutput;
         use crate::analysis::ids::EntrypointId;
-        use crate::analysis_kernel::incremental::{DigestKind, InputSnapshot};
-        use crate::analysis_plan::AnalysisPlan;
+        use crate::analysis_kernel::incremental::DigestKind;
         use crate::config::load_config;
         use crate::core::{FileId, FunctionId, Language, Span};
 
@@ -513,14 +512,7 @@ mod entrypoints_provider {
         let temp = tempfile::tempdir().expect("tempdir");
         std::fs::write(temp.path().join(".polint.toml"), "").expect("config");
         let loaded = load_config(temp.path()).expect("config loads");
-        let snapshot = InputSnapshot::from_run_inputs(
-            &loaded,
-            &db,
-            "config-a",
-            "rules-a",
-            AnalysisPlan::empty().digest(),
-            AnalysisKernel::provider_manifests(),
-        );
+        let snapshot = empty_plan_snapshot(&loaded, &db);
         let manifest = AnalysisKernel::provider_manifests()
             .iter()
             .find(|m| m.id == "polint.entrypoints")
@@ -625,21 +617,13 @@ mod entrypoints_provider {
     }
 
     fn derive_for_test(db: &mut crate::core::AnalysisDb) -> super::EntrypointsProviderOutput {
-        use crate::analysis_kernel::incremental::{DigestKind, InputSnapshot};
-        use crate::analysis_plan::AnalysisPlan;
+        use crate::analysis_kernel::incremental::DigestKind;
         use crate::config::load_config;
 
         let temp = tempfile::tempdir().expect("tempdir");
         std::fs::write(temp.path().join(".polint.toml"), "").expect("config");
         let loaded = load_config(temp.path()).expect("config loads");
-        let snapshot = InputSnapshot::from_run_inputs(
-            &loaded,
-            db,
-            "config-a",
-            "rules-a",
-            AnalysisPlan::empty().digest(),
-            AnalysisKernel::provider_manifests(),
-        );
+        let snapshot = empty_plan_snapshot(&loaded, db);
         let manifest = AnalysisKernel::provider_manifests()
             .iter()
             .find(|manifest| manifest.id == "polint.entrypoints")

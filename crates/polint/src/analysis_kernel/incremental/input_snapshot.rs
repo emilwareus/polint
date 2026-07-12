@@ -173,12 +173,12 @@ impl InputSnapshot {
                 })
         );
 
-        Self::from_run_input_digests(
+        Self::from_run_input_plan(
             loaded,
             db,
             config_digest,
             rule_digest,
-            plan.digest(),
+            plan,
             provider_manifests,
         )
     }
@@ -203,32 +203,12 @@ impl InputSnapshot {
         }
     }
 
-    /// Capability-erasing fixture seam for tests that supply only an opaque plan digest.
-    #[cfg(test)]
-    pub(crate) fn from_run_inputs(
+    fn from_run_input_plan(
         loaded: &LoadedConfig,
         db: &AnalysisDb,
         config_digest: &str,
         rule_digest: &str,
-        plan_digest: &str,
-        provider_manifests: &[ProviderManifest],
-    ) -> Self {
-        Self::from_run_input_digests(
-            loaded,
-            db,
-            config_digest,
-            rule_digest,
-            plan_digest,
-            provider_manifests,
-        )
-    }
-
-    fn from_run_input_digests(
-        loaded: &LoadedConfig,
-        db: &AnalysisDb,
-        config_digest: &str,
-        rule_digest: &str,
-        plan_digest: &str,
+        plan: &AnalysisPlan,
         provider_manifests: &[ProviderManifest],
     ) -> Self {
         let mut files = db
@@ -257,7 +237,7 @@ impl InputSnapshot {
             config: config_component(loaded, config_digest),
             go_lifecycle,
             ts_js_lifecycle,
-            rules: rule_components(rule_digest, plan_digest),
+            rules: rule_components(rule_digest, plan),
             models: vec![InputComponent::absent(
                 "model.files",
                 DigestKind::ModelFile,
@@ -797,7 +777,7 @@ fn topology_input_max_bytes(relative_path: &str) -> u64 {
     }
 }
 
-fn rule_components(rule_digest: &str, plan_digest: &str) -> Vec<InputComponent> {
+fn rule_components(rule_digest: &str, plan: &AnalysisPlan) -> Vec<InputComponent> {
     vec![
         InputComponent::present(
             "rule.code",
@@ -810,7 +790,7 @@ fn rule_components(rule_digest: &str, plan_digest: &str) -> Vec<InputComponent> 
             "rule.options",
             DigestKind::RuleOptions,
             "plan_digest",
-            plan_digest,
+            plan.digest(),
             Vec::new(),
         ),
     ]
@@ -1291,9 +1271,9 @@ mod source_config_rule_model_extension {
     use crate::analysis_kernel::{
         CachePolicy, LanguageScope, PrecisionCeiling, ProviderKind, ProviderManifest, SchemaVersion,
     };
-    use crate::analysis_plan::AnalysisPlan;
+    use crate::analysis_plan::{AnalysisPlan, CapabilitySetupStatus};
     use crate::config::{LoadedConfig, PolintConfig};
-    use crate::core::AnalysisDb;
+    use crate::core::{AnalysisDb, CapabilitySupportStatus};
     use std::path::Path;
     use tempfile::TempDir;
 
@@ -1324,14 +1304,21 @@ mod source_config_rule_model_extension {
         db: &AnalysisDb,
         provider_manifests: &[ProviderManifest],
     ) -> InputSnapshot {
-        let plan = AnalysisPlan::empty();
-        assert!(plan.requested_capability_snapshots().is_empty());
-        InputSnapshot::from_run_inputs(
+        let empty_plan = AnalysisPlan::empty();
+        assert!(empty_plan.requested_capability_snapshots().is_empty());
+        let identity_sources = InputSnapshot::identity_sources_from_plan(loaded, &empty_plan);
+        assert!(identity_sources.requested_capabilities.is_empty());
+        assert_eq!(
+            identity_sources.analysis_requirements_identity,
+            Digest::absent(DigestKind::AnalysisRequirements, "requested_capabilities")
+        );
+
+        InputSnapshot::from_run_inputs_with_plan(
             loaded,
             db,
             "config-digest",
             "rule-digest",
-            plan.digest(),
+            &empty_plan,
             provider_manifests,
         )
     }
@@ -1370,7 +1357,7 @@ mod source_config_rule_model_extension {
         let temp = TempDir::new().expect("create temp repo");
         let loaded = loaded_config(temp.path());
         let db = db_with_files(temp.path(), &[("src/app.ts", "export const app = 1;\n")]);
-        let plan = AnalysisPlan::from_capability_names_for_test(&["calls"]);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["calls", "call_graph"]);
 
         let sources = InputSnapshot::identity_sources_from_plan(&loaded, &plan);
         let snapshot = InputSnapshot::from_run_inputs_with_plan(
@@ -1397,6 +1384,39 @@ mod source_config_rule_model_extension {
                 .all(|source| { source.digest.kind == DigestKind::AnalysisSettings })
         );
         assert!(!sources.requested_capabilities.is_empty());
+        assert_eq!(
+            sources
+                .requested_capabilities
+                .iter()
+                .map(|source| source.capability.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "call_graph",
+                "calls",
+                "module_graph",
+                "references",
+                "resolved_imports",
+                "symbols",
+            ]
+        );
+        let call_graph = sources
+            .requested_capabilities
+            .iter()
+            .find(|source| source.capability == "call_graph")
+            .expect("call graph capability source");
+        assert_eq!(
+            call_graph.support_status,
+            CapabilitySupportStatus::Unsupported
+        );
+        assert_eq!(call_graph.setup_status, CapabilitySetupStatus::NotRequired);
+        let calls = sources
+            .requested_capabilities
+            .iter()
+            .find(|source| source.capability == "calls")
+            .expect("calls capability source");
+        assert_eq!(calls.support_status, CapabilitySupportStatus::Supported);
+        assert_eq!(calls.setup_status, CapabilitySetupStatus::NotRequired);
+        assert!(calls.policy_query_version.is_some());
         assert_eq!(
             sources.analysis_requirements_identity.kind,
             DigestKind::AnalysisRequirements
@@ -1656,14 +1676,21 @@ mod lifecycle {
         db: &AnalysisDb,
         provider_manifests: &[ProviderManifest],
     ) -> InputSnapshot {
-        let plan = AnalysisPlan::empty();
-        assert!(plan.requested_capability_snapshots().is_empty());
-        InputSnapshot::from_run_inputs(
+        let empty_plan = AnalysisPlan::empty();
+        assert!(empty_plan.requested_capability_snapshots().is_empty());
+        let identity_sources = InputSnapshot::identity_sources_from_plan(loaded, &empty_plan);
+        assert!(identity_sources.requested_capabilities.is_empty());
+        assert_eq!(
+            identity_sources.analysis_requirements_identity,
+            Digest::absent(DigestKind::AnalysisRequirements, "requested_capabilities")
+        );
+
+        InputSnapshot::from_run_inputs_with_plan(
             loaded,
             db,
             "config-digest",
             "rule-digest",
-            plan.digest(),
+            &empty_plan,
             provider_manifests,
         )
     }
