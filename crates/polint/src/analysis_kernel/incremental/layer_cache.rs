@@ -711,13 +711,13 @@ fn manifest_change_set(manifest: &LayerCacheManifest, key: &LayerKey) -> ChangeS
     if manifest.key.parameter_digest != key.parameter_digest {
         rows.push(layer_key_change_row(manifest, key, ChangeKind::RuleOptions));
     }
-    if manifest.key.config_digest != key.config_digest {
+    if manifest.key.analysis_settings_digest != key.analysis_settings_digest {
         push_dependency_change_rows(
             &mut rows,
             manifest,
             &[DependencyKind::Config],
             ChangeKind::Unknown,
-            manifest.key.config_digest.clone(),
+            manifest.key.analysis_settings_digest.clone(),
         );
     }
     if manifest.key.lifecycle_digest != key.lifecycle_digest {
@@ -858,8 +858,8 @@ fn changed_digest_or_fallback(
 fn layer_key_change_digest(cached: &LayerKey, requested: &LayerKey) -> Digest {
     if cached.parameter_digest != requested.parameter_digest {
         cached.parameter_digest.clone()
-    } else if cached.config_digest != requested.config_digest {
-        cached.config_digest.clone()
+    } else if cached.analysis_settings_digest != requested.analysis_settings_digest {
+        cached.analysis_settings_digest.clone()
     } else if cached.lifecycle_digest != requested.lifecycle_digest {
         cached.lifecycle_digest.clone()
     } else if cached.toolchain_digest != requested.toolchain_digest {

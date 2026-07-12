@@ -16,7 +16,7 @@ pub(crate) struct ExtensionLayerKeyInput {
     pub(crate) source_digest: Digest,
     pub(crate) dependency_digest: Digest,
     pub(crate) manifest_digest: Digest,
-    pub(crate) options_digest: Digest,
+    pub(crate) analysis_settings_digest: Digest,
     pub(crate) declared_read_digest: Digest,
     pub(crate) input_fact_digests: Vec<Digest>,
     pub(crate) dependency_layer_digests: Vec<Digest>,
@@ -40,7 +40,7 @@ pub(crate) fn extension_layer_key(
         ],
     );
     let toolchain_digest = Digest::absent(DigestKind::ToolInvocation, "extension_toolchain");
-    let config_digest = input.options_digest;
+    let analysis_settings_digest = input.analysis_settings_digest;
     let mut extension_digests = vec![
         input.source_digest,
         input.dependency_digest,
@@ -57,14 +57,14 @@ pub(crate) fn extension_layer_key(
     input_digests.extend(input.input_fact_digests);
     input_digests.sort();
 
-    LayerKey::new(
+    LayerKey::new_with_analysis_settings(
         LayerKind::Extension,
         provider_identity,
         manifest.provider_version(),
         EXTENSION_FACTS_SCHEMA_LABEL,
         parameter_digest,
         Digest::absent(DigestKind::ProviderParameters, "extension_lifecycle"),
-        config_digest,
+        analysis_settings_digest,
         toolchain_digest,
         input_digests,
         input.dependency_layer_digests,
@@ -95,7 +95,11 @@ mod tests {
             source_digest: digest(DigestKind::ExtensionCode, "source", "source-v1"),
             dependency_digest: digest(DigestKind::ExtensionCode, "deps", "deps-v1"),
             manifest_digest: digest(DigestKind::ExtensionCode, "manifest", "manifest-v1"),
-            options_digest: digest(DigestKind::RuleOptions, "options", "options-v1"),
+            analysis_settings_digest: digest(
+                DigestKind::AnalysisSettings,
+                "extension_analysis_settings",
+                "options-v1",
+            ),
             declared_read_digest: digest(DigestKind::ProviderParameters, "reads", "reads-v1"),
             input_fact_digests: vec![digest(DigestKind::ProviderOutput, "facts", "facts-v1")],
             dependency_layer_digests: vec![digest(
@@ -117,13 +121,17 @@ mod tests {
         let mut reads_changed = input();
         reads_changed.declared_read_digest =
             digest(DigestKind::ProviderParameters, "reads", "reads-v2");
-        let mut options_changed = input();
-        options_changed.options_digest = digest(DigestKind::RuleOptions, "options", "options-v2");
+        let mut settings_changed = input();
+        settings_changed.analysis_settings_digest = digest(
+            DigestKind::AnalysisSettings,
+            "extension_analysis_settings",
+            "options-v2",
+        );
 
         assert_ne!(base, extension_layer_key(manifest(), source_changed));
         assert_ne!(base, extension_layer_key(manifest(), manifest_changed));
         assert_ne!(base, extension_layer_key(manifest(), reads_changed));
-        assert_ne!(base, extension_layer_key(manifest(), options_changed));
+        assert_ne!(base, extension_layer_key(manifest(), settings_changed));
         assert!(base.extension_digests.iter().any(|digest| {
             digest.kind == DigestKind::ExtensionCode
                 && *digest != Digest::absent(DigestKind::ExtensionCode, "extension_digest_absent")
@@ -136,5 +144,15 @@ mod tests {
             extension_layer_key(manifest(), input()),
             extension_layer_key(manifest(), input())
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "provider-scoped layer keys require an analysis-settings digest")]
+    fn extension_layer_rejects_raw_rule_options_as_analysis_settings() {
+        let mut invalid = input();
+        invalid.analysis_settings_digest =
+            digest(DigestKind::RuleOptions, "raw_rule_options", "options-v1");
+
+        let _ = extension_layer_key(manifest(), invalid);
     }
 }

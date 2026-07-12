@@ -16,6 +16,7 @@ use crate::analysis_kernel::incremental::{
 use crate::analysis_kernel::{FactFamily, ProviderManifest, stable_key_from_parts};
 use crate::analysis_plan::AnalysisPlan;
 use crate::cache::Cache;
+use crate::cache::keys::AnalysisSettingsScope;
 use crate::config::LoadedConfig;
 use crate::core::{
     AnalysisDb, CapabilitySupport, CapabilitySupportStatus, CapabilitySupportView, FileId,
@@ -78,7 +79,7 @@ pub(crate) fn module_graph_layer_key(
     root: &Path,
     db: &AnalysisDb,
     manifest: &ProviderManifest,
-    config_digest: Digest,
+    analysis_settings_digest: Digest,
     go_lifecycle_digest: Digest,
     ts_js_lifecycle_digest: Digest,
     upstream_syntax_output_digests: Vec<Digest>,
@@ -89,7 +90,7 @@ pub(crate) fn module_graph_layer_key(
         manifest,
         module_graph_import_shape_digests(db),
         source_package_digests,
-        config_digest,
+        analysis_settings_digest,
         go_lifecycle_digest,
         ts_js_lifecycle_digest,
         upstream_syntax_output_digests,
@@ -100,7 +101,7 @@ pub(crate) fn module_graph_layer_key(
 pub(crate) fn module_topology_layer_key(
     db: &AnalysisDb,
     manifest: &ProviderManifest,
-    config_digest: Digest,
+    analysis_settings_digest: Digest,
     go_lifecycle_digest: Digest,
     ts_js_lifecycle_digest: Digest,
     module_graph_output_digest: Digest,
@@ -110,7 +111,7 @@ pub(crate) fn module_topology_layer_key(
         manifest,
         module_graph_import_shape_digests(db),
         module_topology_base_topology_digests(db),
-        config_digest,
+        analysis_settings_digest,
         go_lifecycle_digest,
         ts_js_lifecycle_digest,
         module_graph_output_digest,
@@ -129,7 +130,7 @@ pub(crate) fn module_graph_layer_dependency_edges(
     key: &LayerKey,
     manifest: &ProviderManifest,
     upstream_syntax_output_digests: &[Digest],
-    config_digest: Digest,
+    analysis_settings_digest: Digest,
     go_lifecycle_digest: Digest,
     ts_js_lifecycle_digest: Digest,
 ) -> Vec<DependencyEdge> {
@@ -211,7 +212,7 @@ pub(crate) fn module_graph_layer_dependency_edges(
 
     edges.push(dependency_edge(
         &from,
-        CacheNode::Input(format!("config:{}", config_digest)),
+        CacheNode::Input(format!("analysis_settings:{}", analysis_settings_digest)),
         DependencyKind::Config,
         ShapeKind::Unknown,
     ));
@@ -268,7 +269,7 @@ pub(crate) fn module_topology_layer_dependency_edges(
     manifest: &ProviderManifest,
     module_graph_output_digest: Digest,
     symbol_graph_output_digest: Digest,
-    config_digest: Digest,
+    analysis_settings_digest: Digest,
     go_lifecycle_digest: Digest,
     ts_js_lifecycle_digest: Digest,
 ) -> Vec<DependencyEdge> {
@@ -312,7 +313,7 @@ pub(crate) fn module_topology_layer_dependency_edges(
 
     edges.push(dependency_edge(
         &from,
-        CacheNode::Input(format!("config:{}", config_digest)),
+        CacheNode::Input(format!("analysis_settings:{}", analysis_settings_digest)),
         DependencyKind::Config,
         ShapeKind::Unknown,
     ));
@@ -617,7 +618,9 @@ pub(crate) fn derive_module_topology_with_cache_stats(
         };
     }
 
-    let config_digest = input_snapshot.config.digest.clone();
+    let analysis_settings_digest = input_snapshot
+        .analysis_settings_digest(AnalysisSettingsScope::ModuleTopology)
+        .clone();
     let go_lifecycle_digest = lifecycle_component_digest(
         DigestKind::GoLifecycle,
         "module_topology_go_lifecycle",
@@ -631,7 +634,7 @@ pub(crate) fn derive_module_topology_with_cache_stats(
     let layer_key = module_topology_layer_key(
         db,
         manifest,
-        config_digest.clone(),
+        analysis_settings_digest.clone(),
         go_lifecycle_digest.clone(),
         ts_js_lifecycle_digest.clone(),
         module_graph_output_digest.clone(),
@@ -681,7 +684,7 @@ pub(crate) fn derive_module_topology_with_cache_stats(
                 manifest,
                 module_graph_output_digest,
                 symbol_graph_output_digest,
-                config_digest,
+                analysis_settings_digest,
                 go_lifecycle_digest,
                 ts_js_lifecycle_digest,
             );
@@ -1065,7 +1068,9 @@ pub(crate) fn derive_requested_module_graph_with_cache_stats(
         return ModuleGraphDerivation::default();
     }
 
-    let config_digest = input_snapshot.config.digest.clone();
+    let analysis_settings_digest = input_snapshot
+        .analysis_settings_digest(AnalysisSettingsScope::ModuleGraph)
+        .clone();
     let go_lifecycle_digest = lifecycle_component_digest(
         DigestKind::GoLifecycle,
         "module_graph_go_lifecycle",
@@ -1080,7 +1085,7 @@ pub(crate) fn derive_requested_module_graph_with_cache_stats(
         loaded.root.as_path(),
         db,
         manifest,
-        config_digest.clone(),
+        analysis_settings_digest.clone(),
         go_lifecycle_digest.clone(),
         ts_js_lifecycle_digest.clone(),
         upstream_syntax_output_digests.clone(),
@@ -1129,7 +1134,7 @@ pub(crate) fn derive_requested_module_graph_with_cache_stats(
                 &layer_key,
                 manifest,
                 &upstream_syntax_output_digests,
-                config_digest,
+                analysis_settings_digest,
                 go_lifecycle_digest,
                 ts_js_lifecycle_digest,
             );
@@ -2246,7 +2251,11 @@ mod tests {
             root,
             db,
             module_graph_manifest(),
-            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(
+                DigestKind::AnalysisSettings,
+                "provider_analysis_settings",
+                &["polint.module_graph", "base"],
+            ),
             Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
             Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
             vec![Digest::from_parts(
@@ -2437,8 +2446,13 @@ mod tests {
             "export const tokens = {};\n",
         );
         push_ts_import(&mut second, app, "./tokens", 0);
-        let second_result =
-            derive_module_graph_with_cache(&mut second, &loaded, &cache, &plan, "config");
+        let second_result = derive_module_graph_with_cache(
+            &mut second,
+            &loaded,
+            &cache,
+            &plan,
+            "rule-only-full-config-changed",
+        );
 
         assert!(second_result.diagnostics.is_empty());
         assert_eq!(second_result.cache_stats.hits, 1);
@@ -2617,7 +2631,9 @@ mod tests {
             Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["stable"]),
         ];
         let snapshot = module_graph_input_snapshot(&loaded, &first, &plan, "config");
-        let config_digest = snapshot.config.digest.clone();
+        let analysis_settings_digest = snapshot
+            .analysis_settings_digest(crate::cache::keys::AnalysisSettingsScope::ModuleGraph)
+            .clone();
         let go_lifecycle_digest = super::lifecycle_component_digest(
             DigestKind::GoLifecycle,
             "module_graph_go_lifecycle",
@@ -2632,7 +2648,7 @@ mod tests {
             temp.path(),
             &first,
             module_graph_manifest(),
-            config_digest.clone(),
+            analysis_settings_digest.clone(),
             go_lifecycle_digest.clone(),
             ts_js_lifecycle_digest.clone(),
             upstream.clone(),
@@ -2643,7 +2659,7 @@ mod tests {
             &key,
             module_graph_manifest(),
             &upstream,
-            config_digest,
+            analysis_settings_digest,
             go_lifecycle_digest,
             ts_js_lifecycle_digest,
         );
@@ -2852,7 +2868,11 @@ mod tests {
             &key,
             module_graph_manifest(),
             &[go_syntax_output, ts_syntax_output],
-            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(
+                DigestKind::AnalysisSettings,
+                "provider_analysis_settings",
+                &["polint.module_graph", "base"],
+            ),
             Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
             Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
         );
@@ -2898,7 +2918,11 @@ mod tests {
             &key,
             module_graph_manifest(),
             &[],
-            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(
+                DigestKind::AnalysisSettings,
+                "provider_analysis_settings",
+                &["polint.module_graph", "base"],
+            ),
             Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
             Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
         );
@@ -5477,7 +5501,9 @@ mod module_topology_layer_cache {
         duplicate.import_path = "conflicting".to_string();
         payload.import_to_package_edges.push(duplicate);
 
-        let config_digest = snapshot.config.digest.clone();
+        let analysis_settings_digest = snapshot
+            .analysis_settings_digest(crate::cache::keys::AnalysisSettingsScope::ModuleTopology)
+            .clone();
         let go_lifecycle_digest = lifecycle_component_digest(
             DigestKind::GoLifecycle,
             "module_topology_go_lifecycle",
@@ -5491,7 +5517,7 @@ mod module_topology_layer_cache {
         let key = module_topology_layer_key(
             &first,
             module_topology_manifest(),
-            config_digest.clone(),
+            analysis_settings_digest.clone(),
             go_lifecycle_digest.clone(),
             ts_js_lifecycle_digest.clone(),
             module_digest.clone(),
@@ -5503,7 +5529,7 @@ mod module_topology_layer_cache {
             module_topology_manifest(),
             module_digest.clone(),
             symbol_digest.clone(),
-            config_digest,
+            analysis_settings_digest,
             go_lifecycle_digest,
             ts_js_lifecycle_digest,
         );

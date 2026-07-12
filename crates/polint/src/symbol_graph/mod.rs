@@ -14,6 +14,7 @@ use crate::analysis_kernel::incremental::{
 };
 use crate::analysis_plan::AnalysisPlan;
 use crate::cache::Cache;
+use crate::cache::keys::AnalysisSettingsScope;
 use crate::config::LoadedConfig;
 use crate::core::{
     AnalysisDb, CapabilitySupport, CapabilitySupportStatus, CapabilitySupportView, DefinitionFact,
@@ -80,7 +81,7 @@ pub(crate) fn derive_requested_symbols(
 pub(crate) fn symbol_graph_layer_key(
     db: &AnalysisDb,
     manifest: &ProviderManifest,
-    config_digest: Digest,
+    analysis_settings_digest: Digest,
     go_lifecycle_digest: Digest,
     ts_js_lifecycle_digest: Digest,
     module_graph_output_digest: Digest,
@@ -91,7 +92,7 @@ pub(crate) fn symbol_graph_layer_key(
         symbol_graph_source_function_digests(db),
         symbol_graph_package_context_digests(db),
         symbol_graph_import_shape_digests(db),
-        config_digest,
+        analysis_settings_digest,
         go_lifecycle_digest,
         ts_js_lifecycle_digest,
         module_graph_output_digest,
@@ -118,7 +119,9 @@ pub(crate) fn derive_requested_symbols_with_cache_stats(
         return SymbolGraphDerivation::default();
     }
 
-    let config_digest = input_snapshot.config.digest.clone();
+    let analysis_settings_digest = input_snapshot
+        .analysis_settings_digest(AnalysisSettingsScope::SymbolGraph)
+        .clone();
     let go_lifecycle_digest = lifecycle_component_digest(
         DigestKind::GoLifecycle,
         "symbol_graph_go_lifecycle",
@@ -132,7 +135,7 @@ pub(crate) fn derive_requested_symbols_with_cache_stats(
     let layer_key = symbol_graph_layer_key(
         db,
         manifest,
-        config_digest.clone(),
+        analysis_settings_digest.clone(),
         go_lifecycle_digest.clone(),
         ts_js_lifecycle_digest.clone(),
         module_graph_output_digest.clone(),
@@ -184,7 +187,7 @@ pub(crate) fn derive_requested_symbols_with_cache_stats(
                 manifest,
                 &module_graph_output_digest,
                 &upstream_syntax_output_digests,
-                config_digest,
+                analysis_settings_digest,
                 go_lifecycle_digest,
                 ts_js_lifecycle_digest,
             );
@@ -280,7 +283,7 @@ fn symbol_graph_layer_dependency_edges(
     manifest: &ProviderManifest,
     module_graph_output_digest: &Digest,
     upstream_syntax_output_digests: &[Digest],
-    config_digest: Digest,
+    analysis_settings_digest: Digest,
     go_lifecycle_digest: Digest,
     ts_js_lifecycle_digest: Digest,
 ) -> Vec<DependencyEdge> {
@@ -347,7 +350,7 @@ fn symbol_graph_layer_dependency_edges(
 
     edges.push(dependency_edge(
         &from,
-        CacheNode::Input(format!("config:{}", config_digest)),
+        CacheNode::Input(format!("analysis_settings:{}", analysis_settings_digest)),
         DependencyKind::Config,
         ShapeKind::Unknown,
     ));
@@ -1644,7 +1647,7 @@ export function answer() {{
                 &loaded,
                 &cache,
                 &plan,
-                "config",
+                "rule-only-full-config-changed",
                 "stable",
             );
             let second = derive_symbols_with_cache(
@@ -1886,7 +1889,11 @@ export function answer() {
             Vec::new(),
             Vec::new(),
             Vec::new(),
-            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(
+                DigestKind::AnalysisSettings,
+                "provider_analysis_settings",
+                &["polint.symbol_graph", "base"],
+            ),
             Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
             Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
             Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),

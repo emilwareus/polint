@@ -152,6 +152,25 @@ pub(crate) struct InputSnapshotIdentitySources {
 }
 
 impl InputSnapshot {
+    pub(crate) fn analysis_settings_digest(&self, scope: AnalysisSettingsScope) -> &Digest {
+        let source = self
+            .analysis_settings
+            .iter()
+            .find(|source| source.scope == scope)
+            .unwrap_or_else(|| {
+                panic!(
+                    "input snapshot is missing analysis settings for `{}`",
+                    scope.label()
+                )
+            });
+        assert_eq!(
+            source.digest.kind,
+            DigestKind::AnalysisSettings,
+            "input snapshot analysis settings must retain their typed purpose"
+        );
+        &source.digest
+    }
+
     pub(crate) fn from_run_inputs_with_plan(
         loaded: &LoadedConfig,
         db: &AnalysisDb,

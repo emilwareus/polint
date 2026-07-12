@@ -13,7 +13,6 @@ use std::sync::Arc;
 
 use super::digest::{Digest, DigestKind};
 use crate::analysis_kernel::{PrecisionCeiling, ProviderManifest};
-use crate::cache::{CACHE_VERSION, CacheKey};
 use crate::core::AnalysisDb;
 use crate::module_graph::formats::pnpm_workspace::parse_pnpm_workspace_packages;
 use crate::module_graph::paths::{
@@ -98,7 +97,7 @@ pub(crate) struct LayerKey {
     pub(crate) schema_version: String,
     pub(crate) parameter_digest: Digest,
     pub(crate) lifecycle_digest: Digest,
-    pub(crate) config_digest: Digest,
+    pub(crate) analysis_settings_digest: Digest,
     pub(crate) toolchain_digest: Digest,
     pub(crate) input_digests: Arc<Vec<Digest>>,
     pub(crate) dependency_layer_digests: Arc<Vec<Digest>>,
@@ -221,7 +220,7 @@ impl LayerKey {
         schema_version: impl Into<String>,
         parameter_digest: Digest,
         lifecycle_digest: Digest,
-        config_digest: Digest,
+        analysis_settings_digest: Digest,
         toolchain_digest: Digest,
         input_digests: Vec<Digest>,
         dependency_layer_digests: Vec<Digest>,
@@ -234,7 +233,7 @@ impl LayerKey {
             schema_version: schema_version.into(),
             parameter_digest,
             lifecycle_digest,
-            config_digest,
+            analysis_settings_digest,
             toolchain_digest,
             input_digests: Arc::new(sorted_digests(input_digests)),
             dependency_layer_digests: Arc::new(sorted_digests(dependency_layer_digests)),
@@ -242,46 +241,40 @@ impl LayerKey {
         }
     }
 
-    pub(crate) fn from_existing_file_cache(
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Provider-scoped layer cache identity keeps every digest input explicit at construction."
+    )]
+    pub(crate) fn new_with_analysis_settings(
         layer_kind: LayerKind,
         provider_id: impl Into<String>,
         provider_version: impl Into<String>,
-        key: &CacheKey,
+        schema_version: impl Into<String>,
+        parameter_digest: Digest,
+        lifecycle_digest: Digest,
+        analysis_settings_digest: Digest,
+        toolchain_digest: Digest,
+        input_digests: Vec<Digest>,
+        dependency_layer_digests: Vec<Digest>,
+        extension_digests: Vec<Digest>,
     ) -> Self {
-        let version = if key.version.is_empty() {
-            CACHE_VERSION
-        } else {
-            key.version.as_str()
-        };
-        let compatibility_input_digests = vec![
-            Digest::from_parts(DigestKind::SourceText, "file_hash", &[&key.file_hash]),
-            Digest::from_parts(DigestKind::Config, "config_hash", &[&key.config_hash]),
-            Digest::from_parts(DigestKind::RuleCode, "rule_hash", &[&key.rule_hash]),
-            Digest::from_parts(
-                DigestKind::ProviderParameters,
-                "plan_hash",
-                &[&key.plan_hash],
-            ),
-            Digest::from_parts(DigestKind::ToolInvocation, "version", &[version]),
-            Digest::from_parts(DigestKind::ProviderOutput, "schema", &[&key.schema]),
-        ];
-
+        assert_eq!(
+            analysis_settings_digest.kind,
+            DigestKind::AnalysisSettings,
+            "provider-scoped layer keys require an analysis-settings digest"
+        );
         Self::new(
             layer_kind,
             provider_id,
             provider_version,
-            key.schema.clone(),
-            Digest::from_parts(
-                DigestKind::ProviderParameters,
-                "existing_file_cache_parameters",
-                &[&key.rule_hash, &key.plan_hash],
-            ),
-            Digest::absent(DigestKind::DependencyLayer, "existing_file_cache_lifecycle"),
-            Digest::from_parts(DigestKind::Config, "config_hash", &[&key.config_hash]),
-            Digest::from_parts(DigestKind::ToolInvocation, "version", &[version]),
-            compatibility_input_digests,
-            Vec::new(),
-            Vec::new(),
+            schema_version,
+            parameter_digest,
+            lifecycle_digest,
+            analysis_settings_digest,
+            toolchain_digest,
+            input_digests,
+            dependency_layer_digests,
+            extension_digests,
         )
     }
 
@@ -295,7 +288,7 @@ impl LayerKey {
         provider_version: impl Into<String>,
         schema_version: impl Into<String>,
         source_text_digests: Vec<Digest>,
-        config_digest: Digest,
+        analysis_settings_digest: Digest,
         lifecycle_digest: Digest,
         toolchain_digest: Digest,
         parser_parameter_digest: Digest,
@@ -310,14 +303,14 @@ impl LayerKey {
             "syntax layer keys are only defined for Go and TS/JS syntax providers"
         );
 
-        Self::new(
+        Self::new_with_analysis_settings(
             layer_kind,
             provider_id,
             provider_version,
             schema_version,
             parser_parameter_digest,
             lifecycle_digest,
-            config_digest,
+            analysis_settings_digest,
             toolchain_digest,
             source_text_digests,
             Vec::new(),
@@ -336,7 +329,7 @@ impl LayerKey {
         manifest: &ProviderManifest,
         import_shape_digests: Vec<Digest>,
         source_package_digests: Vec<Digest>,
-        config_digest: Digest,
+        analysis_settings_digest: Digest,
         go_lifecycle_digest: Digest,
         ts_js_lifecycle_digest: Digest,
         upstream_syntax_output_digests: Vec<Digest>,
@@ -359,14 +352,14 @@ impl LayerKey {
         input_digests.extend(import_shape_digests);
         input_digests.extend(source_package_digests);
 
-        Self::new(
+        Self::new_with_analysis_settings(
             LayerKind::ModuleGraph,
             manifest.id,
             manifest.provider_version(),
             manifest.primary_schema_label(),
             module_graph_parameter_digest,
             lifecycle_digest,
-            config_digest,
+            analysis_settings_digest,
             Digest::absent(DigestKind::ToolInvocation, "module_graph_toolchain"),
             input_digests,
             upstream_syntax_output_digests
@@ -389,7 +382,7 @@ impl LayerKey {
         source_function_digests: Vec<Digest>,
         package_context_digests: Vec<Digest>,
         import_shape_digests: Vec<Digest>,
-        config_digest: Digest,
+        analysis_settings_digest: Digest,
         go_lifecycle_digest: Digest,
         ts_js_lifecycle_digest: Digest,
         module_graph_output_digest: Digest,
@@ -426,14 +419,14 @@ impl LayerKey {
                 .map(dependency_layer_digest),
         );
 
-        Self::new(
+        Self::new_with_analysis_settings(
             LayerKind::SymbolGraph,
             manifest.id,
             manifest.provider_version(),
             manifest.primary_schema_label(),
             symbol_graph_parameter_digest,
             lifecycle_digest,
-            config_digest,
+            analysis_settings_digest,
             Digest::absent(DigestKind::ToolInvocation, "symbol_graph_toolchain"),
             input_digests,
             dependency_layer_digests,
@@ -452,7 +445,7 @@ impl LayerKey {
         manifest: &ProviderManifest,
         import_shape_digests: Vec<Digest>,
         base_topology_digests: Vec<Digest>,
-        config_digest: Digest,
+        analysis_settings_digest: Digest,
         go_lifecycle_digest: Digest,
         ts_js_lifecycle_digest: Digest,
         module_graph_output_digest: Digest,
@@ -489,14 +482,14 @@ impl LayerKey {
         input_digests.extend(import_shape_digests);
         input_digests.extend(base_topology_digests);
 
-        Self::new(
+        Self::new_with_analysis_settings(
             LayerKind::ModuleTopology,
             manifest.id,
             manifest.provider_version(),
             manifest.primary_schema_label(),
             parameter_digest,
             lifecycle_digest,
-            config_digest,
+            analysis_settings_digest,
             Digest::absent(DigestKind::ToolInvocation, "module_topology_toolchain"),
             input_digests,
             vec![
@@ -863,7 +856,7 @@ impl LayerKey {
         manifest: &ProviderManifest,
         source_text_digests: Vec<Digest>,
         function_fact_digests: Vec<Digest>,
-        config_digest: Digest,
+        analysis_settings_digest: Digest,
         upstream_syntax_output_digests: Vec<Digest>,
         metrics_parameter_digest: Digest,
     ) -> Self {
@@ -897,14 +890,14 @@ impl LayerKey {
             ),
         ];
 
-        Self::new(
+        Self::new_with_analysis_settings(
             LayerKind::Metrics,
             manifest.id,
             manifest.provider_version(),
             manifest.primary_schema_label(),
             metrics_parameter_digest,
             Digest::absent(DigestKind::ProviderParameters, "metrics_lifecycle"),
-            config_digest,
+            analysis_settings_digest,
             Digest::absent(DigestKind::ToolInvocation, "metrics_toolchain"),
             input_digests,
             upstream_syntax_output_digests
@@ -1444,6 +1437,14 @@ mod tests {
         Digest::from_parts(DigestKind::SourceText, label, &[value])
     }
 
+    fn analysis_settings(value: &str) -> Digest {
+        Digest::from_parts(
+            DigestKind::AnalysisSettings,
+            "provider_analysis_settings",
+            &[value],
+        )
+    }
+
     fn module_graph_manifest() -> &'static crate::analysis_kernel::ProviderManifest {
         crate::analysis_kernel::AnalysisKernel::provider_manifests()
             .iter()
@@ -1455,7 +1456,7 @@ mod tests {
         import_shape_digest: Digest,
         go_lifecycle_digest: Digest,
         ts_js_lifecycle_digest: Digest,
-        config_digest: Digest,
+        analysis_settings_digest: Digest,
         upstream_syntax_output_digest: Digest,
     ) -> LayerKey {
         LayerKey::module_graph_layer_key(
@@ -1466,7 +1467,7 @@ mod tests {
                 "source_package",
                 &["src/app.ts", "hash", "pkg"],
             )],
-            config_digest,
+            analysis_settings_digest,
             go_lifecycle_digest,
             ts_js_lifecycle_digest,
             vec![upstream_syntax_output_digest],
@@ -1495,7 +1496,7 @@ mod tests {
     fn symbol_graph_key(
         source_function_digest: Digest,
         import_shape_digest: Digest,
-        config_digest: Digest,
+        analysis_settings_digest: Digest,
         go_lifecycle_digest: Digest,
         ts_js_lifecycle_digest: Digest,
         module_graph_output_digest: Digest,
@@ -1510,7 +1511,7 @@ mod tests {
                 &["src/app.ts", "pkg"],
             )],
             vec![import_shape_digest],
-            config_digest,
+            analysis_settings_digest,
             go_lifecycle_digest,
             ts_js_lifecycle_digest,
             module_graph_output_digest,
@@ -1533,14 +1534,14 @@ mod tests {
     fn metrics_key(
         source_digest: Digest,
         function_digest: Digest,
-        config_digest: Digest,
+        analysis_settings_digest: Digest,
         syntax_output_digest: Digest,
     ) -> LayerKey {
         LayerKey::metrics_layer_key(
             metrics_manifest(),
             vec![source_digest],
             vec![function_digest],
-            config_digest,
+            analysis_settings_digest,
             vec![syntax_output_digest],
             Digest::from_parts(
                 DigestKind::ProviderParameters,
@@ -1561,7 +1562,7 @@ mod tests {
             module_topology_manifest(),
             vec![import_shape_digest],
             vec![base_topology_digest],
-            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            analysis_settings("base"),
             Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
             Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
             module_graph_output_digest,
@@ -1577,7 +1578,7 @@ mod tests {
             "1",
             "go-facts-v2",
             source_text_digests,
-            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            analysis_settings("base"),
             Digest::from_parts(DigestKind::GoLifecycle, "lifecycle", &["base"]),
             Digest::from_parts(DigestKind::ToolInvocation, "toolchain", &["base"]),
             Digest::from_parts(DigestKind::ProviderParameters, "parser", &["base"]),
@@ -1808,7 +1809,7 @@ mod tests {
             module_graph_manifest(),
             Vec::new(),
             topology_inputs,
-            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            analysis_settings("base"),
             Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
             Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
             Vec::new(),
@@ -1839,47 +1840,47 @@ mod tests {
     }
 
     #[test]
-    fn module_graph_layer_key_changes_on_import_lifecycle_config_or_upstream_digest() {
+    fn module_graph_layer_key_changes_on_import_lifecycle_settings_or_upstream_digest() {
         let base = module_graph_key(
             Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["react"]),
             Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
             Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
-            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            analysis_settings("base"),
             Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["base"]),
         );
         let changed_import = module_graph_key(
             Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["lodash"]),
             Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
             Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
-            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            analysis_settings("base"),
             Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["base"]),
         );
         let changed_go_lifecycle = module_graph_key(
             Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["react"]),
             Digest::from_parts(DigestKind::GoLifecycle, "go", &["changed"]),
             Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
-            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            analysis_settings("base"),
             Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["base"]),
         );
         let changed_ts_lifecycle = module_graph_key(
             Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["react"]),
             Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
             Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["changed"]),
-            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            analysis_settings("base"),
             Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["base"]),
         );
-        let changed_config = module_graph_key(
+        let changed_settings = module_graph_key(
             Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["react"]),
             Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
             Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
-            Digest::from_parts(DigestKind::Config, "config", &["changed"]),
+            analysis_settings("changed"),
             Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["base"]),
         );
         let changed_upstream = module_graph_key(
             Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["react"]),
             Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
             Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
-            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            analysis_settings("base"),
             Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["changed"]),
         );
         let mut changed_provider_version = base.clone();
@@ -1891,7 +1892,7 @@ mod tests {
             changed_import,
             changed_go_lifecycle,
             changed_ts_lifecycle,
-            changed_config,
+            changed_settings,
             changed_upstream,
             changed_provider_version,
             changed_schema,
@@ -1982,7 +1983,7 @@ mod tests {
             Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["react"]),
             Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
             Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
-            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            analysis_settings("base"),
             Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["base"]),
         );
         let rule_a = Digest::from_parts(DigestKind::RuleCode, "rule", &["a"]);
@@ -1995,14 +1996,14 @@ mod tests {
                 Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["react"]),
                 Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
                 Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
-                Digest::from_parts(DigestKind::Config, "config", &["base"]),
+                analysis_settings("base"),
                 Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["base"]),
             )
         );
     }
 
     #[test]
-    fn symbol_graph_layer_key_changes_on_source_import_lifecycle_config_or_upstream_digest() {
+    fn symbol_graph_layer_key_changes_on_source_import_lifecycle_settings_or_upstream_digest() {
         let base = symbol_graph_key(
             Digest::from_parts(
                 DigestKind::SourceText,
@@ -2014,7 +2015,7 @@ mod tests {
                 "import_shape",
                 &["./target"],
             ),
-            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            analysis_settings("base"),
             Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
             Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
             Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
@@ -2031,7 +2032,7 @@ mod tests {
                 "import_shape",
                 &["./target"],
             ),
-            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            analysis_settings("base"),
             Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
             Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
             Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
@@ -2044,13 +2045,13 @@ mod tests {
                 &["src/app.ts", "base"],
             ),
             Digest::from_parts(DigestKind::ProviderParameters, "import_shape", &["./other"]),
-            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            analysis_settings("base"),
             Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
             Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
             Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
             Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
         );
-        let changed_config = symbol_graph_key(
+        let changed_settings = symbol_graph_key(
             Digest::from_parts(
                 DigestKind::SourceText,
                 "source_function",
@@ -2061,7 +2062,7 @@ mod tests {
                 "import_shape",
                 &["./target"],
             ),
-            Digest::from_parts(DigestKind::Config, "config", &["changed"]),
+            analysis_settings("changed"),
             Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
             Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
             Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
@@ -2078,7 +2079,7 @@ mod tests {
                 "import_shape",
                 &["./target"],
             ),
-            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            analysis_settings("base"),
             Digest::from_parts(DigestKind::GoLifecycle, "go", &["changed"]),
             Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
             Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
@@ -2095,7 +2096,7 @@ mod tests {
                 "import_shape",
                 &["./target"],
             ),
-            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            analysis_settings("base"),
             Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
             Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
             Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["changed"]),
@@ -2112,7 +2113,7 @@ mod tests {
                 "import_shape",
                 &["./target"],
             ),
-            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            analysis_settings("base"),
             Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
             Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
             Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
@@ -2126,7 +2127,7 @@ mod tests {
         for changed in [
             changed_source,
             changed_import,
-            changed_config,
+            changed_settings,
             changed_go_lifecycle,
             changed_module_output,
             changed_syntax_output,
@@ -2180,7 +2181,7 @@ mod tests {
                     "import_shape",
                     &["./target"],
                 ),
-                Digest::from_parts(DigestKind::Config, "config", &["base"]),
+                analysis_settings("base"),
                 Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
                 Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
@@ -2203,7 +2204,7 @@ mod tests {
                     "import_shape",
                     &["./target"],
                 )],
-                Digest::from_parts(DigestKind::Config, "config", &["base"]),
+                analysis_settings("base"),
                 Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
                 Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
@@ -2241,7 +2242,7 @@ mod tests {
                     "import_shape",
                     &["./target"],
                 ),
-                Digest::from_parts(DigestKind::Config, "config", &["base"]),
+                analysis_settings("base"),
                 Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
                 Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
@@ -2494,7 +2495,7 @@ mod tests {
     }
 
     #[test]
-    fn metrics_layer_key_changes_on_source_function_config_or_syntax_digest() {
+    fn metrics_layer_key_changes_on_source_function_settings_or_syntax_digest() {
         let base = metrics_key(
             Digest::from_parts(DigestKind::SourceText, "source", &["src/app.ts", "base"]),
             Digest::from_parts(
@@ -2502,7 +2503,7 @@ mod tests {
                 "function_fact",
                 &["handler", "base"],
             ),
-            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            analysis_settings("base"),
             Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
         );
         let changed_source = metrics_key(
@@ -2512,7 +2513,7 @@ mod tests {
                 "function_fact",
                 &["handler", "base"],
             ),
-            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            analysis_settings("base"),
             Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
         );
         let changed_function = metrics_key(
@@ -2522,17 +2523,17 @@ mod tests {
                 "function_fact",
                 &["handler", "changed"],
             ),
-            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            analysis_settings("base"),
             Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
         );
-        let changed_config = metrics_key(
+        let changed_settings = metrics_key(
             Digest::from_parts(DigestKind::SourceText, "source", &["src/app.ts", "base"]),
             Digest::from_parts(
                 DigestKind::ProviderParameters,
                 "function_fact",
                 &["handler", "base"],
             ),
-            Digest::from_parts(DigestKind::Config, "config", &["changed"]),
+            analysis_settings("changed"),
             Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
         );
         let changed_syntax = metrics_key(
@@ -2542,7 +2543,7 @@ mod tests {
                 "function_fact",
                 &["handler", "base"],
             ),
-            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            analysis_settings("base"),
             Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["changed"]),
         );
         let mut changed_provider_version = base.clone();
@@ -2553,7 +2554,7 @@ mod tests {
         for changed in [
             changed_source,
             changed_function,
-            changed_config,
+            changed_settings,
             changed_syntax,
             changed_provider_version,
             changed_schema,
@@ -2603,6 +2604,69 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "provider-scoped layer keys require an analysis-settings digest")]
+    fn provider_scoped_constructor_rejects_a_full_config_digest() {
+        let _ = LayerKey::new_with_analysis_settings(
+            LayerKind::Metrics,
+            "polint.metrics",
+            "1",
+            "metrics-facts-v1",
+            Digest::absent(DigestKind::ProviderParameters, "none"),
+            Digest::absent(DigestKind::ProviderParameters, "none"),
+            Digest::absent(DigestKind::Config, "full_config"),
+            Digest::absent(DigestKind::ToolInvocation, "none"),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+    }
+
+    #[test]
+    fn specialized_and_untyped_analysis_settings_paths_are_explicitly_enumerated() {
+        let source = include_str!("keys.rs");
+        for (constructor, next) in [
+            ("syntax_layer_key", "module_graph_layer_key"),
+            ("module_graph_layer_key", "symbol_graph_layer_key"),
+            ("symbol_graph_layer_key", "module_topology_layer_key"),
+            ("module_topology_layer_key", "semantic_mir_layer_key"),
+            ("metrics_layer_key", "impl QueryKey"),
+        ] {
+            let body = constructor_body(source, constructor, next);
+            assert!(
+                body.contains("Self::new_with_analysis_settings("),
+                "{constructor} must use the purpose-checked constructor"
+            );
+        }
+        for (constructor, next) in [
+            ("semantic_mir_layer_key", "cfg_layer_key"),
+            ("cfg_layer_key", "calls_layer_key"),
+            ("calls_layer_key", "abstract_domains_layer_key"),
+            ("abstract_domains_layer_key", "direct_summaries_layer_key"),
+            ("direct_summaries_layer_key", "combine_digests_into"),
+        ] {
+            let body = constructor_body(source, constructor, next);
+            assert!(
+                body.contains("Self::new("),
+                "{constructor} is an explicitly untyped settings seam"
+            );
+            assert!(!body.contains("Self::new_with_analysis_settings("));
+        }
+        let removed_bridge = ["from_existing", "_file_cache"].concat();
+        assert!(!source.contains(&removed_bridge));
+    }
+
+    fn constructor_body<'a>(source: &'a str, constructor: &str, next: &str) -> &'a str {
+        let start = source
+            .find(&format!("fn {constructor}("))
+            .unwrap_or_else(|| panic!("missing constructor {constructor}"));
+        let rest = &source[start..];
+        let end = rest
+            .find(next)
+            .unwrap_or_else(|| panic!("missing boundary after {constructor}"));
+        &rest[..end]
+    }
+
+    #[test]
     fn syntax_layer_key_ignores_rule_digest_changes() {
         let source = digest("file", "src/main.go");
         let rule_a = Digest::from_parts(DigestKind::RuleCode, "rule", &["a"]);
@@ -2618,13 +2682,13 @@ mod tests {
         let base = syntax_key(vec![source.clone()]);
 
         let changed_source = syntax_key(vec![digest("file", "src/other.go")]);
-        let changed_config = LayerKey::syntax_layer_key(
+        let changed_settings = LayerKey::syntax_layer_key(
             LayerKind::GoSyntax,
             "polint.go.syntax",
             "1",
             "go-facts-v2",
             vec![source.clone()],
-            Digest::from_parts(DigestKind::Config, "config", &["changed"]),
+            analysis_settings("changed"),
             Digest::from_parts(DigestKind::GoLifecycle, "lifecycle", &["base"]),
             Digest::from_parts(DigestKind::ToolInvocation, "toolchain", &["base"]),
             Digest::from_parts(DigestKind::ProviderParameters, "parser", &["base"]),
@@ -2635,7 +2699,7 @@ mod tests {
             "1",
             "go-facts-v2",
             vec![source.clone()],
-            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            analysis_settings("base"),
             Digest::from_parts(DigestKind::GoLifecycle, "lifecycle", &["changed"]),
             Digest::from_parts(DigestKind::ToolInvocation, "toolchain", &["base"]),
             Digest::from_parts(DigestKind::ProviderParameters, "parser", &["base"]),
@@ -2646,7 +2710,7 @@ mod tests {
             "1",
             "go-facts-v2",
             vec![source.clone()],
-            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            analysis_settings("base"),
             Digest::from_parts(DigestKind::GoLifecycle, "lifecycle", &["base"]),
             Digest::from_parts(DigestKind::ToolInvocation, "toolchain", &["changed"]),
             Digest::from_parts(DigestKind::ProviderParameters, "parser", &["base"]),
@@ -2657,7 +2721,7 @@ mod tests {
             "1",
             "go-facts-v2",
             vec![source],
-            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            analysis_settings("base"),
             Digest::from_parts(DigestKind::GoLifecycle, "lifecycle", &["base"]),
             Digest::from_parts(DigestKind::ToolInvocation, "toolchain", &["base"]),
             Digest::from_parts(DigestKind::ProviderParameters, "parser", &["changed"]),
@@ -2668,7 +2732,7 @@ mod tests {
             "2",
             "go-facts-v2",
             base.input_digests.as_ref().clone(),
-            base.config_digest.clone(),
+            base.analysis_settings_digest.clone(),
             base.lifecycle_digest.clone(),
             base.toolchain_digest.clone(),
             base.parameter_digest.clone(),
@@ -2679,7 +2743,7 @@ mod tests {
             "1",
             "go-facts-v3",
             base.input_digests.as_ref().clone(),
-            base.config_digest.clone(),
+            base.analysis_settings_digest.clone(),
             base.lifecycle_digest.clone(),
             base.toolchain_digest.clone(),
             base.parameter_digest.clone(),
@@ -2687,7 +2751,7 @@ mod tests {
 
         for changed in [
             changed_source,
-            changed_config,
+            changed_settings,
             changed_lifecycle,
             changed_toolchain,
             changed_parser_params,
@@ -2709,7 +2773,7 @@ mod tests {
             "1",
             "ts-facts-v1",
             vec![b.clone(), a.clone()],
-            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            analysis_settings("base"),
             Digest::from_parts(DigestKind::TsJsLifecycle, "lifecycle", &["base"]),
             Digest::from_parts(DigestKind::ToolInvocation, "toolchain", &["base"]),
             Digest::from_parts(DigestKind::ProviderParameters, "parser", &["base"]),
@@ -2720,7 +2784,7 @@ mod tests {
             "1",
             "ts-facts-v1",
             vec![a, b],
-            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            analysis_settings("base"),
             Digest::from_parts(DigestKind::TsJsLifecycle, "lifecycle", &["base"]),
             Digest::from_parts(DigestKind::ToolInvocation, "toolchain", &["base"]),
             Digest::from_parts(DigestKind::ProviderParameters, "parser", &["base"]),
@@ -2730,54 +2794,6 @@ mod tests {
         assert!(left.extension_digests.contains(&Digest::absent(
             DigestKind::ExtensionCode,
             "extension_digest_absent"
-        )));
-    }
-
-    #[test]
-    fn existing_file_cache_bridge_includes_all_cache_key_fields_as_digests() {
-        let cache_key = CacheKey {
-            file_hash: "file-hash".to_string(),
-            config_hash: "config-hash".to_string(),
-            rule_hash: "rule-hash".to_string(),
-            plan_hash: "plan-hash".to_string(),
-            version: CACHE_VERSION.to_string(),
-            schema: "ts-facts-v1".to_string(),
-        };
-        let key = LayerKey::from_existing_file_cache(
-            LayerKind::TsSyntax,
-            "polint.ts.syntax",
-            "1",
-            &cache_key,
-        );
-
-        assert_eq!(
-            key.config_digest,
-            Digest::from_parts(DigestKind::Config, "config_hash", &["config-hash"])
-        );
-        assert!(key.input_digests.contains(&Digest::from_parts(
-            DigestKind::SourceText,
-            "file_hash",
-            &["file-hash"]
-        )));
-        assert!(key.input_digests.contains(&Digest::from_parts(
-            DigestKind::RuleCode,
-            "rule_hash",
-            &["rule-hash"]
-        )));
-        assert!(key.input_digests.contains(&Digest::from_parts(
-            DigestKind::ProviderParameters,
-            "plan_hash",
-            &["plan-hash"]
-        )));
-        assert!(key.input_digests.contains(&Digest::from_parts(
-            DigestKind::ToolInvocation,
-            "version",
-            &[CACHE_VERSION]
-        )));
-        assert!(key.input_digests.contains(&Digest::from_parts(
-            DigestKind::ProviderOutput,
-            "schema",
-            &["ts-facts-v1"]
         )));
     }
 
@@ -2868,7 +2884,11 @@ mod symbol_graph_semantic_layer_key {
                 "import_shape",
                 &["./target"],
             )],
-            Digest::from_parts(DigestKind::Config, "config", &["base"]),
+            Digest::from_parts(
+                DigestKind::AnalysisSettings,
+                "provider_analysis_settings",
+                &["base"],
+            ),
             Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
             Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
             Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),

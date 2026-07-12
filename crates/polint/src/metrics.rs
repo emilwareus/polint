@@ -6,6 +6,7 @@ use crate::analysis_kernel::incremental::{
 };
 use crate::analysis_plan::AnalysisPlan;
 use crate::cache::Cache;
+use crate::cache::keys::AnalysisSettingsScope;
 use crate::core::{
     AnalysisDb, ComplexityMetricFact, FileId, FileMetricFact, FunctionFact, FunctionMetricFact,
     SourceFile, Span, is_synthetic_ts_js_module_function,
@@ -55,11 +56,13 @@ pub(crate) fn derive_requested_metrics_with_cache_stats(
         return MetricsDerivation::default();
     }
 
-    let config_digest = input_snapshot.config.digest.clone();
+    let analysis_settings_digest = input_snapshot
+        .analysis_settings_digest(AnalysisSettingsScope::Metrics)
+        .clone();
     let layer_key = metrics_layer_key(
         db,
         manifest,
-        config_digest.clone(),
+        analysis_settings_digest.clone(),
         upstream_syntax_output_digests.clone(),
     );
     let store = cache.layer_cache_store();
@@ -104,7 +107,7 @@ pub(crate) fn derive_requested_metrics_with_cache_stats(
                 &layer_key,
                 manifest,
                 &upstream_syntax_output_digests,
-                config_digest,
+                analysis_settings_digest,
             );
             derivation.output_digest = write_metrics_layer_payload(
                 &store,
@@ -123,14 +126,14 @@ pub(crate) fn derive_requested_metrics_with_cache_stats(
 pub(crate) fn metrics_layer_key(
     db: &AnalysisDb,
     manifest: &ProviderManifest,
-    config_digest: Digest,
+    analysis_settings_digest: Digest,
     upstream_syntax_output_digests: Vec<Digest>,
 ) -> LayerKey {
     LayerKey::metrics_layer_key(
         manifest,
         metrics_source_text_digests(db),
         metrics_function_fact_digests(db),
-        config_digest,
+        analysis_settings_digest,
         upstream_syntax_output_digests,
         metrics_parameter_digest(),
     )
@@ -215,7 +218,7 @@ fn metrics_layer_dependency_edges(
     key: &LayerKey,
     manifest: &ProviderManifest,
     upstream_syntax_output_digests: &[Digest],
-    config_digest: Digest,
+    analysis_settings_digest: Digest,
 ) -> Vec<DependencyEdge> {
     let from = CacheNode::Layer(key.clone());
     let mut edges = Vec::new();
@@ -251,7 +254,7 @@ fn metrics_layer_dependency_edges(
 
     edges.push(dependency_edge(
         &from,
-        CacheNode::Input(format!("config:{}", config_digest)),
+        CacheNode::Input(format!("analysis_settings:{}", analysis_settings_digest)),
         DependencyKind::Config,
         ShapeKind::Unknown,
     ));
@@ -973,7 +976,7 @@ mod tests {
                 &loaded,
                 &cache,
                 &plan,
-                "config",
+                "rule-only-full-config-changed",
                 "stable",
             );
             let second = derive_metrics_with_cache(

@@ -276,7 +276,7 @@ fn node_contains_digest(node: &CacheNode, digest: &Digest) -> bool {
 fn layer_key_contains_digest(key: &LayerKey, digest: &Digest) -> bool {
     key.parameter_digest == *digest
         || key.lifecycle_digest == *digest
-        || key.config_digest == *digest
+        || key.analysis_settings_digest == *digest
         || key.toolchain_digest == *digest
         || key.input_digests.contains(digest)
         || key.dependency_layer_digests.contains(digest)
