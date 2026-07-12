@@ -1,4 +1,7 @@
-use serde::{Deserialize, Serialize};
+use std::fmt;
+
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize};
 
 use super::digest::Digest;
 use super::keys::PrecisionTier;
@@ -53,6 +56,70 @@ impl CacheStats {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ProviderValidationStatus {
+    NativeTrusted,
+    ProviderFailed,
+}
+
+impl ProviderValidationStatus {
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::NativeTrusted => "native_trusted",
+            Self::ProviderFailed => "provider_failed",
+        }
+    }
+
+    pub(crate) fn parse_label(label: &str) -> Result<Self, UnknownProviderValidationStatusLabel> {
+        match label {
+            "native_trusted" => Ok(Self::NativeTrusted),
+            "provider_failed" => Ok(Self::ProviderFailed),
+            _ => Err(UnknownProviderValidationStatusLabel {
+                label: label.to_string(),
+            }),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ProviderValidationStatus {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let label = String::deserialize(deserializer)?;
+        Self::parse_label(&label).map_err(D::Error::custom)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct UnknownProviderValidationStatusLabel {
+    label: String,
+}
+
+impl fmt::Display for UnknownProviderValidationStatusLabel {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "unknown provider validation status label `{}`",
+            self.label
+        )
+    }
+}
+
+impl std::error::Error for UnknownProviderValidationStatusLabel {}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub(crate) struct ProviderSemanticProjection<'a> {
+    pub(crate) provider_id: &'a str,
+    pub(crate) provider_version: &'a str,
+    pub(crate) schema_version: &'a str,
+    pub(crate) output_digest: &'a Digest,
+    pub(crate) precision: PrecisionTier,
+    pub(crate) validation: ProviderValidationStatus,
+    pub(crate) dependency_inputs: &'a [Digest],
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ProviderOutputMeta {
     pub(crate) provider_id: String,
@@ -60,7 +127,7 @@ pub(crate) struct ProviderOutputMeta {
     pub(crate) schema_version: String,
     pub(crate) output_digest: Digest,
     pub(crate) precision: PrecisionTier,
-    pub(crate) validation: String,
+    pub(crate) validation: ProviderValidationStatus,
     pub(crate) dependency_inputs: Vec<Digest>,
     pub(crate) cache_stats: CacheStats,
 }
@@ -76,7 +143,7 @@ impl ProviderOutputMeta {
         schema_version: impl Into<String>,
         output_digest: Digest,
         precision: PrecisionTier,
-        validation: impl Into<String>,
+        validation: ProviderValidationStatus,
         dependency_inputs: Vec<Digest>,
         cache_stats: CacheStats,
     ) -> Self {
@@ -86,9 +153,21 @@ impl ProviderOutputMeta {
             schema_version: schema_version.into(),
             output_digest,
             precision,
-            validation: validation.into(),
+            validation,
             dependency_inputs: sorted_digests(dependency_inputs),
             cache_stats,
+        }
+    }
+
+    pub(crate) fn semantic_projection(&self) -> ProviderSemanticProjection<'_> {
+        ProviderSemanticProjection {
+            provider_id: &self.provider_id,
+            provider_version: &self.provider_version,
+            schema_version: &self.schema_version,
+            output_digest: &self.output_digest,
+            precision: self.precision,
+            validation: self.validation,
+            dependency_inputs: &self.dependency_inputs,
         }
     }
 }
@@ -154,7 +233,7 @@ mod tests {
             "ts-facts-v1",
             Digest::from_parts(DigestKind::ProviderOutput, "output", &["facts"]),
             PrecisionTier::Syntax,
-            "native_trusted",
+            ProviderValidationStatus::NativeTrusted,
             vec![Digest::from_parts(
                 DigestKind::SourceText,
                 "file",
@@ -172,5 +251,114 @@ mod tests {
         assert!(json.get("validation").is_some());
         assert!(json.get("dependency_inputs").is_some());
         assert!(json.get("cache_stats").is_some());
+        assert_eq!(json["validation"], "native_trusted");
+    }
+
+    #[test]
+    fn provider_validation_status_labels_round_trip_and_reject_unknown_values() {
+        for status in [
+            ProviderValidationStatus::NativeTrusted,
+            ProviderValidationStatus::ProviderFailed,
+        ] {
+            assert_eq!(
+                ProviderValidationStatus::parse_label(status.label()),
+                Ok(status)
+            );
+            assert_eq!(
+                serde_json::to_string(&status).expect("status serializes"),
+                format!("\"{}\"", status.label())
+            );
+        }
+
+        assert!(ProviderValidationStatus::parse_label("metadata_conflict").is_err());
+        assert!(serde_json::from_str::<ProviderValidationStatus>("\"metadata_conflict\"").is_err());
+    }
+
+    #[test]
+    fn cache_counter_mutations_preserve_provider_semantic_projection() {
+        let base = ProviderOutputMeta::new(
+            "polint.ts.syntax",
+            "1",
+            "ts-facts-v1",
+            Digest::from_parts(DigestKind::ProviderOutput, "output", &["facts"]),
+            PrecisionTier::Syntax,
+            ProviderValidationStatus::NativeTrusted,
+            vec![Digest::from_parts(
+                DigestKind::SourceText,
+                "file",
+                &["src/main.ts"],
+            )],
+            CacheStats::default(),
+        );
+        let expected = base.semantic_projection();
+
+        for stats in [
+            CacheStats {
+                hits: 1,
+                ..CacheStats::default()
+            },
+            CacheStats {
+                misses: 1,
+                ..CacheStats::default()
+            },
+            CacheStats {
+                recomputes: 1,
+                ..CacheStats::default()
+            },
+            CacheStats {
+                writes: 1,
+                ..CacheStats::default()
+            },
+            CacheStats {
+                bypasses_disabled: 1,
+                ..CacheStats::default()
+            },
+            CacheStats {
+                invalid_evicted_reads: 1,
+                ..CacheStats::default()
+            },
+            CacheStats {
+                verified_reuse: 1,
+                ..CacheStats::default()
+            },
+            CacheStats {
+                quarantines: 1,
+                ..CacheStats::default()
+            },
+        ] {
+            let mut changed = base.clone();
+            changed.cache_stats = stats;
+            assert_eq!(changed.semantic_projection(), expected);
+            assert_eq!(changed.output_digest, base.output_digest);
+        }
+    }
+
+    #[test]
+    fn provider_semantic_projection_source_excludes_cache_telemetry() {
+        let source = include_str!("stats.rs");
+        let projection = source
+            .split_once("pub(crate) fn semantic_projection")
+            .expect("semantic projection exists")
+            .1
+            .split_once("fn sorted_digests")
+            .expect("semantic projection has a bounded source section")
+            .0;
+
+        for forbidden in [
+            "cache_stats",
+            "hits",
+            "misses",
+            "recomputes",
+            "writes",
+            "bypasses_disabled",
+            "invalid_evicted_reads",
+            "verified_reuse",
+            "quarantines",
+        ] {
+            assert!(
+                !projection.contains(forbidden),
+                "provider semantic projection must exclude `{forbidden}`"
+            );
+        }
     }
 }

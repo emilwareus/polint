@@ -781,7 +781,7 @@ fn provider_output_invariants(run_report: &KernelRunReport) -> Vec<ObservedItem>
             ));
             invariants.push(observed_invariant(
                 format!("{prefix}.validation"),
-                output.validation.as_str(),
+                output.validation.label(),
                 "kernel.run_report.provider_outputs",
             ));
             invariants.push(observed_invariant(

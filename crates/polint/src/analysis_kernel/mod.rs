@@ -1035,15 +1035,18 @@ impl AnalysisKernel {
     ) -> incremental::ProviderOutputMeta {
         let manifest = Self::provider_manifest(provider_id);
         let (output_digest, validation) = match output_digest {
-            Some(output_digest) => (output_digest, "native_trusted"),
+            Some(output_digest) => (
+                output_digest,
+                incremental::ProviderValidationStatus::NativeTrusted,
+            ),
             None if provider_id == "polint.data_flow" || provider_id == "polint.evidence" => (
                 incremental::Digest::absent(incremental::DigestKind::ProviderOutput, provider_id),
-                "provider_failed",
+                incremental::ProviderValidationStatus::ProviderFailed,
             ),
             None => match provider_output_summary_parts(db, manifest) {
                 Ok(rows) => (
                     incremental::provider_output_digest_from_manifest(manifest, &rows),
-                    "native_trusted",
+                    incremental::ProviderValidationStatus::NativeTrusted,
                 ),
                 Err(_) => (
                     incremental::Digest::unsupported(
@@ -1051,13 +1054,13 @@ impl AnalysisKernel {
                         manifest.id,
                         "conflicting stable fact metadata",
                     ),
-                    "metadata_conflict",
+                    incremental::ProviderValidationStatus::ProviderFailed,
                 ),
             },
         };
         let mut meta =
             incremental::provider_output_from_manifest(manifest, output_digest, cache_stats);
-        meta.validation = validation.to_string();
+        meta.validation = validation;
         meta
     }
 
@@ -1673,7 +1676,10 @@ mod tests {
             None,
         );
 
-        assert_eq!(row.validation, "provider_failed");
+        assert_eq!(
+            row.validation,
+            incremental::ProviderValidationStatus::ProviderFailed
+        );
         assert_eq!(
             row.output_digest.kind,
             incremental::DigestKind::ProviderOutput

@@ -1,5 +1,8 @@
 use super::demand::DemandQueryTrace;
-use super::{CacheStats, Digest, DigestKind, InputSnapshot, PrecisionTier, ProviderOutputMeta};
+use super::{
+    CacheStats, Digest, DigestKind, InputSnapshot, PrecisionTier, ProviderOutputMeta,
+    ProviderValidationStatus,
+};
 #[cfg(test)]
 use crate::analysis::summaries::provider::SccClosureDebugSnapshot;
 use crate::analysis_kernel::{ProviderManifest, StableFactMetaRow, StoreStatus};
@@ -75,7 +78,7 @@ pub(crate) fn provider_output_from_manifest(
         manifest.primary_schema_label(),
         output_digest,
         PrecisionTier::from_ceiling(manifest.precision_ceiling),
-        "native_trusted",
+        ProviderValidationStatus::NativeTrusted,
         dependency_inputs_from_manifest(manifest),
         cache_stats,
     )
@@ -249,7 +252,7 @@ mod tests {
                 row.precision,
                 PrecisionTier::Exact | PrecisionTier::Syntax | PrecisionTier::SetupAware
             ));
-            assert_eq!(row.validation, "native_trusted");
+            assert_eq!(row.validation, ProviderValidationStatus::NativeTrusted);
             assert_eq!(row.dependency_inputs.len(), manifest.inputs.len());
             assert_eq!(row.cache_stats, stats);
         }
@@ -346,5 +349,34 @@ mod tests {
             base_digest,
             provider_output_digest_from_manifest(&policy_changed, &[row])
         );
+    }
+
+    #[test]
+    fn provider_output_family_digest_source_excludes_cache_telemetry() {
+        let source = include_str!("run_report.rs");
+        let digest_projection = source
+            .split_once("pub(crate) fn provider_output_digest_from_manifest")
+            .expect("provider output digest projection exists")
+            .1
+            .split_once("fn dependency_inputs_from_manifest")
+            .expect("provider output digest projection has a bounded source section")
+            .0;
+
+        for forbidden in [
+            "cache_stats",
+            "hits",
+            "misses",
+            "recomputes",
+            "writes",
+            "bypasses_disabled",
+            "invalid_evicted_reads",
+            "verified_reuse",
+            "quarantines",
+        ] {
+            assert!(
+                !digest_projection.contains(forbidden),
+                "provider output digest must exclude `{forbidden}`"
+            );
+        }
     }
 }

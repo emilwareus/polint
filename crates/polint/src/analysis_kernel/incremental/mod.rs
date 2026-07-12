@@ -156,4 +156,4 @@ pub(crate) use quarantine::{QuarantineEntry, QuarantinePolicy, QuarantineStore};
 pub(crate) use run_report::{
     KernelRunReport, provider_output_digest_from_manifest, provider_output_from_manifest,
 };
-pub(crate) use stats::{CacheStats, ProviderOutputMeta};
+pub(crate) use stats::{CacheStats, ProviderOutputMeta, ProviderValidationStatus};
