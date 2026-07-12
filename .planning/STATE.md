@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-07-12T17:59:00.561Z"
-last_activity: 2026-07-12 -- Phase 65 planning complete
+last_updated: "2026-07-12T18:42:31.324Z"
+last_activity: 2026-07-12
 progress:
   total_phases: 9
   completed_phases: 2
   total_plans: 27
-  completed_plans: 8
+  completed_plans: 9
   percent: 22
 ---
 
@@ -42,10 +42,10 @@ See: `.planning/PROJECT.md` (updated 2026-07-10)
 
 ## Current Position
 
-Phase: 65
-Plan: Not started
+Phase: 65 (Generation Manifest and Metadata Mirroring) — EXECUTING
+Plan: 2 of 19
 Status: Ready to execute
-Last activity: 2026-07-12 -- Phase 65 planning complete
+Last activity: 2026-07-12
 
 ### Active Milestone Phase Progress
 
@@ -505,6 +505,9 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase 64]: The cfg(test) isolated benchmark selects store mode through a private child environment key and excludes store bytes from cache_bytes. — Measures real overhead without a public activation contract or double-counting.
 - [Phase 64]: Phase boundary measurements compute the diagnostics digest before the isolated point, matching the committed baseline generator's cache-priming order. — Prevents unlike toolchain/cache states from masquerading as store regressions without changing locked budgets.
 - [Phase 64]: Public leak scanning bans curated store-specific namespaces, types, crate/schema/SQL identifiers while leaving generic store/row/connection prose legal. — Protects supported contracts with negative-controlled precision.
+- [Phase 65]: ConfigIdentity accepts only the complete Config digest; provider-scoped settings retain a separate digest purpose. — Prevents the complete manifest and diagnostic identity from becoming an accidental provider analysis key.
+- [Phase 65]: Stable fact conflicts are keyed by family plus stable key and reject any differing semantic metadata. — Durable identity must deduplicate exact semantic repeats without silently choosing between conflicting rows.
+- [Phase 65]: Provider-output identity hashes explicit canonical row fields and payload_digest, never run IDs, Debug text, or payload bytes. — Keeps persistence identity deterministic, semantic, and independent of transient handles or sensitive payload bodies.
 
 ## Execution Metrics
 
@@ -664,3 +667,4 @@ intentionally avoided during autonomous local commits.
 | Phase 64 P02 | 13min | 3 tasks | 4 files |
 | Phase 64 P03 | 16min | 3 tasks | 7 files |
 | Phase 64 P04 | 31min | 3 tasks | 4 files |
+| Phase 65 P01 | 37 min | 1 tasks | 10 files |

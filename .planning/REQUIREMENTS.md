@@ -79,7 +79,7 @@ Requirements for the v2.0 milestone. Each requirement should map to exactly one 
 - [x] **STORE-01**: Add a private SQLite/rusqlite semantic-store facade owned by the analysis kernel, with `pub(crate)` boundaries and no escaped `rusqlite` connection, statement, row, or SQL-string types.
 - [x] **STORE-02**: Support migrations, schema versioning through `PRAGMA user_version`, controlled diagnostics for future/invalid schemas, and safe rebuild or skipped-persistence behavior.
 - [x] **STORE-03**: Use explicit connection policy: foreign keys enabled, WAL where appropriate, bounded busy timeout, one writer boundary, and separate read-only query connections.
-- [ ] **STORE-04**: Persist store manifest, active generation, pending generation, complete generation, schema version, workspace/config identity, and store stats.
+- [x] **STORE-04**: Persist store manifest, active generation, pending generation, complete generation, schema version, workspace/config identity, and store stats.
 - [ ] **STORE-05**: Commit only complete validated generations. A crash, failed migration, failed payload write, or failed search rebuild must leave either the old complete generation readable or require an explicit rebuild diagnostic.
 - [x] **STORE-06**: Providers and rule execution do not receive SQL connections. They communicate through typed kernel/store methods and existing provider output structures.
 - [x] **STORE-07**: Store failure during `polint check` produces controlled internal diagnostics, rebuilds, or skipped persistence; it must not produce partial policy answers with confident output.
@@ -87,10 +87,10 @@ Requirements for the v2.0 milestone. Each requirement should map to exactly one 
 
 ### Metadata, Facts, and Invalidation
 
-- [ ] **META-01**: Mirror existing kernel identity vocabulary in the store: `InputSnapshot`, provider manifests, layer keys, summary keys, query keys, provider output metadata, validation events, and dependency indexes.
+- [x] **META-01**: Mirror existing kernel identity vocabulary in the store: `InputSnapshot`, provider manifests, layer keys, summary keys, query keys, provider output metadata, validation events, and dependency indexes.
 - [ ] **META-02**: Persist normalized validated facts and indexes for files, packages/modules, imports/exports, resolutions, symbols, definitions, references, functions, calls, evidence, summaries, unknown regions, and budget events as they become available. Whole-program data-flow/taint results are never eagerly materialized: persist summaries and graph adjacency, compute path/taint answers demand-driven at query time over those persisted rows, and persist only bounded query results/traces keyed by existing query keys.
 - [ ] **META-03**: Every fact-like row carries stable semantic identity, repository-relative path identity where applicable, fact family, provider/schema identity, precision, confidence/status, provenance, validation state, dependency metadata, and generation.
-- [ ] **META-04**: Invalidation dependencies include source files, packages/projects, provider manifests, requested capabilities, language lifecycle inputs, config, schema, summary keys, query options, budget profiles, search manifests, and future model/extension digests where relevant.
+- [x] **META-04**: Invalidation dependencies include source files, packages/projects, provider manifests, requested capabilities, language lifecycle inputs, config, schema, summary keys, query options, budget profiles, search manifests, and future model/extension digests where relevant.
 - [ ] **META-05**: Deterministic public/query output never depends on SQLite `rowid`, insertion order, unordered Rust maps, parallel provider completion order, or Tantivy internal document IDs.
 - [ ] **META-06**: The store does not persist full AST, source, MIR, CFG, or whole raw graph dumps as the product storage model. Persist normalized facts, summaries, indexes, compact evidence, digests, spans, and payload references.
 - [ ] **META-07**: `unknown`, `unsupported`, `setup_missing`, `partial`, and `budget_exceeded` states remain durable and queryable. They must never collapse into `not_found` or an empty result.
