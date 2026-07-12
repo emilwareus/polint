@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-07-12T21:19:02.518Z"
+last_updated: "2026-07-12T22:49:14.312Z"
 last_activity: 2026-07-12
 progress:
   total_phases: 9
   completed_phases: 2
   total_plans: 27
-  completed_plans: 14
+  completed_plans: 15
   percent: 22
 ---
 
@@ -43,7 +43,7 @@ See: `.planning/PROJECT.md` (updated 2026-07-10)
 ## Current Position
 
 Phase: 65 (Generation Manifest and Metadata Mirroring) — EXECUTING
-Plan: 7 of 19
+Plan: 8 of 19
 Status: Ready to execute
 Last activity: 2026-07-12
 
@@ -518,6 +518,9 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase 65]: Preserve exact non-empty plans for capability fixtures and use asserted empty plans only for capability-free provider fixtures. — This keeps requested-capability and analysis-requirement identity semantically honest without inferring capabilities from provider IDs.
 - [Phase 65]: Keep the sole input snapshot construction path plan-aware, while capability-free provider fixtures prove canonical empty identity sources. — Prevents opaque digests from erasing requested capability or analysis-setting state before schema migration.
 - [Phase 65]: Publish InputSnapshot v2 with typed full identities and scoped capability/settings rows, while its semantic digest excludes mtime hints, rendered details, ordering, and telemetry. — Preserves complete manifest truth without broadening provider invalidation or leaking machine-local inputs.
+- [Phase 65]: Remove the unused file-cache-to-LayerKey bridge — A structural provider key must not inherit full config, rule, or plan identity from the legacy file cache.
+- [Phase 65]: Purpose-check provider-scoped LayerKey constructors — Migrated structural providers must reject full-config digests at the identity boundary while deferred semantic seams remain explicit.
+- [Phase 65]: Retain full run identity separately from syntax cache identity — InputSnapshot and run metadata keep complete config, rule, and plan truth while Go and TS syntax caches consume only scoped settings.
 
 ## Execution Metrics
 
@@ -683,3 +686,4 @@ intentionally avoided during autonomous local commits.
 | Phase 65 P04 | 9min | 1 tasks | 8 files |
 | Phase 65 P05 | 17min | 1 tasks | 9 files |
 | Phase 65 P06 | 22min | 1 tasks | 11 files |
+| Phase 65 P07 | 1h 4min | 2 tasks | 13 files |
