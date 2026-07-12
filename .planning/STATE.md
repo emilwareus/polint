@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-07-12T20:05:06.548Z"
+last_updated: "2026-07-12T20:26:10.193Z"
 last_activity: 2026-07-12
 progress:
   total_phases: 9
   completed_phases: 2
   total_plans: 27
-  completed_plans: 11
+  completed_plans: 12
   percent: 22
 ---
 
@@ -43,7 +43,7 @@ See: `.planning/PROJECT.md` (updated 2026-07-10)
 ## Current Position
 
 Phase: 65 (Generation Manifest and Metadata Mirroring) — EXECUTING
-Plan: 4 of 19
+Plan: 5 of 19
 Status: Ready to execute
 Last activity: 2026-07-12
 
@@ -515,6 +515,7 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase 65]: Use a closed per-provider analysis-settings scope with only explicitly declared configuration inputs. — This prevents rule-only configuration from contaminating provider cache identity and makes new providers choose their dependencies deliberately.
 - [Phase 65]: Keep capability analysis requirements separate from complete rule and plan behavior identity. — Shared analysis depends on capability, language, support, setup, and policy version, while requester and presentation metadata remain store-facing.
 - [Phase 65]: Keep the input snapshot wire schema at v1 while production starts carrying the borrowed AnalysisPlan. — The semantic source seam can land before serialized row migration without claiming fields that v1 does not contain.
+- [Phase 65]: Preserve exact non-empty plans for capability fixtures and use asserted empty plans only for capability-free provider fixtures. — This keeps requested-capability and analysis-requirement identity semantically honest without inferring capabilities from provider IDs.
 
 ## Execution Metrics
 
@@ -677,3 +678,4 @@ intentionally avoided during autonomous local commits.
 | Phase 65 P01 | 37 min | 1 tasks | 10 files |
 | Phase 65 P02 | 29min | 2 tasks | 9 files |
 | Phase 65 P03 | 25min | 2 tasks | 4 files |
+| Phase 65 P04 | 9min | 1 tasks | 8 files |
