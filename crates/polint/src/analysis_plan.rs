@@ -1,3 +1,4 @@
+use crate::analysis_kernel::incremental::{Digest, DigestKind};
 use crate::cache::keys::deterministic_rule_options;
 use crate::cache::stable_hash;
 use crate::config::{LoadedConfig, RuleConfig};
@@ -66,6 +67,35 @@ pub(crate) struct SetupCheck {
     pub(crate) reason: Option<String>,
     pub(crate) hint: Option<String>,
     pub(crate) docs_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) enum CapabilitySetupStatus {
+    NotRequired,
+    Ready,
+    SetupMissing,
+}
+
+impl CapabilitySetupStatus {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::NotRequired => "not_required",
+            Self::Ready => "ready",
+            Self::SetupMissing => "setup_missing",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RequestedCapabilitySnapshot {
+    pub(crate) capability: String,
+    pub(crate) language: Option<Language>,
+    pub(crate) support_status: CapabilitySupportStatus,
+    pub(crate) setup_status: CapabilitySetupStatus,
+    pub(crate) policy_query_version: Option<String>,
+    pub(crate) requesting_rule_ids: Vec<String>,
+    pub(crate) rule_behavior_digest: Digest,
+    pub(crate) analysis_dependency_digest: Digest,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -206,6 +236,26 @@ impl AnalysisPlan {
     #[allow(dead_code)]
     pub(crate) fn setup_checks(&self) -> &[SetupCheck] {
         &self.setup_checks
+    }
+
+    pub(crate) fn requested_capability_snapshots(&self) -> Vec<RequestedCapabilitySnapshot> {
+        requested_capability_snapshots(&self.rules, &self.capabilities, &self.setup_checks)
+    }
+
+    pub(crate) fn analysis_requirements_digest(&self) -> Digest {
+        let snapshots = self.requested_capability_snapshots();
+        if snapshots.is_empty() {
+            return Digest::absent(DigestKind::AnalysisRequirements, "requested_capabilities");
+        }
+
+        Digest::from_unordered(
+            DigestKind::AnalysisRequirements,
+            "analysis_requirements",
+            snapshots
+                .into_iter()
+                .map(|snapshot| snapshot.analysis_dependency_digest)
+                .collect(),
+        )
     }
 
     pub(crate) fn support_view(&self) -> &CapabilitySupportView {
@@ -754,6 +804,134 @@ fn rule_requests_capability(rule: &PlannedRule, capability: &str) -> bool {
     })
 }
 
+fn requested_capability_snapshots(
+    rules: &[PlannedRule],
+    capabilities: &[PlannedCapability],
+    setup_checks: &[SetupCheck],
+) -> Vec<RequestedCapabilitySnapshot> {
+    let mut snapshots = capabilities
+        .iter()
+        .map(|capability| {
+            let setup_status = capability_setup_status(capability, setup_checks);
+            let policy_query_version =
+                policy_query_version_for_capability(&capability.capability).map(str::to_string);
+            let analysis_dependency_digest = capability_analysis_dependency_digest(
+                capability,
+                setup_status,
+                policy_query_version.as_deref(),
+            );
+
+            RequestedCapabilitySnapshot {
+                capability: capability.capability.clone(),
+                language: capability.language,
+                support_status: capability.status.clone(),
+                setup_status,
+                policy_query_version,
+                requesting_rule_ids: capability.rules.clone(),
+                rule_behavior_digest: capability_rule_behavior_digest(rules, capability),
+                analysis_dependency_digest,
+            }
+        })
+        .collect::<Vec<_>>();
+    snapshots.sort_by(|left, right| {
+        (
+            left.capability.as_str(),
+            left.language.map(Language::label),
+            capability_status_json(&left.support_status),
+            left.setup_status.label(),
+        )
+            .cmp(&(
+                right.capability.as_str(),
+                right.language.map(Language::label),
+                capability_status_json(&right.support_status),
+                right.setup_status.label(),
+            ))
+    });
+    snapshots
+}
+
+fn capability_setup_status(
+    capability: &PlannedCapability,
+    setup_checks: &[SetupCheck],
+) -> CapabilitySetupStatus {
+    if capability.status == CapabilitySupportStatus::SetupMissing {
+        return CapabilitySetupStatus::SetupMissing;
+    }
+
+    let matching_checks = setup_checks
+        .iter()
+        .filter(|check| {
+            check.capability == capability.capability && check.language == capability.language
+        })
+        .collect::<Vec<_>>();
+    if matching_checks.is_empty() {
+        CapabilitySetupStatus::NotRequired
+    } else if matching_checks
+        .iter()
+        .all(|check| check.status == "passed" || check.status == "ready")
+    {
+        CapabilitySetupStatus::Ready
+    } else {
+        CapabilitySetupStatus::SetupMissing
+    }
+}
+
+fn capability_analysis_dependency_digest(
+    capability: &PlannedCapability,
+    setup_status: CapabilitySetupStatus,
+    policy_query_version: Option<&str>,
+) -> Digest {
+    Digest::from_parts(
+        DigestKind::AnalysisRequirements,
+        "requested_capability",
+        &[
+            &capability.capability,
+            capability.language.map(Language::label).unwrap_or("none"),
+            capability_status_json(&capability.status),
+            setup_status.label(),
+            policy_query_version.unwrap_or("none"),
+        ],
+    )
+}
+
+fn capability_rule_behavior_digest(
+    rules: &[PlannedRule],
+    capability: &PlannedCapability,
+) -> Digest {
+    let requesting_rules = capability.rules.iter().collect::<BTreeSet<_>>();
+    let mut parts = Vec::new();
+    for rule in rules
+        .iter()
+        .filter(|rule| requesting_rules.contains(&rule.id))
+    {
+        parts.push(format!("rule.id={}", encode_str(&rule.id)));
+        parts.push(format!(
+            "rule.description={}",
+            encode_str(&rule.description)
+        ));
+        parts.push(format!(
+            "rule.severity={}",
+            encode_str(&rule.severity.to_string())
+        ));
+        parts.push(format!(
+            "rule.capabilities={}",
+            encode_str_list(&rule.requested_capabilities)
+        ));
+        parts.push(format!("rule.files={}", encode_str_list(&rule.files)));
+        parts.push(format!(
+            "rule.allow_files={}",
+            encode_str_list(&rule.allow_files)
+        ));
+        parts.push(format!("rule.options={}", encode_str(&rule.options_digest)));
+    }
+    let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
+    Digest::from_parts(
+        DigestKind::RuleOptions,
+        "requested_capability_rule_behavior",
+        &refs,
+    )
+}
+
 fn plan_digest(
     rules: &[PlannedRule],
     capabilities: &[PlannedCapability],
@@ -796,6 +974,18 @@ fn plan_digest(
             "capability.rules={}",
             encode_str_list(&capability.rules)
         ));
+        parts.push(format!(
+            "capability.reason={}",
+            encode_optional_str(capability.reason.as_deref())
+        ));
+        parts.push(format!(
+            "capability.hint={}",
+            encode_optional_str(capability.hint.as_deref())
+        ));
+        parts.push(format!(
+            "capability.docs_path={}",
+            encode_optional_str(capability.docs_path.as_deref())
+        ));
         push_policy_query_digest_parts(&mut parts, capability);
     }
 
@@ -809,6 +999,18 @@ fn plan_digest(
         parts.push(format!(
             "setup.language={}",
             encode_optional_language(check.language)
+        ));
+        parts.push(format!(
+            "setup.reason={}",
+            encode_optional_str(check.reason.as_deref())
+        ));
+        parts.push(format!(
+            "setup.hint={}",
+            encode_optional_str(check.hint.as_deref())
+        ));
+        parts.push(format!(
+            "setup.docs_path={}",
+            encode_optional_str(check.docs_path.as_deref())
         ));
     }
 
@@ -843,6 +1045,10 @@ fn encode_str_list(values: &[String]) -> String {
         .map(|value| encode_str(value))
         .collect::<Vec<_>>()
         .join("|")
+}
+
+fn encode_optional_str(value: Option<&str>) -> String {
+    value.map(encode_str).unwrap_or_else(|| "none".to_string())
 }
 
 fn encode_optional_language(language: Option<Language>) -> String {
@@ -1619,5 +1825,225 @@ mod tests {
         );
 
         assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn analysis_requirements_exclude_full_rule_behavior() {
+        let baseline_rules = vec![rule(
+            "local/baseline",
+            "Baseline description",
+            Severity::Warn,
+            Capabilities::new().calls(),
+        )];
+        let baseline = AnalysisPlan::from_rules(&baseline_rules, None, &BTreeMap::new());
+        let baseline_analysis = baseline.analysis_requirements_digest();
+        let baseline_snapshot = &baseline.requested_capability_snapshots()[0];
+
+        let renamed_rules = vec![rule(
+            "local/renamed",
+            "Changed description",
+            Severity::Error,
+            Capabilities::new().calls(),
+        )];
+        let renamed = AnalysisPlan::from_rules(&renamed_rules, None, &BTreeMap::new());
+        let renamed_snapshot = &renamed.requested_capability_snapshots()[0];
+
+        assert_ne!(baseline.digest(), renamed.digest());
+        assert_ne!(
+            baseline_snapshot.rule_behavior_digest,
+            renamed_snapshot.rule_behavior_digest
+        );
+        assert_ne!(
+            baseline_snapshot.requesting_rule_ids,
+            renamed_snapshot.requesting_rule_ids
+        );
+        assert_eq!(baseline_analysis, renamed.analysis_requirements_digest());
+        assert_eq!(
+            baseline_snapshot.analysis_dependency_digest,
+            renamed_snapshot.analysis_dependency_digest
+        );
+    }
+
+    #[test]
+    fn rule_option_mutations_change_full_identity_only() {
+        let rules = vec![rule(
+            "local/options",
+            "Options rule",
+            Severity::Warn,
+            Capabilities::new().dataflow(),
+        )];
+        let baseline = AnalysisPlan::from_rules(&rules, None, &BTreeMap::new());
+        let baseline_analysis = baseline.analysis_requirements_digest();
+        let mut option_mutations = Vec::new();
+
+        option_mutations.push(RuleOptions {
+            severity: Some(Severity::Error),
+            ..RuleOptions::default()
+        });
+        option_mutations.push(RuleOptions {
+            files: vec!["src/**".to_string()],
+            ..RuleOptions::default()
+        });
+        option_mutations.push(RuleOptions {
+            allow_files: vec!["src/generated/**".to_string()],
+            ..RuleOptions::default()
+        });
+        option_mutations.push(RuleOptions {
+            allow: vec!["legacy".to_string()],
+            ..RuleOptions::default()
+        });
+        option_mutations.push(RuleOptions {
+            deny: vec!["unsafe".to_string()],
+            ..RuleOptions::default()
+        });
+        option_mutations.push(RuleOptions {
+            max: Some(3),
+            ..RuleOptions::default()
+        });
+        option_mutations.push(RuleOptions {
+            forbidden_imports: BTreeMap::from([(
+                "src/**".to_string(),
+                vec!["legacy/**".to_string()],
+            )]),
+            ..RuleOptions::default()
+        });
+        option_mutations.push(RuleOptions {
+            settings: BTreeMap::from([("threshold".to_string(), toml::Value::Integer(9))]),
+            ..RuleOptions::default()
+        });
+
+        for options in option_mutations {
+            let plan = AnalysisPlan::from_rules(
+                &rules,
+                None,
+                &BTreeMap::from([("local/options".to_string(), options)]),
+            );
+            assert_ne!(baseline.digest(), plan.digest());
+            assert_ne!(
+                baseline.requested_capability_snapshots()[0].rule_behavior_digest,
+                plan.requested_capability_snapshots()[0].rule_behavior_digest
+            );
+            assert_eq!(baseline_analysis, plan.analysis_requirements_digest());
+        }
+    }
+
+    #[test]
+    fn analysis_requirements_change_for_capability_language_support_and_setup() {
+        let baseline = analysis_requirement_fixture(
+            "calls",
+            Some(Language::TypeScript),
+            CapabilitySupportStatus::Supported,
+            Vec::new(),
+        );
+        let capability = analysis_requirement_fixture(
+            "dataflow",
+            Some(Language::TypeScript),
+            CapabilitySupportStatus::Supported,
+            Vec::new(),
+        );
+        let language = analysis_requirement_fixture(
+            "calls",
+            Some(Language::Go),
+            CapabilitySupportStatus::Supported,
+            Vec::new(),
+        );
+        let support = analysis_requirement_fixture(
+            "calls",
+            Some(Language::TypeScript),
+            CapabilitySupportStatus::Unsupported,
+            Vec::new(),
+        );
+        let setup = analysis_requirement_fixture(
+            "calls",
+            Some(Language::TypeScript),
+            CapabilitySupportStatus::Supported,
+            vec![SetupCheck {
+                id: "typescript.calls".to_string(),
+                capability: "calls".to_string(),
+                language: Some(Language::TypeScript),
+                status: "failed".to_string(),
+                reason: Some("tool unavailable".to_string()),
+                hint: Some("install the tool".to_string()),
+                docs_path: Some("docs/facts/calls.md".to_string()),
+            }],
+        );
+
+        assert_ne!(
+            baseline.analysis_requirements_digest(),
+            capability.analysis_requirements_digest()
+        );
+        assert_ne!(
+            baseline.analysis_requirements_digest(),
+            language.analysis_requirements_digest()
+        );
+        assert_ne!(
+            baseline.analysis_requirements_digest(),
+            support.analysis_requirements_digest()
+        );
+        assert_ne!(
+            baseline.analysis_requirements_digest(),
+            setup.analysis_requirements_digest()
+        );
+        assert_eq!(
+            baseline.requested_capability_snapshots()[0]
+                .policy_query_version
+                .as_deref(),
+            Some(POLICY_QUERY_VERSION)
+        );
+    }
+
+    #[test]
+    fn rendered_capability_details_do_not_enter_analysis_requirements() {
+        let baseline = analysis_requirement_fixture(
+            "call_graph",
+            None,
+            CapabilitySupportStatus::Unsupported,
+            Vec::new(),
+        );
+        let mut changed_capability = baseline.capabilities()[0].clone();
+        changed_capability.reason = Some("different rendered reason".to_string());
+        changed_capability.hint = Some("different rendered hint".to_string());
+        changed_capability.docs_path = Some("docs/other.md".to_string());
+        let changed = AnalysisPlan::finish(
+            baseline.rules().to_vec(),
+            vec![changed_capability],
+            Vec::new(),
+        );
+
+        assert_ne!(baseline.digest(), changed.digest());
+        assert_eq!(
+            baseline.analysis_requirements_digest(),
+            changed.analysis_requirements_digest()
+        );
+    }
+
+    fn analysis_requirement_fixture(
+        capability: &str,
+        language: Option<Language>,
+        status: CapabilitySupportStatus,
+        setup_checks: Vec<SetupCheck>,
+    ) -> AnalysisPlan {
+        let rule_id = "local/fixture".to_string();
+        AnalysisPlan::finish(
+            vec![PlannedRule {
+                id: rule_id.clone(),
+                description: "Fixture rule".to_string(),
+                severity: Severity::Warn,
+                requested_capabilities: vec![capability.to_string()],
+                files: Vec::new(),
+                allow_files: Vec::new(),
+                options_digest: deterministic_rule_options(&RuleOptions::default()),
+            }],
+            vec![PlannedCapability {
+                capability: capability.to_string(),
+                language,
+                status,
+                rules: vec![rule_id],
+                reason: Some("rendered reason".to_string()),
+                hint: Some("rendered hint".to_string()),
+                docs_path: Some("docs/facts/capability-plans.md".to_string()),
+            }],
+            setup_checks,
+        )
     }
 }

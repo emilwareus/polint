@@ -2,14 +2,99 @@
 //!
 //! Encoding is deterministic and infallible so cache hashing never relies on panicking serializers.
 
+use std::collections::BTreeSet;
+
+use crate::analysis_kernel::incremental::{Digest, DigestKind};
 use crate::config::{
     IgnoreConfig, LoadedConfig, PathContextPair, PathContextsConfig, PolintConfig, ProfileConfig,
     ReachabilityConfig, RuleConfig, RuleSection, SolverConfig, WorkspaceConfig,
 };
 use crate::core::{Rule, RuleOptions};
-use std::collections::BTreeSet;
 
 use super::stable_hash;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) enum AnalysisSettingsScope {
+    Source,
+    GoSyntax,
+    TsSyntax,
+    ModuleGraph,
+    SymbolGraph,
+    ModuleTopology,
+    SemanticMir,
+    Cfg,
+    Calls,
+    GoSemantic,
+    Identity,
+    AbstractDomains,
+    DirectSummaries,
+    Entrypoints,
+    Reachability,
+    Extensions,
+    TypeValueAlias,
+    SemanticGraph,
+    Solver,
+    RefinedCalls,
+    DataFlow,
+    Evidence,
+    Metrics,
+}
+
+impl AnalysisSettingsScope {
+    pub(crate) const ALL: [Self; 23] = [
+        Self::Source,
+        Self::GoSyntax,
+        Self::TsSyntax,
+        Self::ModuleGraph,
+        Self::SymbolGraph,
+        Self::ModuleTopology,
+        Self::SemanticMir,
+        Self::Cfg,
+        Self::Calls,
+        Self::GoSemantic,
+        Self::Identity,
+        Self::AbstractDomains,
+        Self::DirectSummaries,
+        Self::Entrypoints,
+        Self::Reachability,
+        Self::Extensions,
+        Self::TypeValueAlias,
+        Self::SemanticGraph,
+        Self::Solver,
+        Self::RefinedCalls,
+        Self::DataFlow,
+        Self::Evidence,
+        Self::Metrics,
+    ];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Source => "polint.source",
+            Self::GoSyntax => "polint.go.syntax",
+            Self::TsSyntax => "polint.ts.syntax",
+            Self::ModuleGraph => "polint.module_graph",
+            Self::SymbolGraph => "polint.symbol_graph",
+            Self::ModuleTopology => "polint.module_topology",
+            Self::SemanticMir => "polint.semantic_mir",
+            Self::Cfg => "polint.cfg",
+            Self::Calls => "polint.calls",
+            Self::GoSemantic => "polint.go.semantic",
+            Self::Identity => "polint.identity",
+            Self::AbstractDomains => "polint.abstract_domains",
+            Self::DirectSummaries => "polint.direct_summaries",
+            Self::Entrypoints => "polint.entrypoints",
+            Self::Reachability => "polint.reachability",
+            Self::Extensions => "polint.extensions",
+            Self::TypeValueAlias => "polint.type_value_alias",
+            Self::SemanticGraph => "polint.semantic_graph",
+            Self::Solver => "polint.solver",
+            Self::RefinedCalls => "polint.refined_calls",
+            Self::DataFlow => "polint.data_flow",
+            Self::Evidence => "polint.evidence",
+            Self::Metrics => "polint.metrics",
+        }
+    }
+}
 
 /// Stable digest of loaded config fields that can affect analysis or rule output.
 ///
@@ -24,6 +109,67 @@ pub(crate) fn config_hash(config: &LoadedConfig) -> String {
     };
     let serialized = deterministic_polint_config(&config.config);
     stable_hash(&[missing, respect_gitignore, &serialized])
+}
+
+pub(crate) fn analysis_settings_hash(
+    loaded: &LoadedConfig,
+    scope: AnalysisSettingsScope,
+) -> Digest {
+    let serialized = match scope {
+        AnalysisSettingsScope::Source => Some(format!(
+            "respect_gitignore={}|{}",
+            loaded.respect_gitignore,
+            deterministic_workspace(&loaded.config.workspace)
+        )),
+        AnalysisSettingsScope::GoSyntax | AnalysisSettingsScope::GoSemantic => Some(format!(
+            "languages.go={}",
+            deterministic_toml_map(&loaded.config.languages.go)
+        )),
+        AnalysisSettingsScope::TsSyntax => Some(format!(
+            "languages.ts={}",
+            deterministic_toml_map(&loaded.config.languages.ts)
+        )),
+        AnalysisSettingsScope::ModuleGraph
+        | AnalysisSettingsScope::SymbolGraph
+        | AnalysisSettingsScope::ModuleTopology
+        | AnalysisSettingsScope::SemanticMir
+        | AnalysisSettingsScope::Cfg
+        | AnalysisSettingsScope::Calls
+        | AnalysisSettingsScope::AbstractDomains
+        | AnalysisSettingsScope::DirectSummaries
+        | AnalysisSettingsScope::TypeValueAlias => Some(format!(
+            "languages.go={}|languages.ts={}",
+            deterministic_toml_map(&loaded.config.languages.go),
+            deterministic_toml_map(&loaded.config.languages.ts)
+        )),
+        AnalysisSettingsScope::Reachability => {
+            Some(deterministic_reachability(&loaded.config.reachability))
+        }
+        AnalysisSettingsScope::SemanticGraph => {
+            Some(deterministic_js_object_settings(&loaded.config.solver))
+        }
+        AnalysisSettingsScope::Solver => {
+            Some(deterministic_effective_solver(&loaded.config.solver))
+        }
+        AnalysisSettingsScope::Identity
+        | AnalysisSettingsScope::Entrypoints
+        | AnalysisSettingsScope::Extensions
+        | AnalysisSettingsScope::RefinedCalls
+        | AnalysisSettingsScope::DataFlow
+        | AnalysisSettingsScope::Evidence
+        | AnalysisSettingsScope::Metrics => None,
+    };
+
+    serialized.map_or_else(
+        || Digest::absent(DigestKind::AnalysisSettings, scope.label()),
+        |serialized| {
+            Digest::from_parts(
+                DigestKind::AnalysisSettings,
+                "provider_analysis_settings",
+                &[scope.label(), &serialized],
+            )
+        },
+    )
 }
 
 pub(crate) fn rule_hash(
@@ -225,6 +371,37 @@ fn deterministic_solver(solver: &SolverConfig) -> String {
     )
 }
 
+fn deterministic_effective_solver(solver: &SolverConfig) -> String {
+    let go = solver.to_go_sub_budget();
+    let js = solver.to_js_sub_budget();
+    format!(
+        "go.address_taken_threshold={}|go.max_candidates_per_callsite={}|go.max_rta_rounds={}|go.max_worklist_steps={}|js.max_tokens_per_var={}|js.max_candidates_per_callsite={}|js.max_token_worklist_steps={}|{}",
+        go.address_taken_threshold,
+        go.max_candidates_per_callsite,
+        go.max_rta_rounds,
+        go.max_worklist_steps,
+        js.max_tokens_per_var,
+        js.max_candidates_per_callsite,
+        js.max_token_worklist_steps,
+        deterministic_js_object_settings(solver),
+    )
+}
+
+fn deterministic_js_object_settings(solver: &SolverConfig) -> String {
+    let object = solver.to_js_object_sub_budget();
+    format!(
+        "js.object_model={}|js.max_object_objects_per_place={}|js.max_object_properties_per_object={}|js.max_object_tokens_per_property={}|js.max_object_computed_buckets_per_object={}|js.max_object_prototype_depth={}|js.max_object_receiver_candidates_per_callsite={}|js.max_object_worklist_steps={}",
+        solver.js_object_model_enabled(),
+        object.max_objects_per_place,
+        object.max_properties_per_object,
+        object.max_tokens_per_property,
+        object.max_computed_buckets_per_object,
+        object.max_prototype_depth,
+        object.max_receiver_candidates_per_callsite,
+        object.max_object_worklist_steps,
+    )
+}
+
 fn deterministic_usize_option(value: Option<usize>) -> String {
     value.map(|value| value.to_string()).unwrap_or_default()
 }
@@ -313,6 +490,29 @@ fn deterministic_string_list(values: &[String]) -> String {
 mod tests {
     use super::*;
 
+    fn analysis_settings(loaded: &LoadedConfig) -> Vec<(AnalysisSettingsScope, Digest)> {
+        AnalysisSettingsScope::ALL
+            .into_iter()
+            .map(|scope| (scope, analysis_settings_hash(loaded, scope)))
+            .collect()
+    }
+
+    fn loaded_with_rule_config() -> LoadedConfig {
+        let mut loaded = sample_loaded(false);
+        loaded.config.rules.config.push(RuleConfig {
+            id: "local/no-todo".to_string(),
+            severity: None,
+            files: Vec::new(),
+            allow_files: Vec::new(),
+            allow: Vec::new(),
+            max: None,
+            deny: Vec::new(),
+            forbidden_imports: Default::default(),
+            settings: Default::default(),
+        });
+        loaded
+    }
+
     fn sample_loaded(missing: bool) -> LoadedConfig {
         LoadedConfig {
             root: Default::default(),
@@ -326,6 +526,120 @@ mod tests {
     fn config_hash_stable_for_clone() {
         let loaded = sample_loaded(false);
         assert_eq!(config_hash(&loaded), config_hash(&loaded.clone()));
+    }
+
+    #[test]
+    fn analysis_setting_scopes_cover_every_current_provider() {
+        let scope_labels = AnalysisSettingsScope::ALL
+            .into_iter()
+            .map(AnalysisSettingsScope::label)
+            .collect::<BTreeSet<_>>();
+        let provider_ids = crate::analysis_kernel::AnalysisKernel::provider_manifests()
+            .iter()
+            .map(|manifest| manifest.id)
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(scope_labels, provider_ids);
+    }
+
+    #[test]
+    fn rule_only_config_mutations_preserve_every_analysis_setting_scope() {
+        let baseline = loaded_with_rule_config();
+        let baseline_settings = analysis_settings(&baseline);
+        let mut mutations = Vec::new();
+
+        let mut severity = baseline.clone();
+        severity.config.rules.config[0].severity = Some("error".to_string());
+        mutations.push(severity);
+
+        let mut files = baseline.clone();
+        files.config.rules.config[0].files = vec!["src/**".to_string()];
+        mutations.push(files);
+
+        let mut allow_files = baseline.clone();
+        allow_files.config.rules.config[0].allow_files = vec!["src/generated/**".to_string()];
+        mutations.push(allow_files);
+
+        let mut allow = baseline.clone();
+        allow.config.rules.config[0].allow = vec!["legacy".to_string()];
+        mutations.push(allow);
+
+        let mut deny = baseline.clone();
+        deny.config.rules.config[0].deny = vec!["unsafe".to_string()];
+        mutations.push(deny);
+
+        let mut max = baseline.clone();
+        max.config.rules.config[0].max = Some(7);
+        mutations.push(max);
+
+        let mut forbidden_imports = baseline.clone();
+        forbidden_imports.config.rules.config[0]
+            .forbidden_imports
+            .insert("src/**".to_string(), vec!["legacy/**".to_string()]);
+        mutations.push(forbidden_imports);
+
+        let mut settings = baseline.clone();
+        settings.config.rules.config[0]
+            .settings
+            .insert("token".to_string(), toml::Value::String("TODO".to_string()));
+        mutations.push(settings);
+
+        for mutation in mutations {
+            assert_ne!(config_hash(&baseline), config_hash(&mutation));
+            assert_eq!(baseline_settings, analysis_settings(&mutation));
+        }
+    }
+
+    #[test]
+    fn provider_setting_mutations_change_only_declared_scopes() {
+        let baseline = sample_loaded(false);
+
+        let mut source = baseline.clone();
+        source.respect_gitignore = false;
+        assert_eq!(
+            changed_analysis_setting_scopes(&baseline, &source),
+            BTreeSet::from([AnalysisSettingsScope::Source])
+        );
+
+        let mut reachability = baseline.clone();
+        reachability
+            .config
+            .reachability
+            .roots
+            .push("cmd/server.main".to_string());
+        assert_eq!(
+            changed_analysis_setting_scopes(&baseline, &reachability),
+            BTreeSet::from([AnalysisSettingsScope::Reachability])
+        );
+
+        let mut solver = baseline.clone();
+        solver.config.solver.go.max_rta_rounds = Some(8);
+        assert_eq!(
+            changed_analysis_setting_scopes(&baseline, &solver),
+            BTreeSet::from([AnalysisSettingsScope::Solver])
+        );
+
+        let mut object_model = baseline.clone();
+        object_model.config.solver.js.object_model = Some(true);
+        assert_eq!(
+            changed_analysis_setting_scopes(&baseline, &object_model),
+            BTreeSet::from([
+                AnalysisSettingsScope::SemanticGraph,
+                AnalysisSettingsScope::Solver,
+            ])
+        );
+    }
+
+    fn changed_analysis_setting_scopes(
+        baseline: &LoadedConfig,
+        modified: &LoadedConfig,
+    ) -> BTreeSet<AnalysisSettingsScope> {
+        AnalysisSettingsScope::ALL
+            .into_iter()
+            .filter(|scope| {
+                analysis_settings_hash(baseline, *scope) != analysis_settings_hash(modified, *scope)
+            })
+            .collect()
     }
 
     #[test]

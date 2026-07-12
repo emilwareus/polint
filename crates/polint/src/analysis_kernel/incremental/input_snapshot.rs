@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use super::{Digest, DigestKind};
 use crate::analysis::extensions::discovery::{DiscoveredExtension, discover_local_extensions};
 use crate::analysis_kernel::ProviderManifest;
+use crate::analysis_plan::{AnalysisPlan, RequestedCapabilitySnapshot};
+use crate::cache::keys::{AnalysisSettingsScope, analysis_settings_hash};
 use crate::config::LoadedConfig;
 use crate::core::{AnalysisDb, Language, SourceFile};
 use crate::module_graph::paths::{
@@ -129,7 +131,40 @@ pub(crate) struct ProviderSchemaSnapshot {
     pub(crate) provider_manifest_digest: Digest,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AnalysisSettingSource {
+    pub(crate) scope: AnalysisSettingsScope,
+    pub(crate) digest: Digest,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct InputSnapshotIdentitySources {
+    pub(crate) analysis_settings: Vec<AnalysisSettingSource>,
+    pub(crate) requested_capabilities: Vec<RequestedCapabilitySnapshot>,
+    pub(crate) analysis_requirements_identity: Digest,
+}
+
 impl InputSnapshot {
+    pub(crate) fn identity_sources_from_plan(
+        loaded: &LoadedConfig,
+        plan: &AnalysisPlan,
+    ) -> InputSnapshotIdentitySources {
+        let mut analysis_settings = AnalysisSettingsScope::ALL
+            .into_iter()
+            .map(|scope| AnalysisSettingSource {
+                scope,
+                digest: analysis_settings_hash(loaded, scope),
+            })
+            .collect::<Vec<_>>();
+        analysis_settings.sort_by_key(|source| source.scope.label());
+
+        InputSnapshotIdentitySources {
+            analysis_settings,
+            requested_capabilities: plan.requested_capability_snapshots(),
+            analysis_requirements_identity: plan.analysis_requirements_digest(),
+        }
+    }
+
     pub(crate) fn from_run_inputs(
         loaded: &LoadedConfig,
         db: &AnalysisDb,
@@ -1198,6 +1233,7 @@ mod source_config_rule_model_extension {
     use crate::analysis_kernel::{
         CachePolicy, LanguageScope, PrecisionCeiling, ProviderKind, ProviderManifest, SchemaVersion,
     };
+    use crate::analysis_plan::AnalysisPlan;
     use crate::config::{LoadedConfig, PolintConfig};
     use crate::core::AnalysisDb;
     use std::path::Path;
@@ -1266,6 +1302,63 @@ mod source_config_rule_model_extension {
         assert_eq!(
             serde_json::to_string_pretty(&first).expect("serialize first snapshot"),
             serde_json::to_string_pretty(&second).expect("serialize second snapshot")
+        );
+    }
+
+    #[test]
+    fn plan_identity_sources_are_typed_without_changing_the_v1_wire_shape() {
+        let temp = TempDir::new().expect("create temp repo");
+        let loaded = loaded_config(temp.path());
+        let db = db_with_files(temp.path(), &[("src/app.ts", "export const app = 1;\n")]);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["calls"]);
+
+        let sources = InputSnapshot::identity_sources_from_plan(&loaded, &plan);
+        let snapshot = InputSnapshot::from_run_inputs(
+            &loaded,
+            &db,
+            "config-digest",
+            "rule-digest",
+            plan.digest(),
+            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
+        );
+        let wire = serde_json::to_value(snapshot).expect("serialize v1 snapshot");
+
+        assert_eq!(sources.analysis_settings.len(), 23);
+        assert!(
+            sources
+                .analysis_settings
+                .windows(2)
+                .all(|pair| { pair[0].scope.label() < pair[1].scope.label() })
+        );
+        assert!(
+            sources
+                .analysis_settings
+                .iter()
+                .all(|source| { source.digest.kind == DigestKind::AnalysisSettings })
+        );
+        assert!(!sources.requested_capabilities.is_empty());
+        assert_eq!(
+            sources.analysis_requirements_identity.kind,
+            DigestKind::AnalysisRequirements
+        );
+        assert_eq!(wire["schema_version"], INPUT_SNAPSHOT_SCHEMA_VERSION);
+        assert!(wire.get("analysis_settings").is_none());
+        assert!(wire.get("requested_capabilities").is_none());
+        assert!(wire.get("analysis_requirements_identity").is_none());
+    }
+
+    #[test]
+    fn empty_plan_has_no_requested_capability_sources() {
+        let temp = TempDir::new().expect("create temp repo");
+        let loaded = loaded_config(temp.path());
+        let plan = AnalysisPlan::empty();
+
+        let sources = InputSnapshot::identity_sources_from_plan(&loaded, &plan);
+
+        assert!(sources.requested_capabilities.is_empty());
+        assert_eq!(
+            sources.analysis_requirements_identity,
+            Digest::absent(DigestKind::AnalysisRequirements, "requested_capabilities")
         );
     }
 
