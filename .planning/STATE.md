@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-07-12T19:27:39.139Z"
+last_updated: "2026-07-12T20:05:06.548Z"
 last_activity: 2026-07-12
 progress:
   total_phases: 9
   completed_phases: 2
   total_plans: 27
-  completed_plans: 10
+  completed_plans: 11
   percent: 22
 ---
 
@@ -43,7 +43,7 @@ See: `.planning/PROJECT.md` (updated 2026-07-10)
 ## Current Position
 
 Phase: 65 (Generation Manifest and Metadata Mirroring) — EXECUTING
-Plan: 3 of 19
+Plan: 4 of 19
 Status: Ready to execute
 Last activity: 2026-07-12
 
@@ -512,6 +512,9 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase 65]: Provider cache counters and query cache outcome or duration never enter semantic rows or semantic digests. — Execution telemetry must not alter deterministic identity or invalidation behavior.
 - [Phase 65]: Legacy debug and eval schemas explicitly render typed values while preserving established field names and strings. — Internal typing can strengthen invariants without breaking compatibility fixtures.
 - [Phase 65]: Cross-module demand trace fixtures construct QueryKey only through dependency_free_test_query_key. — One cfg(test) seam prevents test consumers from duplicating internal identity construction.
+- [Phase 65]: Use a closed per-provider analysis-settings scope with only explicitly declared configuration inputs. — This prevents rule-only configuration from contaminating provider cache identity and makes new providers choose their dependencies deliberately.
+- [Phase 65]: Keep capability analysis requirements separate from complete rule and plan behavior identity. — Shared analysis depends on capability, language, support, setup, and policy version, while requester and presentation metadata remain store-facing.
+- [Phase 65]: Keep the input snapshot wire schema at v1 while production starts carrying the borrowed AnalysisPlan. — The semantic source seam can land before serialized row migration without claiming fields that v1 does not contain.
 
 ## Execution Metrics
 
@@ -673,3 +676,4 @@ intentionally avoided during autonomous local commits.
 | Phase 64 P04 | 31min | 3 tasks | 4 files |
 | Phase 65 P01 | 37 min | 1 tasks | 10 files |
 | Phase 65 P02 | 29min | 2 tasks | 9 files |
+| Phase 65 P03 | 25min | 2 tasks | 4 files |
