@@ -1,7 +1,7 @@
 use super::demand::DemandQueryTrace;
 use super::{
-    CacheStats, Digest, DigestKind, InputSnapshot, PrecisionTier, ProviderOutputMeta,
-    ProviderValidationStatus,
+    CacheStats, DemandCacheStatus, Digest, DigestKind, InputSnapshot, PrecisionTier,
+    ProviderOutputMeta, ProviderValidationStatus,
 };
 #[cfg(test)]
 use crate::analysis::summaries::provider::SccClosureDebugSnapshot;
@@ -135,14 +135,13 @@ fn dependency_inputs_from_manifest(manifest: &ProviderManifest) -> Vec<Digest> {
 
 /// Aggregates demand query cache statistics into an existing `CacheStats`.
 ///
-/// Entries with `cache_status == "hit"` count as hits; entries with
-/// `cache_status == "miss"` or `"computed"` count as recomputes.
+/// Cache hits count as hits; cache misses and freshly computed results count
+/// as recomputes.
 fn aggregate_demand_query_stats(trace: &DemandQueryTrace, stats: &mut CacheStats) {
     for entry in trace.entries() {
-        match entry.cache_status.as_str() {
-            "hit" => stats.hits += 1,
-            "miss" | "computed" => stats.recomputes += 1,
-            _ => {}
+        match entry.cache_status {
+            DemandCacheStatus::Hit => stats.hits += 1,
+            DemandCacheStatus::Miss | DemandCacheStatus::Computed => stats.recomputes += 1,
         }
     }
 }

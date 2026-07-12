@@ -1420,16 +1420,18 @@ fn demand_query_report(trace: &DemandQueryTrace) -> DemandQueryDebugSection {
         .entries()
         .iter()
         .map(|entry| {
-            match entry.cache_status.as_str() {
-                "hit" => cache_hits += 1,
-                "miss" | "computed" => cache_misses += 1,
-                _ => {}
+            match entry.cache_status {
+                crate::analysis_kernel::incremental::DemandCacheStatus::Hit => cache_hits += 1,
+                crate::analysis_kernel::incremental::DemandCacheStatus::Miss
+                | crate::analysis_kernel::incremental::DemandCacheStatus::Computed => {
+                    cache_misses += 1;
+                }
             }
             DemandQueryDebugEntry {
-                query_kind: entry.query_kind.clone(),
-                precision_tier: entry.precision_tier.clone(),
-                cache_status: entry.cache_status.clone(),
-                result_digest_prefix: entry.result_digest.chars().take(16).collect(),
+                query_kind: entry.query_key.query_kind.clone(),
+                precision_tier: format!("{:?}", entry.precision_tier),
+                cache_status: entry.cache_status.label().to_string(),
+                result_digest_prefix: entry.result_digest.value.chars().take(16).collect(),
                 compute_duration_micros: entry.compute_duration_micros,
             }
         })
@@ -3567,30 +3569,49 @@ mod abstract_domains_debug_json {
     #[test]
     fn metadata_debug_json_with_demand_trace_contains_query_rows() {
         use crate::analysis_kernel::incremental::{
-            DemandQueryTrace, DemandQueryTraceEntry,
+            DemandCacheStatus, DemandQueryTrace, DemandQueryTraceEntry, Digest, DigestKind,
+            PrecisionTier, dependency_free_test_query_key,
         };
 
         let db = base_db();
         let mut trace = DemandQueryTrace::default();
         trace.record_entry(DemandQueryTraceEntry {
-            query_kind: "scc_closure".to_string(),
-            query_version: "1".to_string(),
-            parameter_digest: "parameter-digest".to_string(),
-            input_layer_digests: vec!["layer-a".to_string()],
-            cache_status: "computed".to_string(),
+            query_key: dependency_free_test_query_key(
+                "scc_closure",
+                "1",
+                Digest::from_parts(DigestKind::QueryParameters, "query", &["scc_closure"]),
+                Digest::from_parts(DigestKind::Budget, "budget", &["default"]),
+                PrecisionTier::SetupAware,
+            ),
+            result_digest: Digest {
+                kind: DigestKind::ProviderOutput,
+                value: "1234567890abcdef-result".to_string(),
+            },
+            precision_tier: PrecisionTier::SetupAware,
+            provenance: "native_scc_closure".to_string(),
+            cache_status: DemandCacheStatus::Computed,
             compute_duration_micros: 42,
-            result_digest: "1234567890abcdef-result".to_string(),
-            precision_tier: "SetupAware".to_string(),
         });
         trace.record_entry(DemandQueryTraceEntry {
-            query_kind: "function_summary".to_string(),
-            query_version: "1".to_string(),
-            parameter_digest: "parameter-digest-b".to_string(),
-            input_layer_digests: vec!["layer-b".to_string()],
-            cache_status: "hit".to_string(),
+            query_key: dependency_free_test_query_key(
+                "function_summary",
+                "1",
+                Digest::from_parts(
+                    DigestKind::QueryParameters,
+                    "query",
+                    &["function_summary"],
+                ),
+                Digest::from_parts(DigestKind::Budget, "budget", &["default"]),
+                PrecisionTier::SetupAware,
+            ),
+            result_digest: Digest {
+                kind: DigestKind::ProviderOutput,
+                value: "fedcba0987654321-result".to_string(),
+            },
+            precision_tier: PrecisionTier::SetupAware,
+            provenance: "native_summary".to_string(),
+            cache_status: DemandCacheStatus::Hit,
             compute_duration_micros: 7,
-            result_digest: "fedcba0987654321-result".to_string(),
-            precision_tier: "SetupAware".to_string(),
         });
 
         let json = metadata_debug_json_with_demand_trace_for_test(&db, &trace, None);
@@ -3612,6 +3633,14 @@ mod abstract_domains_debug_json {
         assert_eq!(
             demand_queries["entries"][0]["result_digest_prefix"],
             serde_json::json!("1234567890abcdef")
+        );
+        assert_eq!(
+            demand_queries["entries"][0]["cache_status"],
+            serde_json::json!("computed")
+        );
+        assert_eq!(
+            demand_queries["entries"][0]["compute_duration_micros"],
+            serde_json::json!(42)
         );
     }
 

@@ -25,6 +25,8 @@ mod stats;
     )
 )]
 pub(crate) use change_set::{ChangeKind, ChangeSet, ChangeSetRow};
+#[cfg(test)]
+pub(crate) use demand::dependency_free_test_query_key;
 #[cfg_attr(
     test,
     allow(
@@ -36,11 +38,12 @@ pub(crate) use change_set::{ChangeKind, ChangeSet, ChangeSetRow};
     not(test),
     expect(
         unused_imports,
-        reason = "Demand query engine infrastructure is established before Plan 04 wires real demand-driven consumers."
+        reason = "demand query vocabulary is retained for private query consumers"
     )
 )]
 pub(crate) use demand::{
-    DemandQueryEngine, DemandQueryResult, DemandQueryTrace, DemandQueryTraceEntry,
+    DemandCacheStatus, DemandQueryEngine, DemandQueryResult, DemandQueryTrace,
+    DemandQueryTraceEntry,
 };
 #[cfg_attr(
     test,

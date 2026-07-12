@@ -441,6 +441,7 @@ mod scc_closure_provider {
         SummaryDomainKind, SummaryFact, SummaryPrecision, SummaryProvenance, SummaryStatus,
     };
     use crate::analysis::summaries::store::SummaryOutput;
+    use crate::analysis_kernel::incremental::DemandCacheStatus;
     use crate::cache::Cache;
     use crate::core::{FileId, FunctionId, Language, Span};
 
@@ -545,7 +546,7 @@ mod scc_closure_provider {
 
         // All entries should be scc_closure queries
         for entry in output.demand_query_trace.entries() {
-            assert_eq!(entry.query_kind, "scc_closure");
+            assert_eq!(entry.query_key.query_kind, "scc_closure");
         }
 
         // No diagnostics for non-recursive SCCs
@@ -632,7 +633,7 @@ mod scc_closure_provider {
             warm.demand_query_trace
                 .entries()
                 .iter()
-                .any(|entry| entry.cache_status == "hit"),
+                .any(|entry| entry.cache_status == DemandCacheStatus::Hit),
             "warm SCC closure should record hit trace rows: {:#?}",
             warm.demand_query_trace
         );

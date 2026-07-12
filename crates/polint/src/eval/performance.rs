@@ -27,12 +27,12 @@ impl EvalPerformanceReport {
             .entries()
             .iter()
             .map(|entry| DemandQueryStatsRow {
-                query_kind: entry.query_kind.clone(),
-                query_version: entry.query_version.clone(),
-                parameter_digest: entry.parameter_digest.clone(),
-                cache_status: entry.cache_status.clone(),
-                result_digest: entry.result_digest.clone(),
-                precision_tier: entry.precision_tier.clone(),
+                query_kind: entry.query_key.query_kind.clone(),
+                query_version: entry.query_key.query_version.clone(),
+                parameter_digest: entry.query_key.parameter_digest.value.clone(),
+                cache_status: entry.cache_status.label().to_string(),
+                result_digest: entry.result_digest.value.clone(),
+                precision_tier: format!("{:?}", entry.precision_tier),
                 compute_duration_micros: Some(entry.compute_duration_micros),
             })
             .collect::<Vec<_>>();
@@ -85,14 +85,15 @@ pub(crate) struct ProviderStatsRow {
 
 impl ProviderStatsRow {
     fn from_provider_output(output: &ProviderOutputMeta) -> Self {
+        let semantic = output.semantic_projection();
         Self {
-            provider_id: output.provider_id.clone(),
-            provider_version: output.provider_version.clone(),
-            schema_version: output.schema_version.clone(),
-            output_digest: output.output_digest.value.clone(),
-            precision: output.precision.label().to_string(),
-            validation: output.validation.clone(),
-            dependency_input_count: output.dependency_inputs.len(),
+            provider_id: semantic.provider_id.to_string(),
+            provider_version: semantic.provider_version.to_string(),
+            schema_version: semantic.schema_version.to_string(),
+            output_digest: semantic.output_digest.value.clone(),
+            precision: semantic.precision.label().to_string(),
+            validation: semantic.validation.label().to_string(),
+            dependency_input_count: semantic.dependency_inputs.len(),
             facts_emitted: None,
             diagnostics_emitted: None,
             validation_rejections: None,
@@ -194,10 +195,10 @@ mod tests {
     use super::*;
     use crate::analysis_kernel::AnalysisKernel;
     use crate::analysis_kernel::incremental::{
-        CacheStats, DemandQueryTrace, DemandQueryTraceEntry, Digest, DigestKind,
+        CacheStats, DemandCacheStatus, DemandQueryTrace, DemandQueryTraceEntry, Digest, DigestKind,
         GoLifecycleSnapshot, InputComponent, InputComponentStatus, InputSnapshot, KernelRunReport,
-        ProviderOutputMeta, TsJsLifecycleSnapshot, provider_output_digest_from_manifest,
-        provider_output_from_manifest,
+        PrecisionTier, ProviderOutputMeta, TsJsLifecycleSnapshot, dependency_free_test_query_key,
+        provider_output_digest_from_manifest, provider_output_from_manifest,
     };
     use crate::analysis_kernel::{
         FactConfidence, FactFamily, FactPrecision, ProviderManifest, StableFactMetaRow,
@@ -223,6 +224,15 @@ mod tests {
         assert_eq!(performance.cache.writes, 2);
         assert_eq!(performance.cache.quarantines, 2);
         assert_eq!(performance.cache_by_provider().len(), 2);
+        assert_eq!(performance.providers[0].validation, "native_trusted");
+        assert_eq!(performance.demand_queries[0].query_kind, "call_graph");
+        assert_eq!(performance.demand_queries[0].query_version, "1");
+        assert_eq!(performance.demand_queries[0].cache_status, "computed");
+        assert_eq!(performance.demand_queries[0].precision_tier, "SetupAware");
+        assert_eq!(
+            performance.demand_queries[0].compute_duration_micros,
+            Some(123)
+        );
     }
 
     #[test]
@@ -356,16 +366,18 @@ mod tests {
 
         let mut trace = DemandQueryTrace::default();
         trace.record_entry(DemandQueryTraceEntry {
-            query_kind: "call_graph".to_string(),
-            query_version: "1".to_string(),
-            parameter_digest: Digest::from_parts(DigestKind::QueryParameters, "query", &["calls"])
-                .value,
-            input_layer_digests: Vec::new(),
-            cache_status: "computed".to_string(),
+            query_key: dependency_free_test_query_key(
+                "call_graph",
+                "1",
+                Digest::from_parts(DigestKind::QueryParameters, "query", &["calls"]),
+                Digest::from_parts(DigestKind::Budget, "budget", &["default"]),
+                PrecisionTier::SetupAware,
+            ),
+            result_digest: Digest::from_parts(DigestKind::ProviderOutput, "result", &["calls"]),
+            precision_tier: PrecisionTier::SetupAware,
+            provenance: "native".to_string(),
+            cache_status: DemandCacheStatus::Computed,
             compute_duration_micros: 123,
-            result_digest: Digest::from_parts(DigestKind::ProviderOutput, "result", &["calls"])
-                .value,
-            precision_tier: "setup_aware".to_string(),
         });
 
         KernelRunReport::new(
