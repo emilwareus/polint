@@ -6,7 +6,7 @@
     )
 )]
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
 use std::path::Path;
 
@@ -278,7 +278,28 @@ impl WorkspaceIdentity {
     }
 }
 
+impl<'de> Deserialize<'de> for WorkspaceIdentity {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let digest = Digest::deserialize(deserializer)?;
+        require_digest_kind(
+            "WorkspaceIdentity",
+            "workspace",
+            &digest,
+            DigestKind::Workspace,
+        )
+        .map_err(serde::de::Error::custom)?;
+        Ok(Self(digest))
+    }
+}
+
 impl ConfigIdentity {
+    pub(crate) fn from_complete_config_parts(label: &str, parts: &[&str]) -> Self {
+        Self(Digest::from_parts(DigestKind::Config, label, parts))
+    }
+
     pub(crate) fn from_complete_config_digest(
         digest: Digest,
     ) -> Result<Self, IdentityDigestKindError> {
@@ -288,6 +309,16 @@ impl ConfigIdentity {
 
     pub(crate) fn digest(&self) -> &Digest {
         &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for ConfigIdentity {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let digest = Digest::deserialize(deserializer)?;
+        Self::from_complete_config_digest(digest).map_err(serde::de::Error::custom)
     }
 }
 
@@ -645,6 +676,36 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn workspace_identity_deserialization_rejects_wrong_digest_kind() {
+        let wire = serde_json::to_value(Digest::from_parts(
+            DigestKind::Config,
+            "wrong_workspace",
+            &["config"],
+        ))
+        .expect("serialize wrong-kind workspace fixture");
+
+        let error = serde_json::from_value::<WorkspaceIdentity>(wire)
+            .expect_err("workspace identity must reject config digests");
+
+        assert!(error.to_string().contains("requires a workspace digest"));
+    }
+
+    #[test]
+    fn config_identity_deserialization_rejects_wrong_digest_kind() {
+        let wire = serde_json::to_value(Digest::from_parts(
+            DigestKind::AnalysisSettings,
+            "wrong_config",
+            &["settings"],
+        ))
+        .expect("serialize wrong-kind config fixture");
+
+        let error = serde_json::from_value::<ConfigIdentity>(wire)
+            .expect_err("config identity must reject scoped settings digests");
+
+        assert!(error.to_string().contains("requires a config digest"));
     }
 
     #[test]

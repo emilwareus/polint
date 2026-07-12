@@ -9,13 +9,31 @@ path = "repo"
 max_runtime_ms = 5000
 
 [[expected]]
-invariant = { name = "snapshot.schema_version", value = "polint-input-snapshot-1", mode = "exact" }
+invariant = { name = "snapshot.schema_version", value = "polint-input-snapshot-2", mode = "exact" }
 
 [[expected]]
 invariant = { name = "snapshot.source_text_digest.present", value = "true", mode = "exact" }
 
 [[expected]]
 invariant = { name = "snapshot.config_digest.present", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "snapshot.workspace_identity.present", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "snapshot.config_identity.full", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "snapshot.analysis_settings.scoped", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "snapshot.requested_capability.typed_status_and_language", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "snapshot.analysis_requirements_identity.present", value = "true", mode = "exact" }
+
+[[expected]]
+invariant = { name = "snapshot.semantic_digest.present", value = "true", mode = "exact" }
 
 [[expected]]
 invariant = { name = "snapshot.go_lifecycle.present", value = "true", mode = "exact" }

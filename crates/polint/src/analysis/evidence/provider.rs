@@ -956,13 +956,29 @@ mod tests {
     }
 
     fn minimal_snapshot() -> InputSnapshot {
-        InputSnapshot {
-            schema_version: "test".to_string(),
+        let config_digest = Digest::from_parts(DigestKind::Config, "config", &["config"]);
+        let snapshot = InputSnapshot {
+            schema_version: crate::analysis_kernel::incremental::INPUT_SNAPSHOT_SCHEMA_VERSION
+                .to_string(),
+            workspace_identity: crate::analysis_kernel::incremental::WorkspaceIdentity::from_roots(
+                [std::path::Path::new("test-workspace")],
+            ),
+            config_identity:
+                crate::analysis_kernel::incremental::ConfigIdentity::from_complete_config_digest(
+                    config_digest.clone(),
+                )
+                .expect("test config digest has the required kind"),
+            analysis_settings: Vec::new(),
+            requested_capabilities: Vec::new(),
+            analysis_requirements_identity: Digest::absent(
+                DigestKind::AnalysisRequirements,
+                "requested_capabilities",
+            ),
             files: Vec::new(),
             config: InputComponent {
                 name: "config".to_string(),
                 status: InputComponentStatus::Present,
-                digest: digest("config"),
+                digest: config_digest,
                 detail: Vec::new(),
             },
             go_lifecycle: GoLifecycleSnapshot {
@@ -976,7 +992,13 @@ mod tests {
             extensions: Vec::new(),
             tool_invocations: Vec::new(),
             provider_schemas: Vec::new(),
-        }
+        };
+        assert!(snapshot.requested_capabilities.is_empty());
+        assert_eq!(
+            snapshot.analysis_requirements_identity,
+            Digest::absent(DigestKind::AnalysisRequirements, "requested_capabilities")
+        );
+        snapshot
     }
 
     fn digest(label: &str) -> Digest {

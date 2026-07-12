@@ -14,7 +14,7 @@ use serde_json::Value;
 
 #[cfg(test)]
 use crate::analysis_kernel::incremental::{
-    CacheStats, InputComponent, InputComponentStatus, KernelRunReport,
+    CacheStats, DigestKind, InputComponent, InputComponentStatus, KernelRunReport,
 };
 #[cfg(test)]
 use crate::analysis_kernel::{AnalysisKernel, KernelInput};
@@ -574,6 +574,64 @@ fn snapshot_invariants(run_report: &KernelRunReport) -> Vec<ObservedItem> {
         observed_invariant(
             "snapshot.config_digest.present",
             bool_string(component_present(&snapshot.config)),
+            "kernel.run_report.input_snapshot",
+        ),
+        observed_invariant(
+            "snapshot.workspace_identity.present",
+            bool_string(snapshot.workspace_identity.digest().kind == DigestKind::Workspace),
+            "kernel.run_report.input_snapshot",
+        ),
+        observed_invariant(
+            "snapshot.config_identity.full",
+            bool_string(
+                snapshot.config_identity.digest().kind == DigestKind::Config
+                    && snapshot.config_identity.digest() == &snapshot.config.digest,
+            ),
+            "kernel.run_report.input_snapshot",
+        ),
+        observed_invariant(
+            "snapshot.analysis_settings.scoped",
+            bool_string(
+                !snapshot.analysis_settings.is_empty()
+                    && snapshot.analysis_settings.iter().all(|row| {
+                        !row.scope.label().is_empty()
+                            && row.digest.kind == DigestKind::AnalysisSettings
+                    }),
+            ),
+            "kernel.run_report.input_snapshot",
+        ),
+        observed_invariant(
+            "snapshot.requested_capability.typed_status_and_language",
+            bool_string(
+                !snapshot.requested_capabilities.is_empty()
+                    && snapshot.requested_capabilities.iter().all(|row| {
+                        !row.capability.is_empty()
+                            && matches!(
+                                row.support_status,
+                                crate::core::CapabilitySupportStatus::Supported
+                                    | crate::core::CapabilitySupportStatus::Unsupported
+                                    | crate::core::CapabilitySupportStatus::SetupMissing
+                            )
+                            && !row
+                                .language
+                                .map(crate::core::Language::label)
+                                .unwrap_or("none")
+                                .is_empty()
+                    }),
+            ),
+            "kernel.run_report.input_snapshot",
+        ),
+        observed_invariant(
+            "snapshot.analysis_requirements_identity.present",
+            bool_string(
+                snapshot.analysis_requirements_identity.kind == DigestKind::AnalysisRequirements
+                    && !snapshot.requested_capabilities.is_empty(),
+            ),
+            "kernel.run_report.input_snapshot",
+        ),
+        observed_invariant(
+            "snapshot.semantic_digest.present",
+            bool_string(snapshot.semantic_digest().kind == DigestKind::InputSnapshot),
             "kernel.run_report.input_snapshot",
         ),
         observed_invariant(
@@ -3659,13 +3717,13 @@ path = "repo"
         }
 
         #[test]
-        fn snapshot_invariants_emit_required_phase23_inputs() {
+        fn snapshot_invariants_emit_complete_input_identities() {
             let (_temp, observed) = observed_for_mixed_fixture();
             let invariants = invariant_values(&observed);
 
             assert_eq!(
                 invariants.get("snapshot.schema_version").copied(),
-                Some("polint-input-snapshot-1")
+                Some("polint-input-snapshot-2")
             );
             assert_eq!(
                 invariants
@@ -3675,6 +3733,36 @@ path = "repo"
             );
             assert_eq!(
                 invariants.get("snapshot.config_digest.present").copied(),
+                Some("true")
+            );
+            assert_eq!(
+                invariants
+                    .get("snapshot.workspace_identity.present")
+                    .copied(),
+                Some("true")
+            );
+            assert_eq!(
+                invariants.get("snapshot.config_identity.full").copied(),
+                Some("true")
+            );
+            assert_eq!(
+                invariants.get("snapshot.analysis_settings.scoped").copied(),
+                Some("true")
+            );
+            assert_eq!(
+                invariants
+                    .get("snapshot.requested_capability.typed_status_and_language")
+                    .copied(),
+                Some("true")
+            );
+            assert_eq!(
+                invariants
+                    .get("snapshot.analysis_requirements_identity.present")
+                    .copied(),
+                Some("true")
+            );
+            assert_eq!(
+                invariants.get("snapshot.semantic_digest.present").copied(),
                 Some("true")
             );
             assert_eq!(

@@ -2725,7 +2725,12 @@ const INTERNAL_INPUT_SNAPSHOT_PUBLIC_MARKERS: &[&str] = &[
     "snapshot.schema_version",
     "provider_output.polint",
     "layer_key.polint",
-    "polint-input-snapshot-1",
+    "polint-input-snapshot-2",
+    "workspace_identity",
+    "config_identity",
+    "analysis_settings",
+    "requested_capabilities",
+    "analysis_requirements_identity",
     "go.tool_invocation",
     "ts_js.tool_invocation",
 ];

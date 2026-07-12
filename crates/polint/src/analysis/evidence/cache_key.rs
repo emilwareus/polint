@@ -151,8 +151,23 @@ mod tests {
     }
 
     fn minimal_snapshot() -> InputSnapshot {
-        InputSnapshot {
-            schema_version: "test".to_string(),
+        let snapshot = InputSnapshot {
+            schema_version: crate::analysis_kernel::incremental::INPUT_SNAPSHOT_SCHEMA_VERSION
+                .to_string(),
+            workspace_identity: crate::analysis_kernel::incremental::WorkspaceIdentity::from_roots(
+                [std::path::Path::new("test-workspace")],
+            ),
+            config_identity:
+                crate::analysis_kernel::incremental::ConfigIdentity::from_complete_config_parts(
+                    "config",
+                    &["config"],
+                ),
+            analysis_settings: Vec::new(),
+            requested_capabilities: Vec::new(),
+            analysis_requirements_identity: Digest::absent(
+                DigestKind::AnalysisRequirements,
+                "requested_capabilities",
+            ),
             files: Vec::new(),
             config: component("config"),
             go_lifecycle: GoLifecycleSnapshot {
@@ -166,7 +181,13 @@ mod tests {
             extensions: Vec::new(),
             tool_invocations: Vec::new(),
             provider_schemas: Vec::new(),
-        }
+        };
+        assert!(snapshot.requested_capabilities.is_empty());
+        assert_eq!(
+            snapshot.analysis_requirements_identity,
+            Digest::absent(DigestKind::AnalysisRequirements, "requested_capabilities")
+        );
+        snapshot
     }
 
     fn component(name: &str) -> InputComponent {

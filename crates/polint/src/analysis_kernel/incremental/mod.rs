@@ -92,8 +92,9 @@ pub(crate) use digest::{
     expect(unused_imports, reason = "kept for private internal consumers")
 )]
 pub(crate) use input_snapshot::{
-    FileSnapshot, GoLifecycleSnapshot, INPUT_SNAPSHOT_SCHEMA_VERSION, InputComponent,
-    InputComponentStatus, InputSnapshot, ProviderSchemaSnapshot, TsJsLifecycleSnapshot,
+    AnalysisSettingSource, FileSnapshot, GoLifecycleSnapshot, INPUT_SNAPSHOT_SCHEMA_VERSION,
+    InputComponent, InputComponentStatus, InputSnapshot, InputSnapshotIdentitySources,
+    ProviderSchemaSnapshot, TsJsLifecycleSnapshot,
 };
 #[cfg_attr(
     test,

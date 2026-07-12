@@ -1,26 +1,32 @@
-use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
+use std::fmt;
+use std::path::{Path as FsPath, PathBuf};
 
-use super::{Digest, DigestKind};
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+use super::{ConfigIdentity, Digest, DigestKind, WorkspaceIdentity};
 use crate::analysis::extensions::discovery::{DiscoveredExtension, discover_local_extensions};
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_plan::{AnalysisPlan, RequestedCapabilitySnapshot};
 use crate::cache::keys::{AnalysisSettingsScope, analysis_settings_hash};
 use crate::config::LoadedConfig;
-use crate::core::{AnalysisDb, Language, SourceFile};
+use crate::core::{AnalysisDb, CapabilitySupportStatus, Language, SourceFile};
 use crate::module_graph::paths::{
     TOPOLOGY_LOCKFILE_MAX_BYTES, TOPOLOGY_MANIFEST_MAX_BYTES, normalize_repo_relative,
     normalize_repo_relative_input, read_repo_file_to_string_with_limit, read_repo_file_with_limit,
     repo_file_exists, repo_file_path, repo_relative_existing_path,
 };
-use std::collections::BTreeSet;
-use std::fmt;
-use std::path::{Path as FsPath, PathBuf};
+pub(crate) const INPUT_SNAPSHOT_SCHEMA_VERSION: &str = "polint-input-snapshot-2";
 
-pub(crate) const INPUT_SNAPSHOT_SCHEMA_VERSION: &str = "polint-input-snapshot-1";
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct InputSnapshot {
     pub(crate) schema_version: String,
+    pub(crate) workspace_identity: WorkspaceIdentity,
+    pub(crate) config_identity: ConfigIdentity,
+    pub(crate) analysis_settings: Vec<AnalysisSettingSource>,
+    pub(crate) requested_capabilities: Vec<RequestedCapabilitySnapshot>,
+    pub(crate) analysis_requirements_identity: Digest,
     pub(crate) files: Vec<FileSnapshot>,
     pub(crate) config: InputComponent,
     pub(crate) go_lifecycle: GoLifecycleSnapshot,
@@ -52,6 +58,7 @@ pub(crate) struct TsJsLifecycleSnapshot {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum InputComponentStatus {
     Present,
     Absent,
@@ -173,14 +180,16 @@ impl InputSnapshot {
                 })
         );
 
-        Self::from_run_input_plan(
+        let snapshot = Self::from_run_input_plan(
             loaded,
             db,
             config_digest,
             rule_digest,
             plan,
             provider_manifests,
-        )
+        );
+        debug_assert_eq!(snapshot.semantic_digest().kind, DigestKind::InputSnapshot);
+        snapshot
     }
 
     pub(crate) fn identity_sources_from_plan(
@@ -211,6 +220,11 @@ impl InputSnapshot {
         plan: &AnalysisPlan,
         provider_manifests: &[ProviderManifest],
     ) -> Self {
+        let identity_sources = Self::identity_sources_from_plan(loaded, plan);
+        let workspace_identity = WorkspaceIdentity::from_roots([loaded.root.as_path()]);
+        let config_identity =
+            ConfigIdentity::from_complete_config_parts("config_digest", &[config_digest]);
+        let config = config_component(loaded, config_identity.digest().clone());
         let mut files = db
             .files()
             .iter()
@@ -233,8 +247,13 @@ impl InputSnapshot {
 
         Self {
             schema_version: INPUT_SNAPSHOT_SCHEMA_VERSION.to_string(),
+            workspace_identity,
+            config_identity,
+            analysis_settings: identity_sources.analysis_settings,
+            requested_capabilities: identity_sources.requested_capabilities,
+            analysis_requirements_identity: identity_sources.analysis_requirements_identity,
             files,
-            config: config_component(loaded, config_digest),
+            config,
             go_lifecycle,
             ts_js_lifecycle,
             rules: rule_components(rule_digest, plan),
@@ -247,6 +266,325 @@ impl InputSnapshot {
             tool_invocations,
             provider_schemas,
         }
+    }
+
+    pub(crate) fn semantic_digest(&self) -> Digest {
+        let mut rows = vec![semantic_row(
+            "schema",
+            [("version", self.schema_version.as_str())],
+        )];
+        rows.push(digest_semantic_row(
+            "workspace_identity",
+            self.workspace_identity.digest(),
+        ));
+        rows.push(digest_semantic_row(
+            "config_identity",
+            self.config_identity.digest(),
+        ));
+        rows.push(digest_semantic_row(
+            "analysis_requirements_identity",
+            &self.analysis_requirements_identity,
+        ));
+
+        for file in &self.files {
+            let size_bytes = file.size_bytes.to_string();
+            let mut row = semantic_row_builder("file");
+            row.labeled_part("relative_path", &file.relative_path);
+            row.labeled_part("language", file.language.label());
+            row.labeled_part("source_digest_kind", file.source_text_digest.kind.label());
+            row.labeled_part("source_digest_value", &file.source_text_digest.value);
+            row.labeled_part("size_bytes", &size_bytes);
+            rows.push(row.finish());
+        }
+        push_component_rows(&mut rows, "config", std::slice::from_ref(&self.config));
+        push_component_rows(&mut rows, "go_lifecycle", &self.go_lifecycle.components);
+        push_component_rows(
+            &mut rows,
+            "ts_js_lifecycle",
+            &self.ts_js_lifecycle.components,
+        );
+        push_component_rows(&mut rows, "rule", &self.rules);
+        push_component_rows(&mut rows, "model", &self.models);
+        push_component_rows(&mut rows, "extension", &self.extensions);
+        push_component_rows(&mut rows, "tool", &self.tool_invocations);
+        for provider in &self.provider_schemas {
+            let mut row = semantic_row_builder("provider_schema");
+            row.labeled_part("provider_id", &provider.provider_id);
+            let mut schema_versions = provider.schema_versions.clone();
+            schema_versions.sort();
+            for schema_version in &schema_versions {
+                row.labeled_part("schema_version", schema_version);
+            }
+            row.labeled_part("language_scope", &provider.language_scope);
+            row.labeled_part("cache_policy", &provider.cache_policy);
+            row.labeled_part("precision_ceiling", &provider.precision_ceiling);
+            row.labeled_part(
+                "manifest_digest_kind",
+                provider.provider_manifest_digest.kind.label(),
+            );
+            row.labeled_part(
+                "manifest_digest_value",
+                &provider.provider_manifest_digest.value,
+            );
+            rows.push(row.finish());
+        }
+        for setting in &self.analysis_settings {
+            let mut row = semantic_row_builder("analysis_setting");
+            row.labeled_part("provider_id", setting.scope.label());
+            row.labeled_part("digest_kind", setting.digest.kind.label());
+            row.labeled_part("digest_value", &setting.digest.value);
+            rows.push(row.finish());
+        }
+        for capability in &self.requested_capabilities {
+            let mut requesting_rule_ids = capability.requesting_rule_ids.clone();
+            requesting_rule_ids.sort();
+            let mut row = semantic_row_builder("requested_capability");
+            row.labeled_part("capability", &capability.capability);
+            row.labeled_part(
+                "language",
+                capability.language.map(Language::label).unwrap_or("none"),
+            );
+            row.labeled_part(
+                "support_status",
+                capability_support_status_label(&capability.support_status),
+            );
+            row.labeled_part("setup_status", capability.setup_status.label());
+            row.labeled_part(
+                "policy_query_version",
+                capability.policy_query_version.as_deref().unwrap_or("none"),
+            );
+            for rule_id in &requesting_rule_ids {
+                row.labeled_part("requesting_rule_id", rule_id);
+            }
+            row.labeled_part(
+                "rule_behavior_digest_kind",
+                capability.rule_behavior_digest.kind.label(),
+            );
+            row.labeled_part(
+                "rule_behavior_digest_value",
+                &capability.rule_behavior_digest.value,
+            );
+            row.labeled_part(
+                "analysis_dependency_digest_kind",
+                capability.analysis_dependency_digest.kind.label(),
+            );
+            row.labeled_part(
+                "analysis_dependency_digest_value",
+                &capability.analysis_dependency_digest.value,
+            );
+            rows.push(row.finish());
+        }
+        Digest::from_unordered(DigestKind::InputSnapshot, "semantic_rows", rows)
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InputSnapshotWire {
+    schema_version: String,
+    workspace_identity: WorkspaceIdentity,
+    config_identity: ConfigIdentity,
+    analysis_settings: Vec<AnalysisSettingSource>,
+    requested_capabilities: Vec<RequestedCapabilitySnapshot>,
+    analysis_requirements_identity: Digest,
+    files: Vec<FileSnapshot>,
+    config: InputComponent,
+    go_lifecycle: GoLifecycleSnapshot,
+    ts_js_lifecycle: TsJsLifecycleSnapshot,
+    rules: Vec<InputComponent>,
+    models: Vec<InputComponent>,
+    extensions: Vec<InputComponent>,
+    tool_invocations: Vec<InputComponent>,
+    provider_schemas: Vec<ProviderSchemaSnapshot>,
+}
+
+impl<'de> Deserialize<'de> for InputSnapshot {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = InputSnapshotWire::deserialize(deserializer)?;
+        if wire.schema_version != INPUT_SNAPSHOT_SCHEMA_VERSION {
+            return Err(serde::de::Error::custom(format!(
+                "unsupported input snapshot schema `{}`; expected `{INPUT_SNAPSHOT_SCHEMA_VERSION}`",
+                wire.schema_version
+            )));
+        }
+        if wire.config.digest != *wire.config_identity.digest() {
+            return Err(serde::de::Error::custom(
+                "config component digest does not match config identity",
+            ));
+        }
+        if wire.analysis_requirements_identity.kind != DigestKind::AnalysisRequirements {
+            return Err(serde::de::Error::custom(
+                "analysis requirements identity has the wrong digest kind",
+            ));
+        }
+        if !wire
+            .analysis_settings
+            .windows(2)
+            .all(|pair| pair[0].scope.label() < pair[1].scope.label())
+        {
+            return Err(serde::de::Error::custom(
+                "analysis settings must be strictly sorted by provider id",
+            ));
+        }
+        let expected_requirements = analysis_requirements_digest(&wire.requested_capabilities);
+        if wire.analysis_requirements_identity != expected_requirements {
+            return Err(serde::de::Error::custom(
+                "requested capability rows do not match analysis requirements identity",
+            ));
+        }
+
+        Ok(Self {
+            schema_version: wire.schema_version,
+            workspace_identity: wire.workspace_identity,
+            config_identity: wire.config_identity,
+            analysis_settings: wire.analysis_settings,
+            requested_capabilities: wire.requested_capabilities,
+            analysis_requirements_identity: wire.analysis_requirements_identity,
+            files: wire.files,
+            config: wire.config,
+            go_lifecycle: wire.go_lifecycle,
+            ts_js_lifecycle: wire.ts_js_lifecycle,
+            rules: wire.rules,
+            models: wire.models,
+            extensions: wire.extensions,
+            tool_invocations: wire.tool_invocations,
+            provider_schemas: wire.provider_schemas,
+        })
+    }
+}
+
+impl Serialize for AnalysisSettingSource {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut row = serializer.serialize_struct("AnalysisSettingSource", 2)?;
+        row.serialize_field("provider_id", self.scope.label())?;
+        row.serialize_field("digest", &self.digest)?;
+        row.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for AnalysisSettingSource {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Wire {
+            provider_id: String,
+            digest: Digest,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        let scope = AnalysisSettingsScope::ALL
+            .into_iter()
+            .find(|scope| scope.label() == wire.provider_id)
+            .ok_or_else(|| {
+                serde::de::Error::custom(format!(
+                    "unknown analysis settings provider `{}`",
+                    wire.provider_id
+                ))
+            })?;
+        if wire.digest.kind != DigestKind::AnalysisSettings {
+            return Err(serde::de::Error::custom(
+                "analysis setting has the wrong digest kind",
+            ));
+        }
+        Ok(Self {
+            scope,
+            digest: wire.digest,
+        })
+    }
+}
+
+impl Serialize for RequestedCapabilitySnapshot {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut row = serializer.serialize_struct("RequestedCapabilitySnapshot", 8)?;
+        row.serialize_field("capability", &self.capability)?;
+        row.serialize_field("language", &self.language)?;
+        row.serialize_field(
+            "support_status",
+            capability_support_status_label(&self.support_status),
+        )?;
+        row.serialize_field("setup_status", self.setup_status.label())?;
+        row.serialize_field("policy_query_version", &self.policy_query_version)?;
+        row.serialize_field("requesting_rule_ids", &self.requesting_rule_ids)?;
+        row.serialize_field("rule_behavior_digest", &self.rule_behavior_digest)?;
+        row.serialize_field(
+            "analysis_dependency_digest",
+            &self.analysis_dependency_digest,
+        )?;
+        row.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for RequestedCapabilitySnapshot {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Wire {
+            capability: String,
+            language: Option<Language>,
+            support_status: String,
+            setup_status: String,
+            policy_query_version: Option<String>,
+            requesting_rule_ids: Vec<String>,
+            rule_behavior_digest: Digest,
+            analysis_dependency_digest: Digest,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        let support_status = match wire.support_status.as_str() {
+            "supported" => CapabilitySupportStatus::Supported,
+            "unsupported" => CapabilitySupportStatus::Unsupported,
+            "setup_missing" => CapabilitySupportStatus::SetupMissing,
+            label => {
+                return Err(serde::de::Error::custom(format!(
+                    "unknown capability support status `{label}`"
+                )));
+            }
+        };
+        let setup_status = match wire.setup_status.as_str() {
+            "not_required" => crate::analysis_plan::CapabilitySetupStatus::NotRequired,
+            "ready" => crate::analysis_plan::CapabilitySetupStatus::Ready,
+            "setup_missing" => crate::analysis_plan::CapabilitySetupStatus::SetupMissing,
+            label => {
+                return Err(serde::de::Error::custom(format!(
+                    "unknown capability setup status `{label}`"
+                )));
+            }
+        };
+        if wire.rule_behavior_digest.kind != DigestKind::RuleOptions {
+            return Err(serde::de::Error::custom(
+                "capability rule behavior has the wrong digest kind",
+            ));
+        }
+        if wire.analysis_dependency_digest.kind != DigestKind::AnalysisRequirements {
+            return Err(serde::de::Error::custom(
+                "capability analysis dependency has the wrong digest kind",
+            ));
+        }
+        Ok(Self {
+            capability: wire.capability,
+            language: wire.language,
+            support_status,
+            setup_status,
+            policy_query_version: wire.policy_query_version,
+            requesting_rule_ids: wire.requesting_rule_ids,
+            rule_behavior_digest: wire.rule_behavior_digest,
+            analysis_dependency_digest: wire.analysis_dependency_digest,
+        })
     }
 }
 
@@ -607,7 +945,7 @@ fn go_lifecycle_error_components(loaded: &LoadedConfig, reason: &str) -> Vec<Inp
     ]
 }
 
-fn config_component(loaded: &LoadedConfig, config_digest: &str) -> InputComponent {
+fn config_component(loaded: &LoadedConfig, config_digest: Digest) -> InputComponent {
     let mut detail = vec![format!("missing={}", loaded.missing)];
     detail.extend(
         loaded
@@ -634,12 +972,72 @@ fn config_component(loaded: &LoadedConfig, config_digest: &str) -> InputComponen
             .map(|path| format!("rules.path={}", normalize_relative_path(path))),
     );
 
-    InputComponent::present(
+    InputComponent::new(
         "config.loaded",
-        DigestKind::Config,
-        "config_digest",
+        InputComponentStatus::Present,
         config_digest,
         detail,
+    )
+}
+
+fn semantic_row_builder(row_kind: &str) -> super::DigestBuilder {
+    let mut row = Digest::builder(DigestKind::InputSnapshot, "semantic_row");
+    row.labeled_part("row_kind", row_kind);
+    row
+}
+
+fn semantic_row<'a>(
+    row_kind: &str,
+    fields: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> Digest {
+    let mut row = semantic_row_builder(row_kind);
+    for (label, value) in fields {
+        row.labeled_part(label, value);
+    }
+    row.finish()
+}
+
+fn digest_semantic_row(row_kind: &str, digest: &Digest) -> Digest {
+    semantic_row(
+        row_kind,
+        [
+            ("digest_kind", digest.kind.label()),
+            ("digest_value", digest.value.as_str()),
+        ],
+    )
+}
+
+fn push_component_rows(rows: &mut Vec<Digest>, row_kind: &str, components: &[InputComponent]) {
+    rows.extend(components.iter().map(|component| {
+        let mut row = semantic_row_builder(row_kind);
+        row.labeled_part("name", &component.name);
+        row.labeled_part("status", component.status.label());
+        row.labeled_part("digest_kind", component.digest.kind.label());
+        row.labeled_part("digest_value", &component.digest.value);
+        row.finish()
+    }));
+}
+
+fn capability_support_status_label(status: &CapabilitySupportStatus) -> &'static str {
+    match status {
+        CapabilitySupportStatus::Supported => "supported",
+        CapabilitySupportStatus::Unsupported => "unsupported",
+        CapabilitySupportStatus::SetupMissing => "setup_missing",
+    }
+}
+
+fn analysis_requirements_digest(capabilities: &[RequestedCapabilitySnapshot]) -> Digest {
+    if capabilities.is_empty() {
+        return Digest::absent(DigestKind::AnalysisRequirements, "requested_capabilities");
+    }
+
+    Digest::from_unordered(
+        DigestKind::AnalysisRequirements,
+        "analysis_requirements",
+        capabilities
+            .iter()
+            .map(|capability| capability.analysis_dependency_digest.clone())
+            .collect(),
     )
 }
 
@@ -1259,9 +1657,17 @@ mod input_component_status_codec {
                 InputComponentStatus::parse_label(status.label()),
                 Ok(status)
             );
+            let wire = serde_json::to_string(&status).expect("serialize input status");
+            assert_eq!(
+                serde_json::from_str::<InputComponentStatus>(&wire)
+                    .expect("deserialize input status"),
+                status
+            );
+            assert_eq!(wire, format!("\"{}\"", status.label()));
         }
 
         assert!(InputComponentStatus::parse_label("setup-missing").is_err());
+        assert!(serde_json::from_str::<InputComponentStatus>("\"setup-missing\"").is_err());
     }
 }
 
@@ -1272,7 +1678,8 @@ mod source_config_rule_model_extension {
         CachePolicy, LanguageScope, PrecisionCeiling, ProviderKind, ProviderManifest, SchemaVersion,
     };
     use crate::analysis_plan::{AnalysisPlan, CapabilitySetupStatus};
-    use crate::config::{LoadedConfig, PolintConfig};
+    use crate::cache::keys::{AnalysisSettingsScope, config_hash};
+    use crate::config::{LoadedConfig, PolintConfig, RuleConfig};
     use crate::core::{AnalysisDb, CapabilitySupportStatus};
     use std::path::Path;
     use tempfile::TempDir;
@@ -1353,7 +1760,7 @@ mod source_config_rule_model_extension {
     }
 
     #[test]
-    fn plan_identity_sources_are_typed_without_changing_the_v1_wire_shape() {
+    fn plan_identity_sources_are_typed_in_the_v2_wire_shape() {
         let temp = TempDir::new().expect("create temp repo");
         let loaded = loaded_config(temp.path());
         let db = db_with_files(temp.path(), &[("src/app.ts", "export const app = 1;\n")]);
@@ -1368,7 +1775,7 @@ mod source_config_rule_model_extension {
             &plan,
             crate::analysis_kernel::AnalysisKernel::provider_manifests(),
         );
-        let wire = serde_json::to_value(snapshot).expect("serialize v1 snapshot");
+        let wire = serde_json::to_value(snapshot).expect("serialize v2 snapshot");
 
         assert_eq!(sources.analysis_settings.len(), 23);
         assert!(
@@ -1422,9 +1829,257 @@ mod source_config_rule_model_extension {
             DigestKind::AnalysisRequirements
         );
         assert_eq!(wire["schema_version"], INPUT_SNAPSHOT_SCHEMA_VERSION);
-        assert!(wire.get("analysis_settings").is_none());
-        assert!(wire.get("requested_capabilities").is_none());
-        assert!(wire.get("analysis_requirements_identity").is_none());
+        assert_eq!(wire["analysis_settings"].as_array().map(Vec::len), Some(23));
+        assert!(wire["analysis_settings"][0].get("provider_id").is_some());
+        assert!(wire["analysis_settings"][0].get("digest").is_some());
+        assert!(
+            wire["requested_capabilities"]
+                .as_array()
+                .is_some_and(|rows| {
+                    rows.iter().all(|row| {
+                        row.get("language").is_some()
+                            && row.get("support_status").is_some()
+                            && row.get("setup_status").is_some()
+                            && row.get("requesting_rule_ids").is_some()
+                            && row.get("rule_behavior_digest").is_some()
+                            && row.get("analysis_dependency_digest").is_some()
+                    })
+                })
+        );
+        assert!(wire.get("workspace_identity").is_some());
+        assert!(wire.get("config_identity").is_some());
+        assert!(wire.get("analysis_requirements_identity").is_some());
+    }
+
+    #[test]
+    fn v2_snapshot_round_trips_and_rejects_future_or_unknown_wire_values() {
+        let temp = TempDir::new().expect("create temp repo");
+        let loaded = loaded_config(temp.path());
+        let db = db_with_files(temp.path(), &[("src/app.ts", "export const app = 1;\n")]);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["calls", "call_graph"]);
+        let snapshot = InputSnapshot::from_run_inputs_with_plan(
+            &loaded,
+            &db,
+            "config-digest",
+            "rule-digest",
+            &plan,
+            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
+        );
+        let value = serde_json::to_value(&snapshot).expect("serialize v2 snapshot");
+        let round_trip: InputSnapshot =
+            serde_json::from_value(value.clone()).expect("deserialize v2 snapshot");
+
+        assert_eq!(round_trip, snapshot);
+
+        let mut future = value.clone();
+        future["schema_version"] = serde_json::Value::String("polint-input-snapshot-99".into());
+        let future_error = serde_json::from_value::<InputSnapshot>(future)
+            .expect_err("future schema must be rejected");
+        assert!(
+            future_error
+                .to_string()
+                .contains("unsupported input snapshot schema")
+        );
+
+        let mut unknown_provider = value.clone();
+        unknown_provider["analysis_settings"][0]["provider_id"] =
+            serde_json::Value::String("polint.future_provider".into());
+        let provider_error = serde_json::from_value::<InputSnapshot>(unknown_provider)
+            .expect_err("unknown settings provider must be rejected");
+        assert!(
+            provider_error
+                .to_string()
+                .contains("unknown analysis settings provider")
+        );
+
+        let mut unknown_field = value.clone();
+        unknown_field["future_field"] = serde_json::Value::Bool(true);
+        let field_error = serde_json::from_value::<InputSnapshot>(unknown_field)
+            .expect_err("unknown snapshot fields must be rejected");
+        assert!(field_error.to_string().contains("unknown field"));
+
+        let mut unknown_status = value;
+        unknown_status["requested_capabilities"][0]["support_status"] =
+            serde_json::Value::String("maybe_supported".into());
+        let status_error = serde_json::from_value::<InputSnapshot>(unknown_status)
+            .expect_err("unknown capability status must be rejected");
+        assert!(
+            status_error
+                .to_string()
+                .contains("unknown capability support status")
+        );
+    }
+
+    #[test]
+    fn semantic_digest_is_order_independent_and_excludes_hints_and_rendered_details() {
+        let temp = TempDir::new().expect("create temp repo");
+        let loaded = loaded_config(temp.path());
+        let db = db_with_files(
+            temp.path(),
+            &[
+                ("src/z.ts", "export const z = 1;\n"),
+                ("src/a.ts", "export const a = 1;\n"),
+            ],
+        );
+        let plan = AnalysisPlan::from_capability_names_for_test(&["calls", "call_graph"]);
+        let snapshot = InputSnapshot::from_run_inputs_with_plan(
+            &loaded,
+            &db,
+            "config-digest",
+            "rule-digest",
+            &plan,
+            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
+        );
+        let mut non_semantic = snapshot.clone();
+        non_semantic.files.reverse();
+        non_semantic.files[0].mtime_hint_present = !non_semantic.files[0].mtime_hint_present;
+        non_semantic.config.detail = vec!["rendered reason changed".to_string()];
+        non_semantic.analysis_settings.reverse();
+        non_semantic.requested_capabilities.reverse();
+        non_semantic.provider_schemas.reverse();
+
+        assert_eq!(snapshot.semantic_digest(), non_semantic.semantic_digest());
+
+        let mut semantic_change = snapshot.clone();
+        semantic_change.files[0].source_text_digest =
+            Digest::from_parts(DigestKind::SourceText, "changed", &["source"]);
+        assert_ne!(
+            snapshot.semantic_digest(),
+            semantic_change.semantic_digest()
+        );
+
+        let mut model_change = snapshot.clone();
+        model_change.models[0].digest =
+            Digest::from_parts(DigestKind::ModelFile, "model", &["changed"]);
+        assert_ne!(snapshot.semantic_digest(), model_change.semantic_digest());
+
+        let mut extension_change = snapshot.clone();
+        extension_change.extensions[0].digest =
+            Digest::from_parts(DigestKind::ExtensionCode, "extension", &["changed"]);
+        assert_ne!(
+            snapshot.semantic_digest(),
+            extension_change.semantic_digest()
+        );
+    }
+
+    #[test]
+    fn full_config_capability_and_scoped_setting_identities_have_separate_boundaries() {
+        let temp = TempDir::new().expect("create temp repo");
+        let mut baseline_loaded = loaded_config(temp.path());
+        baseline_loaded.config.rules.config.push(RuleConfig {
+            id: "local/example".to_string(),
+            severity: None,
+            files: Vec::new(),
+            allow_files: Vec::new(),
+            allow: Vec::new(),
+            max: None,
+            deny: Vec::new(),
+            forbidden_imports: Default::default(),
+            settings: Default::default(),
+        });
+        let db = db_with_files(temp.path(), &[("src/app.ts", "export const app = 1;\n")]);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["calls"]);
+        let mut rule_only = baseline_loaded.clone();
+        rule_only.config.rules.config[0].severity = Some("error".to_string());
+        let mut relevant_setting = baseline_loaded.clone();
+        relevant_setting.config.solver.go.max_rta_rounds = Some(8);
+
+        let baseline_config = config_hash(&baseline_loaded);
+        let rule_config = config_hash(&rule_only);
+        let relevant_config = config_hash(&relevant_setting);
+        let baseline = InputSnapshot::from_run_inputs_with_plan(
+            &baseline_loaded,
+            &db,
+            &baseline_config,
+            "rule-digest",
+            &plan,
+            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
+        );
+        let rule_changed = InputSnapshot::from_run_inputs_with_plan(
+            &rule_only,
+            &db,
+            &rule_config,
+            "rule-digest",
+            &plan,
+            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
+        );
+        let setting_changed = InputSnapshot::from_run_inputs_with_plan(
+            &relevant_setting,
+            &db,
+            &relevant_config,
+            "rule-digest",
+            &plan,
+            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
+        );
+
+        assert_ne!(baseline.config_identity, rule_changed.config_identity);
+        assert_ne!(baseline.semantic_digest(), rule_changed.semantic_digest());
+        assert_eq!(baseline.analysis_settings, rule_changed.analysis_settings);
+        assert_eq!(
+            baseline.analysis_requirements_identity,
+            rule_changed.analysis_requirements_identity
+        );
+        assert_eq!(
+            baseline.requested_capabilities,
+            rule_changed.requested_capabilities
+        );
+
+        let baseline_solver = baseline
+            .analysis_settings
+            .iter()
+            .find(|row| row.scope == AnalysisSettingsScope::Solver)
+            .expect("solver setting row");
+        let changed_solver = setting_changed
+            .analysis_settings
+            .iter()
+            .find(|row| row.scope == AnalysisSettingsScope::Solver)
+            .expect("changed solver setting row");
+        assert_ne!(baseline_solver.digest, changed_solver.digest);
+        let baseline_source = baseline
+            .analysis_settings
+            .iter()
+            .find(|row| row.scope == AnalysisSettingsScope::Source)
+            .expect("source setting row");
+        let changed_source = setting_changed
+            .analysis_settings
+            .iter()
+            .find(|row| row.scope == AnalysisSettingsScope::Source)
+            .expect("unchanged source setting row");
+        assert_eq!(baseline_source.digest, changed_source.digest);
+
+        let capability_changed = AnalysisPlan::from_capability_names_for_test(&["call_graph"]);
+        let capability_snapshot = InputSnapshot::from_run_inputs_with_plan(
+            &baseline_loaded,
+            &db,
+            &baseline_config,
+            "rule-digest",
+            &capability_changed,
+            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
+        );
+        assert_ne!(
+            baseline.analysis_requirements_identity,
+            capability_snapshot.analysis_requirements_identity
+        );
+    }
+
+    #[test]
+    fn opaque_identity_serialization_excludes_root_source_and_environment_sentinels() {
+        let temp = TempDir::new().expect("create root-sentinel repo");
+        let loaded = loaded_config(temp.path());
+        let db = db_with_files(
+            temp.path(),
+            &[("src/app.ts", "const sourceSentinel = 'source-secret';\n")],
+        );
+        let snapshot = snapshot_for(
+            &loaded,
+            &db,
+            crate::analysis_kernel::AnalysisKernel::provider_manifests(),
+        );
+        let rendered = serde_json::to_string_pretty(&snapshot).expect("serialize snapshot");
+
+        assert!(!rendered.contains(temp.path().to_string_lossy().as_ref()));
+        assert!(!rendered.contains("source-secret"));
+        assert!(!rendered.contains("environment-variable-sentinel"));
     }
 
     #[test]

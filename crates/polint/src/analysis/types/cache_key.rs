@@ -299,8 +299,23 @@ mod tests {
             "go.tool_invocation",
             Digest::from_parts(DigestKind::ToolInvocation, "go", &[tool_suffix]),
         );
-        InputSnapshot {
-            schema_version: "test".to_string(),
+        let snapshot = InputSnapshot {
+            schema_version: crate::analysis_kernel::incremental::INPUT_SNAPSHOT_SCHEMA_VERSION
+                .to_string(),
+            workspace_identity: crate::analysis_kernel::incremental::WorkspaceIdentity::from_roots(
+                [std::path::Path::new("test-workspace")],
+            ),
+            config_identity:
+                crate::analysis_kernel::incremental::ConfigIdentity::from_complete_config_parts(
+                    "config",
+                    &["base"],
+                ),
+            analysis_settings: Vec::new(),
+            requested_capabilities: Vec::new(),
+            analysis_requirements_identity: Digest::absent(
+                DigestKind::AnalysisRequirements,
+                "requested_capabilities",
+            ),
             files: Vec::new(),
             config: component(
                 "config",
@@ -317,7 +332,13 @@ mod tests {
             extensions: Vec::new(),
             tool_invocations: vec![tool_component],
             provider_schemas: Vec::<ProviderSchemaSnapshot>::new(),
-        }
+        };
+        assert!(snapshot.requested_capabilities.is_empty());
+        assert_eq!(
+            snapshot.analysis_requirements_identity,
+            Digest::absent(DigestKind::AnalysisRequirements, "requested_capabilities")
+        );
+        snapshot
     }
 
     fn snapshot_with_ts_js(tsconfig_suffix: &str, package_suffix: &str) -> InputSnapshot {

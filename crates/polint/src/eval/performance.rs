@@ -380,23 +380,45 @@ mod tests {
             compute_duration_micros: 123,
         });
 
-        KernelRunReport::new(
-            InputSnapshot {
-                schema_version: "test".to_string(),
-                files: Vec::new(),
-                config: input_component("config"),
-                go_lifecycle: GoLifecycleSnapshot {
-                    components: Vec::new(),
-                },
-                ts_js_lifecycle: TsJsLifecycleSnapshot {
-                    components: Vec::new(),
-                },
-                rules: Vec::new(),
-                models: Vec::new(),
-                extensions: Vec::new(),
-                tool_invocations: Vec::new(),
-                provider_schemas: Vec::new(),
+        let input_snapshot = InputSnapshot {
+            schema_version: crate::analysis_kernel::incremental::INPUT_SNAPSHOT_SCHEMA_VERSION
+                .to_string(),
+            workspace_identity: crate::analysis_kernel::incremental::WorkspaceIdentity::from_roots(
+                [std::path::Path::new("test-workspace")],
+            ),
+            config_identity:
+                crate::analysis_kernel::incremental::ConfigIdentity::from_complete_config_parts(
+                    "config",
+                    &["test"],
+                ),
+            analysis_settings: Vec::new(),
+            requested_capabilities: Vec::new(),
+            analysis_requirements_identity: Digest::absent(
+                DigestKind::AnalysisRequirements,
+                "requested_capabilities",
+            ),
+            files: Vec::new(),
+            config: input_component("config"),
+            go_lifecycle: GoLifecycleSnapshot {
+                components: Vec::new(),
             },
+            ts_js_lifecycle: TsJsLifecycleSnapshot {
+                components: Vec::new(),
+            },
+            rules: Vec::new(),
+            models: Vec::new(),
+            extensions: Vec::new(),
+            tool_invocations: Vec::new(),
+            provider_schemas: Vec::new(),
+        };
+        assert!(input_snapshot.requested_capabilities.is_empty());
+        assert_eq!(
+            input_snapshot.analysis_requirements_identity,
+            Digest::absent(DigestKind::AnalysisRequirements, "requested_capabilities")
+        );
+
+        KernelRunReport::new(
+            input_snapshot,
             provider_outputs,
             trace,
             crate::analysis_kernel::StoreStatus::Disabled,
