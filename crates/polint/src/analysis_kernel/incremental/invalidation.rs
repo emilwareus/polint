@@ -438,30 +438,45 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_index_schema_drops_instead_of_reusing() {
+    fn stale_index_schema_labels_drop_instead_of_reusing() {
         let source_digest = digest(DigestKind::SourceText, "a");
         let source = source("src/a.ts", source_digest.clone());
         let layer = CacheNode::Layer(layer("polint.ts.syntax", "a", None));
-        let mut index = DependencyIndex::from_edges(vec![edge(
-            layer.clone(),
-            source.clone(),
-            DependencyKind::Input,
-            ShapeKind::Content,
-        )]);
-        index.schema_version = "old-schema".to_string();
+        for stale_schema in [
+            "polint-dependency-index-1",
+            "polint-dependency-index-next-typed",
+            "polint-dependency-index-next-query-inputs",
+            "polint-dependency-index-unknown",
+            "polint-dependency-index-3",
+        ] {
+            let mut index = DependencyIndex::from_edges(vec![edge(
+                layer.clone(),
+                source.clone(),
+                DependencyKind::Input,
+                ShapeKind::Content,
+            )]);
+            index.schema_version = stale_schema.to_string();
 
-        let plan = InvalidationPlan::from_change_set(
-            &index,
-            &change(source, ChangeKind::ContentOnly, source_digest),
-        );
+            let plan = InvalidationPlan::from_change_set(
+                &index,
+                &change(
+                    source.clone(),
+                    ChangeKind::ContentOnly,
+                    source_digest.clone(),
+                ),
+            );
 
-        assert!(matches!(
-            plan.action_for(&layer),
-            Some(InvalidationAction::Drop(
-                _,
-                DropReason::DependencyIndexSchemaMismatch
-            ))
-        ));
+            assert!(
+                matches!(
+                    plan.action_for(&layer),
+                    Some(InvalidationAction::Drop(
+                        _,
+                        DropReason::DependencyIndexSchemaMismatch
+                    ))
+                ),
+                "stale schema `{stale_schema}` must conservatively drop reuse"
+            );
+        }
     }
 
     #[test]

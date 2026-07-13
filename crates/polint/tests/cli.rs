@@ -2710,6 +2710,7 @@ fn assert_input_snapshot_vocabulary_is_internal(public_json: &str) {
         );
     }
     assert_analysis_kernel_module_is_crate_private();
+    assert_dependency_index_schema_is_final_and_private();
     assert_incremental_vocabulary_absent_from_public_surfaces();
 }
 
@@ -2726,6 +2727,7 @@ const INTERNAL_INPUT_SNAPSHOT_PUBLIC_MARKERS: &[&str] = &[
     "provider_output.polint",
     "layer_key.polint",
     "polint-input-snapshot-2",
+    FINAL_DEPENDENCY_INDEX_SCHEMA,
     "workspace_identity",
     "config_identity",
     "analysis_settings",
@@ -2734,6 +2736,29 @@ const INTERNAL_INPUT_SNAPSHOT_PUBLIC_MARKERS: &[&str] = &[
     "go.tool_invocation",
     "ts_js.tool_invocation",
 ];
+
+const FINAL_DEPENDENCY_INDEX_SCHEMA: &str = "polint-dependency-index-2";
+
+fn assert_dependency_index_schema_is_final_and_private() {
+    let source_path =
+        repo_root().join("crates/polint/src/analysis_kernel/incremental/dependency_index.rs");
+    let source = fs::read_to_string(&source_path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", source_path.display()));
+    let declaration = format!(
+        "pub(crate) const DEPENDENCY_INDEX_SCHEMA: &str = \"{FINAL_DEPENDENCY_INDEX_SCHEMA}\";"
+    );
+
+    assert!(
+        source.contains(&declaration),
+        "dependency-index schema must have one final crate-private v2 declaration:\n{source}"
+    );
+    let quoted_schema = format!("\"{FINAL_DEPENDENCY_INDEX_SCHEMA}\"");
+    assert_eq!(
+        source.matches(&quoted_schema).count(),
+        1,
+        "the final dependency-index label must be declared exactly once"
+    );
+}
 
 fn assert_analysis_kernel_module_is_crate_private() {
     let lib_rs_path = repo_root().join("crates/polint/src/lib.rs");
@@ -2771,6 +2796,7 @@ fn assert_incremental_vocabulary_absent_from_public_surfaces() {
         "ProviderOutputMeta",
         "CacheStats",
         "KernelRunReport",
+        FINAL_DEPENDENCY_INDEX_SCHEMA,
     ] {
         assert!(
             !public_surface.contains(marker),

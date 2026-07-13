@@ -8,7 +8,7 @@ use super::digest::{Digest, DigestKind};
 use super::input_snapshot::InputComponentStatus;
 use super::keys::{DiagnosticKey, LayerKey, QueryKey, SummaryKey, dependency_layer_digest};
 
-pub(crate) const DEPENDENCY_INDEX_SCHEMA: &str = "polint-dependency-index-next-query-inputs";
+pub(crate) const DEPENDENCY_INDEX_SCHEMA: &str = "polint-dependency-index-2";
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -809,33 +809,87 @@ mod tests {
 
     #[test]
     fn typed_index_round_trips_and_stale_labels_fail_closed() {
-        let source = source("src/a.ts");
-        let layer = CacheNode::Layer(layer("polint.ts.syntax", "a"));
-        let index = DependencyIndex::from_edges(vec![edge(layer, source, ShapeKind::Content)]);
+        let declared_input = InputDependencyKey::requested_capability(
+            "requested_capability:calls:none",
+            digest(DigestKind::AnalysisRequirements, "calls"),
+            InputComponentStatus::Present,
+        )
+        .expect("capability dependency");
+        let query_key = query(QueryDependencyInputs::new(vec![declared_input]));
+        let index = DependencyIndex::from_edges(query_dependency_edges(&query_key));
         let typed_wire = serde_json::to_value(&index).expect("typed index serializes");
 
         assert_eq!(typed_wire["schema_version"], DEPENDENCY_INDEX_SCHEMA);
+        let edges = typed_wire["edges"]
+            .as_array()
+            .expect("canonical edge vector");
+        assert!(!edges.is_empty());
+        for edge in edges {
+            for endpoint_name in ["from", "to"] {
+                let endpoint = edge[endpoint_name]
+                    .as_object()
+                    .expect("typed cache-node endpoint");
+                assert_eq!(endpoint.len(), 1);
+                assert!(endpoint.keys().all(|kind| matches!(
+                    kind.as_str(),
+                    "dependency_input" | "layer" | "query" | "summary" | "diagnostic"
+                )));
+            }
+        }
+        let serialized_query = edges
+            .iter()
+            .find_map(|edge| edge["from"].get("query"))
+            .expect("query endpoint must be serialized");
+        assert_eq!(
+            serialized_query["dependency_inputs"][0]["kind"],
+            "requested_capability"
+        );
         assert_eq!(
             serde_json::from_value::<DependencyIndex>(typed_wire.clone())
                 .expect("current typed index deserializes"),
             index
         );
 
-        let legacy_wire = serde_json::json!({
-            "schema_version": "polint-dependency-index-1",
-            "edges": [],
-        });
-        assert!(serde_json::from_value::<DependencyIndex>(legacy_wire).is_err());
+        let mut missing_query_inputs = typed_wire.clone();
+        for edge in missing_query_inputs["edges"]
+            .as_array_mut()
+            .expect("canonical edge vector")
+        {
+            if let Some(query) = edge["from"].get_mut("query") {
+                query
+                    .as_object_mut()
+                    .expect("query endpoint")
+                    .remove("dependency_inputs");
+            }
+        }
+        assert!(
+            serde_json::from_value::<DependencyIndex>(missing_query_inputs).is_err(),
+            "query dependency declarations are mandatory in the final wire shape"
+        );
 
-        let mut forged_v1 = typed_wire;
-        forged_v1["schema_version"] = "polint-dependency-index-1".into();
-        assert!(serde_json::from_value::<DependencyIndex>(forged_v1).is_err());
+        for stale_schema in [
+            "polint-dependency-index-1",
+            "polint-dependency-index-next-typed",
+            "polint-dependency-index-next-query-inputs",
+            "polint-dependency-index-unknown",
+            "polint-dependency-index-3",
+        ] {
+            let stale_wire = serde_json::json!({
+                "schema_version": stale_schema,
+                "edges": [],
+            });
+            assert!(
+                serde_json::from_value::<DependencyIndex>(stale_wire).is_err(),
+                "stale schema `{stale_schema}` must fail closed"
+            );
 
-        let old_temporary_wire = serde_json::json!({
-            "schema_version": "polint-dependency-index-next-typed",
-            "edges": [],
-        });
-        assert!(serde_json::from_value::<DependencyIndex>(old_temporary_wire).is_err());
+            let mut forged_current_shape = typed_wire.clone();
+            forged_current_shape["schema_version"] = stale_schema.into();
+            assert!(
+                serde_json::from_value::<DependencyIndex>(forged_current_shape).is_err(),
+                "current fields must not make stale schema `{stale_schema}` readable"
+            );
+        }
     }
 
     #[test]

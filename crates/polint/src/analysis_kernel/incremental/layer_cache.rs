@@ -1434,31 +1434,44 @@ mod tests {
     }
 
     #[test]
-    fn explicit_and_forged_v1_manifest_pins_reject_typed_dependencies() {
-        let scratch = scratch_dir();
-        let store = LayerCacheStore::new(scratch.path().join("layers"), true);
+    fn stale_dependency_index_schema_labels_are_rejected_and_evicted() {
         let payload = Payload {
             items: vec!["a".to_string()],
         };
-        let layer_key = derived_key();
-        let mut manifest = manifest_for_payload(layer_key.clone(), &payload);
-        manifest.dependency_index_schema = "polint-dependency-index-1".to_string();
+        for stale_schema in [
+            "polint-dependency-index-1",
+            "polint-dependency-index-next-typed",
+            "polint-dependency-index-next-query-inputs",
+            "polint-dependency-index-unknown",
+            "polint-dependency-index-3",
+        ] {
+            let scratch = scratch_dir();
+            let store = LayerCacheStore::new(scratch.path().join("layers"), true);
+            let layer_key = derived_key();
+            let mut manifest = manifest_for_payload(layer_key.clone(), &payload);
+            manifest.dependency_index_schema = stale_schema.to_string();
 
-        let write_error = store
-            .write_json(&manifest, &payload)
-            .expect_err("v1 manifest pin must reject a typed dependency");
-        assert!(
-            write_error
-                .to_string()
-                .contains("unsupported layer cache manifest metadata")
-        );
+            let write_error = store
+                .write_json(&manifest, &payload)
+                .expect_err("stale manifest pin must reject typed dependencies");
+            assert!(
+                write_error
+                    .to_string()
+                    .contains("unsupported layer cache manifest metadata"),
+                "stale schema `{stale_schema}` must be rejected before publication"
+            );
 
-        store
-            .write_json_without_repair_for_test(&manifest, &payload)
-            .expect("test fixture bypasses metadata validation");
-        let forged_read: LayerCacheReadOutcome<Payload> = store.read_json(&layer_key);
+            store
+                .write_json_without_repair_for_test(&manifest, &payload)
+                .expect("test fixture bypasses metadata validation");
+            let forged_read: LayerCacheReadOutcome<Payload> = store.read_json(&layer_key);
 
-        assert_eq!(forged_read.status, LayerCacheReadStatus::InvalidEvicted);
+            assert_eq!(
+                forged_read.status,
+                LayerCacheReadStatus::InvalidEvicted,
+                "stale schema `{stale_schema}` must take the invalid-read path"
+            );
+        }
     }
 
     #[test]
