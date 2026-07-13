@@ -22,7 +22,7 @@ mod stats;
     not(test),
     expect(
         unused_imports,
-        reason = "Layer manifest reuse consumes this vocabulary; some future change kinds remain reserved."
+        reason = "layer manifest reuse retains the complete conservative invalidation classification"
     )
 )]
 pub(crate) use change_set::{ChangeKind, ChangeSet, ChangeSetRow};
@@ -55,14 +55,14 @@ pub(crate) use demand::{
 )]
 #[cfg_attr(
     not(test),
-    expect(
+    allow(
         unused_imports,
-        reason = "Layer manifests consume dependency indexes; some future shapes remain reserved."
+        reason = "the crate-private dependency vocabulary is shared across cache and persistence boundaries"
     )
 )]
 pub(crate) use dependency_index::{
-    CacheNode, DEPENDENCY_INDEX_SCHEMA, DependencyEdge, DependencyIndex, DependencyKind, ShapeKind,
-    query_dependency_edges,
+    CacheNode, CacheNodeKind, DEPENDENCY_INDEX_SCHEMA, DependencyEdge, DependencyIndex,
+    DependencyKind, ShapeKind, query_dependency_edges,
 };
 #[cfg_attr(
     test,
@@ -75,7 +75,7 @@ pub(crate) use dependency_index::{
     not(test),
     expect(
         unused_imports,
-        reason = "typed dependency inputs remain isolated until producers migrate together with their dependency consumers"
+        reason = "typed dependency inputs stay isolated with the consumers that validate their digest purpose"
     )
 )]
 pub(crate) use dependency_input::{
@@ -120,7 +120,7 @@ pub(crate) use input_snapshot::{
     not(test),
     expect(
         unused_imports,
-        reason = "Layer manifest reuse consumes invalidation plans; some future actions remain reserved."
+        reason = "layer manifest reuse retains every conservative cache-decision action"
     )
 )]
 pub(crate) use invalidation::{

@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 mod commit_plan;
 mod connection;
 mod migrations;
+mod schema;
 
 #[cfg(test)]
 pub(crate) use connection::{HeldWriterConnection, StoreFixtureSnapshot};
@@ -113,7 +114,7 @@ impl SemanticStore {
     not(test),
     expect(
         dead_code,
-        reason = "Explicit store rebuild is retained for a later controlled recovery entry point."
+        reason = "Explicit rebuild remains the controlled recovery path for an owned invalid cache."
     )
 )]
 pub(crate) fn rebuild_owned_cache_store(config: &StoreConfig, candidate: &Path) -> StoreStatus {

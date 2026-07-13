@@ -18,8 +18,8 @@ fn status_vocabulary_is_typed_and_comparable() {
         StoreStatus::Ready,
         StoreStatus::BusySkipped,
         StoreStatus::Skipped(StoreSkipReason::FutureSchema {
-            found: 2,
-            supported: 1,
+            found: migrations::CURRENT_SCHEMA_VERSION + 1,
+            supported: migrations::CURRENT_SCHEMA_VERSION,
         }),
         StoreStatus::Skipped(StoreSkipReason::UnsafePath),
         StoreStatus::Skipped(StoreSkipReason::OpenFailed),
@@ -245,15 +245,18 @@ mod recovery {
         future
             .execute_batch(
                 "CREATE TABLE sentinel (value TEXT NOT NULL);\
-                 INSERT INTO sentinel (value) VALUES ('future-data');\
-                 PRAGMA user_version = 2;",
+                 INSERT INTO sentinel (value) VALUES ('future-data');",
             )
             .expect("create future fixture");
+        let future_version = migrations::CURRENT_SCHEMA_VERSION + 1;
+        future
+            .pragma_update(None, "user_version", future_version)
+            .expect("set future schema version");
         drop(future);
         let original_bytes = fs::read(&path).expect("read original future store");
         let config = StoreConfig::new(&path, true);
         let future_status = StoreStatus::Skipped(StoreSkipReason::FutureSchema {
-            found: 2,
+            found: future_version,
             supported: migrations::CURRENT_SCHEMA_VERSION,
         });
 
@@ -274,7 +277,7 @@ mod recovery {
         let value: String = preserved
             .query_row("SELECT value FROM sentinel", [], |row| row.get(0))
             .expect("sentinel value");
-        assert_eq!(version, 2);
+        assert_eq!(version, future_version);
         assert_eq!(value, "future-data");
     }
 

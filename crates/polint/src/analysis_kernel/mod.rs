@@ -26,7 +26,7 @@ pub(crate) use metadata::{
 )]
 #[cfg_attr(
     not(test),
-    expect(
+    allow(
         unused_imports,
         reason = "canonical provider codecs are shared with private metadata projection and readers"
     )
@@ -91,7 +91,7 @@ pub(crate) struct KernelOutput {
         not(test),
         expect(
             dead_code,
-            reason = "The crate-private run report is consumed by internal tests and eval fixtures before a public surface exists."
+            reason = "the crate-private run report is consumed only by internal tests and evaluation fixtures"
         )
     )]
     pub(crate) run_report: incremental::KernelRunReport,
@@ -1616,7 +1616,7 @@ mod tests {
                 (
                     StoreMode::Future,
                     StoreStatus::Skipped(store::StoreSkipReason::FutureSchema {
-                        found: 2,
+                        found: store::CURRENT_SCHEMA_VERSION_FOR_TEST + 1,
                         supported: store::CURRENT_SCHEMA_VERSION_FOR_TEST,
                     }),
                 ),

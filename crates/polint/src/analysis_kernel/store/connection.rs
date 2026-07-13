@@ -322,8 +322,14 @@ pub(super) fn install_future_fixture_for_test(path: &Path) -> Result<(), Connect
     connection
         .execute_batch(
             "CREATE TABLE sentinel (value TEXT NOT NULL);\
-             INSERT INTO sentinel (value) VALUES ('future-data');\
-             PRAGMA user_version = 2;",
+             INSERT INTO sentinel (value) VALUES ('future-data');",
+        )
+        .map_err(classify_sqlite_error)?;
+    connection
+        .pragma_update(
+            None,
+            "user_version",
+            super::migrations::CURRENT_SCHEMA_VERSION + 1,
         )
         .map_err(classify_sqlite_error)
 }
@@ -403,8 +409,49 @@ pub(super) fn fixture_snapshot_for_test(
 
 #[cfg(test)]
 pub(super) fn current_schema_is_valid_for_test(path: &Path) -> bool {
-    fixture_snapshot_for_test(path).is_ok_and(|snapshot| {
-        snapshot.version == super::migrations::CURRENT_SCHEMA_VERSION
-            && snapshot.bootstrap_markers == Some(1)
-    })
+    Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(classify_sqlite_error)
+        .and_then(|connection| preflight_schema(&connection).map_err(classify_migration_error))
+        .is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn future_fixture_tracks_the_current_schema_without_mutation() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let path = temp.path().join("store.sqlite3");
+        install_future_fixture_for_test(&path).expect("install future fixture");
+        let before = fixture_snapshot_for_test(&path).expect("snapshot future fixture");
+
+        let future = super::super::migrations::CURRENT_SCHEMA_VERSION + 1;
+        assert!(matches!(
+            open_writer(&path),
+            Err(ConnectionError::FutureSchema {
+                found,
+                supported: super::super::migrations::CURRENT_SCHEMA_VERSION,
+            }) if found == future
+        ));
+        assert_eq!(
+            fixture_snapshot_for_test(&path).expect("snapshot preserved fixture"),
+            before
+        );
+    }
+
+    #[test]
+    fn current_schema_probe_uses_strict_shape_validation() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let path = temp.path().join("store.sqlite3");
+        let writer = open_writer(&path).expect("initialize store");
+        assert!(current_schema_is_valid_for_test(&path));
+        writer
+            .connection
+            .execute_batch("ALTER TABLE fact_metadata ADD COLUMN payload_blob TEXT;")
+            .expect("tamper schema");
+        drop(writer);
+
+        assert!(!current_schema_is_valid_for_test(&path));
+    }
 }
