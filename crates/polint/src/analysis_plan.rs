@@ -360,6 +360,41 @@ impl AnalysisPlan {
         Self::finish(rules, capabilities, Vec::new())
     }
 
+    #[cfg(test)]
+    pub(crate) fn with_capability_support_for_test(
+        mut self,
+        capability: &str,
+        status: CapabilitySupportStatus,
+    ) -> Self {
+        let planned = self
+            .capabilities
+            .iter_mut()
+            .find(|planned| planned.capability == capability)
+            .unwrap_or_else(|| panic!("missing requested capability {capability}"));
+        planned.status = status;
+        Self::finish(self.rules, self.capabilities, self.setup_checks)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_setup_status_for_test(mut self, capability: &str, status: &str) -> Self {
+        assert!(
+            self.capabilities
+                .iter()
+                .any(|planned| planned.capability == capability),
+            "missing requested capability {capability}"
+        );
+        self.setup_checks.push(SetupCheck {
+            id: format!("{capability}-setup"),
+            capability: capability.to_string(),
+            language: None,
+            status: status.to_string(),
+            reason: None,
+            hint: None,
+            docs_path: None,
+        });
+        Self::finish(self.rules, self.capabilities, self.setup_checks)
+    }
+
     fn finish(
         rules: Vec<PlannedRule>,
         capabilities: Vec<PlannedCapability>,

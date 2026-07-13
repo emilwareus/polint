@@ -278,7 +278,7 @@ mod tests {
             crate::cache::keys::AnalysisSettingsScope::TypeValueAlias,
             true,
             true,
-            true,
+            false,
             |snapshot| {
                 super::type_value_alias_output_digest(
                     manifest,

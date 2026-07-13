@@ -775,7 +775,8 @@ impl LayerKey {
     pub(crate) fn direct_summaries_layer_key(
         manifest: &ProviderManifest,
         source_function_digests: Vec<Digest>,
-        config_digest: Digest,
+        analysis_settings_digest: Digest,
+        analysis_requirements_digest: Digest,
         go_lifecycle_digest: Digest,
         ts_js_lifecycle_digest: Digest,
         upstream_syntax_output_digests: Vec<Digest>,
@@ -802,10 +803,16 @@ impl LayerKey {
             "direct_summaries_parameters",
             vec![direct_summaries_parameter_digest.clone()],
         );
-        let mut input_digests = Vec::with_capacity(3 + source_function_digests.len());
+        assert_eq!(
+            analysis_requirements_digest.kind,
+            DigestKind::AnalysisRequirements,
+            "direct-summary layer keys require typed analysis requirements"
+        );
+        let mut input_digests = Vec::with_capacity(4 + source_function_digests.len());
         input_digests.push(go_lifecycle_digest);
         input_digests.push(ts_js_lifecycle_digest);
         input_digests.push(direct_summaries_parameter_digest);
+        input_digests.push(analysis_requirements_digest);
         input_digests.extend(source_function_digests);
 
         let mut dependency_layer_digests =
@@ -822,14 +829,14 @@ impl LayerKey {
         dependency_layer_digests.push(dependency_layer_digest(symbol_graph_output_digest));
         dependency_layer_digests.push(dependency_layer_digest(module_topology_output_digest));
 
-        Self::new(
+        Self::new_with_analysis_settings(
             LayerKind::DirectSummaries,
             manifest.id,
             manifest.provider_version(),
             manifest.primary_schema_label(),
             parameter_digest,
             lifecycle_digest,
-            config_digest,
+            analysis_settings_digest,
             Digest::absent(DigestKind::ToolInvocation, "direct_summaries_toolchain"),
             input_digests,
             dependency_layer_digests,
@@ -2645,10 +2652,9 @@ mod tests {
             let (constructor, next) = ("direct_summaries_layer_key", "combine_digests_into");
             let body = constructor_body(source, constructor, next);
             assert!(
-                body.contains("Self::new("),
-                "{constructor} is an explicitly untyped settings seam"
+                body.contains("Self::new_with_analysis_settings("),
+                "{constructor} must use the purpose-checked constructor"
             );
-            assert!(!body.contains("Self::new_with_analysis_settings("));
         }
         let removed_bridge = ["from_existing", "_file_cache"].concat();
         assert!(!source.contains(&removed_bridge));

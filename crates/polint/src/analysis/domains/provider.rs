@@ -178,9 +178,6 @@ fn abstract_domains_output_digest(
         "ts_js_lifecycle",
         &input_snapshot.ts_js_lifecycle.components,
     );
-    extend_component_parts(&mut parts, "model", &input_snapshot.models);
-    extend_component_parts(&mut parts, "extension", &input_snapshot.extensions);
-    extend_component_parts(&mut parts, "tool", &input_snapshot.tool_invocations);
     parts.extend(
         upstream_syntax_output_digests
             .iter()
@@ -364,7 +361,7 @@ mod abstract_domains_provider {
             crate::cache::keys::AnalysisSettingsScope::AbstractDomains,
             true,
             true,
-            true,
+            false,
             |snapshot| {
                 super::abstract_domains_output_digest(
                     manifest,

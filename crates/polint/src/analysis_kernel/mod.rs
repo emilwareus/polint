@@ -181,7 +181,7 @@ impl AnalysisKernel {
                 go_mb = go_bytes / 1_048_576,
                 ts,
                 ts_mb = ts_bytes / 1_048_576,
-                "phase: source files loaded"
+                "stage: source files loaded"
             );
         }
         let input_snapshot = incremental::InputSnapshot::from_run_inputs_with_plan(
@@ -213,7 +213,7 @@ impl AnalysisKernel {
             input.parallel,
         );
         let go_output_digest = go_output.output_digest.clone();
-        tracing::info!(target: "polint::kernel", "phase: go.syntax done");
+        tracing::info!(target: "polint::kernel", "stage: go.syntax done");
         diagnostics.extend(go_output.diagnostics);
         provider_outputs.push(Self::provider_output_for_with_optional_digest(
             "polint.go.syntax",
@@ -234,7 +234,7 @@ impl AnalysisKernel {
             input.parallel,
         );
         let ts_output_digest = ts_output.output_digest.clone();
-        tracing::info!(target: "polint::kernel", "phase: ts.syntax done");
+        tracing::info!(target: "polint::kernel", "stage: ts.syntax done");
         diagnostics.extend(ts_output.diagnostics);
         provider_outputs.push(Self::provider_output_for_with_optional_digest(
             "polint.ts.syntax",
@@ -566,6 +566,13 @@ impl AnalysisKernel {
             Default::default()
         };
         let polint_direct_summaries_cache_stats = direct_summaries.cache_stats.clone();
+        let direct_summaries_initial_output_digest =
+            direct_summaries.output_digest.clone().unwrap_or_else(|| {
+                incremental::Digest::absent(
+                    incremental::DigestKind::ProviderOutput,
+                    "polint.direct_summaries",
+                )
+            });
         diagnostics.extend(direct_summaries.diagnostics);
 
         // SCC closure: interprocedural summary improvement over SCCs.
@@ -574,9 +581,9 @@ impl AnalysisKernel {
             crate::analysis::summaries::provider::run_scc_closure_with_cache(
                 &mut db,
                 input.cache,
-                input.config_digest,
-                input.rule_digest,
-                input.plan.digest(),
+                &input_snapshot,
+                &direct_summaries_initial_output_digest,
+                &entrypoints_calls_digest,
             )
         } else {
             Default::default()
@@ -648,8 +655,8 @@ impl AnalysisKernel {
             )
         });
 
-        // polint.reachability runs immediately after polint.entrypoints (D-19),
-        // consuming the calls/entrypoints/identity/symbol/topology output digests.
+        // Reachability runs immediately after entrypoint discovery and consumes
+        // the calls, entrypoints, identity, symbol, and topology outputs.
         let reachability = if run_full_refinement_pipeline {
             crate::analysis::reachability::provider::derive_reachability_with_cache_stats(
                 &mut db,
@@ -750,8 +757,8 @@ impl AnalysisKernel {
                 )
             });
 
-        // Thread the per-language solver config into SolverBudget (D-10/D-11),
-        // mirroring how the reachability provider reaches `reachability.roots`.
+        // Thread the per-language solver config into SolverBudget, mirroring how
+        // the reachability provider receives `reachability.roots`.
         // Cross-domain fields stay at their defaults; absent config falls back to each
         // sub-budget default. The adaptation sub-budget is passed to semantic_graph as
         // well because model files lower into semantic constraints before the solver
@@ -764,11 +771,9 @@ impl AnalysisKernel {
             ..crate::analysis::solver::budget::SolverBudget::default()
         };
 
-        // polint.semantic_graph runs between polint.type_value_alias and
-        // polint.refined_calls (D-16). It projects the unified node/edge/constraint
-        // graph from already-stored facts plus repo-local adaptation models, and folds
-        // every consumed upstream provider output digest into its own output digest
-        // (D-17).
+        // Semantic graph projection runs after type/value aliases. It projects the
+        // unified graph from stored facts and repo-local adaptation models, folding
+        // every consumed upstream provider output into its own identity.
         let semantic_graph = if run_full_refinement_pipeline {
             crate::analysis::semantic_graph::provider::derive_semantic_graph_with_cache_stats(
                 &mut db,
@@ -810,19 +815,10 @@ impl AnalysisKernel {
                 )
             });
 
-        // polint.solver runs between polint.semantic_graph and polint.refined_calls
-        // (D-13). It drives the unified solver engine over
-        // the closed input snapshot (the stored semantic-graph constraints), emits
-        // derived edges + provenance, and folds the semantic_graph + points-to source
-        // (type_value_alias) + go.semantic output digests plus the SolverBudget into its
-        // own output digest (D-15). The go.semantic digest is folded because the Go RTA
-        // policy reads the stored go.semantic RTA-signal families (instantiated_types /
-        // address_taken / dynamic_dispatch / method_sets) via GoRtaInputs::from_db, so a Go
-        // edit touching ONLY those families changes the RTA-resolved edges and must
-        // invalidate the solver cache (FIX 4 — without this the provider docstring's "any
-        // upstream change invalidates the solver cache" was false). Auto-enrolls in the
-        // the determinism gate (D-14). Thread the per-language solver config into
-        // SolverBudget (D-10/D-11).
+        // The solver consumes the closed semantic graph and emits derived edges with
+        // provenance. Its identity includes semantic graph, type/value aliases,
+        // Go-semantic output, and SolverBudget because Go RTA reads instantiated-type,
+        // address-taken, dynamic-dispatch, and method-set signals from that output.
         let solver = if run_full_refinement_pipeline {
             crate::analysis::solver::provider::derive_solver_with_cache_stats(
                 &mut db,
@@ -956,7 +952,7 @@ impl AnalysisKernel {
             polint_metrics_cache_stats,
             metrics_output_digest,
         ));
-        tracing::info!(target: "polint::kernel", "phase: metrics + derived done");
+        tracing::info!(target: "polint::kernel", "stage: metrics + derived done");
         let validation_diagnostics =
             validation::validate_fact_metadata(&db, Self::provider_manifests());
         diagnostics.extend(validation_diagnostics);
@@ -1121,16 +1117,20 @@ fn provider_output_summary_parts(
 mod tests {
     use super::*;
     use crate::analysis_kernel::incremental::{CacheStats, INPUT_SNAPSHOT_SCHEMA_VERSION};
-    use crate::config::load_config;
+    use crate::analysis_plan::RulePlanInputs;
+    use crate::cache::keys::config_hash;
+    use crate::config::{LoadedConfig, RuleConfig, load_config};
     use crate::core::{
-        BranchObligation, ComplexityMetricFact, CoverageFact, DefinitionFact, DefinitionId,
-        DefinitionKind, FileMetricFact, FunctionFact, FunctionId, FunctionMetricFact, ImportFact,
-        ImportId, JsxAttributeFact, Language, ModuleEdge, ModuleEdgeId, ModuleEdgeKind, ModuleNode,
-        ModuleNodeId, ModuleNodeKind, PackageFact, PackageId, ReferenceFact, ReferenceId,
-        ReferenceKind, ResolutionPrecision, ResolutionStatus, ResolvedImportFact, ResolvedImportId,
-        Span, StringLiteralFact, SymbolFact, SymbolId, SymbolKind, SymbolNamespace,
-        SymbolPrecision, SymbolResolutionStatus, TestFact, TsClassFact, TsComponentFact,
+        BranchObligation, Capabilities, CapabilitySupportStatus, ComplexityMetricFact,
+        CoverageFact, DefinitionFact, DefinitionId, DefinitionKind, FileMetricFact, FunctionFact,
+        FunctionId, FunctionMetricFact, ImportFact, ImportId, JsxAttributeFact, Language,
+        ModuleEdge, ModuleEdgeId, ModuleEdgeKind, ModuleNode, ModuleNodeId, ModuleNodeKind,
+        PackageFact, PackageId, ReferenceFact, ReferenceId, ReferenceKind, ResolutionPrecision,
+        ResolutionStatus, ResolvedImportFact, ResolvedImportId, Rule, RuleKind, RuleMeta, Span,
+        StringLiteralFact, SymbolFact, SymbolId, SymbolKind, SymbolNamespace, SymbolPrecision,
+        SymbolResolutionStatus, TestFact, TsClassFact, TsComponentFact,
     };
+    use crate::diagnostics::Severity;
     use std::path::{Path, PathBuf};
     use std::time::Instant;
 
@@ -2958,6 +2958,736 @@ function setup() {
                 },
             ]
         );
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum RuleOnlyMutation {
+        Severity,
+        Files,
+        AllowFiles,
+        Allow,
+        Deny,
+        Max,
+        ForbiddenImports,
+        Description,
+        Settings,
+    }
+
+    impl RuleOnlyMutation {
+        const ALL: [Self; 9] = [
+            Self::Severity,
+            Self::Files,
+            Self::AllowFiles,
+            Self::Allow,
+            Self::Deny,
+            Self::Max,
+            Self::ForbiddenImports,
+            Self::Description,
+            Self::Settings,
+        ];
+
+        fn apply(self, config: &mut RuleConfig) {
+            match self {
+                Self::Severity => config.severity = Some("error".to_string()),
+                Self::Files => config.files = vec!["src/**/*.ts".to_string()],
+                Self::AllowFiles => config.allow_files = vec!["generated/**".to_string()],
+                Self::Allow => config.allow = vec!["permitted".to_string()],
+                Self::Deny => config.deny = vec!["forbidden".to_string()],
+                Self::Max => config.max = Some(7),
+                Self::ForbiddenImports => {
+                    config
+                        .forbidden_imports
+                        .insert("src/**".to_string(), vec!["internal/**".to_string()]);
+                }
+                Self::Settings => {
+                    config
+                        .settings
+                        .insert("threshold".to_string(), toml::Value::Integer(7));
+                }
+                Self::Description => {}
+            }
+        }
+
+        fn description(self) -> &'static str {
+            if matches!(self, Self::Description) {
+                "Changed rule description"
+            } else {
+                "Baseline rule description"
+            }
+        }
+    }
+
+    struct IdentityRun {
+        output: KernelOutput,
+        config_digest: String,
+        rule_digest: String,
+        plan_digest: String,
+    }
+
+    fn identity_rule(description: &str, capabilities: Capabilities) -> Rule {
+        let description = description.to_string();
+        Rule::from_parts(
+            move || RuleMeta {
+                id: "local/identity-probe".to_string(),
+                description: description.clone(),
+                severity: Severity::Warn,
+                kind: RuleKind::Check,
+            },
+            move || capabilities,
+            |_db, _ctx| Ok(()),
+        )
+    }
+
+    fn identity_rule_config() -> RuleConfig {
+        RuleConfig {
+            id: "local/identity-probe".to_string(),
+            severity: None,
+            files: Vec::new(),
+            allow_files: Vec::new(),
+            allow: Vec::new(),
+            max: None,
+            deny: Vec::new(),
+            forbidden_imports: Default::default(),
+            settings: Default::default(),
+        }
+    }
+
+    fn identity_loaded(root: &Path) -> LoadedConfig {
+        let mut loaded = load_config(root).expect("default config loads");
+        loaded.config.rules.config.push(identity_rule_config());
+        loaded
+    }
+
+    fn run_identity_case<F>(
+        loaded: &LoadedConfig,
+        cache: &Cache,
+        description: &str,
+        capabilities: Capabilities,
+        transform_plan: F,
+    ) -> IdentityRun
+    where
+        F: FnOnce(AnalysisPlan) -> AnalysisPlan,
+    {
+        let rules = [identity_rule(description, capabilities)];
+        let inputs = RulePlanInputs::collect(&rules, None);
+        let options = inputs.rule_options_from_config(loaded);
+        let rule_digest = inputs.rule_digest(&options);
+        let plan = transform_plan(AnalysisPlan::from_inputs(&inputs, &options));
+        let plan_digest = plan.digest().to_string();
+        let config_digest = config_hash(loaded);
+        let output = AnalysisKernel::run(KernelInput {
+            loaded,
+            cache,
+            config_digest: &config_digest,
+            rule_digest: &rule_digest,
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("identity fixture kernel run should succeed");
+        IdentityRun {
+            output,
+            config_digest,
+            rule_digest,
+            plan_digest,
+        }
+    }
+
+    fn provider_digest(
+        output: &KernelOutput,
+        provider_id: &str,
+    ) -> crate::analysis_kernel::incremental::Digest {
+        provider_output(output, provider_id).output_digest.clone()
+    }
+
+    fn scc_backdated_count(output: &KernelOutput) -> usize {
+        output
+            .run_report
+            .scc_closure_debug()
+            .unwrap_or_else(|| panic!("missing SCC closure debug snapshot"))
+            .result
+            .backdated_sccs
+    }
+
+    fn assert_cached_analysis_reused(output: &KernelOutput, case: &str) {
+        for provider_id in [
+            "polint.ts.syntax",
+            "polint.module_graph",
+            "polint.symbol_graph",
+        ] {
+            let stats = &provider_output(output, provider_id).cache_stats;
+            assert!(
+                stats.hits > 0 && stats.verified_reuse > 0,
+                "{case}: expected verified reuse for {provider_id}, got {stats:?}"
+            );
+            assert_eq!(
+                stats.recomputes, 0,
+                "{case}: cached provider {provider_id} recomputed"
+            );
+        }
+    }
+
+    fn assert_same_provider_digests(
+        baseline: &KernelOutput,
+        candidate: &KernelOutput,
+        provider_ids: &[&str],
+        case: &str,
+    ) {
+        for provider_id in provider_ids {
+            assert_eq!(
+                provider_digest(baseline, provider_id),
+                provider_digest(candidate, provider_id),
+                "{case}: {provider_id} output identity changed"
+            );
+        }
+    }
+
+    fn write_identity_source(root: &Path) {
+        std::fs::create_dir_all(root.join("src")).expect("create source directory");
+        std::fs::write(root.join("package.json"), r#"{"name":"identity-fixture"}"#)
+            .expect("write package manifest");
+        std::fs::write(
+            root.join("src/app.ts"),
+            "export function target(value: number) { return value + 1; }\n\
+             export function caller(value: number) { return target(value); }\n",
+        )
+        .expect("write TypeScript source");
+    }
+
+    #[test]
+    fn rule_only_changes_preserve_analysis_hits() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_identity_source(temp.path());
+        let baseline_loaded = identity_loaded(temp.path());
+        let cache = Cache::new(temp.path().join(".cache/analysis"), true);
+        let baseline = run_identity_case(
+            &baseline_loaded,
+            &cache,
+            "Baseline rule description",
+            Capabilities::new().calls(),
+            |plan| plan,
+        );
+        assert_eq!(scc_backdated_count(&baseline.output), 0);
+
+        for mutation in RuleOnlyMutation::ALL {
+            let mut loaded = baseline_loaded.clone();
+            mutation.apply(
+                loaded
+                    .config
+                    .rules
+                    .config
+                    .first_mut()
+                    .expect("identity rule config"),
+            );
+            let candidate = run_identity_case(
+                &loaded,
+                &cache,
+                mutation.description(),
+                Capabilities::new().calls(),
+                |plan| plan,
+            );
+            let case = format!("{mutation:?}");
+
+            assert_ne!(baseline.rule_digest, candidate.rule_digest, "{case}");
+            assert_ne!(baseline.plan_digest, candidate.plan_digest, "{case}");
+            assert_ne!(
+                baseline.output.run_report.input_snapshot.semantic_digest(),
+                candidate.output.run_report.input_snapshot.semantic_digest(),
+                "{case}: complete input identity did not change"
+            );
+            assert_ne!(
+                baseline.output.run_report.input_snapshot.rules,
+                candidate.output.run_report.input_snapshot.rules,
+                "{case}: rule snapshot rows did not change"
+            );
+            if !matches!(mutation, RuleOnlyMutation::Description) {
+                assert_ne!(baseline.config_digest, candidate.config_digest, "{case}");
+                assert_ne!(
+                    baseline.output.run_report.input_snapshot.config_identity,
+                    candidate.output.run_report.input_snapshot.config_identity,
+                    "{case}: complete config identity did not change"
+                );
+            }
+
+            assert_cached_analysis_reused(&candidate.output, &case);
+            assert!(
+                scc_backdated_count(&candidate.output) > 0,
+                "{case}: SCC closure did not reuse its prior output"
+            );
+            assert_same_provider_digests(
+                &baseline.output,
+                &candidate.output,
+                &[
+                    "polint.calls",
+                    "polint.direct_summaries",
+                    "polint.entrypoints",
+                    "polint.reachability",
+                    "polint.extensions",
+                    "polint.type_value_alias",
+                    "polint.semantic_graph",
+                    "polint.solver",
+                    "polint.refined_calls",
+                ],
+                &case,
+            );
+        }
+    }
+
+    fn write_adaptation_model(root: &Path) {
+        let model_dir = root.join(".polint/models");
+        std::fs::create_dir_all(&model_dir).expect("create model directory");
+        std::fs::write(
+            model_dir.join("identity.toml"),
+            r#"
+[[facts]]
+source_pattern = "call:src/app.ts:2:target"
+target_pattern = "function:src/app.ts:1:target"
+confidence = "heuristic"
+language = "typescript"
+scope = "src/app.ts"
+evidence = ["src/app.ts:2"]
+"#,
+        )
+        .expect("write adaptation model");
+    }
+
+    fn write_extension_fixture(root: &Path) -> PathBuf {
+        let extension = root.join(".polint/extensions/identity-probe");
+        std::fs::create_dir_all(extension.join("src")).expect("create extension source directory");
+        std::fs::write(
+            extension.join("Cargo.toml"),
+            "[package]\nname = \"identity-probe\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .expect("write extension manifest");
+        std::fs::write(
+            extension.join("Cargo.lock"),
+            "version = 4\n\n[[package]]\nname = \"identity-probe\"\nversion = \"0.1.0\"\n",
+        )
+        .expect("write extension lockfile");
+        std::fs::write(extension.join("declared.txt"), "input-v1\n")
+            .expect("write extension-declared input");
+        std::fs::write(
+            extension.join("src/main.rs"),
+            r###"
+use std::{env, fs};
+
+fn main() {
+    match env::args().nth(1).as_deref() {
+        Some("handshake") => println!(
+            "{}",
+            r#"{"schema_version":"polint-extension-handshake-v1","extension_id":"identity-probe","activation_status":"handshake_ok","providers":[{"provider_id":"probe","declared_inputs":[],"declared_outputs":[]}],"diagnostics":[]}"#
+        ),
+        Some("run-provider") => {
+            let input = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/declared.txt"))
+                .expect("declared input");
+            println!(
+                r#"{{"schema_version":"polint-extension-provider-run-v1","extension_id":"identity-probe","provider_id":"probe","activation_status":"active","diagnostics":[],"facts":[],"output_digest_inputs":["declared={}"]}}"#,
+                input.trim()
+            );
+        }
+        _ => {}
+    }
+}
+"###,
+        )
+        .expect("write extension source");
+        extension
+    }
+
+    fn assert_production_analysis_keys_are_scoped() {
+        let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let searched = [
+            source_root.join("analysis"),
+            source_root.join("module_graph"),
+            source_root.join("symbol_graph"),
+            source_root.join("metrics.rs"),
+            source_root.join("analysis_kernel/incremental/keys.rs"),
+        ];
+        let mut files = Vec::new();
+        for path in searched {
+            collect_rust_source_paths(&path, &mut files);
+        }
+        files.sort();
+        files.dedup();
+
+        for path in files {
+            let source = std::fs::read_to_string(&path).expect("read production-key source");
+            assert!(
+                !source.contains("input_snapshot.config.digest"),
+                "{} consumes the complete config identity",
+                path.display()
+            );
+            assert!(
+                !source.contains("plan.digest()"),
+                "{} consumes the complete plan identity",
+                path.display()
+            );
+            assert!(
+                !source.contains("input_snapshot.models"),
+                "{} consumes every model snapshot row",
+                path.display()
+            );
+            assert!(
+                !source.contains("input_snapshot.tool_invocations"),
+                "{} consumes every tool snapshot row",
+                path.display()
+            );
+            if !path.ends_with("analysis/extensions/provider.rs") {
+                assert!(
+                    !source.contains("input_snapshot.extensions"),
+                    "{} consumes every extension snapshot row",
+                    path.display()
+                );
+            }
+            for line in source.lines().filter(|line| line.contains("rule_digest")) {
+                assert!(
+                    line.contains("_ignores_rule_digest_changes") || line.contains("rule_digest:"),
+                    "{} consumes the complete rule identity: {line}",
+                    path.display()
+                );
+            }
+        }
+
+        let keys = std::fs::read_to_string(source_root.join("analysis_kernel/incremental/keys.rs"))
+            .expect("read layer keys");
+        let direct_summaries = source_section(
+            &keys,
+            "fn direct_summaries_layer_key(",
+            "fn combine_digests_into",
+        );
+        assert!(direct_summaries.contains("analysis_settings_digest: Digest"));
+        assert!(direct_summaries.contains("analysis_requirements_digest: Digest"));
+        assert!(direct_summaries.contains("Self::new_with_analysis_settings("));
+        assert!(!direct_summaries.contains("config_digest"));
+
+        let cache_keys = std::fs::read_to_string(source_root.join("cache/keys.rs"))
+            .expect("read cache key builders");
+        let scoped_settings =
+            source_section(&cache_keys, "fn analysis_settings_hash(", "fn rule_hash(");
+        assert!(!scoped_settings.contains("config_hash("));
+        assert!(!scoped_settings.contains("deterministic_polint_config"));
+        assert!(!scoped_settings.contains("loaded.config.rules"));
+
+        let summaries = std::fs::read_to_string(source_root.join("analysis/summaries/provider.rs"))
+            .expect("read summary provider");
+        let scc_key = source_section(
+            &summaries,
+            "fn scc_closure_analysis_identity(",
+            "fn scc_closure_cache_key(",
+        );
+        assert!(scc_key.contains("DigestKind::AnalysisSettings"));
+        assert!(scc_key.contains("analysis_requirements_digest_for"));
+        assert!(scc_key.contains("direct_summaries_output_digest"));
+        assert!(scc_key.contains("calls_output_digest"));
+        assert!(!scc_key.contains("config_digest"));
+        assert!(!scc_key.contains("rule_digest"));
+        assert!(!scc_key.contains("plan_digest"));
+
+        let plan = std::fs::read_to_string(source_root.join("analysis_plan.rs"))
+            .expect("read analysis plan");
+        let capability_identity = source_section(
+            &plan,
+            "fn capability_analysis_dependency_digest(",
+            "fn capability_rule_behavior_digest(",
+        );
+        assert!(!capability_identity.contains("requesting_rule_ids"));
+        assert!(!capability_identity.contains("rule_behavior_digest"));
+        assert!(!capability_identity.contains("options_digest"));
+
+        let snapshot = std::fs::read_to_string(
+            source_root.join("analysis_kernel/incremental/input_snapshot.rs"),
+        )
+        .expect("read input snapshot");
+        let projected_requirements = source_section(
+            &snapshot,
+            "fn analysis_requirements_digest_for(",
+            "fn from_run_inputs_with_plan(",
+        );
+        assert!(projected_requirements.contains("analysis_dependency_digest"));
+        assert!(!projected_requirements.contains("rule_behavior_digest"));
+    }
+
+    fn collect_rust_source_paths(path: &Path, output: &mut Vec<PathBuf>) {
+        if path.is_file() {
+            if path.extension().and_then(|extension| extension.to_str()) == Some("rs") {
+                output.push(path.to_path_buf());
+            }
+            return;
+        }
+        let entries = std::fs::read_dir(path)
+            .unwrap_or_else(|error| panic!("read source directory {}: {error}", path.display()));
+        for entry in entries {
+            let entry = entry.expect("read source entry");
+            collect_rust_source_paths(&entry.path(), output);
+        }
+    }
+
+    fn source_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
+        let start = source
+            .find(start)
+            .unwrap_or_else(|| panic!("missing source section start {start}"));
+        let remaining = &source[start..];
+        let end = remaining
+            .find(end)
+            .unwrap_or_else(|| panic!("missing source section end {end}"));
+        &remaining[..end]
+    }
+
+    #[test]
+    fn declared_analysis_inputs_invalidate_linked_providers() {
+        assert_production_analysis_keys_are_scoped();
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_identity_source(temp.path());
+        let baseline_loaded = identity_loaded(temp.path());
+        let cache = Cache::new(temp.path().join(".cache/analysis"), true);
+        let baseline = run_identity_case(
+            &baseline_loaded,
+            &cache,
+            "Baseline rule description",
+            Capabilities::new().calls(),
+            |plan| plan,
+        );
+        let warm = run_identity_case(
+            &baseline_loaded,
+            &cache,
+            "Baseline rule description",
+            Capabilities::new().calls(),
+            |plan| plan,
+        );
+        assert_cached_analysis_reused(&warm.output, "warm baseline");
+        assert!(scc_backdated_count(&warm.output) > 0);
+
+        let unrelated = run_identity_case(
+            &baseline_loaded,
+            &cache,
+            "Baseline rule description",
+            Capabilities::new().calls().events(),
+            |plan| plan,
+        );
+        assert_ne!(
+            baseline.output.run_report.input_snapshot.semantic_digest(),
+            unrelated.output.run_report.input_snapshot.semantic_digest()
+        );
+        assert_same_provider_digests(
+            &baseline.output,
+            &unrelated.output,
+            &[
+                "polint.calls",
+                "polint.direct_summaries",
+                "polint.refined_calls",
+            ],
+            "unreferenced events capability",
+        );
+        assert!(scc_backdated_count(&unrelated.output) > 0);
+
+        let relevant_capability = run_identity_case(
+            &baseline_loaded,
+            &cache,
+            "Baseline rule description",
+            Capabilities::new().calls().dataflow(),
+            |plan| plan,
+        );
+        assert_ne!(
+            provider_digest(&baseline.output, "polint.calls"),
+            provider_digest(&relevant_capability.output, "polint.calls")
+        );
+        assert_ne!(
+            provider_digest(&baseline.output, "polint.direct_summaries"),
+            provider_digest(&relevant_capability.output, "polint.direct_summaries")
+        );
+        assert_eq!(scc_backdated_count(&relevant_capability.output), 0);
+        assert!(
+            provider_output(&relevant_capability.output, "polint.data_flow")
+                .cache_stats
+                .recomputes
+                > 0
+        );
+
+        let support_changed = run_identity_case(
+            &baseline_loaded,
+            &cache,
+            "Baseline rule description",
+            Capabilities::new().calls(),
+            |plan| {
+                plan.with_capability_support_for_test("calls", CapabilitySupportStatus::Unsupported)
+            },
+        );
+        assert_ne!(
+            provider_digest(&baseline.output, "polint.calls"),
+            provider_digest(&support_changed.output, "polint.calls")
+        );
+        assert_eq!(scc_backdated_count(&support_changed.output), 0);
+
+        let setup_changed = run_identity_case(
+            &baseline_loaded,
+            &cache,
+            "Baseline rule description",
+            Capabilities::new().calls(),
+            |plan| plan.with_setup_status_for_test("calls", "missing"),
+        );
+        assert_ne!(
+            provider_digest(&baseline.output, "polint.calls"),
+            provider_digest(&setup_changed.output, "polint.calls")
+        );
+        assert_eq!(scc_backdated_count(&setup_changed.output), 0);
+
+        let mut reachability_loaded = baseline_loaded.clone();
+        reachability_loaded.config.reachability.roots = vec!["src/app.ts#caller".to_string()];
+        let reachability_changed = run_identity_case(
+            &reachability_loaded,
+            &cache,
+            "Baseline rule description",
+            Capabilities::new().calls(),
+            |plan| plan,
+        );
+        assert_ne!(
+            provider_digest(&baseline.output, "polint.reachability"),
+            provider_digest(&reachability_changed.output, "polint.reachability")
+        );
+        assert_same_provider_digests(
+            &baseline.output,
+            &reachability_changed.output,
+            &["polint.calls", "polint.direct_summaries"],
+            "reachability roots",
+        );
+        assert!(scc_backdated_count(&reachability_changed.output) > 0);
+
+        let mut budget_loaded = baseline_loaded.clone();
+        budget_loaded.config.solver.go.max_rta_rounds = Some(1);
+        let budget_changed = run_identity_case(
+            &budget_loaded,
+            &cache,
+            "Baseline rule description",
+            Capabilities::new().calls(),
+            |plan| plan,
+        );
+        assert_ne!(
+            provider_digest(&baseline.output, "polint.solver"),
+            provider_digest(&budget_changed.output, "polint.solver")
+        );
+        assert_ne!(
+            provider_digest(&baseline.output, "polint.refined_calls"),
+            provider_digest(&budget_changed.output, "polint.refined_calls")
+        );
+        assert_same_provider_digests(
+            &baseline.output,
+            &budget_changed.output,
+            &["polint.calls", "polint.direct_summaries"],
+            "solver budget",
+        );
+        assert!(scc_backdated_count(&budget_changed.output) > 0);
+
+        write_adaptation_model(temp.path());
+        let model_changed = run_identity_case(
+            &baseline_loaded,
+            &cache,
+            "Baseline rule description",
+            Capabilities::new().calls(),
+            |plan| plan,
+        );
+        assert_ne!(
+            provider_digest(&baseline.output, "polint.semantic_graph"),
+            provider_digest(&model_changed.output, "polint.semantic_graph")
+        );
+        assert_ne!(
+            provider_digest(&baseline.output, "polint.refined_calls"),
+            provider_digest(&model_changed.output, "polint.refined_calls")
+        );
+        assert_same_provider_digests(
+            &baseline.output,
+            &model_changed.output,
+            &["polint.calls", "polint.direct_summaries"],
+            "adaptation model",
+        );
+        assert!(scc_backdated_count(&model_changed.output) > 0);
+
+        let extension_dir = write_extension_fixture(temp.path());
+        let extension_baseline = run_identity_case(
+            &baseline_loaded,
+            &cache,
+            "Baseline rule description",
+            Capabilities::new().calls(),
+            |plan| plan,
+        );
+        let extension_source = extension_dir.join("src/main.rs");
+        let source = std::fs::read_to_string(&extension_source).expect("read extension source");
+        std::fs::write(
+            &extension_source,
+            format!("{source}\n// source identity mutation\n"),
+        )
+        .expect("mutate extension source");
+        let extension_code_changed = run_identity_case(
+            &baseline_loaded,
+            &cache,
+            "Baseline rule description",
+            Capabilities::new().calls(),
+            |plan| plan,
+        );
+        assert_ne!(
+            extension_baseline
+                .output
+                .run_report
+                .input_snapshot
+                .extensions,
+            extension_code_changed
+                .output
+                .run_report
+                .input_snapshot
+                .extensions
+        );
+        assert_ne!(
+            provider_digest(&extension_baseline.output, "polint.extensions"),
+            provider_digest(&extension_code_changed.output, "polint.extensions")
+        );
+        assert_ne!(
+            provider_digest(&extension_baseline.output, "polint.refined_calls"),
+            provider_digest(&extension_code_changed.output, "polint.refined_calls")
+        );
+        assert_same_provider_digests(
+            &extension_baseline.output,
+            &extension_code_changed.output,
+            &["polint.calls", "polint.direct_summaries"],
+            "extension code",
+        );
+        assert!(scc_backdated_count(&extension_code_changed.output) > 0);
+
+        std::fs::write(extension_dir.join("declared.txt"), "input-v2\n")
+            .expect("mutate extension-declared input");
+        let extension_input_changed = run_identity_case(
+            &baseline_loaded,
+            &cache,
+            "Baseline rule description",
+            Capabilities::new().calls(),
+            |plan| plan,
+        );
+        assert_eq!(
+            extension_code_changed
+                .output
+                .run_report
+                .input_snapshot
+                .extensions,
+            extension_input_changed
+                .output
+                .run_report
+                .input_snapshot
+                .extensions
+        );
+        assert_ne!(
+            provider_digest(&extension_code_changed.output, "polint.extensions"),
+            provider_digest(&extension_input_changed.output, "polint.extensions")
+        );
+        assert_ne!(
+            provider_digest(&extension_code_changed.output, "polint.refined_calls"),
+            provider_digest(&extension_input_changed.output, "polint.refined_calls")
+        );
+        assert_same_provider_digests(
+            &extension_code_changed.output,
+            &extension_input_changed.output,
+            &["polint.calls", "polint.direct_summaries"],
+            "extension-declared input",
+        );
+        assert!(scc_backdated_count(&extension_input_changed.output) > 0);
+        assert_cached_analysis_reused(&extension_input_changed.output, "extension-declared input");
     }
 
     fn provider_output<'a>(

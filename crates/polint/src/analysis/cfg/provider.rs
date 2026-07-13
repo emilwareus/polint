@@ -186,9 +186,6 @@ fn cfg_output_digest(
         "ts_js_lifecycle",
         &input_snapshot.ts_js_lifecycle.components,
     );
-    append_component_digest_parts(&mut digest, "model", &input_snapshot.models);
-    append_component_digest_parts(&mut digest, "extension", &input_snapshot.extensions);
-    append_component_digest_parts(&mut digest, "tool", &input_snapshot.tool_invocations);
 
     let mut upstream_syntax_output_digests =
         upstream_syntax_output_digests.iter().collect::<Vec<_>>();
@@ -544,7 +541,7 @@ mod cfg_provider {
             crate::cache::keys::AnalysisSettingsScope::Cfg,
             true,
             true,
-            true,
+            false,
             |snapshot| super::cfg_output_digest(manifest, snapshot, &semantic_mir, &[], &output),
         );
     }

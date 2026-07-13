@@ -14,12 +14,16 @@ use super::store::SummaryOutput;
 use crate::analysis::ids::MirBodyId;
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
-    CacheStats, DemandQueryEngine, DemandQueryTrace, Digest, DigestKind, InputComponent,
-    InputSnapshot,
+    CacheStats, DemandQueryEngine, DemandQueryTrace, Digest, DigestKind, InputSnapshot,
 };
+use crate::cache::keys::AnalysisSettingsScope;
 use crate::cache::{Cache, CacheKey};
 use crate::core::AnalysisDb;
 use crate::diagnostics::Diagnostic;
+
+const REQUESTED_CAPABILITIES: &[&str] = &["calls", "control_flow", "dataflow"];
+const SCC_CLOSURE_QUERY_VERSION: &str = "1";
+const SCC_CLOSURE_CACHE_SCHEMA: &str = "summary-scc-closure-digests-v2";
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct DirectSummariesProviderOutput {
@@ -111,21 +115,46 @@ struct SccClosureDigestCacheEntry {
 /// 4. Call close_summaries_by_scc.
 /// 5. Return closure result, demand query trace, and any diagnostics.
 pub(crate) fn run_scc_closure(db: &mut AnalysisDb) -> SccClosureProviderOutput {
-    run_scc_closure_with_previous_digests(db, BTreeMap::new())
+    run_scc_closure_with_previous_digests(db, BTreeMap::new(), &SccClosureConfig::default())
 }
 
 pub(crate) fn run_scc_closure_with_cache(
     db: &mut AnalysisDb,
     cache: &Cache,
-    config_digest: &str,
-    rule_digest: &str,
-    plan_digest: &str,
+    input_snapshot: &InputSnapshot,
+    direct_summaries_output_digest: &Digest,
+    calls_output_digest: &Digest,
 ) -> SccClosureProviderOutput {
-    let cache_key = scc_closure_cache_key(config_digest, rule_digest, plan_digest);
+    let config = SccClosureConfig::default();
+    run_scc_closure_with_cache_config(
+        db,
+        cache,
+        input_snapshot,
+        direct_summaries_output_digest,
+        calls_output_digest,
+        &config,
+    )
+}
+
+fn run_scc_closure_with_cache_config(
+    db: &mut AnalysisDb,
+    cache: &Cache,
+    input_snapshot: &InputSnapshot,
+    direct_summaries_output_digest: &Digest,
+    calls_output_digest: &Digest,
+    config: &SccClosureConfig,
+) -> SccClosureProviderOutput {
+    let analysis_identity = scc_closure_analysis_identity(
+        input_snapshot,
+        config,
+        direct_summaries_output_digest,
+        calls_output_digest,
+    );
+    let cache_key = scc_closure_cache_key(&analysis_identity);
     let previous_scc_digests = cache
         .read_json_with_status::<SccClosureDigestCache>(&cache_key)
         .value
-        .filter(|entry| entry.schema == "summary-scc-closure-digests-v1")
+        .filter(|entry| entry.schema == SCC_CLOSURE_CACHE_SCHEMA)
         .map(|entry| {
             entry
                 .scc_digests
@@ -135,7 +164,7 @@ pub(crate) fn run_scc_closure_with_cache(
         })
         .unwrap_or_default();
 
-    let output = run_scc_closure_with_previous_digests(db, previous_scc_digests);
+    let output = run_scc_closure_with_previous_digests(db, previous_scc_digests, config);
 
     let scc_digests = output.scc_output_digests.clone();
 
@@ -143,7 +172,7 @@ pub(crate) fn run_scc_closure_with_cache(
         let _ = cache.write_json_with_status(
             &cache_key,
             &SccClosureDigestCache {
-                schema: "summary-scc-closure-digests-v1".to_string(),
+                schema: SCC_CLOSURE_CACHE_SCHEMA.to_string(),
                 scc_digests: scc_digests
                     .into_iter()
                     .map(|(members, digest)| SccClosureDigestCacheEntry { members, digest })
@@ -158,6 +187,7 @@ pub(crate) fn run_scc_closure_with_cache(
 fn run_scc_closure_with_previous_digests(
     db: &mut AnalysisDb,
     previous_scc_digests: BTreeMap<Vec<String>, String>,
+    config: &SccClosureConfig,
 ) -> SccClosureProviderOutput {
     let schedule = compute_scc_schedule(db);
 
@@ -165,13 +195,12 @@ fn run_scc_closure_with_previous_digests(
         return SccClosureProviderOutput::default();
     }
 
-    let config = SccClosureConfig::default();
     let mut demand_engine = DemandQueryEngine::default();
 
     let closure_result = close_summaries_by_scc(
         db,
         &schedule,
-        &config,
+        config,
         &mut demand_engine,
         &previous_scc_digests,
     );
@@ -212,14 +241,46 @@ fn run_scc_closure_with_previous_digests(
     }
 }
 
-fn scc_closure_cache_key(config_digest: &str, rule_digest: &str, plan_digest: &str) -> CacheKey {
+fn scc_closure_analysis_identity(
+    input_snapshot: &InputSnapshot,
+    config: &SccClosureConfig,
+    direct_summaries_output_digest: &Digest,
+    calls_output_digest: &Digest,
+) -> Digest {
+    let max_iterations = config.max_iterations.to_string();
+    let enable_backdating = config.enable_backdating.to_string();
+    Digest::from_parts(
+        DigestKind::AnalysisSettings,
+        "summary_scc_closure_analysis",
+        &[
+            &input_snapshot
+                .analysis_settings_digest(AnalysisSettingsScope::DirectSummaries)
+                .to_string(),
+            &input_snapshot
+                .analysis_requirements_digest_for(REQUESTED_CAPABILITIES)
+                .to_string(),
+            &format!("max_iterations={max_iterations}"),
+            &format!("enable_backdating={enable_backdating}"),
+            &format!("query_version={SCC_CLOSURE_QUERY_VERSION}"),
+            &format!("direct_summaries={direct_summaries_output_digest}"),
+            &format!("calls={calls_output_digest}"),
+        ],
+    )
+}
+
+fn scc_closure_cache_key(analysis_identity: &Digest) -> CacheKey {
+    assert_eq!(
+        analysis_identity.kind,
+        DigestKind::AnalysisSettings,
+        "SCC closure cache keys require a typed analysis identity"
+    );
     CacheKey::for_file(
         "summary-scc-closure",
         "scc-output-digests",
-        config_digest,
-        rule_digest,
-        plan_digest,
-        "summary-scc-closure-digests-v1",
+        &analysis_identity.value,
+        "",
+        "",
+        SCC_CLOSURE_CACHE_SCHEMA,
     )
 }
 
@@ -245,7 +306,14 @@ pub(crate) fn direct_summaries_output_digest(
             "parameters={}",
             direct_summaries_provider_parameter_digest()
         ),
-        format!("config={}", input_snapshot.config.digest),
+        format!(
+            "analysis_settings={}",
+            input_snapshot.analysis_settings_digest(AnalysisSettingsScope::DirectSummaries)
+        ),
+        format!(
+            "requested_capabilities={}",
+            input_snapshot.analysis_requirements_digest_for(REQUESTED_CAPABILITIES)
+        ),
         format!("semantic_mir={semantic_mir_output_digest}"),
         format!("cfg={cfg_output_digest}"),
         format!("calls={calls_output_digest}"),
@@ -253,19 +321,6 @@ pub(crate) fn direct_summaries_output_digest(
         format!("symbol_graph={symbol_graph_output_digest}"),
         format!("module_topology={module_topology_output_digest}"),
     ];
-    extend_component_parts(
-        &mut parts,
-        "go_lifecycle",
-        &input_snapshot.go_lifecycle.components,
-    );
-    extend_component_parts(
-        &mut parts,
-        "ts_js_lifecycle",
-        &input_snapshot.ts_js_lifecycle.components,
-    );
-    extend_component_parts(&mut parts, "model", &input_snapshot.models);
-    extend_component_parts(&mut parts, "extension", &input_snapshot.extensions);
-    extend_component_parts(&mut parts, "tool", &input_snapshot.tool_invocations);
     parts.extend(
         upstream_syntax_output_digests
             .iter()
@@ -311,15 +366,6 @@ pub(crate) fn direct_summaries_output_digest(
     Digest::from_parts(DigestKind::ProviderOutput, "direct_summaries_output", &refs)
 }
 
-fn extend_component_parts(parts: &mut Vec<String>, prefix: &str, components: &[InputComponent]) {
-    parts.extend(components.iter().map(|component| {
-        format!(
-            "{prefix}:{}:{:?}:{}",
-            component.name, component.status, component.digest
-        )
-    }));
-}
-
 pub(crate) fn callable_stable_key_map(
     db: &AnalysisDb,
 ) -> std::collections::BTreeMap<MirBodyId, String> {
@@ -339,6 +385,42 @@ mod direct_summaries_provider {
     use crate::core::AnalysisDb;
     use std::fs;
     use tempfile::tempdir;
+
+    #[test]
+    fn output_identity_uses_only_declared_summary_inputs() {
+        let temp = tempdir().expect("tempdir");
+        let db = AnalysisDb::new();
+        let callable_keys = callable_stable_key_map(&db);
+        let output = SummaryOutput::empty();
+        let upstream = Digest::absent(DigestKind::ProviderOutput, "upstream");
+        let manifest = AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.direct_summaries")
+            .expect("direct summaries manifest");
+
+        crate::analysis::provider::scoped_identity_test_support::assert_provider_identity(
+            temp.path(),
+            AnalysisSettingsScope::DirectSummaries,
+            true,
+            false,
+            false,
+            |snapshot| {
+                direct_summaries_output_digest(
+                    manifest,
+                    snapshot,
+                    &upstream,
+                    &upstream,
+                    &upstream,
+                    &upstream,
+                    &upstream,
+                    &upstream,
+                    &[],
+                    &callable_keys,
+                    &output,
+                )
+            },
+        );
+    }
 
     #[test]
     fn provider_accepts_empty_output_with_deterministic_digest() {
@@ -449,8 +531,12 @@ mod scc_closure_provider {
         SummaryDomainKind, SummaryFact, SummaryPrecision, SummaryProvenance, SummaryStatus,
     };
     use crate::analysis::summaries::store::SummaryOutput;
-    use crate::analysis_kernel::incremental::DemandCacheStatus;
+    use crate::analysis_kernel::AnalysisKernel;
+    use crate::analysis_kernel::incremental::{DemandCacheStatus, InputSnapshot};
+    use crate::analysis_plan::AnalysisPlan;
     use crate::cache::Cache;
+    use crate::cache::keys::config_hash;
+    use crate::config::{LoadedConfig, RuleConfig, load_config};
     use crate::core::{FileId, FunctionId, Language, Span};
 
     fn span() -> Span {
@@ -512,6 +598,37 @@ mod scc_closure_provider {
             precision: CallPrecision::Exact,
             stable_key: format!("target:{id}"),
         }
+    }
+
+    fn closure_db(
+        summaries: Vec<SummaryFact>,
+        sites: Vec<CallSiteFact>,
+        targets: Vec<CallTargetFact>,
+    ) -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        db.replace_summary_facts(SummaryOutput {
+            summaries,
+            events: Vec::new(),
+        });
+        db.replace_call_facts(CallOutput {
+            sites,
+            targets,
+            unresolved: Vec::new(),
+        })
+        .expect("call output should be valid");
+        db
+    }
+
+    fn snapshot(loaded: &LoadedConfig, db: &AnalysisDb, plan: &AnalysisPlan) -> InputSnapshot {
+        let config_digest = config_hash(loaded);
+        InputSnapshot::from_run_inputs_with_plan(
+            loaded,
+            db,
+            &config_digest,
+            "rule-digest",
+            plan,
+            AnalysisKernel::provider_manifests(),
+        )
     }
 
     #[test]
@@ -576,28 +693,23 @@ mod scc_closure_provider {
     fn scc_closure_with_cache_backdates_warm_run_and_records_hit_trace() {
         let temp = tempfile::tempdir().expect("tempdir");
         let cache = Cache::default_for_repo(temp.path(), true);
+        let loaded = load_config(temp.path()).expect("config loads");
+        let plan = AnalysisPlan::from_capability_names_for_test(&["calls"]);
         let summaries = vec![summary_fact(1, "func::a"), summary_fact(2, "func::b")];
         let sites = vec![call_site(1, 1)];
         let targets = vec![call_target(1, 1, 1, 2)];
+        let direct_summaries_digest =
+            Digest::from_parts(DigestKind::ProviderOutput, "direct_summaries", &["base"]);
+        let calls_digest = Digest::from_parts(DigestKind::ProviderOutput, "calls", &["base"]);
 
-        let mut cold_db = AnalysisDb::new();
-        cold_db.replace_summary_facts(SummaryOutput {
-            summaries: summaries.clone(),
-            events: Vec::new(),
-        });
-        cold_db
-            .replace_call_facts(CallOutput {
-                sites: sites.clone(),
-                targets: targets.clone(),
-                unresolved: Vec::new(),
-            })
-            .expect("call output should be valid");
+        let mut cold_db = closure_db(summaries.clone(), sites.clone(), targets.clone());
+        let input_snapshot = snapshot(&loaded, &cold_db, &plan);
         let cold = run_scc_closure_with_cache(
             &mut cold_db,
             &cache,
-            "config-digest",
-            "rule-digest",
-            "plan-digest",
+            &input_snapshot,
+            &direct_summaries_digest,
+            &calls_digest,
         );
         assert_eq!(
             cold.debug_snapshot
@@ -608,24 +720,13 @@ mod scc_closure_provider {
             0
         );
 
-        let mut warm_db = AnalysisDb::new();
-        warm_db.replace_summary_facts(SummaryOutput {
-            summaries,
-            events: Vec::new(),
-        });
-        warm_db
-            .replace_call_facts(CallOutput {
-                sites,
-                targets,
-                unresolved: Vec::new(),
-            })
-            .expect("call output should be valid");
+        let mut warm_db = closure_db(summaries.clone(), sites.clone(), targets.clone());
         let warm = run_scc_closure_with_cache(
             &mut warm_db,
             &cache,
-            "config-digest",
-            "rule-digest",
-            "plan-digest",
+            &input_snapshot,
+            &direct_summaries_digest,
+            &calls_digest,
         );
 
         assert!(
@@ -644,6 +745,87 @@ mod scc_closure_provider {
                 .any(|entry| entry.cache_status == DemandCacheStatus::Hit),
             "warm SCC closure should record hit trace rows: {:#?}",
             warm.demand_query_trace
+        );
+
+        let mut rule_loaded = loaded;
+        rule_loaded.config.rules.config.push(RuleConfig {
+            id: "local/scc-identity".to_string(),
+            severity: None,
+            files: Vec::new(),
+            allow_files: Vec::new(),
+            allow: Vec::new(),
+            max: None,
+            deny: Vec::new(),
+            forbidden_imports: Default::default(),
+            settings: std::collections::BTreeMap::from([(
+                "threshold".to_string(),
+                toml::Value::Integer(7),
+            )]),
+        });
+        let rule_snapshot = snapshot(&rule_loaded, &warm_db, &plan);
+        assert_ne!(
+            input_snapshot.config_identity,
+            rule_snapshot.config_identity
+        );
+        let mut rule_only_db = closure_db(summaries.clone(), sites.clone(), targets.clone());
+        let rule_only = run_scc_closure_with_cache(
+            &mut rule_only_db,
+            &cache,
+            &rule_snapshot,
+            &direct_summaries_digest,
+            &calls_digest,
+        );
+        assert!(
+            rule_only
+                .debug_snapshot
+                .as_ref()
+                .expect("rule-only snapshot")
+                .result
+                .backdated_sccs
+                > 0
+        );
+
+        let mut budget_db = closure_db(summaries.clone(), sites.clone(), targets.clone());
+        let changed_budget = SccClosureConfig {
+            max_iterations: SccClosureConfig::default().max_iterations + 1,
+            ..SccClosureConfig::default()
+        };
+        let budget_changed = run_scc_closure_with_cache_config(
+            &mut budget_db,
+            &cache,
+            &input_snapshot,
+            &direct_summaries_digest,
+            &calls_digest,
+            &changed_budget,
+        );
+        assert_eq!(
+            budget_changed
+                .debug_snapshot
+                .as_ref()
+                .expect("budget snapshot")
+                .result
+                .backdated_sccs,
+            0
+        );
+
+        let mut upstream_db = closure_db(summaries, sites, targets);
+        let changed_direct_summaries =
+            Digest::from_parts(DigestKind::ProviderOutput, "direct_summaries", &["changed"]);
+        let upstream_changed = run_scc_closure_with_cache(
+            &mut upstream_db,
+            &cache,
+            &input_snapshot,
+            &changed_direct_summaries,
+            &calls_digest,
+        );
+        assert_eq!(
+            upstream_changed
+                .debug_snapshot
+                .as_ref()
+                .expect("upstream snapshot")
+                .result
+                .backdated_sccs,
+            0
         );
     }
 }
