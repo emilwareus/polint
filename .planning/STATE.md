@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-07-12T22:49:14.312Z"
-last_activity: 2026-07-12
+last_updated: "2026-07-13T13:35:03.230Z"
+last_activity: 2026-07-13
 progress:
   total_phases: 9
   completed_phases: 2
   total_plans: 27
-  completed_plans: 15
+  completed_plans: 16
   percent: 22
 ---
 
@@ -43,9 +43,9 @@ See: `.planning/PROJECT.md` (updated 2026-07-10)
 ## Current Position
 
 Phase: 65 (Generation Manifest and Metadata Mirroring) — EXECUTING
-Plan: 8 of 19
+Plan: 9 of 19
 Status: Ready to execute
-Last activity: 2026-07-12
+Last activity: 2026-07-13
 
 ### Active Milestone Phase Progress
 
@@ -521,6 +521,9 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase 65]: Remove the unused file-cache-to-LayerKey bridge — A structural provider key must not inherit full config, rule, or plan identity from the legacy file cache.
 - [Phase 65]: Purpose-check provider-scoped LayerKey constructors — Migrated structural providers must reject full-config digests at the identity boundary while deferred semantic seams remain explicit.
 - [Phase 65]: Retain full run identity separately from syntax cache identity — InputSnapshot and run metadata keep complete config, rule, and plan truth while Go and TS syntax caches consume only scoped settings.
+- [Phase 65]: Filter semantic provider capability identity to direct trigger analysis-dependency rows — Capability and setup changes must invalidate, while rule behavior and unrelated capability requests must remain outside provider identity.
+- [Phase 65]: Use typed absent settings for providers without configurable analysis settings — Identity and entrypoints still require a purpose-validating settings boundary without importing complete config identity.
+- [Phase 65]: Share one canonical type value alias input projection between cache and output digests — A single projection prevents lifecycle model extension tool and upstream identity from drifting between builders.
 
 ## Execution Metrics
 
@@ -687,3 +690,4 @@ intentionally avoided during autonomous local commits.
 | Phase 65 P05 | 17min | 1 tasks | 9 files |
 | Phase 65 P06 | 22min | 1 tasks | 11 files |
 | Phase 65 P07 | 1h 4min | 2 tasks | 13 files |
+| Phase 65 P08 | 23min | 1 tasks | 11 files |
