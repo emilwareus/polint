@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-07-13T18:05:15.930Z"
+last_updated: "2026-07-13T18:34:03.300Z"
 last_activity: 2026-07-13
 progress:
   total_phases: 9
   completed_phases: 2
   total_plans: 27
-  completed_plans: 20
+  completed_plans: 21
   percent: 22
 ---
 
@@ -43,7 +43,7 @@ See: `.planning/PROJECT.md` (updated 2026-07-10)
 ## Current Position
 
 Phase: 65 (Generation Manifest and Metadata Mirroring) — EXECUTING
-Plan: 13 of 19
+Plan: 14 of 19
 Status: Ready to execute
 Last activity: 2026-07-13
 
@@ -537,6 +537,10 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase 65]: Disabled cache mode skips persistence only and failed writes retain pre-write metadata — Cache availability must not change semantic provider identity.
 - [Phase 65]: Sort and deduplicate LayerRunMetadata at ProviderOutputMeta construction — Provider completion order cannot affect retained run metadata.
 - [Phase 65]: Keep CacheStats outside layer and provider semantic projections — Cache path and counters are telemetry rather than semantic identity.
+- [Phase 65]: Derive validation stage status from structured issue counts and digest only kind, status, and count. — This keeps event identity semantic and independent of rendered diagnostics or telemetry.
+- [Phase 65]: Build the global validation digest from the canonical ordered child events. — The aggregate attests completeness and order without adding relational or persistence identity.
+- [Phase 65]: Retain events after unchanged diagnostic extension and before fact finalization and later persistence. — The authoritative validator remains the source of both policy diagnostics and durable trust evidence.
+- [Phase 65]: Use explicit empty validation events only for synthetic reports that execute no validator. — Fixtures remain honest without introducing a production compatibility default.
 
 ## Execution Metrics
 
@@ -708,3 +712,4 @@ intentionally avoided during autonomous local commits.
 | Phase 65 P10 | 11min | 1 tasks | 2 files |
 | Phase 65 P11 | 48min | 1 tasks | 10 files |
 | Phase 65 P12 | 25min | 1 tasks | 10 files |
+| Phase 65 P13 | 18min | 1 tasks | 6 files |
