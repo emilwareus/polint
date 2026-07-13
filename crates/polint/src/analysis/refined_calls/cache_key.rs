@@ -1,4 +1,7 @@
-use crate::analysis_kernel::incremental::{Digest, DigestKind, InputComponent, InputSnapshot};
+use crate::analysis_kernel::incremental::{Digest, DigestKind, InputSnapshot};
+use crate::cache::keys::AnalysisSettingsScope;
+
+const REQUESTED_CAPABILITIES: &[&str] = &["calls", "control_flow", "dataflow"];
 
 pub(crate) const REFINED_CALLS_SCHEMA_LABEL: &str = "refined-call-facts-1";
 
@@ -32,20 +35,14 @@ pub(crate) fn refined_calls_provider_parameter_digest_for_snapshot(
     upstream_output_digests: &[Digest],
 ) -> Digest {
     let mut parts = parameter_parts(&RefinedCallsProviderParameters::deterministic_default());
-    parts.push(format!("config={}", input_snapshot.config.digest));
-    extend_component_parts(
-        &mut parts,
-        "go_lifecycle",
-        &input_snapshot.go_lifecycle.components,
-    );
-    extend_component_parts(
-        &mut parts,
-        "ts_js_lifecycle",
-        &input_snapshot.ts_js_lifecycle.components,
-    );
-    extend_component_parts(&mut parts, "extension", &input_snapshot.extensions);
-    extend_component_parts(&mut parts, "model", &input_snapshot.models);
-    extend_component_parts(&mut parts, "tool", &input_snapshot.tool_invocations);
+    parts.push(format!(
+        "analysis_settings={}",
+        input_snapshot.analysis_settings_digest(AnalysisSettingsScope::RefinedCalls)
+    ));
+    parts.push(format!(
+        "requested_capabilities={}",
+        input_snapshot.analysis_requirements_digest_for(REQUESTED_CAPABILITIES)
+    ));
     parts.extend(
         upstream_output_digests
             .iter()
@@ -83,19 +80,6 @@ fn parameter_parts(settings: &RefinedCallsProviderParameters) -> Vec<String> {
             settings.retired_heuristic_producers
         ),
     ]
-}
-
-fn extend_component_parts(parts: &mut Vec<String>, prefix: &str, components: &[InputComponent]) {
-    if components.is_empty() {
-        parts.push(format!("{prefix}=absent"));
-        return;
-    }
-    parts.extend(components.iter().map(|component| {
-        format!(
-            "{prefix}:{}:{:?}:{}",
-            component.name, component.status, component.digest
-        )
-    }));
 }
 
 #[cfg(test)]

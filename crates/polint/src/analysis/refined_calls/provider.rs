@@ -17,9 +17,7 @@ use crate::analysis::points_to::facts::{PointsToPrecision, PointsToStatus};
 use crate::analysis::semantic_graph::constraints::ConstraintKind;
 use crate::analysis::semantic_graph::facts::NodeKind;
 use crate::analysis::solver::facts::DerivedEdgeFact;
-use crate::analysis_kernel::incremental::{
-    CacheStats, Digest, DigestKind, InputComponent, InputSnapshot,
-};
+use crate::analysis_kernel::incremental::{CacheStats, Digest, DigestKind, InputSnapshot};
 use crate::analysis_kernel::{FactFamily, FactRef, ProviderManifest};
 use crate::core::AnalysisDb;
 use crate::diagnostics::Diagnostic;
@@ -530,7 +528,6 @@ fn refined_calls_output_digest(
             "input_parameters={}",
             refined_calls_provider_parameter_digest_for_snapshot(input_snapshot, &upstream)
         ),
-        format!("config={}", input_snapshot.config.digest),
         format!("calls={calls_output_digest}"),
         format!("entrypoints={entrypoints_output_digest}"),
         format!("direct_summaries={direct_summaries_output_digest}"),
@@ -538,19 +535,6 @@ fn refined_calls_output_digest(
         format!("extensions={extensions_output_digest}"),
         format!("solver={solver_output_digest}"),
     ];
-    extend_component_parts(
-        &mut parts,
-        "go_lifecycle",
-        &input_snapshot.go_lifecycle.components,
-    );
-    extend_component_parts(
-        &mut parts,
-        "ts_js_lifecycle",
-        &input_snapshot.ts_js_lifecycle.components,
-    );
-    extend_component_parts(&mut parts, "model", &input_snapshot.models);
-    extend_component_parts(&mut parts, "extension", &input_snapshot.extensions);
-    extend_component_parts(&mut parts, "tool", &input_snapshot.tool_invocations);
     parts.extend(
         output
             .edges
@@ -564,19 +548,6 @@ fn refined_calls_output_digest(
     parts.sort();
     let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
     Digest::from_parts(DigestKind::ProviderOutput, "refined_calls_output", &refs)
-}
-
-fn extend_component_parts(parts: &mut Vec<String>, prefix: &str, components: &[InputComponent]) {
-    if components.is_empty() {
-        parts.push(format!("{prefix}=absent"));
-        return;
-    }
-    parts.extend(components.iter().map(|component| {
-        format!(
-            "{prefix}:{}:{:?}:{}",
-            component.name, component.status, component.digest
-        )
-    }));
 }
 
 fn stable_fact_payload<T>(fact: &T) -> String
@@ -603,7 +574,9 @@ mod solver_projection_tests {
     use crate::analysis_kernel::AnalysisKernel;
     use crate::analysis_kernel::incremental::InputSnapshot;
     use crate::analysis_plan::AnalysisPlan;
+    use crate::cache::keys::config_hash;
     use crate::config::load_config;
+    use crate::config::{LoadedConfig, PolintConfig, RuleConfig};
     use crate::core::{FileId, FunctionFact, FunctionId, Language, Span};
     use crate::go::semantic::facts::{
         GoSemanticCallStatus, GoSemanticCallsiteFact, GoSemanticFunctionFact, GoSemanticFunctionId,
@@ -611,7 +584,103 @@ mod solver_projection_tests {
     };
     use crate::go::semantic::store::GoSemanticFactsOutput;
     use std::fs;
+    use std::path::Path;
     use tempfile::tempdir;
+
+    #[test]
+    fn output_identity_tracks_refinement_inputs_and_ignores_rule_settings() {
+        let temp = tempdir().expect("tempdir");
+        let baseline_loaded = loaded_with_rule(temp.path());
+        let plan = AnalysisPlan::from_capability_names_for_test(&["calls", "events"]);
+        let baseline_snapshot = identity_snapshot(&baseline_loaded, &plan);
+        let upstream = Digest::from_parts(DigestKind::ProviderOutput, "upstream", &["base"]);
+        let output = RefinedCallOutput::empty();
+        let digest = |snapshot: &InputSnapshot, upstream: &Digest| {
+            refined_calls_output_digest(
+                manifest(),
+                snapshot,
+                upstream,
+                upstream,
+                upstream,
+                upstream,
+                upstream,
+                upstream,
+                &output,
+            )
+        };
+        let baseline_digest = digest(&baseline_snapshot, &upstream);
+
+        let mut rule_settings = baseline_loaded;
+        rule_settings.config.rules.config[0]
+            .settings
+            .insert("threshold".to_string(), toml::Value::Integer(7));
+        let rule_snapshot = identity_snapshot(&rule_settings, &plan);
+        assert_ne!(
+            baseline_snapshot.config_identity,
+            rule_snapshot.config_identity
+        );
+        assert_eq!(baseline_digest, digest(&rule_snapshot, &upstream));
+
+        let mut relevant = baseline_snapshot.clone();
+        relevant
+            .requested_capabilities
+            .iter_mut()
+            .find(|row| row.capability == "calls")
+            .expect("calls capability")
+            .analysis_dependency_digest =
+            Digest::from_parts(DigestKind::AnalysisRequirements, "calls", &["changed"]);
+        assert_ne!(baseline_digest, digest(&relevant, &upstream));
+
+        let mut unrelated = baseline_snapshot.clone();
+        unrelated
+            .requested_capabilities
+            .iter_mut()
+            .find(|row| row.capability == "events")
+            .expect("events capability")
+            .analysis_dependency_digest =
+            Digest::from_parts(DigestKind::AnalysisRequirements, "events", &["changed"]);
+        assert_eq!(baseline_digest, digest(&unrelated, &upstream));
+
+        let changed_upstream =
+            Digest::from_parts(DigestKind::ProviderOutput, "upstream", &["changed"]);
+        assert_ne!(
+            baseline_digest,
+            digest(&baseline_snapshot, &changed_upstream)
+        );
+    }
+
+    fn loaded_with_rule(root: &Path) -> LoadedConfig {
+        let mut config = PolintConfig::default();
+        config.rules.config.push(RuleConfig {
+            id: "local/provider-identity".to_string(),
+            severity: None,
+            files: Vec::new(),
+            allow_files: Vec::new(),
+            allow: Vec::new(),
+            max: None,
+            deny: Vec::new(),
+            forbidden_imports: Default::default(),
+            settings: Default::default(),
+        });
+        LoadedConfig {
+            root: root.to_path_buf(),
+            config,
+            missing: false,
+            respect_gitignore: true,
+        }
+    }
+
+    fn identity_snapshot(loaded: &LoadedConfig, plan: &AnalysisPlan) -> InputSnapshot {
+        let config_digest = config_hash(loaded);
+        InputSnapshot::from_run_inputs_with_plan(
+            loaded,
+            &AnalysisDb::new(),
+            &config_digest,
+            "rule-digest",
+            plan,
+            AnalysisKernel::provider_manifests(),
+        )
+    }
 
     #[test]
     fn solver_derived_call_edges_project_to_refined_calls() {

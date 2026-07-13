@@ -7,9 +7,8 @@ use crate::analysis::reachability::discover::discover_reachability_roots;
 use crate::analysis::reachability::store::{REACHABILITY_PROVIDER_ID, ReachabilityProviderOutput};
 use crate::analysis::reachability::traverse::mark_call_reachability;
 use crate::analysis_kernel::ProviderManifest;
-use crate::analysis_kernel::incremental::{
-    CacheStats, Digest, DigestKind, InputComponent, InputSnapshot,
-};
+use crate::analysis_kernel::incremental::{CacheStats, Digest, DigestKind, InputSnapshot};
+use crate::cache::keys::AnalysisSettingsScope;
 use crate::core::AnalysisDb;
 use crate::diagnostics::{Diagnostic, TextRange};
 
@@ -22,17 +21,14 @@ pub(crate) struct ReachabilityProviderRunOutput {
 
 /// `polint.reachability` provider entry point.
 ///
-/// Pipeline mirroring `polint.identity` and `polint.entrypoints`: extract roots by
-/// projecting existing facts (no mutation) -> partition discovered roots into the
-/// storable (real-target) set and the configured-unresolvable set -> normalize the
-/// STORABLE set -> compute the output digest over EXACTLY the stored stable
-/// payloads (D-06/D-19: never dense IDs, never a non-stored superset) -> assign
-/// dense IDs as a post-digest read concern -> replace reachability facts.
+/// Extracts roots, partitions unresolvable configured roots, normalizes stored
+/// facts, computes their stable digest, assigns dense in-memory IDs, and replaces
+/// the reachability store.
 ///
 /// Configured-unresolvable roots are folded into the digest via a dedicated
 /// `unresolved_configured=<stable-keys>` part (so the cache still invalidates when
-/// they change) and surfaced as honest diagnostics (D-13: never a silent drop),
-/// rather than being serialized as whole `root=...` facts.
+/// they change) and surfaced as honest diagnostics rather than being serialized
+/// as whole `root=...` facts.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn derive_reachability_with_cache_stats(
     db: &mut AnalysisDb,
@@ -47,14 +43,10 @@ pub(crate) fn derive_reachability_with_cache_stats(
 ) -> ReachabilityProviderRunOutput {
     debug_assert_eq!(manifest.id, REACHABILITY_PROVIDER_ID);
 
-    // Step: extract roots from existing facts + configured input.
+    // Root discovery projects existing facts together with configured input.
     let roots = discover_reachability_roots(db, configured_roots);
-    // Step: partition into the storable (real-target) set and the
-    // configured-unresolvable set. Configured-unresolvable roots carry a sentinel
-    // target the referential store rejects, so they never reach the validated
-    // store; we keep their stable keys to (a) fold into the digest and (b) report
-    // as diagnostics so an operator can see their configured root failed to resolve
-    // (D-13: never a silent drop).
+    // Configured roots without a real target cannot enter the referential store.
+    // Their stable keys still participate in identity and diagnostics.
     let (real_roots, unresolved_roots): (Vec<_>, Vec<_>) = roots
         .into_iter()
         .partition(|root| db.functions().iter().any(|f| f.id == root.target_function));
@@ -62,33 +54,24 @@ pub(crate) fn derive_reachability_with_cache_stats(
         .iter()
         .map(|root| root.stable_key.clone())
         .collect();
-    // Step: mark call reachability — BFS/DFS over resolved direct-call edges
-    // from the storable roots, keyed by call-site stable key (composition, never
-    // mutating analysis::calls; D-18).
+    // Reachability composes resolved call edges without mutating call facts.
     //
-    // WR-04 forward-compat note: these marks are computed and stored in PRODUCTION
-    // here, but their only readers in v1.3 (`reachable_graph_lookup`,
+    // Marks are stored even while their current readers (`reachable_graph_lookup`,
     // `filter_scored_edges_by_scoring_mode`, `scored_call_graph_edges_for_db`) are
-    // `#[cfg(test)]` — the eval harness that consumes them is internal/test-facing
-    // with no public CLI/SDK surface. The production marking is INTENTIONAL per D-18
-    // (the REACH-02 deliverable): a solver-derived edge set can replace the
-    // direct-call edges behind this SAME marking contract and read the marks in
-    // production. Do NOT remove the production marking to chase "dead computation" —
-    // the produced-but-unread state in v1.3 production is deliberate forward-compat.
+    // test-only. A solver-derived edge set can replace direct calls behind the same
+    // contract without changing how marks are represented.
     let marks = mark_call_reachability(db, &real_roots);
-    // Step: normalize the STORABLE set (real roots + marks). The digest is
-    // computed over exactly this set so it certifies what actually lands in the db;
+    // Normalize the storable set before hashing so the digest certifies the facts
+    // that actually land in the database;
     // `ReachabilityRootFact.id` carries `#[serde(skip)]`, so the digest payload
-    // never folds in run-local dense IDs (D-06/D-19).
+    // never folds in run-local dense IDs.
     let mut storable = ReachabilityProviderOutput {
         roots: real_roots,
         marks,
     }
     .normalized();
-    // Step: digest over the stored stable payloads, plus a dedicated stable-key
-    // part for configured-unresolvable roots so the cache invalidates when they
-    // change without serializing whole facts (with dense IDs) into the `root=`
-    // parts.
+    // A dedicated stable-key part invalidates unresolvable configured roots
+    // without serializing their non-stored facts into `root=` parts.
     let output_digest = reachability_output_digest(
         manifest,
         input_snapshot,
@@ -100,10 +83,7 @@ pub(crate) fn derive_reachability_with_cache_stats(
         &storable,
         &unresolved_stable_keys,
     );
-    // Step: assign dense IDs as a post-digest read concern only (never before /
-    // independent of the digest). normalized() above fixed the order; the dense IDs
-    // simply enumerate that order for any in-memory reader and are stripped from
-    // serialization (D-06/D-19).
+    // Dense IDs are assigned after hashing and stripped from serialization.
     for (index, root) in storable.roots.iter_mut().enumerate() {
         root.id = ReachabilityRootId(index as u64);
     }
@@ -111,14 +91,12 @@ pub(crate) fn derive_reachability_with_cache_stats(
     let mut cache_stats = CacheStats::default();
     cache_stats.record_recompute();
 
-    // Configured-unresolvable roots are reported as honest diagnostics regardless
-    // of whether the store succeeds (D-13).
+    // Report configured roots that did not resolve even if storing other facts fails.
     let mut diagnostics: Vec<Diagnostic> = unresolved_roots
         .iter()
         .map(unresolved_configured_root_diagnostic)
         .collect();
 
-    // Step: store the storable set.
     match db.replace_reachability_facts(storable) {
         Ok(()) => ReachabilityProviderRunOutput {
             diagnostics,
@@ -141,11 +119,10 @@ pub(crate) fn derive_reachability_with_cache_stats(
     }
 }
 
-/// Output digest over stable payloads, never dense IDs (D-19).
+/// Output digest over stable payloads, never dense IDs.
 ///
-/// The configured-roots input rides on `input_snapshot.config.digest`, so any
-/// change to `[reachability] roots` invalidates the cache. Every upstream
-/// provider output digest the reachability provider consumes is also folded in.
+/// The reachability settings scope carries configured roots. Every upstream
+/// provider output consumed by reachability is folded in explicitly.
 #[allow(clippy::too_many_arguments)]
 fn reachability_output_digest(
     manifest: &ProviderManifest,
@@ -163,24 +140,16 @@ fn reachability_output_digest(
         format!("provider_version={}", manifest.provider_version()),
         format!("schema={}", manifest.primary_schema_label()),
         format!("parameters={}", reachability_provider_parameter_digest()),
-        format!("config={}", input_snapshot.config.digest),
+        format!(
+            "analysis_settings={}",
+            input_snapshot.analysis_settings_digest(AnalysisSettingsScope::Reachability)
+        ),
         format!("calls_output={calls_output_digest}"),
         format!("entrypoints_output={entrypoints_output_digest}"),
         format!("identity_output={identity_output_digest}"),
         format!("symbol_graph={symbol_output_digest}"),
         format!("module_topology={module_topology_output_digest}"),
     ];
-    extend_component_parts(
-        &mut parts,
-        "go_lifecycle",
-        &input_snapshot.go_lifecycle.components,
-    );
-    extend_component_parts(
-        &mut parts,
-        "ts_js_lifecycle",
-        &input_snapshot.ts_js_lifecycle.components,
-    );
-
     parts.extend(
         output
             .roots
@@ -193,10 +162,8 @@ fn reachability_output_digest(
             .iter()
             .map(|mark| format!("mark={}", stable_fact_payload(mark))),
     );
-    // Configured-unresolvable roots are NOT stored and NOT serialized as `root=`
-    // facts (that would fold dense IDs / a non-stored superset into the digest,
-    // CR-01). Instead each contributes its stable key under a dedicated part so the
-    // cache still invalidates when an unresolvable configured root changes (D-13).
+    // Non-stored configured roots contribute only stable keys, avoiding dense IDs
+    // and non-stored payloads while still invalidating changed configuration.
     parts.extend(
         unresolved_configured_stable_keys
             .iter()
@@ -214,15 +181,6 @@ fn reachability_output_digest(
     Digest::from_parts(DigestKind::ProviderOutput, "reachability_output", &refs)
 }
 
-fn extend_component_parts(parts: &mut Vec<String>, prefix: &str, components: &[InputComponent]) {
-    parts.extend(components.iter().map(|component| {
-        format!(
-            "{prefix}:{}:{:?}:{}",
-            component.name, component.status, component.digest
-        )
-    }));
-}
-
 fn stable_fact_payload<T>(fact: &T) -> String
 where
     T: Serialize + Debug,
@@ -232,8 +190,7 @@ where
 
 fn provider_error_diagnostic(message: String) -> Diagnostic {
     // Propagate the underlying store-failure message into the evidence so the
-    // failure is debuggable, mirroring `validate.rs::push_diagnostic`'s
-    // `.with_evidence(...)` discipline (WR-06).
+    // failure is debuggable, mirroring `validate.rs::push_diagnostic`.
     Diagnostic::error(
         "polint/internal",
         "<workspace>",
@@ -244,10 +201,8 @@ fn provider_error_diagnostic(message: String) -> Diagnostic {
     .with_evidence("reason", message)
 }
 
-/// Honest `RootStatus::Unresolved` diagnostic for a configured root the provider
-/// could not resolve to a real function (D-13: never a silent drop). Surfaced so an
-/// operator can see exactly which configured `[reachability] roots` entry failed to
-/// resolve, mirroring `validate.rs`'s evidence-bearing diagnostic discipline.
+/// Diagnostic for a configured root the provider could not resolve to a function.
+/// It identifies the exact `[reachability] roots` entry that failed.
 fn unresolved_configured_root_diagnostic(
     root: &crate::analysis::reachability::facts::ReachabilityRootFact,
 ) -> Diagnostic {
@@ -278,7 +233,8 @@ mod tests {
     use crate::analysis_kernel::AnalysisKernel;
     use crate::analysis_kernel::incremental::{Digest, DigestKind};
     use crate::analysis_plan::AnalysisPlan;
-    use crate::config::load_config;
+    use crate::cache::keys::config_hash;
+    use crate::config::{LoadedConfig, PolintConfig, RuleConfig, load_config};
     use crate::core::{
         AnalysisDb, FunctionFact, FunctionId, Language, PackageFact, PackageId, Span,
     };
@@ -312,6 +268,99 @@ mod tests {
             "config-a",
             "rules-a",
             &empty_plan,
+            AnalysisKernel::provider_manifests(),
+        )
+    }
+
+    #[test]
+    fn output_identity_tracks_roots_and_graph_inputs_only() {
+        let temp = tempdir().expect("tempdir");
+        let baseline_loaded = loaded_with_rule(temp.path());
+        let baseline_snapshot = identity_snapshot(&baseline_loaded);
+        let upstream = absent("upstream");
+        let output = ReachabilityProviderOutput::empty();
+        let digest = |snapshot: &InputSnapshot, upstream: &Digest| {
+            reachability_output_digest(
+                manifest(),
+                snapshot,
+                upstream,
+                upstream,
+                upstream,
+                upstream,
+                upstream,
+                &output,
+                &[],
+            )
+        };
+        let baseline_digest = digest(&baseline_snapshot, &upstream);
+
+        let mut rule_settings = baseline_loaded.clone();
+        rule_settings.config.rules.config[0]
+            .settings
+            .insert("threshold".to_string(), toml::Value::Integer(7));
+        let rule_snapshot = identity_snapshot(&rule_settings);
+        assert_ne!(
+            baseline_snapshot.config_identity,
+            rule_snapshot.config_identity
+        );
+        assert_eq!(baseline_digest, digest(&rule_snapshot, &upstream));
+
+        let mut unrelated = baseline_loaded.clone();
+        unrelated
+            .config
+            .languages
+            .go
+            .insert("offline".to_string(), toml::Value::Boolean(true));
+        let unrelated_snapshot = identity_snapshot(&unrelated);
+        assert_ne!(
+            baseline_snapshot.config_identity,
+            unrelated_snapshot.config_identity
+        );
+        assert_eq!(baseline_digest, digest(&unrelated_snapshot, &upstream));
+
+        let mut relevant = baseline_loaded;
+        relevant.config.reachability.roots = vec!["main.main".to_string()];
+        let relevant_snapshot = identity_snapshot(&relevant);
+        assert_ne!(baseline_digest, digest(&relevant_snapshot, &upstream));
+
+        let changed_upstream =
+            Digest::from_parts(DigestKind::ProviderOutput, "upstream", &["changed"]);
+        assert_ne!(
+            baseline_digest,
+            digest(&baseline_snapshot, &changed_upstream)
+        );
+    }
+
+    fn loaded_with_rule(root: &std::path::Path) -> LoadedConfig {
+        let mut config = PolintConfig::default();
+        config.rules.config.push(RuleConfig {
+            id: "local/provider-identity".to_string(),
+            severity: None,
+            files: Vec::new(),
+            allow_files: Vec::new(),
+            allow: Vec::new(),
+            max: None,
+            deny: Vec::new(),
+            forbidden_imports: Default::default(),
+            settings: Default::default(),
+        });
+        LoadedConfig {
+            root: root.to_path_buf(),
+            config,
+            missing: false,
+            respect_gitignore: true,
+        }
+    }
+
+    fn identity_snapshot(loaded: &LoadedConfig) -> InputSnapshot {
+        let plan = AnalysisPlan::empty();
+        let config_digest = config_hash(loaded);
+        InputSnapshot::from_run_inputs_with_plan(
+            loaded,
+            &AnalysisDb::new(),
+            &config_digest,
+            "rule-digest",
+            &plan,
             AnalysisKernel::provider_manifests(),
         )
     }
@@ -482,9 +531,7 @@ mod tests {
 
     #[test]
     fn unresolvable_configured_root_is_observable_via_diagnostic() {
-        // WR-01: an unresolvable configured root must never be a silent drop — it is
-        // surfaced as a diagnostic so an operator can see their configured root
-        // failed to resolve (D-13).
+        // An unresolvable configured root must be visible to the operator.
         let mut db = empty_db();
         let output = run_with_configured(&mut db, &["does/not.Resolve".to_string()]);
         assert_eq!(
@@ -511,8 +558,8 @@ mod tests {
         // The configured-unresolvable root is folded into the digest via the
         // dedicated `unresolved_configured=` part, so two runs that differ only in
         // their unresolvable configured roots produce DIFFERENT digests, while the
-        // stored fact set (empty) is identical (CR-01: the digest still keys the
-        // cache on the configured input without serializing whole facts).
+        // stored fact set is identical. The key still captures the configured
+        // input without serializing whole non-stored facts.
         let mut db_a = empty_db();
         let with_root =
             run_with_configured(&mut db_a, &["does/not.Resolve".to_string()]).output_digest;

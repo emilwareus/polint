@@ -1,7 +1,10 @@
 use crate::analysis::evidence::facts::{
     EvidenceQueryBudget, EvidenceRankingMode, EvidenceRendererMode,
 };
-use crate::analysis_kernel::incremental::{Digest, DigestKind, InputComponent, InputSnapshot};
+use crate::analysis_kernel::incremental::{Digest, DigestKind, InputSnapshot};
+use crate::cache::keys::AnalysisSettingsScope;
+
+const REQUESTED_CAPABILITIES: &[&str] = &["dataflow"];
 
 pub(crate) const EVIDENCE_SCHEMA_LABEL: &str = "evidence-facts-1";
 
@@ -33,20 +36,14 @@ pub(crate) fn evidence_provider_parameter_digest_for_snapshot(
     upstream_output_digests: &[Digest],
 ) -> Digest {
     let mut parts = parameter_parts(&EvidenceProviderParameters::deterministic_default());
-    parts.push(format!("config={}", input_snapshot.config.digest));
-    extend_component_parts(
-        &mut parts,
-        "go_lifecycle",
-        &input_snapshot.go_lifecycle.components,
-    );
-    extend_component_parts(
-        &mut parts,
-        "ts_js_lifecycle",
-        &input_snapshot.ts_js_lifecycle.components,
-    );
-    extend_component_parts(&mut parts, "extension", &input_snapshot.extensions);
-    extend_component_parts(&mut parts, "model", &input_snapshot.models);
-    extend_component_parts(&mut parts, "tool", &input_snapshot.tool_invocations);
+    parts.push(format!(
+        "analysis_settings={}",
+        input_snapshot.analysis_settings_digest(AnalysisSettingsScope::Evidence)
+    ));
+    parts.push(format!(
+        "requested_capabilities={}",
+        input_snapshot.analysis_requirements_digest_for(REQUESTED_CAPABILITIES)
+    ));
     parts.extend(
         upstream_output_digests
             .iter()
@@ -78,26 +75,14 @@ fn parameter_parts(settings: &EvidenceProviderParameters) -> Vec<String> {
     ]
 }
 
-fn extend_component_parts(parts: &mut Vec<String>, prefix: &str, components: &[InputComponent]) {
-    if components.is_empty() {
-        parts.push(format!("{prefix}=absent"));
-        return;
-    }
-    parts.extend(components.iter().map(|component| {
-        format!(
-            "{prefix}:{}:{:?}:{}",
-            component.name, component.status, component.digest
-        )
-    }));
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis_kernel::incremental::{
-        GoLifecycleSnapshot, InputComponent, InputComponentStatus, InputSnapshot,
-        TsJsLifecycleSnapshot,
-    };
+    use crate::analysis_kernel::AnalysisKernel;
+    use crate::analysis_plan::AnalysisPlan;
+    use crate::cache::keys::config_hash;
+    use crate::config::{LoadedConfig, PolintConfig};
+    use crate::core::AnalysisDb;
 
     #[test]
     fn parameters_include_schema_budget_ranking_and_renderer() {
@@ -151,51 +136,21 @@ mod tests {
     }
 
     fn minimal_snapshot() -> InputSnapshot {
-        let snapshot = InputSnapshot {
-            schema_version: crate::analysis_kernel::incremental::INPUT_SNAPSHOT_SCHEMA_VERSION
-                .to_string(),
-            workspace_identity: crate::analysis_kernel::incremental::WorkspaceIdentity::from_roots(
-                [std::path::Path::new("test-workspace")],
-            ),
-            config_identity:
-                crate::analysis_kernel::incremental::ConfigIdentity::from_complete_config_parts(
-                    "config",
-                    &["config"],
-                ),
-            analysis_settings: Vec::new(),
-            requested_capabilities: Vec::new(),
-            analysis_requirements_identity: Digest::absent(
-                DigestKind::AnalysisRequirements,
-                "requested_capabilities",
-            ),
-            files: Vec::new(),
-            config: component("config"),
-            go_lifecycle: GoLifecycleSnapshot {
-                components: Vec::new(),
-            },
-            ts_js_lifecycle: TsJsLifecycleSnapshot {
-                components: Vec::new(),
-            },
-            rules: Vec::new(),
-            models: Vec::new(),
-            extensions: Vec::new(),
-            tool_invocations: Vec::new(),
-            provider_schemas: Vec::new(),
+        let loaded = LoadedConfig {
+            root: "test-workspace".into(),
+            config: PolintConfig::default(),
+            missing: false,
+            respect_gitignore: true,
         };
-        assert!(snapshot.requested_capabilities.is_empty());
-        assert_eq!(
-            snapshot.analysis_requirements_identity,
-            Digest::absent(DigestKind::AnalysisRequirements, "requested_capabilities")
-        );
-        snapshot
-    }
-
-    fn component(name: &str) -> InputComponent {
-        InputComponent {
-            name: name.to_string(),
-            status: InputComponentStatus::Present,
-            digest: Digest::from_parts(DigestKind::Config, name, &[name]),
-            detail: Vec::new(),
-        }
+        let plan = AnalysisPlan::from_capability_names_for_test(&["dataflow"]);
+        let config_digest = config_hash(&loaded);
+        InputSnapshot::from_run_inputs_with_plan(
+            &loaded,
+            &AnalysisDb::new(),
+            &config_digest,
+            "rule-digest",
+            &plan,
+            AnalysisKernel::provider_manifests(),
+        )
     }
 }

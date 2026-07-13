@@ -17,9 +17,7 @@ use crate::analysis::data_flow::facts::{
 };
 use crate::analysis::ids::{EvidenceEdgeId, EvidenceNodeId};
 use crate::analysis_kernel::ProviderManifest;
-use crate::analysis_kernel::incremental::{
-    CacheStats, Digest, DigestKind, InputComponent, InputSnapshot,
-};
+use crate::analysis_kernel::incremental::{CacheStats, Digest, DigestKind, InputSnapshot};
 use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
 use crate::core::AnalysisDb;
 use crate::diagnostics::Diagnostic;
@@ -506,19 +504,6 @@ fn evidence_output_digest(
         format!("extensions={extensions_output_digest}"),
         format!("data_flow={data_flow_output_digest}"),
     ];
-    extend_component_parts(
-        &mut parts,
-        "go_lifecycle",
-        &input_snapshot.go_lifecycle.components,
-    );
-    extend_component_parts(
-        &mut parts,
-        "ts_js_lifecycle",
-        &input_snapshot.ts_js_lifecycle.components,
-    );
-    extend_component_parts(&mut parts, "model", &input_snapshot.models);
-    extend_component_parts(&mut parts, "extension", &input_snapshot.extensions);
-    extend_component_parts(&mut parts, "tool", &input_snapshot.tool_invocations);
     parts.extend(
         output
             .nodes
@@ -583,19 +568,6 @@ fn evidence_output_digest(
     Digest::from_parts(DigestKind::ProviderOutput, "evidence_output", &refs)
 }
 
-fn extend_component_parts(parts: &mut Vec<String>, prefix: &str, components: &[InputComponent]) {
-    if components.is_empty() {
-        parts.push(format!("{prefix}=absent"));
-        return;
-    }
-    parts.extend(components.iter().map(|component| {
-        format!(
-            "{prefix}:{}:{:?}:{}",
-            component.name, component.status, component.digest
-        )
-    }));
-}
-
 fn stable_fact_payload<T>(fact: &T) -> String
 where
     T: Serialize + Debug,
@@ -636,11 +608,74 @@ mod tests {
     };
     use crate::analysis::ids::{DataFlowEdgeId, DataFlowNodeId, MirBodyId, PlaceId};
     use crate::analysis_kernel::AnalysisKernel;
-    use crate::analysis_kernel::incremental::{
-        GoLifecycleSnapshot, InputComponent, InputComponentStatus, InputSnapshot,
-        TsJsLifecycleSnapshot,
-    };
+    use crate::analysis_kernel::incremental::InputSnapshot;
+    use crate::analysis_plan::AnalysisPlan;
+    use crate::cache::keys::config_hash;
+    use crate::config::{LoadedConfig, PolintConfig, RuleConfig};
     use crate::core::{FileId, FunctionId, Language, Span};
+    use std::path::Path;
+    use tempfile::tempdir;
+
+    #[test]
+    fn output_identity_tracks_evidence_inputs_and_ignores_rule_settings() {
+        let temp = tempdir().expect("tempdir");
+        let baseline_loaded = loaded_with_rule(temp.path());
+        let plan = AnalysisPlan::from_capability_names_for_test(&["dataflow", "events"]);
+        let baseline_snapshot = identity_snapshot(&baseline_loaded, &plan);
+        let upstream = digest("upstream");
+        let output = EvidenceOutput::empty();
+        let manifest = AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == EVIDENCE_PROVIDER_ID)
+            .expect("evidence manifest");
+        let baseline_digest = digest_for_output(manifest, &baseline_snapshot, &upstream, &output);
+
+        let mut rule_settings = baseline_loaded;
+        rule_settings.config.rules.config[0]
+            .settings
+            .insert("threshold".to_string(), toml::Value::Integer(7));
+        let rule_snapshot = identity_snapshot(&rule_settings, &plan);
+        assert_ne!(
+            baseline_snapshot.config_identity,
+            rule_snapshot.config_identity
+        );
+        assert_eq!(
+            baseline_digest,
+            digest_for_output(manifest, &rule_snapshot, &upstream, &output)
+        );
+
+        let mut relevant = baseline_snapshot.clone();
+        relevant
+            .requested_capabilities
+            .iter_mut()
+            .find(|row| row.capability == "dataflow")
+            .expect("dataflow capability")
+            .analysis_dependency_digest =
+            Digest::from_parts(DigestKind::AnalysisRequirements, "dataflow", &["changed"]);
+        assert_ne!(
+            baseline_digest,
+            digest_for_output(manifest, &relevant, &upstream, &output)
+        );
+
+        let mut unrelated = baseline_snapshot.clone();
+        unrelated
+            .requested_capabilities
+            .iter_mut()
+            .find(|row| row.capability == "events")
+            .expect("events capability")
+            .analysis_dependency_digest =
+            Digest::from_parts(DigestKind::AnalysisRequirements, "events", &["changed"]);
+        assert_eq!(
+            baseline_digest,
+            digest_for_output(manifest, &unrelated, &upstream, &output)
+        );
+
+        let changed_upstream = digest("changed-upstream");
+        assert_ne!(
+            baseline_digest,
+            digest_for_output(manifest, &baseline_snapshot, &changed_upstream, &output)
+        );
+    }
 
     #[test]
     fn evidence_runs_after_data_flow_and_before_metrics() {
@@ -956,49 +991,49 @@ mod tests {
     }
 
     fn minimal_snapshot() -> InputSnapshot {
-        let config_digest = Digest::from_parts(DigestKind::Config, "config", &["config"]);
-        let snapshot = InputSnapshot {
-            schema_version: crate::analysis_kernel::incremental::INPUT_SNAPSHOT_SCHEMA_VERSION
-                .to_string(),
-            workspace_identity: crate::analysis_kernel::incremental::WorkspaceIdentity::from_roots(
-                [std::path::Path::new("test-workspace")],
-            ),
-            config_identity:
-                crate::analysis_kernel::incremental::ConfigIdentity::from_complete_config_digest(
-                    config_digest.clone(),
-                )
-                .expect("test config digest has the required kind"),
-            analysis_settings: Vec::new(),
-            requested_capabilities: Vec::new(),
-            analysis_requirements_identity: Digest::absent(
-                DigestKind::AnalysisRequirements,
-                "requested_capabilities",
-            ),
-            files: Vec::new(),
-            config: InputComponent {
-                name: "config".to_string(),
-                status: InputComponentStatus::Present,
-                digest: config_digest,
-                detail: Vec::new(),
-            },
-            go_lifecycle: GoLifecycleSnapshot {
-                components: Vec::new(),
-            },
-            ts_js_lifecycle: TsJsLifecycleSnapshot {
-                components: Vec::new(),
-            },
-            rules: Vec::new(),
-            models: Vec::new(),
-            extensions: Vec::new(),
-            tool_invocations: Vec::new(),
-            provider_schemas: Vec::new(),
+        let loaded = LoadedConfig {
+            root: "test-workspace".into(),
+            config: PolintConfig::default(),
+            missing: false,
+            respect_gitignore: true,
         };
-        assert!(snapshot.requested_capabilities.is_empty());
-        assert_eq!(
-            snapshot.analysis_requirements_identity,
-            Digest::absent(DigestKind::AnalysisRequirements, "requested_capabilities")
-        );
-        snapshot
+        identity_snapshot(
+            &loaded,
+            &AnalysisPlan::from_capability_names_for_test(&["dataflow"]),
+        )
+    }
+
+    fn loaded_with_rule(root: &Path) -> LoadedConfig {
+        let mut config = PolintConfig::default();
+        config.rules.config.push(RuleConfig {
+            id: "local/provider-identity".to_string(),
+            severity: None,
+            files: Vec::new(),
+            allow_files: Vec::new(),
+            allow: Vec::new(),
+            max: None,
+            deny: Vec::new(),
+            forbidden_imports: Default::default(),
+            settings: Default::default(),
+        });
+        LoadedConfig {
+            root: root.to_path_buf(),
+            config,
+            missing: false,
+            respect_gitignore: true,
+        }
+    }
+
+    fn identity_snapshot(loaded: &LoadedConfig, plan: &AnalysisPlan) -> InputSnapshot {
+        let config_digest = config_hash(loaded);
+        InputSnapshot::from_run_inputs_with_plan(
+            loaded,
+            &AnalysisDb::new(),
+            &config_digest,
+            "rule-digest",
+            plan,
+            AnalysisKernel::provider_manifests(),
+        )
     }
 
     fn digest(label: &str) -> Digest {
