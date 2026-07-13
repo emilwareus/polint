@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-07-13T16:27:53.580Z"
+last_updated: "2026-07-13T17:28:39.275Z"
 last_activity: 2026-07-13
 progress:
   total_phases: 9
   completed_phases: 2
   total_plans: 27
-  completed_plans: 18
+  completed_plans: 19
   percent: 22
 ---
 
@@ -43,7 +43,7 @@ See: `.planning/PROJECT.md` (updated 2026-07-10)
 ## Current Position
 
 Phase: 65 (Generation Manifest and Metadata Mirroring) — EXECUTING
-Plan: 11 of 19
+Plan: 12 of 19
 Status: Ready to execute
 Last activity: 2026-07-13
 
@@ -529,6 +529,10 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase 65]: Capability support and setup transitions are exercised through test-only AnalysisPlan mutation helpers — The whole-kernel matrix needs canonical plan transitions without widening production or public APIs.
 - [Phase 65]: Typed dependency endpoints validate existing digest purposes before construction — This stages exact invalidation identity without adding a parallel digest vocabulary or changing a wire shape.
 - [Phase 65]: Typed dependency inputs remain non-wire until producers and consumers migrate together — The v1 dependency-index schema and every existing CacheNode producer remain readable and unchanged.
+- [Phase 65]: Publish the first typed cache-node shape only under polint-dependency-index-next-typed — The final v2 label remains deferred until QueryKey reaches its final shape
+- [Phase 65]: Represent syntax module and manifest-relative dependencies as typed UpstreamLayer endpoints — Synthetic dependency-only LayerKey nodes blur real inputs with cached derived nodes
+- [Phase 65]: Persist canonical dependency edges only and reconstruct directional indexes — A single serialized truth prevents forward and reverse traversal data from diverging
+- [Phase 65]: Require AnalysisSettings purpose at the general LayerKey constructor boundary — Config and RuleOptions digests must not occupy the analysis-settings identity slot
 
 ## Execution Metrics
 
@@ -698,3 +702,4 @@ intentionally avoided during autonomous local commits.
 | Phase 65 P08 | 23min | 1 tasks | 11 files |
 | Phase 65 P09 | 2h 6m | 2 tasks | 18 files |
 | Phase 65 P10 | 11min | 1 tasks | 2 files |
+| Phase 65 P11 | 48min | 1 tasks | 10 files |
