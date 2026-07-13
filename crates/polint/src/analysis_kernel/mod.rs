@@ -213,13 +213,15 @@ impl AnalysisKernel {
             input.parallel,
         );
         let go_output_digest = go_output.output_digest.clone();
+        let go_layers = go_output.layers;
         tracing::info!(target: "polint::kernel", "stage: go.syntax done");
         diagnostics.extend(go_output.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+        provider_outputs.push(Self::provider_output_for_with_optional_digest_and_layers(
             "polint.go.syntax",
             &db,
             go_output.cache_stats,
             go_output_digest.clone(),
+            go_layers,
         ));
 
         let ts_analysis_settings_hash = input_snapshot
@@ -234,13 +236,15 @@ impl AnalysisKernel {
             input.parallel,
         );
         let ts_output_digest = ts_output.output_digest.clone();
+        let ts_layers = ts_output.layers;
         tracing::info!(target: "polint::kernel", "stage: ts.syntax done");
         diagnostics.extend(ts_output.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+        provider_outputs.push(Self::provider_output_for_with_optional_digest_and_layers(
             "polint.ts.syntax",
             &db,
             ts_output.cache_stats,
             ts_output_digest.clone(),
+            ts_layers,
         ));
 
         let go_dependency_output_digest = go_output_digest.unwrap_or_else(|| {
@@ -265,12 +269,14 @@ impl AnalysisKernel {
         // Keep polint.module_graph cache_stats internal to KernelRunReport.
         let polint_module_graph_cache_stats = module_graph.cache_stats.clone();
         let module_output_digest = module_graph.output_digest.clone();
+        let module_graph_layers = module_graph.layers;
         diagnostics.extend(module_graph.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+        provider_outputs.push(Self::provider_output_for_with_optional_digest_and_layers(
             "polint.module_graph",
             &db,
             polint_module_graph_cache_stats,
             module_output_digest.clone(),
+            module_graph_layers,
         ));
 
         let module_dependency_output_digest = module_output_digest.unwrap_or_else(|| {
@@ -295,12 +301,14 @@ impl AnalysisKernel {
         let capability_support = symbol_graph.support_view(&module_support);
         let polint_symbol_graph_cache_stats = symbol_graph.cache_stats.clone();
         let symbol_output_digest = symbol_graph.output_digest.clone();
+        let symbol_graph_layers = symbol_graph.layers;
         diagnostics.extend(symbol_graph.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+        provider_outputs.push(Self::provider_output_for_with_optional_digest_and_layers(
             "polint.symbol_graph",
             &db,
             polint_symbol_graph_cache_stats,
             symbol_output_digest.clone(),
+            symbol_graph_layers,
         ));
 
         let symbol_dependency_output_digest = symbol_output_digest.unwrap_or_else(|| {
@@ -323,12 +331,14 @@ impl AnalysisKernel {
         };
         let polint_module_topology_cache_stats = module_topology.cache_stats.clone();
         let module_topology_output_digest = module_topology.output_digest.clone();
+        let module_topology_layers = module_topology.layers;
         diagnostics.extend(module_topology.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+        provider_outputs.push(Self::provider_output_for_with_optional_digest_and_layers(
             "polint.module_topology",
             &db,
             polint_module_topology_cache_stats,
             module_topology_output_digest.clone(),
+            module_topology_layers,
         ));
 
         let module_topology_dependency_output_digest = module_topology_output_digest
@@ -945,12 +955,14 @@ impl AnalysisKernel {
         );
         let polint_metrics_cache_stats = metrics.cache_stats.clone();
         let metrics_output_digest = metrics.output_digest;
+        let metrics_layers = metrics.layers;
         diagnostics.extend(metrics.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+        provider_outputs.push(Self::provider_output_for_with_optional_digest_and_layers(
             "polint.metrics",
             &db,
             polint_metrics_cache_stats,
             metrics_output_digest,
+            metrics_layers,
         ));
         tracing::info!(target: "polint::kernel", "stage: metrics + derived done");
         let validation_diagnostics =
@@ -1035,6 +1047,22 @@ impl AnalysisKernel {
         cache_stats: incremental::CacheStats,
         output_digest: Option<incremental::Digest>,
     ) -> incremental::ProviderOutputMeta {
+        Self::provider_output_for_with_optional_digest_and_layers(
+            provider_id,
+            db,
+            cache_stats,
+            output_digest,
+            Vec::new(),
+        )
+    }
+
+    fn provider_output_for_with_optional_digest_and_layers(
+        provider_id: &'static str,
+        db: &AnalysisDb,
+        cache_stats: incremental::CacheStats,
+        output_digest: Option<incremental::Digest>,
+        layers: Vec<incremental::LayerRunMetadata>,
+    ) -> incremental::ProviderOutputMeta {
         let manifest = Self::provider_manifest(provider_id);
         let (output_digest, validation) = match output_digest {
             Some(output_digest) => (
@@ -1060,8 +1088,12 @@ impl AnalysisKernel {
                 ),
             },
         };
-        let mut meta =
-            incremental::provider_output_from_manifest(manifest, output_digest, cache_stats);
+        let mut meta = incremental::provider_output_from_manifest_with_layers(
+            manifest,
+            output_digest,
+            layers,
+            cache_stats,
+        );
         meta.validation = validation;
         meta
     }
@@ -1637,6 +1669,14 @@ mod tests {
                 "polint.metrics",
             ]
         );
+        for provider_id in ["polint.go.syntax", "polint.ts.syntax"] {
+            let provider = provider_outputs
+                .iter()
+                .find(|row| row.provider_id == provider_id)
+                .expect("syntax provider output");
+            assert_eq!(provider.layers.len(), 1);
+            assert_eq!(provider.output_digest, provider.layers[0].output_digest);
+        }
     }
 
     #[test]
@@ -1769,6 +1809,8 @@ mod tests {
             first_module_graph.output_digest,
             second_module_graph.output_digest
         );
+        assert_eq!(first_module_graph.layers.len(), 1);
+        assert_eq!(second_module_graph.layers, first_module_graph.layers);
     }
 
     #[test]
@@ -1816,6 +1858,8 @@ mod tests {
             first_symbol_graph.output_digest,
             second_symbol_graph.output_digest
         );
+        assert_eq!(first_symbol_graph.layers.len(), 1);
+        assert_eq!(second_symbol_graph.layers, first_symbol_graph.layers);
     }
 
     #[test]
@@ -1883,6 +1927,12 @@ mod tests {
         assert_eq!(disabled_module_topology.cache_stats.bypasses_disabled, 1);
         assert_eq!(disabled_module_topology.cache_stats.recomputes, 1);
         assert!(!disabled_module_topology.output_digest.value.is_empty());
+        assert_eq!(first_module_topology.layers.len(), 1);
+        assert_eq!(second_module_topology.layers, first_module_topology.layers);
+        assert_eq!(
+            disabled_module_topology.layers,
+            first_module_topology.layers
+        );
     }
 
     #[test]
@@ -2020,6 +2070,8 @@ mod tests {
         assert_eq!(second_metrics.cache_stats.verified_reuse, 1);
         assert_eq!(second_metrics.cache_stats.recomputes, 0);
         assert_eq!(first_metrics.output_digest, second_metrics.output_digest);
+        assert_eq!(first_metrics.layers.len(), 1);
+        assert_eq!(second_metrics.layers, first_metrics.layers);
     }
 
     #[test]
@@ -2047,6 +2099,8 @@ mod tests {
         assert_eq!(metrics.cache_stats.invalid_evicted_reads, 1);
         assert_eq!(metrics.cache_stats.recomputes, 1);
         assert_eq!(metrics.cache_stats.writes, 0);
+        assert_eq!(metrics.layers.len(), 1);
+        assert_eq!(metrics.output_digest, metrics.layers[0].output_digest);
         assert!(output.diagnostics.iter().any(|diagnostic| {
             diagnostic.rule_id == "internal/cache"
                 && diagnostic.file == "metrics layer"

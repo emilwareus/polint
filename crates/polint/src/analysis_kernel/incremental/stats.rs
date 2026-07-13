@@ -5,6 +5,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use super::digest::Digest;
 use super::keys::PrecisionTier;
+use super::layer_cache::LayerRunMetadata;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct CacheStats {
@@ -118,6 +119,7 @@ pub(crate) struct ProviderSemanticProjection<'a> {
     pub(crate) precision: PrecisionTier,
     pub(crate) validation: ProviderValidationStatus,
     pub(crate) dependency_inputs: &'a [Digest],
+    pub(crate) layers: &'a [LayerRunMetadata],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,6 +131,7 @@ pub(crate) struct ProviderOutputMeta {
     pub(crate) precision: PrecisionTier,
     pub(crate) validation: ProviderValidationStatus,
     pub(crate) dependency_inputs: Vec<Digest>,
+    pub(crate) layers: Vec<LayerRunMetadata>,
     pub(crate) cache_stats: CacheStats,
 }
 
@@ -145,6 +148,7 @@ impl ProviderOutputMeta {
         precision: PrecisionTier,
         validation: ProviderValidationStatus,
         dependency_inputs: Vec<Digest>,
+        layers: Vec<LayerRunMetadata>,
         cache_stats: CacheStats,
     ) -> Self {
         Self {
@@ -155,6 +159,7 @@ impl ProviderOutputMeta {
             precision,
             validation,
             dependency_inputs: sorted_digests(dependency_inputs),
+            layers: sorted_layers(layers),
             cache_stats,
         }
     }
@@ -168,6 +173,7 @@ impl ProviderOutputMeta {
             precision: self.precision,
             validation: self.validation,
             dependency_inputs: &self.dependency_inputs,
+            layers: &self.layers,
         }
     }
 }
@@ -177,10 +183,63 @@ fn sorted_digests(mut digests: Vec<Digest>) -> Vec<Digest> {
     digests
 }
 
+fn sorted_layers(mut layers: Vec<LayerRunMetadata>) -> Vec<LayerRunMetadata> {
+    layers.sort();
+    layers.dedup();
+    layers
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis_kernel::incremental::digest::{Digest, DigestKind};
+    use crate::analysis_kernel::incremental::{
+        DigestKind, LayerCacheManifest, LayerKey, LayerKind,
+    };
+
+    fn layer(label: &str, layer_kind: LayerKind) -> LayerRunMetadata {
+        let key = LayerKey::new(
+            layer_kind,
+            format!("polint.{label}"),
+            "1",
+            format!("{label}-v1"),
+            Digest::absent(DigestKind::ProviderParameters, "none"),
+            Digest::absent(DigestKind::ProviderParameters, "none"),
+            Digest::absent(DigestKind::AnalysisSettings, "none"),
+            Digest::absent(DigestKind::ToolInvocation, "none"),
+            vec![Digest::from_parts(DigestKind::SourceText, label, &[label])],
+            Vec::new(),
+            Vec::new(),
+        );
+        LayerRunMetadata::from_manifest(LayerCacheManifest::new(
+            key,
+            Digest::from_parts(DigestKind::LayerOutput, label, &["output"]),
+            Digest::from_parts(DigestKind::LayerOutput, label, &["payload"]),
+            Vec::new(),
+            PrecisionTier::Syntax,
+            ProviderValidationStatus::NativeTrusted,
+            vec!["z-warning".to_string(), "a-warning".to_string()],
+        ))
+    }
+
+    fn permutations<T: Clone>(values: &[T]) -> Vec<Vec<T>> {
+        fn visit<T: Clone>(remaining: Vec<T>, prefix: Vec<T>, output: &mut Vec<Vec<T>>) {
+            if remaining.is_empty() {
+                output.push(prefix);
+                return;
+            }
+            for index in 0..remaining.len() {
+                let mut next_remaining = remaining.clone();
+                let value = next_remaining.remove(index);
+                let mut next_prefix = prefix.clone();
+                next_prefix.push(value);
+                visit(next_remaining, next_prefix, output);
+            }
+        }
+
+        let mut output = Vec::new();
+        visit(values.to_vec(), Vec::new(), &mut output);
+        output
+    }
 
     #[test]
     fn default_cache_stats_serialize_zero_counters() {
@@ -239,6 +298,7 @@ mod tests {
                 "file",
                 &["src/main.ts"],
             )],
+            Vec::new(),
             CacheStats::default(),
         );
         let json = serde_json::to_value(meta).expect("provider output metadata should serialize");
@@ -250,6 +310,7 @@ mod tests {
         assert!(json.get("precision").is_some());
         assert!(json.get("validation").is_some());
         assert!(json.get("dependency_inputs").is_some());
+        assert!(json.get("layers").is_some());
         assert!(json.get("cache_stats").is_some());
         assert_eq!(json["validation"], "native_trusted");
     }
@@ -288,6 +349,7 @@ mod tests {
                 "file",
                 &["src/main.ts"],
             )],
+            vec![layer("ts.syntax", LayerKind::TsSyntax)],
             CacheStats::default(),
         );
         let expected = base.semantic_projection();
@@ -330,6 +392,51 @@ mod tests {
             changed.cache_stats = stats;
             assert_eq!(changed.semantic_projection(), expected);
             assert_eq!(changed.output_digest, base.output_digest);
+        }
+    }
+
+    #[test]
+    fn provider_and_layer_rows_are_identical_across_completion_order_permutations() {
+        let layers = vec![
+            layer("go.syntax", LayerKind::GoSyntax),
+            layer("ts.syntax", LayerKind::TsSyntax),
+            layer("module_graph", LayerKind::ModuleGraph),
+            layer("metrics", LayerKind::Metrics),
+        ];
+        let permutations = permutations(&layers);
+        assert_eq!(permutations.len(), 24);
+
+        let expected = ProviderOutputMeta::new(
+            "polint.aggregate",
+            "1",
+            "aggregate-v1",
+            Digest::from_parts(DigestKind::ProviderOutput, "aggregate", &["facts"]),
+            PrecisionTier::Syntax,
+            ProviderValidationStatus::NativeTrusted,
+            Vec::new(),
+            layers,
+            CacheStats::default(),
+        );
+
+        for mut completion_order in permutations {
+            completion_order.push(completion_order[0].clone());
+            let actual = ProviderOutputMeta::new(
+                "polint.aggregate",
+                "1",
+                "aggregate-v1",
+                Digest::from_parts(DigestKind::ProviderOutput, "aggregate", &["facts"]),
+                PrecisionTier::Syntax,
+                ProviderValidationStatus::NativeTrusted,
+                Vec::new(),
+                completion_order,
+                CacheStats {
+                    hits: 1,
+                    ..CacheStats::default()
+                },
+            );
+
+            assert_eq!(actual.layers, expected.layers);
+            assert_eq!(actual.semantic_projection(), expected.semantic_projection());
         }
     }
 

@@ -22,6 +22,7 @@ use super::digest::{Digest, DigestKind};
 use super::input_snapshot::InputComponentStatus;
 use super::invalidation::{InvalidationAction, InvalidationPlan};
 use super::keys::{LayerKey, LayerKind, PrecisionTier};
+use super::stats::ProviderValidationStatus;
 use crate::cache::stable_hash;
 
 pub(crate) const LAYER_CACHE_MANIFEST_SCHEMA: &str = "polint-layer-cache-manifest-2";
@@ -43,7 +44,7 @@ pub(crate) struct LayerCacheManifest {
     #[serde(skip)]
     pub(crate) dependency_index: DependencyIndex,
     pub(crate) precision: PrecisionTier,
-    pub(crate) validation: String,
+    pub(crate) validation: ProviderValidationStatus,
     pub(crate) warnings: Vec<String>,
 }
 
@@ -54,7 +55,7 @@ impl LayerCacheManifest {
         payload_digest: Digest,
         mut dependencies: Vec<DependencyEdge>,
         precision: PrecisionTier,
-        validation: impl Into<String>,
+        validation: ProviderValidationStatus,
         mut warnings: Vec<String>,
     ) -> Self {
         sort_and_dedup_manifest_dependencies(&mut dependencies);
@@ -71,7 +72,7 @@ impl LayerCacheManifest {
             dependency_index: DependencyIndex::default(),
             dependencies,
             precision,
-            validation: validation.into(),
+            validation,
             warnings,
         };
         manifest.canonicalize_dependency_sources();
@@ -84,6 +85,60 @@ impl LayerCacheManifest {
             edge.from = from.clone();
         }
         sort_and_dedup_manifest_dependencies(&mut self.dependencies);
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub(crate) struct LayerRunMetadata {
+    pub(crate) key: LayerKey,
+    pub(crate) output_digest: Digest,
+    pub(crate) payload_digest: Digest,
+    pub(crate) dependencies: Vec<DependencyEdge>,
+    pub(crate) precision: PrecisionTier,
+    pub(crate) validation: ProviderValidationStatus,
+    pub(crate) warning_codes: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub(crate) struct LayerSemanticProjection<'a> {
+    pub(crate) key: &'a LayerKey,
+    pub(crate) output_digest: &'a Digest,
+    pub(crate) payload_digest: &'a Digest,
+    pub(crate) dependencies: &'a [DependencyEdge],
+    pub(crate) precision: PrecisionTier,
+    pub(crate) validation: ProviderValidationStatus,
+    pub(crate) warning_codes: &'a [String],
+}
+
+impl LayerRunMetadata {
+    pub(crate) fn from_manifest(mut manifest: LayerCacheManifest) -> Self {
+        manifest.canonicalize_dependency_sources();
+        let dependencies = expanded_manifest_dependencies(&manifest);
+        let mut warning_codes = manifest.warnings;
+        warning_codes.sort();
+        warning_codes.dedup();
+
+        Self {
+            key: manifest.key,
+            output_digest: manifest.output_digest,
+            payload_digest: manifest.payload_digest,
+            dependencies,
+            precision: manifest.precision,
+            validation: manifest.validation,
+            warning_codes,
+        }
+    }
+
+    pub(crate) fn semantic_projection(&self) -> LayerSemanticProjection<'_> {
+        LayerSemanticProjection {
+            key: &self.key,
+            output_digest: &self.output_digest,
+            payload_digest: &self.payload_digest,
+            dependencies: &self.dependencies,
+            precision: self.precision,
+            validation: self.validation,
+            warning_codes: &self.warning_codes,
+        }
     }
 }
 
@@ -447,7 +502,7 @@ impl LayerCacheStore {
             && is_safe_digest_file_component(&manifest.output_digest.value)
             && manifest.payload_digest.kind == DigestKind::LayerOutput
             && is_safe_digest_file_component(&manifest.payload_digest.value)
-            && is_supported_validation_label(&manifest.validation)
+            && manifest.validation == ProviderValidationStatus::NativeTrusted
             && dependencies_match_layer_key(manifest)
             && invalidation_allows_manifest_reuse(manifest, key)
     }
@@ -635,10 +690,6 @@ fn payload_digest_for_bytes(payload: &[u8]) -> Result<Digest> {
 
 fn is_safe_digest_file_component(value: &str) -> bool {
     !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
-fn is_supported_validation_label(value: &str) -> bool {
-    value == "native_trusted"
 }
 
 fn dependencies_match_layer_key(manifest: &LayerCacheManifest) -> bool {
@@ -1018,7 +1069,7 @@ mod tests {
             LayerCacheStore::payload_digest_for_json(payload).expect("payload digest"),
             vec![dependency(&layer_key)],
             PrecisionTier::Syntax,
-            "native_trusted",
+            ProviderValidationStatus::NativeTrusted,
             Vec::new(),
         )
     }
@@ -1191,6 +1242,97 @@ mod tests {
                 "unexpected field {forbidden}"
             );
         }
+    }
+
+    #[test]
+    fn manifest_validation_status_uses_the_typed_native_trusted_wire_label() {
+        let payload = Payload {
+            items: vec!["a".to_string()],
+        };
+        let manifest = manifest_for_payload(key(), &payload);
+        let json = serde_json::to_value(&manifest).expect("manifest should serialize");
+
+        assert_eq!(json["validation"], "native_trusted");
+        assert_eq!(
+            serde_json::from_value::<LayerCacheManifest>(json)
+                .expect("typed validation status should deserialize"),
+            manifest
+        );
+    }
+
+    #[test]
+    fn layer_run_metadata_expands_manifest_relative_edges_and_has_digest_only_payload_identity() {
+        fn assert_no_forbidden_object_keys(value: &serde_json::Value, forbidden: &[&str]) {
+            match value {
+                serde_json::Value::Object(object) => {
+                    for (key, value) in object {
+                        assert!(
+                            !forbidden.contains(&key.as_str()),
+                            "layer metadata must not serialize forbidden field `{key}`"
+                        );
+                        assert_no_forbidden_object_keys(value, forbidden);
+                    }
+                }
+                serde_json::Value::Array(values) => {
+                    for value in values {
+                        assert_no_forbidden_object_keys(value, forbidden);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let payload = Payload {
+            items: vec!["a".to_string()],
+        };
+        let manifest = manifest_for_payload(key(), &payload);
+        assert_eq!(
+            manifest.dependencies[0].from,
+            relative_manifest_dependency_source()
+        );
+        let expected_key = manifest.key.clone();
+        let metadata = LayerRunMetadata::from_manifest(manifest);
+
+        assert_eq!(metadata.key, expected_key);
+        assert_eq!(
+            metadata.dependencies[0].from,
+            CacheNode::Layer(metadata.key.clone())
+        );
+        let metadata_json =
+            serde_json::to_value(&metadata).expect("layer metadata should serialize");
+        assert_eq!(
+            serde_json::from_value::<LayerRunMetadata>(metadata_json)
+                .expect("layer metadata should deserialize"),
+            metadata
+        );
+        let json = serde_json::to_value(metadata.semantic_projection())
+            .expect("semantic layer metadata should serialize");
+        assert!(json.get("payload_digest").is_some());
+        assert_no_forbidden_object_keys(
+            &json,
+            &[
+                "source_text",
+                "source_bytes",
+                "fact_payload",
+                "payload_blob",
+                "ast_blob",
+                "mir_blob",
+                "cfg_blob",
+                "summary_body",
+                "summary_blob",
+                "graph_nodes",
+                "graph_edges",
+                "cache_stats",
+                "hits",
+                "misses",
+                "recomputes",
+                "writes",
+                "bypasses_disabled",
+                "invalid_evicted_reads",
+                "verified_reuse",
+                "quarantines",
+            ],
+        );
     }
 
     #[test]

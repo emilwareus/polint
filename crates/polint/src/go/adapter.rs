@@ -1,6 +1,7 @@
 use crate::analysis_kernel::incremental::{
     CacheStats, Digest, DigestKind, LayerCacheManifest, LayerCacheReadStatus, LayerCacheStore,
-    LayerCacheWriteStatus, LayerKey, LayerKind, PrecisionTier,
+    LayerCacheWriteStatus, LayerKey, LayerKind, LayerRunMetadata, PrecisionTier,
+    ProviderValidationStatus,
 };
 use crate::analysis_plan::AnalysisPlan;
 use crate::cache::CacheReadStatus;
@@ -72,6 +73,7 @@ pub(crate) struct ProviderAnalysisResult {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) cache_stats: CacheStats,
     pub(crate) output_digest: Option<Digest>,
+    pub(crate) layers: Vec<LayerRunMetadata>,
 }
 
 pub(crate) fn analyze_with_plan_options_and_cache_stats(
@@ -93,6 +95,7 @@ pub(crate) fn analyze_with_plan_options_and_cache_stats(
             diagnostics: Vec::new(),
             cache_stats,
             output_digest: None,
+            layers: Vec::new(),
         };
     }
 
@@ -112,46 +115,63 @@ pub(crate) fn analyze_with_plan_options_and_cache_stats(
             let payload = read
                 .value
                 .expect("layer cache hit should include syntax payload");
+            let layer = LayerRunMetadata::from_manifest(
+                read.manifest
+                    .expect("layer cache hit should include syntax manifest"),
+            );
             ProviderAnalysisResult {
                 diagnostics: restore_syntax_layer_payload(db, payload),
                 cache_stats,
-                output_digest: read.output_digest,
+                output_digest: Some(layer.output_digest.clone()),
+                layers: vec![layer],
             }
         }
-        LayerCacheReadStatus::BypassedDisabled => {
-            cache_stats.record_disabled_bypass();
-            cache_stats.record_recompute();
-            let payload =
-                parse_go_syntax_layer_payload(&files, cache, analysis_settings_hash, parallel);
-            ProviderAnalysisResult {
-                diagnostics: restore_syntax_layer_payload(db, payload),
-                cache_stats,
-                output_digest: None,
-            }
-        }
-        LayerCacheReadStatus::Miss | LayerCacheReadStatus::InvalidEvicted => {
-            if read.status == LayerCacheReadStatus::Miss {
-                cache_stats.record_miss();
-            } else {
-                cache_stats.record_invalid_evicted_read();
+        status @ (LayerCacheReadStatus::BypassedDisabled
+        | LayerCacheReadStatus::Miss
+        | LayerCacheReadStatus::InvalidEvicted) => {
+            match status {
+                LayerCacheReadStatus::BypassedDisabled => cache_stats.record_disabled_bypass(),
+                LayerCacheReadStatus::Miss => cache_stats.record_miss(),
+                LayerCacheReadStatus::InvalidEvicted => {
+                    cache_stats.record_invalid_evicted_read();
+                }
+                LayerCacheReadStatus::Hit => {}
             }
             cache_stats.record_recompute();
             let payload =
                 parse_go_syntax_layer_payload(&files, cache, analysis_settings_hash, parallel);
             let mut write_diagnostics = Vec::new();
-            let output_digest = write_syntax_layer_payload(
-                &layer_store,
-                layer_key,
-                &payload,
-                &mut cache_stats,
-                &mut write_diagnostics,
-            );
+            let manifest = match go_syntax_layer_manifest(layer_key, &payload) {
+                Ok(manifest) => manifest,
+                Err(error) => {
+                    write_diagnostics.push(cache_write_diagnostic("go syntax layer", error));
+                    let mut diagnostics = restore_syntax_layer_payload(db, payload);
+                    diagnostics.extend(write_diagnostics);
+                    return ProviderAnalysisResult {
+                        diagnostics,
+                        cache_stats,
+                        output_digest: None,
+                        layers: Vec::new(),
+                    };
+                }
+            };
+            if status != LayerCacheReadStatus::BypassedDisabled {
+                write_syntax_layer_payload(
+                    &layer_store,
+                    &manifest,
+                    &payload,
+                    &mut cache_stats,
+                    &mut write_diagnostics,
+                );
+            }
+            let layer = LayerRunMetadata::from_manifest(manifest);
             let mut diagnostics = restore_syntax_layer_payload(db, payload);
             diagnostics.extend(write_diagnostics);
             ProviderAnalysisResult {
                 diagnostics,
                 cache_stats,
-                output_digest,
+                output_digest: Some(layer.output_digest.clone()),
+                layers: vec![layer],
             }
         }
     }
@@ -301,35 +321,33 @@ fn restore_syntax_layer_payload(
 
 fn write_syntax_layer_payload(
     store: &LayerCacheStore,
-    layer_key: LayerKey,
+    manifest: &LayerCacheManifest,
     payload: &SyntaxLayerPayload,
     stats: &mut CacheStats,
     diagnostics: &mut Vec<Diagnostic>,
-) -> Option<Digest> {
-    let payload_digest = match LayerCacheStore::payload_digest_for_json(payload) {
-        Ok(digest) => digest,
-        Err(error) => {
-            diagnostics.push(cache_write_diagnostic("go syntax layer", error));
-            return None;
-        }
-    };
-    let output_digest = go_syntax_output_digest(&payload_digest);
-    let manifest = LayerCacheManifest::new(
-        layer_key,
-        output_digest.clone(),
-        payload_digest,
-        Vec::new(),
-        PrecisionTier::Syntax,
-        "native_trusted",
-        Vec::new(),
-    );
-
-    match store.write_json(&manifest, payload) {
+) {
+    match store.write_json(manifest, payload) {
         Ok(LayerCacheWriteStatus::Written) => stats.record_write(),
         Ok(LayerCacheWriteStatus::BypassedDisabled) => stats.record_disabled_bypass(),
         Err(error) => diagnostics.push(cache_write_diagnostic("go syntax layer", error)),
     }
-    Some(output_digest)
+}
+
+fn go_syntax_layer_manifest(
+    layer_key: LayerKey,
+    payload: &SyntaxLayerPayload,
+) -> Result<LayerCacheManifest> {
+    let payload_digest = LayerCacheStore::payload_digest_for_json(payload)?;
+    let output_digest = go_syntax_output_digest(&payload_digest);
+    Ok(LayerCacheManifest::new(
+        layer_key,
+        output_digest,
+        payload_digest,
+        Vec::new(),
+        PrecisionTier::Syntax,
+        ProviderValidationStatus::NativeTrusted,
+        Vec::new(),
+    ))
 }
 
 fn go_syntax_output_digest_for_payload(payload: &SyntaxLayerPayload) -> Digest {
@@ -1662,5 +1680,155 @@ func TestFoo(t *testing.T) {
         let names: Vec<_> = db.tests()[0].subtest_names.clone();
         assert_eq!(names, vec!["case_a".to_string(), "case_b".to_string()]);
         assert_eq!(db.tests()[0].subtest_count, 2);
+    }
+}
+
+#[cfg(test)]
+mod layer_run_metadata_path_tests {
+    use super::*;
+    use std::path::{Path, PathBuf};
+
+    fn database() -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        db.add_file(
+            PathBuf::from("main.go"),
+            "main.go".to_string(),
+            "package main\nfunc main() {}\n".to_string(),
+        );
+        db
+    }
+
+    fn run(cache: &crate::cache::Cache) -> ProviderAnalysisResult {
+        analyze_with_plan_options_and_cache_stats(
+            &mut database(),
+            cache,
+            "stable-settings",
+            &AnalysisPlan::empty(),
+            false,
+        )
+    }
+
+    fn corrupt_only_file(directory: &Path) {
+        let files = std::fs::read_dir(directory)
+            .expect("layer cache directory should exist")
+            .map(|entry| entry.expect("layer cache entry").path())
+            .filter(|path| path.is_file())
+            .collect::<Vec<_>>();
+        assert_eq!(files.len(), 1, "fixture should contain one layer file");
+        std::fs::write(&files[0], "{not-json").expect("layer cache file should be corruptible");
+    }
+
+    fn assert_layer_projection_excludes_cache_telemetry(result: &ProviderAnalysisResult) {
+        let serialized = serde_json::to_string(&result.layers[0].semantic_projection())
+            .expect("layer semantic projection should serialize");
+        for forbidden in [
+            "cache_stats",
+            "hits",
+            "misses",
+            "recomputes",
+            "writes",
+            "bypasses_disabled",
+            "invalid_evicted_reads",
+            "verified_reuse",
+            "quarantines",
+        ] {
+            assert!(
+                !serialized.contains(&format!("\"{forbidden}\":")),
+                "layer semantic projection must exclude `{forbidden}`"
+            );
+        }
+    }
+
+    #[test]
+    fn go_layer_run_metadata_is_identical_across_hit_miss_disabled_invalid_read_and_failed_write() {
+        let scratch = tempfile::TempDir::new().expect("scratch directory");
+        let cache_root = scratch.path().join("cache");
+        let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
+
+        let cold = run(&cache);
+        assert!(cold.diagnostics.is_empty());
+        assert_eq!(
+            cold.cache_stats,
+            CacheStats {
+                misses: 1,
+                recomputes: 1,
+                writes: 1,
+                ..CacheStats::default()
+            }
+        );
+
+        let warm = run(&cache);
+        assert!(warm.diagnostics.is_empty());
+        assert_eq!(
+            warm.cache_stats,
+            CacheStats {
+                hits: 1,
+                verified_reuse: 1,
+                ..CacheStats::default()
+            }
+        );
+
+        let disabled_root = scratch.path().join("disabled");
+        let disabled = run(&crate::cache::Cache::new(
+            disabled_root.join("analysis"),
+            false,
+        ));
+        assert!(disabled.diagnostics.is_empty());
+        assert_eq!(
+            disabled.cache_stats,
+            CacheStats {
+                recomputes: 1,
+                bypasses_disabled: 1,
+                ..CacheStats::default()
+            }
+        );
+        assert!(!disabled_root.join("layers").exists());
+
+        corrupt_only_file(&cache_root.join("layers/manifests"));
+        let invalid = run(&cache);
+        assert!(invalid.diagnostics.is_empty());
+        assert_eq!(
+            invalid.cache_stats,
+            CacheStats {
+                recomputes: 1,
+                writes: 1,
+                invalid_evicted_reads: 1,
+                ..CacheStats::default()
+            }
+        );
+
+        let failed_root = scratch.path().join("failed");
+        std::fs::create_dir_all(&failed_root).expect("failed-write cache parent");
+        std::fs::write(failed_root.join("layers"), "not a directory")
+            .expect("failed-write fixture");
+        let failed = run(&crate::cache::Cache::new(
+            failed_root.join("analysis"),
+            true,
+        ));
+        assert_eq!(
+            failed.cache_stats,
+            CacheStats {
+                recomputes: 1,
+                invalid_evicted_reads: 1,
+                ..CacheStats::default()
+            }
+        );
+        assert!(
+            failed
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.rule_id == "internal/cache")
+        );
+
+        for result in [&cold, &warm, &disabled, &invalid, &failed] {
+            assert_eq!(result.layers.len(), 1);
+            assert_eq!(result.layers, cold.layers);
+            assert_eq!(
+                result.layers[0].semantic_projection(),
+                cold.layers[0].semantic_projection()
+            );
+            assert_eq!(result.output_digest, cold.output_digest);
+            assert_layer_projection_excludes_cache_telemetry(result);
+        }
     }
 }

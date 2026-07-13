@@ -1,7 +1,7 @@
 use super::demand::DemandQueryTrace;
 use super::{
-    CacheStats, DemandCacheStatus, Digest, DigestKind, InputSnapshot, PrecisionTier,
-    ProviderOutputMeta, ProviderValidationStatus,
+    CacheStats, DemandCacheStatus, Digest, DigestKind, InputSnapshot, LayerRunMetadata,
+    PrecisionTier, ProviderOutputMeta, ProviderValidationStatus,
 };
 #[cfg(test)]
 use crate::analysis::summaries::provider::SccClosureDebugSnapshot;
@@ -67,9 +67,10 @@ impl KernelRunReport {
     }
 }
 
-pub(crate) fn provider_output_from_manifest(
+pub(crate) fn provider_output_from_manifest_with_layers(
     manifest: &ProviderManifest,
     output_digest: Digest,
+    layers: Vec<LayerRunMetadata>,
     cache_stats: CacheStats,
 ) -> ProviderOutputMeta {
     ProviderOutputMeta::new(
@@ -80,8 +81,18 @@ pub(crate) fn provider_output_from_manifest(
         PrecisionTier::from_ceiling(manifest.precision_ceiling),
         ProviderValidationStatus::NativeTrusted,
         dependency_inputs_from_manifest(manifest),
+        layers,
         cache_stats,
     )
+}
+
+#[cfg(test)]
+pub(crate) fn provider_output_from_manifest(
+    manifest: &ProviderManifest,
+    output_digest: Digest,
+    cache_stats: CacheStats,
+) -> ProviderOutputMeta {
+    provider_output_from_manifest_with_layers(manifest, output_digest, Vec::new(), cache_stats)
 }
 
 pub(crate) fn provider_output_digest_from_manifest(

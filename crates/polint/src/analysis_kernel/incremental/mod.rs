@@ -162,7 +162,8 @@ pub(crate) use keys::{
 )]
 pub(crate) use layer_cache::{
     LAYER_CACHE_MANIFEST_SCHEMA, LayerCacheManifest, LayerCacheReadOutcome, LayerCacheReadStatus,
-    LayerCacheStore, LayerCacheWriteStatus, relative_manifest_dependency_source,
+    LayerCacheStore, LayerCacheWriteStatus, LayerRunMetadata, LayerSemanticProjection,
+    relative_manifest_dependency_source,
 };
 #[cfg_attr(
     test,
@@ -176,7 +177,10 @@ pub(crate) use layer_cache::{
     expect(unused_imports, reason = "kept for private internal consumers")
 )]
 pub(crate) use quarantine::{QuarantineEntry, QuarantinePolicy, QuarantineStore};
+#[cfg(test)]
+pub(crate) use run_report::provider_output_from_manifest;
 pub(crate) use run_report::{
-    KernelRunReport, provider_output_digest_from_manifest, provider_output_from_manifest,
+    KernelRunReport, provider_output_digest_from_manifest,
+    provider_output_from_manifest_with_layers,
 };
 pub(crate) use stats::{CacheStats, ProviderOutputMeta, ProviderValidationStatus};

@@ -3,7 +3,8 @@ use crate::analysis_kernel::incremental::{
     CacheNode, CacheStats, DependencyEdge, DependencyKind, Digest, DigestKind,
     InputComponentStatus, InputDependencyKey, InputSnapshot, LayerCacheManifest,
     LayerCacheReadStatus, LayerCacheStore, LayerCacheWriteStatus, LayerKey, LayerKind,
-    PrecisionTier, ShapeKind, relative_manifest_dependency_source,
+    LayerRunMetadata, PrecisionTier, ProviderValidationStatus, ShapeKind,
+    relative_manifest_dependency_source,
 };
 use crate::analysis_plan::AnalysisPlan;
 use crate::cache::Cache;
@@ -24,6 +25,7 @@ pub(crate) struct MetricsDerivation {
     pub(crate) cache_stats: CacheStats,
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) output_digest: Option<Digest>,
+    pub(crate) layers: Vec<LayerRunMetadata>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,25 +82,28 @@ pub(crate) fn derive_requested_metrics_with_cache_stats(
             let payload = read
                 .value
                 .expect("layer cache hit should include metrics payload");
+            let layer = LayerRunMetadata::from_manifest(
+                read.manifest
+                    .expect("layer cache hit should include metrics manifest"),
+            );
             restore_metrics_layer_payload(db, &payload);
             MetricsDerivation {
                 cache_stats,
                 diagnostics: Vec::new(),
-                output_digest: read.output_digest,
+                output_digest: Some(layer.output_digest.clone()),
+                layers: vec![layer],
             }
         }
-        LayerCacheReadStatus::BypassedDisabled => {
-            cache_stats.record_disabled_bypass();
-            cache_stats.record_recompute();
-            let mut derivation = derive_requested_metrics_uncached(db, plan);
-            derivation.cache_stats = cache_stats;
-            derivation
-        }
-        LayerCacheReadStatus::Miss | LayerCacheReadStatus::InvalidEvicted => {
-            if read.status == LayerCacheReadStatus::Miss {
-                cache_stats.record_miss();
-            } else {
-                cache_stats.record_invalid_evicted_read();
+        status @ (LayerCacheReadStatus::BypassedDisabled
+        | LayerCacheReadStatus::Miss
+        | LayerCacheReadStatus::InvalidEvicted) => {
+            match status {
+                LayerCacheReadStatus::BypassedDisabled => cache_stats.record_disabled_bypass(),
+                LayerCacheReadStatus::Miss => cache_stats.record_miss(),
+                LayerCacheReadStatus::InvalidEvicted => {
+                    cache_stats.record_invalid_evicted_read();
+                }
+                LayerCacheReadStatus::Hit => {}
             }
             cache_stats.record_recompute();
             let mut derivation = derive_requested_metrics_uncached(db, plan);
@@ -111,14 +116,28 @@ pub(crate) fn derive_requested_metrics_with_cache_stats(
                 analysis_settings_digest,
                 provider_manifest_dependency_digest(input_snapshot, manifest),
             );
-            derivation.output_digest = write_metrics_layer_payload(
-                &store,
-                layer_key,
-                &payload,
-                dependencies,
-                &mut cache_stats,
-                &mut derivation.diagnostics,
-            );
+            let manifest = match metrics_layer_manifest(layer_key, &payload, dependencies) {
+                Ok(manifest) => manifest,
+                Err(error) => {
+                    derivation
+                        .diagnostics
+                        .push(cache_write_diagnostic("metrics layer", error));
+                    derivation.cache_stats = cache_stats;
+                    return derivation;
+                }
+            };
+            if status != LayerCacheReadStatus::BypassedDisabled {
+                write_metrics_layer_payload(
+                    &store,
+                    &manifest,
+                    &payload,
+                    &mut cache_stats,
+                    &mut derivation.diagnostics,
+                );
+            }
+            let layer = LayerRunMetadata::from_manifest(manifest);
+            derivation.output_digest = Some(layer.output_digest.clone());
+            derivation.layers = vec![layer];
             derivation.cache_stats = cache_stats;
             derivation
         }
@@ -212,6 +231,7 @@ fn derive_requested_metrics_uncached(
             &metrics_layer_payload(db),
             None,
         )),
+        layers: Vec::new(),
     }
 }
 
@@ -412,36 +432,34 @@ fn validate_metrics_layer_payload(
 
 fn write_metrics_layer_payload(
     store: &LayerCacheStore,
-    layer_key: LayerKey,
+    manifest: &LayerCacheManifest,
     payload: &MetricsLayerPayload,
-    dependencies: Vec<DependencyEdge>,
     stats: &mut CacheStats,
     diagnostics: &mut Vec<Diagnostic>,
-) -> Option<Digest> {
-    let payload_digest = match LayerCacheStore::payload_digest_for_json(payload) {
-        Ok(digest) => digest,
-        Err(error) => {
-            diagnostics.push(cache_write_diagnostic("metrics layer", error));
-            return None;
-        }
-    };
-    let output_digest = metrics_output_digest(&layer_key, &payload_digest);
-    let manifest = LayerCacheManifest::new(
-        layer_key,
-        output_digest.clone(),
-        payload_digest,
-        dependencies,
-        PrecisionTier::Syntax,
-        "native_trusted",
-        Vec::new(),
-    );
-
-    match store.write_json(&manifest, payload) {
+) {
+    match store.write_json(manifest, payload) {
         Ok(LayerCacheWriteStatus::Written) => stats.record_write(),
         Ok(LayerCacheWriteStatus::BypassedDisabled) => stats.record_disabled_bypass(),
         Err(error) => diagnostics.push(cache_write_diagnostic("metrics layer", error)),
     }
-    Some(output_digest)
+}
+
+fn metrics_layer_manifest(
+    layer_key: LayerKey,
+    payload: &MetricsLayerPayload,
+    dependencies: Vec<DependencyEdge>,
+) -> anyhow::Result<LayerCacheManifest> {
+    let payload_digest = LayerCacheStore::payload_digest_for_json(payload)?;
+    let output_digest = metrics_output_digest(&layer_key, &payload_digest);
+    Ok(LayerCacheManifest::new(
+        layer_key,
+        output_digest,
+        payload_digest,
+        dependencies,
+        PrecisionTier::Syntax,
+        ProviderValidationStatus::NativeTrusted,
+        Vec::new(),
+    ))
 }
 
 fn cache_write_diagnostic(path: &str, error: anyhow::Error) -> Diagnostic {

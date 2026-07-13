@@ -10,8 +10,8 @@ use crate::analysis_kernel::incremental::{
     CacheNode, CacheStats, DependencyEdge, DependencyKind, Digest, DigestKind, InputComponent,
     InputComponentStatus, InputDependencyKey, InputSnapshot, LayerCacheManifest,
     LayerCacheReadStatus, LayerCacheStore, LayerCacheWriteStatus, LayerKey, LayerKind,
-    PrecisionTier, ShapeKind, relative_manifest_dependency_source,
-    semantic_provider_parameter_digest,
+    LayerRunMetadata, PrecisionTier, ProviderValidationStatus, ShapeKind,
+    relative_manifest_dependency_source, semantic_provider_parameter_digest,
 };
 use crate::analysis_plan::AnalysisPlan;
 use crate::cache::Cache;
@@ -38,6 +38,7 @@ pub(crate) struct SymbolGraphDerivation {
     pub(crate) capability_support: Vec<CapabilitySupport>,
     pub(crate) cache_stats: CacheStats,
     pub(crate) output_digest: Option<Digest>,
+    pub(crate) layers: Vec<LayerRunMetadata>,
 }
 
 impl SymbolGraphDerivation {
@@ -156,27 +157,27 @@ pub(crate) fn derive_requested_symbols_with_cache_stats(
             let payload = read
                 .value
                 .expect("layer cache hit should include symbol graph payload");
+            let layer = LayerRunMetadata::from_manifest(
+                read.manifest
+                    .expect("layer cache hit should include symbol graph manifest"),
+            );
             restore_symbol_graph_layer_payload(db, &payload);
             SymbolGraphDerivation {
                 diagnostics: payload.diagnostics,
                 capability_support: payload.capability_support,
                 cache_stats,
-                output_digest: read.output_digest,
+                output_digest: Some(layer.output_digest.clone()),
+                layers: vec![layer],
             }
         }
-        LayerCacheReadStatus::BypassedDisabled => {
-            cache_stats.record_disabled_bypass();
-            cache_stats.record_recompute();
-            let (mut derivation, _) =
-                derive_requested_symbols_uncached_with_payload(db, loaded, plan);
-            derivation.cache_stats = cache_stats;
-            derivation
-        }
-        LayerCacheReadStatus::Miss | LayerCacheReadStatus::InvalidEvicted => {
-            if read.status == LayerCacheReadStatus::Miss {
-                cache_stats.record_miss();
-            } else {
-                cache_stats.record_invalid_evicted_read();
+        status @ (LayerCacheReadStatus::BypassedDisabled
+        | LayerCacheReadStatus::Miss
+        | LayerCacheReadStatus::InvalidEvicted) => {
+            match status {
+                LayerCacheReadStatus::BypassedDisabled => cache_stats.record_disabled_bypass(),
+                LayerCacheReadStatus::Miss => cache_stats.record_miss(),
+                LayerCacheReadStatus::InvalidEvicted => cache_stats.record_invalid_evicted_read(),
+                LayerCacheReadStatus::Hit => {}
             }
             cache_stats.record_recompute();
             let (mut derivation, payload) =
@@ -193,14 +194,29 @@ pub(crate) fn derive_requested_symbols_with_cache_stats(
                 &input_snapshot.ts_js_lifecycle.components,
                 provider_manifest_dependency_digest(input_snapshot, manifest),
             );
-            derivation.output_digest = write_symbol_graph_layer_payload(
-                &store,
-                layer_key,
-                &payload,
-                dependencies,
-                &mut cache_stats,
-                &mut derivation.diagnostics,
-            );
+            let (manifest, payload_bytes) =
+                match symbol_graph_layer_manifest(layer_key, &payload, dependencies) {
+                    Ok(result) => result,
+                    Err(error) => {
+                        derivation
+                            .diagnostics
+                            .push(cache_write_diagnostic("symbol graph layer", error));
+                        derivation.cache_stats = cache_stats;
+                        return derivation;
+                    }
+                };
+            if status != LayerCacheReadStatus::BypassedDisabled {
+                write_symbol_graph_layer_payload(
+                    &store,
+                    &manifest,
+                    payload_bytes,
+                    &mut cache_stats,
+                    &mut derivation.diagnostics,
+                );
+            }
+            let layer = LayerRunMetadata::from_manifest(manifest);
+            derivation.output_digest = Some(layer.output_digest.clone());
+            derivation.layers = vec![layer];
             derivation.cache_stats = cache_stats;
             derivation
         }
@@ -686,43 +702,36 @@ fn is_windows_drive_absolute(value: &str) -> bool {
 
 fn write_symbol_graph_layer_payload(
     store: &LayerCacheStore,
-    layer_key: LayerKey,
-    payload: &SymbolGraphLayerPayload,
-    dependencies: Vec<DependencyEdge>,
+    manifest: &LayerCacheManifest,
+    payload_bytes: Vec<u8>,
     stats: &mut CacheStats,
     diagnostics: &mut Vec<Diagnostic>,
-) -> Option<Digest> {
-    let payload_bytes = match serde_json::to_vec(payload) {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            diagnostics.push(cache_write_diagnostic("symbol graph layer", error.into()));
-            return None;
-        }
-    };
-    let payload_digest = match LayerCacheStore::payload_digest_for_json_bytes(&payload_bytes) {
-        Ok(digest) => digest,
-        Err(error) => {
-            diagnostics.push(cache_write_diagnostic("symbol graph layer", error));
-            return None;
-        }
-    };
-    let output_digest = symbol_graph_output_digest(&layer_key, &payload_digest);
-    let manifest = LayerCacheManifest::new(
-        layer_key,
-        output_digest.clone(),
-        payload_digest,
-        dependencies,
-        PrecisionTier::SetupAware,
-        "native_trusted",
-        Vec::new(),
-    );
-
-    match store.write_json_bytes(&manifest, payload_bytes) {
+) {
+    match store.write_json_bytes(manifest, payload_bytes) {
         Ok(LayerCacheWriteStatus::Written) => stats.record_write(),
         Ok(LayerCacheWriteStatus::BypassedDisabled) => stats.record_disabled_bypass(),
         Err(error) => diagnostics.push(cache_write_diagnostic("symbol graph layer", error)),
     }
-    Some(output_digest)
+}
+
+fn symbol_graph_layer_manifest(
+    layer_key: LayerKey,
+    payload: &SymbolGraphLayerPayload,
+    dependencies: Vec<DependencyEdge>,
+) -> anyhow::Result<(LayerCacheManifest, Vec<u8>)> {
+    let payload_bytes = serde_json::to_vec(payload)?;
+    let payload_digest = LayerCacheStore::payload_digest_for_json_bytes(&payload_bytes)?;
+    let output_digest = symbol_graph_output_digest(&layer_key, &payload_digest);
+    let manifest = LayerCacheManifest::new(
+        layer_key,
+        output_digest,
+        payload_digest,
+        dependencies,
+        PrecisionTier::SetupAware,
+        ProviderValidationStatus::NativeTrusted,
+        Vec::new(),
+    );
+    Ok((manifest, payload_bytes))
 }
 
 fn symbol_graph_output_digest_for_payload(
@@ -2108,7 +2117,7 @@ export function answer() {
             payload_digest,
             Vec::new(),
             PrecisionTier::SetupAware,
-            "native_trusted",
+            crate::analysis_kernel::incremental::ProviderValidationStatus::NativeTrusted,
             Vec::new(),
         )
     }

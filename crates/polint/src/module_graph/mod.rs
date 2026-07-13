@@ -10,9 +10,9 @@ use crate::analysis_kernel::incremental::{
     CacheNode, CacheStats, DependencyEdge, DependencyKind, Digest, DigestKind, InputComponent,
     InputComponentStatus, InputDependencyKey, InputSnapshot, LayerCacheManifest,
     LayerCacheReadStatus, LayerCacheStore, LayerCacheWriteStatus, LayerKey, LayerKind,
-    PrecisionTier, ShapeKind, module_graph_topology_input_digest_rows,
-    module_graph_topology_input_digests, relative_manifest_dependency_source,
-    semantic_provider_parameter_digest,
+    LayerRunMetadata, PrecisionTier, ProviderValidationStatus, ShapeKind,
+    module_graph_topology_input_digest_rows, module_graph_topology_input_digests,
+    relative_manifest_dependency_source, semantic_provider_parameter_digest,
 };
 use crate::analysis_kernel::{FactFamily, ProviderManifest, stable_key_from_parts};
 use crate::analysis_plan::AnalysisPlan;
@@ -49,6 +49,7 @@ pub(crate) struct ModuleGraphDerivation {
     pub(crate) capability_support: Vec<CapabilitySupport>,
     pub(crate) cache_stats: CacheStats,
     pub(crate) output_digest: Option<Digest>,
+    pub(crate) layers: Vec<LayerRunMetadata>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -57,6 +58,7 @@ pub(crate) struct ModuleTopologyDerivation {
     pub(crate) capability_support: Vec<CapabilitySupport>,
     pub(crate) cache_stats: CacheStats,
     pub(crate) output_digest: Option<Digest>,
+    pub(crate) layers: Vec<LayerRunMetadata>,
 }
 
 impl ModuleGraphDerivation {
@@ -763,26 +765,27 @@ pub(crate) fn derive_module_topology_with_cache_stats(
             let payload = read
                 .value
                 .expect("layer cache hit should include module topology payload");
+            let layer = LayerRunMetadata::from_manifest(
+                read.manifest
+                    .expect("layer cache hit should include module topology manifest"),
+            );
             restore_module_topology_layer_payload(db, &payload);
             ModuleTopologyDerivation {
                 diagnostics: payload.diagnostics,
                 capability_support: payload.capability_support,
                 cache_stats,
-                output_digest: read.output_digest,
+                output_digest: Some(layer.output_digest.clone()),
+                layers: vec![layer],
             }
         }
-        LayerCacheReadStatus::BypassedDisabled => {
-            cache_stats.record_disabled_bypass();
-            cache_stats.record_recompute();
-            let mut derivation = derive_module_topology_uncached(db);
-            derivation.cache_stats = cache_stats;
-            derivation
-        }
-        LayerCacheReadStatus::Miss | LayerCacheReadStatus::InvalidEvicted => {
-            if read.status == LayerCacheReadStatus::Miss {
-                cache_stats.record_miss();
-            } else {
-                cache_stats.record_invalid_evicted_read();
+        status @ (LayerCacheReadStatus::BypassedDisabled
+        | LayerCacheReadStatus::Miss
+        | LayerCacheReadStatus::InvalidEvicted) => {
+            match status {
+                LayerCacheReadStatus::BypassedDisabled => cache_stats.record_disabled_bypass(),
+                LayerCacheReadStatus::Miss => cache_stats.record_miss(),
+                LayerCacheReadStatus::InvalidEvicted => cache_stats.record_invalid_evicted_read(),
+                LayerCacheReadStatus::Hit => {}
             }
             cache_stats.record_recompute();
             let mut derivation = derive_module_topology_uncached(db);
@@ -798,14 +801,28 @@ pub(crate) fn derive_module_topology_with_cache_stats(
                 &input_snapshot.ts_js_lifecycle.components,
                 provider_manifest_dependency_digest(input_snapshot, manifest),
             );
-            derivation.output_digest = write_module_topology_layer_payload(
-                &store,
-                layer_key,
-                &payload,
-                dependencies,
-                &mut cache_stats,
-                &mut derivation.diagnostics,
-            );
+            let manifest = match module_topology_layer_manifest(layer_key, &payload, dependencies) {
+                Ok(manifest) => manifest,
+                Err(error) => {
+                    derivation
+                        .diagnostics
+                        .push(cache_write_diagnostic("module topology layer", error));
+                    derivation.cache_stats = cache_stats;
+                    return derivation;
+                }
+            };
+            if status != LayerCacheReadStatus::BypassedDisabled {
+                persist_module_topology_layer_payload(
+                    &store,
+                    &manifest,
+                    &payload,
+                    &mut cache_stats,
+                    &mut derivation.diagnostics,
+                );
+            }
+            let layer = LayerRunMetadata::from_manifest(manifest);
+            derivation.output_digest = Some(layer.output_digest.clone());
+            derivation.layers = vec![layer];
             derivation.cache_stats = cache_stats;
             derivation
         }
@@ -826,6 +843,7 @@ fn derive_module_topology_uncached(db: &mut AnalysisDb) -> ModuleTopologyDerivat
         capability_support: Vec::new(),
         cache_stats: CacheStats::default(),
         output_digest: Some(module_topology_output_digest_for_payload(&payload, None)),
+        layers: Vec::new(),
     }
 }
 
@@ -1214,26 +1232,27 @@ pub(crate) fn derive_requested_module_graph_with_cache_stats(
             let payload = read
                 .value
                 .expect("layer cache hit should include module graph payload");
+            let layer = LayerRunMetadata::from_manifest(
+                read.manifest
+                    .expect("layer cache hit should include module graph manifest"),
+            );
             restore_module_graph_layer_payload(db, &payload);
             ModuleGraphDerivation {
                 diagnostics: payload.diagnostics,
                 capability_support: payload.capability_support,
                 cache_stats,
-                output_digest: read.output_digest,
+                output_digest: Some(layer.output_digest.clone()),
+                layers: vec![layer],
             }
         }
-        LayerCacheReadStatus::BypassedDisabled => {
-            cache_stats.record_disabled_bypass();
-            cache_stats.record_recompute();
-            let mut derivation = derive_requested_module_graph_uncached(db, loaded, plan);
-            derivation.cache_stats = cache_stats;
-            derivation
-        }
-        LayerCacheReadStatus::Miss | LayerCacheReadStatus::InvalidEvicted => {
-            if read.status == LayerCacheReadStatus::Miss {
-                cache_stats.record_miss();
-            } else {
-                cache_stats.record_invalid_evicted_read();
+        status @ (LayerCacheReadStatus::BypassedDisabled
+        | LayerCacheReadStatus::Miss
+        | LayerCacheReadStatus::InvalidEvicted) => {
+            match status {
+                LayerCacheReadStatus::BypassedDisabled => cache_stats.record_disabled_bypass(),
+                LayerCacheReadStatus::Miss => cache_stats.record_miss(),
+                LayerCacheReadStatus::InvalidEvicted => cache_stats.record_invalid_evicted_read(),
+                LayerCacheReadStatus::Hit => {}
             }
             cache_stats.record_recompute();
             let mut derivation = derive_requested_module_graph_uncached(db, loaded, plan);
@@ -1249,14 +1268,28 @@ pub(crate) fn derive_requested_module_graph_with_cache_stats(
                 &input_snapshot.ts_js_lifecycle.components,
                 provider_manifest_dependency_digest(input_snapshot, manifest),
             );
-            derivation.output_digest = write_module_graph_layer_payload(
-                &store,
-                layer_key,
-                &payload,
-                dependencies,
-                &mut cache_stats,
-                &mut derivation.diagnostics,
-            );
+            let manifest = match module_graph_layer_manifest(layer_key, &payload, dependencies) {
+                Ok(manifest) => manifest,
+                Err(error) => {
+                    derivation
+                        .diagnostics
+                        .push(cache_write_diagnostic("module graph layer", error));
+                    derivation.cache_stats = cache_stats;
+                    return derivation;
+                }
+            };
+            if status != LayerCacheReadStatus::BypassedDisabled {
+                persist_module_graph_layer_payload(
+                    &store,
+                    &manifest,
+                    &payload,
+                    &mut cache_stats,
+                    &mut derivation.diagnostics,
+                );
+            }
+            let layer = LayerRunMetadata::from_manifest(manifest);
+            derivation.output_digest = Some(layer.output_digest.clone());
+            derivation.layers = vec![layer];
             derivation.cache_stats = cache_stats;
             derivation
         }
@@ -1425,6 +1458,7 @@ fn derive_requested_module_graph_uncached(
         capability_support,
         cache_stats: CacheStats::default(),
         output_digest,
+        layers: Vec::new(),
     }
 }
 
@@ -1525,6 +1559,71 @@ fn import_to_package_payload_stable_keys_are_unique(rows: &[ImportToPackageFact]
         .all(|row| seen.insert(row.stable_key.as_str().to_string()))
 }
 
+fn persist_module_graph_layer_payload(
+    store: &LayerCacheStore,
+    manifest: &LayerCacheManifest,
+    payload: &ModuleGraphLayerPayload,
+    stats: &mut CacheStats,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    match store.write_json(manifest, payload) {
+        Ok(LayerCacheWriteStatus::Written) => stats.record_write(),
+        Ok(LayerCacheWriteStatus::BypassedDisabled) => stats.record_disabled_bypass(),
+        Err(error) => diagnostics.push(cache_write_diagnostic("module graph layer", error)),
+    }
+}
+
+fn module_graph_layer_manifest(
+    layer_key: LayerKey,
+    payload: &ModuleGraphLayerPayload,
+    dependencies: Vec<DependencyEdge>,
+) -> anyhow::Result<LayerCacheManifest> {
+    let payload_digest = LayerCacheStore::payload_digest_for_json(payload)?;
+    let output_digest = module_graph_output_digest(&layer_key, &payload_digest);
+    Ok(LayerCacheManifest::new(
+        layer_key,
+        output_digest,
+        payload_digest,
+        dependencies,
+        PrecisionTier::SetupAware,
+        ProviderValidationStatus::NativeTrusted,
+        Vec::new(),
+    ))
+}
+
+fn persist_module_topology_layer_payload(
+    store: &LayerCacheStore,
+    manifest: &LayerCacheManifest,
+    payload: &ModuleTopologyLayerPayload,
+    stats: &mut CacheStats,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    match store.write_json(manifest, payload) {
+        Ok(LayerCacheWriteStatus::Written) => stats.record_write(),
+        Ok(LayerCacheWriteStatus::BypassedDisabled) => stats.record_disabled_bypass(),
+        Err(error) => diagnostics.push(cache_write_diagnostic("module topology layer", error)),
+    }
+}
+
+fn module_topology_layer_manifest(
+    layer_key: LayerKey,
+    payload: &ModuleTopologyLayerPayload,
+    dependencies: Vec<DependencyEdge>,
+) -> anyhow::Result<LayerCacheManifest> {
+    let payload_digest = LayerCacheStore::payload_digest_for_json(payload)?;
+    let output_digest = module_topology_output_digest(&layer_key, &payload_digest);
+    Ok(LayerCacheManifest::new(
+        layer_key,
+        output_digest,
+        payload_digest,
+        dependencies,
+        PrecisionTier::SetupAware,
+        ProviderValidationStatus::NativeTrusted,
+        Vec::new(),
+    ))
+}
+
+#[cfg(test)]
 fn write_module_graph_layer_payload(
     store: &LayerCacheStore,
     layer_key: LayerKey,
@@ -1533,32 +1632,18 @@ fn write_module_graph_layer_payload(
     stats: &mut CacheStats,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<Digest> {
-    let payload_digest = match LayerCacheStore::payload_digest_for_json(payload) {
-        Ok(digest) => digest,
+    let manifest = match module_graph_layer_manifest(layer_key, payload, dependencies) {
+        Ok(manifest) => manifest,
         Err(error) => {
             diagnostics.push(cache_write_diagnostic("module graph layer", error));
             return None;
         }
     };
-    let output_digest = module_graph_output_digest(&layer_key, &payload_digest);
-    let manifest = LayerCacheManifest::new(
-        layer_key,
-        output_digest.clone(),
-        payload_digest,
-        dependencies,
-        PrecisionTier::SetupAware,
-        "native_trusted",
-        Vec::new(),
-    );
-
-    match store.write_json(&manifest, payload) {
-        Ok(LayerCacheWriteStatus::Written) => stats.record_write(),
-        Ok(LayerCacheWriteStatus::BypassedDisabled) => stats.record_disabled_bypass(),
-        Err(error) => diagnostics.push(cache_write_diagnostic("module graph layer", error)),
-    }
-    Some(output_digest)
+    persist_module_graph_layer_payload(store, &manifest, payload, stats, diagnostics);
+    Some(manifest.output_digest)
 }
 
+#[cfg(test)]
 fn write_module_topology_layer_payload(
     store: &LayerCacheStore,
     layer_key: LayerKey,
@@ -1567,30 +1652,15 @@ fn write_module_topology_layer_payload(
     stats: &mut CacheStats,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<Digest> {
-    let payload_digest = match LayerCacheStore::payload_digest_for_json(payload) {
-        Ok(digest) => digest,
+    let manifest = match module_topology_layer_manifest(layer_key, payload, dependencies) {
+        Ok(manifest) => manifest,
         Err(error) => {
             diagnostics.push(cache_write_diagnostic("module topology layer", error));
             return None;
         }
     };
-    let output_digest = module_topology_output_digest(&layer_key, &payload_digest);
-    let manifest = LayerCacheManifest::new(
-        layer_key,
-        output_digest.clone(),
-        payload_digest,
-        dependencies,
-        PrecisionTier::SetupAware,
-        "native_trusted",
-        Vec::new(),
-    );
-
-    match store.write_json(&manifest, payload) {
-        Ok(LayerCacheWriteStatus::Written) => stats.record_write(),
-        Ok(LayerCacheWriteStatus::BypassedDisabled) => stats.record_disabled_bypass(),
-        Err(error) => diagnostics.push(cache_write_diagnostic("module topology layer", error)),
-    }
-    Some(output_digest)
+    persist_module_topology_layer_payload(store, &manifest, payload, stats, diagnostics);
+    Some(manifest.output_digest)
 }
 
 fn module_graph_output_digest_for_payload(
