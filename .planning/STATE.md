@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-07-13T13:35:03.230Z"
+last_updated: "2026-07-13T16:05:59.925Z"
 last_activity: 2026-07-13
 progress:
   total_phases: 9
   completed_phases: 2
   total_plans: 27
-  completed_plans: 16
+  completed_plans: 17
   percent: 22
 ---
 
@@ -43,7 +43,7 @@ See: `.planning/PROJECT.md` (updated 2026-07-10)
 ## Current Position
 
 Phase: 65 (Generation Manifest and Metadata Mirroring) — EXECUTING
-Plan: 9 of 19
+Plan: 10 of 19
 Status: Ready to execute
 Last activity: 2026-07-13
 
@@ -524,6 +524,9 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase 65]: Filter semantic provider capability identity to direct trigger analysis-dependency rows — Capability and setup changes must invalidate, while rule behavior and unrelated capability requests must remain outside provider identity.
 - [Phase 65]: Use typed absent settings for providers without configurable analysis settings — Identity and entrypoints still require a purpose-validating settings boundary without importing complete config identity.
 - [Phase 65]: Share one canonical type value alias input projection between cache and output digests — A single projection prevents lifecycle model extension tool and upstream identity from drifting between builders.
+- [Phase 65]: SCC closure identity is a typed analysis-settings digest over direct-summary settings, relevant capability state, closure budget/query version, and direct-summary/call outputs — Complete config, rule, and plan identities belong to run and diagnostic boundaries, not shared analysis reuse.
+- [Phase 65]: Downstream providers consume model and extension effects through declared producer outputs rather than every snapshot row — Exact dependency projections preserve unreferenced sibling hits while linked producer output changes still invalidate consumers.
+- [Phase 65]: Capability support and setup transitions are exercised through test-only AnalysisPlan mutation helpers — The whole-kernel matrix needs canonical plan transitions without widening production or public APIs.
 
 ## Execution Metrics
 
@@ -691,3 +694,4 @@ intentionally avoided during autonomous local commits.
 | Phase 65 P06 | 22min | 1 tasks | 11 files |
 | Phase 65 P07 | 1h 4min | 2 tasks | 13 files |
 | Phase 65 P08 | 23min | 1 tasks | 11 files |
+| Phase 65 P09 | 2h 6m | 2 tasks | 18 files |
