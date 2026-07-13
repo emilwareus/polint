@@ -8,8 +8,11 @@ use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
     CacheStats, Digest, DigestKind, InputComponent, InputSnapshot,
 };
+use crate::cache::keys::AnalysisSettingsScope;
 use crate::core::AnalysisDb;
 use crate::diagnostics::{Diagnostic, TextRange};
+
+const REQUESTED_CAPABILITIES: &[&str] = &["calls", "control_flow", "dataflow"];
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SemanticMirProviderOutput {
@@ -181,7 +184,14 @@ fn semantic_mir_output_digest(
         format!("provider_id={}", manifest.id),
         format!("provider_version={}", manifest.provider_version()),
         format!("schema={}", manifest.primary_schema_label()),
-        format!("config={}", input_snapshot.config.digest),
+        format!(
+            "analysis_settings={}",
+            input_snapshot.analysis_settings_digest(AnalysisSettingsScope::SemanticMir)
+        ),
+        format!(
+            "requested_capabilities={}",
+            input_snapshot.analysis_requirements_digest_for(REQUESTED_CAPABILITIES)
+        ),
         format!("module_topology={module_topology_output_digest}"),
         format!("symbol_graph={symbol_graph_output_digest}"),
     ];
@@ -375,6 +385,238 @@ fn provider_error_diagnostic(reason: String) -> Diagnostic {
 }
 
 #[cfg(test)]
+pub(crate) mod scoped_identity_test_support {
+    use std::path::Path;
+
+    use crate::analysis_kernel::AnalysisKernel;
+    use crate::analysis_kernel::incremental::{
+        Digest, DigestKind, InputComponentStatus, InputSnapshot,
+    };
+    use crate::analysis_plan::AnalysisPlan;
+    use crate::cache::keys::{AnalysisSettingsScope, config_hash};
+    use crate::config::{LoadedConfig, PolintConfig, RuleConfig};
+    use crate::core::AnalysisDb;
+
+    pub(crate) fn assert_provider_identity<F>(
+        root: &Path,
+        scope: AnalysisSettingsScope,
+        configurable: bool,
+        lifecycle_inputs: bool,
+        model_extension_tool_inputs: bool,
+        digest: F,
+    ) where
+        F: Fn(&InputSnapshot) -> Digest,
+    {
+        let baseline_loaded = loaded_with_rule(root);
+        let calls_plan = AnalysisPlan::from_capability_names_for_test(&["calls"]);
+        let baseline_snapshot = snapshot(&baseline_loaded, &calls_plan);
+        let baseline_digest = digest(&baseline_snapshot);
+
+        let mut rule_behavior_changed = baseline_snapshot.clone();
+        let requested_calls = rule_behavior_changed
+            .requested_capabilities
+            .iter_mut()
+            .find(|requested| requested.capability == "calls")
+            .expect("calls capability row");
+        requested_calls.rule_behavior_digest =
+            Digest::from_parts(DigestKind::RuleOptions, "rule_behavior", &["changed"]);
+        assert_eq!(
+            baseline_digest,
+            digest(&rule_behavior_changed),
+            "rule behavior must remain outside provider identity"
+        );
+
+        let mut capability_setup_changed = baseline_snapshot.clone();
+        let requested_calls = capability_setup_changed
+            .requested_capabilities
+            .iter_mut()
+            .find(|requested| requested.capability == "calls")
+            .expect("calls capability row");
+        requested_calls.setup_status = crate::analysis_plan::CapabilitySetupStatus::SetupMissing;
+        requested_calls.analysis_dependency_digest = Digest::from_parts(
+            DigestKind::AnalysisRequirements,
+            "requested_capability",
+            &["calls", "setup_missing"],
+        );
+        assert_ne!(
+            baseline_digest,
+            digest(&capability_setup_changed),
+            "capability setup state must participate in provider identity"
+        );
+
+        for (label, mutation) in rule_only_mutations(&baseline_loaded) {
+            let mutation_snapshot = snapshot(&mutation, &calls_plan);
+            assert_ne!(
+                baseline_snapshot.config_identity, mutation_snapshot.config_identity,
+                "{label} must change full config identity"
+            );
+            assert_eq!(
+                baseline_digest,
+                digest(&mutation_snapshot),
+                "{label} must preserve provider identity"
+            );
+        }
+
+        let mut unrelated = baseline_loaded.clone();
+        unrelated.config.solver.go.max_rta_rounds = Some(8);
+        let unrelated_snapshot = snapshot(&unrelated, &calls_plan);
+        assert_ne!(
+            baseline_snapshot.config_identity,
+            unrelated_snapshot.config_identity
+        );
+        assert_eq!(baseline_digest, digest(&unrelated_snapshot));
+
+        let unrelated_capability_plan =
+            AnalysisPlan::from_capability_names_for_test(&["calls", "events"]);
+        assert_eq!(
+            baseline_digest,
+            digest(&snapshot(&baseline_loaded, &unrelated_capability_plan)),
+            "an undeclared capability must not invalidate provider identity"
+        );
+
+        let changed_capability_plan =
+            AnalysisPlan::from_capability_names_for_test(&["control_flow"]);
+        assert_ne!(
+            baseline_digest,
+            digest(&snapshot(&baseline_loaded, &changed_capability_plan)),
+            "a declared capability must invalidate provider identity"
+        );
+
+        if configurable {
+            let mut relevant = baseline_loaded;
+            relevant
+                .config
+                .languages
+                .go
+                .insert("offline".to_string(), toml::Value::Boolean(true));
+            let relevant_snapshot = snapshot(&relevant, &calls_plan);
+            assert_ne!(
+                baseline_snapshot.analysis_settings_digest(scope),
+                relevant_snapshot.analysis_settings_digest(scope)
+            );
+            assert_ne!(baseline_digest, digest(&relevant_snapshot));
+        } else {
+            assert_eq!(
+                baseline_snapshot.analysis_settings_digest(scope).kind,
+                DigestKind::AnalysisSettings
+            );
+        }
+
+        if lifecycle_inputs {
+            let mut changed = baseline_snapshot.clone();
+            let component = changed
+                .go_lifecycle
+                .components
+                .first_mut()
+                .expect("Go lifecycle component");
+            component.status = InputComponentStatus::SetupMissing;
+            component.digest = Digest::absent(DigestKind::GoLifecycle, "setup_missing");
+            assert_ne!(baseline_digest, digest(&changed));
+        }
+
+        if model_extension_tool_inputs {
+            for changed in [
+                changed_component(
+                    &baseline_snapshot,
+                    ComponentFamily::Model,
+                    DigestKind::ModelFile,
+                ),
+                changed_component(
+                    &baseline_snapshot,
+                    ComponentFamily::Extension,
+                    DigestKind::ExtensionCode,
+                ),
+                changed_component(
+                    &baseline_snapshot,
+                    ComponentFamily::Tool,
+                    DigestKind::ToolInvocation,
+                ),
+            ] {
+                assert_ne!(baseline_digest, digest(&changed));
+            }
+        }
+    }
+
+    enum ComponentFamily {
+        Model,
+        Extension,
+        Tool,
+    }
+
+    fn changed_component(
+        baseline: &InputSnapshot,
+        family: ComponentFamily,
+        kind: DigestKind,
+    ) -> InputSnapshot {
+        let mut changed = baseline.clone();
+        let components = match family {
+            ComponentFamily::Model => &mut changed.models,
+            ComponentFamily::Extension => &mut changed.extensions,
+            ComponentFamily::Tool => &mut changed.tool_invocations,
+        };
+        let component = components.first_mut().expect("declared input component");
+        component.status = InputComponentStatus::Present;
+        component.digest = Digest::from_parts(kind, "declared_input", &["changed"]);
+        changed
+    }
+
+    fn loaded_with_rule(root: &Path) -> LoadedConfig {
+        let mut config = PolintConfig::default();
+        config.rules.config.push(RuleConfig {
+            id: "local/provider-identity".to_string(),
+            severity: None,
+            files: Vec::new(),
+            allow_files: Vec::new(),
+            allow: Vec::new(),
+            max: None,
+            deny: Vec::new(),
+            forbidden_imports: Default::default(),
+            settings: Default::default(),
+        });
+        LoadedConfig {
+            root: root.to_path_buf(),
+            config,
+            missing: false,
+            respect_gitignore: true,
+        }
+    }
+
+    fn rule_only_mutations(baseline: &LoadedConfig) -> Vec<(&'static str, LoadedConfig)> {
+        let mut severity = baseline.clone();
+        severity.config.rules.config[0].severity = Some("error".to_string());
+        let mut files = baseline.clone();
+        files.config.rules.config[0].files = vec!["src/**".to_string()];
+        let mut allow_files = baseline.clone();
+        allow_files.config.rules.config[0].allow_files = vec!["generated/**".to_string()];
+        let mut max = baseline.clone();
+        max.config.rules.config[0].max = Some(7);
+        let mut settings = baseline.clone();
+        settings.config.rules.config[0]
+            .settings
+            .insert("threshold".to_string(), toml::Value::Integer(3));
+        vec![
+            ("severity", severity),
+            ("files", files),
+            ("allow_files", allow_files),
+            ("max", max),
+            ("custom settings", settings),
+        ]
+    }
+
+    fn snapshot(loaded: &LoadedConfig, plan: &AnalysisPlan) -> InputSnapshot {
+        let config_digest = config_hash(loaded);
+        InputSnapshot::from_run_inputs_with_plan(
+            loaded,
+            &AnalysisDb::new(),
+            &config_digest,
+            "rule-digest",
+            plan,
+            AnalysisKernel::provider_manifests(),
+        )
+    }
+}
+
+#[cfg(test)]
 mod semantic_mir_provider {
     use crate::analysis::ids::{MirBodyId, MirOpId, MirPredicateId, PlaceId};
     use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
@@ -554,6 +796,41 @@ mod semantic_mir_provider {
         );
 
         assert_ne!(first.output_digest, second.output_digest);
+    }
+
+    #[test]
+    fn output_identity_uses_only_declared_semantic_mir_inputs() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let manifest = AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.semantic_mir")
+            .expect("semantic MIR manifest");
+        let topology = Digest::absent(DigestKind::ProviderOutput, "module_topology");
+        let symbols = Digest::absent(DigestKind::ProviderOutput, "symbol_graph");
+        let output = MirOutput {
+            bodies: Vec::new(),
+            places: Vec::new(),
+            operations: Vec::new(),
+            unsupported: Vec::new(),
+        };
+
+        crate::analysis::provider::scoped_identity_test_support::assert_provider_identity(
+            temp.path(),
+            crate::cache::keys::AnalysisSettingsScope::SemanticMir,
+            true,
+            true,
+            true,
+            |snapshot| {
+                super::semantic_mir_output_digest(
+                    manifest,
+                    snapshot,
+                    &topology,
+                    &symbols,
+                    &[],
+                    &output,
+                )
+            },
+        );
     }
 
     #[test]

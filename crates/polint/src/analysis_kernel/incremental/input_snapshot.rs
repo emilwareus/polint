@@ -171,6 +171,35 @@ impl InputSnapshot {
         &source.digest
     }
 
+    pub(crate) fn analysis_requirements_digest_for(&self, capabilities: &[&str]) -> Digest {
+        let capabilities = capabilities.iter().copied().collect::<BTreeSet<_>>();
+        let mut inputs = self
+            .requested_capabilities
+            .iter()
+            .filter(|requested| capabilities.contains(requested.capability.as_str()))
+            .map(|requested| requested.analysis_dependency_digest.clone())
+            .collect::<Vec<_>>();
+        inputs.sort();
+        assert!(
+            inputs
+                .iter()
+                .all(|digest| digest.kind == DigestKind::AnalysisRequirements),
+            "provider capability inputs must retain their typed purpose"
+        );
+        if inputs.is_empty() {
+            Digest::absent(
+                DigestKind::AnalysisRequirements,
+                "provider_requested_capabilities",
+            )
+        } else {
+            Digest::from_unordered(
+                DigestKind::AnalysisRequirements,
+                "provider_requested_capabilities",
+                inputs,
+            )
+        }
+    }
+
     pub(crate) fn from_run_inputs_with_plan(
         loaded: &LoadedConfig,
         db: &AnalysisDb,

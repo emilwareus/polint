@@ -12,8 +12,11 @@ use crate::analysis::identity::store::IdentityProviderOutput;
 use crate::analysis::ids::CallSiteId;
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{CacheStats, Digest, DigestKind, InputSnapshot};
+use crate::cache::keys::AnalysisSettingsScope;
 use crate::core::{AnalysisDb, FunctionFact, Language, Span};
 use crate::diagnostics::{Diagnostic, TextRange};
+
+const REQUESTED_CAPABILITIES: &[&str] = &["calls", "control_flow", "dataflow"];
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct IdentityProviderRunOutput {
@@ -269,7 +272,14 @@ fn identity_output_digest(
         format!("provider_version={}", manifest.provider_version()),
         format!("schema={}", manifest.primary_schema_label()),
         format!("parameters={}", identity_provider_parameter_digest()),
-        format!("config={}", input_snapshot.config.digest),
+        format!(
+            "analysis_settings={}",
+            input_snapshot.analysis_settings_digest(AnalysisSettingsScope::Identity)
+        ),
+        format!(
+            "requested_capabilities={}",
+            input_snapshot.analysis_requirements_digest_for(REQUESTED_CAPABILITIES)
+        ),
         format!("calls_output={calls_provider_output_digest}"),
         format!("go_semantic_output={go_semantic_output_digest}"),
     ];
@@ -341,6 +351,29 @@ mod tests {
     use std::fs;
     use std::sync::Arc;
     use tempfile::tempdir;
+
+    #[test]
+    fn output_identity_uses_only_declared_identity_inputs() {
+        let temp = tempdir().expect("tempdir");
+        let manifest = AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.identity")
+            .expect("identity manifest");
+        let calls = Digest::absent(DigestKind::ProviderOutput, "calls");
+        let go_semantic = Digest::absent(DigestKind::ProviderOutput, "go_semantic");
+        let output = IdentityProviderOutput::default();
+
+        crate::analysis::provider::scoped_identity_test_support::assert_provider_identity(
+            temp.path(),
+            crate::cache::keys::AnalysisSettingsScope::Identity,
+            false,
+            false,
+            false,
+            |snapshot| {
+                super::identity_output_digest(manifest, snapshot, &calls, &go_semantic, &output)
+            },
+        );
+    }
 
     /// Builds a single-file db with one Go function and (optionally) a matching
     /// Go `PackageFact`, returning the function's identity record straight from

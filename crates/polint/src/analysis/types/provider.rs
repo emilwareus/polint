@@ -1,12 +1,10 @@
 use super::cache_key::{
-    type_value_alias_provider_parameter_digest,
+    type_value_alias_provider_input_parts, type_value_alias_provider_parameter_digest,
     type_value_alias_provider_parameter_digest_for_snapshot,
 };
 use super::store::TypeValueAliasOutput;
 use crate::analysis_kernel::ProviderManifest;
-use crate::analysis_kernel::incremental::{
-    CacheStats, Digest, DigestKind, InputComponent, InputSnapshot,
-};
+use crate::analysis_kernel::incremental::{CacheStats, Digest, DigestKind, InputSnapshot};
 use crate::core::AnalysisDb;
 use crate::diagnostics::Diagnostic;
 use serde::Serialize;
@@ -147,7 +145,6 @@ fn type_value_alias_output_digest(
             "input_parameters={}",
             type_value_alias_provider_parameter_digest_for_snapshot(input_snapshot, &upstream)
         ),
-        format!("config={}", input_snapshot.config.digest),
         format!("semantic_mir={semantic_mir_output_digest}"),
         format!("cfg={cfg_output_digest}"),
         format!("calls={calls_output_digest}"),
@@ -158,24 +155,10 @@ fn type_value_alias_output_digest(
         format!("symbol_graph={symbol_graph_output_digest}"),
         format!("module_topology={module_topology_output_digest}"),
     ];
-    extend_component_parts(
-        &mut parts,
-        "go_lifecycle",
-        &input_snapshot.go_lifecycle.components,
-    );
-    extend_component_parts(
-        &mut parts,
-        "ts_js_lifecycle",
-        &input_snapshot.ts_js_lifecycle.components,
-    );
-    extend_component_parts(&mut parts, "model", &input_snapshot.models);
-    extend_component_parts(&mut parts, "extension", &input_snapshot.extensions);
-    extend_component_parts(&mut parts, "tool", &input_snapshot.tool_invocations);
-    parts.extend(
-        upstream_syntax_output_digests
-            .iter()
-            .map(|digest| format!("upstream_syntax={digest}")),
-    );
+    parts.extend(type_value_alias_provider_input_parts(
+        input_snapshot,
+        &upstream,
+    ));
     parts.extend(
         output
             .types
@@ -249,19 +232,6 @@ fn type_value_alias_output_digest(
     Digest::from_parts(DigestKind::ProviderOutput, "type_value_alias_output", &refs)
 }
 
-fn extend_component_parts(parts: &mut Vec<String>, prefix: &str, components: &[InputComponent]) {
-    if components.is_empty() {
-        parts.push(format!("{prefix}=absent"));
-        return;
-    }
-    parts.extend(components.iter().map(|component| {
-        format!(
-            "{prefix}:{}:{:?}:{}",
-            component.name, component.status, component.digest
-        )
-    }));
-}
-
 fn stable_fact_payload<T>(fact: &T) -> String
 where
     T: Serialize + Debug,
@@ -283,6 +253,51 @@ mod tests {
     use crate::analysis_plan::AnalysisPlan;
     use crate::config::load_config;
     use tempfile::tempdir;
+
+    #[test]
+    fn output_identity_uses_only_declared_type_value_alias_inputs() {
+        let temp = tempdir().expect("tempdir");
+        let manifest = AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == TYPE_VALUE_ALIAS_PROVIDER_ID)
+            .expect("type/value/alias manifest");
+        let absent = |label| Digest::absent(DigestKind::ProviderOutput, label);
+        let semantic_mir = absent("semantic_mir");
+        let cfg = absent("cfg");
+        let calls = absent("calls");
+        let domains = absent("abstract_domains");
+        let summaries = absent("direct_summaries");
+        let entrypoints = absent("entrypoints");
+        let extensions = absent("extensions");
+        let symbols = absent("symbol_graph");
+        let topology = absent("module_topology");
+        let output = TypeValueAliasOutput::default();
+
+        crate::analysis::provider::scoped_identity_test_support::assert_provider_identity(
+            temp.path(),
+            crate::cache::keys::AnalysisSettingsScope::TypeValueAlias,
+            true,
+            true,
+            true,
+            |snapshot| {
+                super::type_value_alias_output_digest(
+                    manifest,
+                    snapshot,
+                    &semantic_mir,
+                    &cfg,
+                    &calls,
+                    &domains,
+                    &summaries,
+                    &entrypoints,
+                    &extensions,
+                    &symbols,
+                    &topology,
+                    &[],
+                    &output,
+                )
+            },
+        );
+    }
 
     #[test]
     fn type_value_alias_provider_accepts_empty_output_with_deterministic_digest() {

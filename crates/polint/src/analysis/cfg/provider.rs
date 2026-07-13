@@ -16,8 +16,11 @@ use crate::analysis_kernel::incremental::{
     CacheStats, Digest, DigestBuilder, DigestKind, InputComponent, InputComponentStatus,
     InputSnapshot,
 };
+use crate::cache::keys::AnalysisSettingsScope;
 use crate::core::AnalysisDb;
 use crate::diagnostics::{Diagnostic, TextRange};
+
+const REQUESTED_CAPABILITIES: &[&str] = &["calls", "control_flow", "dataflow"];
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct CfgProviderOutput {
@@ -159,8 +162,18 @@ fn cfg_output_digest(
     digest.part(manifest.provider_version());
     digest.part("schema");
     digest.part(&manifest.primary_schema_label());
-    digest.part("config");
-    digest.part(&input_snapshot.config.digest.to_string());
+    digest.part("analysis_settings");
+    digest.part(
+        &input_snapshot
+            .analysis_settings_digest(AnalysisSettingsScope::Cfg)
+            .to_string(),
+    );
+    digest.part("requested_capabilities");
+    digest.part(
+        &input_snapshot
+            .analysis_requirements_digest_for(REQUESTED_CAPABILITIES)
+            .to_string(),
+    );
     digest.part("semantic_mir");
     digest.part(&semantic_mir_output_digest.to_string());
     append_component_digest_parts(
@@ -514,6 +527,26 @@ mod cfg_provider {
             &empty_plan,
             AnalysisKernel::provider_manifests(),
         )
+    }
+
+    #[test]
+    fn output_identity_uses_only_declared_cfg_inputs() {
+        let temp = tempdir().expect("tempdir");
+        let manifest = AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.cfg")
+            .expect("CFG manifest");
+        let semantic_mir = Digest::absent(DigestKind::ProviderOutput, "semantic_mir");
+        let output = CfgOutput::default();
+
+        crate::analysis::provider::scoped_identity_test_support::assert_provider_identity(
+            temp.path(),
+            crate::cache::keys::AnalysisSettingsScope::Cfg,
+            true,
+            true,
+            true,
+            |snapshot| super::cfg_output_digest(manifest, snapshot, &semantic_mir, &[], &output),
+        );
     }
 
     fn span() -> Span {

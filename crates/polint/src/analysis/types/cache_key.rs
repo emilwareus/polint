@@ -1,4 +1,7 @@
 use crate::analysis_kernel::incremental::{Digest, DigestKind, InputComponent, InputSnapshot};
+use crate::cache::keys::AnalysisSettingsScope;
+
+const REQUESTED_CAPABILITIES: &[&str] = &["calls", "control_flow", "dataflow"];
 
 pub(crate) const TYPE_VALUE_ALIAS_SCHEMA_LABEL: &str = "type-value-alias-facts-1";
 
@@ -41,7 +44,31 @@ pub(crate) fn type_value_alias_provider_parameter_digest_for_snapshot(
     upstream_output_digests: &[Digest],
 ) -> Digest {
     let mut parts = parameter_parts(&TypeValueAliasProviderParameters::deterministic_default());
-    parts.push(format!("config={}", input_snapshot.config.digest));
+    parts.extend(type_value_alias_provider_input_parts(
+        input_snapshot,
+        upstream_output_digests,
+    ));
+    parts.sort();
+    let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
+    Digest::from_parts(
+        DigestKind::ProviderParameters,
+        "type_value_alias_inputs",
+        &refs,
+    )
+}
+
+pub(crate) fn type_value_alias_provider_input_parts(
+    input_snapshot: &InputSnapshot,
+    upstream_output_digests: &[Digest],
+) -> Vec<String> {
+    let mut parts = vec![format!(
+        "analysis_settings={}",
+        input_snapshot.analysis_settings_digest(AnalysisSettingsScope::TypeValueAlias)
+    )];
+    parts.push(format!(
+        "requested_capabilities={}",
+        input_snapshot.analysis_requirements_digest_for(REQUESTED_CAPABILITIES)
+    ));
     extend_component_parts(
         &mut parts,
         "go_lifecycle",
@@ -61,12 +88,7 @@ pub(crate) fn type_value_alias_provider_parameter_digest_for_snapshot(
             .map(|digest| format!("upstream={digest}")),
     );
     parts.sort();
-    let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
-    Digest::from_parts(
-        DigestKind::ProviderParameters,
-        "type_value_alias_inputs",
-        &refs,
-    )
+    parts
 }
 
 fn type_value_alias_provider_parameter_digest_for_settings(
@@ -149,7 +171,8 @@ pub(crate) fn type_value_alias_provider_parameter_digest_for_test(
 mod tests {
     use super::*;
     use crate::analysis_kernel::incremental::{
-        GoLifecycleSnapshot, InputComponentStatus, ProviderSchemaSnapshot, TsJsLifecycleSnapshot,
+        AnalysisSettingSource, GoLifecycleSnapshot, InputComponentStatus, ProviderSchemaSnapshot,
+        TsJsLifecycleSnapshot,
     };
 
     #[test]
@@ -310,7 +333,14 @@ mod tests {
                     "config",
                     &["base"],
                 ),
-            analysis_settings: Vec::new(),
+            analysis_settings: vec![AnalysisSettingSource {
+                scope: AnalysisSettingsScope::TypeValueAlias,
+                digest: Digest::from_parts(
+                    DigestKind::AnalysisSettings,
+                    "provider_analysis_settings",
+                    &[AnalysisSettingsScope::TypeValueAlias.label(), "base"],
+                ),
+            }],
             requested_capabilities: Vec::new(),
             analysis_requirements_identity: Digest::absent(
                 DigestKind::AnalysisRequirements,

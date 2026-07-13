@@ -7,8 +7,11 @@ use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
     CacheStats, Digest, DigestKind, InputComponent, InputSnapshot,
 };
+use crate::cache::keys::AnalysisSettingsScope;
 use crate::core::AnalysisDb;
 use crate::diagnostics::Diagnostic;
+
+const REQUESTED_CAPABILITIES: &[&str] = &["calls", "control_flow", "dataflow"];
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct AbstractDomainsProviderOutput {
@@ -151,7 +154,14 @@ fn abstract_domains_output_digest(
             "parameters={}",
             abstract_domains_provider_parameter_digest()
         ),
-        format!("config={}", input_snapshot.config.digest),
+        format!(
+            "analysis_settings={}",
+            input_snapshot.analysis_settings_digest(AnalysisSettingsScope::AbstractDomains)
+        ),
+        format!(
+            "requested_capabilities={}",
+            input_snapshot.analysis_requirements_digest_for(REQUESTED_CAPABILITIES)
+        ),
         format!("semantic_mir={semantic_mir_output_digest}"),
         format!("cfg={cfg_output_digest}"),
         format!("calls={calls_output_digest}"),
@@ -331,6 +341,52 @@ mod abstract_domains_provider {
     }
 
     #[test]
+    fn output_identity_uses_only_declared_domain_inputs() {
+        let temp = tempdir().expect("tempdir");
+        let manifest = AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.abstract_domains")
+            .expect("abstract domains manifest");
+        let absent = |label| Digest::absent(DigestKind::ProviderOutput, label);
+        let semantic_mir = absent("semantic_mir");
+        let cfg = absent("cfg");
+        let calls = absent("calls");
+        let symbols = absent("symbol_graph");
+        let topology = absent("module_topology");
+        let body_keys = Default::default();
+        let block_keys = Default::default();
+        let operation_keys = Default::default();
+        let place_keys = Default::default();
+        let output = DomainOutput::default();
+
+        crate::analysis::provider::scoped_identity_test_support::assert_provider_identity(
+            temp.path(),
+            crate::cache::keys::AnalysisSettingsScope::AbstractDomains,
+            true,
+            true,
+            true,
+            |snapshot| {
+                super::abstract_domains_output_digest(
+                    manifest,
+                    snapshot,
+                    &semantic_mir,
+                    &cfg,
+                    &calls,
+                    &symbols,
+                    &topology,
+                    &[],
+                    &body_keys,
+                    &block_keys,
+                    &operation_keys,
+                    &place_keys,
+                    &output,
+                    DomainMaterialization::Full,
+                )
+            },
+        );
+    }
+
+    #[test]
     fn abstract_domains_provider_manifest_declares_private_outputs() {
         let manifest = AnalysisKernel::provider_manifests()
             .iter()
@@ -386,7 +442,7 @@ mod abstract_domains_layer_key {
         let key = LayerKey::abstract_domains_layer_key(
             manifest,
             Vec::new(),
-            Digest::from_parts(DigestKind::Config, "config", &["a"]),
+            Digest::from_parts(DigestKind::AnalysisSettings, "settings", &["a"]),
             Digest::absent(DigestKind::ProviderParameters, "go_lifecycle"),
             Digest::absent(DigestKind::ProviderParameters, "ts_lifecycle"),
             Vec::new(),

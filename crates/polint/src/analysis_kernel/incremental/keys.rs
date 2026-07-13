@@ -510,7 +510,7 @@ impl LayerKey {
     pub(crate) fn semantic_mir_layer_key(
         manifest: &ProviderManifest,
         source_function_digests: Vec<Digest>,
-        config_digest: Digest,
+        analysis_settings_digest: Digest,
         go_lifecycle_digest: Digest,
         ts_js_lifecycle_digest: Digest,
         upstream_syntax_output_digests: Vec<Digest>,
@@ -543,14 +543,14 @@ impl LayerKey {
         dependency_layer_digests.push(dependency_layer_digest(symbol_graph_output_digest));
         dependency_layer_digests.push(dependency_layer_digest(module_topology_output_digest));
 
-        Self::new(
+        Self::new_with_analysis_settings(
             LayerKind::SemanticMir,
             manifest.id,
             manifest.provider_version(),
             manifest.primary_schema_label(),
             semantic_mir_parameter_digest,
             lifecycle_digest,
-            config_digest,
+            analysis_settings_digest,
             Digest::absent(DigestKind::ToolInvocation, "semantic_mir_toolchain"),
             input_digests,
             dependency_layer_digests,
@@ -568,7 +568,7 @@ impl LayerKey {
     pub(crate) fn cfg_layer_key(
         manifest: &ProviderManifest,
         source_function_digests: Vec<Digest>,
-        config_digest: Digest,
+        analysis_settings_digest: Digest,
         go_lifecycle_digest: Digest,
         ts_js_lifecycle_digest: Digest,
         upstream_syntax_output_digests: Vec<Digest>,
@@ -610,14 +610,14 @@ impl LayerKey {
                 .map(dependency_layer_digest),
         );
 
-        Self::new(
+        Self::new_with_analysis_settings(
             LayerKind::Cfg,
             manifest.id,
             manifest.provider_version(),
             manifest.primary_schema_label(),
             parameter_digest,
             lifecycle_digest,
-            config_digest,
+            analysis_settings_digest,
             Digest::absent(DigestKind::ToolInvocation, "cfg_toolchain"),
             input_digests,
             dependency_layer_digests,
@@ -635,7 +635,7 @@ impl LayerKey {
     pub(crate) fn calls_layer_key(
         manifest: &ProviderManifest,
         source_function_digests: Vec<Digest>,
-        config_digest: Digest,
+        analysis_settings_digest: Digest,
         go_lifecycle_digest: Digest,
         ts_js_lifecycle_digest: Digest,
         upstream_syntax_output_digests: Vec<Digest>,
@@ -678,14 +678,14 @@ impl LayerKey {
         dependency_layer_digests.push(dependency_layer_digest(symbol_graph_output_digest));
         dependency_layer_digests.push(dependency_layer_digest(module_topology_output_digest));
 
-        Self::new(
+        Self::new_with_analysis_settings(
             LayerKind::Calls,
             manifest.id,
             manifest.provider_version(),
             manifest.primary_schema_label(),
             parameter_digest,
             lifecycle_digest,
-            config_digest,
+            analysis_settings_digest,
             Digest::absent(DigestKind::ToolInvocation, "calls_toolchain"),
             input_digests,
             dependency_layer_digests,
@@ -703,7 +703,7 @@ impl LayerKey {
     pub(crate) fn abstract_domains_layer_key(
         manifest: &ProviderManifest,
         source_function_digests: Vec<Digest>,
-        config_digest: Digest,
+        analysis_settings_digest: Digest,
         go_lifecycle_digest: Digest,
         ts_js_lifecycle_digest: Digest,
         upstream_syntax_output_digests: Vec<Digest>,
@@ -748,14 +748,14 @@ impl LayerKey {
         dependency_layer_digests.push(dependency_layer_digest(symbol_graph_output_digest));
         dependency_layer_digests.push(dependency_layer_digest(module_topology_output_digest));
 
-        Self::new(
+        Self::new_with_analysis_settings(
             LayerKind::AbstractDomains,
             manifest.id,
             manifest.provider_version(),
             manifest.primary_schema_label(),
             parameter_digest,
             lifecycle_digest,
-            config_digest,
+            analysis_settings_digest,
             Digest::absent(DigestKind::ToolInvocation, "abstract_domains_toolchain"),
             input_digests,
             dependency_layer_digests,
@@ -2291,7 +2291,7 @@ mod tests {
         )]
         fn semantic_mir_key(
             source_function_digest: Digest,
-            config_digest: Digest,
+            analysis_settings_digest: Digest,
             go_lifecycle_digest: Digest,
             ts_js_lifecycle_digest: Digest,
             syntax_output_digest: Digest,
@@ -2302,7 +2302,7 @@ mod tests {
             LayerKey::semantic_mir_layer_key(
                 semantic_mir_manifest(),
                 vec![source_function_digest],
-                config_digest,
+                analysis_settings_digest,
                 go_lifecycle_digest,
                 ts_js_lifecycle_digest,
                 vec![syntax_output_digest],
@@ -2313,14 +2313,14 @@ mod tests {
         }
 
         #[test]
-        fn key_changes_on_source_lifecycle_config_parameters_and_upstream_outputs() {
+        fn key_changes_on_source_lifecycle_settings_parameters_and_upstream_outputs() {
             let base = semantic_mir_key(
                 Digest::from_parts(
                     DigestKind::SourceText,
                     "source_function",
                     &["src/app.ts", "base"],
                 ),
-                Digest::from_parts(DigestKind::Config, "config", &["base"]),
+                Digest::from_parts(DigestKind::AnalysisSettings, "settings", &["base"]),
                 Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
                 Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
@@ -2335,7 +2335,7 @@ mod tests {
                     "source_function",
                     &["src/app.ts", "changed"],
                 ),
-                Digest::from_parts(DigestKind::Config, "config", &["base"]),
+                Digest::from_parts(DigestKind::AnalysisSettings, "settings", &["base"]),
                 Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
                 Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
@@ -2343,13 +2343,13 @@ mod tests {
                 Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["base"]),
                 crate::analysis::cache_key::semantic_mir_provider_parameter_digest(),
             );
-            let changed_config = semantic_mir_key(
+            let changed_settings = semantic_mir_key(
                 Digest::from_parts(
                     DigestKind::SourceText,
                     "source_function",
                     &["src/app.ts", "base"],
                 ),
-                Digest::from_parts(DigestKind::Config, "config", &["changed"]),
+                Digest::from_parts(DigestKind::AnalysisSettings, "settings", &["changed"]),
                 Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
                 Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
@@ -2363,7 +2363,7 @@ mod tests {
                     "source_function",
                     &["src/app.ts", "base"],
                 ),
-                Digest::from_parts(DigestKind::Config, "config", &["base"]),
+                Digest::from_parts(DigestKind::AnalysisSettings, "settings", &["base"]),
                 Digest::from_parts(DigestKind::GoLifecycle, "go", &["changed"]),
                 Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
@@ -2377,7 +2377,7 @@ mod tests {
                     "source_function",
                     &["src/app.ts", "base"],
                 ),
-                Digest::from_parts(DigestKind::Config, "config", &["base"]),
+                Digest::from_parts(DigestKind::AnalysisSettings, "settings", &["base"]),
                 Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
                 Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["changed"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
@@ -2391,7 +2391,7 @@ mod tests {
                     "source_function",
                     &["src/app.ts", "base"],
                 ),
-                Digest::from_parts(DigestKind::Config, "config", &["base"]),
+                Digest::from_parts(DigestKind::AnalysisSettings, "settings", &["base"]),
                 Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
                 Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["changed"]),
@@ -2405,7 +2405,7 @@ mod tests {
                     "source_function",
                     &["src/app.ts", "base"],
                 ),
-                Digest::from_parts(DigestKind::Config, "config", &["base"]),
+                Digest::from_parts(DigestKind::AnalysisSettings, "settings", &["base"]),
                 Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
                 Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
@@ -2419,7 +2419,7 @@ mod tests {
                     "source_function",
                     &["src/app.ts", "base"],
                 ),
-                Digest::from_parts(DigestKind::Config, "config", &["base"]),
+                Digest::from_parts(DigestKind::AnalysisSettings, "settings", &["base"]),
                 Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
                 Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
@@ -2433,7 +2433,7 @@ mod tests {
                     "source_function",
                     &["src/app.ts", "base"],
                 ),
-                Digest::from_parts(DigestKind::Config, "config", &["base"]),
+                Digest::from_parts(DigestKind::AnalysisSettings, "settings", &["base"]),
                 Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
                 Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]),
@@ -2448,7 +2448,7 @@ mod tests {
 
             for changed in [
                 changed_source,
-                changed_config,
+                changed_settings,
                 changed_go_lifecycle,
                 changed_ts_lifecycle,
                 changed_syntax,
@@ -2464,7 +2464,7 @@ mod tests {
         fn key_includes_absent_extension_model_and_toolchain_slots_and_excludes_rule_code() {
             let base = semantic_mir_key(
                 Digest::from_parts(DigestKind::SourceText, "source_function", &["base"]),
-                Digest::from_parts(DigestKind::Config, "config", &["base"]),
+                Digest::from_parts(DigestKind::AnalysisSettings, "settings", &["base"]),
                 Digest::from_parts(DigestKind::GoLifecycle, "go", &["base"]),
                 Digest::from_parts(DigestKind::TsJsLifecycle, "ts", &["base"]),
                 Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["base"]),
@@ -2629,6 +2629,10 @@ mod tests {
             ("module_graph_layer_key", "symbol_graph_layer_key"),
             ("symbol_graph_layer_key", "module_topology_layer_key"),
             ("module_topology_layer_key", "semantic_mir_layer_key"),
+            ("semantic_mir_layer_key", "cfg_layer_key"),
+            ("cfg_layer_key", "calls_layer_key"),
+            ("calls_layer_key", "abstract_domains_layer_key"),
+            ("abstract_domains_layer_key", "direct_summaries_layer_key"),
             ("metrics_layer_key", "impl QueryKey"),
         ] {
             let body = constructor_body(source, constructor, next);
@@ -2637,13 +2641,8 @@ mod tests {
                 "{constructor} must use the purpose-checked constructor"
             );
         }
-        for (constructor, next) in [
-            ("semantic_mir_layer_key", "cfg_layer_key"),
-            ("cfg_layer_key", "calls_layer_key"),
-            ("calls_layer_key", "abstract_domains_layer_key"),
-            ("abstract_domains_layer_key", "direct_summaries_layer_key"),
-            ("direct_summaries_layer_key", "combine_digests_into"),
-        ] {
+        {
+            let (constructor, next) = ("direct_summaries_layer_key", "combine_digests_into");
             let body = constructor_body(source, constructor, next);
             assert!(
                 body.contains("Self::new("),
@@ -2981,7 +2980,7 @@ mod cfg_layer_key {
     #[allow(clippy::too_many_arguments)]
     fn key(
         source_suffix: &str,
-        config_suffix: &str,
+        settings_suffix: &str,
         go_suffix: &str,
         ts_suffix: &str,
         syntax_suffix: &str,
@@ -2995,7 +2994,7 @@ mod cfg_layer_key {
                 "source_function",
                 &["src/app.ts", source_suffix],
             )],
-            Digest::from_parts(DigestKind::Config, "config", &[config_suffix]),
+            Digest::from_parts(DigestKind::AnalysisSettings, "settings", &[settings_suffix]),
             Digest::from_parts(DigestKind::GoLifecycle, "go_lifecycle", &[go_suffix]),
             Digest::from_parts(DigestKind::TsJsLifecycle, "ts_js_lifecycle", &[ts_suffix]),
             vec![Digest::from_parts(
@@ -3187,7 +3186,7 @@ mod calls_layer_key {
     #[allow(clippy::too_many_arguments)]
     fn key(
         source_suffix: &str,
-        config_suffix: &str,
+        settings_suffix: &str,
         go_suffix: &str,
         ts_suffix: &str,
         syntax_suffix: &str,
@@ -3204,7 +3203,7 @@ mod calls_layer_key {
                 "source_function",
                 &["src/app.ts", source_suffix],
             )],
-            Digest::from_parts(DigestKind::Config, "config", &[config_suffix]),
+            Digest::from_parts(DigestKind::AnalysisSettings, "settings", &[settings_suffix]),
             Digest::from_parts(DigestKind::GoLifecycle, "go_lifecycle", &[go_suffix]),
             Digest::from_parts(DigestKind::TsJsLifecycle, "ts_js_lifecycle", &[ts_suffix]),
             vec![Digest::from_parts(

@@ -5,10 +5,13 @@ use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
     CacheStats, Digest, DigestKind, InputComponent, InputSnapshot,
 };
+use crate::cache::keys::AnalysisSettingsScope;
 use crate::core::AnalysisDb;
 use crate::diagnostics::{Diagnostic, TextRange};
 use serde::Serialize;
 use std::fmt::Debug;
+
+const REQUESTED_CAPABILITIES: &[&str] = &["calls", "control_flow", "dataflow"];
 
 pub(crate) const ENTRYPOINTS_PROVIDER_ID: &str = "polint.entrypoints";
 
@@ -81,7 +84,14 @@ fn entrypoints_output_digest(
         format!("provider_version={}", manifest.provider_version()),
         format!("schema={}", manifest.primary_schema_label()),
         format!("parameters={}", entrypoints_provider_parameter_digest()),
-        format!("config={}", input_snapshot.config.digest),
+        format!(
+            "analysis_settings={}",
+            input_snapshot.analysis_settings_digest(AnalysisSettingsScope::Entrypoints)
+        ),
+        format!(
+            "requested_capabilities={}",
+            input_snapshot.analysis_requirements_digest_for(REQUESTED_CAPABILITIES)
+        ),
         format!("semantic_mir={semantic_mir_output_digest}"),
         format!("cfg={cfg_output_digest}"),
         format!("calls={calls_output_digest}"),
@@ -212,6 +222,45 @@ mod entrypoints_provider {
 
         assert_eq!(first, second);
         assert!(!first.value.is_empty());
+    }
+
+    #[test]
+    fn output_identity_uses_only_declared_entrypoint_inputs() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let manifest = AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.entrypoints")
+            .expect("entrypoints manifest");
+        let db = crate::core::AnalysisDb::new();
+        let output = crate::analysis::entrypoints::store::EntrypointOutput::default();
+        let absent = |label| Digest::absent(DigestKind::ProviderOutput, label);
+        let semantic_mir = absent("semantic_mir");
+        let cfg = absent("cfg");
+        let calls = absent("calls");
+        let symbols = absent("symbol_graph");
+        let topology = absent("module_topology");
+
+        crate::analysis::provider::scoped_identity_test_support::assert_provider_identity(
+            temp.path(),
+            crate::cache::keys::AnalysisSettingsScope::Entrypoints,
+            false,
+            true,
+            true,
+            |snapshot| {
+                super::entrypoints_output_digest(
+                    &db,
+                    manifest,
+                    snapshot,
+                    &semantic_mir,
+                    &cfg,
+                    &calls,
+                    &symbols,
+                    &topology,
+                    &[],
+                    &output,
+                )
+            },
+        );
     }
 
     #[test]

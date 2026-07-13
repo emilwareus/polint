@@ -12,8 +12,11 @@ use crate::analysis_kernel::incremental::{
     CacheStats, Digest, DigestKind, InputComponent, InputSnapshot,
 };
 use crate::analysis_kernel::{FactFamily, FactRef, ProviderManifest};
+use crate::cache::keys::AnalysisSettingsScope;
 use crate::core::{AnalysisDb, FunctionFact, FunctionId, SymbolFact, SymbolId};
 use crate::diagnostics::{Diagnostic, TextRange};
+
+const REQUESTED_CAPABILITIES: &[&str] = &["calls", "control_flow", "dataflow"];
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct CallsProviderOutput {
@@ -158,7 +161,14 @@ fn calls_output_digest(
         format!("provider_version={}", manifest.provider_version()),
         format!("schema={}", manifest.primary_schema_label()),
         format!("parameters={}", calls_provider_parameter_digest()),
-        format!("config={}", input_snapshot.config.digest),
+        format!(
+            "analysis_settings={}",
+            input_snapshot.analysis_settings_digest(AnalysisSettingsScope::Calls)
+        ),
+        format!(
+            "requested_capabilities={}",
+            input_snapshot.analysis_requirements_digest_for(REQUESTED_CAPABILITIES)
+        ),
         format!("semantic_mir={semantic_mir_output_digest}"),
         format!("cfg={cfg_output_digest}"),
         format!("symbol_graph={symbol_graph_output_digest}"),
@@ -402,6 +412,43 @@ mod calls_provider {
             &empty_plan,
             AnalysisKernel::provider_manifests(),
         )
+    }
+
+    #[test]
+    fn output_identity_uses_only_declared_calls_inputs() {
+        let temp = tempdir().expect("tempdir");
+        let manifest = AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.calls")
+            .expect("calls manifest");
+        let db = AnalysisDb::new();
+        let output = crate::analysis::calls::store::CallOutput::default();
+        let absent = |label| Digest::absent(DigestKind::ProviderOutput, label);
+        let semantic_mir = absent("semantic_mir");
+        let cfg = absent("cfg");
+        let symbols = absent("symbol_graph");
+        let topology = absent("module_topology");
+
+        crate::analysis::provider::scoped_identity_test_support::assert_provider_identity(
+            temp.path(),
+            crate::cache::keys::AnalysisSettingsScope::Calls,
+            true,
+            true,
+            true,
+            |snapshot| {
+                super::calls_output_digest(
+                    &db,
+                    manifest,
+                    snapshot,
+                    &semantic_mir,
+                    &cfg,
+                    &symbols,
+                    &topology,
+                    &[],
+                    &output,
+                )
+            },
+        );
     }
 
     #[test]

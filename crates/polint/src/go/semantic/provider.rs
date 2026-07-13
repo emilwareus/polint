@@ -1,5 +1,6 @@
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{CacheStats, Digest, DigestKind, InputSnapshot};
+use crate::cache::keys::AnalysisSettingsScope;
 use crate::config::LoadedConfig;
 use crate::core::{AnalysisDb, Span};
 use crate::diagnostics::{Diagnostic, TextRange};
@@ -15,6 +16,8 @@ use crate::go::semantic::diagnostics::{
 use crate::go::semantic::lower::lower_go_semantic;
 use crate::go::semantic::process::GoSemanticProcessError;
 use crate::go::semantic::store::{GoSemanticFactsOutput, StructuralDuplicateReport};
+
+const REQUESTED_CAPABILITIES: &[&str] = &["calls", "control_flow", "dataflow"];
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct GoSemanticProviderRunOutput {
@@ -301,10 +304,29 @@ fn go_semantic_output_digest(
         format!("provider_version={}", manifest.provider_version()),
         format!("schema={}", manifest.primary_schema_label()),
         format!("parameters={}", go_semantic_provider_parameter_digest()),
-        format!("config={}", input_snapshot.config.digest),
+        format!(
+            "analysis_settings={}",
+            input_snapshot.analysis_settings_digest(AnalysisSettingsScope::GoSemantic)
+        ),
+        format!(
+            "requested_capabilities={}",
+            input_snapshot.analysis_requirements_digest_for(REQUESTED_CAPABILITIES)
+        ),
         format!("go_syntax={go_syntax_output_digest}"),
         format!("input_digest={input_digest}"),
     ];
+    parts.extend(
+        input_snapshot
+            .go_lifecycle
+            .components
+            .iter()
+            .map(|component| {
+                format!(
+                    "go_lifecycle:{}:{:?}:{}",
+                    component.name, component.status, component.digest
+                )
+            }),
+    );
     parts.extend(output.packages.iter().map(|package| {
         format!(
             "package={} id={} path={} name={} module={} files={}",
@@ -556,6 +578,37 @@ mod tests {
     use crate::core::{AnalysisDb, Language};
     use crate::go::semantic::protocol::decode_ndjson_str;
     use std::path::PathBuf;
+
+    #[test]
+    fn output_identity_uses_only_declared_go_semantic_inputs() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let manifest = crate::analysis_kernel::AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.go.semantic")
+            .expect("Go semantic manifest");
+        let syntax = Digest::absent(DigestKind::ProviderOutput, "go_syntax");
+        let digest_inputs: DigestInputs = EmptyDigestInputs::default().into();
+        let lifecycle = default_lifecycle();
+        let output = GoSemanticFactsOutput::default();
+
+        crate::analysis::provider::scoped_identity_test_support::assert_provider_identity(
+            temp.path(),
+            crate::cache::keys::AnalysisSettingsScope::GoSemantic,
+            true,
+            true,
+            false,
+            |snapshot| {
+                super::go_semantic_output_digest(
+                    manifest,
+                    snapshot,
+                    &syntax,
+                    &digest_inputs,
+                    &lifecycle,
+                    &output,
+                )
+            },
+        );
+    }
 
     #[test]
     fn provider_lowers_and_stores_fake_sidecar_output() {
