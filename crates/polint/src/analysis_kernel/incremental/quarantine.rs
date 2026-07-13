@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use super::dependency_index::CacheNode;
+use super::dependency_input::InputDependencyKind;
 use super::digest::{Digest, DigestKind};
 use super::invalidation::QuarantineReason;
 use super::keys::LayerKey;
@@ -63,7 +64,7 @@ impl Default for QuarantinePolicy {
 /// When an extension's code digest changes, dependent cache entries are
 /// quarantined rather than deleted. If the extension reverts to a previously
 /// seen digest, quarantined entries are reinstated. Native facts are never
-/// quarantined per D-09.
+/// quarantined because native facts are independent of extension state.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub(crate) struct QuarantineStore {
     entries: BTreeMap<CacheNode, QuarantineEntry>,
@@ -81,7 +82,7 @@ impl QuarantineStore {
     }
 
     /// Quarantine a cache node. Returns `true` if the node was quarantined,
-    /// `false` if rejected (native-only nodes are never quarantined per D-09).
+    /// `false` if rejected because native-only nodes never depend on extension state.
     pub(crate) fn quarantine(
         &mut self,
         node: CacheNode,
@@ -110,7 +111,7 @@ impl QuarantineStore {
     }
 
     /// Reinstates all quarantine entries whose `extension_digest_at_quarantine`
-    /// matches the given digest (extension reverted to a known-good state per D-08).
+    /// matches the given digest after an extension reverts to a known-good state.
     /// Returns the reinstated cache nodes.
     pub(crate) fn reinstate(&mut self, extension_digest: &Digest) -> Vec<CacheNode> {
         let to_reinstate: Vec<CacheNode> = self
@@ -146,31 +147,30 @@ impl QuarantineStore {
 }
 
 // ---------------------------------------------------------------------------
-// Native-only node detection (D-09)
+// Native-only node detection
 // ---------------------------------------------------------------------------
 
 /// Returns `true` for cache nodes that represent native-only facts and must
-/// never be quarantined per D-09.
+/// never be quarantined because extension changes cannot affect them.
 ///
 /// Native-only nodes:
-/// - `CacheNode::Input` -- raw source inputs, always native
-/// - `CacheNode::ToolInvocation` -- tool lifecycle, always native
+/// - typed source, lifecycle, configuration, and tool inputs
 /// - `CacheNode::Layer` where all `extension_digests` are absent sentinels
 ///
 /// Extension-influenced nodes (can be quarantined):
-/// - `CacheNode::Extension` -- directly extension-produced
+/// - typed extension inputs
 /// - `CacheNode::Query` -- may depend on extension data
 /// - `CacheNode::Summary` -- may include extension digest
 /// - `CacheNode::Diagnostic` -- may be extension-influenced
 /// - `CacheNode::Layer` with at least one non-absent extension digest
 fn is_native_only_node(node: &CacheNode) -> bool {
     match node {
-        CacheNode::Input(_) | CacheNode::ToolInvocation(_) => true,
+        CacheNode::DependencyInput(input) => !matches!(
+            input.kind,
+            InputDependencyKind::ExtensionCode | InputDependencyKind::ExtensionDeclaredInput
+        ),
         CacheNode::Layer(key) => all_extension_digests_absent(key),
-        CacheNode::Extension(_)
-        | CacheNode::Query(_)
-        | CacheNode::Summary(_)
-        | CacheNode::Diagnostic(_) => false,
+        CacheNode::Query(_) | CacheNode::Summary(_) | CacheNode::Diagnostic(_) => false,
     }
 }
 
@@ -226,6 +226,15 @@ pub(crate) fn apply_quarantine_actions(
 fn extract_extension_digest(node: &CacheNode) -> Digest {
     let sentinel = absent_extension_sentinel();
     match node {
+        CacheNode::DependencyInput(input)
+            if matches!(
+                input.kind,
+                InputDependencyKind::ExtensionCode | InputDependencyKind::ExtensionDeclaredInput
+            ) =>
+        {
+            input.digest.clone()
+        }
+        CacheNode::DependencyInput(_) => sentinel,
         CacheNode::Summary(key) => key.extension_digest.clone(),
         CacheNode::Layer(key) => key
             .extension_digests
@@ -233,9 +242,7 @@ fn extract_extension_digest(node: &CacheNode) -> Digest {
             .find(|d| **d != sentinel)
             .cloned()
             .unwrap_or_else(|| sentinel.clone()),
-        CacheNode::Extension(key) => Digest::from_parts(DigestKind::ExtensionCode, key, &[key]),
         CacheNode::Query(_) | CacheNode::Diagnostic(_) => sentinel,
-        CacheNode::Input(_) | CacheNode::ToolInvocation(_) => sentinel,
     }
 }
 
@@ -247,7 +254,8 @@ fn extract_extension_digest(node: &CacheNode) -> Digest {
 mod tests {
     use super::*;
     use crate::analysis_kernel::incremental::{
-        Digest, DigestKind, LayerKey, QueryKey, SummaryKey, keys::LayerKind, keys::PrecisionTier,
+        Digest, DigestKind, InputComponentStatus, InputDependencyKey, LayerKey, QueryKey,
+        SummaryKey, keys::LayerKind, keys::PrecisionTier,
     };
 
     fn ext_digest(label: &str) -> Digest {
@@ -256,6 +264,39 @@ mod tests {
 
     fn absent_ext_digest() -> Digest {
         Digest::absent(DigestKind::ExtensionCode, "extension_digest_absent")
+    }
+
+    fn source_dependency(path: &str) -> CacheNode {
+        CacheNode::DependencyInput(
+            InputDependencyKey::source_file(
+                path,
+                Digest::from_parts(DigestKind::SourceText, "source", &[path]),
+                InputComponentStatus::Present,
+            )
+            .expect("source dependency uses a source-text digest"),
+        )
+    }
+
+    fn tool_dependency(tool: &str) -> CacheNode {
+        CacheNode::DependencyInput(
+            InputDependencyKey::tool_invocation(
+                tool,
+                Digest::absent(DigestKind::ToolInvocation, tool),
+                InputComponentStatus::Absent,
+            )
+            .expect("tool dependency uses a tool-invocation digest"),
+        )
+    }
+
+    fn extension_dependency(extension: &str) -> CacheNode {
+        CacheNode::DependencyInput(
+            InputDependencyKey::extension_code(
+                extension,
+                ext_digest(extension),
+                InputComponentStatus::Present,
+            )
+            .expect("extension dependency uses an extension-code digest"),
+        )
     }
 
     fn summary_node(callable: &str, ext_digest: Digest) -> CacheNode {
@@ -277,7 +318,7 @@ mod tests {
             "ts-facts-v1",
             Digest::absent(DigestKind::ProviderParameters, "none"),
             Digest::absent(DigestKind::TsJsLifecycle, "none"),
-            Digest::absent(DigestKind::Config, "none"),
+            Digest::absent(DigestKind::AnalysisSettings, "none"),
             Digest::absent(DigestKind::ToolInvocation, "none"),
             vec![Digest::from_parts(DigestKind::SourceText, "a", &["a"])],
             Vec::new(),
@@ -293,7 +334,7 @@ mod tests {
             "ext-facts-v1",
             Digest::absent(DigestKind::ProviderParameters, "none"),
             Digest::absent(DigestKind::TsJsLifecycle, "none"),
-            Digest::absent(DigestKind::Config, "none"),
+            Digest::absent(DigestKind::AnalysisSettings, "none"),
             Digest::absent(DigestKind::ToolInvocation, "none"),
             vec![Digest::from_parts(DigestKind::SourceText, "a", &["a"])],
             Vec::new(),
@@ -309,7 +350,7 @@ mod tests {
             "type-value-alias-facts-1:1",
             Digest::absent(DigestKind::ProviderParameters, "none"),
             Digest::absent(DigestKind::TsJsLifecycle, "none"),
-            Digest::absent(DigestKind::Config, "none"),
+            Digest::absent(DigestKind::AnalysisSettings, "none"),
             Digest::absent(DigestKind::ToolInvocation, "none"),
             vec![Digest::from_parts(DigestKind::SourceText, "a", &["a"])],
             vec![Digest::from_parts(
@@ -441,19 +482,19 @@ mod tests {
 
     #[test]
     fn input_node_is_native_only() {
-        let node = CacheNode::Input("src/main.ts".to_string());
+        let node = source_dependency("src/main.ts");
         assert!(is_native_only_node(&node));
     }
 
     #[test]
     fn tool_invocation_node_is_native_only() {
-        let node = CacheNode::ToolInvocation("go".to_string());
+        let node = tool_dependency("go");
         assert!(is_native_only_node(&node));
     }
 
     #[test]
     fn extension_node_is_not_native_only() {
-        let node = CacheNode::Extension("ext::custom_model".to_string());
+        let node = extension_dependency("ext::custom_model");
         assert!(!is_native_only_node(&node));
     }
 
@@ -501,7 +542,7 @@ mod tests {
             "ts-facts-v1",
             Digest::absent(DigestKind::ProviderParameters, "none"),
             Digest::absent(DigestKind::TsJsLifecycle, "none"),
-            Digest::absent(DigestKind::Config, "none"),
+            Digest::absent(DigestKind::AnalysisSettings, "none"),
             Digest::absent(DigestKind::ToolInvocation, "none"),
             vec![Digest::from_parts(DigestKind::SourceText, "a", &["a"])],
             Vec::new(),
@@ -535,7 +576,7 @@ mod tests {
 
     // -----------------------------------------------------------------------
     // Integration tests: invalidation-to-quarantine flow with synthetic
-    // extension digests per D-10
+    // extension digests
     // -----------------------------------------------------------------------
 
     // (a) Create a synthetic Summary node with InvalidationAction::Quarantine,
@@ -643,7 +684,7 @@ mod tests {
     #[test]
     fn integration_non_quarantine_actions_ignored() {
         let mut store = QuarantineStore::default();
-        let reuse_node = CacheNode::Input("src/a.ts".to_string());
+        let reuse_node = source_dependency("src/a.ts");
         let summary = summary_node("func_a", ext_digest("ext-v1"));
         let actions = vec![
             InvalidationAction::Reuse(reuse_node),

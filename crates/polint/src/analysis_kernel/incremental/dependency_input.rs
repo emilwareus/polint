@@ -2,15 +2,17 @@
     not(test),
     allow(
         dead_code,
-        reason = "typed dependency inputs remain isolated until producers migrate together with their dependency consumers"
+        reason = "the complete typed input vocabulary includes dependency families that are emitted only by providers that declare them"
     )
 )]
 
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 use super::{Digest, DigestKind, InputComponentStatus};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum InputDependencyKind {
     SourceFile,
     PackageProject,
@@ -33,12 +35,21 @@ pub(crate) enum InputDependencyKind {
     RuleOptions,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(try_from = "InputDependencyKeyWire")]
 pub(crate) struct InputDependencyKey {
     pub(crate) kind: InputDependencyKind,
     pub(crate) stable_key: String,
     pub(crate) digest: Digest,
     pub(crate) status: InputComponentStatus,
+}
+
+#[derive(Deserialize)]
+struct InputDependencyKeyWire {
+    kind: InputDependencyKind,
+    stable_key: String,
+    digest: Digest,
+    status: InputComponentStatus,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,6 +87,14 @@ impl fmt::Display for InputDependencyDigestKindError {
 }
 
 impl std::error::Error for InputDependencyDigestKindError {}
+
+impl TryFrom<InputDependencyKeyWire> for InputDependencyKey {
+    type Error = InputDependencyDigestKindError;
+
+    fn try_from(wire: InputDependencyKeyWire) -> Result<Self, Self::Error> {
+        Self::new(wire.kind, wire.stable_key, wire.digest, wire.status)
+    }
+}
 
 impl InputDependencyKind {
     pub(crate) fn label(self) -> &'static str {
@@ -632,5 +651,47 @@ mod tests {
 
             assert_eq!(key.digest, digest);
         }
+    }
+
+    #[test]
+    fn serde_round_trips_every_kind_and_status_with_exact_labels() {
+        for (kind, label, digest_kind) in KINDS {
+            for status in STATUSES {
+                let key = construct(
+                    *kind,
+                    label,
+                    Digest::from_parts(*digest_kind, "dependency_input", &[*label]),
+                    *status,
+                )
+                .unwrap();
+
+                let wire = serde_json::to_value(&key).expect("typed input serializes");
+                assert_eq!(wire["kind"], *label);
+                assert_eq!(
+                    serde_json::from_value::<InputDependencyKey>(wire)
+                        .expect("typed input deserializes"),
+                    key
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn deserialization_rejects_a_kind_digest_purpose_mismatch() {
+        let wire = serde_json::json!({
+            "kind": "source_file",
+            "stable_key": "src/main.ts",
+            "digest": Digest::from_parts(DigestKind::Config, "wrong", &["wrong"]),
+            "status": "present",
+        });
+
+        let error = serde_json::from_value::<InputDependencyKey>(wire)
+            .expect_err("mismatched typed input must fail closed");
+
+        assert!(
+            error.to_string().contains(
+                "input dependency kind `source_file` does not accept digest kind `config`"
+            )
+        );
     }
 }

@@ -226,6 +226,11 @@ impl LayerKey {
         dependency_layer_digests: Vec<Digest>,
         extension_digests: Vec<Digest>,
     ) -> Self {
+        assert_eq!(
+            analysis_settings_digest.kind,
+            DigestKind::AnalysisSettings,
+            "layer keys require an analysis-settings digest"
+        );
         Self {
             layer_kind,
             provider_id: provider_id.into(),
@@ -2587,7 +2592,7 @@ mod tests {
             "ts-facts-v1",
             Digest::absent(DigestKind::ProviderParameters, "none"),
             Digest::absent(DigestKind::TsJsLifecycle, "none"),
-            Digest::absent(DigestKind::Config, "none"),
+            Digest::absent(DigestKind::AnalysisSettings, "none"),
             Digest::absent(DigestKind::ToolInvocation, "none"),
             vec![b.clone(), a.clone()],
             vec![b.clone(), a.clone()],
@@ -2600,7 +2605,7 @@ mod tests {
             "ts-facts-v1",
             Digest::absent(DigestKind::ProviderParameters, "none"),
             Digest::absent(DigestKind::TsJsLifecycle, "none"),
-            Digest::absent(DigestKind::Config, "none"),
+            Digest::absent(DigestKind::AnalysisSettings, "none"),
             Digest::absent(DigestKind::ToolInvocation, "none"),
             vec![a.clone(), b.clone()],
             vec![a.clone(), b.clone()],
@@ -2626,6 +2631,29 @@ mod tests {
             Vec::new(),
             Vec::new(),
         );
+    }
+
+    #[test]
+    fn general_constructor_rejects_config_and_rule_options_as_analysis_settings() {
+        for digest_kind in [DigestKind::Config, DigestKind::RuleOptions] {
+            let rejected = std::panic::catch_unwind(|| {
+                LayerKey::new(
+                    LayerKind::Metrics,
+                    "polint.metrics",
+                    "1",
+                    "metrics-facts-v1",
+                    Digest::absent(DigestKind::ProviderParameters, "none"),
+                    Digest::absent(DigestKind::ProviderParameters, "none"),
+                    Digest::absent(digest_kind, "wrong_analysis_settings"),
+                    Digest::absent(DigestKind::ToolInvocation, "none"),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                )
+            });
+
+            assert!(rejected.is_err(), "{digest_kind:?} must be rejected");
+        }
     }
 
     #[test]

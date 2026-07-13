@@ -17,7 +17,9 @@ use super::change_set::{ChangeKind, ChangeSet, ChangeSetRow};
 use super::dependency_index::{
     CacheNode, DEPENDENCY_INDEX_SCHEMA, DependencyEdge, DependencyIndex, DependencyKind, ShapeKind,
 };
+use super::dependency_input::InputDependencyKey;
 use super::digest::{Digest, DigestKind};
+use super::input_snapshot::InputComponentStatus;
 use super::invalidation::{InvalidationAction, InvalidationPlan};
 use super::keys::{LayerKey, LayerKind, PrecisionTier};
 use crate::cache::stable_hash;
@@ -86,7 +88,17 @@ impl LayerCacheManifest {
 }
 
 pub(crate) fn relative_manifest_dependency_source() -> CacheNode {
-    CacheNode::Input(MANIFEST_LAYER_DEPENDENCY_SOURCE.to_string())
+    CacheNode::DependencyInput(
+        InputDependencyKey::upstream_layer(
+            MANIFEST_LAYER_DEPENDENCY_SOURCE,
+            Digest::absent(
+                DigestKind::DependencyLayer,
+                MANIFEST_LAYER_DEPENDENCY_SOURCE,
+            ),
+            InputComponentStatus::Absent,
+        )
+        .expect("manifest-relative dependency source uses a dependency-layer digest"),
+    )
 }
 
 fn sort_and_dedup_manifest_dependencies(dependencies: &mut Vec<DependencyEdge>) {
@@ -648,7 +660,7 @@ fn dependency_source_matches_manifest(
     manifest: &LayerCacheManifest,
 ) -> bool {
     match &edge.from {
-        CacheNode::Input(value) => value == MANIFEST_LAYER_DEPENDENCY_SOURCE,
+        CacheNode::DependencyInput(_) => edge.from == relative_manifest_dependency_source(),
         CacheNode::Layer(layer_key) => layer_key == &manifest.key,
         _ => false,
     }
@@ -800,7 +812,10 @@ fn push_dependency_change_rows(
             .map(|edge| ChangeSetRow {
                 node: edge.to.clone(),
                 kind: change_kind_for_edge(edge, fallback_kind),
-                digest: digest.clone(),
+                digest: match &edge.to {
+                    CacheNode::DependencyInput(input) => input.digest.clone(),
+                    _ => digest.clone(),
+                },
             }),
     );
     if rows.len() == before {
@@ -915,8 +930,8 @@ fn evict_file(path: &Path) {
 mod tests {
     use super::*;
     use crate::analysis_kernel::incremental::{
-        CacheNode, DependencyEdge, DependencyKind, Digest, DigestKind, LayerKey, PrecisionTier,
-        ShapeKind,
+        CacheNode, DependencyEdge, DependencyKind, Digest, DigestKind, InputComponentStatus,
+        InputDependencyKey, LayerKey, PrecisionTier, ShapeKind,
     };
 
     #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -936,7 +951,7 @@ mod tests {
             "ts-facts-v1",
             Digest::absent(DigestKind::ProviderParameters, "none"),
             Digest::absent(DigestKind::TsJsLifecycle, "none"),
-            Digest::absent(DigestKind::Config, "none"),
+            Digest::absent(DigestKind::AnalysisSettings, "none"),
             Digest::absent(DigestKind::ToolInvocation, "none"),
             vec![digest(DigestKind::SourceText, "src/main.ts")],
             Vec::new(),
@@ -952,7 +967,7 @@ mod tests {
             "module-graph-v1",
             Digest::absent(DigestKind::ProviderParameters, "none"),
             Digest::absent(DigestKind::ProviderParameters, "none"),
-            Digest::absent(DigestKind::Config, "none"),
+            Digest::absent(DigestKind::AnalysisSettings, "none"),
             Digest::absent(DigestKind::ToolInvocation, "none"),
             vec![digest(DigestKind::SourceText, "src/main.ts")],
             vec![digest(DigestKind::DependencyLayer, "polint.ts.syntax")],
@@ -968,7 +983,7 @@ mod tests {
             "module-graph-v1",
             Digest::absent(DigestKind::ProviderParameters, "none"),
             Digest::absent(DigestKind::ProviderParameters, "none"),
-            Digest::absent(DigestKind::Config, "none"),
+            Digest::absent(DigestKind::AnalysisSettings, "none"),
             Digest::absent(DigestKind::ToolInvocation, "none"),
             vec![digest(DigestKind::SourceText, "src/changed.ts")],
             vec![digest(DigestKind::DependencyLayer, "polint.ts.syntax")],
@@ -979,7 +994,14 @@ mod tests {
     fn dependency(layer_key: &LayerKey) -> DependencyEdge {
         DependencyEdge {
             from: CacheNode::Layer(layer_key.clone()),
-            to: CacheNode::Input("src/main.ts".to_string()),
+            to: CacheNode::DependencyInput(
+                InputDependencyKey::source_file(
+                    "src/main.ts",
+                    digest(DigestKind::SourceText, "src/main.ts"),
+                    InputComponentStatus::Present,
+                )
+                .expect("source dependency uses a source-text digest"),
+            ),
             kind: DependencyKind::Input,
             required_shape: ShapeKind::Content,
         }
@@ -1141,7 +1163,7 @@ mod tests {
         let json = serde_json::to_value(manifest).expect("manifest should serialize");
 
         assert_eq!(json["manifest_schema"], "polint-layer-cache-manifest-2");
-        assert_eq!(json["dependency_index_schema"], "polint-dependency-index-1");
+        assert_eq!(json["dependency_index_schema"], DEPENDENCY_INDEX_SCHEMA);
         let dependencies = json["dependencies"]
             .as_array()
             .expect("manifest dependencies should serialize as rows");
@@ -1151,6 +1173,7 @@ mod tests {
             "manifest dependencies should be stored relative to manifest.key"
         );
         assert!(dependencies[0].get("to").is_some());
+        assert!(dependencies[0]["to"].get("dependency_input").is_some());
         assert!(dependencies[0].get("kind").is_some());
         assert!(dependencies[0].get("required_shape").is_some());
         for forbidden in [
@@ -1266,6 +1289,34 @@ mod tests {
                 .to_string()
                 .contains("unsupported layer cache manifest metadata")
         );
+    }
+
+    #[test]
+    fn explicit_and_forged_v1_manifest_pins_reject_typed_dependencies() {
+        let scratch = scratch_dir();
+        let store = LayerCacheStore::new(scratch.path().join("layers"), true);
+        let payload = Payload {
+            items: vec!["a".to_string()],
+        };
+        let layer_key = derived_key();
+        let mut manifest = manifest_for_payload(layer_key.clone(), &payload);
+        manifest.dependency_index_schema = "polint-dependency-index-1".to_string();
+
+        let write_error = store
+            .write_json(&manifest, &payload)
+            .expect_err("v1 manifest pin must reject a typed dependency");
+        assert!(
+            write_error
+                .to_string()
+                .contains("unsupported layer cache manifest metadata")
+        );
+
+        store
+            .write_json_without_repair_for_test(&manifest, &payload)
+            .expect("test fixture bypasses metadata validation");
+        let forged_read: LayerCacheReadOutcome<Payload> = store.read_json(&layer_key);
+
+        assert_eq!(forged_read.status, LayerCacheReadStatus::InvalidEvicted);
     }
 
     #[test]

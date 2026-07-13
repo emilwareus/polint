@@ -8,9 +8,10 @@ pub(crate) mod ts;
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
     CacheNode, CacheStats, DependencyEdge, DependencyKind, Digest, DigestKind, InputComponent,
-    InputSnapshot, LayerCacheManifest, LayerCacheReadStatus, LayerCacheStore,
-    LayerCacheWriteStatus, LayerKey, LayerKind, PrecisionTier, ShapeKind, dependency_layer_digest,
-    relative_manifest_dependency_source, semantic_provider_parameter_digest,
+    InputComponentStatus, InputDependencyKey, InputSnapshot, LayerCacheManifest,
+    LayerCacheReadStatus, LayerCacheStore, LayerCacheWriteStatus, LayerKey, LayerKind,
+    PrecisionTier, ShapeKind, relative_manifest_dependency_source,
+    semantic_provider_parameter_digest,
 };
 use crate::analysis_plan::AnalysisPlan;
 use crate::cache::Cache;
@@ -136,8 +137,8 @@ pub(crate) fn derive_requested_symbols_with_cache_stats(
         db,
         manifest,
         analysis_settings_digest.clone(),
-        go_lifecycle_digest.clone(),
-        ts_js_lifecycle_digest.clone(),
+        go_lifecycle_digest,
+        ts_js_lifecycle_digest,
         module_graph_output_digest.clone(),
         upstream_syntax_output_digests.clone(),
     );
@@ -188,8 +189,9 @@ pub(crate) fn derive_requested_symbols_with_cache_stats(
                 &module_graph_output_digest,
                 &upstream_syntax_output_digests,
                 analysis_settings_digest,
-                go_lifecycle_digest,
-                ts_js_lifecycle_digest,
+                &input_snapshot.go_lifecycle.components,
+                &input_snapshot.ts_js_lifecycle.components,
+                provider_manifest_dependency_digest(input_snapshot, manifest),
             );
             derivation.output_digest = write_symbol_graph_layer_payload(
                 &store,
@@ -284,8 +286,9 @@ fn symbol_graph_layer_dependency_edges(
     module_graph_output_digest: &Digest,
     upstream_syntax_output_digests: &[Digest],
     analysis_settings_digest: Digest,
-    go_lifecycle_digest: Digest,
-    ts_js_lifecycle_digest: Digest,
+    go_lifecycle_components: &[InputComponent],
+    ts_js_lifecycle_components: &[InputComponent],
+    provider_manifest_digest: Digest,
 ) -> Vec<DependencyEdge> {
     let from = CacheNode::Layer(key.clone());
     let mut edges = Vec::new();
@@ -293,27 +296,19 @@ fn symbol_graph_layer_dependency_edges(
     for file in sorted_files(db) {
         edges.push(dependency_edge(
             &from,
-            CacheNode::Input(format!(
-                "source:{}:{}",
-                normalized_file_path(file),
-                file.content_hash
-            )),
+            source_file_dependency(file),
             DependencyKind::SourceText,
             ShapeKind::Content,
         ));
     }
 
     for function in sorted_functions(db) {
+        let file = db
+            .file(function.file)
+            .expect("function dependency should reference a discovered file");
         edges.push(dependency_edge(
             &from,
-            CacheNode::Input(format!(
-                "function:{}:{}:{}:{}:{}",
-                db.path_for(function.file),
-                function.name,
-                function.span.start_byte,
-                function.span.end_byte,
-                language_cache_label(function.language)
-            )),
+            source_file_dependency(file),
             DependencyKind::Input,
             ShapeKind::Syntax,
         ));
@@ -322,27 +317,34 @@ fn symbol_graph_layer_dependency_edges(
     for package in sorted_packages(db) {
         edges.push(dependency_edge(
             &from,
-            CacheNode::Input(format!(
-                "package:{}:{}:{}",
-                db.path_for(package.file),
-                language_cache_label(package.language),
-                package.name
-            )),
+            dependency_input(
+                InputDependencyKey::package_project(
+                    db.path_for(package.file),
+                    Digest::from_parts(
+                        DigestKind::Workspace,
+                        "package_project",
+                        &[
+                            &db.path_for(package.file),
+                            language_cache_label(package.language),
+                            &package.name,
+                        ],
+                    ),
+                    InputComponentStatus::Present,
+                ),
+                "package/project dependency",
+            ),
             DependencyKind::Input,
             ShapeKind::ModuleTopology,
         ));
     }
 
     for import in sorted_imports(db) {
+        let file = db
+            .file(import.file)
+            .expect("import dependency should reference a discovered file");
         edges.push(dependency_edge(
             &from,
-            CacheNode::Input(format!(
-                "import:{}:{}:{}:{}",
-                db.path_for(import.file),
-                import.path,
-                import.span.start_byte,
-                language_cache_label(import.language)
-            )),
+            source_file_dependency(file),
             DependencyKind::ImportShape,
             ShapeKind::Import,
         ));
@@ -350,45 +352,65 @@ fn symbol_graph_layer_dependency_edges(
 
     edges.push(dependency_edge(
         &from,
-        CacheNode::Input(format!("analysis_settings:{}", analysis_settings_digest)),
+        dependency_input(
+            InputDependencyKey::analysis_setting(
+                format!("{}/analysis-settings", manifest.id),
+                analysis_settings_digest,
+                InputComponentStatus::Present,
+            ),
+            "analysis-settings dependency",
+        ),
         DependencyKind::Config,
         ShapeKind::Unknown,
     ));
+    append_lifecycle_dependencies(&mut edges, &from, go_lifecycle_components);
+    append_lifecycle_dependencies(&mut edges, &from, ts_js_lifecycle_components);
     edges.push(dependency_edge(
         &from,
-        CacheNode::Input(format!("lifecycle:go:{}", go_lifecycle_digest)),
-        DependencyKind::Lifecycle,
-        ShapeKind::Lifecycle,
+        dependency_input(
+            InputDependencyKey::provider_manifest(
+                manifest.id,
+                provider_manifest_digest.clone(),
+                InputComponentStatus::Present,
+            ),
+            "provider-manifest dependency",
+        ),
+        DependencyKind::Provider,
+        ShapeKind::ProviderVersion,
     ));
     edges.push(dependency_edge(
         &from,
-        CacheNode::Input(format!("lifecycle:ts_js:{}", ts_js_lifecycle_digest)),
-        DependencyKind::Lifecycle,
-        ShapeKind::Lifecycle,
-    ));
-    edges.push(dependency_edge(
-        &from,
-        CacheNode::Input(format!(
-            "provider_schema:{}:{}",
-            manifest.id,
-            manifest.primary_schema_label()
-        )),
+        dependency_input(
+            InputDependencyKey::provider_schema(
+                format!("{}/{}", manifest.id, manifest.primary_schema_label()),
+                provider_manifest_digest,
+                InputComponentStatus::Present,
+            ),
+            "provider-schema dependency",
+        ),
         DependencyKind::ProviderSchema,
         ShapeKind::ProviderVersion,
     ));
     edges.push(dependency_edge(
         &from,
-        CacheNode::Input("toolchain:symbol_graph:absent".to_string()),
+        dependency_input(
+            InputDependencyKey::tool_invocation(
+                format!("{}/toolchain", manifest.id),
+                key.toolchain_digest.clone(),
+                InputComponentStatus::Absent,
+            ),
+            "tool invocation dependency",
+        ),
         DependencyKind::Toolchain,
         ShapeKind::Toolchain,
     ));
     edges.push(dependency_edge(
         &from,
-        CacheNode::Layer(upstream_layer_key(
+        upstream_layer_dependency(
             LayerKind::ModuleGraph,
             "polint.module_graph",
             module_graph_output_digest.clone(),
-        )),
+        ),
         DependencyKind::UpstreamLayer,
         ShapeKind::Output,
     ));
@@ -401,7 +423,7 @@ fn symbol_graph_layer_dependency_edges(
         };
         edges.push(dependency_edge(
             &from,
-            CacheNode::Layer(upstream_layer_key(layer_kind, provider_id, output_digest)),
+            upstream_layer_dependency(layer_kind, provider_id, output_digest),
             DependencyKind::UpstreamLayer,
             ShapeKind::Output,
         ));
@@ -824,6 +846,83 @@ fn normalized_file_path(file: &SourceFile) -> String {
         .unwrap_or_else(|| file.relative_path.clone())
 }
 
+fn source_file_dependency(file: &SourceFile) -> CacheNode {
+    dependency_input(
+        InputDependencyKey::source_file(
+            normalized_file_path(file),
+            Digest {
+                kind: DigestKind::SourceText,
+                value: file.content_hash.clone(),
+            },
+            InputComponentStatus::Present,
+        ),
+        "source-file dependency",
+    )
+}
+
+fn dependency_input(
+    input: Result<
+        InputDependencyKey,
+        crate::analysis_kernel::incremental::InputDependencyDigestKindError,
+    >,
+    context: &str,
+) -> CacheNode {
+    CacheNode::DependencyInput(
+        input.unwrap_or_else(|error| panic!("invalid {context} digest purpose: {error}")),
+    )
+}
+
+fn append_lifecycle_dependencies(
+    edges: &mut Vec<DependencyEdge>,
+    from: &CacheNode,
+    components: &[InputComponent],
+) {
+    edges.extend(components.iter().map(|component| {
+        let (input, kind, shape, context) = if component.digest.kind == DigestKind::ToolInvocation {
+            (
+                InputDependencyKey::tool_invocation(
+                    component.name.clone(),
+                    component.digest.clone(),
+                    component.status,
+                ),
+                DependencyKind::ToolInvocation,
+                ShapeKind::Toolchain,
+                "tool-invocation lifecycle dependency",
+            )
+        } else {
+            (
+                InputDependencyKey::language_lifecycle(
+                    component.name.clone(),
+                    component.digest.clone(),
+                    component.status,
+                ),
+                DependencyKind::Lifecycle,
+                ShapeKind::Lifecycle,
+                "language-lifecycle dependency",
+            )
+        };
+        dependency_edge(from, dependency_input(input, context), kind, shape)
+    }));
+}
+
+fn provider_manifest_dependency_digest(
+    input_snapshot: &InputSnapshot,
+    manifest: &ProviderManifest,
+) -> Digest {
+    input_snapshot
+        .provider_schemas
+        .iter()
+        .find(|provider| provider.provider_id == manifest.id)
+        .unwrap_or_else(|| {
+            panic!(
+                "input snapshot is missing provider manifest identity for `{}`",
+                manifest.id
+            )
+        })
+        .provider_manifest_digest
+        .clone()
+}
+
 fn dependency_edge(
     _from: &CacheNode,
     to: CacheNode,
@@ -838,21 +937,18 @@ fn dependency_edge(
     }
 }
 
-fn upstream_layer_key(layer_kind: LayerKind, provider_id: &str, output_digest: Digest) -> LayerKey {
-    let output_dependency = dependency_layer_digest(output_digest);
-
-    LayerKey::new(
-        layer_kind,
-        provider_id,
-        "output-digest",
-        "output-digest",
-        output_dependency.clone(),
-        Digest::absent(DigestKind::DependencyLayer, "upstream_lifecycle_unknown"),
-        Digest::absent(DigestKind::Config, "upstream_config_unknown"),
-        Digest::absent(DigestKind::ToolInvocation, "upstream_toolchain_unknown"),
-        vec![output_dependency],
-        Vec::new(),
-        Vec::new(),
+fn upstream_layer_dependency(
+    layer_kind: LayerKind,
+    provider_id: &str,
+    output_digest: Digest,
+) -> CacheNode {
+    dependency_input(
+        InputDependencyKey::upstream_layer(
+            format!("{provider_id}/{}", layer_kind.label()),
+            crate::analysis_kernel::incremental::dependency_layer_digest(output_digest),
+            InputComponentStatus::Present,
+        ),
+        "upstream-layer dependency",
     )
 }
 
@@ -1086,7 +1182,10 @@ fn capability_status_json(status: &CapabilitySupportStatus) -> &'static str {
 #[cfg(test)]
 mod symbol_graph_derivation {
     use super::{SymbolGraphDerivation, derive_requested_symbols};
-    use crate::analysis_kernel::incremental::{Digest, DigestKind, InputSnapshot};
+    use crate::analysis_kernel::incremental::{
+        CacheNode, DependencyKind, Digest, DigestKind, InputComponentStatus, InputDependencyKind,
+        InputSnapshot,
+    };
     use crate::analysis_kernel::{
         FactConfidence, FactFamily, FactPrecision, FactRef, ValidationStatus,
     };
@@ -1628,6 +1727,98 @@ export function answer() {{
         assert!(first.0.iter().any(|(_, name, _)| name == "value"));
         assert!(first.0.iter().all(|(_, name, _)| name != "stale"));
         assert!(first.1.iter().all(|(_, name, _, _)| name != "stale"));
+    }
+
+    #[test]
+    fn symbol_graph_dependency_edges_preserve_typed_input_identity_and_status() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let loaded = loaded_config_for(temp.path());
+        let plan = requested_symbol_plan();
+        let db = fixture_db(temp.path(), "./target");
+        let snapshot = symbol_input_snapshot(&loaded, &db, &plan, "config");
+        let analysis_settings = snapshot
+            .analysis_settings_digest(crate::cache::keys::AnalysisSettingsScope::SymbolGraph)
+            .clone();
+        let go_lifecycle = super::lifecycle_component_digest(
+            DigestKind::GoLifecycle,
+            "symbol_graph_go_lifecycle",
+            &snapshot.go_lifecycle.components,
+        );
+        let ts_js_lifecycle = super::lifecycle_component_digest(
+            DigestKind::TsJsLifecycle,
+            "symbol_graph_ts_js_lifecycle",
+            &snapshot.ts_js_lifecycle.components,
+        );
+        let (module_graph_output, syntax_outputs) = upstream_digests("typed");
+        let key = super::symbol_graph_layer_key(
+            &db,
+            symbol_graph_manifest(),
+            analysis_settings.clone(),
+            go_lifecycle,
+            ts_js_lifecycle,
+            module_graph_output.clone(),
+            syntax_outputs.clone(),
+        );
+
+        let edges = super::symbol_graph_layer_dependency_edges(
+            &db,
+            &key,
+            symbol_graph_manifest(),
+            &module_graph_output,
+            &syntax_outputs,
+            analysis_settings,
+            &snapshot.go_lifecycle.components,
+            &snapshot.ts_js_lifecycle.components,
+            super::provider_manifest_dependency_digest(&snapshot, symbol_graph_manifest()),
+        );
+
+        let typed_inputs = edges
+            .iter()
+            .filter_map(|edge| match &edge.to {
+                CacheNode::DependencyInput(input) => Some(input),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(typed_inputs.iter().any(|input| {
+            input.kind == InputDependencyKind::SourceFile
+                && input.stable_key == "src/app.ts"
+                && input.digest.kind == DigestKind::SourceText
+                && input.status == InputComponentStatus::Present
+        }));
+        assert!(typed_inputs.iter().any(|input| {
+            input.kind == InputDependencyKind::AnalysisSetting
+                && input.digest.kind == DigestKind::AnalysisSettings
+                && input.status == InputComponentStatus::Present
+        }));
+        assert!(typed_inputs.iter().any(|input| {
+            input.kind == InputDependencyKind::ProviderManifest
+                && input.digest.kind == DigestKind::ProviderManifest
+        }));
+        assert!(typed_inputs.iter().any(|input| {
+            input.kind == InputDependencyKind::ProviderSchema
+                && input.digest.kind == DigestKind::ProviderManifest
+        }));
+        assert!(typed_inputs.iter().any(|input| {
+            input.kind == InputDependencyKind::UpstreamLayer
+                && input.digest.kind == DigestKind::DependencyLayer
+                && input.status == InputComponentStatus::Present
+        }));
+        for component in snapshot
+            .go_lifecycle
+            .components
+            .iter()
+            .chain(&snapshot.ts_js_lifecycle.components)
+        {
+            assert!(typed_inputs.iter().any(|input| {
+                input.stable_key == component.name
+                    && input.digest == component.digest
+                    && input.status == component.status
+            }));
+        }
+        assert!(!edges.iter().any(|edge| matches!(
+            edge.kind,
+            DependencyKind::Rule | DependencyKind::Extension | DependencyKind::Model
+        )));
     }
 
     mod symbol_graph_layer_cache {

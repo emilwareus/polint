@@ -85,6 +85,17 @@ impl InvalidationPlan {
             return Self::from_actions(actions);
         }
 
+        if !change_set.typed_input_digests_match() {
+            let nodes = actions.keys().cloned().collect::<Vec<_>>();
+            for node in nodes {
+                actions.insert(
+                    node.clone(),
+                    InvalidationAction::Recompute(node, RecomputeReason::UnknownChange),
+                );
+            }
+            return Self::from_actions(actions);
+        }
+
         for row in change_set.rows() {
             if !index.contains_node(&row.node) {
                 actions.insert(
@@ -173,7 +184,7 @@ fn default_reuse_actions(
 }
 
 fn action_for_changed_node(row: &ChangeSetRow) -> Option<InvalidationAction> {
-    if matches!(row.node, CacheNode::Input(_) | CacheNode::ToolInvocation(_)) {
+    if matches!(row.node, CacheNode::DependencyInput(_)) {
         return None;
     }
     action_for_change(row, &row.node)
@@ -265,11 +276,11 @@ fn action_for_change(row: &ChangeSetRow, node: &CacheNode) -> Option<Invalidatio
 
 fn node_contains_digest(node: &CacheNode, digest: &Digest) -> bool {
     match node {
+        CacheNode::DependencyInput(input) => input.digest == *digest,
         CacheNode::Layer(key) => layer_key_contains_digest(key, digest),
         CacheNode::Query(key) => query_key_contains_digest(key, digest),
         CacheNode::Summary(key) => summary_key_contains_digest(key, digest),
         CacheNode::Diagnostic(key) => diagnostic_key_contains_digest(key, digest),
-        CacheNode::Input(_) | CacheNode::Extension(_) | CacheNode::ToolInvocation(_) => false,
     }
 }
 
@@ -307,11 +318,59 @@ mod tests {
     use super::*;
     use crate::analysis_kernel::incremental::{
         CacheNode, ChangeKind, ChangeSet, ChangeSetRow, DEPENDENCY_INDEX_SCHEMA, DependencyEdge,
-        DependencyIndex, DependencyKind, Digest, DigestKind, LayerKey, ShapeKind,
+        DependencyIndex, DependencyKind, DiagnosticKey, Digest, DigestKind, InputComponentStatus,
+        InputDependencyKey, LayerKey, ShapeKind,
     };
 
     fn digest(kind: DigestKind, label: &str) -> Digest {
         Digest::from_parts(kind, label, &[label])
+    }
+
+    fn source(stable_key: &str, digest: Digest) -> CacheNode {
+        CacheNode::DependencyInput(
+            InputDependencyKey::source_file(stable_key, digest, InputComponentStatus::Present)
+                .expect("source dependency uses a source-text digest"),
+        )
+    }
+
+    fn lifecycle(stable_key: &str, digest: Digest) -> CacheNode {
+        CacheNode::DependencyInput(
+            InputDependencyKey::language_lifecycle(
+                stable_key,
+                digest,
+                InputComponentStatus::Present,
+            )
+            .expect("lifecycle dependency uses a language-lifecycle digest"),
+        )
+    }
+
+    fn provider(stable_key: &str, digest: Digest) -> CacheNode {
+        CacheNode::DependencyInput(
+            InputDependencyKey::provider_manifest(
+                stable_key,
+                digest,
+                InputComponentStatus::Present,
+            )
+            .expect("provider dependency uses a provider-manifest digest"),
+        )
+    }
+
+    fn rule_dependency(stable_key: &str, digest: Digest) -> CacheNode {
+        CacheNode::DependencyInput(
+            InputDependencyKey::rule_code(stable_key, digest, InputComponentStatus::Present)
+                .expect("rule dependency uses a rule-code digest"),
+        )
+    }
+
+    fn diagnostic(rule_id: &str, rule_digest: Digest) -> CacheNode {
+        CacheNode::Diagnostic(DiagnosticKey::new(
+            rule_id,
+            "1",
+            rule_digest,
+            Digest::absent(DigestKind::RuleOptions, "none"),
+            Vec::new(),
+            Digest::absent(DigestKind::Evidence, "none"),
+        ))
     }
 
     fn layer(provider_id: &str, input_label: &str, rule_digest: Option<Digest>) -> LayerKey {
@@ -326,7 +385,7 @@ mod tests {
             "ts-facts-v1",
             Digest::absent(DigestKind::ProviderParameters, "none"),
             Digest::absent(DigestKind::TsJsLifecycle, "none"),
-            Digest::absent(DigestKind::Config, "none"),
+            Digest::absent(DigestKind::AnalysisSettings, "none"),
             Digest::absent(DigestKind::ToolInvocation, "none"),
             input_digests,
             Vec::new(),
@@ -354,7 +413,8 @@ mod tests {
 
     #[test]
     fn unknown_change_never_reuses_affected_dependents() {
-        let source = CacheNode::Input("src/a.ts".to_string());
+        let source_digest = digest(DigestKind::SourceText, "a");
+        let source = source("src/a.ts", source_digest.clone());
         let layer = CacheNode::Layer(layer("polint.ts.syntax", "a", None));
         let index = DependencyIndex::from_edges(vec![edge(
             layer.clone(),
@@ -365,11 +425,7 @@ mod tests {
 
         let plan = InvalidationPlan::from_change_set(
             &index,
-            &change(
-                source,
-                ChangeKind::Unknown,
-                digest(DigestKind::SourceText, "a"),
-            ),
+            &change(source, ChangeKind::Unknown, source_digest),
         );
 
         assert!(matches!(
@@ -383,7 +439,8 @@ mod tests {
 
     #[test]
     fn corrupt_index_schema_drops_instead_of_reusing() {
-        let source = CacheNode::Input("src/a.ts".to_string());
+        let source_digest = digest(DigestKind::SourceText, "a");
+        let source = source("src/a.ts", source_digest.clone());
         let layer = CacheNode::Layer(layer("polint.ts.syntax", "a", None));
         let mut index = DependencyIndex::from_edges(vec![edge(
             layer.clone(),
@@ -395,11 +452,7 @@ mod tests {
 
         let plan = InvalidationPlan::from_change_set(
             &index,
-            &change(
-                source,
-                ChangeKind::ContentOnly,
-                digest(DigestKind::SourceText, "a"),
-            ),
+            &change(source, ChangeKind::ContentOnly, source_digest),
         );
 
         assert!(matches!(
@@ -413,16 +466,13 @@ mod tests {
 
     #[test]
     fn missing_dependency_target_recomputes_instead_of_reusing() {
-        let missing = CacheNode::Input("src/missing.ts".to_string());
+        let missing_digest = digest(DigestKind::SourceText, "missing");
+        let missing = source("src/missing.ts", missing_digest.clone());
         let index = DependencyIndex::from_edges(Vec::new());
 
         let plan = InvalidationPlan::from_change_set(
             &index,
-            &change(
-                missing.clone(),
-                ChangeKind::ContentOnly,
-                digest(DigestKind::SourceText, "missing"),
-            ),
+            &change(missing.clone(), ChangeKind::ContentOnly, missing_digest),
         );
 
         assert!(matches!(
@@ -436,8 +486,9 @@ mod tests {
 
     #[test]
     fn source_content_changes_affect_only_matching_source_dependents() {
-        let source_a = CacheNode::Input("src/a.ts".to_string());
-        let source_b = CacheNode::Input("src/b.ts".to_string());
+        let source_a_digest = digest(DigestKind::SourceText, "a");
+        let source_a = source("src/a.ts", source_a_digest.clone());
+        let source_b = source("src/b.ts", digest(DigestKind::SourceText, "b"));
         let layer_a = CacheNode::Layer(layer("polint.ts.syntax", "a", None));
         let layer_b = CacheNode::Layer(layer("polint.ts.syntax", "b", None));
         let index = DependencyIndex::from_edges(vec![
@@ -457,11 +508,7 @@ mod tests {
 
         let plan = InvalidationPlan::from_change_set(
             &index,
-            &change(
-                source_a,
-                ChangeKind::ContentOnly,
-                digest(DigestKind::SourceText, "a"),
-            ),
+            &change(source_a, ChangeKind::ContentOnly, source_a_digest),
         );
 
         assert!(matches!(
@@ -479,30 +526,33 @@ mod tests {
 
     #[test]
     fn lifecycle_and_provider_changes_fail_closed_for_dependents() {
-        let lifecycle = CacheNode::ToolInvocation("go-lifecycle".to_string());
+        let lifecycle_digest = digest(DigestKind::GoLifecycle, "go");
+        let lifecycle = lifecycle("go-lifecycle", lifecycle_digest.clone());
+        let provider_digest = digest(DigestKind::ProviderManifest, "provider");
+        let provider = provider("polint.go.syntax", provider_digest.clone());
         let layer = CacheNode::Layer(layer("polint.go.syntax", "a", None));
-        let index = DependencyIndex::from_edges(vec![edge(
-            layer.clone(),
-            lifecycle.clone(),
-            DependencyKind::Lifecycle,
-            ShapeKind::Lifecycle,
-        )]);
+        let index = DependencyIndex::from_edges(vec![
+            edge(
+                layer.clone(),
+                lifecycle.clone(),
+                DependencyKind::Lifecycle,
+                ShapeKind::Lifecycle,
+            ),
+            edge(
+                layer.clone(),
+                provider.clone(),
+                DependencyKind::Provider,
+                ShapeKind::ProviderVersion,
+            ),
+        ]);
 
         let lifecycle_plan = InvalidationPlan::from_change_set(
             &index,
-            &change(
-                lifecycle.clone(),
-                ChangeKind::Lifecycle,
-                digest(DigestKind::GoLifecycle, "go"),
-            ),
+            &change(lifecycle, ChangeKind::Lifecycle, lifecycle_digest),
         );
         let provider_plan = InvalidationPlan::from_change_set(
             &index,
-            &change(
-                lifecycle,
-                ChangeKind::ProviderVersion,
-                digest(DigestKind::ProviderOutput, "provider"),
-            ),
+            &change(provider, ChangeKind::ProviderVersion, provider_digest),
         );
 
         assert!(matches!(
@@ -522,21 +572,23 @@ mod tests {
     }
 
     #[test]
-    fn rule_changes_do_not_affect_syntax_layers_unless_digest_is_in_key() {
-        let rule = CacheNode::Input("rule:local/example".to_string());
+    fn rule_changes_recompute_only_linked_diagnostics() {
         let rule_digest = digest(DigestKind::RuleCode, "rule");
-        let unaffected = CacheNode::Layer(layer("polint.ts.syntax", "a", None));
-        let affected = CacheNode::Layer(layer("polint.ts.syntax", "b", Some(rule_digest.clone())));
+        let other_rule_digest = digest(DigestKind::RuleCode, "other-rule");
+        let rule = rule_dependency("local/example", rule_digest.clone());
+        let other_rule = rule_dependency("local/other", other_rule_digest.clone());
+        let affected = diagnostic("local/example", rule_digest.clone());
+        let unaffected = diagnostic("local/other", other_rule_digest);
         let index = DependencyIndex::from_edges(vec![
             edge(
-                unaffected.clone(),
+                affected.clone(),
                 rule.clone(),
                 DependencyKind::Rule,
                 ShapeKind::RuleCode,
             ),
             edge(
-                affected.clone(),
-                rule.clone(),
+                unaffected.clone(),
+                other_rule,
                 DependencyKind::Rule,
                 ShapeKind::RuleCode,
             ),
@@ -561,7 +613,39 @@ mod tests {
     }
 
     #[test]
-    fn dependency_index_schema_constant_matches_expected_value() {
-        assert_eq!(DEPENDENCY_INDEX_SCHEMA, "polint-dependency-index-1");
+    fn dependency_index_schema_constant_matches_default_index() {
+        assert_eq!(
+            DependencyIndex::default().schema_version,
+            DEPENDENCY_INDEX_SCHEMA
+        );
+    }
+
+    #[test]
+    fn mismatched_typed_change_digest_fails_closed_for_the_whole_index() {
+        let source = source("src/a.ts", digest(DigestKind::SourceText, "a"));
+        let layer = CacheNode::Layer(layer("polint.ts.syntax", "a", None));
+        let index = DependencyIndex::from_edges(vec![edge(
+            layer.clone(),
+            source.clone(),
+            DependencyKind::Input,
+            ShapeKind::Content,
+        )]);
+        let invalid = ChangeSet {
+            rows: vec![ChangeSetRow {
+                node: source,
+                kind: ChangeKind::ContentOnly,
+                digest: digest(DigestKind::SourceText, "different"),
+            }],
+        };
+
+        let plan = InvalidationPlan::from_change_set(&index, &invalid);
+
+        assert!(matches!(
+            plan.action_for(&layer),
+            Some(InvalidationAction::Recompute(
+                _,
+                RecomputeReason::UnknownChange
+            ))
+        ));
     }
 }

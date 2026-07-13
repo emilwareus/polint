@@ -1,8 +1,9 @@
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
-    CacheNode, CacheStats, DependencyEdge, DependencyKind, Digest, DigestKind, InputSnapshot,
-    LayerCacheManifest, LayerCacheReadStatus, LayerCacheStore, LayerCacheWriteStatus, LayerKey,
-    LayerKind, PrecisionTier, ShapeKind, dependency_layer_digest,
+    CacheNode, CacheStats, DependencyEdge, DependencyKind, Digest, DigestKind,
+    InputComponentStatus, InputDependencyKey, InputSnapshot, LayerCacheManifest,
+    LayerCacheReadStatus, LayerCacheStore, LayerCacheWriteStatus, LayerKey, LayerKind,
+    PrecisionTier, ShapeKind, relative_manifest_dependency_source,
 };
 use crate::analysis_plan::AnalysisPlan;
 use crate::cache::Cache;
@@ -108,6 +109,7 @@ pub(crate) fn derive_requested_metrics_with_cache_stats(
                 manifest,
                 &upstream_syntax_output_digests,
                 analysis_settings_digest,
+                provider_manifest_dependency_digest(input_snapshot, manifest),
             );
             derivation.output_digest = write_metrics_layer_payload(
                 &store,
@@ -219,6 +221,7 @@ fn metrics_layer_dependency_edges(
     manifest: &ProviderManifest,
     upstream_syntax_output_digests: &[Digest],
     analysis_settings_digest: Digest,
+    provider_manifest_digest: Digest,
 ) -> Vec<DependencyEdge> {
     let from = CacheNode::Layer(key.clone());
     let mut edges = Vec::new();
@@ -226,27 +229,19 @@ fn metrics_layer_dependency_edges(
     for file in sorted_files(db) {
         edges.push(dependency_edge(
             &from,
-            CacheNode::Input(format!(
-                "source:{}:{}",
-                normalized_file_path(file),
-                file.content_hash
-            )),
+            source_file_dependency(file),
             DependencyKind::SourceText,
             ShapeKind::Content,
         ));
     }
 
     for function in sorted_functions(db) {
+        let file = db
+            .file(function.file)
+            .expect("function dependency should reference a discovered file");
         edges.push(dependency_edge(
             &from,
-            CacheNode::Input(format!(
-                "function:{}:{}:{}:{}:{}",
-                db.path_for(function.file),
-                function.name,
-                function.span.start_byte,
-                function.span.end_byte,
-                language_cache_label(function.language)
-            )),
+            source_file_dependency(file),
             DependencyKind::Input,
             ShapeKind::Syntax,
         ));
@@ -254,23 +249,53 @@ fn metrics_layer_dependency_edges(
 
     edges.push(dependency_edge(
         &from,
-        CacheNode::Input(format!("analysis_settings:{}", analysis_settings_digest)),
+        dependency_input(
+            InputDependencyKey::analysis_setting(
+                format!("{}/analysis-settings", manifest.id),
+                analysis_settings_digest,
+                InputComponentStatus::Present,
+            ),
+            "analysis-settings dependency",
+        ),
         DependencyKind::Config,
         ShapeKind::Unknown,
     ));
     edges.push(dependency_edge(
         &from,
-        CacheNode::Input(format!(
-            "provider_schema:{}:{}",
-            manifest.id,
-            manifest.primary_schema_label()
-        )),
+        dependency_input(
+            InputDependencyKey::provider_manifest(
+                manifest.id,
+                provider_manifest_digest.clone(),
+                InputComponentStatus::Present,
+            ),
+            "provider-manifest dependency",
+        ),
+        DependencyKind::Provider,
+        ShapeKind::ProviderVersion,
+    ));
+    edges.push(dependency_edge(
+        &from,
+        dependency_input(
+            InputDependencyKey::provider_schema(
+                format!("{}/{}", manifest.id, manifest.primary_schema_label()),
+                provider_manifest_digest,
+                InputComponentStatus::Present,
+            ),
+            "provider-schema dependency",
+        ),
         DependencyKind::ProviderSchema,
         ShapeKind::ProviderVersion,
     ));
     edges.push(dependency_edge(
         &from,
-        CacheNode::Input("toolchain:metrics:absent".to_string()),
+        dependency_input(
+            InputDependencyKey::tool_invocation(
+                format!("{}/toolchain", manifest.id),
+                key.toolchain_digest.clone(),
+                InputComponentStatus::Absent,
+            ),
+            "tool invocation dependency",
+        ),
         DependencyKind::Toolchain,
         ShapeKind::Toolchain,
     ));
@@ -283,7 +308,7 @@ fn metrics_layer_dependency_edges(
         };
         edges.push(dependency_edge(
             &from,
-            CacheNode::Layer(upstream_layer_key(layer_kind, provider_id, output_digest)),
+            upstream_layer_dependency(layer_kind, provider_id, output_digest),
             DependencyKind::UpstreamLayer,
             ShapeKind::Output,
         ));
@@ -491,35 +516,76 @@ fn normalized_file_path(file: &SourceFile) -> String {
         .unwrap_or_else(|| file.relative_path.clone())
 }
 
+fn source_file_dependency(file: &SourceFile) -> CacheNode {
+    dependency_input(
+        InputDependencyKey::source_file(
+            normalized_file_path(file),
+            Digest {
+                kind: DigestKind::SourceText,
+                value: file.content_hash.clone(),
+            },
+            InputComponentStatus::Present,
+        ),
+        "source-file dependency",
+    )
+}
+
+fn dependency_input(
+    input: Result<
+        InputDependencyKey,
+        crate::analysis_kernel::incremental::InputDependencyDigestKindError,
+    >,
+    context: &str,
+) -> CacheNode {
+    CacheNode::DependencyInput(
+        input.unwrap_or_else(|error| panic!("invalid {context} digest purpose: {error}")),
+    )
+}
+
+fn provider_manifest_dependency_digest(
+    input_snapshot: &InputSnapshot,
+    manifest: &ProviderManifest,
+) -> Digest {
+    input_snapshot
+        .provider_schemas
+        .iter()
+        .find(|provider| provider.provider_id == manifest.id)
+        .unwrap_or_else(|| {
+            panic!(
+                "input snapshot is missing provider manifest identity for `{}`",
+                manifest.id
+            )
+        })
+        .provider_manifest_digest
+        .clone()
+}
+
 fn dependency_edge(
-    from: &CacheNode,
+    _from: &CacheNode,
     to: CacheNode,
     kind: DependencyKind,
     required_shape: ShapeKind,
 ) -> DependencyEdge {
     DependencyEdge {
-        from: from.clone(),
+        from: relative_manifest_dependency_source(),
         to,
         kind,
         required_shape,
     }
 }
 
-fn upstream_layer_key(layer_kind: LayerKind, provider_id: &str, output_digest: Digest) -> LayerKey {
-    let output_dependency = dependency_layer_digest(output_digest);
-
-    LayerKey::new(
-        layer_kind,
-        provider_id,
-        "output-digest",
-        "output-digest",
-        output_dependency.clone(),
-        Digest::absent(DigestKind::DependencyLayer, "upstream_lifecycle_unknown"),
-        Digest::absent(DigestKind::Config, "upstream_config_unknown"),
-        Digest::absent(DigestKind::ToolInvocation, "upstream_toolchain_unknown"),
-        vec![output_dependency],
-        Vec::new(),
-        Vec::new(),
+fn upstream_layer_dependency(
+    layer_kind: LayerKind,
+    provider_id: &str,
+    output_digest: Digest,
+) -> CacheNode {
+    dependency_input(
+        InputDependencyKey::upstream_layer(
+            format!("{provider_id}/{}", layer_kind.label()),
+            crate::analysis_kernel::incremental::dependency_layer_digest(output_digest),
+            InputComponentStatus::Present,
+        ),
+        "upstream-layer dependency",
     )
 }
 
@@ -956,6 +1022,81 @@ mod tests {
                 .stable_key
                 .contains("cyclomatic_complexity")
         );
+    }
+
+    #[test]
+    fn metrics_dependency_edges_use_only_declared_typed_inputs() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let plan = requested_metrics_plan();
+        let db = fixture_db(
+            temp.path(),
+            "handler",
+            "export function handler() { return 1; }\n",
+        );
+        let snapshot = metrics_input_snapshot(&loaded, &db, &plan, "config");
+        let analysis_settings = snapshot
+            .analysis_settings_digest(AnalysisSettingsScope::Metrics)
+            .clone();
+        let syntax_outputs = vec![
+            Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["typed"]),
+            Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["typed"]),
+        ];
+        let key = metrics_layer_key(
+            &db,
+            metrics_manifest(),
+            analysis_settings.clone(),
+            syntax_outputs.clone(),
+        );
+
+        let edges = metrics_layer_dependency_edges(
+            &db,
+            &key,
+            metrics_manifest(),
+            &syntax_outputs,
+            analysis_settings,
+            provider_manifest_dependency_digest(&snapshot, metrics_manifest()),
+        );
+
+        let typed_inputs = edges
+            .iter()
+            .filter_map(|edge| match &edge.to {
+                CacheNode::DependencyInput(input) => Some(input),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(typed_inputs.iter().any(|input| {
+            input.kind == crate::analysis_kernel::incremental::InputDependencyKind::SourceFile
+                && input.stable_key == "src/app.ts"
+                && input.digest.kind == DigestKind::SourceText
+                && input.status == InputComponentStatus::Present
+        }));
+        assert!(typed_inputs.iter().any(|input| {
+            input.kind == crate::analysis_kernel::incremental::InputDependencyKind::AnalysisSetting
+                && input.digest.kind == DigestKind::AnalysisSettings
+                && input.status == InputComponentStatus::Present
+        }));
+        assert!(typed_inputs.iter().any(|input| {
+            input.kind == crate::analysis_kernel::incremental::InputDependencyKind::ProviderManifest
+                && input.digest.kind == DigestKind::ProviderManifest
+        }));
+        assert!(typed_inputs.iter().any(|input| {
+            input.kind == crate::analysis_kernel::incremental::InputDependencyKind::ProviderSchema
+                && input.digest.kind == DigestKind::ProviderManifest
+        }));
+        assert!(typed_inputs.iter().any(|input| {
+            input.kind == crate::analysis_kernel::incremental::InputDependencyKind::ToolInvocation
+                && input.status == InputComponentStatus::Absent
+        }));
+        assert!(typed_inputs.iter().any(|input| {
+            input.kind == crate::analysis_kernel::incremental::InputDependencyKind::UpstreamLayer
+                && input.digest.kind == DigestKind::DependencyLayer
+                && input.status == InputComponentStatus::Present
+        }));
+        assert!(!edges.iter().any(|edge| matches!(
+            edge.kind,
+            DependencyKind::Rule | DependencyKind::Extension | DependencyKind::Model
+        )));
     }
 
     mod metrics_layer_cache {
