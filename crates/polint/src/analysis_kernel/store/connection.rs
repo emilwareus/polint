@@ -3,10 +3,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use rusqlite::{Connection, ErrorCode, OpenFlags, TransactionBehavior};
-
-#[cfg(test)]
-use rusqlite::Transaction;
+use rusqlite::{Connection, ErrorCode, OpenFlags, Transaction, TransactionBehavior};
 
 use super::migrations::{MigrationError, apply_migrations_in_transaction, preflight_schema};
 
@@ -17,10 +14,6 @@ pub(super) struct WriterConnection {
     connection: Connection,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "kept for private internal consumers")
-)]
 pub(super) struct ReadOnlyConnection {
     connection: Connection,
 }
@@ -86,10 +79,6 @@ pub(super) fn validate_journal_mode(journal_mode: &str) -> Result<(), Connection
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "kept for private internal consumers")
-)]
 pub(super) fn open_read_only(path: &Path) -> Result<ReadOnlyConnection, ConnectionError> {
     let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(classify_sqlite_error)?;
@@ -117,6 +106,23 @@ pub(super) fn try_writer_lease(
     Ok(LeaseStatus::Acquired)
 }
 
+pub(super) fn begin_immediate(
+    writer: &mut WriterConnection,
+) -> Result<Transaction<'_>, ConnectionError> {
+    writer
+        .connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(classify_sqlite_error)
+}
+
+pub(super) fn read_connection(reader: &ReadOnlyConnection) -> &Connection {
+    &reader.connection
+}
+
+pub(super) fn validate_schema(connection: &Connection) -> Result<(), ConnectionError> {
+    preflight_schema(connection).map_err(classify_migration_error)
+}
+
 fn try_initialize_writer(writer: &mut WriterConnection) -> Result<LeaseStatus, ConnectionError> {
     let transaction = match writer
         .connection
@@ -141,7 +147,7 @@ fn classify_migration_error(error: MigrationError) -> ConnectionError {
     }
 }
 
-fn classify_sqlite_error(error: rusqlite::Error) -> ConnectionError {
+pub(super) fn classify_sqlite_error(error: rusqlite::Error) -> ConnectionError {
     match error.sqlite_error_code() {
         Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked) => ConnectionError::Busy,
         Some(ErrorCode::DatabaseCorrupt | ErrorCode::NotADatabase) => ConnectionError::Corrupt,

@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 mod commit_plan;
 mod connection;
+mod generation;
 mod migrations;
 mod schema;
 
@@ -78,12 +79,17 @@ pub(crate) enum StoreSkipReason {
     FutureSchema { found: i32, supported: i32 },
     UnsafePath,
     OpenFailed,
+    WorkspaceMismatch,
+    StaleReservation,
+    InvalidPlan,
+    CommitFailed,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum StoreRebuildReason {
     Corrupt,
     InvalidSchema,
+    InvalidMetadata,
 }
 
 pub(crate) struct SemanticStore;

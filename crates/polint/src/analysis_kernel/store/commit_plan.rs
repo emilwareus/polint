@@ -2,7 +2,7 @@
     not(test),
     allow(
         dead_code,
-        reason = "the private generation writer is the sole consumer of this normalized plan"
+        reason = "the private generation publication and active-read boundary consumes this normalized plan"
     )
 )]
 
@@ -537,7 +537,7 @@ impl StoreCommitPlan {
         Ok(plan)
     }
 
-    fn validate(&self) -> Result<(), StorePlanError> {
+    pub(super) fn validate(&self) -> Result<(), StorePlanError> {
         self.semantic.validate()
     }
 }
