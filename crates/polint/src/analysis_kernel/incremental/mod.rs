@@ -1,6 +1,7 @@
 mod change_set;
 mod demand;
 mod dependency_index;
+mod dependency_input;
 mod digest;
 mod input_snapshot;
 mod invalidation;
@@ -61,6 +62,24 @@ pub(crate) use demand::{
 )]
 pub(crate) use dependency_index::{
     CacheNode, DEPENDENCY_INDEX_SCHEMA, DependencyEdge, DependencyIndex, DependencyKind, ShapeKind,
+};
+#[cfg_attr(
+    test,
+    allow(
+        unused_imports,
+        reason = "unit tests exercise typed dependency inputs in their defining module"
+    )
+)]
+#[cfg_attr(
+    not(test),
+    expect(
+        unused_imports,
+        reason = "typed dependency inputs remain isolated until producers migrate together with their dependency consumers"
+    )
+)]
+pub(crate) use dependency_input::{
+    InputDependencyDigestKindError, InputDependencyKey, InputDependencyKind,
+    UnknownInputDependencyKindLabel,
 };
 #[cfg_attr(
     test,
