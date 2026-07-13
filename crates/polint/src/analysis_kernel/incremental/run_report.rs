@@ -5,6 +5,7 @@ use super::{
 };
 #[cfg(test)]
 use crate::analysis::summaries::provider::SccClosureDebugSnapshot;
+use crate::analysis_kernel::validation::ValidationEvent;
 use crate::analysis_kernel::{ProviderManifest, StableFactMetaRow, StoreStatus};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -13,6 +14,7 @@ pub(crate) struct KernelRunReport {
     pub(crate) provider_outputs: Vec<ProviderOutputMeta>,
     pub(crate) cache_stats: CacheStats,
     pub(crate) demand_query_trace: DemandQueryTrace,
+    validation_events: Vec<ValidationEvent>,
     store_status: StoreStatus,
     #[cfg(test)]
     pub(crate) scc_closure_debug: Option<SccClosureDebugSnapshot>,
@@ -23,6 +25,7 @@ impl KernelRunReport {
         input_snapshot: InputSnapshot,
         provider_outputs: Vec<ProviderOutputMeta>,
         demand_query_trace: DemandQueryTrace,
+        validation_events: Vec<ValidationEvent>,
         store_status: StoreStatus,
     ) -> Self {
         let mut cache_stats = aggregate_cache_stats(&provider_outputs);
@@ -33,6 +36,7 @@ impl KernelRunReport {
             provider_outputs,
             cache_stats,
             demand_query_trace,
+            validation_events,
             store_status,
             #[cfg(test)]
             scc_closure_debug: None,
@@ -48,6 +52,11 @@ impl KernelRunReport {
     )]
     pub(crate) fn demand_query_trace(&self) -> &DemandQueryTrace {
         &self.demand_query_trace
+    }
+
+    #[cfg(test)]
+    pub(crate) fn validation_events(&self) -> &[ValidationEvent] {
+        &self.validation_events
     }
 
     #[cfg(test)]

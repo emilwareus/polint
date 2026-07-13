@@ -421,6 +421,7 @@ mod tests {
             input_snapshot,
             provider_outputs,
             trace,
+            Vec::new(),
             crate::analysis_kernel::StoreStatus::Disabled,
         )
     }

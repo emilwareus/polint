@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Debug;
+use std::fmt::{self, Debug};
 
-use serde::Serialize;
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::analysis::access_paths::facts::AccessPathProjection;
 use crate::analysis::aliases::facts::{AliasOperand, AliasPrecision, AliasStatus};
@@ -21,6 +22,7 @@ use crate::analysis::summaries::validate::validate_summaries;
 use crate::analysis::types::facts::{TypePrecision, TypeShape, TypeStatus, TypeSubject};
 use crate::analysis::validate::validate_semantic_mir;
 use crate::analysis::values::facts::{ValueKind, ValuePrecision, ValueStatus, ValueSubject};
+use crate::analysis_kernel::incremental::{Digest, DigestKind};
 use crate::analysis_kernel::{
     FactFamily, FactPrecision, FactRef, PrecisionCeiling, ProviderManifest,
 };
@@ -38,39 +40,394 @@ use crate::symbol_graph::semantic::{ExportId, ScopeId, SemanticStatus};
 const SYMBOL_GRAPH_PROVIDER_ID: &str = "polint.symbol_graph";
 const SEMANTIC_EVIDENCE_ORDER: (&str, &str, &str) = ("family", "stable_key", "reason");
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ValidationEventKind {
+    MissingMetadata,
+    StableKeyConflicts,
+    References,
+    Spans,
+    SemanticIndex,
+    TopologyFacts,
+    SemanticMir,
+    Cfg,
+    Calls,
+    Identity,
+    AbstractDomains,
+    Summaries,
+    Entrypoints,
+    TypeValueAlias,
+    SemanticGraph,
+    RefinedCalls,
+    DataFlow,
+    MetadataProviders,
+    PrecisionCeilings,
+    GlobalFactValidation,
+}
+
+impl ValidationEventKind {
+    pub(crate) const ALL: [Self; 20] = [
+        Self::MissingMetadata,
+        Self::StableKeyConflicts,
+        Self::References,
+        Self::Spans,
+        Self::SemanticIndex,
+        Self::TopologyFacts,
+        Self::SemanticMir,
+        Self::Cfg,
+        Self::Calls,
+        Self::Identity,
+        Self::AbstractDomains,
+        Self::Summaries,
+        Self::Entrypoints,
+        Self::TypeValueAlias,
+        Self::SemanticGraph,
+        Self::RefinedCalls,
+        Self::DataFlow,
+        Self::MetadataProviders,
+        Self::PrecisionCeilings,
+        Self::GlobalFactValidation,
+    ];
+
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::MissingMetadata => "missing_metadata",
+            Self::StableKeyConflicts => "stable_key_conflicts",
+            Self::References => "references",
+            Self::Spans => "spans",
+            Self::SemanticIndex => "semantic_index",
+            Self::TopologyFacts => "topology_facts",
+            Self::SemanticMir => "semantic_mir",
+            Self::Cfg => "cfg",
+            Self::Calls => "calls",
+            Self::Identity => "identity",
+            Self::AbstractDomains => "abstract_domains",
+            Self::Summaries => "summaries",
+            Self::Entrypoints => "entrypoints",
+            Self::TypeValueAlias => "type_value_alias",
+            Self::SemanticGraph => "semantic_graph",
+            Self::RefinedCalls => "refined_calls",
+            Self::DataFlow => "data_flow",
+            Self::MetadataProviders => "metadata_providers",
+            Self::PrecisionCeilings => "precision_ceilings",
+            Self::GlobalFactValidation => "global_fact_validation",
+        }
+    }
+
+    pub(crate) fn parse_label(label: &str) -> Result<Self, UnknownValidationEventKindLabel> {
+        match label {
+            "missing_metadata" => Ok(Self::MissingMetadata),
+            "stable_key_conflicts" => Ok(Self::StableKeyConflicts),
+            "references" => Ok(Self::References),
+            "spans" => Ok(Self::Spans),
+            "semantic_index" => Ok(Self::SemanticIndex),
+            "topology_facts" => Ok(Self::TopologyFacts),
+            "semantic_mir" => Ok(Self::SemanticMir),
+            "cfg" => Ok(Self::Cfg),
+            "calls" => Ok(Self::Calls),
+            "identity" => Ok(Self::Identity),
+            "abstract_domains" => Ok(Self::AbstractDomains),
+            "summaries" => Ok(Self::Summaries),
+            "entrypoints" => Ok(Self::Entrypoints),
+            "type_value_alias" => Ok(Self::TypeValueAlias),
+            "semantic_graph" => Ok(Self::SemanticGraph),
+            "refined_calls" => Ok(Self::RefinedCalls),
+            "data_flow" => Ok(Self::DataFlow),
+            "metadata_providers" => Ok(Self::MetadataProviders),
+            "precision_ceilings" => Ok(Self::PrecisionCeilings),
+            "global_fact_validation" => Ok(Self::GlobalFactValidation),
+            _ => Err(UnknownValidationEventKindLabel {
+                label: label.to_string(),
+            }),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ValidationEventKind {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let label = String::deserialize(deserializer)?;
+        Self::parse_label(&label).map_err(D::Error::custom)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct UnknownValidationEventKindLabel {
+    label: String,
+}
+
+impl fmt::Display for UnknownValidationEventKindLabel {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "unknown validation event kind label `{}`",
+            self.label
+        )
+    }
+}
+
+impl std::error::Error for UnknownValidationEventKindLabel {}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ValidationEventStatus {
+    Passed,
+    Failed,
+}
+
+impl ValidationEventStatus {
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Passed => "passed",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub(crate) fn parse_label(label: &str) -> Result<Self, UnknownValidationEventStatusLabel> {
+        match label {
+            "passed" => Ok(Self::Passed),
+            "failed" => Ok(Self::Failed),
+            _ => Err(UnknownValidationEventStatusLabel {
+                label: label.to_string(),
+            }),
+        }
+    }
+
+    const fn from_issue_count(issue_count: u64) -> Self {
+        if issue_count == 0 {
+            Self::Passed
+        } else {
+            Self::Failed
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ValidationEventStatus {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let label = String::deserialize(deserializer)?;
+        Self::parse_label(&label).map_err(D::Error::custom)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct UnknownValidationEventStatusLabel {
+    label: String,
+}
+
+impl fmt::Display for UnknownValidationEventStatusLabel {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "unknown validation event status label `{}`",
+            self.label
+        )
+    }
+}
+
+impl std::error::Error for UnknownValidationEventStatusLabel {}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ValidationEvent {
+    pub(crate) kind: ValidationEventKind,
+    pub(crate) status: ValidationEventStatus,
+    pub(crate) issue_count: u64,
+    pub(crate) digest: Digest,
+}
+
+impl ValidationEvent {
+    fn from_issue_count(kind: ValidationEventKind, issue_count: u64) -> Self {
+        let status = ValidationEventStatus::from_issue_count(issue_count);
+        let digest = validation_event_digest(kind, status, issue_count);
+        Self {
+            kind,
+            status,
+            issue_count,
+            digest,
+        }
+    }
+
+    fn global(stage_events: &[Self]) -> Self {
+        let issue_count = stage_events.iter().fold(0_u64, |count, event| {
+            count.saturating_add(event.issue_count)
+        });
+        let kind = ValidationEventKind::GlobalFactValidation;
+        let status = ValidationEventStatus::from_issue_count(issue_count);
+        let mut builder = validation_event_digest_builder(kind, status, issue_count);
+        for event in stage_events {
+            builder.labeled_part("stage_kind", event.kind.label());
+            builder.labeled_part("stage_status", event.status.label());
+            builder.labeled_part("stage_issue_count", &event.issue_count.to_string());
+            builder.labeled_part("stage_digest", &event.digest.value);
+        }
+
+        Self {
+            kind,
+            status,
+            issue_count,
+            digest: builder.finish(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct FactValidationReport {
+    pub(crate) diagnostics: Vec<Diagnostic>,
+    pub(crate) events: Vec<ValidationEvent>,
+}
+
 pub(crate) fn validate_fact_metadata(
     db: &AnalysisDb,
     manifests: &[ProviderManifest],
-) -> Vec<Diagnostic> {
+) -> FactValidationReport {
     let mut diagnostics = Vec::new();
+    let mut events = Vec::with_capacity(ValidationEventKind::ALL.len());
     let ids = IdSets::from_db(db);
     let manifests_by_id = manifests
         .iter()
         .map(|manifest| (manifest.id, *manifest))
         .collect::<BTreeMap<_, _>>();
 
-    validate_missing_metadata(db, &mut diagnostics);
-    validate_stable_key_conflicts(db, &mut diagnostics);
-    validate_references(db, &ids, &mut diagnostics);
-    validate_spans(db, &ids.files, &mut diagnostics);
-    validate_semantic_index(db, &ids, &mut diagnostics);
-    validate_topology_facts(db, &ids, &mut diagnostics);
-    validate_semantic_mir(db, &ids, &mut diagnostics);
-    validate_cfg(db, &mut diagnostics);
-    validate_calls(db, &mut diagnostics);
-    validate_identity(db, &mut diagnostics);
-    validate_abstract_domains(db, &mut diagnostics);
-    validate_summaries(db, &mut diagnostics);
-    validate_entrypoints(db, &mut diagnostics);
-    validate_type_value_alias(db, &mut diagnostics);
-    validate_semantic_graph(db, &mut diagnostics);
-    validate_refined_calls(db, &mut diagnostics);
-    validate_data_flow(db, &mut diagnostics);
-    validate_metadata_providers(db, &manifests_by_id, &mut diagnostics);
-    validate_precision_ceilings(db, &manifests_by_id, &mut diagnostics);
+    events.push(run_validation_stage(
+        ValidationEventKind::MissingMetadata,
+        &mut diagnostics,
+        |diagnostics| validate_missing_metadata(db, diagnostics),
+    ));
+    events.push(run_validation_stage(
+        ValidationEventKind::StableKeyConflicts,
+        &mut diagnostics,
+        |diagnostics| validate_stable_key_conflicts(db, diagnostics),
+    ));
+    events.push(run_validation_stage(
+        ValidationEventKind::References,
+        &mut diagnostics,
+        |diagnostics| validate_references(db, &ids, diagnostics),
+    ));
+    events.push(run_validation_stage(
+        ValidationEventKind::Spans,
+        &mut diagnostics,
+        |diagnostics| validate_spans(db, &ids.files, diagnostics),
+    ));
+    events.push(run_validation_stage(
+        ValidationEventKind::SemanticIndex,
+        &mut diagnostics,
+        |diagnostics| validate_semantic_index(db, &ids, diagnostics),
+    ));
+    events.push(run_validation_stage(
+        ValidationEventKind::TopologyFacts,
+        &mut diagnostics,
+        |diagnostics| validate_topology_facts(db, &ids, diagnostics),
+    ));
+    events.push(run_validation_stage(
+        ValidationEventKind::SemanticMir,
+        &mut diagnostics,
+        |diagnostics| validate_semantic_mir(db, &ids, diagnostics),
+    ));
+    events.push(run_validation_stage(
+        ValidationEventKind::Cfg,
+        &mut diagnostics,
+        |diagnostics| validate_cfg(db, diagnostics),
+    ));
+    events.push(run_validation_stage(
+        ValidationEventKind::Calls,
+        &mut diagnostics,
+        |diagnostics| validate_calls(db, diagnostics),
+    ));
+    events.push(run_validation_stage(
+        ValidationEventKind::Identity,
+        &mut diagnostics,
+        |diagnostics| validate_identity(db, diagnostics),
+    ));
+    events.push(run_validation_stage(
+        ValidationEventKind::AbstractDomains,
+        &mut diagnostics,
+        |diagnostics| validate_abstract_domains(db, diagnostics),
+    ));
+    events.push(run_validation_stage(
+        ValidationEventKind::Summaries,
+        &mut diagnostics,
+        |diagnostics| validate_summaries(db, diagnostics),
+    ));
+    events.push(run_validation_stage(
+        ValidationEventKind::Entrypoints,
+        &mut diagnostics,
+        |diagnostics| validate_entrypoints(db, diagnostics),
+    ));
+    events.push(run_validation_stage(
+        ValidationEventKind::TypeValueAlias,
+        &mut diagnostics,
+        |diagnostics| validate_type_value_alias(db, diagnostics),
+    ));
+    events.push(run_validation_stage(
+        ValidationEventKind::SemanticGraph,
+        &mut diagnostics,
+        |diagnostics| validate_semantic_graph(db, diagnostics),
+    ));
+    events.push(run_validation_stage(
+        ValidationEventKind::RefinedCalls,
+        &mut diagnostics,
+        |diagnostics| validate_refined_calls(db, diagnostics),
+    ));
+    events.push(run_validation_stage(
+        ValidationEventKind::DataFlow,
+        &mut diagnostics,
+        |diagnostics| validate_data_flow(db, diagnostics),
+    ));
+    events.push(run_validation_stage(
+        ValidationEventKind::MetadataProviders,
+        &mut diagnostics,
+        |diagnostics| validate_metadata_providers(db, &manifests_by_id, diagnostics),
+    ));
+    events.push(run_validation_stage(
+        ValidationEventKind::PrecisionCeilings,
+        &mut diagnostics,
+        |diagnostics| validate_precision_ceilings(db, &manifests_by_id, diagnostics),
+    ));
+    let global_event = ValidationEvent::global(&events);
+    events.push(global_event);
 
     diagnostics.sort_by(diagnostic_order);
-    diagnostics
+    FactValidationReport {
+        diagnostics,
+        events,
+    }
+}
+
+fn run_validation_stage(
+    kind: ValidationEventKind,
+    diagnostics: &mut Vec<Diagnostic>,
+    validate: impl FnOnce(&mut Vec<Diagnostic>),
+) -> ValidationEvent {
+    let issue_start = diagnostics.len();
+    validate(diagnostics);
+    let issue_count = diagnostics[issue_start..]
+        .iter()
+        .fold(0_u64, |count, _| count.saturating_add(1));
+    ValidationEvent::from_issue_count(kind, issue_count)
+}
+
+fn validation_event_digest(
+    kind: ValidationEventKind,
+    status: ValidationEventStatus,
+    issue_count: u64,
+) -> Digest {
+    validation_event_digest_builder(kind, status, issue_count).finish()
+}
+
+fn validation_event_digest_builder(
+    kind: ValidationEventKind,
+    status: ValidationEventStatus,
+    issue_count: u64,
+) -> crate::analysis_kernel::incremental::DigestBuilder {
+    let mut builder = Digest::builder(DigestKind::ValidationEvent, "fact_validation_event");
+    builder.labeled_part("kind", kind.label());
+    builder.labeled_part("status", status.label());
+    builder.labeled_part("issue_count", &issue_count.to_string());
+    builder
 }
 
 fn validate_data_flow(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
@@ -1125,7 +1482,8 @@ mod abstract_domains {
             }],
         });
 
-        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let diagnostics =
+            validate_fact_metadata(&db, AnalysisKernel::provider_manifests()).diagnostics;
         let domain = domain_diagnostics(&diagnostics);
 
         assert!(
@@ -1171,7 +1529,8 @@ mod abstract_domains {
             },
         );
 
-        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let diagnostics =
+            validate_fact_metadata(&db, AnalysisKernel::provider_manifests()).diagnostics;
 
         assert!(
             diagnostics.iter().any(|diagnostic| {
@@ -1501,7 +1860,8 @@ mod type_value_alias_validation {
             },
         });
 
-        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let diagnostics =
+            validate_fact_metadata(&db, AnalysisKernel::provider_manifests()).diagnostics;
         let reasons = diagnostics
             .iter()
             .flat_map(|diagnostic| diagnostic.evidence.iter())
@@ -1590,7 +1950,8 @@ mod type_value_alias_validation {
             ..TypeValueAliasOutput::default()
         });
 
-        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let diagnostics =
+            validate_fact_metadata(&db, AnalysisKernel::provider_manifests()).diagnostics;
         assert!(
             diagnostics.iter().all(|diagnostic| {
                 !diagnostic
@@ -1703,7 +2064,8 @@ mod semantic_mir {
         })
         .expect("semantic rows should store for validation");
 
-        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let diagnostics =
+            validate_fact_metadata(&db, AnalysisKernel::provider_manifests()).diagnostics;
         let semantic_mir = diagnostics
             .iter()
             .filter(|diagnostic| {
@@ -1751,7 +2113,8 @@ mod semantic_mir {
             },
         );
 
-        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let diagnostics =
+            validate_fact_metadata(&db, AnalysisKernel::provider_manifests()).diagnostics;
 
         assert!(
             diagnostics.iter().any(|diagnostic| {
@@ -1947,7 +2310,8 @@ mod cfg {
         })
         .expect("cfg rows should store for validation");
 
-        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let diagnostics =
+            validate_fact_metadata(&db, AnalysisKernel::provider_manifests()).diagnostics;
         let cfg = cfg_diagnostics(&diagnostics);
 
         assert!(
@@ -2021,7 +2385,8 @@ mod cfg {
         })
         .expect("cfg rows should store for validation");
 
-        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let diagnostics =
+            validate_fact_metadata(&db, AnalysisKernel::provider_manifests()).diagnostics;
 
         assert!(diagnostics.iter().any(|diagnostic| {
             diagnostic.message.starts_with("CFG validation failed")
@@ -2065,7 +2430,8 @@ mod cfg {
             },
         );
 
-        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let diagnostics =
+            validate_fact_metadata(&db, AnalysisKernel::provider_manifests()).diagnostics;
 
         assert!(
             diagnostics.iter().any(|diagnostic| {
@@ -2300,7 +2666,8 @@ mod calls {
         })
         .expect("call rows should store for validation");
 
-        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let diagnostics =
+            validate_fact_metadata(&db, AnalysisKernel::provider_manifests()).diagnostics;
         let calls = call_diagnostics(&diagnostics);
 
         assert!(
@@ -2350,7 +2717,8 @@ mod calls {
         })
         .expect("call rows should store for validation");
 
-        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let diagnostics =
+            validate_fact_metadata(&db, AnalysisKernel::provider_manifests()).diagnostics;
         let calls = call_diagnostics(&diagnostics);
 
         assert!(
@@ -2390,7 +2758,8 @@ mod calls {
             },
         );
 
-        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let diagnostics =
+            validate_fact_metadata(&db, AnalysisKernel::provider_manifests()).diagnostics;
 
         assert!(
             diagnostics.iter().any(|diagnostic| {
@@ -2633,7 +3002,8 @@ mod semantic_index {
             Vec::new(),
         );
 
-        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let diagnostics =
+            validate_fact_metadata(&db, AnalysisKernel::provider_manifests()).diagnostics;
         let semantic_diagnostics = diagnostics
             .iter()
             .filter(|diagnostic| {
@@ -2700,7 +3070,8 @@ mod semantic_index {
             },
         );
 
-        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let diagnostics =
+            validate_fact_metadata(&db, AnalysisKernel::provider_manifests()).diagnostics;
 
         assert!(
             diagnostics.iter().any(|diagnostic| {
@@ -2760,7 +3131,8 @@ mod semantic_index {
             }],
         );
 
-        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let diagnostics =
+            validate_fact_metadata(&db, AnalysisKernel::provider_manifests()).diagnostics;
 
         assert!(
             diagnostics.iter().any(|diagnostic| {
@@ -2914,7 +3286,8 @@ mod topology {
             ..TopologyOutput::default()
         });
 
-        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let diagnostics =
+            validate_fact_metadata(&db, AnalysisKernel::provider_manifests()).diagnostics;
         let topology = topology_diagnostics(&diagnostics);
 
         assert!(
@@ -2956,7 +3329,8 @@ mod topology {
             ..TopologyOutput::default()
         });
 
-        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let diagnostics =
+            validate_fact_metadata(&db, AnalysisKernel::provider_manifests()).diagnostics;
 
         assert!(topology_diagnostics(&diagnostics).iter().any(|diagnostic| {
             diagnostic.evidence.iter().any(|evidence| {
@@ -3043,7 +3417,8 @@ mod topology {
             ..TopologyOutput::default()
         });
 
-        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let diagnostics =
+            validate_fact_metadata(&db, AnalysisKernel::provider_manifests()).diagnostics;
         let reasons = topology_diagnostics(&diagnostics)
             .iter()
             .flat_map(|diagnostic| diagnostic.evidence.iter())
@@ -3087,7 +3462,8 @@ mod topology {
             ..TopologyOutput::default()
         });
 
-        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let diagnostics =
+            validate_fact_metadata(&db, AnalysisKernel::provider_manifests()).diagnostics;
 
         assert!(
             topology_diagnostics(&diagnostics).is_empty(),
@@ -5335,13 +5711,16 @@ fn evidence_order_key(diagnostic: &Diagnostic) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_fact_metadata;
+    use super::{
+        ValidationEvent, ValidationEventKind, ValidationEventStatus, validate_fact_metadata,
+    };
     use crate::analysis::evidence::facts::{
         EvidenceConfidence, EvidenceNodeFact, EvidenceNodeKind, EvidencePrecision,
         EvidenceProvenance, EvidenceStatus, EvidenceValidation,
     };
     use crate::analysis::evidence::store::EvidenceOutput;
     use crate::analysis::ids::EvidenceNodeId;
+    use crate::analysis_kernel::incremental::DigestKind;
     use crate::analysis_kernel::{
         AnalysisKernel, FactConfidence, FactFamily, FactMeta, FactPrecision, FactRef,
         ValidationStatus,
@@ -5353,6 +5732,129 @@ mod tests {
     };
     use std::collections::BTreeSet;
     use std::path::PathBuf;
+
+    #[test]
+    fn validation_event_codecs_are_exact_and_reject_unknown_labels() {
+        let kinds = [
+            (ValidationEventKind::MissingMetadata, "missing_metadata"),
+            (
+                ValidationEventKind::StableKeyConflicts,
+                "stable_key_conflicts",
+            ),
+            (ValidationEventKind::References, "references"),
+            (ValidationEventKind::Spans, "spans"),
+            (ValidationEventKind::SemanticIndex, "semantic_index"),
+            (ValidationEventKind::TopologyFacts, "topology_facts"),
+            (ValidationEventKind::SemanticMir, "semantic_mir"),
+            (ValidationEventKind::Cfg, "cfg"),
+            (ValidationEventKind::Calls, "calls"),
+            (ValidationEventKind::Identity, "identity"),
+            (ValidationEventKind::AbstractDomains, "abstract_domains"),
+            (ValidationEventKind::Summaries, "summaries"),
+            (ValidationEventKind::Entrypoints, "entrypoints"),
+            (ValidationEventKind::TypeValueAlias, "type_value_alias"),
+            (ValidationEventKind::SemanticGraph, "semantic_graph"),
+            (ValidationEventKind::RefinedCalls, "refined_calls"),
+            (ValidationEventKind::DataFlow, "data_flow"),
+            (ValidationEventKind::MetadataProviders, "metadata_providers"),
+            (ValidationEventKind::PrecisionCeilings, "precision_ceilings"),
+            (
+                ValidationEventKind::GlobalFactValidation,
+                "global_fact_validation",
+            ),
+        ];
+
+        for (kind, label) in kinds {
+            assert_eq!(kind.label(), label);
+            assert_eq!(ValidationEventKind::parse_label(label), Ok(kind));
+            let json = serde_json::to_string(&kind).expect("event kind should serialize");
+            assert_eq!(json, format!("\"{label}\""));
+            assert_eq!(
+                serde_json::from_str::<ValidationEventKind>(&json)
+                    .expect("event kind should deserialize"),
+                kind
+            );
+        }
+
+        let kind_error = ValidationEventKind::parse_label("rendered_message")
+            .expect_err("unknown event kind must fail closed");
+        assert_eq!(
+            kind_error.to_string(),
+            "unknown validation event kind label `rendered_message`"
+        );
+        assert!(
+            serde_json::from_str::<ValidationEventKind>("\"rendered_message\"")
+                .expect_err("unknown serde event kind must fail closed")
+                .to_string()
+                .contains("unknown validation event kind label `rendered_message`")
+        );
+
+        for (status, label) in [
+            (ValidationEventStatus::Passed, "passed"),
+            (ValidationEventStatus::Failed, "failed"),
+        ] {
+            assert_eq!(status.label(), label);
+            assert_eq!(ValidationEventStatus::parse_label(label), Ok(status));
+            let json = serde_json::to_string(&status).expect("event status should serialize");
+            assert_eq!(json, format!("\"{label}\""));
+            assert_eq!(
+                serde_json::from_str::<ValidationEventStatus>(&json)
+                    .expect("event status should deserialize"),
+                status
+            );
+        }
+
+        let status_error = ValidationEventStatus::parse_label("cached")
+            .expect_err("unknown event status must fail closed");
+        assert_eq!(
+            status_error.to_string(),
+            "unknown validation event status label `cached`"
+        );
+        assert!(
+            serde_json::from_str::<ValidationEventStatus>("\"cached\"")
+                .expect_err("unknown serde event status must fail closed")
+                .to_string()
+                .contains("unknown validation event status label `cached`")
+        );
+    }
+
+    #[test]
+    fn metadata_validation_emits_one_stable_passing_event_per_stage_and_global() {
+        let db = AnalysisDb::new();
+
+        let first = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let second = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+
+        assert_eq!(first, second);
+        assert!(first.diagnostics.is_empty());
+        assert_eq!(
+            first
+                .events
+                .iter()
+                .map(|event| event.kind)
+                .collect::<Vec<_>>(),
+            ValidationEventKind::ALL
+        );
+        assert!(first.events.iter().all(|event| {
+            event.status == ValidationEventStatus::Passed
+                && event.issue_count == 0
+                && event.digest.kind == DigestKind::ValidationEvent
+        }));
+        assert_eq!(
+            first
+                .events
+                .iter()
+                .map(|event| event.digest.value.as_str())
+                .collect::<BTreeSet<_>>()
+                .len(),
+            20
+        );
+        let encoded =
+            serde_json::to_vec(&first.events).expect("validation events should serialize");
+        let decoded = serde_json::from_slice::<Vec<ValidationEvent>>(&encoded)
+            .expect("validation events should deserialize");
+        assert_eq!(decoded, first.events);
+    }
 
     #[test]
     fn metadata_validation_conflict_records_render_internal_diagnostics_with_evidence() {
@@ -5369,7 +5871,29 @@ mod tests {
             test_meta(FactFamily::Import, "import:key", "payload:b"),
         );
 
-        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let report = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let repeated = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        assert_eq!(report, repeated);
+
+        let conflict_event = report
+            .events
+            .iter()
+            .find(|event| event.kind == ValidationEventKind::StableKeyConflicts)
+            .expect("stable-key validator event should exist");
+        assert_eq!(conflict_event.status, ValidationEventStatus::Failed);
+        assert_eq!(conflict_event.issue_count, 1);
+        assert_eq!(conflict_event.digest.kind, DigestKind::ValidationEvent);
+
+        let global_event = report
+            .events
+            .last()
+            .expect("global validator event should be last");
+        assert_eq!(global_event.kind, ValidationEventKind::GlobalFactValidation);
+        assert_eq!(global_event.status, ValidationEventStatus::Failed);
+        assert_eq!(global_event.issue_count, 1);
+        assert_ne!(global_event.digest, conflict_event.digest);
+
+        let diagnostics = &report.diagnostics;
 
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(diagnostics[0].rule_id, "polint/internal");
@@ -5431,7 +5955,8 @@ mod tests {
             calls: Vec::new(),
         });
 
-        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let diagnostics =
+            validate_fact_metadata(&db, AnalysisKernel::provider_manifests()).diagnostics;
         let messages = diagnostics
             .iter()
             .map(|diagnostic| diagnostic.message.as_str())
@@ -5520,7 +6045,8 @@ mod tests {
             }],
         );
 
-        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let diagnostics =
+            validate_fact_metadata(&db, AnalysisKernel::provider_manifests()).diagnostics;
         let evidence_values = diagnostics
             .iter()
             .filter(|diagnostic| {
@@ -5563,7 +6089,8 @@ mod tests {
         })
         .expect("evidence store accepts external refs for kernel validation");
 
-        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let diagnostics =
+            validate_fact_metadata(&db, AnalysisKernel::provider_manifests()).diagnostics;
         let evidence_values = diagnostics
             .iter()
             .filter(|diagnostic| {
@@ -5599,7 +6126,8 @@ mod tests {
         })
         .expect("evidence store accepts spans for kernel validation");
 
-        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let diagnostics =
+            validate_fact_metadata(&db, AnalysisKernel::provider_manifests()).diagnostics;
 
         assert!(diagnostics.iter().any(|diagnostic| {
             diagnostic
@@ -5627,7 +6155,8 @@ mod tests {
             },
         );
 
-        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let diagnostics =
+            validate_fact_metadata(&db, AnalysisKernel::provider_manifests()).diagnostics;
 
         assert_eq!(diagnostics.len(), 1);
         assert!(
@@ -5657,7 +6186,8 @@ mod tests {
             },
         );
 
-        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let diagnostics =
+            validate_fact_metadata(&db, AnalysisKernel::provider_manifests()).diagnostics;
         let provider_fields = diagnostics
             .iter()
             .filter(|diagnostic| {
@@ -5698,7 +6228,8 @@ mod tests {
             rejected: Vec::new(),
         });
 
-        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let diagnostics =
+            validate_fact_metadata(&db, AnalysisKernel::provider_manifests()).diagnostics;
 
         assert!(!diagnostics.iter().any(|diagnostic| {
             diagnostic

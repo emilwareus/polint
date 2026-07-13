@@ -965,9 +965,9 @@ impl AnalysisKernel {
             metrics_layers,
         ));
         tracing::info!(target: "polint::kernel", "stage: metrics + derived done");
-        let validation_diagnostics =
-            validation::validate_fact_metadata(&db, Self::provider_manifests());
-        diagnostics.extend(validation_diagnostics);
+        let validation_report = validation::validate_fact_metadata(&db, Self::provider_manifests());
+        diagnostics.extend(validation_report.diagnostics);
+        let validation_events = validation_report.events;
         db.finish_all_fact_meta_insertions();
         // Persistence is deliberately last: store availability must not change
         // provider execution, validated facts, diagnostics, or capability
@@ -981,6 +981,7 @@ impl AnalysisKernel {
             input_snapshot,
             provider_outputs,
             scc_closure.demand_query_trace,
+            validation_events,
             store_status,
         );
         #[cfg(test)]
@@ -1428,6 +1429,7 @@ mod tests {
             .expect("kernel should run");
 
             assert_eq!(output.run_report.store_status(), &StoreStatus::Disabled);
+            assert_eq!(output.run_report.validation_events().len(), 20);
             assert!(!store_path.exists());
             assert!(!store_path.parent().expect("store directory").exists());
         }
@@ -1454,6 +1456,7 @@ mod tests {
 
             assert!(AnalysisKernel::missing_fact_metadata_for_test(&output.db).is_empty());
             assert_eq!(output.run_report.store_status(), &StoreStatus::Ready);
+            assert_eq!(output.run_report.validation_events().len(), 20);
             assert!(store_path.is_file());
         }
     }

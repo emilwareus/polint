@@ -607,7 +607,8 @@ mod tests {
         })
         .expect("output should store");
 
-        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let diagnostics =
+            validate_fact_metadata(&db, AnalysisKernel::provider_manifests()).diagnostics;
 
         assert!(
             diagnostics

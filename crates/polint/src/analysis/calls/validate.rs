@@ -433,7 +433,8 @@ mod tests {
         })
         .expect("call rows should store for validation");
 
-        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let diagnostics =
+            validate_fact_metadata(&db, AnalysisKernel::provider_manifests()).diagnostics;
         let calls = call_diagnostics(&diagnostics);
 
         assert!(
@@ -483,7 +484,8 @@ mod tests {
         })
         .expect("call rows should store for validation");
 
-        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let diagnostics =
+            validate_fact_metadata(&db, AnalysisKernel::provider_manifests()).diagnostics;
         let calls = call_diagnostics(&diagnostics);
 
         assert!(
@@ -523,7 +525,8 @@ mod tests {
             },
         );
 
-        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let diagnostics =
+            validate_fact_metadata(&db, AnalysisKernel::provider_manifests()).diagnostics;
 
         assert!(
             diagnostics.iter().any(|diagnostic| {
