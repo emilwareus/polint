@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-07-13T17:28:39.275Z"
+last_updated: "2026-07-13T18:05:15.930Z"
 last_activity: 2026-07-13
 progress:
   total_phases: 9
   completed_phases: 2
   total_plans: 27
-  completed_plans: 19
+  completed_plans: 20
   percent: 22
 ---
 
@@ -43,7 +43,7 @@ See: `.planning/PROJECT.md` (updated 2026-07-10)
 ## Current Position
 
 Phase: 65 (Generation Manifest and Metadata Mirroring) — EXECUTING
-Plan: 12 of 19
+Plan: 13 of 19
 Status: Ready to execute
 Last activity: 2026-07-13
 
@@ -533,6 +533,10 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 - [Phase 65]: Represent syntax module and manifest-relative dependencies as typed UpstreamLayer endpoints — Synthetic dependency-only LayerKey nodes blur real inputs with cached derived nodes
 - [Phase 65]: Persist canonical dependency edges only and reconstruct directional indexes — A single serialized truth prevents forward and reverse traversal data from diverging
 - [Phase 65]: Require AnalysisSettings purpose at the general LayerKey constructor boundary — Config and RuleOptions digests must not occupy the analysis-settings identity slot
+- [Phase 65]: Use normalized LayerCacheManifest as the sole current-run layer metadata source — One manifest-derived row keeps hit, recompute, disabled, invalid-read, and failed-write outcomes semantically identical.
+- [Phase 65]: Disabled cache mode skips persistence only and failed writes retain pre-write metadata — Cache availability must not change semantic provider identity.
+- [Phase 65]: Sort and deduplicate LayerRunMetadata at ProviderOutputMeta construction — Provider completion order cannot affect retained run metadata.
+- [Phase 65]: Keep CacheStats outside layer and provider semantic projections — Cache path and counters are telemetry rather than semantic identity.
 
 ## Execution Metrics
 
@@ -703,3 +707,4 @@ intentionally avoided during autonomous local commits.
 | Phase 65 P09 | 2h 6m | 2 tasks | 18 files |
 | Phase 65 P10 | 11min | 1 tasks | 2 files |
 | Phase 65 P11 | 48min | 1 tasks | 10 files |
+| Phase 65 P12 | 25min | 1 tasks | 10 files |
