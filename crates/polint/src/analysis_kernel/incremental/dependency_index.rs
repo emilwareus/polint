@@ -4,9 +4,11 @@ use std::fmt;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::dependency_input::InputDependencyKey;
-use super::keys::{DiagnosticKey, LayerKey, QueryKey, SummaryKey};
+use super::digest::{Digest, DigestKind};
+use super::input_snapshot::InputComponentStatus;
+use super::keys::{DiagnosticKey, LayerKey, QueryKey, SummaryKey, dependency_layer_digest};
 
-pub(crate) const DEPENDENCY_INDEX_SCHEMA: &str = "polint-dependency-index-next-typed";
+pub(crate) const DEPENDENCY_INDEX_SCHEMA: &str = "polint-dependency-index-next-query-inputs";
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -260,6 +262,125 @@ pub(crate) struct DependencyEdge {
     pub(crate) required_shape: ShapeKind,
 }
 
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "query edges are retained for validated-run dependency assembly"
+    )
+)]
+pub(crate) fn query_dependency_edges(query_key: &QueryKey) -> Vec<DependencyEdge> {
+    let query_node = CacheNode::Query(query_key.clone());
+    let mut edges = query_key
+        .dependency_inputs
+        .as_slice()
+        .iter()
+        .cloned()
+        .map(|input| {
+            let (kind, required_shape) = declared_query_dependency_semantics(input.kind);
+            DependencyEdge {
+                from: query_node.clone(),
+                to: CacheNode::DependencyInput(input),
+                kind,
+                required_shape,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let parameter = InputDependencyKey::query_option(
+        format!("query:{}:parameters", query_key.query_kind),
+        query_key.parameter_digest.clone(),
+        InputComponentStatus::Present,
+    )
+    .expect("query parameter dependencies require a query-parameters digest");
+    edges.push(DependencyEdge {
+        from: query_node.clone(),
+        to: CacheNode::DependencyInput(parameter),
+        kind: DependencyKind::Input,
+        required_shape: ShapeKind::Unknown,
+    });
+
+    edges.extend(
+        query_key
+            .layer_digests
+            .iter()
+            .enumerate()
+            .map(|(index, digest)| {
+                let dependency = InputDependencyKey::upstream_layer(
+                    format!("query:{}:layer:{index}", query_key.query_kind),
+                    dependency_layer_digest(digest.clone()),
+                    InputComponentStatus::Present,
+                )
+                .expect("query layer dependencies use dependency-layer digests");
+                DependencyEdge {
+                    from: query_node.clone(),
+                    to: CacheNode::DependencyInput(dependency),
+                    kind: DependencyKind::UpstreamLayer,
+                    required_shape: ShapeKind::Output,
+                }
+            }),
+    );
+
+    let budget = InputDependencyKey::budget_profile(
+        format!("query:{}:budget", query_key.query_kind),
+        query_key.budget_digest.clone(),
+        InputComponentStatus::Present,
+    )
+    .expect("query budget dependencies require a budget digest");
+    edges.push(DependencyEdge {
+        from: query_node.clone(),
+        to: CacheNode::DependencyInput(budget),
+        kind: DependencyKind::Input,
+        required_shape: ShapeKind::Unknown,
+    });
+
+    let precision_digest = Digest::from_parts(
+        DigestKind::QueryParameters,
+        "query_precision",
+        &[query_key.precision_tier.label()],
+    );
+    let precision = InputDependencyKey::query_option(
+        format!("query:{}:precision", query_key.query_kind),
+        precision_digest,
+        InputComponentStatus::Present,
+    )
+    .expect("query precision dependencies use a query-parameters digest");
+    edges.push(DependencyEdge {
+        from: query_node,
+        to: CacheNode::DependencyInput(precision),
+        kind: DependencyKind::Input,
+        required_shape: ShapeKind::Unknown,
+    });
+
+    edges.sort();
+    edges.dedup();
+    edges
+}
+
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "query edge semantics are retained with validated-run dependency assembly"
+    )
+)]
+fn declared_query_dependency_semantics(
+    kind: super::dependency_input::InputDependencyKind,
+) -> (DependencyKind, ShapeKind) {
+    use super::dependency_input::InputDependencyKind;
+
+    match kind {
+        InputDependencyKind::RequestedCapability => (DependencyKind::Input, ShapeKind::Unknown),
+        InputDependencyKind::AnalysisSetting => (DependencyKind::Config, ShapeKind::Unknown),
+        InputDependencyKind::Model => (DependencyKind::Model, ShapeKind::Model),
+        InputDependencyKind::ExtensionCode => (DependencyKind::Extension, ShapeKind::ExtensionCode),
+        InputDependencyKind::ExtensionDeclaredInput => {
+            (DependencyKind::Extension, ShapeKind::ExtensionDeclaredInput)
+        }
+        _ => unreachable!("QueryDependencyInputs rejects non-query dependency kinds"),
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DependencyIndex {
     pub(crate) schema_version: String,
@@ -382,7 +503,9 @@ impl<'de> Deserialize<'de> for DependencyIndex {
 mod tests {
     use super::*;
     use crate::analysis_kernel::incremental::{
-        Digest, DigestKind, InputComponentStatus, InputDependencyKey, LayerKey, PrecisionTier,
+        ChangeKind, ChangeSet, ChangeSetRow, Digest, DigestKind, InputComponentStatus,
+        InputDependencyKey, InvalidationAction, InvalidationPlan, LayerKey, PrecisionTier,
+        QueryDependencyInputs,
     };
 
     fn digest(kind: DigestKind, label: &str) -> Digest {
@@ -458,6 +581,68 @@ mod tests {
         }
     }
 
+    fn query(dependency_inputs: QueryDependencyInputs) -> QueryKey {
+        QueryKey::new(
+            "scc_closure",
+            "1",
+            digest(DigestKind::QueryParameters, "scc_parameters"),
+            dependency_inputs,
+            vec![digest(DigestKind::ProviderOutput, "calls")],
+            digest(DigestKind::Budget, "scc_budget"),
+            PrecisionTier::SetupAware,
+        )
+    }
+
+    fn query_input_fixtures() -> Vec<(InputDependencyKey, ChangeKind)> {
+        vec![
+            (
+                InputDependencyKey::requested_capability(
+                    "requested_capability:calls:none",
+                    digest(DigestKind::AnalysisRequirements, "calls"),
+                    InputComponentStatus::Present,
+                )
+                .expect("capability dependency"),
+                ChangeKind::Unknown,
+            ),
+            (
+                InputDependencyKey::analysis_setting(
+                    "polint.direct_summaries",
+                    digest(DigestKind::AnalysisSettings, "summary_settings"),
+                    InputComponentStatus::Present,
+                )
+                .expect("analysis setting dependency"),
+                ChangeKind::Unknown,
+            ),
+            (
+                InputDependencyKey::model(
+                    "model.files",
+                    digest(DigestKind::ModelFile, "models"),
+                    InputComponentStatus::Present,
+                )
+                .expect("model dependency"),
+                ChangeKind::ModelFile,
+            ),
+            (
+                InputDependencyKey::extension_code(
+                    "extension:code",
+                    digest(DigestKind::ExtensionCode, "extension_code"),
+                    InputComponentStatus::Present,
+                )
+                .expect("extension-code dependency"),
+                ChangeKind::ExtensionCode,
+            ),
+            (
+                InputDependencyKey::extension_declared_input(
+                    "extension:declared:models",
+                    digest(DigestKind::ExtensionCode, "extension_input"),
+                    InputComponentStatus::Present,
+                )
+                .expect("extension-declared-input dependency"),
+                ChangeKind::ExtensionDeclaredInput,
+            ),
+        ]
+    }
+
     #[test]
     fn from_edges_stores_sorted_forward_reverse_edges_and_schema() {
         let source_a = source("src/a.ts");
@@ -519,6 +704,7 @@ mod tests {
             "call_graph",
             "1",
             Digest::absent(DigestKind::QueryParameters, "none"),
+            QueryDependencyInputs::new(Vec::new()),
             Vec::new(),
             Digest::absent(DigestKind::Budget, "none"),
             PrecisionTier::Syntax,
@@ -622,7 +808,7 @@ mod tests {
     }
 
     #[test]
-    fn typed_index_round_trips_and_v1_labels_fail_closed() {
+    fn typed_index_round_trips_and_stale_labels_fail_closed() {
         let source = source("src/a.ts");
         let layer = CacheNode::Layer(layer("polint.ts.syntax", "a"));
         let index = DependencyIndex::from_edges(vec![edge(layer, source, ShapeKind::Content)]);
@@ -644,6 +830,108 @@ mod tests {
         let mut forged_v1 = typed_wire;
         forged_v1["schema_version"] = "polint-dependency-index-1".into();
         assert!(serde_json::from_value::<DependencyIndex>(forged_v1).is_err());
+
+        let old_temporary_wire = serde_json::json!({
+            "schema_version": "polint-dependency-index-next-typed",
+            "edges": [],
+        });
+        assert!(serde_json::from_value::<DependencyIndex>(old_temporary_wire).is_err());
+    }
+
+    #[test]
+    fn query_dependency_edges_include_exact_declarations_and_key_inputs() {
+        let declared = query_input_fixtures()
+            .into_iter()
+            .map(|(input, _)| input)
+            .collect::<Vec<_>>();
+        let key = query(QueryDependencyInputs::new(declared.clone()));
+        let edges = query_dependency_edges(&key);
+
+        assert_eq!(edges.len(), declared.len() + key.layer_digests.len() + 3);
+        for input in declared {
+            assert!(edges.iter().any(|edge| {
+                edge.from == CacheNode::Query(key.clone())
+                    && edge.to == CacheNode::DependencyInput(input.clone())
+            }));
+        }
+        assert!(edges.iter().any(|edge| {
+            matches!(
+                &edge.to,
+                CacheNode::DependencyInput(input)
+                    if input.kind == super::super::dependency_input::InputDependencyKind::QueryOption
+                        && input.stable_key == "query:scc_closure:parameters"
+            )
+        }));
+        assert!(edges.iter().any(|edge| {
+            matches!(
+                &edge.to,
+                CacheNode::DependencyInput(input)
+                    if input.kind == super::super::dependency_input::InputDependencyKind::BudgetProfile
+            )
+        }));
+        assert!(edges.iter().any(|edge| {
+            matches!(
+                &edge.to,
+                CacheNode::DependencyInput(input)
+                    if input.stable_key == "query:scc_closure:precision"
+            )
+        }));
+    }
+
+    #[test]
+    fn every_referenced_query_input_family_invalidates_the_query() {
+        for (input, change_kind) in query_input_fixtures() {
+            let key = query(QueryDependencyInputs::new(vec![input.clone()]));
+            let query_node = CacheNode::Query(key.clone());
+            let index = DependencyIndex::from_edges(query_dependency_edges(&key));
+            let change_set = ChangeSet::from_rows(vec![ChangeSetRow {
+                node: CacheNode::DependencyInput(input.clone()),
+                kind: change_kind,
+                digest: input.digest,
+            }]);
+
+            let plan = InvalidationPlan::from_change_set(&index, &change_set);
+            assert!(
+                !matches!(
+                    plan.action_for(&query_node),
+                    Some(InvalidationAction::Reuse(_))
+                ),
+                "referenced {:?} input must invalidate its query",
+                input.kind
+            );
+        }
+    }
+
+    #[test]
+    fn unreferenced_snapshot_sibling_preserves_query_key_edges_and_reuse() {
+        let capability = query_input_fixtures().remove(0).0;
+        let baseline = query(QueryDependencyInputs::new(vec![capability]));
+        let baseline_edges = query_dependency_edges(&baseline);
+        let mut changed_sibling = InputDependencyKey::model(
+            "model.unreferenced",
+            digest(DigestKind::ModelFile, "unreferenced_model"),
+            InputComponentStatus::Present,
+        )
+        .expect("model dependency");
+        changed_sibling.digest = digest(DigestKind::ModelFile, "changed_unreferenced_model");
+
+        let after_sibling_change = baseline.clone();
+        let after_edges = query_dependency_edges(&after_sibling_change);
+        assert_eq!(after_sibling_change, baseline);
+        assert_eq!(after_edges, baseline_edges);
+
+        let query_node = CacheNode::Query(baseline);
+        let index = DependencyIndex::from_edges(baseline_edges);
+        let change_set = ChangeSet::from_rows(vec![ChangeSetRow {
+            node: CacheNode::DependencyInput(changed_sibling.clone()),
+            kind: ChangeKind::ModelFile,
+            digest: changed_sibling.digest,
+        }]);
+        let plan = InvalidationPlan::from_change_set(&index, &change_set);
+        assert!(matches!(
+            plan.action_for(&query_node),
+            Some(InvalidationAction::Reuse(_))
+        ));
     }
 
     #[test]

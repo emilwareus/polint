@@ -62,6 +62,7 @@ pub(crate) use demand::{
 )]
 pub(crate) use dependency_index::{
     CacheNode, DEPENDENCY_INDEX_SCHEMA, DependencyEdge, DependencyIndex, DependencyKind, ShapeKind,
+    query_dependency_edges,
 };
 #[cfg_attr(
     test,
@@ -146,8 +147,9 @@ pub(crate) use invalidation::{
 )]
 pub(crate) use keys::{
     DiagnosticKey, LayerKey, LayerKind, MODULE_GRAPH_TOPOLOGY_INPUT_FILE_NAMES, PrecisionTier,
-    QueryKey, SummaryKey, dependency_layer_digest, module_graph_topology_input_digest_rows,
-    module_graph_topology_input_digests, semantic_provider_parameter_digest,
+    QueryDependencyInputs, QueryKey, SummaryKey, dependency_layer_digest,
+    module_graph_topology_input_digest_rows, module_graph_topology_input_digests,
+    semantic_provider_parameter_digest,
 };
 #[cfg_attr(
     test,

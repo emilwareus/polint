@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use crate::analysis_kernel::incremental::{Digest, DigestKind, PrecisionTier, QueryKey};
+use crate::analysis_kernel::incremental::{
+    Digest, DigestKind, PrecisionTier, QueryDependencyInputs, QueryKey,
+};
 
 // ---------------------------------------------------------------------------
 // QueryKind — the set of demand query families
@@ -82,7 +84,7 @@ impl QueryBudget {
     /// Returns a digest of this budget for cache identity.
     pub(crate) fn digest(&self) -> Digest {
         Digest::from_parts(
-            DigestKind::ProviderParameters,
+            DigestKind::Budget,
             "query_budget",
             &[
                 &self.max_iterations.to_string(),
@@ -181,6 +183,7 @@ impl<T> QueryResult<T> {
 pub(crate) fn demand_query_key(
     kind: QueryKind,
     parameter_digest: Digest,
+    dependency_inputs: QueryDependencyInputs,
     layer_digests: Vec<Digest>,
     budget: &QueryBudget,
     precision_tier: PrecisionTier,
@@ -189,6 +192,7 @@ pub(crate) fn demand_query_key(
         kind.as_str(),
         kind.version(),
         parameter_digest,
+        dependency_inputs,
         layer_digests,
         budget.digest(),
         precision_tier,
@@ -256,7 +260,7 @@ mod tests {
     #[test]
     fn demand_query_key_builds_valid_key() {
         let param_digest = Digest::from_parts(
-            DigestKind::ProviderParameters,
+            DigestKind::QueryParameters,
             "test_params",
             &["callable:func_a"],
         );
@@ -270,6 +274,7 @@ mod tests {
         let key = demand_query_key(
             QueryKind::FunctionSummary,
             param_digest,
+            QueryDependencyInputs::new(Vec::new()),
             layer_digests,
             &budget,
             PrecisionTier::SetupAware,
@@ -295,6 +300,7 @@ mod tests {
         let key_a = demand_query_key(
             QueryKind::FunctionSummary,
             param_digest.clone(),
+            QueryDependencyInputs::new(Vec::new()),
             vec![first.clone(), second.clone()],
             &budget,
             PrecisionTier::SetupAware,
@@ -302,6 +308,7 @@ mod tests {
         let key_b = demand_query_key(
             QueryKind::FunctionSummary,
             param_digest,
+            QueryDependencyInputs::new(Vec::new()),
             vec![second, first],
             &budget,
             PrecisionTier::SetupAware,

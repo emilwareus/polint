@@ -254,8 +254,8 @@ fn extract_extension_digest(node: &CacheNode) -> Digest {
 mod tests {
     use super::*;
     use crate::analysis_kernel::incremental::{
-        Digest, DigestKind, InputComponentStatus, InputDependencyKey, LayerKey, QueryKey,
-        SummaryKey, keys::LayerKind, keys::PrecisionTier,
+        Digest, DigestKind, InputComponentStatus, InputDependencyKey, LayerKey,
+        QueryDependencyInputs, QueryKey, SummaryKey, keys::LayerKind, keys::PrecisionTier,
     };
 
     fn ext_digest(label: &str) -> Digest {
@@ -504,6 +504,7 @@ mod tests {
             "call_graph",
             "1",
             Digest::absent(DigestKind::QueryParameters, "none"),
+            QueryDependencyInputs::new(Vec::new()),
             Vec::new(),
             Digest::absent(DigestKind::Budget, "none"),
             PrecisionTier::Syntax,

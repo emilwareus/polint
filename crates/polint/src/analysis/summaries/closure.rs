@@ -11,7 +11,8 @@ use crate::analysis::calls::facts::CallTargetStatus;
 use crate::analysis::ids::{SummaryEventId, SummaryId};
 use crate::analysis_kernel::FactFamily;
 use crate::analysis_kernel::incremental::{
-    DemandQueryEngine, DemandQueryResult, Digest, DigestKind, PrecisionTier, QueryKey,
+    DemandQueryEngine, DemandQueryResult, Digest, DigestKind, PrecisionTier, QueryDependencyInputs,
+    QueryKey,
 };
 use crate::analysis_kernel::stable_key_from_parts;
 use crate::core::{AnalysisDb, FunctionId};
@@ -90,6 +91,8 @@ pub(crate) fn close_summaries_by_scc(
     config: &SccClosureConfig,
     demand_engine: &mut DemandQueryEngine,
     previous_scc_digests: &BTreeMap<Vec<String>, String>,
+    query_dependency_inputs: &QueryDependencyInputs,
+    query_layer_digests: &[Digest],
 ) -> SccClosureResult {
     let mut result = SccClosureResult {
         total_sccs_processed: 0,
@@ -142,7 +145,15 @@ pub(crate) fn close_summaries_by_scc(
                 .insert(scc.member_stable_keys.clone(), scc_digest.clone());
 
             // Record demand query entry
-            record_scc_demand_query(demand_engine, scc, &scc_digest, iterations, was_backdated);
+            record_scc_demand_query(
+                demand_engine,
+                scc,
+                &scc_digest,
+                config,
+                query_dependency_inputs,
+                query_layer_digests,
+                was_backdated,
+            );
         } else {
             result.non_recursive_sccs += 1;
             let (scc_summaries, scc_events) = process_non_recursive_scc(db, scc);
@@ -168,7 +179,15 @@ pub(crate) fn close_summaries_by_scc(
                 .insert(scc.member_stable_keys.clone(), scc_digest.clone());
 
             // Record demand query entry
-            record_scc_demand_query(demand_engine, scc, &scc_digest, 1, was_backdated);
+            record_scc_demand_query(
+                demand_engine,
+                scc,
+                &scc_digest,
+                config,
+                query_dependency_inputs,
+                query_layer_digests,
+                was_backdated,
+            );
         }
     }
 
@@ -698,31 +717,36 @@ fn record_scc_demand_query(
     demand_engine: &mut DemandQueryEngine,
     scc: &Scc,
     scc_digest: &str,
-    iterations: u32,
+    config: &SccClosureConfig,
+    query_dependency_inputs: &QueryDependencyInputs,
+    query_layer_digests: &[Digest],
     was_backdated: bool,
 ) {
-    let param_parts: Vec<String> = scc
+    let mut param_parts: Vec<String> = scc
         .member_stable_keys
         .iter()
         .map(|k| format!("member:{k}"))
         .collect();
+    param_parts.push(format!("enable_backdating={}", config.enable_backdating));
+    param_parts.sort();
     let param_refs: Vec<&str> = param_parts.iter().map(|s| s.as_str()).collect();
 
     let parameter_digest =
         Digest::from_parts(DigestKind::QueryParameters, "scc_closure", &param_refs);
 
-    let query_key = QueryKey {
-        query_kind: "scc_closure".to_string(),
-        query_version: "1".to_string(),
+    let query_key = QueryKey::new(
+        "scc_closure",
+        "1",
         parameter_digest,
-        layer_digests: Vec::new(),
-        budget_digest: Digest::from_parts(
+        query_dependency_inputs.clone(),
+        query_layer_digests.to_vec(),
+        Digest::from_parts(
             DigestKind::Budget,
             "scc_closure",
-            &[&format!("iterations:{iterations}")],
+            &[&format!("max_iterations:{}", config.max_iterations)],
         ),
-        precision_tier: PrecisionTier::SetupAware,
-    };
+        PrecisionTier::SetupAware,
+    );
 
     let output_digest = Digest::from_parts(
         DigestKind::ProviderOutput,
@@ -781,6 +805,10 @@ mod tests {
 
     fn span() -> Span {
         Span::point(FileId(1), 1, 1)
+    }
+
+    fn dependency_free_query_inputs() -> QueryDependencyInputs {
+        QueryDependencyInputs::new(Vec::new())
     }
 
     fn summary_fact(
@@ -916,6 +944,8 @@ mod tests {
             &config,
             &mut demand_engine,
             &previous_digests,
+            &dependency_free_query_inputs(),
+            &[],
         );
 
         // Both B and A should be processed as non-recursive SCCs
@@ -965,6 +995,8 @@ mod tests {
             &SccClosureConfig::default(),
             &mut demand_engine,
             &BTreeMap::new(),
+            &dependency_free_query_inputs(),
+            &[],
         );
 
         assert_eq!(result.non_recursive_sccs, 3);
@@ -997,6 +1029,8 @@ mod tests {
             &SccClosureConfig::default(),
             &mut demand_engine,
             &BTreeMap::new(),
+            &dependency_free_query_inputs(),
+            &[],
         );
 
         assert_eq!(
@@ -1030,6 +1064,8 @@ mod tests {
             &SccClosureConfig::default(),
             &mut demand_engine,
             &BTreeMap::new(),
+            &dependency_free_query_inputs(),
+            &[],
         );
 
         let mut changed_call_summary =
@@ -1049,6 +1085,8 @@ mod tests {
             &SccClosureConfig::default(),
             &mut changed_demand_engine,
             &first.scc_output_digests,
+            &dependency_free_query_inputs(),
+            &[],
         );
 
         assert_eq!(
@@ -1095,6 +1133,8 @@ mod tests {
             &config,
             &mut demand_engine,
             &previous_digests,
+            &dependency_free_query_inputs(),
+            &[],
         );
 
         assert_eq!(result.total_sccs_processed, 1);
@@ -1152,6 +1192,8 @@ mod tests {
             &config,
             &mut demand_engine,
             &BTreeMap::new(),
+            &dependency_free_query_inputs(),
+            &[],
         );
 
         assert_eq!(result.recursive_sccs, 1);
@@ -1201,6 +1243,8 @@ mod tests {
             &config,
             &mut demand_engine1,
             &BTreeMap::new(),
+            &dependency_free_query_inputs(),
+            &[],
         );
 
         assert_eq!(
@@ -1219,6 +1263,8 @@ mod tests {
             &config,
             &mut demand_engine2,
             &result1.scc_output_digests,
+            &dependency_free_query_inputs(),
+            &[],
         );
 
         assert_eq!(
@@ -1291,6 +1337,8 @@ mod tests {
             &config,
             &mut demand_engine,
             &BTreeMap::new(),
+            &dependency_free_query_inputs(),
+            &[],
         );
 
         assert_eq!(result.total_sccs_processed, 0);

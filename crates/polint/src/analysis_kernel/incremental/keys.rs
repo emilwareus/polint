@@ -3,7 +3,8 @@
     expect(dead_code, reason = "kept for private internal consumers")
 )]
 
-use serde::{Deserialize, Serialize};
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::fmt;
@@ -11,6 +12,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use super::dependency_input::{InputDependencyKey, InputDependencyKind};
 use super::digest::{Digest, DigestKind};
 use crate::analysis_kernel::{PrecisionCeiling, ProviderManifest};
 use crate::core::AnalysisDb;
@@ -104,11 +106,78 @@ pub(crate) struct LayerKey {
     pub(crate) extension_digests: Arc<Vec<Digest>>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(transparent)]
+pub(crate) struct QueryDependencyInputs(Vec<InputDependencyKey>);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct UnsupportedQueryDependencyKind(InputDependencyKind);
+
+impl fmt::Display for UnsupportedQueryDependencyKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "input dependency kind `{}` cannot be declared by a query",
+            self.0.label()
+        )
+    }
+}
+
+impl std::error::Error for UnsupportedQueryDependencyKind {}
+
+impl QueryDependencyInputs {
+    pub(crate) fn new(mut inputs: Vec<InputDependencyKey>) -> Self {
+        if let Some(input) = inputs
+            .iter()
+            .find(|input| !is_query_dependency_kind(input.kind))
+        {
+            panic!("{}", UnsupportedQueryDependencyKind(input.kind));
+        }
+        inputs.sort();
+        inputs.dedup();
+        Self(inputs)
+    }
+
+    pub(crate) fn as_slice(&self) -> &[InputDependencyKey] {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for QueryDependencyInputs {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let mut inputs = Vec::<InputDependencyKey>::deserialize(deserializer)?;
+        if let Some(input) = inputs
+            .iter()
+            .find(|input| !is_query_dependency_kind(input.kind))
+        {
+            return Err(D::Error::custom(UnsupportedQueryDependencyKind(input.kind)));
+        }
+        inputs.sort();
+        inputs.dedup();
+        Ok(Self(inputs))
+    }
+}
+
+const fn is_query_dependency_kind(kind: InputDependencyKind) -> bool {
+    matches!(
+        kind,
+        InputDependencyKind::RequestedCapability
+            | InputDependencyKind::AnalysisSetting
+            | InputDependencyKind::Model
+            | InputDependencyKind::ExtensionCode
+            | InputDependencyKind::ExtensionDeclaredInput
+    )
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) struct QueryKey {
     pub(crate) query_kind: String,
     pub(crate) query_version: String,
     pub(crate) parameter_digest: Digest,
+    pub(crate) dependency_inputs: QueryDependencyInputs,
     pub(crate) layer_digests: Vec<Digest>,
     pub(crate) budget_digest: Digest,
     pub(crate) precision_tier: PrecisionTier,
@@ -929,6 +998,7 @@ impl QueryKey {
         query_kind: impl Into<String>,
         query_version: impl Into<String>,
         parameter_digest: Digest,
+        dependency_inputs: QueryDependencyInputs,
         layer_digests: Vec<Digest>,
         budget_digest: Digest,
         precision_tier: PrecisionTier,
@@ -937,6 +1007,7 @@ impl QueryKey {
             query_kind: query_kind.into(),
             query_version: query_version.into(),
             parameter_digest,
+            dependency_inputs,
             layer_digests: sorted_digests(layer_digests),
             budget_digest,
             precision_tier,
@@ -2838,6 +2909,7 @@ mod tests {
             "call_graph",
             "1",
             Digest::absent(DigestKind::QueryParameters, "none"),
+            QueryDependencyInputs::new(Vec::new()),
             vec![b.clone(), a.clone()],
             Digest::absent(DigestKind::Budget, "none"),
             PrecisionTier::Syntax,
@@ -2879,6 +2951,64 @@ mod tests {
             digest_value(&diagnostic_json["requested_view_digests"][0])
                 < digest_value(&diagnostic_json["requested_view_digests"][1])
         );
+    }
+
+    #[test]
+    fn query_dependency_inputs_are_sorted_deduplicated_and_part_of_query_identity() {
+        let capability = InputDependencyKey::requested_capability(
+            "requested_capability:calls:none",
+            Digest::from_parts(DigestKind::AnalysisRequirements, "calls", &["calls"]),
+            crate::analysis_kernel::incremental::InputComponentStatus::Present,
+        )
+        .expect("capability dependency uses an analysis-requirements digest");
+        let setting = InputDependencyKey::analysis_setting(
+            "polint.direct_summaries",
+            Digest::from_parts(DigestKind::AnalysisSettings, "settings", &["summaries"]),
+            crate::analysis_kernel::incremental::InputComponentStatus::Present,
+        )
+        .expect("setting dependency uses an analysis-settings digest");
+
+        let canonical =
+            QueryDependencyInputs::new(vec![setting.clone(), capability.clone(), setting.clone()]);
+        assert_eq!(canonical.as_slice(), &[capability.clone(), setting.clone()]);
+
+        let base = QueryKey::new(
+            "scc_closure",
+            "1",
+            Digest::absent(DigestKind::QueryParameters, "none"),
+            QueryDependencyInputs::new(vec![capability]),
+            Vec::new(),
+            Digest::absent(DigestKind::Budget, "none"),
+            PrecisionTier::SetupAware,
+        );
+        let changed = QueryKey::new(
+            "scc_closure",
+            "1",
+            Digest::absent(DigestKind::QueryParameters, "none"),
+            QueryDependencyInputs::new(vec![setting]),
+            Vec::new(),
+            Digest::absent(DigestKind::Budget, "none"),
+            PrecisionTier::SetupAware,
+        );
+        assert_ne!(base, changed);
+    }
+
+    #[test]
+    fn query_dependency_inputs_reject_non_query_input_kinds_in_construction_and_serde() {
+        let source = InputDependencyKey::source_file(
+            "src/main.ts",
+            Digest::from_parts(DigestKind::SourceText, "source", &["src/main.ts"]),
+            crate::analysis_kernel::incremental::InputComponentStatus::Present,
+        )
+        .expect("source dependency uses a source-text digest");
+
+        let rejected =
+            std::panic::catch_unwind(|| QueryDependencyInputs::new(vec![source.clone()]));
+        assert!(rejected.is_err());
+        let wire = serde_json::to_value(vec![source]).expect("source dependency serializes");
+        let error = serde_json::from_value::<QueryDependencyInputs>(wire)
+            .expect_err("query dependency input wire must reject source files");
+        assert!(error.to_string().contains("source_file"));
     }
 
     fn digest_value(value: &serde_json::Value) -> &str {

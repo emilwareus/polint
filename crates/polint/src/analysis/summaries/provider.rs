@@ -14,11 +14,12 @@ use super::store::SummaryOutput;
 use crate::analysis::ids::MirBodyId;
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
-    CacheStats, DemandQueryEngine, DemandQueryTrace, Digest, DigestKind, InputSnapshot,
+    CacheStats, DemandQueryEngine, DemandQueryTrace, Digest, DigestKind, InputComponentStatus,
+    InputDependencyKey, InputSnapshot, QueryDependencyInputs,
 };
 use crate::cache::keys::AnalysisSettingsScope;
 use crate::cache::{Cache, CacheKey};
-use crate::core::AnalysisDb;
+use crate::core::{AnalysisDb, CapabilitySupportStatus};
 use crate::diagnostics::Diagnostic;
 
 const REQUESTED_CAPABILITIES: &[&str] = &["calls", "control_flow", "dataflow"];
@@ -114,8 +115,15 @@ struct SccClosureDigestCacheEntry {
 ///    is future work), and a DemandQueryEngine.
 /// 4. Call close_summaries_by_scc.
 /// 5. Return closure result, demand query trace, and any diagnostics.
+#[cfg(test)]
 pub(crate) fn run_scc_closure(db: &mut AnalysisDb) -> SccClosureProviderOutput {
-    run_scc_closure_with_previous_digests(db, BTreeMap::new(), &SccClosureConfig::default())
+    run_scc_closure_with_previous_digests(
+        db,
+        BTreeMap::new(),
+        &SccClosureConfig::default(),
+        &QueryDependencyInputs::new(Vec::new()),
+        &[],
+    )
 }
 
 pub(crate) fn run_scc_closure_with_cache(
@@ -164,7 +172,18 @@ fn run_scc_closure_with_cache_config(
         })
         .unwrap_or_default();
 
-    let output = run_scc_closure_with_previous_digests(db, previous_scc_digests, config);
+    let query_dependency_inputs = scc_closure_query_dependency_inputs(input_snapshot);
+    let query_layer_digests = [
+        direct_summaries_output_digest.clone(),
+        calls_output_digest.clone(),
+    ];
+    let output = run_scc_closure_with_previous_digests(
+        db,
+        previous_scc_digests,
+        config,
+        &query_dependency_inputs,
+        &query_layer_digests,
+    );
 
     let scc_digests = output.scc_output_digests.clone();
 
@@ -188,6 +207,8 @@ fn run_scc_closure_with_previous_digests(
     db: &mut AnalysisDb,
     previous_scc_digests: BTreeMap<Vec<String>, String>,
     config: &SccClosureConfig,
+    query_dependency_inputs: &QueryDependencyInputs,
+    query_layer_digests: &[Digest],
 ) -> SccClosureProviderOutput {
     let schedule = compute_scc_schedule(db);
 
@@ -203,6 +224,8 @@ fn run_scc_closure_with_previous_digests(
         config,
         &mut demand_engine,
         &previous_scc_digests,
+        query_dependency_inputs,
+        query_layer_digests,
     );
     #[cfg(test)]
     let debug_snapshot = Some(SccClosureDebugSnapshot {
@@ -239,6 +262,42 @@ fn run_scc_closure_with_previous_digests(
         #[cfg(test)]
         debug_snapshot,
     }
+}
+
+fn scc_closure_query_dependency_inputs(input_snapshot: &InputSnapshot) -> QueryDependencyInputs {
+    let mut inputs = input_snapshot
+        .requested_capabilities
+        .iter()
+        .filter(|capability| REQUESTED_CAPABILITIES.contains(&capability.capability.as_str()))
+        .map(|capability| {
+            let language = capability
+                .language
+                .map(crate::core::Language::label)
+                .unwrap_or("none");
+            let status = match &capability.support_status {
+                CapabilitySupportStatus::Supported => InputComponentStatus::Present,
+                CapabilitySupportStatus::Unsupported => InputComponentStatus::Unsupported,
+                CapabilitySupportStatus::SetupMissing => InputComponentStatus::SetupMissing,
+            };
+            InputDependencyKey::requested_capability(
+                format!("requested_capability:{}:{language}", capability.capability),
+                capability.analysis_dependency_digest.clone(),
+                status,
+            )
+            .expect("requested capabilities retain analysis-requirements digests")
+        })
+        .collect::<Vec<_>>();
+    inputs.push(
+        InputDependencyKey::analysis_setting(
+            AnalysisSettingsScope::DirectSummaries.label(),
+            input_snapshot
+                .analysis_settings_digest(AnalysisSettingsScope::DirectSummaries)
+                .clone(),
+            InputComponentStatus::Present,
+        )
+        .expect("SCC analysis settings retain an analysis-settings digest"),
+    );
+    QueryDependencyInputs::new(inputs)
 }
 
 fn scc_closure_analysis_identity(
@@ -532,7 +591,9 @@ mod scc_closure_provider {
     };
     use crate::analysis::summaries::store::SummaryOutput;
     use crate::analysis_kernel::AnalysisKernel;
-    use crate::analysis_kernel::incremental::{DemandCacheStatus, InputSnapshot};
+    use crate::analysis_kernel::incremental::{
+        DemandCacheStatus, InputDependencyKind, InputSnapshot,
+    };
     use crate::analysis_plan::AnalysisPlan;
     use crate::cache::Cache;
     use crate::cache::keys::config_hash;
@@ -632,6 +693,74 @@ mod scc_closure_provider {
     }
 
     #[test]
+    fn scc_query_dependencies_select_only_declared_snapshot_rows() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let loaded = load_config(temp.path()).expect("config loads");
+        let plan = AnalysisPlan::from_capability_names_for_test(&["calls"]);
+        let baseline_snapshot = snapshot(&loaded, &AnalysisDb::new(), &plan);
+        let baseline = scc_closure_query_dependency_inputs(&baseline_snapshot);
+
+        assert_eq!(baseline.as_slice().len(), 2);
+        assert!(baseline.as_slice().iter().any(|input| {
+            input.kind == InputDependencyKind::RequestedCapability
+                && input.stable_key == "requested_capability:calls:none"
+        }));
+        assert!(baseline.as_slice().iter().any(|input| {
+            input.kind == InputDependencyKind::AnalysisSetting
+                && input.stable_key == "polint.direct_summaries"
+        }));
+        assert!(baseline.as_slice().iter().all(|input| {
+            !matches!(
+                input.kind,
+                InputDependencyKind::Model
+                    | InputDependencyKind::ExtensionCode
+                    | InputDependencyKind::ExtensionDeclaredInput
+            )
+        }));
+
+        let mut unreferenced_changed = baseline_snapshot.clone();
+        unreferenced_changed.models[0].digest =
+            Digest::from_parts(DigestKind::ModelFile, "unreferenced_model", &["changed"]);
+        unreferenced_changed.extensions[0].digest = Digest::from_parts(
+            DigestKind::ExtensionCode,
+            "unreferenced_extension",
+            &["changed"],
+        );
+        assert_eq!(
+            scc_closure_query_dependency_inputs(&unreferenced_changed),
+            baseline
+        );
+
+        let mut capability_changed = baseline_snapshot.clone();
+        capability_changed.requested_capabilities[0].analysis_dependency_digest =
+            Digest::from_parts(
+                DigestKind::AnalysisRequirements,
+                "requested_capability",
+                &["changed"],
+            );
+        assert_ne!(
+            scc_closure_query_dependency_inputs(&capability_changed),
+            baseline
+        );
+
+        let mut setting_changed = baseline_snapshot;
+        setting_changed
+            .analysis_settings
+            .iter_mut()
+            .find(|setting| setting.scope == AnalysisSettingsScope::DirectSummaries)
+            .expect("direct summaries settings row")
+            .digest = Digest::from_parts(
+            DigestKind::AnalysisSettings,
+            "summary_settings",
+            &["changed"],
+        );
+        assert_ne!(
+            scc_closure_query_dependency_inputs(&setting_changed),
+            baseline
+        );
+    }
+
+    #[test]
     fn scc_closure_processes_chain_in_correct_order_and_records_demand_trace() {
         // A calls B. Both have direct summaries.
         // SCC closure should process B first (leaf callee), then A.
@@ -719,6 +848,18 @@ mod scc_closure_provider {
                 .backdated_sccs,
             0
         );
+        let expected_query_inputs = scc_closure_query_dependency_inputs(&input_snapshot);
+        for entry in cold.demand_query_trace.entries() {
+            assert_eq!(entry.query_key.dependency_inputs, expected_query_inputs);
+            assert_eq!(entry.query_key.layer_digests.len(), 2);
+            assert!(
+                entry
+                    .query_key
+                    .layer_digests
+                    .contains(&direct_summaries_digest)
+            );
+            assert!(entry.query_key.layer_digests.contains(&calls_digest));
+        }
 
         let mut warm_db = closure_db(summaries.clone(), sites.clone(), targets.clone());
         let warm = run_scc_closure_with_cache(

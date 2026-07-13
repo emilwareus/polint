@@ -13,6 +13,8 @@ use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use super::digest::{Digest, DigestBuilder, DigestKind};
+#[cfg(test)]
+use super::keys::QueryDependencyInputs;
 use super::keys::{PrecisionTier, QueryKey};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -164,6 +166,17 @@ impl DemandQueryTrace {
                 "parameter_digest_value",
                 &key.parameter_digest,
             );
+            for dependency_input in key.dependency_inputs.as_slice() {
+                builder.labeled_part("dependency_input_kind", dependency_input.kind.label());
+                builder.labeled_part("dependency_input_stable_key", &dependency_input.stable_key);
+                append_digest(
+                    &mut builder,
+                    "dependency_input_digest_kind",
+                    "dependency_input_digest_value",
+                    &dependency_input.digest,
+                );
+                builder.labeled_part("dependency_input_status", dependency_input.status.label());
+            }
             for layer_digest in &key.layer_digests {
                 append_digest(
                     &mut builder,
@@ -289,6 +302,7 @@ pub(crate) fn dependency_free_test_query_key(
         query_kind,
         query_version,
         parameter_digest,
+        QueryDependencyInputs::new(Vec::new()),
         Vec::new(),
         budget_digest,
         precision_tier,
@@ -302,13 +316,15 @@ mod tests {
     use crate::analysis_kernel::incremental::digest::{Digest, DigestKind};
 
     fn test_query_key(kind: &str) -> QueryKey {
-        dependency_free_test_query_key(
+        let key = dependency_free_test_query_key(
             kind,
             "1",
-            Digest::from_parts(DigestKind::ProviderParameters, "test_params", &["param_a"]),
-            Digest::from_parts(DigestKind::ProviderParameters, "budget", &["default"]),
+            Digest::from_parts(DigestKind::QueryParameters, "test_params", &["param_a"]),
+            Digest::from_parts(DigestKind::Budget, "budget", &["default"]),
             PrecisionTier::SetupAware,
-        )
+        );
+        assert!(key.dependency_inputs.as_slice().is_empty());
+        key
     }
 
     fn test_result(kind: &str, digest_label: &str) -> DemandQueryResult {
@@ -465,6 +481,27 @@ mod tests {
         provenance_changed.entries[0].provenance = "extension".to_string();
         assert_ne!(provenance_changed.semantic_projections(), expected_rows);
         assert_ne!(provenance_changed.semantic_digest(), expected_digest);
+    }
+
+    #[test]
+    fn declared_dependency_mutations_change_query_semantics() {
+        let mut trace = DemandQueryTrace::default();
+        trace.record_entry(trace_entry("function_summary", "result"));
+        let expected_rows = trace.semantic_projections();
+        let expected_digest = trace.semantic_digest();
+        let dependency = crate::analysis_kernel::incremental::InputDependencyKey::model(
+            "model.files",
+            Digest::from_parts(DigestKind::ModelFile, "models", &["changed"]),
+            crate::analysis_kernel::incremental::InputComponentStatus::Present,
+        )
+        .expect("model query dependency uses a model-file digest");
+
+        let mut changed = trace.clone();
+        changed.entries[0].query_key.dependency_inputs =
+            QueryDependencyInputs::new(vec![dependency]);
+
+        assert_ne!(changed.semantic_projections(), expected_rows);
+        assert_ne!(changed.semantic_digest(), expected_digest);
     }
 
     #[test]
