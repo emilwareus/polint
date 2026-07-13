@@ -250,7 +250,9 @@ impl ValidatedRunMetadata {
         &self.identities
     }
 
-    fn validate_integrity(&self) -> Result<(), ValidatedRunMetadataError> {
+    pub(in crate::analysis_kernel) fn validate_integrity(
+        &self,
+    ) -> Result<(), ValidatedRunMetadataError> {
         if self.input_snapshot.schema_version != INPUT_SNAPSHOT_SCHEMA_VERSION {
             return Err(ValidatedRunMetadataError::new(
                 "validated-run input snapshot schema is not current",

@@ -6,6 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
+mod commit_plan;
 mod connection;
 mod migrations;
 
