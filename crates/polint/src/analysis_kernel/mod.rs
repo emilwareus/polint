@@ -1458,6 +1458,29 @@ mod tests {
             assert_eq!(output.run_report.store_status(), &StoreStatus::Ready);
             assert_eq!(output.run_report.validation_events().len(), 20);
             assert!(store_path.is_file());
+
+            let stable_rows = output
+                .db
+                .fact_meta()
+                .stable_rows()
+                .expect("finalized metadata rows are canonical");
+            let expected_fact_count = stable_rows.len();
+            let metadata = incremental::ValidatedRunMetadata::from_finalized_run(
+                &output.run_report,
+                AnalysisKernel::provider_manifests(),
+                stable_rows,
+            )
+            .expect("validated run is a complete store-planning handoff");
+            assert_eq!(
+                metadata.provider_manifests().len(),
+                AnalysisKernel::provider_manifests().len()
+            );
+            assert_eq!(
+                metadata.provider_outputs().len(),
+                metadata.provider_manifests().len()
+            );
+            assert_eq!(metadata.fact_rows().len(), expected_fact_count);
+            assert_eq!(metadata.validation_events().len(), 20);
         }
     }
 

@@ -89,13 +89,6 @@ pub(crate) use dependency_input::{
         reason = "unit tests exercise identities in their defining module"
     )
 )]
-#[cfg_attr(
-    not(test),
-    expect(
-        unused_imports,
-        reason = "opaque identities are shared by private validated-run metadata projections"
-    )
-)]
 pub(crate) use digest::{
     ConfigIdentity, Digest, DigestBuilder, DigestKind, GenerationIdentity, RunIdentity,
     WorkspaceIdentity,
@@ -181,6 +174,14 @@ pub(crate) use layer_cache::{
 pub(crate) use quarantine::{QuarantineEntry, QuarantinePolicy, QuarantineStore};
 #[cfg(test)]
 pub(crate) use run_report::provider_output_from_manifest;
+#[allow(
+    unused_imports,
+    reason = "private sibling-store row types form the borrowed handoff vocabulary"
+)]
+pub(in crate::analysis_kernel) use run_report::{
+    CanonicalProviderManifest, CanonicalProviderOutput, CanonicalQueryRow, CanonicalRunIdentities,
+    ValidatedRunMetadata, ValidatedRunMetadataError,
+};
 pub(crate) use run_report::{
     KernelRunReport, provider_output_digest_from_manifest,
     provider_output_from_manifest_with_layers,
