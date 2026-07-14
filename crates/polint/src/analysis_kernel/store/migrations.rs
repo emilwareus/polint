@@ -1,5 +1,7 @@
 //! Strict, private schema migrations for the durable semantic store.
 
+use std::sync::OnceLock;
+
 #[cfg(test)]
 use rusqlite::TransactionBehavior;
 use rusqlite::{Connection, ErrorCode, Transaction};
@@ -807,6 +809,16 @@ END;
 
 const V2_MARKER_SQL: &str = "UPDATE _polint_schema_migrations SET version = 2 WHERE version = 1;";
 
+#[derive(Debug, PartialEq, Eq)]
+struct SchemaObjectDefinition {
+    object_type: String,
+    name: String,
+    table_name: String,
+    sql: Option<String>,
+}
+
+static EXPECTED_CURRENT_SCHEMA: OnceLock<Result<Vec<SchemaObjectDefinition>, ()>> = OnceLock::new();
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum MigrationStatus {
     Current,
@@ -950,6 +962,7 @@ fn validate_current_schema(connection: &Connection) -> Result<(), MigrationError
         return Err(MigrationError::InvalidSchema { version });
     }
     validate_bootstrap_marker(connection, version)?;
+    validate_exact_schema_objects(connection, version)?;
 
     for table in REQUIRED_V2_TABLES {
         let count: i64 = connection
@@ -1021,6 +1034,91 @@ fn validate_current_schema(connection: &Connection) -> Result<(), MigrationError
     }
 
     Ok(())
+}
+
+fn validate_exact_schema_objects(
+    connection: &Connection,
+    version: i32,
+) -> Result<(), MigrationError> {
+    let actual = read_schema_object_definitions(connection)
+        .map_err(|error| classify_invariant_error(error, version))?;
+    let expected = EXPECTED_CURRENT_SCHEMA.get_or_init(build_expected_current_schema);
+    let Ok(expected) = expected else {
+        return Err(MigrationError::InvalidSchema { version });
+    };
+    if actual.as_slice() != expected.as_slice() {
+        return Err(MigrationError::InvalidSchema { version });
+    }
+    Ok(())
+}
+
+fn build_expected_current_schema() -> Result<Vec<SchemaObjectDefinition>, ()> {
+    let connection = Connection::open_in_memory().map_err(|_| ())?;
+    connection.execute_batch(V1_BOOTSTRAP_SQL).map_err(|_| ())?;
+    connection.execute_batch(V2_TABLES_SQL).map_err(|_| ())?;
+    connection
+        .execute_batch(V2_INDEXES_AND_TRIGGERS_SQL)
+        .map_err(|_| ())?;
+    read_schema_object_definitions(&connection).map_err(|_| ())
+}
+
+fn read_schema_object_definitions(
+    connection: &Connection,
+) -> Result<Vec<SchemaObjectDefinition>, rusqlite::Error> {
+    let mut statement = connection.prepare(
+        "SELECT type, name, tbl_name, sql
+         FROM sqlite_schema
+         WHERE name NOT LIKE 'sqlite_%'
+         ORDER BY type, name",
+    )?;
+    statement
+        .query_map([], |row| {
+            let sql = row
+                .get::<_, Option<String>>(3)?
+                .map(|definition| normalize_schema_definition(&definition));
+            Ok(SchemaObjectDefinition {
+                object_type: row.get(0)?,
+                name: row.get(1)?,
+                table_name: row.get(2)?,
+                sql,
+            })
+        })?
+        .collect()
+}
+
+fn normalize_schema_definition(definition: &str) -> String {
+    let mut normalized = String::with_capacity(definition.len());
+    let mut pending_space = false;
+    let mut quote = None;
+    let mut characters = definition.chars().peekable();
+    while let Some(character) = characters.next() {
+        if let Some(terminator) = quote {
+            normalized.push(character);
+            if character == terminator {
+                if terminator != ']' && characters.peek() == Some(&terminator) {
+                    if let Some(escaped) = characters.next() {
+                        normalized.push(escaped);
+                    }
+                } else {
+                    quote = None;
+                }
+            }
+        } else if character.is_whitespace() {
+            pending_space = !normalized.is_empty();
+        } else {
+            if pending_space {
+                normalized.push(' ');
+                pending_space = false;
+            }
+            normalized.push(character);
+            quote = match character {
+                '\'' | '"' | '`' => Some(character),
+                '[' => Some(']'),
+                _ => None,
+            };
+        }
+    }
+    normalized
 }
 
 fn validate_forbidden_schema_names(
@@ -1433,6 +1531,23 @@ mod tests {
             .expect("collect schema snapshot")
     }
 
+    fn assert_current_schema_tamper_is_rejected(tamper: &str) {
+        let (_temp, mut connection) = open_temp_database();
+        apply_migrations(&mut connection).expect("migration succeeds");
+        connection.execute_batch(tamper).expect("tamper schema");
+        let before = schema_snapshot(&connection);
+
+        let error = apply_migrations(&mut connection).expect_err("schema tamper refused");
+
+        assert!(matches!(
+            error,
+            MigrationError::InvalidSchema {
+                version: CURRENT_SCHEMA_VERSION
+            }
+        ));
+        assert_eq!(schema_snapshot(&connection), before);
+    }
+
     fn bind_workspace(connection: &Connection, workspace_value: &str) {
         connection
             .execute(
@@ -1561,7 +1676,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_version_zero_fixture_migrates_without_losing_existing_data() {
+    fn version_zero_with_unknown_schema_is_rejected_without_losing_existing_data() {
         let (_temp, mut connection) = open_temp_database();
         connection
             .execute_batch(
@@ -1570,16 +1685,18 @@ mod tests {
                  PRAGMA user_version = 0;",
             )
             .expect("create prior fixture");
+        let before = schema_snapshot(&connection);
 
-        let status = apply_migrations(&mut connection).expect("migration succeeds");
+        let error = apply_migrations(&mut connection).expect_err("unknown schema refused");
 
-        assert_eq!(
-            status,
-            MigrationStatus::Migrated {
-                from: 0,
-                to: CURRENT_SCHEMA_VERSION
+        assert!(matches!(
+            error,
+            MigrationError::InvalidSchema {
+                version: CURRENT_SCHEMA_VERSION
             }
-        );
+        ));
+        assert_eq!(schema_snapshot(&connection), before);
+        assert_eq!(schema_version(&connection).expect("schema version"), 0);
         let value: String = connection
             .query_row("SELECT value FROM sentinel", [], |row| row.get(0))
             .expect("sentinel row");
@@ -1861,6 +1978,49 @@ mod tests {
             }
         ));
         assert_eq!(schema_snapshot(&connection), before);
+    }
+
+    #[test]
+    fn current_schema_rejects_required_table_with_weakened_constraints() {
+        assert_current_schema_tamper_is_rejected(
+            "DROP TABLE input_files;
+             CREATE TABLE input_files (
+                 generation_id INTEGER,
+                 relative_path TEXT,
+                 language TEXT,
+                 source_digest_kind TEXT,
+                 source_digest_value TEXT,
+                 size_bytes INTEGER
+             );",
+        );
+    }
+
+    #[test]
+    fn current_schema_rejects_same_name_trigger_with_wrong_program() {
+        assert_current_schema_tamper_is_rejected(
+            "DROP TRIGGER store_manifest_workspace_immutable;
+             CREATE TRIGGER store_manifest_workspace_immutable
+             BEFORE UPDATE OF workspace_kind, workspace_value ON store_manifest
+             BEGIN
+                 SELECT 1;
+             END;",
+        );
+    }
+
+    #[test]
+    fn current_schema_rejects_same_name_index_with_wrong_columns() {
+        assert_current_schema_tamper_is_rejected(
+            "DROP INDEX dependency_edges_to_endpoint_idx;
+             CREATE INDEX dependency_edges_to_endpoint_idx
+             ON dependency_edges (generation_id, from_node_kind, ordinal);",
+        );
+    }
+
+    #[test]
+    fn current_schema_rejects_unrecognized_payload_bearing_table() {
+        assert_current_schema_tamper_is_rejected(
+            "CREATE TABLE cached_sources (contents BLOB NOT NULL);",
+        );
     }
 
     #[test]
