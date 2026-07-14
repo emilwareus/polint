@@ -35,6 +35,7 @@ pub(crate) use provider::{
     CachePolicy, CachePolicyView, LanguageScope, PrecisionCeiling, ProviderKind, ProviderManifest,
     SchemaVersion,
 };
+#[cfg(test)]
 pub(crate) use store::StoreStatus;
 
 /// Capabilities that require whole-repo discovery even when the deep semantic
@@ -969,20 +970,35 @@ impl AnalysisKernel {
         diagnostics.extend(validation_report.diagnostics);
         let validation_events = validation_report.events;
         db.finish_all_fact_meta_insertions();
-        // Persistence is deliberately last: store availability must not change
-        // provider execution, validated facts, diagnostics, or capability
-        // support. Only this private maintenance status is stored.
-        let store_config = store::StoreConfig::new(
-            input.cache.semantic_store_path(),
-            input.cache.semantic_store_enabled(),
-        );
-        let store_status = store::SemanticStore::maintain(&store_config);
+        let store_outcome = if input.cache.semantic_store_enabled() {
+            match db.fact_meta().stable_rows() {
+                Ok(fact_rows) => {
+                    match incremental::ValidatedRunMetadata::from_finalized_run(
+                        &input_snapshot,
+                        &provider_outputs,
+                        &scc_closure.demand_query_trace,
+                        &validation_events,
+                        Self::provider_manifests(),
+                        fact_rows,
+                    ) {
+                        Ok(validated) => store::SemanticStore::commit_validated_run(
+                            &store::StoreConfig::new(input.cache.semantic_store_path(), true),
+                            &validated,
+                        ),
+                        Err(_) => store::StoreOutcome::invalid_metadata(),
+                    }
+                }
+                Err(_) => store::StoreOutcome::invalid_metadata(),
+            }
+        } else {
+            store::StoreOutcome::disabled()
+        };
         let run_report = incremental::KernelRunReport::new(
             input_snapshot,
             provider_outputs,
             scc_closure.demand_query_trace,
             validation_events,
-            store_status,
+            store_outcome,
         );
         #[cfg(test)]
         let run_report = run_report.with_scc_closure_debug(scc_closure_debug);
@@ -1411,7 +1427,52 @@ mod tests {
         use super::*;
 
         #[test]
+        fn kernel_uses_only_the_enabled_post_finalization_store_facade() {
+            let source = include_str!("mod.rs");
+            let production = source
+                .split_once("#[cfg(test)]\nmod tests")
+                .expect("kernel test module boundary")
+                .0;
+            let validation = production
+                .find("let validation_report = validation::validate_fact_metadata")
+                .expect("authoritative validation report");
+            let diagnostics = production
+                .find("diagnostics.extend(validation_report.diagnostics)")
+                .expect("validation diagnostics are preserved");
+            let finalization = production
+                .find("db.finish_all_fact_meta_insertions()")
+                .expect("fact metadata finalization");
+            let enabled_guard = production
+                .find("if input.cache.semantic_store_enabled()")
+                .expect("enabled-only store branch");
+            let handoff = production
+                .find("incremental::ValidatedRunMetadata::from_finalized_run")
+                .expect("validated-run handoff");
+            let facade = production
+                .find("store::SemanticStore::commit_validated_run")
+                .expect("sole parent-facing store facade");
+            let path = production
+                .find("input.cache.semantic_store_path()")
+                .expect("private store path construction");
+            assert!(
+                validation < diagnostics
+                    && diagnostics < finalization
+                    && finalization < enabled_guard
+                    && enabled_guard < handoff
+                    && handoff < facade
+                    && enabled_guard < path
+            );
+            for forbidden in ["commit_plan", "StoreCommitPlan", "from_validated_run"] {
+                assert!(
+                    !production.contains(forbidden),
+                    "kernel must not name store planning detail `{forbidden}`"
+                );
+            }
+        }
+
+        #[test]
         fn disabled_full_kernel_run_is_filesystem_free_and_records_status() {
+            store::reset_materialization_counters_for_test();
             let temp = tempfile::tempdir().expect("temp directory");
             let loaded = load_config(temp.path()).expect("default config loads");
             let cache = Cache::default_for_repo(temp.path(), true);
@@ -1432,10 +1493,36 @@ mod tests {
             assert_eq!(output.run_report.validation_events().len(), 20);
             assert!(!store_path.exists());
             assert!(!store_path.parent().expect("store directory").exists());
+            assert_eq!(store::materialization_counters_for_test(), (0, 0, 0));
+        }
+
+        #[test]
+        fn no_cache_full_kernel_run_is_filesystem_free_and_materialization_free() {
+            store::reset_materialization_counters_for_test();
+            let temp = tempfile::tempdir().expect("temp directory");
+            let loaded = load_config(temp.path()).expect("default config loads");
+            let cache = Cache::default_for_repo(temp.path(), false);
+            let store_path = cache.semantic_store_path();
+
+            let output = AnalysisKernel::run(KernelInput {
+                loaded: &loaded,
+                cache: &cache,
+                config_digest: "config",
+                rule_digest: "rules",
+                plan: &AnalysisPlan::empty(),
+                parallel: false,
+            })
+            .expect("kernel should run");
+
+            assert_eq!(output.run_report.store_status(), &StoreStatus::Disabled);
+            assert!(!store_path.exists());
+            assert!(!store_path.parent().expect("store directory").exists());
+            assert_eq!(store::materialization_counters_for_test(), (0, 0, 0));
         }
 
         #[test]
         fn enabled_maintenance_runs_after_validated_fact_finalization() {
+            store::reset_materialization_counters_for_test();
             let temp = tempfile::tempdir().expect("temp directory");
             std::fs::write(temp.path().join("main.go"), "package main\n").expect("write source");
             let loaded = load_config(temp.path()).expect("default config loads");
@@ -1458,6 +1545,7 @@ mod tests {
             assert_eq!(output.run_report.store_status(), &StoreStatus::Ready);
             assert_eq!(output.run_report.validation_events().len(), 20);
             assert!(store_path.is_file());
+            assert_eq!(store::materialization_counters_for_test(), (1, 1, 2));
 
             let stable_rows = output
                 .db
@@ -1466,7 +1554,10 @@ mod tests {
                 .expect("finalized metadata rows are canonical");
             let expected_fact_count = stable_rows.len();
             let metadata = incremental::ValidatedRunMetadata::from_finalized_run(
-                &output.run_report,
+                &output.run_report.input_snapshot,
+                &output.run_report.provider_outputs,
+                output.run_report.demand_query_trace(),
+                output.run_report.validation_events(),
                 AnalysisKernel::provider_manifests(),
                 stable_rows,
             )
@@ -1495,10 +1586,47 @@ mod tests {
         enum StoreMode {
             Disabled,
             Enabled,
+            Complete,
+            WorkspaceMismatch,
+            FirstFailureRecovery,
+            AuditedFailed,
+            Pending,
             Corrupt,
             Future,
             Invalid,
             Busy,
+            #[cfg(unix)]
+            Unsafe,
+        }
+
+        fn validated_setup_run(
+            loaded: &LoadedConfig,
+            cache: &Cache,
+            plan: &AnalysisPlan,
+        ) -> incremental::ValidatedRunMetadata {
+            let output = AnalysisKernel::run(KernelInput {
+                loaded,
+                cache,
+                config_digest: "config",
+                rule_digest: "rules",
+                plan,
+                parallel: false,
+            })
+            .expect("setup kernel run");
+            let fact_rows = output
+                .db
+                .fact_meta()
+                .stable_rows()
+                .expect("setup fact metadata is canonical");
+            incremental::ValidatedRunMetadata::from_finalized_run(
+                &output.run_report.input_snapshot,
+                &output.run_report.provider_outputs,
+                output.run_report.demand_query_trace(),
+                output.run_report.validation_events(),
+                AnalysisKernel::provider_manifests(),
+                fact_rows,
+            )
+            .expect("setup run is a complete handoff")
         }
 
         fn run_mode(mode: StoreMode) -> (String, u8, StoreStatus) {
@@ -1509,20 +1637,70 @@ mod tests {
             )
             .expect("write source");
             let loaded = load_config(temp.path()).expect("default config loads");
-            let cache = Cache::default_for_repo(temp.path(), true);
-            let cache = if matches!(mode, StoreMode::Disabled) {
-                cache
-            } else {
-                cache.with_semantic_store_enabled_for_test()
-            };
-            let path = cache.semantic_store_path();
+            let plan = AnalysisPlan::empty();
+            let base_cache = Cache::default_for_repo(temp.path(), true);
+            let path = base_cache.semantic_store_path();
             let config = store::StoreConfig::new(&path, true);
+            let setup = matches!(
+                mode,
+                StoreMode::Complete
+                    | StoreMode::FirstFailureRecovery
+                    | StoreMode::AuditedFailed
+                    | StoreMode::Pending
+            )
+            .then(|| validated_setup_run(&loaded, &base_cache, &plan));
+            let cache = if matches!(mode, StoreMode::Disabled) {
+                base_cache
+            } else {
+                base_cache.with_semantic_store_enabled_for_test()
+            };
 
             let mut corrupt_before = None;
             let mut fixture_before = None;
             let mut held_writer = None;
+            #[cfg(unix)]
+            let mut unsafe_outside = None;
             match mode {
                 StoreMode::Disabled | StoreMode::Enabled => {}
+                StoreMode::Complete => {
+                    let outcome = store::SemanticStore::commit_validated_run(
+                        &config,
+                        setup.as_ref().expect("complete setup"),
+                    );
+                    assert_eq!(outcome.status, StoreStatus::Ready);
+                }
+                StoreMode::WorkspaceMismatch => {
+                    let other = tempfile::tempdir().expect("other workspace");
+                    std::fs::write(other.path().join("main.go"), "package main\n")
+                        .expect("write other source");
+                    let other_loaded = load_config(other.path()).expect("other config loads");
+                    let other_cache = Cache::default_for_repo(other.path(), true);
+                    let other_validated = validated_setup_run(&other_loaded, &other_cache, &plan);
+                    let outcome =
+                        store::SemanticStore::commit_validated_run(&config, &other_validated);
+                    assert_eq!(outcome.status, StoreStatus::Ready);
+                }
+                StoreMode::FirstFailureRecovery => {
+                    let outcome = store::SemanticStore::commit_validated_run(
+                        &config,
+                        setup.as_ref().expect("failure-recovery setup"),
+                    );
+                    assert_eq!(outcome.status, StoreStatus::Ready);
+                    store::inject_next_commit_failure_for_test();
+                }
+                StoreMode::AuditedFailed | StoreMode::Pending => {
+                    let fixture_state = if matches!(mode, StoreMode::Pending) {
+                        store::StoredGenerationFixtureState::Pending
+                    } else {
+                        store::StoredGenerationFixtureState::AuditedFailed
+                    };
+                    store::install_generation_fixture_for_test(
+                        &config,
+                        setup.as_ref().expect("generation-state setup"),
+                        fixture_state,
+                    )
+                    .expect("install generation state");
+                }
                 StoreMode::Corrupt => {
                     std::fs::create_dir_all(path.parent().expect("store directory"))
                         .expect("create store directory");
@@ -1548,7 +1726,10 @@ mod tests {
                     );
                 }
                 StoreMode::Busy => {
-                    assert_eq!(store::SemanticStore::maintain(&config), StoreStatus::Ready);
+                    assert_eq!(
+                        store::initialize_empty_fixture_for_test(&config),
+                        StoreStatus::Ready
+                    );
                     fixture_before = Some(
                         store::fixture_snapshot_for_test(&path).expect("snapshot current fixture"),
                     );
@@ -1556,9 +1737,18 @@ mod tests {
                         store::hold_writer_connection_for_test(&path).expect("hold writer lease"),
                     );
                 }
+                #[cfg(unix)]
+                StoreMode::Unsafe => {
+                    std::fs::create_dir_all(path.parent().expect("store directory"))
+                        .expect("create store directory");
+                    let outside = temp.path().join("outside.sqlite3");
+                    let bytes = b"unsafe parity target".to_vec();
+                    std::fs::write(&outside, &bytes).expect("write outside target");
+                    std::os::unix::fs::symlink(&outside, &path).expect("symlink store path");
+                    unsafe_outside = Some((outside, bytes));
+                }
             }
 
-            let plan = AnalysisPlan::empty();
             let mut output = AnalysisKernel::run(KernelInput {
                 loaded: &loaded,
                 cache: &cache,
@@ -1598,6 +1788,10 @@ mod tests {
                     before
                 );
             }
+            #[cfg(unix)]
+            if let Some((outside, bytes)) = unsafe_outside {
+                assert_eq!(std::fs::read(outside).expect("read outside target"), bytes);
+            }
             drop(held_writer);
             (json, exit_code, status)
         }
@@ -1607,8 +1801,19 @@ mod tests {
             let (disabled_json, disabled_exit, disabled_status) = run_mode(StoreMode::Disabled);
             assert_eq!(disabled_status, StoreStatus::Disabled);
 
-            let cases = [
+            let mut cases = vec![
                 (StoreMode::Enabled, StoreStatus::Ready),
+                (StoreMode::Complete, StoreStatus::Ready),
+                (
+                    StoreMode::WorkspaceMismatch,
+                    StoreStatus::Skipped(store::StoreSkipReason::WorkspaceMismatch),
+                ),
+                (
+                    StoreMode::FirstFailureRecovery,
+                    StoreStatus::Skipped(store::StoreSkipReason::CommitFailed),
+                ),
+                (StoreMode::AuditedFailed, StoreStatus::Ready),
+                (StoreMode::Pending, StoreStatus::Ready),
                 (
                     StoreMode::Corrupt,
                     StoreStatus::RebuildNeeded(store::StoreRebuildReason::Corrupt),
@@ -1626,6 +1831,11 @@ mod tests {
                 ),
                 (StoreMode::Busy, StoreStatus::BusySkipped),
             ];
+            #[cfg(unix)]
+            cases.push((
+                StoreMode::Unsafe,
+                StoreStatus::Skipped(store::StoreSkipReason::UnsafePath),
+            ));
 
             for (mode, expected_status) in cases {
                 let (json, exit_code, status) = run_mode(mode);

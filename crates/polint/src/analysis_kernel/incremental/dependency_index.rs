@@ -4,7 +4,7 @@ use std::fmt;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::dependency_input::InputDependencyKey;
-use super::digest::{Digest, DigestKind};
+use super::digest::{ConfigIdentity, Digest, DigestKind, RunIdentity};
 use super::input_snapshot::InputComponentStatus;
 use super::keys::{DiagnosticKey, LayerKey, QueryKey, SummaryKey, dependency_layer_digest};
 
@@ -14,16 +14,30 @@ pub(crate) const DEPENDENCY_INDEX_SCHEMA: &str = "polint-dependency-index-2";
 #[serde(rename_all = "snake_case")]
 pub(crate) enum CacheNode {
     DependencyInput(InputDependencyKey),
+    RunManifest(RunManifestKey),
     Layer(LayerKey),
     Query(QueryKey),
     Summary(SummaryKey),
     Diagnostic(DiagnosticKey),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub(crate) struct RunManifestKey {
+    pub(crate) run: RunIdentity,
+    pub(crate) full_config: ConfigIdentity,
+}
+
+impl RunManifestKey {
+    pub(crate) fn new(run: RunIdentity, full_config: ConfigIdentity) -> Self {
+        Self { run, full_config }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum CacheNodeKind {
     DependencyInput,
+    RunManifest,
     Layer,
     Query,
     Summary,
@@ -112,6 +126,7 @@ impl CacheNodeKind {
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::DependencyInput => "dependency_input",
+            Self::RunManifest => "run_manifest",
             Self::Layer => "layer",
             Self::Query => "query",
             Self::Summary => "summary",
@@ -122,6 +137,7 @@ impl CacheNodeKind {
     pub(crate) fn parse_label(label: &str) -> Result<Self, UnknownCacheNodeKindLabel> {
         match label {
             "dependency_input" => Ok(Self::DependencyInput),
+            "run_manifest" => Ok(Self::RunManifest),
             "layer" => Ok(Self::Layer),
             "query" => Ok(Self::Query),
             "summary" => Ok(Self::Summary),
@@ -144,6 +160,7 @@ impl CacheNode {
     pub(crate) fn kind(&self) -> CacheNodeKind {
         match self {
             Self::DependencyInput(_) => CacheNodeKind::DependencyInput,
+            Self::RunManifest(_) => CacheNodeKind::RunManifest,
             Self::Layer(_) => CacheNodeKind::Layer,
             Self::Query(_) => CacheNodeKind::Query,
             Self::Summary(_) => CacheNodeKind::Summary,

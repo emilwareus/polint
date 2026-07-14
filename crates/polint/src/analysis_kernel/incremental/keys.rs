@@ -1049,14 +1049,28 @@ impl DiagnosticKey {
             rule_version: rule_version.into(),
             rule_code_digest,
             options_digest,
-            requested_view_digests: sorted_digests(requested_view_digests),
+            requested_view_digests: sorted_unique_digests(requested_view_digests),
             evidence_digest,
         }
+    }
+
+    pub(crate) fn requested_views_digest(&self) -> Digest {
+        Digest::from_unordered(
+            DigestKind::Dependency,
+            "diagnostic_requested_views",
+            self.requested_view_digests.clone(),
+        )
     }
 }
 
 fn sorted_digests(mut digests: Vec<Digest>) -> Vec<Digest> {
     digests.sort();
+    digests
+}
+
+fn sorted_unique_digests(mut digests: Vec<Digest>) -> Vec<Digest> {
+    digests.sort();
+    digests.dedup();
     digests
 }
 
@@ -2950,6 +2964,36 @@ mod tests {
         assert!(
             digest_value(&diagnostic_json["requested_view_digests"][0])
                 < digest_value(&diagnostic_json["requested_view_digests"][1])
+        );
+    }
+
+    #[test]
+    fn diagnostic_requested_views_digest_is_canonical_and_identity_sensitive() {
+        let a = Digest::from_parts(DigestKind::ProviderOutput, "requested_view", &["a"]);
+        let b = Digest::from_parts(DigestKind::ProviderOutput, "requested_view", &["b"]);
+        let key = |requested_view_digests| {
+            DiagnosticKey::new(
+                "local/example",
+                "1",
+                Digest::absent(DigestKind::RuleCode, "none"),
+                Digest::absent(DigestKind::RuleOptions, "none"),
+                requested_view_digests,
+                Digest::absent(DigestKind::Evidence, "none"),
+            )
+        };
+        let left = key(vec![b.clone(), a.clone(), a.clone()]);
+        let reordered = key(vec![a.clone(), b]);
+        let changed = key(vec![a]);
+
+        assert_eq!(left, reordered);
+        assert_eq!(left.requested_views_digest().kind, DigestKind::Dependency);
+        assert_eq!(
+            left.requested_views_digest(),
+            reordered.requested_views_digest()
+        );
+        assert_ne!(
+            left.requested_views_digest(),
+            changed.requested_views_digest()
         );
     }
 

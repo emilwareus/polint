@@ -277,6 +277,9 @@ fn action_for_change(row: &ChangeSetRow, node: &CacheNode) -> Option<Invalidatio
 fn node_contains_digest(node: &CacheNode, digest: &Digest) -> bool {
     match node {
         CacheNode::DependencyInput(input) => input.digest == *digest,
+        CacheNode::RunManifest(key) => {
+            key.run.digest() == digest || key.full_config.digest() == digest
+        }
         CacheNode::Layer(key) => layer_key_contains_digest(key, digest),
         CacheNode::Query(key) => query_key_contains_digest(key, digest),
         CacheNode::Summary(key) => summary_key_contains_digest(key, digest),

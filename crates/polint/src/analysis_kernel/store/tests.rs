@@ -10,6 +10,968 @@ use crate::analysis_plan::AnalysisPlan;
 use crate::cache::Cache;
 use crate::config::load_config;
 
+struct GenerationFinalizedFixture {
+    report: crate::analysis_kernel::incremental::KernelRunReport,
+    manifests: Vec<crate::analysis_kernel::ProviderManifest>,
+    facts: Vec<crate::analysis_kernel::StableFactMetaRow>,
+}
+
+mod metadata_invalidation_matrix {
+    use super::*;
+    use crate::analysis_kernel::incremental::{
+        CacheNode, ChangeKind, ChangeSet, ChangeSetRow, DependencyEdge, DependencyKind,
+        DiagnosticKey, InputComponentStatus, InputDependencyKey, InputDependencyKind,
+        InvalidationAction, InvalidationPlan, ShapeKind,
+    };
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum ExpectedAction {
+        Verify,
+        Recompute,
+        Drop,
+        Quarantine,
+    }
+
+    #[derive(Clone, Debug)]
+    struct MatrixCase {
+        label: &'static str,
+        input: InputDependencyKey,
+        kind: ChangeKind,
+        target: CacheNode,
+        sibling: CacheNode,
+        expected: ExpectedAction,
+    }
+
+    #[derive(Clone, Debug)]
+    struct MatrixTopology {
+        cases: Vec<MatrixCase>,
+        statuses: std::collections::BTreeSet<InputComponentStatus>,
+    }
+
+    fn rotate<T>(rows: &mut [T], seed: usize) {
+        if !rows.is_empty() {
+            rows.rotate_left(seed % rows.len());
+        }
+    }
+
+    fn permuted_validated_run(
+        fixture: &GenerationFinalizedFixture,
+        seed: usize,
+        mutate_telemetry: bool,
+    ) -> (ValidatedRunMetadata, MatrixTopology) {
+        let mut report = fixture.report.clone();
+        let mut manifests = fixture.manifests.clone();
+        let mut facts = fixture.facts.clone();
+
+        rotate(&mut report.input_snapshot.files, seed);
+        rotate(&mut report.input_snapshot.analysis_settings, seed + 1);
+        rotate(&mut report.input_snapshot.requested_capabilities, seed + 2);
+        rotate(&mut report.input_snapshot.rules, seed + 3);
+        rotate(&mut report.input_snapshot.models, seed + 4);
+        rotate(&mut report.input_snapshot.extensions, seed + 5);
+        rotate(&mut report.input_snapshot.tool_invocations, seed + 6);
+        rotate(&mut report.input_snapshot.provider_schemas, seed + 7);
+        rotate(&mut report.input_snapshot.go_lifecycle.components, seed + 8);
+        rotate(
+            &mut report.input_snapshot.ts_js_lifecycle.components,
+            seed + 9,
+        );
+        rotate(&mut report.provider_outputs, seed + 10);
+        rotate(&mut manifests, seed + 11);
+        rotate(&mut facts, seed + 12);
+        let entries = report.demand_query_trace.entries().to_vec();
+        let mut trace = DemandQueryTrace::default();
+        for entry in entries
+            .iter()
+            .cycle()
+            .skip(seed % entries.len())
+            .take(entries.len())
+        {
+            let mut entry = entry.clone();
+            if mutate_telemetry {
+                entry.cache_status = match entry.cache_status {
+                    DemandCacheStatus::Computed => DemandCacheStatus::Hit,
+                    DemandCacheStatus::Hit | DemandCacheStatus::Miss => DemandCacheStatus::Computed,
+                };
+                entry.compute_duration_micros = entry.compute_duration_micros.saturating_add(8192);
+            }
+            trace.record_entry(entry);
+        }
+        report.demand_query_trace = trace;
+        if mutate_telemetry {
+            report.cache_stats.hits = report.cache_stats.hits.saturating_add(31);
+            for provider in &mut report.provider_outputs {
+                provider.cache_stats.misses = provider.cache_stats.misses.saturating_add(17);
+                provider.cache_stats.writes = provider.cache_stats.writes.saturating_add(23);
+            }
+            for file in &mut report.input_snapshot.files {
+                file.mtime_hint_present = !file.mtime_hint_present;
+            }
+        }
+
+        let base = ValidatedRunMetadata::from_finalized_run(
+            &report.input_snapshot,
+            &report.provider_outputs,
+            &report.demand_query_trace,
+            report.validation_events(),
+            &manifests,
+            facts,
+        )
+        .expect("permuted run remains a valid store handoff");
+        attach_matrix_dependencies(base, seed)
+    }
+
+    fn attach_matrix_dependencies(
+        base: ValidatedRunMetadata,
+        seed: usize,
+    ) -> (ValidatedRunMetadata, MatrixTopology) {
+        let queries = base
+            .query_rows()
+            .iter()
+            .map(|row| row.query_key().clone())
+            .collect::<Vec<_>>();
+        let target_query = queries.first().cloned().expect("matrix target query");
+        let sibling_query = queries.get(1).cloned().expect("matrix sibling query");
+        let target_query_node = CacheNode::Query(target_query.clone());
+        let sibling_query_node = CacheNode::Query(sibling_query);
+
+        let target_rule_code = typed_input(
+            InputDependencyKind::RuleCode,
+            "rules/matrix-target:code",
+            DigestKind::RuleCode,
+            InputComponentStatus::Present,
+        );
+        let target_rule_options = typed_input(
+            InputDependencyKind::RuleOptions,
+            "rules/matrix-target:options",
+            DigestKind::RuleOptions,
+            InputComponentStatus::SetupMissing,
+        );
+        let sibling_rule_code = typed_input(
+            InputDependencyKind::RuleCode,
+            "rules/matrix-sibling:code",
+            DigestKind::RuleCode,
+            InputComponentStatus::Present,
+        );
+        let sibling_rule_options = typed_input(
+            InputDependencyKind::RuleOptions,
+            "rules/matrix-sibling:options",
+            DigestKind::RuleOptions,
+            InputComponentStatus::Present,
+        );
+        let target_diagnostic = DiagnosticKey::new(
+            "matrix.target",
+            "1",
+            target_rule_code.digest.clone(),
+            target_rule_options.digest.clone(),
+            vec![Digest::from_parts(
+                DigestKind::ProviderOutput,
+                "matrix_requested_view",
+                &["target"],
+            )],
+            Digest::from_parts(DigestKind::Evidence, "matrix_evidence", &["target"]),
+        );
+        let sibling_diagnostic = DiagnosticKey::new(
+            "matrix.sibling",
+            "1",
+            sibling_rule_code.digest.clone(),
+            sibling_rule_options.digest.clone(),
+            vec![Digest::from_parts(
+                DigestKind::ProviderOutput,
+                "matrix_requested_view",
+                &["sibling"],
+            )],
+            Digest::from_parts(DigestKind::Evidence, "matrix_evidence", &["sibling"]),
+        );
+        let target_diagnostic_node = CacheNode::Diagnostic(target_diagnostic.clone());
+        let sibling_diagnostic_node = CacheNode::Diagnostic(sibling_diagnostic.clone());
+
+        let mut declared_edges = vec![
+            edge(
+                target_diagnostic_node.clone(),
+                target_rule_code.clone(),
+                DependencyKind::Rule,
+                ShapeKind::RuleCode,
+            ),
+            edge(
+                target_diagnostic_node.clone(),
+                target_rule_options.clone(),
+                DependencyKind::Rule,
+                ShapeKind::RuleOptions,
+            ),
+            edge(
+                sibling_diagnostic_node.clone(),
+                sibling_rule_code,
+                DependencyKind::Rule,
+                ShapeKind::RuleCode,
+            ),
+            edge(
+                sibling_diagnostic_node.clone(),
+                sibling_rule_options,
+                DependencyKind::Rule,
+                ShapeKind::RuleOptions,
+            ),
+        ];
+        let mut cases = Vec::new();
+        let status_cycle = [
+            InputComponentStatus::Present,
+            InputComponentStatus::Absent,
+            InputComponentStatus::Unsupported,
+            InputComponentStatus::SetupMissing,
+        ];
+        let specifications = [
+            (
+                "source_file",
+                InputDependencyKind::SourceFile,
+                DigestKind::SourceText,
+                ChangeKind::ContentOnly,
+                DependencyKind::SourceText,
+                ShapeKind::Content,
+                ExpectedAction::Verify,
+            ),
+            (
+                "package_project",
+                InputDependencyKind::PackageProject,
+                DigestKind::Workspace,
+                ChangeKind::ModuleTopology,
+                DependencyKind::Input,
+                ShapeKind::ModuleTopology,
+                ExpectedAction::Recompute,
+            ),
+            (
+                "provider_manifest_version",
+                InputDependencyKind::ProviderManifest,
+                DigestKind::ProviderManifest,
+                ChangeKind::ProviderVersion,
+                DependencyKind::Provider,
+                ShapeKind::ProviderVersion,
+                ExpectedAction::Drop,
+            ),
+            (
+                "provider_schema",
+                InputDependencyKind::ProviderSchema,
+                DigestKind::ProviderManifest,
+                ChangeKind::ProviderVersion,
+                DependencyKind::ProviderSchema,
+                ShapeKind::ProviderVersion,
+                ExpectedAction::Drop,
+            ),
+            (
+                "requested_capability",
+                InputDependencyKind::RequestedCapability,
+                DigestKind::AnalysisRequirements,
+                ChangeKind::Unknown,
+                DependencyKind::Input,
+                ShapeKind::Unknown,
+                ExpectedAction::Recompute,
+            ),
+            (
+                "analysis_setting",
+                InputDependencyKind::AnalysisSetting,
+                DigestKind::AnalysisSettings,
+                ChangeKind::Unknown,
+                DependencyKind::Config,
+                ShapeKind::Unknown,
+                ExpectedAction::Recompute,
+            ),
+            (
+                "go_lifecycle",
+                InputDependencyKind::LanguageLifecycle,
+                DigestKind::GoLifecycle,
+                ChangeKind::Lifecycle,
+                DependencyKind::Lifecycle,
+                ShapeKind::Lifecycle,
+                ExpectedAction::Recompute,
+            ),
+            (
+                "go_tool",
+                InputDependencyKind::ToolInvocation,
+                DigestKind::ToolInvocation,
+                ChangeKind::Toolchain,
+                DependencyKind::ToolInvocation,
+                ShapeKind::Toolchain,
+                ExpectedAction::Recompute,
+            ),
+            (
+                "ts_js_lifecycle",
+                InputDependencyKind::LanguageLifecycle,
+                DigestKind::TsJsLifecycle,
+                ChangeKind::Lifecycle,
+                DependencyKind::Lifecycle,
+                ShapeKind::Lifecycle,
+                ExpectedAction::Recompute,
+            ),
+            (
+                "ts_js_tool",
+                InputDependencyKind::ToolInvocation,
+                DigestKind::ToolInvocation,
+                ChangeKind::Toolchain,
+                DependencyKind::ToolInvocation,
+                ShapeKind::Toolchain,
+                ExpectedAction::Recompute,
+            ),
+            (
+                "upstream_layer",
+                InputDependencyKind::UpstreamLayer,
+                DigestKind::DependencyLayer,
+                ChangeKind::PublicApiShape,
+                DependencyKind::UpstreamLayer,
+                ShapeKind::PublicApi,
+                ExpectedAction::Recompute,
+            ),
+            (
+                "summary_dependency",
+                InputDependencyKind::SummaryDependency,
+                DigestKind::SummaryDependency,
+                ChangeKind::PublicApiShape,
+                DependencyKind::UpstreamLayer,
+                ShapeKind::PublicApi,
+                ExpectedAction::Recompute,
+            ),
+            (
+                "reserved_search_manifest",
+                InputDependencyKind::SearchManifest,
+                DigestKind::Dependency,
+                ChangeKind::Unknown,
+                DependencyKind::Input,
+                ShapeKind::Unknown,
+                ExpectedAction::Recompute,
+            ),
+            (
+                "extension_code",
+                InputDependencyKind::ExtensionCode,
+                DigestKind::ExtensionCode,
+                ChangeKind::ExtensionCode,
+                DependencyKind::Extension,
+                ShapeKind::ExtensionCode,
+                ExpectedAction::Quarantine,
+            ),
+            (
+                "extension_declared_input",
+                InputDependencyKind::ExtensionDeclaredInput,
+                DigestKind::ExtensionCode,
+                ChangeKind::ExtensionDeclaredInput,
+                DependencyKind::Extension,
+                ShapeKind::ExtensionDeclaredInput,
+                ExpectedAction::Quarantine,
+            ),
+            (
+                "model_digest",
+                InputDependencyKind::Model,
+                DigestKind::ModelFile,
+                ChangeKind::ModelFile,
+                DependencyKind::Model,
+                ShapeKind::Model,
+                ExpectedAction::Recompute,
+            ),
+        ];
+        for (
+            index,
+            (label, input_kind, digest_kind, change_kind, dependency_kind, shape, expected),
+        ) in specifications.into_iter().enumerate()
+        {
+            let input = typed_input(
+                input_kind,
+                &format!("matrix/{label}"),
+                digest_kind,
+                status_cycle[index % status_cycle.len()],
+            );
+            declared_edges.push(edge(
+                target_query_node.clone(),
+                input.clone(),
+                dependency_kind,
+                shape,
+            ));
+            cases.push(MatrixCase {
+                label,
+                input,
+                kind: change_kind,
+                target: target_query_node.clone(),
+                sibling: sibling_query_node.clone(),
+                expected,
+            });
+        }
+
+        cases.push(MatrixCase {
+            label: "rule_code",
+            input: target_rule_code,
+            kind: ChangeKind::RuleCode,
+            target: target_diagnostic_node.clone(),
+            sibling: sibling_diagnostic_node.clone(),
+            expected: ExpectedAction::Recompute,
+        });
+        cases.push(MatrixCase {
+            label: "rule_options",
+            input: target_rule_options,
+            kind: ChangeKind::RuleOptions,
+            target: target_diagnostic_node,
+            sibling: sibling_diagnostic_node,
+            expected: ExpectedAction::Recompute,
+        });
+
+        let config_edge = base
+            .dependency_index()
+            .forward_edges(&CacheNode::RunManifest(base.run_manifest_key().clone()))
+            .and_then(|edges| {
+                edges.iter().find_map(|edge| match &edge.to {
+                    CacheNode::DependencyInput(input)
+                        if input.kind == InputDependencyKind::Config =>
+                    {
+                        Some(input.clone())
+                    }
+                    _ => None,
+                })
+            })
+            .expect("run manifest declares the complete config input");
+        cases.push(MatrixCase {
+            label: "full_config",
+            input: config_edge,
+            kind: ChangeKind::Unknown,
+            target: CacheNode::RunManifest(base.run_manifest_key().clone()),
+            sibling: sibling_query_node.clone(),
+            expected: ExpectedAction::Recompute,
+        });
+
+        let query_edges = base
+            .dependency_index()
+            .forward_edges(&target_query_node)
+            .expect("query has exact declared inputs");
+        for (label, kind) in [
+            ("query_parameter_option", InputDependencyKind::QueryOption),
+            ("budget_profile", InputDependencyKind::BudgetProfile),
+        ] {
+            let input = query_edges
+                .iter()
+                .find_map(|edge| match &edge.to {
+                    CacheNode::DependencyInput(input) if input.kind == kind => Some(input.clone()),
+                    _ => None,
+                })
+                .expect("query boundary input");
+            cases.push(MatrixCase {
+                label,
+                input,
+                kind: ChangeKind::Unknown,
+                target: target_query_node.clone(),
+                sibling: sibling_query_node.clone(),
+                expected: ExpectedAction::Recompute,
+            });
+        }
+        let exact_query_input = target_query
+            .dependency_inputs
+            .as_slice()
+            .first()
+            .cloned()
+            .expect("query declares a typed dependency input");
+        cases.push(MatrixCase {
+            label: "exact_query_dependency_inputs",
+            input: exact_query_input,
+            kind: ChangeKind::Unknown,
+            target: target_query_node,
+            sibling: sibling_query_node,
+            expected: ExpectedAction::Recompute,
+        });
+
+        let edge_count = declared_edges.len();
+        declared_edges.rotate_left(seed % edge_count);
+        let validated = base
+            .with_dependency_fixture(vec![sibling_diagnostic, target_diagnostic], declared_edges)
+            .expect("matrix dependency fixture is canonical and complete");
+        let statuses = cases.iter().map(|case| case.input.status).collect();
+        (validated, MatrixTopology { cases, statuses })
+    }
+
+    fn typed_input(
+        kind: InputDependencyKind,
+        stable_key: &str,
+        digest_kind: DigestKind,
+        status: InputComponentStatus,
+    ) -> InputDependencyKey {
+        let digest = Digest::from_parts(digest_kind, "matrix_input", &[stable_key]);
+        let result = match kind {
+            InputDependencyKind::SourceFile => {
+                InputDependencyKey::source_file(stable_key, digest, status)
+            }
+            InputDependencyKind::PackageProject => {
+                InputDependencyKey::package_project(stable_key, digest, status)
+            }
+            InputDependencyKind::ProviderManifest => {
+                InputDependencyKey::provider_manifest(stable_key, digest, status)
+            }
+            InputDependencyKind::ProviderSchema => {
+                InputDependencyKey::provider_schema(stable_key, digest, status)
+            }
+            InputDependencyKind::RequestedCapability => {
+                InputDependencyKey::requested_capability(stable_key, digest, status)
+            }
+            InputDependencyKind::AnalysisSetting => {
+                InputDependencyKey::analysis_setting(stable_key, digest, status)
+            }
+            InputDependencyKind::LanguageLifecycle => {
+                InputDependencyKey::language_lifecycle(stable_key, digest, status)
+            }
+            InputDependencyKind::ToolInvocation => {
+                InputDependencyKey::tool_invocation(stable_key, digest, status)
+            }
+            InputDependencyKind::Config => InputDependencyKey::config(stable_key, digest, status),
+            InputDependencyKind::UpstreamLayer => {
+                InputDependencyKey::upstream_layer(stable_key, digest, status)
+            }
+            InputDependencyKind::SummaryDependency => {
+                InputDependencyKey::summary_dependency(stable_key, digest, status)
+            }
+            InputDependencyKind::QueryOption => {
+                InputDependencyKey::query_option(stable_key, digest, status)
+            }
+            InputDependencyKind::BudgetProfile => {
+                InputDependencyKey::budget_profile(stable_key, digest, status)
+            }
+            InputDependencyKind::SearchManifest => {
+                InputDependencyKey::search_manifest(stable_key, digest, status)
+            }
+            InputDependencyKind::ExtensionCode => {
+                InputDependencyKey::extension_code(stable_key, digest, status)
+            }
+            InputDependencyKind::ExtensionDeclaredInput => {
+                InputDependencyKey::extension_declared_input(stable_key, digest, status)
+            }
+            InputDependencyKind::Model => InputDependencyKey::model(stable_key, digest, status),
+            InputDependencyKind::RuleCode => {
+                InputDependencyKey::rule_code(stable_key, digest, status)
+            }
+            InputDependencyKind::RuleOptions => {
+                InputDependencyKey::rule_options(stable_key, digest, status)
+            }
+        };
+        result.expect("matrix digest kind matches typed input")
+    }
+
+    fn edge(
+        from: CacheNode,
+        input: InputDependencyKey,
+        kind: DependencyKind,
+        required_shape: ShapeKind,
+    ) -> DependencyEdge {
+        DependencyEdge {
+            from,
+            to: CacheNode::DependencyInput(input),
+            kind,
+            required_shape,
+        }
+    }
+
+    fn commit_and_reopen(
+        root: &Path,
+        validated: &ValidatedRunMetadata,
+    ) -> generation::ActiveCompleteGeneration {
+        let config = generation_store_config(root);
+        let outcome = SemanticStore::commit_validated_run(&config, validated);
+        assert_eq!(outcome.status, StoreStatus::Ready);
+        let statistics = outcome
+            .statistics
+            .expect("ready commit returns private statistics");
+        assert!(statistics.planned_semantic_row_count > 0);
+        assert!(statistics.semantic_logical_bytes > 0);
+        assert_eq!(
+            statistics.input_digest,
+            *validated.identities().input_snapshot()
+        );
+        assert_eq!(
+            statistics.dependency_digest,
+            *validated.identities().dependency()
+        );
+        assert_eq!(
+            statistics.validation_digest,
+            *validated.identities().validation()
+        );
+        generation::read_active_complete(&config, validated.identities().workspace())
+            .expect("active read succeeds")
+            .expect("committed generation is active")
+    }
+
+    fn plans_for_cases(
+        index: &crate::analysis_kernel::incremental::DependencyIndex,
+        topology: &MatrixTopology,
+    ) -> Vec<InvalidationPlan> {
+        let layers = index
+            .all_nodes()
+            .into_iter()
+            .filter(|node| matches!(node, CacheNode::Layer(_)))
+            .collect::<Vec<_>>();
+        assert!(!layers.is_empty());
+        let unchanged = InvalidationPlan::from_change_set(index, &ChangeSet::from_rows(Vec::new()));
+        assert!(
+            unchanged
+                .actions
+                .iter()
+                .all(|action| matches!(action, InvalidationAction::Reuse(_)))
+        );
+        let mut plans = vec![unchanged];
+        for case in &topology.cases {
+            let plan = InvalidationPlan::from_change_set(
+                index,
+                &ChangeSet::from_rows(vec![ChangeSetRow {
+                    node: CacheNode::DependencyInput(case.input.clone()),
+                    kind: case.kind,
+                    digest: case.input.digest.clone(),
+                }]),
+            );
+            let target_action = plan
+                .action_for(&case.target)
+                .unwrap_or_else(|| panic!("{} target has an action", case.label));
+            assert!(
+                matches!(
+                    (case.expected, target_action),
+                    (ExpectedAction::Verify, InvalidationAction::Verify(_, _))
+                        | (
+                            ExpectedAction::Recompute,
+                            InvalidationAction::Recompute(_, _)
+                        )
+                        | (ExpectedAction::Drop, InvalidationAction::Drop(_, _))
+                        | (
+                            ExpectedAction::Quarantine,
+                            InvalidationAction::Quarantine(_, _)
+                        )
+                ),
+                "{} has its exact invalidation class: {target_action:?}",
+                case.label
+            );
+            assert!(
+                matches!(
+                    plan.action_for(&case.sibling),
+                    Some(InvalidationAction::Reuse(_))
+                ),
+                "{} preserves its unreferenced sibling",
+                case.label
+            );
+            if matches!(case.label, "rule_code" | "rule_options" | "full_config") {
+                assert!(
+                    layers.iter().all(|layer| matches!(
+                        plan.action_for(layer),
+                        Some(InvalidationAction::Reuse(_))
+                    )),
+                    "{} preserves every unrelated analysis layer",
+                    case.label
+                );
+            }
+            plans.push(plan);
+        }
+        plans
+    }
+
+    fn transition_run(
+        base: &ValidatedRunMetadata,
+        stable_key: &str,
+        status: InputComponentStatus,
+    ) -> (
+        ValidatedRunMetadata,
+        CacheNode,
+        CacheNode,
+        InputDependencyKey,
+    ) {
+        let queries = base
+            .query_rows()
+            .iter()
+            .map(|row| row.query_key().clone())
+            .collect::<Vec<_>>();
+        let target = CacheNode::Query(queries.first().cloned().expect("transition target query"));
+        let sibling = CacheNode::Query(queries.get(1).cloned().expect("transition sibling query"));
+        let input = typed_input(
+            InputDependencyKind::AnalysisSetting,
+            stable_key,
+            DigestKind::AnalysisSettings,
+            status,
+        );
+        let validated = base
+            .clone()
+            .with_dependency_fixture(
+                Vec::new(),
+                vec![edge(
+                    target.clone(),
+                    input.clone(),
+                    DependencyKind::Config,
+                    ShapeKind::Unknown,
+                )],
+            )
+            .expect("status transition fixture remains canonical");
+        (validated, target, sibling, input)
+    }
+
+    fn status_transition_change(
+        prior: &InputDependencyKey,
+        next: &InputDependencyKey,
+    ) -> ChangeSetRow {
+        assert_eq!(prior.kind, next.kind);
+        assert_eq!(prior.stable_key, next.stable_key);
+        assert_eq!(prior.digest, next.digest);
+        assert_ne!(prior.status, next.status);
+        ChangeSetRow {
+            node: CacheNode::DependencyInput(prior.clone()),
+            kind: ChangeKind::Unknown,
+            digest: prior.digest.clone(),
+        }
+    }
+
+    #[test]
+    fn persisted_referenced_inputs_invalidate_and_unreferenced_siblings_reuse() {
+        let temp = tempfile::tempdir().expect("temporary matrix root");
+        let fixture = generation_finalized_fixture(&temp.path().join("repo"), "matrix");
+        let (validated, topology) = permuted_validated_run(&fixture, 0, false);
+        assert_eq!(
+            topology.statuses,
+            std::collections::BTreeSet::from([
+                InputComponentStatus::Present,
+                InputComponentStatus::Absent,
+                InputComponentStatus::Unsupported,
+                InputComponentStatus::SetupMissing,
+            ])
+        );
+        let active = commit_and_reopen(&temp.path().join("baseline-store"), &validated);
+        assert_eq!(active.dependency_index, *validated.dependency_index());
+        let plans = plans_for_cases(&active.dependency_index, &topology);
+        assert_eq!(plans.len(), topology.cases.len() + 1);
+    }
+
+    #[test]
+    fn persisted_status_transitions_invalidate_only_the_linked_query() {
+        let temp = tempfile::tempdir().expect("temporary transition root");
+        let base = generation_validated_fixture(&temp.path().join("repo"), "transitions");
+        let transitions = [
+            (
+                "present-to-absent",
+                InputComponentStatus::Present,
+                InputComponentStatus::Absent,
+            ),
+            (
+                "absent-to-present",
+                InputComponentStatus::Absent,
+                InputComponentStatus::Present,
+            ),
+            (
+                "unsupported-to-setup-missing",
+                InputComponentStatus::Unsupported,
+                InputComponentStatus::SetupMissing,
+            ),
+            (
+                "setup-missing-to-unsupported",
+                InputComponentStatus::SetupMissing,
+                InputComponentStatus::Unsupported,
+            ),
+        ];
+
+        for (label, prior_status, next_status) in transitions {
+            let stable_key = format!("matrix/status-transition/{label}");
+            let (prior, target, sibling, prior_input) =
+                transition_run(&base, &stable_key, prior_status);
+            let (next, next_target, next_sibling, next_input) =
+                transition_run(&base, &stable_key, next_status);
+            assert_eq!(target, next_target);
+            assert_eq!(sibling, next_sibling);
+            assert_eq!(prior_input.stable_key, next_input.stable_key);
+            assert_eq!(prior_input.digest, next_input.digest);
+            assert_eq!(prior_input.status, prior_status);
+            assert_eq!(next_input.status, next_status);
+
+            let prior_active =
+                commit_and_reopen(&temp.path().join(format!("{label}-prior")), &prior);
+            let next_active = commit_and_reopen(&temp.path().join(format!("{label}-next")), &next);
+            assert_ne!(
+                prior_active.plan.semantic.identities, next_active.plan.semantic.identities,
+                "{label} changes persisted semantic identity"
+            );
+            assert_ne!(
+                prior_active.dependency_index, next_active.dependency_index,
+                "{label} changes the persisted typed dependency index"
+            );
+            for (active, expected_input) in
+                [(&prior_active, &prior_input), (&next_active, &next_input)]
+            {
+                assert!(
+                    active
+                        .dependency_index
+                        .forward_edges(&target)
+                        .expect("transition target has persisted edges")
+                        .iter()
+                        .any(|edge| {
+                            edge.to == CacheNode::DependencyInput(expected_input.clone())
+                        }),
+                    "{label} preserves the exact typed status"
+                );
+            }
+
+            let unchanged = InvalidationPlan::from_change_set(
+                &prior_active.dependency_index,
+                &ChangeSet::from_rows(Vec::new()),
+            );
+            assert!(
+                unchanged
+                    .actions
+                    .iter()
+                    .all(|action| matches!(action, InvalidationAction::Reuse(_))),
+                "{label} reuses every node when nothing changes"
+            );
+            let changed = InvalidationPlan::from_change_set(
+                &prior_active.dependency_index,
+                &ChangeSet::from_rows(vec![status_transition_change(&prior_input, &next_input)]),
+            );
+            assert!(
+                matches!(
+                    changed.action_for(&target),
+                    Some(InvalidationAction::Recompute(_, _))
+                ),
+                "{label} invalidates its linked query"
+            );
+            assert!(
+                matches!(
+                    changed.action_for(&sibling),
+                    Some(InvalidationAction::Reuse(_))
+                ),
+                "{label} preserves the unlinked sibling"
+            );
+        }
+    }
+
+    #[test]
+    fn twenty_persisted_permutations_preserve_rows_maps_digests_and_actions() {
+        let temp = tempfile::tempdir().expect("temporary permutation root");
+        let fixture = generation_finalized_fixture(&temp.path().join("repo"), "permutations");
+        let (baseline_validated, baseline_topology) = permuted_validated_run(&fixture, 0, false);
+        let baseline_active = commit_and_reopen(&temp.path().join("store-0"), &baseline_validated);
+        let baseline_actions =
+            plans_for_cases(&baseline_active.dependency_index, &baseline_topology);
+
+        for seed in 1..20 {
+            let (validated, topology) = permuted_validated_run(&fixture, seed, false);
+            let active = commit_and_reopen(&temp.path().join(format!("store-{seed}")), &validated);
+            assert_eq!(
+                active.plan.semantic, baseline_active.plan.semantic,
+                "rows {seed}"
+            );
+            assert_eq!(
+                active.dependency_index, baseline_active.dependency_index,
+                "maps {seed}"
+            );
+            assert_eq!(
+                active.plan.semantic.identities, baseline_active.plan.semantic.identities,
+                "semantic digests {seed}"
+            );
+            assert_eq!(
+                plans_for_cases(&active.dependency_index, &topology),
+                baseline_actions,
+                "actions {seed}"
+            );
+        }
+    }
+
+    #[test]
+    fn persisted_telemetry_mutations_are_semantically_neutral() {
+        let temp = tempfile::tempdir().expect("temporary telemetry root");
+        let fixture = generation_finalized_fixture(&temp.path().join("repo"), "telemetry");
+        let (baseline_validated, baseline_topology) = permuted_validated_run(&fixture, 0, false);
+        let (telemetry_validated, telemetry_topology) = permuted_validated_run(&fixture, 7, true);
+        let baseline = commit_and_reopen(&temp.path().join("baseline"), &baseline_validated);
+        let telemetry = commit_and_reopen(&temp.path().join("telemetry"), &telemetry_validated);
+
+        assert_eq!(telemetry.plan.semantic, baseline.plan.semantic);
+        assert_ne!(telemetry.plan.telemetry, baseline.plan.telemetry);
+        assert_eq!(telemetry.dependency_index, baseline.dependency_index);
+        assert_eq!(
+            plans_for_cases(&telemetry.dependency_index, &telemetry_topology),
+            plans_for_cases(&baseline.dependency_index, &baseline_topology)
+        );
+    }
+
+    #[test]
+    fn diagnostics_that_differ_only_by_requested_views_round_trip_independently() {
+        let temp = tempfile::tempdir().expect("temporary diagnostic identity root");
+        let base = generation_validated_fixture(&temp.path().join("repo"), "diagnostics");
+        let rule_code = typed_input(
+            InputDependencyKind::RuleCode,
+            "rules/matrix-same-rule:code",
+            DigestKind::RuleCode,
+            InputComponentStatus::Present,
+        );
+        let rule_options = typed_input(
+            InputDependencyKind::RuleOptions,
+            "rules/matrix-same-rule:options",
+            DigestKind::RuleOptions,
+            InputComponentStatus::Present,
+        );
+        let diagnostic = |view: &str| {
+            DiagnosticKey::new(
+                "matrix.same-rule",
+                "1",
+                rule_code.digest.clone(),
+                rule_options.digest.clone(),
+                vec![Digest::from_parts(
+                    DigestKind::ProviderOutput,
+                    "requested_view",
+                    &[view],
+                )],
+                Digest::from_parts(DigestKind::Evidence, "same_rule", &["evidence"]),
+            )
+        };
+        let first = diagnostic("first");
+        let second = diagnostic("second");
+        assert_ne!(
+            first.requested_views_digest(),
+            second.requested_views_digest()
+        );
+        let mut declared_edges = Vec::new();
+        for key in [&first, &second] {
+            let node = CacheNode::Diagnostic(key.clone());
+            declared_edges.push(edge(
+                node.clone(),
+                rule_code.clone(),
+                DependencyKind::Rule,
+                ShapeKind::RuleCode,
+            ));
+            declared_edges.push(edge(
+                node,
+                rule_options.clone(),
+                DependencyKind::Rule,
+                ShapeKind::RuleOptions,
+            ));
+        }
+        let validated = base
+            .with_dependency_fixture(vec![second.clone(), first.clone()], declared_edges)
+            .expect("distinct requested-view identities remain valid");
+
+        let active = commit_and_reopen(&temp.path().join("store"), &validated);
+
+        assert_eq!(active.dependency_index, *validated.dependency_index());
+        assert_eq!(active.plan.semantic.diagnostics.len(), 2);
+        assert!(
+            active
+                .plan
+                .semantic
+                .diagnostics
+                .iter()
+                .any(|row| row.key == first)
+        );
+        assert!(
+            active
+                .plan
+                .semantic
+                .diagnostics
+                .iter()
+                .any(|row| row.key == second)
+        );
+        assert_eq!(active.plan.semantic.diagnostic_requested_views.len(), 2);
+        for key in [first, second] {
+            let node = CacheNode::Diagnostic(key);
+            assert!(active.dependency_index.contains_node(&node));
+            assert_eq!(
+                active
+                    .dependency_index
+                    .forward_edges(&node)
+                    .expect("diagnostic has reconstructed rule dependencies")
+                    .len(),
+                2
+            );
+        }
+    }
+}
+
 fn generation_query_trace_entry(label: &str) -> DemandQueryTraceEntry {
     let dependency = InputDependencyKey::analysis_setting(
         format!("polint.{label}"),
@@ -40,7 +1002,7 @@ fn generation_query_trace_entry(label: &str) -> DemandQueryTraceEntry {
     }
 }
 
-fn generation_plan_fixture(root: &Path, label: &str) -> commit_plan::StoreCommitPlan {
+fn generation_finalized_fixture(root: &Path, label: &str) -> GenerationFinalizedFixture {
     std::fs::create_dir_all(root).expect("create fixture repository");
     if !root.join("main.go").exists() {
         std::fs::write(
@@ -74,13 +1036,29 @@ fn generation_plan_fixture(root: &Path, label: &str) -> commit_plan::StoreCommit
         query_trace.record_entry(generation_query_trace_entry(query_label));
     }
     report.demand_query_trace = query_trace;
-    let validated = ValidatedRunMetadata::from_finalized_run(
-        &report,
-        AnalysisKernel::provider_manifests(),
+    GenerationFinalizedFixture {
+        report,
+        manifests: AnalysisKernel::provider_manifests().to_vec(),
         facts,
+    }
+}
+
+fn generation_validated_fixture(root: &Path, label: &str) -> ValidatedRunMetadata {
+    let fixture = generation_finalized_fixture(root, label);
+    ValidatedRunMetadata::from_finalized_run(
+        &fixture.report.input_snapshot,
+        &fixture.report.provider_outputs,
+        &fixture.report.demand_query_trace,
+        fixture.report.validation_events(),
+        &fixture.manifests,
+        fixture.facts,
     )
-    .expect("fixture produces a validated handoff");
-    commit_plan::StoreCommitPlan::from_validated_run(validated)
+    .expect("fixture produces a validated handoff")
+}
+
+fn generation_plan_fixture(root: &Path, label: &str) -> commit_plan::StoreCommitPlan {
+    let validated = generation_validated_fixture(root, label);
+    commit_plan::StoreCommitPlan::from_validated_run(&validated)
         .expect("validated handoff produces a complete plan")
 }
 
@@ -97,6 +1075,22 @@ fn config_preserves_path_and_disabled_state() {
         Path::new("cache/semantic-store/store.sqlite3")
     );
     assert!(!config.is_enabled());
+}
+
+#[test]
+fn facade_disabled_guard_skips_plan_io_and_path_creation() {
+    let temp = tempfile::tempdir().expect("temporary disabled facade root");
+    let validated = generation_validated_fixture(&temp.path().join("repo"), "disabled-facade");
+    let path = temp.path().join("cache/semantic-store/store.sqlite3");
+    let config = StoreConfig::new(&path, false);
+    reset_materialization_counters_for_test();
+
+    let outcome = SemanticStore::commit_validated_run(&config, &validated);
+
+    assert_eq!(outcome, StoreOutcome::disabled());
+    assert_eq!(materialization_counters_for_test(), (0, 0, 0));
+    assert!(!path.exists());
+    assert!(!path.parent().expect("store directory").exists());
 }
 
 #[test]
@@ -1029,6 +2023,34 @@ mod recovery {
             StoreStatus::RebuildNeeded(StoreRebuildReason::InvalidSchema)
         );
         assert!(invalid_path.exists());
+    }
+
+    #[test]
+    fn incomplete_current_version_result_boundaries_require_controlled_rebuild() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let path = store_path(&temp);
+        fs::create_dir_all(path.parent().expect("store parent")).expect("create store directory");
+        connection::install_incomplete_current_v2_fixture_for_test(&path)
+            .expect("install incomplete current-version fixture");
+        assert!(!connection::current_schema_is_valid_for_test(&path));
+        let before = connection::fixture_snapshot_for_test(&path).expect("snapshot fixture");
+        let config = StoreConfig::new(&path, true);
+
+        assert_eq!(
+            SemanticStore::maintain(&config),
+            StoreStatus::RebuildNeeded(StoreRebuildReason::InvalidSchema)
+        );
+        assert_eq!(
+            connection::fixture_snapshot_for_test(&path).expect("snapshot preserved fixture"),
+            before
+        );
+        assert!(!connection::current_schema_is_valid_for_test(&path));
+
+        assert_eq!(
+            rebuild_owned_cache_store(&config, &path),
+            StoreStatus::Ready
+        );
+        assert!(connection::current_schema_is_valid_for_test(&path));
     }
 
     #[test]

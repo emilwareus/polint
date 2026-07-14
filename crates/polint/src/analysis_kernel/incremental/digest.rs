@@ -359,6 +359,18 @@ impl RunIdentity {
     }
 }
 
+impl<'de> Deserialize<'de> for RunIdentity {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let digest = Digest::deserialize(deserializer)?;
+        require_digest_kind("RunIdentity", "run", &digest, DigestKind::Run)
+            .map_err(serde::de::Error::custom)?;
+        Ok(Self(digest))
+    }
+}
+
 impl GenerationIdentity {
     pub(crate) fn new(
         run: &RunIdentity,

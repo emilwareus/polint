@@ -13,10 +13,10 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::analysis_kernel::incremental::{
-    CacheNode, ConfigIdentity, DependencyKind, Digest, DigestKind, GenerationIdentity,
-    INPUT_SNAPSHOT_SCHEMA_VERSION, InputComponent, InputComponentStatus, InputDependencyKey,
-    LayerKey, PrecisionTier, ProviderValidationStatus, QueryKey, RunIdentity, ShapeKind,
-    SummaryKey, ValidatedRunMetadata, WorkspaceIdentity,
+    CacheNode, ConfigIdentity, DependencyKind, DiagnosticKey, Digest, DigestKind,
+    GenerationIdentity, INPUT_SNAPSHOT_SCHEMA_VERSION, InputComponent, InputComponentStatus,
+    InputDependencyKey, LayerKey, PrecisionTier, ProviderValidationStatus, QueryKey, RunIdentity,
+    RunManifestKey, ShapeKind, SummaryKey, ValidatedRunMetadata, WorkspaceIdentity,
 };
 use crate::analysis_kernel::validation::{ValidationEventKind, ValidationEventStatus};
 use crate::analysis_kernel::{FactConfidence, FactFamily, FactPrecision, ValidationStatus};
@@ -211,6 +211,9 @@ pub(super) struct StoreSemanticPlan {
     pub(super) query_inputs: Vec<StoreQueryInputRow>,
     pub(super) query_layers: Vec<StoreQueryLayerRow>,
     pub(super) facts: Vec<StoreFactRow>,
+    pub(super) run_manifest: StoreRunManifestRow,
+    pub(super) diagnostics: Vec<StoreDiagnosticRow>,
+    pub(super) diagnostic_requested_views: Vec<StoreDiagnosticRequestedViewRow>,
     pub(super) dependency_schema: String,
     pub(super) dependency_edges: Vec<StoreDependencyEdgeRow>,
     pub(super) validation_events: Vec<StoreValidationEventRow>,
@@ -459,6 +462,24 @@ pub(super) struct StoreFactRow {
     pub(super) payload_digest: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(super) struct StoreRunManifestRow {
+    pub(super) key: RunManifestKey,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub(super) struct StoreDiagnosticRow {
+    pub(super) key: DiagnosticKey,
+    pub(super) requested_views_digest: Digest,
+    pub(super) requested_view_count: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub(super) struct StoreDiagnosticRequestedViewRow {
+    pub(super) key: DiagnosticKey,
+    pub(super) digest: Digest,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub(super) struct StoreDependencyEdgeRow {
     pub(super) from: CacheNode,
@@ -495,6 +516,7 @@ pub(super) struct StoreGenerationStats {
     pub(super) summary_count: u64,
     pub(super) query_count: u64,
     pub(super) fact_count: u64,
+    pub(super) diagnostic_count: u64,
     pub(super) dependency_edge_count: u64,
     pub(super) validation_event_count: u64,
     pub(super) input_digest: Digest,
@@ -512,6 +534,7 @@ pub(super) struct StoreGenerationStats {
     pub(super) summary_logical_bytes: u64,
     pub(super) query_logical_bytes: u64,
     pub(super) fact_logical_bytes: u64,
+    pub(super) diagnostic_logical_bytes: u64,
     pub(super) dependency_logical_bytes: u64,
     pub(super) validation_logical_bytes: u64,
     pub(super) semantic_logical_bytes: u64,
@@ -519,7 +542,7 @@ pub(super) struct StoreGenerationStats {
 
 impl StoreCommitPlan {
     pub(super) fn from_validated_run(
-        validated: ValidatedRunMetadata,
+        validated: &ValidatedRunMetadata,
     ) -> Result<Self, StorePlanError> {
         validated
             .validate_integrity()
@@ -527,8 +550,8 @@ impl StoreCommitPlan {
                 message: error.to_string(),
             })?;
 
-        let telemetry = telemetry_rows(&validated);
-        let semantic = StoreSemanticPlan::from_validated(&validated);
+        let telemetry = telemetry_rows(validated);
+        let semantic = StoreSemanticPlan::from_validated(validated);
         let plan = Self {
             semantic,
             telemetry,
@@ -874,6 +897,27 @@ impl StoreSemanticPlan {
             .collect::<Vec<_>>();
         facts.sort();
 
+        let run_manifest = StoreRunManifestRow {
+            key: validated.run_manifest_key().clone(),
+        };
+        let mut diagnostics = Vec::with_capacity(validated.diagnostic_keys().len());
+        let mut diagnostic_requested_views = Vec::new();
+        for key in validated.diagnostic_keys() {
+            diagnostics.push(StoreDiagnosticRow {
+                key: key.clone(),
+                requested_views_digest: key.requested_views_digest(),
+                requested_view_count: row_count(key.requested_view_digests.len()),
+            });
+            diagnostic_requested_views.extend(key.requested_view_digests.iter().map(|digest| {
+                StoreDiagnosticRequestedViewRow {
+                    key: key.clone(),
+                    digest: digest.clone(),
+                }
+            }));
+        }
+        diagnostics.sort();
+        diagnostic_requested_views.sort();
+
         let mut dependency_edges = validated
             .dependency_index()
             .canonical_edges()
@@ -928,6 +972,9 @@ impl StoreSemanticPlan {
             query_inputs,
             query_layers,
             facts,
+            run_manifest,
+            diagnostics,
+            diagnostic_requested_views,
             dependency_schema: validated.dependency_index().schema_version.clone(),
             dependency_edges,
             validation_events,
@@ -945,6 +992,7 @@ impl StoreSemanticPlan {
         self.validate_required_events()?;
         self.validate_provider_relationships()?;
         self.validate_query_declarations()?;
+        self.validate_result_boundaries()?;
         self.validate_dependency_endpoints()?;
         self.validate_facts()?;
         self.validate_canonical_order()?;
@@ -1460,14 +1508,20 @@ impl StoreSemanticPlan {
             .iter()
             .map(|row| row.key.clone())
             .collect::<BTreeSet<_>>();
+        let diagnostics = self
+            .diagnostics
+            .iter()
+            .map(|row| row.key.clone())
+            .collect::<BTreeSet<_>>();
         for edge in &self.dependency_edges {
             for endpoint in [&edge.from, &edge.to] {
                 let retained = match endpoint {
                     CacheNode::DependencyInput(_) => true,
+                    CacheNode::RunManifest(key) => key == &self.run_manifest.key,
                     CacheNode::Layer(key) => layers.contains(key),
                     CacheNode::Query(key) => queries.contains(key),
                     CacheNode::Summary(key) => summaries.contains(key),
-                    CacheNode::Diagnostic(_) => false,
+                    CacheNode::Diagnostic(key) => diagnostics.contains(key),
                 };
                 if !retained {
                     return Err(StorePlanError::DanglingDependencyEndpoint {
@@ -1485,6 +1539,42 @@ impl StoreSemanticPlan {
                     .filter(|edge| edge.from == CacheNode::Layer(layer.key.clone()))
                     .count(),
             )?;
+        }
+        Ok(())
+    }
+
+    fn validate_result_boundaries(&self) -> Result<(), StorePlanError> {
+        if self.run_manifest.key.run != self.identities.run
+            || self.run_manifest.key.full_config != self.identities.full_config
+        {
+            return Err(StorePlanError::IdentityMismatch {
+                family: "run manifest",
+            });
+        }
+        let mut expected_requested_views = Vec::new();
+        for diagnostic in &self.diagnostics {
+            if diagnostic.requested_views_digest != diagnostic.key.requested_views_digest() {
+                return Err(StorePlanError::IdentityMismatch {
+                    family: "diagnostic requested views",
+                });
+            }
+            check_count(
+                "diagnostic requested view",
+                diagnostic.requested_view_count,
+                diagnostic.key.requested_view_digests.len(),
+            )?;
+            expected_requested_views.extend(diagnostic.key.requested_view_digests.iter().map(
+                |digest| StoreDiagnosticRequestedViewRow {
+                    key: diagnostic.key.clone(),
+                    digest: digest.clone(),
+                },
+            ));
+        }
+        expected_requested_views.sort();
+        if expected_requested_views != self.diagnostic_requested_views {
+            return Err(StorePlanError::NonCanonicalRows {
+                family: "diagnostic requested view",
+            });
         }
         Ok(())
     }
@@ -1552,6 +1642,11 @@ impl StoreSemanticPlan {
         require_strictly_sorted(&self.query_inputs, "query input")?;
         require_strictly_sorted(&self.query_layers, "query layer")?;
         require_strictly_sorted(&self.facts, "fact")?;
+        require_strictly_sorted(&self.diagnostics, "diagnostic")?;
+        require_strictly_sorted(
+            &self.diagnostic_requested_views,
+            "diagnostic requested view",
+        )?;
         require_strictly_sorted(&self.dependency_edges, "dependency edge")?;
         require_strictly_sorted(&self.validation_events, "validation event")
     }
@@ -1604,6 +1699,11 @@ impl StoreSemanticPlan {
             ("query", expected.query_count, self.stats.query_count),
             ("fact", expected.fact_count, self.stats.fact_count),
             (
+                "diagnostic",
+                expected.diagnostic_count,
+                self.stats.diagnostic_count,
+            ),
+            (
                 "dependency edge",
                 expected.dependency_edge_count,
                 self.stats.dependency_edge_count,
@@ -1642,6 +1742,7 @@ impl StoreSemanticPlan {
             || self.stats.summary_logical_bytes != expected.summary_logical_bytes
             || self.stats.query_logical_bytes != expected.query_logical_bytes
             || self.stats.fact_logical_bytes != expected.fact_logical_bytes
+            || self.stats.diagnostic_logical_bytes != expected.diagnostic_logical_bytes
             || self.stats.dependency_logical_bytes != expected.dependency_logical_bytes
             || self.stats.validation_logical_bytes != expected.validation_logical_bytes
             || self.stats.semantic_logical_bytes != expected.semantic_logical_bytes
@@ -1671,6 +1772,7 @@ impl StoreGenerationStats {
             summary_count: 0,
             query_count: 0,
             fact_count: 0,
+            diagnostic_count: 0,
             dependency_edge_count: 0,
             validation_event_count: 0,
             input_digest: identities.input_snapshot.clone(),
@@ -1688,6 +1790,7 @@ impl StoreGenerationStats {
             summary_logical_bytes: 0,
             query_logical_bytes: 0,
             fact_logical_bytes: 0,
+            diagnostic_logical_bytes: 0,
             dependency_logical_bytes: 0,
             validation_logical_bytes: 0,
             semantic_logical_bytes: 0,
@@ -1708,6 +1811,7 @@ impl StoreGenerationStats {
         stats.summary_count = row_count(plan.summaries.len());
         stats.query_count = row_count(plan.queries.len());
         stats.fact_count = row_count(plan.facts.len());
+        stats.diagnostic_count = row_count(plan.diagnostics.len());
         stats.dependency_edge_count = row_count(plan.dependency_edges.len());
         stats.validation_event_count = row_count(plan.validation_events.len());
 
@@ -1719,7 +1823,8 @@ impl StoreGenerationStats {
             .saturating_add(logical_size(&plan.capabilities))
             .saturating_add(logical_size(&plan.capability_requesters))
             .saturating_add(logical_size(&plan.provider_schemas))
-            .saturating_add(logical_size(&plan.provider_schema_versions));
+            .saturating_add(logical_size(&plan.provider_schema_versions))
+            .saturating_add(logical_size(&plan.run_manifest));
         stats.provider_logical_bytes = logical_size(&plan.provider_manifests)
             .saturating_add(logical_size(&plan.provider_manifest_schemas))
             .saturating_add(logical_size(&plan.provider_manifest_inputs))
@@ -1737,6 +1842,8 @@ impl StoreGenerationStats {
             .saturating_add(logical_size(&plan.query_inputs))
             .saturating_add(logical_size(&plan.query_layers));
         stats.fact_logical_bytes = logical_size(&plan.facts);
+        stats.diagnostic_logical_bytes = logical_rows_size(&plan.diagnostics)
+            .saturating_add(logical_rows_size(&plan.diagnostic_requested_views));
         stats.dependency_logical_bytes = logical_size(&plan.dependency_edges);
         stats.validation_logical_bytes = logical_size(&plan.validation_events);
         stats.semantic_logical_bytes = logical_size(&plan.identities)
@@ -1746,6 +1853,7 @@ impl StoreGenerationStats {
             .saturating_add(stats.summary_logical_bytes)
             .saturating_add(stats.query_logical_bytes)
             .saturating_add(stats.fact_logical_bytes)
+            .saturating_add(stats.diagnostic_logical_bytes)
             .saturating_add(stats.dependency_logical_bytes)
             .saturating_add(stats.validation_logical_bytes);
         stats
@@ -1807,6 +1915,11 @@ fn logical_size<T: Serialize + ?Sized>(value: &T) -> u64 {
             .expect("normalized semantic rows serialize")
             .len(),
     )
+}
+
+fn logical_rows_size<T: Serialize>(rows: &[T]) -> u64 {
+    rows.iter()
+        .fold(0, |total, row| total.saturating_add(logical_size(row)))
 }
 
 fn check_count(family: &'static str, expected: u64, actual: usize) -> Result<(), StorePlanError> {
@@ -1955,7 +2068,10 @@ mod tests {
 
     fn metadata_from(fixture: &FinalizedFixture) -> ValidatedRunMetadata {
         ValidatedRunMetadata::from_finalized_run(
-            &fixture.report,
+            &fixture.report.input_snapshot,
+            &fixture.report.provider_outputs,
+            &fixture.report.demand_query_trace,
+            fixture.report.validation_events(),
             &fixture.manifests,
             fixture.facts.clone(),
         )
@@ -1964,7 +2080,7 @@ mod tests {
 
     fn plan_fixture() -> StoreCommitPlan {
         let fixture = finalized_fixture();
-        StoreCommitPlan::from_validated_run(metadata_from(&fixture))
+        StoreCommitPlan::from_validated_run(&metadata_from(&fixture))
             .expect("validated handoff produces a complete plan")
     }
 
@@ -1995,6 +2111,10 @@ mod tests {
             row_count(plan.semantic.provider_manifests.len())
         );
         assert!(plan.semantic.stats.semantic_logical_bytes > 0);
+        assert!(plan.semantic.diagnostics.is_empty());
+        assert!(plan.semantic.diagnostic_requested_views.is_empty());
+        assert_eq!(plan.semantic.stats.diagnostic_count, 0);
+        assert_eq!(plan.semantic.stats.diagnostic_logical_bytes, 0);
 
         let groups = plan
             .semantic
@@ -2019,7 +2139,7 @@ mod tests {
     #[test]
     fn twenty_four_source_permutations_produce_one_identical_plan() {
         let fixture = finalized_fixture();
-        let baseline = StoreCommitPlan::from_validated_run(metadata_from(&fixture))
+        let baseline = StoreCommitPlan::from_validated_run(&metadata_from(&fixture))
             .expect("baseline plan validates");
 
         for seed in 0..24 {
@@ -2046,10 +2166,17 @@ mod tests {
                 let fact_len = facts.len();
                 facts.rotate_left(seed % fact_len);
             }
-            let metadata = ValidatedRunMetadata::from_finalized_run(&report, &manifests, facts)
-                .expect("permuted handoff validates");
+            let metadata = ValidatedRunMetadata::from_finalized_run(
+                &report.input_snapshot,
+                &report.provider_outputs,
+                &report.demand_query_trace,
+                report.validation_events(),
+                &manifests,
+                facts,
+            )
+            .expect("permuted handoff validates");
             let candidate =
-                StoreCommitPlan::from_validated_run(metadata).expect("permuted plan validates");
+                StoreCommitPlan::from_validated_run(&metadata).expect("permuted plan validates");
             assert_eq!(candidate, baseline, "seed {seed}");
         }
     }
@@ -2057,7 +2184,7 @@ mod tests {
     #[test]
     fn runtime_telemetry_mutations_leave_the_semantic_plan_identical() {
         let fixture = finalized_fixture();
-        let baseline = StoreCommitPlan::from_validated_run(metadata_from(&fixture))
+        let baseline = StoreCommitPlan::from_validated_run(&metadata_from(&fixture))
             .expect("baseline plan validates");
 
         let mut changed_report = fixture.report.clone();
@@ -2080,12 +2207,15 @@ mod tests {
         }
         changed_report.demand_query_trace = changed_trace;
         let changed_metadata = ValidatedRunMetadata::from_finalized_run(
-            &changed_report,
+            &changed_report.input_snapshot,
+            &changed_report.provider_outputs,
+            &changed_report.demand_query_trace,
+            changed_report.validation_events(),
             &fixture.manifests,
             fixture.facts.clone(),
         )
         .expect("telemetry-mutated handoff validates");
-        let changed = StoreCommitPlan::from_validated_run(changed_metadata)
+        let changed = StoreCommitPlan::from_validated_run(&changed_metadata)
             .expect("telemetry-mutated plan validates");
 
         assert_eq!(changed.semantic, baseline.semantic);

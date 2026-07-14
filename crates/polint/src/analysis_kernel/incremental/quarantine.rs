@@ -170,7 +170,10 @@ fn is_native_only_node(node: &CacheNode) -> bool {
             InputDependencyKind::ExtensionCode | InputDependencyKind::ExtensionDeclaredInput
         ),
         CacheNode::Layer(key) => all_extension_digests_absent(key),
-        CacheNode::Query(_) | CacheNode::Summary(_) | CacheNode::Diagnostic(_) => false,
+        CacheNode::RunManifest(_)
+        | CacheNode::Query(_)
+        | CacheNode::Summary(_)
+        | CacheNode::Diagnostic(_) => false,
     }
 }
 
@@ -242,7 +245,7 @@ fn extract_extension_digest(node: &CacheNode) -> Digest {
             .find(|d| **d != sentinel)
             .cloned()
             .unwrap_or_else(|| sentinel.clone()),
-        CacheNode::Query(_) | CacheNode::Diagnostic(_) => sentinel,
+        CacheNode::RunManifest(_) | CacheNode::Query(_) | CacheNode::Diagnostic(_) => sentinel,
     }
 }
 

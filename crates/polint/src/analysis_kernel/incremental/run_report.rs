@@ -13,17 +13,21 @@ use serde::Serialize;
 
 use super::demand::DemandQueryTrace;
 use super::{
-    CacheNode, CacheStats, ConfigIdentity, DemandCacheStatus, DependencyIndex, Digest, DigestKind,
-    GenerationIdentity, INPUT_SNAPSHOT_SCHEMA_VERSION, InputSnapshot, LayerRunMetadata,
-    PrecisionTier, ProviderOutputMeta, ProviderValidationStatus, QueryKey, RunIdentity, SummaryKey,
-    WorkspaceIdentity, query_dependency_edges,
+    CacheNode, CacheStats, ConfigIdentity, DemandCacheStatus, DependencyEdge, DependencyIndex,
+    DependencyKind, DiagnosticKey, Digest, DigestKind, GenerationIdentity,
+    INPUT_SNAPSHOT_SCHEMA_VERSION, InputDependencyKey, InputSnapshot, LayerRunMetadata,
+    PrecisionTier, ProviderOutputMeta, ProviderValidationStatus, QueryKey, RunIdentity,
+    RunManifestKey, ShapeKind, SummaryKey, WorkspaceIdentity, query_dependency_edges,
 };
 #[cfg(test)]
 use crate::analysis::summaries::provider::SccClosureDebugSnapshot;
+use crate::analysis_kernel::store::StoreOutcome;
+#[cfg(test)]
+use crate::analysis_kernel::store::StoreStatus;
 use crate::analysis_kernel::validation::{
     ValidationEvent, ValidationEventKind, ValidationEventStatus,
 };
-use crate::analysis_kernel::{ProviderManifest, StableFactMetaRow, StoreStatus};
+use crate::analysis_kernel::{ProviderManifest, StableFactMetaRow};
 
 type CanonicalQueryIdentity = QueryKey;
 
@@ -46,6 +50,9 @@ pub(in crate::analysis_kernel) struct ValidatedRunMetadata {
     provider_outputs: Vec<CanonicalProviderOutput>,
     summary_keys: Vec<SummaryKey>,
     query_rows: Vec<CanonicalQueryRow>,
+    run_manifest_key: RunManifestKey,
+    diagnostic_keys: Vec<DiagnosticKey>,
+    declared_dependency_edges: Vec<DependencyEdge>,
     dependency_index: DependencyIndex,
     fact_rows: Vec<StableFactMetaRow>,
     validation_events: Vec<ValidationEvent>,
@@ -154,21 +161,24 @@ impl std::error::Error for ValidatedRunMetadataError {}
 
 impl ValidatedRunMetadata {
     pub(in crate::analysis_kernel) fn from_finalized_run(
-        report: &KernelRunReport,
+        input_snapshot: &InputSnapshot,
+        provider_output_rows: &[ProviderOutputMeta],
+        demand_query_trace: &DemandQueryTrace,
+        validation_event_rows: &[ValidationEvent],
         manifests: &[ProviderManifest],
         fact_rows: Vec<StableFactMetaRow>,
     ) -> Result<Self, ValidatedRunMetadataError> {
-        if report.input_snapshot.schema_version != INPUT_SNAPSHOT_SCHEMA_VERSION {
+        crate::analysis_kernel::store::record_handoff_materialization();
+        if input_snapshot.schema_version != INPUT_SNAPSHOT_SCHEMA_VERSION {
             return Err(ValidatedRunMetadataError::new(format!(
                 "validated run uses unsupported input snapshot schema `{}`",
-                report.input_snapshot.schema_version
+                input_snapshot.schema_version
             )));
         }
 
-        let provider_manifests = canonical_provider_manifests(&report.input_snapshot, manifests)?;
-        let provider_outputs = canonical_provider_outputs(&report.provider_outputs, manifests)?;
-        let query_rows = report
-            .demand_query_trace
+        let provider_manifests = canonical_provider_manifests(input_snapshot, manifests)?;
+        let provider_outputs = canonical_provider_outputs(provider_output_rows, manifests)?;
+        let query_rows = demand_query_trace
             .semantic_projections()
             .into_iter()
             .map(|projection| CanonicalQueryRow {
@@ -179,11 +189,21 @@ impl ValidatedRunMetadata {
             })
             .collect::<Vec<_>>();
         let summary_keys = Vec::new();
+        let diagnostic_keys = Vec::new();
+        let declared_dependency_edges = Vec::new();
         let fact_rows = canonical_fact_rows(fact_rows)?;
-        let validation_events = canonical_validation_events(report.validation_events.clone())?;
-        let dependency_index = dependency_index_for(&provider_outputs, &query_rows);
+        let validation_events = canonical_validation_events(validation_event_rows.to_vec())?;
+        let run_manifest_key = run_manifest_key_for(input_snapshot, &provider_manifests)?;
+        let dependency_index = dependency_index_for(
+            input_snapshot,
+            &provider_outputs,
+            &query_rows,
+            &run_manifest_key,
+            &diagnostic_keys,
+            &declared_dependency_edges,
+        );
         let identities = CanonicalRunIdentities::from_semantic_rows(
-            &report.input_snapshot,
+            input_snapshot,
             &provider_manifests,
             &provider_outputs,
             &summary_keys,
@@ -194,11 +214,14 @@ impl ValidatedRunMetadata {
         )?;
 
         let metadata = Self {
-            input_snapshot: report.input_snapshot.clone(),
+            input_snapshot: input_snapshot.clone(),
             provider_manifests,
             provider_outputs,
             summary_keys,
             query_rows,
+            run_manifest_key,
+            diagnostic_keys,
+            declared_dependency_edges,
             dependency_index,
             fact_rows,
             validation_events,
@@ -232,6 +255,14 @@ impl ValidatedRunMetadata {
 
     pub(in crate::analysis_kernel) fn query_rows(&self) -> &[CanonicalQueryRow] {
         &self.query_rows
+    }
+
+    pub(in crate::analysis_kernel) fn run_manifest_key(&self) -> &RunManifestKey {
+        &self.run_manifest_key
+    }
+
+    pub(in crate::analysis_kernel) fn diagnostic_keys(&self) -> &[DiagnosticKey] {
+        &self.diagnostic_keys
     }
 
     pub(in crate::analysis_kernel) fn dependency_index(&self) -> &DependencyIndex {
@@ -278,6 +309,8 @@ impl ValidatedRunMetadata {
         require_strictly_sorted(&self.provider_manifests, "provider manifests")?;
         require_strictly_sorted(&self.provider_outputs, "provider outputs")?;
         require_strictly_sorted(&self.query_rows, "query rows")?;
+        require_strictly_sorted(&self.diagnostic_keys, "diagnostic keys")?;
+        require_strictly_sorted(&self.declared_dependency_edges, "declared dependency edges")?;
         for provider in &self.provider_outputs {
             require_strictly_sorted(&provider.layers, "provider layers")?;
         }
@@ -298,8 +331,21 @@ impl ValidatedRunMetadata {
             ));
         }
 
-        let expected_dependency_index =
-            dependency_index_for(&self.provider_outputs, &self.query_rows);
+        let expected_run_manifest_key =
+            run_manifest_key_for(&self.input_snapshot, &self.provider_manifests)?;
+        if self.run_manifest_key != expected_run_manifest_key {
+            return Err(ValidatedRunMetadataError::new(
+                "validated-run manifest key does not match canonical run identity",
+            ));
+        }
+        let expected_dependency_index = dependency_index_for(
+            &self.input_snapshot,
+            &self.provider_outputs,
+            &self.query_rows,
+            &self.run_manifest_key,
+            &self.diagnostic_keys,
+            &self.declared_dependency_edges,
+        );
         if self.dependency_index != expected_dependency_index {
             return Err(ValidatedRunMetadataError::new(
                 "validated-run dependency index does not match canonical layer and query declarations",
@@ -322,6 +368,40 @@ impl ValidatedRunMetadata {
             ));
         }
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_dependency_fixture(
+        mut self,
+        mut diagnostic_keys: Vec<DiagnosticKey>,
+        mut declared_dependency_edges: Vec<DependencyEdge>,
+    ) -> Result<Self, ValidatedRunMetadataError> {
+        diagnostic_keys.sort();
+        diagnostic_keys.dedup();
+        declared_dependency_edges.sort();
+        declared_dependency_edges.dedup();
+        self.diagnostic_keys = diagnostic_keys;
+        self.declared_dependency_edges = declared_dependency_edges;
+        self.dependency_index = dependency_index_for(
+            &self.input_snapshot,
+            &self.provider_outputs,
+            &self.query_rows,
+            &self.run_manifest_key,
+            &self.diagnostic_keys,
+            &self.declared_dependency_edges,
+        );
+        self.identities = CanonicalRunIdentities::from_semantic_rows(
+            &self.input_snapshot,
+            &self.provider_manifests,
+            &self.provider_outputs,
+            &self.summary_keys,
+            &self.query_rows,
+            &self.fact_rows,
+            &self.dependency_index,
+            &self.validation_events,
+        )?;
+        self.validate_integrity()?;
+        Ok(self)
     }
 }
 
@@ -435,14 +515,7 @@ impl CanonicalRunIdentities {
         validation_events: &[ValidationEvent],
     ) -> Result<Self, ValidatedRunMetadataError> {
         let input_snapshot_digest = input_snapshot.semantic_digest();
-        let provider_manifest = Digest::from_unordered(
-            DigestKind::ProviderManifest,
-            "provider_manifest_rows",
-            provider_manifests
-                .iter()
-                .map(|row| row.manifest_digest.clone())
-                .collect(),
-        );
+        let (provider_manifest, run) = run_identity_for(input_snapshot, provider_manifests)?;
         let provider_output = serialized_rows_digest(
             DigestKind::ProviderOutput,
             "provider_output_rows",
@@ -466,13 +539,6 @@ impl CanonicalRunIdentities {
             "validation_rows",
             validation_events,
         );
-        let run = RunIdentity::new(
-            &input_snapshot.workspace_identity,
-            &input_snapshot.config_identity,
-            &input_snapshot_digest,
-            &provider_manifest,
-        )
-        .map_err(|error| ValidatedRunMetadataError::new(error.to_string()))?;
         let generation = GenerationIdentity::new(
             &run,
             &[
@@ -555,6 +621,40 @@ impl CanonicalRunIdentities {
     pub(in crate::analysis_kernel) fn generation(&self) -> &GenerationIdentity {
         &self.generation
     }
+}
+
+fn run_identity_for(
+    input_snapshot: &InputSnapshot,
+    provider_manifests: &[CanonicalProviderManifest],
+) -> Result<(Digest, RunIdentity), ValidatedRunMetadataError> {
+    let input_snapshot_digest = input_snapshot.semantic_digest();
+    let provider_manifest = Digest::from_unordered(
+        DigestKind::ProviderManifest,
+        "provider_manifest_rows",
+        provider_manifests
+            .iter()
+            .map(|row| row.manifest_digest.clone())
+            .collect(),
+    );
+    let run = RunIdentity::new(
+        &input_snapshot.workspace_identity,
+        &input_snapshot.config_identity,
+        &input_snapshot_digest,
+        &provider_manifest,
+    )
+    .map_err(|error| ValidatedRunMetadataError::new(error.to_string()))?;
+    Ok((provider_manifest, run))
+}
+
+fn run_manifest_key_for(
+    input_snapshot: &InputSnapshot,
+    provider_manifests: &[CanonicalProviderManifest],
+) -> Result<RunManifestKey, ValidatedRunMetadataError> {
+    let (_, run) = run_identity_for(input_snapshot, provider_manifests)?;
+    Ok(RunManifestKey::new(
+        run,
+        input_snapshot.config_identity.clone(),
+    ))
 }
 
 fn canonical_provider_manifests(
@@ -903,8 +1003,12 @@ fn validation_event_digest_builder(
 }
 
 fn dependency_index_for(
+    input_snapshot: &InputSnapshot,
     provider_outputs: &[CanonicalProviderOutput],
     query_rows: &[CanonicalQueryRow],
+    run_manifest_key: &RunManifestKey,
+    diagnostic_keys: &[DiagnosticKey],
+    declared_dependency_edges: &[DependencyEdge],
 ) -> DependencyIndex {
     let layer_edges = provider_outputs.iter().flat_map(|provider| {
         provider.layers.iter().flat_map(|layer| {
@@ -918,7 +1022,66 @@ fn dependency_index_for(
     let query_edges = query_rows
         .iter()
         .flat_map(|row| query_dependency_edges(&row.query_key));
-    DependencyIndex::from_edges(layer_edges.chain(query_edges).collect())
+    let boundary_edges = run_boundary_edges(input_snapshot, run_manifest_key, diagnostic_keys);
+    DependencyIndex::from_edges(
+        layer_edges
+            .chain(query_edges)
+            .chain(boundary_edges)
+            .chain(declared_dependency_edges.iter().cloned())
+            .collect(),
+    )
+}
+
+fn run_boundary_edges(
+    input_snapshot: &InputSnapshot,
+    run_manifest_key: &RunManifestKey,
+    diagnostic_keys: &[DiagnosticKey],
+) -> Vec<DependencyEdge> {
+    let config = InputDependencyKey::config(
+        input_snapshot.config.name.clone(),
+        input_snapshot.config_identity.digest().clone(),
+        input_snapshot.config.status,
+    )
+    .expect("canonical config component has a config digest");
+    let mut edges = vec![DependencyEdge {
+        from: CacheNode::RunManifest(run_manifest_key.clone()),
+        to: CacheNode::DependencyInput(config),
+        kind: DependencyKind::Config,
+        required_shape: ShapeKind::Unknown,
+    }];
+
+    for diagnostic in diagnostic_keys {
+        for component in &input_snapshot.rules {
+            let (input, required_shape) = match component.digest.kind {
+                DigestKind::RuleCode if component.digest == diagnostic.rule_code_digest => (
+                    InputDependencyKey::rule_code(
+                        component.name.clone(),
+                        component.digest.clone(),
+                        component.status,
+                    )
+                    .expect("canonical rule-code component has a rule-code digest"),
+                    ShapeKind::RuleCode,
+                ),
+                DigestKind::RuleOptions if component.digest == diagnostic.options_digest => (
+                    InputDependencyKey::rule_options(
+                        component.name.clone(),
+                        component.digest.clone(),
+                        component.status,
+                    )
+                    .expect("canonical rule-options component has a rule-options digest"),
+                    ShapeKind::RuleOptions,
+                ),
+                _ => continue,
+            };
+            edges.push(DependencyEdge {
+                from: CacheNode::Diagnostic(diagnostic.clone()),
+                to: CacheNode::DependencyInput(input),
+                kind: DependencyKind::Rule,
+                required_shape,
+            });
+        }
+    }
+    edges
 }
 
 fn serialized_rows_digest<T: Serialize>(
@@ -967,18 +1130,18 @@ pub(crate) struct KernelRunReport {
     pub(crate) cache_stats: CacheStats,
     pub(crate) demand_query_trace: DemandQueryTrace,
     validation_events: Vec<ValidationEvent>,
-    store_status: StoreStatus,
+    store_outcome: StoreOutcome,
     #[cfg(test)]
     pub(crate) scc_closure_debug: Option<SccClosureDebugSnapshot>,
 }
 
 impl KernelRunReport {
-    pub(crate) fn new(
+    pub(in crate::analysis_kernel) fn new(
         input_snapshot: InputSnapshot,
         provider_outputs: Vec<ProviderOutputMeta>,
         demand_query_trace: DemandQueryTrace,
         validation_events: Vec<ValidationEvent>,
-        store_status: StoreStatus,
+        store_outcome: StoreOutcome,
     ) -> Self {
         let mut cache_stats = aggregate_cache_stats(&provider_outputs);
         aggregate_demand_query_stats(&demand_query_trace, &mut cache_stats);
@@ -989,10 +1152,30 @@ impl KernelRunReport {
             cache_stats,
             demand_query_trace,
             validation_events,
-            store_status,
+            store_outcome,
             #[cfg(test)]
             scc_closure_debug: None,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_test(
+        input_snapshot: InputSnapshot,
+        provider_outputs: Vec<ProviderOutputMeta>,
+        demand_query_trace: DemandQueryTrace,
+        validation_events: Vec<ValidationEvent>,
+        store_status: StoreStatus,
+    ) -> Self {
+        Self::new(
+            input_snapshot,
+            provider_outputs,
+            demand_query_trace,
+            validation_events,
+            StoreOutcome {
+                status: store_status,
+                statistics: None,
+            },
+        )
     }
 
     #[cfg_attr(
@@ -1024,7 +1207,7 @@ impl KernelRunReport {
 
     #[cfg(test)]
     pub(crate) fn store_status(&self) -> &StoreStatus {
-        &self.store_status
+        &self.store_outcome.status
     }
 }
 
@@ -1174,6 +1357,21 @@ mod tests {
             .stable_rows()
             .expect("finalized fact metadata is canonical");
         (output.run_report, fact_rows)
+    }
+
+    fn validated_run_from_report(
+        report: &KernelRunReport,
+        manifests: &[ProviderManifest],
+        fact_rows: Vec<StableFactMetaRow>,
+    ) -> Result<ValidatedRunMetadata, ValidatedRunMetadataError> {
+        ValidatedRunMetadata::from_finalized_run(
+            &report.input_snapshot,
+            &report.provider_outputs,
+            &report.demand_query_trace,
+            &report.validation_events,
+            manifests,
+            fact_rows,
+        )
     }
 
     fn query_trace_entry(label: &str, cache_status: DemandCacheStatus) -> DemandQueryTraceEntry {
@@ -1434,9 +1632,8 @@ mod tests {
         let (report, fact_rows) = finalized_run_fixture();
         let report = report_with_query_rows(report);
         let manifests = AnalysisKernel::provider_manifests().to_vec();
-        let baseline =
-            ValidatedRunMetadata::from_finalized_run(&report, &manifests, fact_rows.clone())
-                .expect("baseline handoff is valid");
+        let baseline = validated_run_from_report(&report, &manifests, fact_rows.clone())
+            .expect("baseline handoff is valid");
 
         for permutation in 0..24 {
             let mut candidate_report = report.clone();
@@ -1469,12 +1666,9 @@ mod tests {
                 candidate_facts.rotate_left(permutation % fact_len);
             }
 
-            let candidate = ValidatedRunMetadata::from_finalized_run(
-                &candidate_report,
-                &candidate_manifests,
-                candidate_facts,
-            )
-            .expect("permuted handoff is valid");
+            let candidate =
+                validated_run_from_report(&candidate_report, &candidate_manifests, candidate_facts)
+                    .expect("permuted handoff is valid");
             assert_eq!(candidate, baseline, "permutation {permutation}");
         }
     }
@@ -1484,9 +1678,8 @@ mod tests {
         let (report, fact_rows) = finalized_run_fixture();
         let report = report_with_query_rows(report);
         let manifests = AnalysisKernel::provider_manifests();
-        let baseline =
-            ValidatedRunMetadata::from_finalized_run(&report, manifests, fact_rows.clone())
-                .expect("baseline handoff is valid");
+        let baseline = validated_run_from_report(&report, manifests, fact_rows.clone())
+            .expect("baseline handoff is valid");
 
         let mut changed_report = report;
         changed_report.cache_stats.hits = changed_report.cache_stats.hits.saturating_add(91);
@@ -1507,9 +1700,8 @@ mod tests {
             changed_trace.record_entry(entry);
         }
         changed_report.demand_query_trace = changed_trace;
-        let changed =
-            ValidatedRunMetadata::from_finalized_run(&changed_report, manifests, fact_rows)
-                .expect("telemetry-mutated handoff is valid");
+        let changed = validated_run_from_report(&changed_report, manifests, fact_rows)
+            .expect("telemetry-mutated handoff is valid");
 
         assert_ne!(changed.input_snapshot(), baseline.input_snapshot());
         assert_eq!(changed.provider_manifests(), baseline.provider_manifests());
@@ -1556,12 +1748,9 @@ mod tests {
     fn dependency_handoff_uses_each_query_key_declaration_exactly() {
         let (report, fact_rows) = finalized_run_fixture();
         let report = report_with_query_rows(report);
-        let metadata = ValidatedRunMetadata::from_finalized_run(
-            &report,
-            AnalysisKernel::provider_manifests(),
-            fact_rows,
-        )
-        .expect("handoff is valid");
+        let metadata =
+            validated_run_from_report(&report, AnalysisKernel::provider_manifests(), fact_rows)
+                .expect("handoff is valid");
 
         for row in metadata.query_rows() {
             assert_eq!(row.result_digest().kind, DigestKind::ProviderOutput);
@@ -1582,12 +1771,9 @@ mod tests {
     #[test]
     fn handoff_retains_payload_digests_and_excludes_forbidden_content_fields() {
         let (report, fact_rows) = finalized_run_fixture();
-        let metadata = ValidatedRunMetadata::from_finalized_run(
-            &report,
-            AnalysisKernel::provider_manifests(),
-            fact_rows,
-        )
-        .expect("handoff is valid");
+        let metadata =
+            validated_run_from_report(&report, AnalysisKernel::provider_manifests(), fact_rows)
+                .expect("handoff is valid");
         assert!(!metadata.fact_rows().is_empty());
         assert!(
             metadata
@@ -1687,7 +1873,7 @@ mod tests {
         let mut missing_event = report.clone();
         missing_event.validation_events.pop();
         assert!(
-            ValidatedRunMetadata::from_finalized_run(
+            validated_run_from_report(
                 &missing_event,
                 AnalysisKernel::provider_manifests(),
                 fact_rows.clone(),
@@ -1700,7 +1886,7 @@ mod tests {
             .provider_outputs
             .push(duplicate_provider.provider_outputs[0].clone());
         assert!(
-            ValidatedRunMetadata::from_finalized_run(
+            validated_run_from_report(
                 &duplicate_provider,
                 AnalysisKernel::provider_manifests(),
                 fact_rows,

@@ -26,9 +26,10 @@ use crate::core::{CapabilitySupportStatus, Language};
 
 use super::commit_plan::StoreInputGroup;
 
-pub(super) const REQUIRED_V2_TABLES: [&str; 33] = [
+pub(super) const REQUIRED_V2_TABLES: [&str; 36] = [
     "store_manifest",
     "generations",
+    "run_manifest_nodes",
     "input_snapshots",
     "input_files",
     "input_components",
@@ -55,6 +56,8 @@ pub(super) const REQUIRED_V2_TABLES: [&str; 33] = [
     "query_inputs",
     "query_layer_digests",
     "fact_metadata",
+    "diagnostic_nodes",
+    "diagnostic_requested_view_digests",
     "dependency_edges",
     "validation_events",
     "generation_stats",
@@ -62,11 +65,12 @@ pub(super) const REQUIRED_V2_TABLES: [&str; 33] = [
     "generation_failure_events",
 ];
 
-pub(super) const SEMANTIC_ORDER_BY: [(&str, &str); 30] = [
+pub(super) const SEMANTIC_ORDER_BY: [(&str, &str); 33] = [
     (
         "generations",
         "ORDER BY workspace_kind, workspace_value, generation_kind, generation_value, reservation_ordinal",
     ),
+    ("run_manifest_nodes", "ORDER BY generation_id, id"),
     ("input_files", "ORDER BY relative_path, language"),
     (
         "input_components",
@@ -150,6 +154,11 @@ pub(super) const SEMANTIC_ORDER_BY: [(&str, &str); 30] = [
         "ORDER BY query.semantic_ordinal, child.ordinal",
     ),
     ("fact_metadata", "ORDER BY family, stable_key"),
+    ("diagnostic_nodes", "ORDER BY semantic_ordinal"),
+    (
+        "diagnostic_requested_view_digests",
+        "ORDER BY diagnostic.semantic_ordinal, child.ordinal",
+    ),
     ("dependency_edges", "ORDER BY ordinal"),
     ("validation_events", "ORDER BY event_kind, status"),
     ("generation_telemetry", "ORDER BY relative_path"),
@@ -976,6 +985,7 @@ mod tests {
         }
         for value in [
             CacheNodeKind::DependencyInput,
+            CacheNodeKind::RunManifest,
             CacheNodeKind::Layer,
             CacheNodeKind::Query,
             CacheNodeKind::Summary,
@@ -1091,7 +1101,7 @@ mod tests {
 
     #[test]
     fn every_multirow_family_declares_semantic_ordering() {
-        assert_eq!(SEMANTIC_ORDER_BY.len(), 30);
+        assert_eq!(SEMANTIC_ORDER_BY.len(), 33);
         for table in REQUIRED_V2_TABLES {
             if matches!(
                 table,

@@ -417,7 +417,7 @@ mod tests {
             Digest::absent(DigestKind::AnalysisRequirements, "requested_capabilities")
         );
 
-        KernelRunReport::new(
+        KernelRunReport::new_for_test(
             input_snapshot,
             provider_outputs,
             trace,

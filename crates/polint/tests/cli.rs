@@ -12312,3 +12312,100 @@ fn review_requires_local_rule_hosts() {
             "polint new-rule generic <name> --review",
         ));
 }
+
+#[test]
+fn semantic_store_is_private_and_no_cache_preserves_check_and_review_bytes() {
+    if !review_git_available() {
+        eprintln!("skipping semantic-store check/review parity; `git` not on PATH");
+        return;
+    }
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path();
+    write_review_rule_repo(root);
+    review_git_init_identity(root);
+    write_file(&root.join("app.go"), "package app\n\nfunc main() {}\n");
+    write_file(
+        &root.join("db/migrations/0001_init.sql"),
+        "CREATE TABLE t (id INT);\n",
+    );
+    let base = review_git_commit_all(root, "base");
+    write_file(
+        &root.join("db/migrations/0001_init.sql"),
+        "CREATE TABLE t (id INT, name TEXT);\n",
+    );
+    review_git_commit_all(root, "change migration");
+
+    let run = |args: &[&str]| {
+        polint_cmd()
+            .current_dir(root)
+            .args(args)
+            .output()
+            .expect("run public command")
+    };
+    let check = run(&["check", "--format", "json", "--fail-on", "none"]);
+    let check_no_cache = run(&[
+        "check",
+        "--no-cache",
+        "--format",
+        "json",
+        "--fail-on",
+        "none",
+    ]);
+    let review = run(&["review", &base, "--format", "json", "--fail-on", "none"]);
+    let review_no_cache = run(&[
+        "review",
+        &base,
+        "--no-cache",
+        "--format",
+        "json",
+        "--fail-on",
+        "none",
+    ]);
+
+    for (label, cached, no_cache) in [
+        ("check", &check, &check_no_cache),
+        ("review", &review, &review_no_cache),
+    ] {
+        assert!(cached.status.success(), "{label} failed: {cached:?}");
+        assert!(
+            no_cache.status.success(),
+            "{label} --no-cache failed: {no_cache:?}"
+        );
+        assert_eq!(cached.status.code(), no_cache.status.code(), "{label} exit");
+        assert_eq!(cached.stdout, no_cache.stdout, "{label} JSON bytes");
+        let output = String::from_utf8_lossy(&cached.stdout);
+        for marker in [
+            "SemanticStore",
+            "StoreCommitPlan",
+            "ValidatedRunMetadata",
+            "StoreOutcome",
+            "StoreStatistics",
+            "RunManifestKey",
+            "DiagnosticKey",
+            "commit_validated_run",
+            "run_manifest_nodes",
+            "diagnostic_nodes",
+            "dependency_edges",
+            "semantic-store",
+        ] {
+            assert!(
+                !output.contains(marker),
+                "{label} output leaked private store marker `{marker}`: {output}"
+            );
+        }
+    }
+
+    let help = stdout_string(polint_cmd().arg("--help").assert().success());
+    for marker in [
+        "semantic-store",
+        "commit-validated-run",
+        "store-outcome",
+        "run-manifest",
+    ] {
+        assert!(!help.contains(marker), "help leaked `{marker}`: {help}");
+    }
+    assert!(
+        !root.join(".polint/cache/semantic-store").exists(),
+        "default and --no-cache public commands must not create the private store path"
+    );
+}

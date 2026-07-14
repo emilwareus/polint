@@ -62,7 +62,7 @@ pub(crate) use demand::{
 )]
 pub(crate) use dependency_index::{
     CacheNode, CacheNodeKind, DEPENDENCY_INDEX_SCHEMA, DependencyEdge, DependencyIndex,
-    DependencyKind, ShapeKind, query_dependency_edges,
+    DependencyKind, RunManifestKey, ShapeKind, query_dependency_edges,
 };
 #[cfg_attr(
     test,

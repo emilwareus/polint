@@ -353,11 +353,169 @@ pub(super) fn install_invalid_fixture_for_test(path: &Path) -> Result<(), Connec
 }
 
 #[cfg(test)]
+pub(super) fn install_incomplete_current_v2_fixture_for_test(
+    path: &Path,
+) -> Result<(), ConnectionError> {
+    let writer = open_writer(path)?;
+    writer
+        .connection
+        .pragma_update(None, "foreign_keys", false)
+        .map_err(classify_sqlite_error)?;
+    writer
+        .connection
+        .execute_batch(
+            r#"
+            DROP TABLE dependency_edges;
+            DROP TABLE diagnostic_requested_view_digests;
+            DROP TABLE diagnostic_nodes;
+            DROP TABLE run_manifest_nodes;
+            DROP TABLE generation_stats;
+
+            CREATE TABLE dependency_edges (
+                generation_id INTEGER NOT NULL,
+                ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+                from_node_kind TEXT NOT NULL CHECK (from_node_kind IN ('dependency_input', 'layer', 'query', 'summary')),
+                from_input_kind TEXT,
+                from_input_stable_key TEXT,
+                from_input_digest_kind TEXT,
+                from_input_digest_value TEXT,
+                from_input_status TEXT,
+                from_layer_id INTEGER,
+                from_query_id INTEGER,
+                from_summary_id INTEGER,
+                to_node_kind TEXT NOT NULL CHECK (to_node_kind IN ('dependency_input', 'layer', 'query', 'summary')),
+                to_input_kind TEXT,
+                to_input_stable_key TEXT,
+                to_input_digest_kind TEXT,
+                to_input_digest_value TEXT,
+                to_input_status TEXT,
+                to_layer_id INTEGER,
+                to_query_id INTEGER,
+                to_summary_id INTEGER,
+                dependency_kind TEXT NOT NULL CHECK (dependency_kind <> ''),
+                required_shape TEXT NOT NULL CHECK (required_shape <> ''),
+                PRIMARY KEY (generation_id, ordinal),
+                CHECK (
+                    (from_node_kind = 'dependency_input'
+                        AND from_input_kind IS NOT NULL AND from_input_stable_key IS NOT NULL
+                        AND from_input_digest_kind IS NOT NULL AND from_input_digest_value IS NOT NULL
+                        AND from_input_status IS NOT NULL
+                        AND from_layer_id IS NULL AND from_query_id IS NULL AND from_summary_id IS NULL)
+                    OR (from_node_kind = 'layer' AND from_layer_id IS NOT NULL
+                        AND from_input_kind IS NULL AND from_input_stable_key IS NULL
+                        AND from_input_digest_kind IS NULL AND from_input_digest_value IS NULL
+                        AND from_input_status IS NULL AND from_query_id IS NULL AND from_summary_id IS NULL)
+                    OR (from_node_kind = 'query' AND from_query_id IS NOT NULL
+                        AND from_input_kind IS NULL AND from_input_stable_key IS NULL
+                        AND from_input_digest_kind IS NULL AND from_input_digest_value IS NULL
+                        AND from_input_status IS NULL AND from_layer_id IS NULL AND from_summary_id IS NULL)
+                    OR (from_node_kind = 'summary' AND from_summary_id IS NOT NULL
+                        AND from_input_kind IS NULL AND from_input_stable_key IS NULL
+                        AND from_input_digest_kind IS NULL AND from_input_digest_value IS NULL
+                        AND from_input_status IS NULL AND from_layer_id IS NULL AND from_query_id IS NULL)
+                ),
+                CHECK (
+                    (to_node_kind = 'dependency_input'
+                        AND to_input_kind IS NOT NULL AND to_input_stable_key IS NOT NULL
+                        AND to_input_digest_kind IS NOT NULL AND to_input_digest_value IS NOT NULL
+                        AND to_input_status IS NOT NULL
+                        AND to_layer_id IS NULL AND to_query_id IS NULL AND to_summary_id IS NULL)
+                    OR (to_node_kind = 'layer' AND to_layer_id IS NOT NULL
+                        AND to_input_kind IS NULL AND to_input_stable_key IS NULL
+                        AND to_input_digest_kind IS NULL AND to_input_digest_value IS NULL
+                        AND to_input_status IS NULL AND to_query_id IS NULL AND to_summary_id IS NULL)
+                    OR (to_node_kind = 'query' AND to_query_id IS NOT NULL
+                        AND to_input_kind IS NULL AND to_input_stable_key IS NULL
+                        AND to_input_digest_kind IS NULL AND to_input_digest_value IS NULL
+                        AND to_input_status IS NULL AND to_layer_id IS NULL AND to_summary_id IS NULL)
+                    OR (to_node_kind = 'summary' AND to_summary_id IS NOT NULL
+                        AND to_input_kind IS NULL AND to_input_stable_key IS NULL
+                        AND to_input_digest_kind IS NULL AND to_input_digest_value IS NULL
+                        AND to_input_status IS NULL AND to_layer_id IS NULL AND to_query_id IS NULL)
+                ),
+                FOREIGN KEY (generation_id) REFERENCES generations(id) ON DELETE CASCADE,
+                FOREIGN KEY (generation_id, from_layer_id) REFERENCES layers(generation_id, id),
+                FOREIGN KEY (generation_id, from_query_id) REFERENCES queries(generation_id, id),
+                FOREIGN KEY (generation_id, from_summary_id) REFERENCES summaries(generation_id, id),
+                FOREIGN KEY (generation_id, to_layer_id) REFERENCES layers(generation_id, id),
+                FOREIGN KEY (generation_id, to_query_id) REFERENCES queries(generation_id, id),
+                FOREIGN KEY (generation_id, to_summary_id) REFERENCES summaries(generation_id, id)
+            );
+
+            CREATE TABLE generation_stats (
+                generation_id INTEGER PRIMARY KEY,
+                input_file_count INTEGER NOT NULL CHECK (input_file_count >= 0),
+                input_component_count INTEGER NOT NULL CHECK (input_component_count >= 0),
+                input_detail_count INTEGER NOT NULL CHECK (input_detail_count >= 0),
+                analysis_setting_count INTEGER NOT NULL CHECK (analysis_setting_count >= 0),
+                capability_count INTEGER NOT NULL CHECK (capability_count >= 0),
+                provider_schema_count INTEGER NOT NULL CHECK (provider_schema_count >= 0),
+                provider_manifest_count INTEGER NOT NULL CHECK (provider_manifest_count >= 0),
+                provider_generation_count INTEGER NOT NULL CHECK (provider_generation_count >= 0),
+                layer_count INTEGER NOT NULL CHECK (layer_count >= 0),
+                summary_count INTEGER NOT NULL CHECK (summary_count >= 0),
+                query_count INTEGER NOT NULL CHECK (query_count >= 0),
+                fact_count INTEGER NOT NULL CHECK (fact_count >= 0),
+                dependency_edge_count INTEGER NOT NULL CHECK (dependency_edge_count >= 0),
+                validation_event_count INTEGER NOT NULL CHECK (validation_event_count >= 0),
+                input_digest_kind TEXT NOT NULL CHECK (input_digest_kind = 'input_snapshot'),
+                input_digest_value TEXT NOT NULL CHECK (input_digest_value <> ''),
+                provider_manifest_digest_kind TEXT NOT NULL CHECK (provider_manifest_digest_kind = 'provider_manifest'),
+                provider_manifest_digest_value TEXT NOT NULL CHECK (provider_manifest_digest_value <> ''),
+                provider_output_digest_kind TEXT NOT NULL CHECK (provider_output_digest_kind = 'provider_output'),
+                provider_output_digest_value TEXT NOT NULL CHECK (provider_output_digest_value <> ''),
+                layer_digest_kind TEXT NOT NULL CHECK (layer_digest_kind = 'layer'),
+                layer_digest_value TEXT NOT NULL CHECK (layer_digest_value <> ''),
+                summary_digest_kind TEXT NOT NULL CHECK (summary_digest_kind = 'summary'),
+                summary_digest_value TEXT NOT NULL CHECK (summary_digest_value <> ''),
+                query_digest_kind TEXT NOT NULL CHECK (query_digest_kind = 'query'),
+                query_digest_value TEXT NOT NULL CHECK (query_digest_value <> ''),
+                fact_digest_kind TEXT NOT NULL CHECK (fact_digest_kind = 'fact_metadata'),
+                fact_digest_value TEXT NOT NULL CHECK (fact_digest_value <> ''),
+                dependency_digest_kind TEXT NOT NULL CHECK (dependency_digest_kind = 'dependency'),
+                dependency_digest_value TEXT NOT NULL CHECK (dependency_digest_value <> ''),
+                validation_digest_kind TEXT NOT NULL CHECK (validation_digest_kind = 'validation_event'),
+                validation_digest_value TEXT NOT NULL CHECK (validation_digest_value <> ''),
+                input_logical_bytes INTEGER NOT NULL CHECK (input_logical_bytes >= 0),
+                provider_logical_bytes INTEGER NOT NULL CHECK (provider_logical_bytes >= 0),
+                layer_logical_bytes INTEGER NOT NULL CHECK (layer_logical_bytes >= 0),
+                summary_logical_bytes INTEGER NOT NULL CHECK (summary_logical_bytes >= 0),
+                query_logical_bytes INTEGER NOT NULL CHECK (query_logical_bytes >= 0),
+                fact_logical_bytes INTEGER NOT NULL CHECK (fact_logical_bytes >= 0),
+                dependency_logical_bytes INTEGER NOT NULL CHECK (dependency_logical_bytes >= 0),
+                validation_logical_bytes INTEGER NOT NULL CHECK (validation_logical_bytes >= 0),
+                semantic_logical_bytes INTEGER NOT NULL CHECK (semantic_logical_bytes >= 0),
+                FOREIGN KEY (generation_id) REFERENCES generations(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX dependency_edges_from_endpoint_idx
+                ON dependency_edges(
+                    generation_id, from_node_kind, from_layer_id, from_query_id, from_summary_id,
+                    from_input_kind, from_input_stable_key, from_input_digest_kind,
+                    from_input_digest_value, from_input_status
+                );
+            CREATE INDEX dependency_edges_to_endpoint_idx
+                ON dependency_edges(
+                    generation_id, to_node_kind, to_layer_id, to_query_id, to_summary_id,
+                    to_input_kind, to_input_stable_key, to_input_digest_kind,
+                    to_input_digest_value, to_input_status
+                );
+            "#,
+        )
+        .map_err(classify_sqlite_error)?;
+    writer
+        .connection
+        .pragma_update(None, "foreign_keys", true)
+        .map_err(classify_sqlite_error)
+}
+
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct StoreFixtureSnapshot {
     version: i32,
     bootstrap_markers: Option<i64>,
     sentinel: Option<String>,
+    schema_objects: Vec<(String, String, String)>,
 }
 
 #[cfg(test)]
@@ -406,10 +564,23 @@ pub(super) fn fixture_snapshot_for_test(
     } else {
         None
     };
+    let mut statement = connection
+        .prepare(
+            "SELECT type, name, coalesce(sql, '') FROM sqlite_schema
+             WHERE name NOT LIKE 'sqlite_%'
+             ORDER BY type, name, sql",
+        )
+        .map_err(classify_sqlite_error)?;
+    let schema_objects = statement
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .map_err(classify_sqlite_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(classify_sqlite_error)?;
     Ok(StoreFixtureSnapshot {
         version,
         bootstrap_markers,
         sentinel,
+        schema_objects,
     })
 }
 

@@ -79,6 +79,17 @@ CREATE TABLE generations (
     UNIQUE (workspace_kind, workspace_value, generation_kind, generation_value, reservation_ordinal)
 );
 
+CREATE TABLE run_manifest_nodes (
+    id INTEGER PRIMARY KEY,
+    generation_id INTEGER NOT NULL UNIQUE,
+    run_kind TEXT NOT NULL CHECK (run_kind = 'run'),
+    run_value TEXT NOT NULL CHECK (run_value <> ''),
+    full_config_kind TEXT NOT NULL CHECK (full_config_kind = 'config'),
+    full_config_value TEXT NOT NULL CHECK (full_config_value <> ''),
+    UNIQUE (generation_id, id),
+    FOREIGN KEY (generation_id) REFERENCES generations(id) ON DELETE CASCADE
+);
+
 INSERT INTO store_manifest (id, workspace_kind, workspace_value, active_generation_id)
 VALUES (1, NULL, NULL, NULL);
 
@@ -439,10 +450,48 @@ CREATE TABLE fact_metadata (
     FOREIGN KEY (generation_id) REFERENCES generations(id) ON DELETE CASCADE
 );
 
+CREATE TABLE diagnostic_nodes (
+    id INTEGER PRIMARY KEY,
+    generation_id INTEGER NOT NULL,
+    semantic_ordinal INTEGER NOT NULL CHECK (semantic_ordinal >= 0),
+    rule_id TEXT NOT NULL CHECK (rule_id <> ''),
+    rule_version TEXT NOT NULL CHECK (rule_version <> ''),
+    rule_code_kind TEXT NOT NULL CHECK (rule_code_kind = 'rule_code'),
+    rule_code_value TEXT NOT NULL CHECK (rule_code_value <> ''),
+    options_kind TEXT NOT NULL CHECK (options_kind = 'rule_options'),
+    options_value TEXT NOT NULL CHECK (options_value <> ''),
+    evidence_kind TEXT NOT NULL CHECK (evidence_kind = 'evidence'),
+    evidence_value TEXT NOT NULL CHECK (evidence_value <> ''),
+    requested_views_digest_kind TEXT NOT NULL CHECK (requested_views_digest_kind = 'dependency'),
+    requested_views_digest_value TEXT NOT NULL CHECK (requested_views_digest_value <> ''),
+    requested_view_count INTEGER NOT NULL CHECK (requested_view_count >= 0),
+    UNIQUE (generation_id, id),
+    UNIQUE (generation_id, semantic_ordinal),
+    UNIQUE (
+        generation_id, rule_id, rule_version,
+        rule_code_kind, rule_code_value, options_kind, options_value,
+        evidence_kind, evidence_value,
+        requested_views_digest_kind, requested_views_digest_value
+    ),
+    FOREIGN KEY (generation_id) REFERENCES generations(id) ON DELETE CASCADE
+);
+
+CREATE TABLE diagnostic_requested_view_digests (
+    generation_id INTEGER NOT NULL,
+    diagnostic_id INTEGER NOT NULL,
+    ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+    digest_kind TEXT NOT NULL CHECK (digest_kind <> ''),
+    digest_value TEXT NOT NULL CHECK (digest_value <> ''),
+    PRIMARY KEY (generation_id, diagnostic_id, ordinal),
+    UNIQUE (generation_id, diagnostic_id, digest_kind, digest_value),
+    FOREIGN KEY (generation_id, diagnostic_id)
+        REFERENCES diagnostic_nodes(generation_id, id) ON DELETE CASCADE
+);
+
 CREATE TABLE dependency_edges (
     generation_id INTEGER NOT NULL,
     ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
-    from_node_kind TEXT NOT NULL CHECK (from_node_kind IN ('dependency_input', 'layer', 'query', 'summary')),
+    from_node_kind TEXT NOT NULL CHECK (from_node_kind IN ('dependency_input', 'run_manifest', 'layer', 'query', 'summary', 'diagnostic')),
     from_input_kind TEXT,
     from_input_stable_key TEXT,
     from_input_digest_kind TEXT,
@@ -451,7 +500,9 @@ CREATE TABLE dependency_edges (
     from_layer_id INTEGER,
     from_query_id INTEGER,
     from_summary_id INTEGER,
-    to_node_kind TEXT NOT NULL CHECK (to_node_kind IN ('dependency_input', 'layer', 'query', 'summary')),
+    from_run_manifest_id INTEGER,
+    from_diagnostic_id INTEGER,
+    to_node_kind TEXT NOT NULL CHECK (to_node_kind IN ('dependency_input', 'run_manifest', 'layer', 'query', 'summary', 'diagnostic')),
     to_input_kind TEXT,
     to_input_stable_key TEXT,
     to_input_digest_kind TEXT,
@@ -460,6 +511,8 @@ CREATE TABLE dependency_edges (
     to_layer_id INTEGER,
     to_query_id INTEGER,
     to_summary_id INTEGER,
+    to_run_manifest_id INTEGER,
+    to_diagnostic_id INTEGER,
     dependency_kind TEXT NOT NULL CHECK (dependency_kind <> ''),
     required_shape TEXT NOT NULL CHECK (required_shape <> ''),
     PRIMARY KEY (generation_id, ordinal),
@@ -468,46 +521,78 @@ CREATE TABLE dependency_edges (
             AND from_input_kind IS NOT NULL AND from_input_stable_key IS NOT NULL
             AND from_input_digest_kind IS NOT NULL AND from_input_digest_value IS NOT NULL
             AND from_input_status IS NOT NULL
-            AND from_layer_id IS NULL AND from_query_id IS NULL AND from_summary_id IS NULL)
+            AND from_layer_id IS NULL AND from_query_id IS NULL AND from_summary_id IS NULL
+            AND from_run_manifest_id IS NULL AND from_diagnostic_id IS NULL)
+        OR (from_node_kind = 'run_manifest' AND from_run_manifest_id IS NOT NULL
+            AND from_input_kind IS NULL AND from_input_stable_key IS NULL
+            AND from_input_digest_kind IS NULL AND from_input_digest_value IS NULL
+            AND from_input_status IS NULL AND from_layer_id IS NULL AND from_query_id IS NULL
+            AND from_summary_id IS NULL AND from_diagnostic_id IS NULL)
         OR (from_node_kind = 'layer' AND from_layer_id IS NOT NULL
             AND from_input_kind IS NULL AND from_input_stable_key IS NULL
             AND from_input_digest_kind IS NULL AND from_input_digest_value IS NULL
-            AND from_input_status IS NULL AND from_query_id IS NULL AND from_summary_id IS NULL)
+            AND from_input_status IS NULL AND from_query_id IS NULL AND from_summary_id IS NULL
+            AND from_run_manifest_id IS NULL AND from_diagnostic_id IS NULL)
         OR (from_node_kind = 'query' AND from_query_id IS NOT NULL
             AND from_input_kind IS NULL AND from_input_stable_key IS NULL
             AND from_input_digest_kind IS NULL AND from_input_digest_value IS NULL
-            AND from_input_status IS NULL AND from_layer_id IS NULL AND from_summary_id IS NULL)
+            AND from_input_status IS NULL AND from_layer_id IS NULL AND from_summary_id IS NULL
+            AND from_run_manifest_id IS NULL AND from_diagnostic_id IS NULL)
         OR (from_node_kind = 'summary' AND from_summary_id IS NOT NULL
             AND from_input_kind IS NULL AND from_input_stable_key IS NULL
             AND from_input_digest_kind IS NULL AND from_input_digest_value IS NULL
-            AND from_input_status IS NULL AND from_layer_id IS NULL AND from_query_id IS NULL)
+            AND from_input_status IS NULL AND from_layer_id IS NULL AND from_query_id IS NULL
+            AND from_run_manifest_id IS NULL AND from_diagnostic_id IS NULL)
+        OR (from_node_kind = 'diagnostic' AND from_diagnostic_id IS NOT NULL
+            AND from_input_kind IS NULL AND from_input_stable_key IS NULL
+            AND from_input_digest_kind IS NULL AND from_input_digest_value IS NULL
+            AND from_input_status IS NULL AND from_layer_id IS NULL AND from_query_id IS NULL
+            AND from_summary_id IS NULL AND from_run_manifest_id IS NULL)
     ),
     CHECK (
         (to_node_kind = 'dependency_input'
             AND to_input_kind IS NOT NULL AND to_input_stable_key IS NOT NULL
             AND to_input_digest_kind IS NOT NULL AND to_input_digest_value IS NOT NULL
             AND to_input_status IS NOT NULL
-            AND to_layer_id IS NULL AND to_query_id IS NULL AND to_summary_id IS NULL)
+            AND to_layer_id IS NULL AND to_query_id IS NULL AND to_summary_id IS NULL
+            AND to_run_manifest_id IS NULL AND to_diagnostic_id IS NULL)
+        OR (to_node_kind = 'run_manifest' AND to_run_manifest_id IS NOT NULL
+            AND to_input_kind IS NULL AND to_input_stable_key IS NULL
+            AND to_input_digest_kind IS NULL AND to_input_digest_value IS NULL
+            AND to_input_status IS NULL AND to_layer_id IS NULL AND to_query_id IS NULL
+            AND to_summary_id IS NULL AND to_diagnostic_id IS NULL)
         OR (to_node_kind = 'layer' AND to_layer_id IS NOT NULL
             AND to_input_kind IS NULL AND to_input_stable_key IS NULL
             AND to_input_digest_kind IS NULL AND to_input_digest_value IS NULL
-            AND to_input_status IS NULL AND to_query_id IS NULL AND to_summary_id IS NULL)
+            AND to_input_status IS NULL AND to_query_id IS NULL AND to_summary_id IS NULL
+            AND to_run_manifest_id IS NULL AND to_diagnostic_id IS NULL)
         OR (to_node_kind = 'query' AND to_query_id IS NOT NULL
             AND to_input_kind IS NULL AND to_input_stable_key IS NULL
             AND to_input_digest_kind IS NULL AND to_input_digest_value IS NULL
-            AND to_input_status IS NULL AND to_layer_id IS NULL AND to_summary_id IS NULL)
+            AND to_input_status IS NULL AND to_layer_id IS NULL AND to_summary_id IS NULL
+            AND to_run_manifest_id IS NULL AND to_diagnostic_id IS NULL)
         OR (to_node_kind = 'summary' AND to_summary_id IS NOT NULL
             AND to_input_kind IS NULL AND to_input_stable_key IS NULL
             AND to_input_digest_kind IS NULL AND to_input_digest_value IS NULL
-            AND to_input_status IS NULL AND to_layer_id IS NULL AND to_query_id IS NULL)
+            AND to_input_status IS NULL AND to_layer_id IS NULL AND to_query_id IS NULL
+            AND to_run_manifest_id IS NULL AND to_diagnostic_id IS NULL)
+        OR (to_node_kind = 'diagnostic' AND to_diagnostic_id IS NOT NULL
+            AND to_input_kind IS NULL AND to_input_stable_key IS NULL
+            AND to_input_digest_kind IS NULL AND to_input_digest_value IS NULL
+            AND to_input_status IS NULL AND to_layer_id IS NULL AND to_query_id IS NULL
+            AND to_summary_id IS NULL AND to_run_manifest_id IS NULL)
     ),
     FOREIGN KEY (generation_id) REFERENCES generations(id) ON DELETE CASCADE,
     FOREIGN KEY (generation_id, from_layer_id) REFERENCES layers(generation_id, id),
     FOREIGN KEY (generation_id, from_query_id) REFERENCES queries(generation_id, id),
     FOREIGN KEY (generation_id, from_summary_id) REFERENCES summaries(generation_id, id),
+    FOREIGN KEY (generation_id, from_run_manifest_id) REFERENCES run_manifest_nodes(generation_id, id),
+    FOREIGN KEY (generation_id, from_diagnostic_id) REFERENCES diagnostic_nodes(generation_id, id),
     FOREIGN KEY (generation_id, to_layer_id) REFERENCES layers(generation_id, id),
     FOREIGN KEY (generation_id, to_query_id) REFERENCES queries(generation_id, id),
-    FOREIGN KEY (generation_id, to_summary_id) REFERENCES summaries(generation_id, id)
+    FOREIGN KEY (generation_id, to_summary_id) REFERENCES summaries(generation_id, id),
+    FOREIGN KEY (generation_id, to_run_manifest_id) REFERENCES run_manifest_nodes(generation_id, id),
+    FOREIGN KEY (generation_id, to_diagnostic_id) REFERENCES diagnostic_nodes(generation_id, id)
 );
 
 CREATE TABLE validation_events (
@@ -535,6 +620,7 @@ CREATE TABLE generation_stats (
     summary_count INTEGER NOT NULL CHECK (summary_count >= 0),
     query_count INTEGER NOT NULL CHECK (query_count >= 0),
     fact_count INTEGER NOT NULL CHECK (fact_count >= 0),
+    diagnostic_count INTEGER NOT NULL CHECK (diagnostic_count >= 0),
     dependency_edge_count INTEGER NOT NULL CHECK (dependency_edge_count >= 0),
     validation_event_count INTEGER NOT NULL CHECK (validation_event_count >= 0),
     input_digest_kind TEXT NOT NULL CHECK (input_digest_kind = 'input_snapshot'),
@@ -561,6 +647,7 @@ CREATE TABLE generation_stats (
     summary_logical_bytes INTEGER NOT NULL CHECK (summary_logical_bytes >= 0),
     query_logical_bytes INTEGER NOT NULL CHECK (query_logical_bytes >= 0),
     fact_logical_bytes INTEGER NOT NULL CHECK (fact_logical_bytes >= 0),
+    diagnostic_logical_bytes INTEGER NOT NULL CHECK (diagnostic_logical_bytes >= 0),
     dependency_logical_bytes INTEGER NOT NULL CHECK (dependency_logical_bytes >= 0),
     validation_logical_bytes INTEGER NOT NULL CHECK (validation_logical_bytes >= 0),
     semantic_logical_bytes INTEGER NOT NULL CHECK (semantic_logical_bytes >= 0),
@@ -602,13 +689,15 @@ CREATE INDEX provider_generations_generation_idx
     ON provider_generations(generation_id, provider_id);
 CREATE INDEX dependency_edges_from_endpoint_idx
     ON dependency_edges(
-        generation_id, from_node_kind, from_layer_id, from_query_id, from_summary_id,
+        generation_id, from_node_kind, from_run_manifest_id, from_layer_id, from_query_id,
+        from_summary_id, from_diagnostic_id,
         from_input_kind, from_input_stable_key, from_input_digest_kind, from_input_digest_value,
         from_input_status
     );
 CREATE INDEX dependency_edges_to_endpoint_idx
     ON dependency_edges(
-        generation_id, to_node_kind, to_layer_id, to_query_id, to_summary_id,
+        generation_id, to_node_kind, to_run_manifest_id, to_layer_id, to_query_id,
+        to_summary_id, to_diagnostic_id,
         to_input_kind, to_input_stable_key, to_input_digest_kind, to_input_digest_value,
         to_input_status
     );
@@ -996,6 +1085,10 @@ fn validate_required_columns(connection: &Connection, version: i32) -> Result<()
              dependency_kind dependency_value validation_kind validation_value dependency_schema status",
         ),
         (
+            "run_manifest_nodes",
+            "id generation_id run_kind run_value full_config_kind full_config_value",
+        ),
+        (
             "input_snapshots",
             "generation_id schema_version workspace_kind workspace_value full_config_kind full_config_value \
              input_digest_kind input_digest_value requirements_digest_kind requirements_digest_value",
@@ -1116,11 +1209,22 @@ fn validate_required_columns(connection: &Connection, version: i32) -> Result<()
              payload_digest",
         ),
         (
+            "diagnostic_nodes",
+            "id generation_id semantic_ordinal rule_id rule_version rule_code_kind rule_code_value \
+             options_kind options_value evidence_kind evidence_value requested_views_digest_kind \
+             requested_views_digest_value requested_view_count",
+        ),
+        (
+            "diagnostic_requested_view_digests",
+            "generation_id diagnostic_id ordinal digest_kind digest_value",
+        ),
+        (
             "dependency_edges",
             "generation_id ordinal from_node_kind from_input_kind from_input_stable_key \
              from_input_digest_kind from_input_digest_value from_input_status from_layer_id from_query_id \
-             from_summary_id to_node_kind to_input_kind to_input_stable_key to_input_digest_kind \
-             to_input_digest_value to_input_status to_layer_id to_query_id to_summary_id dependency_kind \
+             from_summary_id from_run_manifest_id from_diagnostic_id to_node_kind to_input_kind \
+             to_input_stable_key to_input_digest_kind to_input_digest_value to_input_status \
+             to_layer_id to_query_id to_summary_id to_run_manifest_id to_diagnostic_id dependency_kind \
              required_shape",
         ),
         (
@@ -1131,13 +1235,13 @@ fn validate_required_columns(connection: &Connection, version: i32) -> Result<()
             "generation_stats",
             "generation_id input_file_count input_component_count input_detail_count analysis_setting_count \
              capability_count provider_schema_count provider_manifest_count provider_generation_count layer_count \
-             summary_count query_count fact_count dependency_edge_count validation_event_count input_digest_kind \
+             summary_count query_count fact_count diagnostic_count dependency_edge_count validation_event_count input_digest_kind \
              input_digest_value provider_manifest_digest_kind provider_manifest_digest_value \
              provider_output_digest_kind provider_output_digest_value layer_digest_kind layer_digest_value \
              summary_digest_kind summary_digest_value query_digest_kind query_digest_value fact_digest_kind \
              fact_digest_value dependency_digest_kind dependency_digest_value validation_digest_kind \
              validation_digest_value input_logical_bytes provider_logical_bytes layer_logical_bytes \
-             summary_logical_bytes query_logical_bytes fact_logical_bytes dependency_logical_bytes \
+             summary_logical_bytes query_logical_bytes fact_logical_bytes diagnostic_logical_bytes dependency_logical_bytes \
              validation_logical_bytes semantic_logical_bytes",
         ),
         (
