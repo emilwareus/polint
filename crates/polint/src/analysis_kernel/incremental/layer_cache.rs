@@ -712,7 +712,7 @@ fn dependency_source_matches_manifest(
 ) -> bool {
     match &edge.from {
         CacheNode::DependencyInput(_) => edge.from == relative_manifest_dependency_source(),
-        CacheNode::Layer(layer_key) => layer_key == &manifest.key,
+        CacheNode::Layer(layer_key) => layer_key.as_ref() == &manifest.key,
         _ => false,
     }
 }
@@ -740,7 +740,7 @@ fn invalidation_plan_for_manifest(
 }
 
 fn expanded_manifest_dependencies(manifest: &LayerCacheManifest) -> Vec<DependencyEdge> {
-    let from = CacheNode::Layer(manifest.key.clone());
+    let from = CacheNode::layer(manifest.key.clone());
     manifest
         .dependencies
         .iter()
@@ -871,7 +871,7 @@ fn push_dependency_change_rows(
     );
     if rows.len() == before {
         rows.push(ChangeSetRow {
-            node: CacheNode::Layer(manifest.key.clone()),
+            node: CacheNode::layer(manifest.key.clone()),
             kind: fallback_kind,
             digest,
         });
@@ -903,7 +903,7 @@ fn layer_key_change_row(
     kind: ChangeKind,
 ) -> ChangeSetRow {
     ChangeSetRow {
-        node: CacheNode::Layer(manifest.key.clone()),
+        node: CacheNode::layer(manifest.key.clone()),
         kind,
         digest: layer_key_change_digest(&manifest.key, requested),
     }
@@ -1044,7 +1044,7 @@ mod tests {
 
     fn dependency(layer_key: &LayerKey) -> DependencyEdge {
         DependencyEdge {
-            from: CacheNode::Layer(layer_key.clone()),
+            from: CacheNode::layer(layer_key.clone()),
             to: CacheNode::DependencyInput(
                 InputDependencyKey::source_file(
                     "src/main.ts",
@@ -1296,7 +1296,7 @@ mod tests {
         assert_eq!(metadata.key, expected_key);
         assert_eq!(
             metadata.dependencies[0].from,
-            CacheNode::Layer(metadata.key.clone())
+            CacheNode::layer(metadata.key.clone())
         );
         let metadata_json =
             serde_json::to_value(&metadata).expect("layer metadata should serialize");

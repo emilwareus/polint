@@ -8,6 +8,7 @@
 
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
+use std::hash::Hasher as _;
 use std::path::Path;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -15,6 +16,9 @@ pub(crate) struct Digest {
     pub(crate) kind: DigestKind,
     pub(crate) value: String,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct DigestFingerprint(u64);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -104,17 +108,37 @@ impl std::error::Error for IdentityDigestKindError {}
 
 impl Digest {
     pub(crate) fn from_parts(kind: DigestKind, label: &str, parts: &[&str]) -> Self {
+        Self::from_fingerprint(kind, Self::fingerprint_from_parts(kind, label, parts))
+    }
+
+    pub(crate) fn fingerprint_from_parts(
+        kind: DigestKind,
+        label: &str,
+        parts: &[&str],
+    ) -> DigestFingerprint {
         let kind_label = kind.label();
         let mut hash = FNV_OFFSET_BASIS;
         fingerprint_length_prefixed_part(&mut hash, "kind", kind_label);
         for part in parts {
             fingerprint_length_prefixed_part(&mut hash, label, part);
         }
+        DigestFingerprint(hash)
+    }
 
-        Self {
-            kind,
-            value: format!("{hash:016x}"),
-        }
+    pub(crate) fn fingerprint_from_fragments(
+        kind: DigestKind,
+        label: &str,
+        fragments: &[&str],
+    ) -> DigestFingerprint {
+        let mut hash = FNV_OFFSET_BASIS;
+        fingerprint_length_prefixed_part(&mut hash, "kind", kind.label());
+        let value_len = fragments.iter().fold(0_usize, |total, fragment| {
+            total
+                .checked_add(fragment.len())
+                .expect("digest input length fits in usize")
+        });
+        fingerprint_length_prefixed_fragments(&mut hash, label, value_len, fragments);
+        DigestFingerprint(hash)
     }
 
     pub(crate) fn builder(kind: DigestKind, label: &'static str) -> DigestBuilder {
@@ -122,11 +146,44 @@ impl Digest {
     }
 
     pub(crate) fn from_unordered(kind: DigestKind, label: &str, mut digests: Vec<Digest>) -> Self {
-        digests.sort();
-        let digest_parts = digests.iter().map(ToString::to_string).collect::<Vec<_>>();
-        let hash_parts = digest_parts.iter().map(String::as_str).collect::<Vec<_>>();
+        digests.sort_unstable();
+        let mut hash = FNV_OFFSET_BASIS;
+        fingerprint_length_prefixed_part(&mut hash, "kind", kind.label());
+        for digest in &digests {
+            let digest_kind = digest.kind.label();
+            let value_len = digest_kind
+                .len()
+                .saturating_add(1)
+                .saturating_add(digest.value.len());
+            fingerprint_length_prefixed_fragments(
+                &mut hash,
+                label,
+                value_len,
+                &[digest_kind, ":", &digest.value],
+            );
+        }
+        Self::from_fingerprint(kind, DigestFingerprint(hash))
+    }
 
-        Self::from_parts(kind, label, &hash_parts)
+    pub(crate) fn from_unordered_same_kind_fingerprints(
+        kind: DigestKind,
+        label: &str,
+        item_kind: DigestKind,
+        mut fingerprints: Vec<DigestFingerprint>,
+    ) -> Self {
+        fingerprints.sort_unstable();
+        let mut hash = FNV_OFFSET_BASIS;
+        fingerprint_length_prefixed_part(&mut hash, "kind", kind.label());
+        let item_kind = item_kind.label();
+        let value_len = item_kind.len().saturating_add(1).saturating_add(16);
+        let part_prefix = format!("{}:{label}={value_len}:{item_kind}:", label.len());
+        for fingerprint in fingerprints {
+            let value = fingerprint_hex(fingerprint);
+            fingerprint_bytes(&mut hash, part_prefix.as_bytes());
+            fingerprint_bytes(&mut hash, &value);
+            fingerprint_byte(&mut hash, PART_SEPARATOR);
+        }
+        Self::from_fingerprint(kind, DigestFingerprint(hash))
     }
 
     pub(crate) fn absent(kind: DigestKind, label: &str) -> Self {
@@ -135,6 +192,13 @@ impl Digest {
 
     pub(crate) fn unsupported(kind: DigestKind, label: &str, reason: &str) -> Self {
         Self::from_parts(kind, "unsupported", &[label, reason])
+    }
+
+    fn from_fingerprint(kind: DigestKind, fingerprint: DigestFingerprint) -> Self {
+        Self {
+            kind,
+            value: format!("{:016x}", fingerprint.0),
+        }
     }
 }
 
@@ -158,6 +222,15 @@ impl DigestBuilder {
 
     pub(crate) fn labeled_part(&mut self, label: &str, value: &str) {
         fingerprint_length_prefixed_part(&mut self.hash, label, value);
+    }
+
+    pub(crate) fn fragmented_part(&mut self, fragments: &[&str]) {
+        let value_len = fragments.iter().fold(0_usize, |total, fragment| {
+            total
+                .checked_add(fragment.len())
+                .expect("digest input length fits in usize")
+        });
+        fingerprint_length_prefixed_fragments(&mut self.hash, self.label, value_len, fragments);
     }
 
     pub(crate) fn debug_part(&mut self, value: impl fmt::Debug) {
@@ -495,14 +568,36 @@ const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
 const FNV_PRIME: u64 = 0x100000001b3;
 const PART_SEPARATOR: u8 = 0xfe;
 
+fn fingerprint_hex(fingerprint: DigestFingerprint) -> [u8; 16] {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+
+    let mut encoded = [0_u8; 16];
+    for (index, byte) in encoded.iter_mut().enumerate() {
+        let shift = (15 - index) * 4;
+        *byte = HEX[((fingerprint.0 >> shift) & 0x0f) as usize];
+    }
+    encoded
+}
+
 fn fingerprint_length_prefixed_part(hash: &mut u64, label: &str, value: &str) {
+    fingerprint_length_prefixed_fragments(hash, label, value.len(), &[value]);
+}
+
+fn fingerprint_length_prefixed_fragments(
+    hash: &mut u64,
+    label: &str,
+    value_len: usize,
+    fragments: &[&str],
+) {
     fingerprint_usize_decimal(hash, label.len());
     fingerprint_byte(hash, b':');
     fingerprint_bytes(hash, label.as_bytes());
     fingerprint_byte(hash, b'=');
-    fingerprint_usize_decimal(hash, value.len());
+    fingerprint_usize_decimal(hash, value_len);
     fingerprint_byte(hash, b':');
-    fingerprint_bytes(hash, value.as_bytes());
+    for fragment in fragments {
+        fingerprint_bytes(hash, fragment.as_bytes());
+    }
     fingerprint_byte(hash, PART_SEPARATOR);
 }
 
@@ -522,12 +617,14 @@ fn fingerprint_usize_decimal(hash: &mut u64, mut value: usize) {
     fingerprint_bytes(hash, &buffer[index..]);
 }
 
+#[inline]
 fn fingerprint_bytes(hash: &mut u64, bytes: &[u8]) {
-    for byte in bytes {
-        fingerprint_byte(hash, *byte);
-    }
+    let mut hasher = fnv::FnvHasher::with_key(*hash);
+    hasher.write(bytes);
+    *hash = hasher.finish();
 }
 
+#[inline(always)]
 fn fingerprint_byte(hash: &mut u64, byte: u8) {
     *hash ^= u64::from(byte);
     *hash = hash.wrapping_mul(FNV_PRIME);
@@ -582,13 +679,116 @@ mod tests {
     }
 
     #[test]
+    fn optimized_fnv_bytes_match_the_scalar_recurrence() {
+        for bytes in [
+            b"".as_slice(),
+            b"a",
+            b"semantic metadata",
+            "räksmörgås".as_bytes(),
+        ] {
+            let mut accelerated = FNV_OFFSET_BASIS;
+            fingerprint_bytes(&mut accelerated, bytes);
+            let scalar = bytes.iter().fold(FNV_OFFSET_BASIS, |mut hash, byte| {
+                hash ^= u64::from(*byte);
+                hash.wrapping_mul(FNV_PRIME)
+            });
+
+            assert_eq!(accelerated, scalar);
+        }
+    }
+
+    #[test]
+    fn fragmented_part_matches_one_contiguous_part() {
+        let expected = Digest::from_parts(DigestKind::Dependency, "edge", &["alpha:beta"]);
+        let mut builder = Digest::builder(DigestKind::Dependency, "edge");
+        builder.fragmented_part(&["alpha", ":", "beta"]);
+
+        assert_eq!(builder.finish(), expected);
+        assert_eq!(
+            Digest::from_fingerprint(
+                DigestKind::Dependency,
+                Digest::fingerprint_from_fragments(
+                    DigestKind::Dependency,
+                    "edge",
+                    &["alpha", ":", "beta"],
+                ),
+            ),
+            expected
+        );
+    }
+
+    #[test]
     fn from_unordered_sorts_input_digests_canonically() {
         let a = Digest::from_parts(DigestKind::SourceText, "file", &["a"]);
         let b = Digest::from_parts(DigestKind::SourceText, "file", &["b"]);
+        let mut expected_digests = [a.clone(), b.clone()];
+        expected_digests.sort();
+        let expected_parts = expected_digests.map(|digest| digest.to_string());
 
         assert_eq!(
             Digest::from_unordered(DigestKind::LayerOutput, "layer", vec![b.clone(), a.clone()]),
             Digest::from_unordered(DigestKind::LayerOutput, "layer", vec![a, b])
+        );
+        assert_eq!(
+            Digest::from_unordered(
+                DigestKind::LayerOutput,
+                "layer",
+                vec![
+                    Digest::from_parts(DigestKind::SourceText, "file", &["b"]),
+                    Digest::from_parts(DigestKind::SourceText, "file", &["a"]),
+                ],
+            ),
+            Digest::from_parts(
+                DigestKind::LayerOutput,
+                "layer",
+                &[&expected_parts[0], &expected_parts[1]],
+            )
+        );
+    }
+
+    #[test]
+    fn same_kind_fingerprints_match_allocating_unordered_digest_path() {
+        let rows = [
+            ["zeta", "payload:2"],
+            ["alpha", "payload:1"],
+            ["alpha", "payload:1"],
+        ];
+        let digests = rows
+            .iter()
+            .map(|parts| Digest::from_parts(DigestKind::FactMetadata, "fact_metadata_row", parts))
+            .collect::<Vec<_>>();
+        let mut fingerprints = rows
+            .iter()
+            .map(|parts| {
+                Digest::fingerprint_from_parts(DigestKind::FactMetadata, "fact_metadata_row", parts)
+            })
+            .collect::<Vec<_>>();
+        let expected =
+            Digest::from_unordered(DigestKind::FactMetadata, "fact_metadata_rows", digests);
+
+        assert_eq!(
+            Digest::from_unordered_same_kind_fingerprints(
+                DigestKind::FactMetadata,
+                "fact_metadata_rows",
+                DigestKind::FactMetadata,
+                fingerprints.clone(),
+            ),
+            expected
+        );
+        fingerprints.reverse();
+        assert_eq!(
+            Digest::from_unordered_same_kind_fingerprints(
+                DigestKind::FactMetadata,
+                "fact_metadata_rows",
+                DigestKind::FactMetadata,
+                fingerprints,
+            ),
+            expected
+        );
+        assert_eq!(fingerprint_hex(DigestFingerprint(0)), *b"0000000000000000");
+        assert_eq!(
+            fingerprint_hex(DigestFingerprint(u64::MAX)),
+            *b"ffffffffffffffff"
         );
     }
 

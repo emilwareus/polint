@@ -952,11 +952,10 @@ impl LayerKey {
         // dependency EDGES emitted in `metrics::metrics_layer_dependency_edges`
         // (one `to` node per file/function), not by the key's `input_digests`.
         // Embedding every digest in the key as well made the key O(files+functions)
-        // in size, and because `CacheNode::Layer(key)` is cloned into the `from`
-        // field of every dependency edge, dependency-edge construction became
-        // O(files * (files+functions)) in time and memory — tens of GB and minutes
-        // on large repos. The combined digests still change whenever any source or
-        // function digest changes, so the key identity and the coarse
+        // in size. Keeping the key compact also avoids repeating a large identity
+        // throughout dependency-edge processing. The combined digests still
+        // change whenever any source or function digest changes, so the key
+        // identity and the coarse
         // `input_digests != input_digests` change check stay correct.
         let input_digests = vec![
             Self::combine_digests_into(

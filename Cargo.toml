@@ -40,11 +40,13 @@ description = "polint workspace crate: multi-language repo-local static analysis
 anyhow = "1.0.103"
 assert_cmd = "2.2.1"
 clap = { version = "4.6.1", features = ["derive"] }
+fnv = "1.0.7"
 globset = "0.4.18"
 ignore = "0.4.25"
 insta = "1.47.2"
 json-strip-comments = "3.1.1"
 libc = "0.2"
+lz4_flex = "0.13.1"
 oxc_allocator = "0.129.0"
 oxc_ast = "0.129.0"
 oxc_parser = "0.129.0"
@@ -84,3 +86,15 @@ unimplemented = "warn"
 redundant_clone = "warn"
 needless_collect = "warn"
 large_enum_variant = "warn"
+
+[profile.test.package.fnv]
+opt-level = 3
+
+[profile.test.package.lz4_flex]
+opt-level = 3
+
+[profile.test.package.libsqlite3-sys]
+opt-level = 3
+
+[profile.test.package.rusqlite]
+opt-level = 3

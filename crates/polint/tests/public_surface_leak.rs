@@ -10,18 +10,17 @@
 // adds preview policy-query vocabulary while keeping raw CFG/call graph/solver
 // internals private.
 //
-// The gate runs on Linux + macOS in fast CI on every PR (D-18). Both platforms
-// must pass independently — no averaging, no skipping either platform.
+// The gate runs on Linux + macOS in fast CI on every PR. Both platforms must
+// pass independently — no averaging, no skipping either platform.
 //
 // Strategy: APPROACH B (direct cargo invocation, no new dependency). The gate
 // shells out to `cargo build` on the excluded probe crate and asserts a clean
 // compile, then snapshot-compares the prelude re-export block against
-// ALLOWED_PRELUDE. trybuild was deliberately NOT added — the no-new-deps
-// discipline of Plans 01/02 (T-42-SC) carries here, and a direct cargo
-// invocation gives rustc-level granularity without a UI-test dependency.
+// ALLOWED_PRELUDE. A direct cargo invocation gives rustc-level granularity
+// without adding a UI-test dependency.
 //
 // If you are reading this comment because the test failed:
-//   1. Did you accidentally add `pub` to a v1.3 type? Make it `pub(crate)`.
+//   1. Did you accidentally expose an internal type? Make it `pub(crate)`.
 //   2. Did you add a sanctioned new public type via release-close review?
 //      Extend ALLOWED_PRELUDE in the same PR and reference the review record,
 //      and add a witness for it in the probe crate's allowlist_witness module.
@@ -190,16 +189,52 @@ fn probe_lib_source() -> String {
 
 const STORE_PRIVATE_MARKERS: &[&str] = &[
     "polint::analysis_kernel::store",
+    "analysis_kernel::store::",
     "polint::store",
     "SemanticStore",
     "StoreConfig",
     "StoreStatus",
+    "StoreSkipReason",
+    "StoreRebuildReason",
+    "StoreOutcome",
+    "StoreStatistics",
+    "StoreCommitPlan",
+    "StorePlanError",
+    "StoreIdentityRow",
+    "ValidatedRunMetadata",
+    "CanonicalRunIdentities",
+    "WorkspaceIdentity",
+    "ConfigIdentity",
+    "RunIdentity",
+    "GenerationIdentity",
+    "RunManifestKey",
+    "DiagnosticKey",
+    "InputDependencyKey",
+    "QueryDependencyInputs",
+    "RequestedCapabilitySnapshot",
+    "GenerationFailureEvent",
+    "GenerationFailureReason",
+    "GenerationFailureStage",
+    "GenerationStatus",
+    "SchemaCodecError",
+    "decode_workspace_identity",
+    "encode_cache_node_endpoint",
     "rusqlite",
     "_polint_schema_migrations",
+    "store_manifest",
+    "generations",
+    "run_manifest_nodes",
+    "diagnostic_nodes",
+    "generation_failure_events",
+    "dependency_edges",
+    "generation_stats",
+    "generation_telemetry",
     "SQLITE_OPEN_READ_WRITE",
     "SQLITE_OPEN_READ_ONLY",
     "TransactionBehavior::Immediate",
     "PRAGMA user_version",
+    "active_generation_id",
+    "provider_generation_id",
     "raw_row_id",
     "sqlite_row_id",
 ];
@@ -252,10 +287,10 @@ fn assert_no_store_private_markers(label: &str, source: &str) {
 /// Parses the `pub mod prelude { ... }` block of `sdk/mod.rs` and returns the
 /// set of identifier names re-exported through it.
 ///
-/// BLOCKER #6: this helper is exercised directly by
-/// `parser_self_test_detects_synthetic_leak` so a buggy parser cannot silently
-/// hollow out the gate. It returns the FINAL nameable identifier for each
-/// re-export, honoring `X as Y` aliases (yielding `Y`).
+/// This helper is exercised directly by `parser_self_test_detects_synthetic_leak`
+/// so a buggy parser cannot silently hollow out the gate. It returns the final
+/// nameable identifier for each re-export, honoring `X as Y` aliases (yielding
+/// `Y`).
 pub fn parse_prelude_reexports(source: &str) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
 
@@ -366,7 +401,7 @@ fn probe_crate_compiles_against_prelude_only() {
     assert!(
         output.status.success(),
         "leak-gate probe crate FAILED to compile against `polint::sdk::prelude::*`.\n\
-         A v1.0–v1.2 allow-listed identifier was likely dropped from the prelude, \
+         An allow-listed identifier was likely dropped from the prelude, \
          or the probe was tampered with.\n\
          See crates/polint/tests/public_surface_leak.rs top comment.\n\
          --- cargo stdout ---\n{stdout}\n--- cargo stderr ---\n{stderr}"
@@ -417,16 +452,17 @@ fn allowlist_matches_prelude_source() {
 fn ensure_no_private_namespace_in_probe() {
     let src = probe_lib_source();
 
-    // (a) #![no_implicit_prelude] must be present (T-42-04-04 mitigation).
+    // The probe must disable the implicit prelude so unrelated names cannot
+    // mask an accidental change to polint's prelude.
     assert!(
         src.lines().any(|l| l.trim() == "#![no_implicit_prelude]"),
         "probe lib.rs is missing `#![no_implicit_prelude]` — removing it lets std's \
-         prelude mask accidental polint-prelude additions (T-42-04-04). \
-         Restore it to preserve the leak-gate isolation contract."
+         prelude mask accidental polint-prelude additions. Restore it to preserve \
+         the leak-gate isolation contract."
     );
 
-    // (b) EXACTLY one `use polint::` line, and it is the prelude glob
-    // (the leading `::` is required under no_implicit_prelude; T-42-04-05).
+    // Exactly one `use polint::` line is allowed, and it is the prelude glob.
+    // The leading `::` is required under `no_implicit_prelude`.
     let polint_use_lines: Vec<&str> = src
         .lines()
         .map(str::trim)
@@ -435,8 +471,8 @@ fn ensure_no_private_namespace_in_probe() {
     assert_eq!(
         polint_use_lines.len(),
         1,
-        "probe lib.rs must contain EXACTLY one `use polint::` import; found: {polint_use_lines:?} \
-         (T-42-04-05 — the single glob is the catch-all)"
+        "probe lib.rs must contain EXACTLY one `use polint::` import; found: \
+         {polint_use_lines:?}; the single glob is the catch-all"
     );
     assert!(
         polint_use_lines[0] == "use ::polint::sdk::prelude::*;"
@@ -445,7 +481,7 @@ fn ensure_no_private_namespace_in_probe() {
         polint_use_lines[0]
     );
 
-    // (c) ZERO private-namespace path substrings anywhere in executable code.
+    // No private-namespace path substrings may appear in executable code.
     // Strip comment lines first so the cautionary doc-comment listing the
     // forbidden namespaces does not trip the check.
     let code_only: String = src
@@ -477,8 +513,8 @@ fn ensure_no_private_namespace_in_probe() {
     ] {
         assert!(
             !code_only.contains(forbidden),
-            "probe lib.rs references private namespace `{forbidden}` in code — the whole point \
-             is that private types are NOT nameable here (D-23). Remove it."
+            "probe lib.rs references private namespace `{forbidden}` in code — private types \
+             must not be nameable here. Remove it."
         );
     }
 }
@@ -510,19 +546,84 @@ fn semantic_store_markers_do_not_leak_into_supported_public_surfaces() {
         "package main\n\nfunc main() {}\n",
     )
     .expect("write public-output source");
-    let check = Command::new(env!("CARGO_BIN_EXE_polint"))
-        .current_dir(repo.path())
-        .args(["check", "--format", "json", "--fail-on", "none"])
-        .output()
-        .expect("run public check JSON");
-    assert!(
-        check.status.success(),
-        "public check failed: {}",
-        String::from_utf8_lossy(&check.stderr)
-    );
-    let check_json = String::from_utf8(check.stdout).expect("check JSON is UTF-8");
-    serde_json::from_str::<serde_json::Value>(&check_json).expect("check output is JSON");
-    assert_no_store_private_markers("polint check --format json", &check_json);
+    for args in [
+        ["init"].as_slice(),
+        ["new-rule", "generic", "public-surface-review", "--review"].as_slice(),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_polint"))
+            .current_dir(repo.path())
+            .args(args)
+            .output()
+            .expect("prepare public-output rule repo");
+        assert!(
+            output.status.success(),
+            "polint {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let git = |args: &[&str]| {
+        let output = Command::new("git")
+            .current_dir(repo.path())
+            .args(args)
+            .output()
+            .expect("run git for public-output repo");
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output
+    };
+    git(&["init", "--quiet"]);
+    git(&["config", "user.email", "polint@example.invalid"]);
+    git(&["config", "user.name", "polint public-surface test"]);
+    git(&["config", "commit.gpgsign", "false"]);
+    git(&["add", "-A"]);
+    git(&["commit", "--quiet", "-m", "base"]);
+    let base = String::from_utf8(git(&["rev-parse", "HEAD"]).stdout)
+        .expect("base revision is UTF-8")
+        .trim()
+        .to_string();
+    std::fs::write(
+        repo.path().join("main.go"),
+        "package main\n\nfunc main() { println(\"changed\") }\n",
+    )
+    .expect("write changed public-output source");
+    git(&["add", "-A"]);
+    git(&["commit", "--quiet", "-m", "change"]);
+
+    for (label, args) in [
+        (
+            "polint check --format json",
+            vec!["check", "--format", "json", "--fail-on", "none"],
+        ),
+        (
+            "polint review --format json",
+            vec![
+                "review",
+                base.as_str(),
+                "--format",
+                "json",
+                "--fail-on",
+                "none",
+            ],
+        ),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_polint"))
+            .current_dir(repo.path())
+            .args(args)
+            .output()
+            .expect("run public JSON command");
+        assert!(
+            output.status.success(),
+            "{label} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let json = String::from_utf8(output.stdout).expect("public JSON is UTF-8");
+        serde_json::from_str::<serde_json::Value>(&json).expect("public output is JSON");
+        assert_no_store_private_markers(label, &json);
+    }
 
     let skill = Command::new(env!("CARGO_BIN_EXE_polint"))
         .current_dir(repo.path())
@@ -542,26 +643,29 @@ fn semantic_store_markers_do_not_leak_into_supported_public_surfaces() {
 
 #[test]
 fn semantic_store_marker_scanner_negative_controls_cover_every_family() {
-    let controls = [
-        ("private module", "use polint::analysis_kernel::store;"),
-        ("private type", "let _: SemanticStore;"),
-        ("sqlite crate", "use rusqlite::Connection;"),
-        ("private table", "SELECT * FROM _polint_schema_migrations"),
-        ("raw database flag", "SQLITE_OPEN_READ_WRITE"),
-        ("migration statement", "PRAGMA user_version"),
-        ("raw identifier", "sqlite_row_id"),
-    ];
-
-    for (family, source) in controls {
+    for marker in STORE_PRIVATE_MARKERS {
+        let hits = store_private_marker_hits(marker);
         assert!(
-            !store_private_marker_hits(source).is_empty(),
-            "negative control for {family} was not detected"
+            hits.contains(marker),
+            "negative control for private marker `{marker}` was not detected; hits: {hits:?}"
         );
     }
-    assert!(
-        store_private_marker_hits("ordinary row/store/connection policy text").is_empty(),
-        "scanner must not ban generic public prose"
-    );
+    for allowed in [
+        "generation",
+        "manifest",
+        "status",
+        "workspace",
+        "identity",
+        "provider",
+        "dependency",
+        "store",
+        "ordinary row and connection policy text",
+    ] {
+        assert!(
+            store_private_marker_hits(allowed).is_empty(),
+            "scanner must allow generic public prose `{allowed}`"
+        );
+    }
 }
 
 #[test]
@@ -580,7 +684,7 @@ fn parser_self_test_detects_synthetic_leak() {
         parsed.contains("IdentityRecord"),
         "parse_prelude_reexports FAILED to detect the synthetic `IdentityRecord` leak — \
          the gate's parser is broken and would silently accept unsanctioned additions \
-         (BLOCKER #6). Parsed set was: {parsed:?}"
+         Parsed set was: {parsed:?}"
     );
 
     // Positive control: a synthetic block with ONLY allow-listed names must
@@ -600,7 +704,7 @@ fn parser_self_test_detects_synthetic_leak() {
     assert_eq!(
         parsed_clean, expected_clean,
         "parse_prelude_reexports produced a false positive or dropped an allow-listed name \
-         (BLOCKER #6). Expected {expected_clean:?}, got {parsed_clean:?}"
+         Expected {expected_clean:?}, got {parsed_clean:?}"
     );
     // Every name returned by the clean control IS in the real allow-list.
     let allowed: BTreeSet<String> = ALLOWED_PRELUDE.iter().map(|s| s.to_string()).collect();
@@ -620,9 +724,8 @@ fn allowlist_has_no_duplicates_and_expected_count() {
         ALLOWED_PRELUDE.len(),
         "ALLOWED_PRELUDE contains duplicate entries"
     );
-    // Locked count derived from sdk/mod.rs after the PolicyConfidence
-    // promotion plus the sanctioned review-rules API addition (ChangedFiles +
-    // ChangeStatus); see docs/API-VISIBILITY-PLAN.md.
+    // The locked count is derived from sdk/mod.rs; sanctioned API additions
+    // update the allow-list, witness crate, and visibility record together.
     assert_eq!(
         ALLOWED_PRELUDE.len(),
         115,

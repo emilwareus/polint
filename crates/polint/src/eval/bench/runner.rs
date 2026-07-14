@@ -1,14 +1,14 @@
-//! Whole-repo performance runner (BENCH-01, success criteria 2).
+//! Whole-repo performance runner.
 //!
 //! Drives a `polint check`-equivalent (and, when a review ref is supplied, the
 //! diff-sizing for a `polint review`) over a checked-out repo and captures a
-//! single [`CurvePoint`] via the Plan 01 measurement substrate: cold/warm
+//! single [`CurvePoint`] via the shared measurement substrate: cold/warm
 //! wall-clock and real OS peak RSS from [`measure::cold_then_warm`], the on-disk
 //! layer-cache size, and the budget-exhaustion counters folded from the live
 //! `AnalysisDb`.
 //!
 //! Everything here is test-facing (`#[cfg(test)]`): it goes through the
-//! capability-gated `AnalysisKernel::run` pipeline (PERF-01 discipline) rather
+//! capability-gated `AnalysisKernel::run` pipeline rather
 //! than eagerly reading the whole repo, and it exposes no public/SDK/CLI
 //! surface. The per-point measurement is aggregated into a multi-point
 //! [`CurveSeries`](crate::eval::bench::curve::CurveSeries) by the sweep
@@ -60,15 +60,15 @@ fn run_repo_perf_point_with_store_mode(
     review_ref: Option<&str>,
     store_mode: SemanticStoreBenchMode,
 ) -> anyhow::Result<CurvePoint> {
-    // Key the point by the repo directory name only — never an absolute host
-    // path (threat T-63-02-04: curve JSON must not leak `/Users/` or `/home/`).
+    // Key the point by the repo directory name only; curve JSON must never leak
+    // an absolute host path such as `/Users/` or `/home/`.
     let repo_id = repo_root
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| "repo".to_string());
 
-    // Diff size for the review measurement. `changeset_for_ref` passes the ref as
-    // a fixed positional arg to the git binary (no shell) — threat T-63-02-01.
+    // `changeset_for_ref` passes the review ref as a fixed positional argument
+    // to the git binary without invoking a shell.
     let (diff_files, diff_hunk_lines) = match review_ref {
         Some(target) => {
             let changeset = crate::git::changeset_for_ref(repo_root, target)?;
@@ -109,8 +109,8 @@ fn run_repo_perf_point_with_store_mode(
     cold_result.expect("cold_then_warm runs the closure at least once")?;
     let output = warm_result.expect("cold_then_warm runs the closure twice")?;
 
-    // Repo size from the source set the pipeline loaded — not a separate eager
-    // whole-repo read (PERF-01 discipline).
+    // Derive repo size from the source set the pipeline loaded instead of a
+    // separate eager whole-repo read.
     let files = output.db.files();
     let repo_file_count = files.len() as u64;
     let repo_source_bytes: u64 = files.iter().map(|file| file.source.len() as u64).sum();
@@ -162,7 +162,7 @@ const CHILD_POINT_END: &str = "<<<POLINT_PERF_POINT_END>>>";
 
 /// Measure a single [`CurvePoint`] for `repo_root` in a DEDICATED CHILD PROCESS
 /// so its `peak_rss_delta_bytes` is genuinely run-attributable and
-/// order-independent (HI-01R).
+/// order-independent.
 ///
 /// `peak_rss_bytes` is `getrusage(RUSAGE_SELF).ru_maxrss` — a process-global,
 /// monotonic, whole-lifetime high-water mark. When several measurements share
@@ -252,7 +252,7 @@ pub(crate) fn run_repo_perf_point_isolated_with_store_mode(
 ///
 /// This is the diagnostics-parity marker a
 /// [`StoreDisabledBaseline`](crate::eval::baseline::StoreDisabledBaseline)
-/// records (BENCH-02): enabling the durable store must not change the
+/// records: enabling the durable store must not change the
 /// diagnostics polint emits, so a later run can assert this digest is unchanged.
 /// It is the FNV stable-hash over the sorted, canonical-JSON-serialized
 /// diagnostics of the check-equivalent kernel run. Clean code (no diagnostics)
@@ -300,14 +300,20 @@ fn run_check_kernel_with_store_mode(
         cache
     };
     let plan = crate::analysis_plan::AnalysisPlan::full_pipeline_for_test();
-    AnalysisKernel::run(KernelInput {
+    let output = AnalysisKernel::run(KernelInput {
         loaded: &loaded,
         cache: &cache,
         config_digest: &config_digest,
         rule_digest: &rule_digest,
         plan: &plan,
         parallel: true,
-    })
+    })?;
+    if store_mode == SemanticStoreBenchMode::Enabled
+        && output.run_report.store_status() != &crate::analysis_kernel::StoreStatus::Ready
+    {
+        anyhow::bail!("enabled semantic-store benchmark did not publish a complete generation");
+    }
+    Ok(output)
 }
 
 /// Fold budget-exhaustion telemetry out of the live `AnalysisDb`.
@@ -437,7 +443,7 @@ mod tests {
         );
     }
 
-    /// Child-process entry for [`super::run_repo_perf_point_isolated`] (HI-01R).
+    /// Child-process entry for [`super::run_repo_perf_point_isolated`].
     ///
     /// A normal `cargo test` run executes this as an immediate no-op because
     /// `POLINT_PERF_CHILD_REPO` is absent. When `run_repo_perf_point_isolated`

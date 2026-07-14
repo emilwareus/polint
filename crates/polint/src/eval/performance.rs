@@ -372,7 +372,8 @@ mod tests {
                 Digest::from_parts(DigestKind::QueryParameters, "query", &["calls"]),
                 Digest::from_parts(DigestKind::Budget, "budget", &["default"]),
                 PrecisionTier::SetupAware,
-            ),
+            )
+            .into(),
             result_digest: Digest::from_parts(DigestKind::ProviderOutput, "result", &["calls"]),
             precision_tier: PrecisionTier::SetupAware,
             provenance: "native".to_string(),
@@ -430,9 +431,9 @@ mod tests {
         vec![
             StableFactMetaRow {
                 family: FactFamily::SourceFile,
-                stable_key: format!("{}:source", manifest.id),
-                producer_id: manifest.id.to_string(),
-                layer_id: manifest.id.to_string(),
+                stable_key: format!("{}:source", manifest.id).into(),
+                producer_id: manifest.id.into(),
+                layer_id: manifest.id.into(),
                 precision: FactPrecision::Syntax,
                 confidence: FactConfidence::High,
                 validation: ValidationStatus::NativeTrusted,
@@ -440,9 +441,9 @@ mod tests {
             },
             StableFactMetaRow {
                 family: FactFamily::Function,
-                stable_key: format!("{}:function", manifest.id),
-                producer_id: manifest.id.to_string(),
-                layer_id: manifest.id.to_string(),
+                stable_key: format!("{}:function", manifest.id).into(),
+                producer_id: manifest.id.into(),
+                layer_id: manifest.id.into(),
                 precision: FactPrecision::SetupAware,
                 confidence: FactConfidence::Medium,
                 validation: ValidationStatus::SchemaValidated,

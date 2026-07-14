@@ -418,7 +418,7 @@ mod tests {
     fn unknown_change_never_reuses_affected_dependents() {
         let source_digest = digest(DigestKind::SourceText, "a");
         let source = source("src/a.ts", source_digest.clone());
-        let layer = CacheNode::Layer(layer("polint.ts.syntax", "a", None));
+        let layer = CacheNode::layer(layer("polint.ts.syntax", "a", None));
         let index = DependencyIndex::from_edges(vec![edge(
             layer.clone(),
             source.clone(),
@@ -444,7 +444,7 @@ mod tests {
     fn stale_index_schema_labels_drop_instead_of_reusing() {
         let source_digest = digest(DigestKind::SourceText, "a");
         let source = source("src/a.ts", source_digest.clone());
-        let layer = CacheNode::Layer(layer("polint.ts.syntax", "a", None));
+        let layer = CacheNode::layer(layer("polint.ts.syntax", "a", None));
         for stale_schema in [
             "polint-dependency-index-1",
             "polint-dependency-index-next-typed",
@@ -507,8 +507,8 @@ mod tests {
         let source_a_digest = digest(DigestKind::SourceText, "a");
         let source_a = source("src/a.ts", source_a_digest.clone());
         let source_b = source("src/b.ts", digest(DigestKind::SourceText, "b"));
-        let layer_a = CacheNode::Layer(layer("polint.ts.syntax", "a", None));
-        let layer_b = CacheNode::Layer(layer("polint.ts.syntax", "b", None));
+        let layer_a = CacheNode::layer(layer("polint.ts.syntax", "a", None));
+        let layer_b = CacheNode::layer(layer("polint.ts.syntax", "b", None));
         let index = DependencyIndex::from_edges(vec![
             edge(
                 layer_a.clone(),
@@ -548,7 +548,7 @@ mod tests {
         let lifecycle = lifecycle("go-lifecycle", lifecycle_digest.clone());
         let provider_digest = digest(DigestKind::ProviderManifest, "provider");
         let provider = provider("polint.go.syntax", provider_digest.clone());
-        let layer = CacheNode::Layer(layer("polint.go.syntax", "a", None));
+        let layer = CacheNode::layer(layer("polint.go.syntax", "a", None));
         let index = DependencyIndex::from_edges(vec![
             edge(
                 layer.clone(),
@@ -641,7 +641,7 @@ mod tests {
     #[test]
     fn mismatched_typed_change_digest_fails_closed_for_the_whole_index() {
         let source = source("src/a.ts", digest(DigestKind::SourceText, "a"));
-        let layer = CacheNode::Layer(layer("polint.ts.syntax", "a", None));
+        let layer = CacheNode::layer(layer("polint.ts.syntax", "a", None));
         let index = DependencyIndex::from_edges(vec![edge(
             layer.clone(),
             source.clone(),

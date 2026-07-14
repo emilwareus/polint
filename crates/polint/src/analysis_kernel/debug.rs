@@ -3582,7 +3582,8 @@ mod abstract_domains_debug_json {
                 Digest::from_parts(DigestKind::QueryParameters, "query", &["scc_closure"]),
                 Digest::from_parts(DigestKind::Budget, "budget", &["default"]),
                 PrecisionTier::SetupAware,
-            ),
+            )
+            .into(),
             result_digest: Digest {
                 kind: DigestKind::ProviderOutput,
                 value: "1234567890abcdef-result".to_string(),
@@ -3603,7 +3604,8 @@ mod abstract_domains_debug_json {
                 ),
                 Digest::from_parts(DigestKind::Budget, "budget", &["default"]),
                 PrecisionTier::SetupAware,
-            ),
+            )
+            .into(),
             result_digest: Digest {
                 kind: DigestKind::ProviderOutput,
                 value: "fedcba0987654321-result".to_string(),

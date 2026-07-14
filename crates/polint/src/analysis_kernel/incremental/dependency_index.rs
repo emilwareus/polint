@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::sync::Arc;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -15,8 +16,8 @@ pub(crate) const DEPENDENCY_INDEX_SCHEMA: &str = "polint-dependency-index-2";
 pub(crate) enum CacheNode {
     DependencyInput(InputDependencyKey),
     RunManifest(RunManifestKey),
-    Layer(LayerKey),
-    Query(QueryKey),
+    Layer(Arc<LayerKey>),
+    Query(Arc<QueryKey>),
     Summary(SummaryKey),
     Diagnostic(DiagnosticKey),
 }
@@ -150,6 +151,10 @@ impl CacheNodeKind {
 }
 
 impl CacheNode {
+    pub(crate) fn layer(key: LayerKey) -> Self {
+        Self::Layer(Arc::new(key))
+    }
+
     #[cfg_attr(
         not(test),
         allow(
@@ -287,7 +292,11 @@ pub(crate) struct DependencyEdge {
     )
 )]
 pub(crate) fn query_dependency_edges(query_key: &QueryKey) -> Vec<DependencyEdge> {
-    let query_node = CacheNode::Query(query_key.clone());
+    query_dependency_edges_shared(Arc::new(query_key.clone()))
+}
+
+pub(crate) fn query_dependency_edges_shared(query_key: Arc<QueryKey>) -> Vec<DependencyEdge> {
+    let query_node = CacheNode::Query(Arc::clone(&query_key));
     let mut edges = query_key
         .dependency_inputs
         .as_slice()
@@ -402,8 +411,8 @@ fn declared_query_dependency_semantics(
 pub(crate) struct DependencyIndex {
     pub(crate) schema_version: String,
     canonical_edges: Vec<DependencyEdge>,
-    forward: BTreeMap<CacheNode, Vec<DependencyEdge>>,
-    reverse: BTreeMap<CacheNode, Vec<DependencyEdge>>,
+    forward: BTreeMap<CacheNode, Vec<usize>>,
+    reverse: BTreeMap<CacheNode, Vec<usize>>,
 }
 
 impl Default for DependencyIndex {
@@ -417,26 +426,29 @@ impl DependencyIndex {
         edges.sort();
         edges.dedup();
 
-        let mut forward: BTreeMap<CacheNode, Vec<DependencyEdge>> = BTreeMap::new();
-        let mut reverse: BTreeMap<CacheNode, Vec<DependencyEdge>> = BTreeMap::new();
-        for edge in &edges {
-            forward
-                .entry(edge.from.clone())
-                .or_default()
-                .push(edge.clone());
-            reverse
-                .entry(edge.to.clone())
-                .or_default()
-                .push(edge.clone());
+        let mut forward: BTreeMap<CacheNode, Vec<usize>> = BTreeMap::new();
+        let mut reverse: BTreeMap<CacheNode, Vec<usize>> = BTreeMap::new();
+        for (ordinal, edge) in edges.iter().enumerate() {
+            forward.entry(edge.from.clone()).or_default().push(ordinal);
+            reverse.entry(edge.to.clone()).or_default().push(ordinal);
         }
-        sort_and_dedup_edges(&mut forward);
-        sort_and_dedup_edges(&mut reverse);
 
         Self {
             schema_version: DEPENDENCY_INDEX_SCHEMA.to_string(),
             canonical_edges: edges,
             forward,
             reverse,
+        }
+    }
+
+    pub(crate) fn from_edges_for_persistence(mut edges: Vec<DependencyEdge>) -> Self {
+        edges.sort();
+        edges.dedup();
+        Self {
+            schema_version: DEPENDENCY_INDEX_SCHEMA.to_string(),
+            canonical_edges: edges,
+            forward: BTreeMap::new(),
+            reverse: BTreeMap::new(),
         }
     }
 
@@ -451,13 +463,27 @@ impl DependencyIndex {
         &self.canonical_edges
     }
 
-    #[cfg(test)]
-    pub(crate) fn forward_edges(&self, node: &CacheNode) -> Option<&[DependencyEdge]> {
-        self.forward.get(node).map(Vec::as_slice)
+    pub(crate) fn into_persistence_parts(self) -> (String, Vec<DependencyEdge>) {
+        (self.schema_version, self.canonical_edges)
     }
 
-    pub(crate) fn reverse_edges(&self, node: &CacheNode) -> Option<&[DependencyEdge]> {
-        self.reverse.get(node).map(Vec::as_slice)
+    #[cfg(test)]
+    pub(crate) fn forward_edges(&self, node: &CacheNode) -> Option<Vec<&DependencyEdge>> {
+        self.forward.get(node).map(|ordinals| {
+            ordinals
+                .iter()
+                .map(|ordinal| &self.canonical_edges[*ordinal])
+                .collect()
+        })
+    }
+
+    pub(crate) fn reverse_edges(&self, node: &CacheNode) -> Option<Vec<&DependencyEdge>> {
+        self.reverse.get(node).map(|ordinals| {
+            ordinals
+                .iter()
+                .map(|ordinal| &self.canonical_edges[*ordinal])
+                .collect()
+        })
     }
 
     pub(crate) fn contains_node(&self, node: &CacheNode) -> bool {
@@ -471,13 +497,6 @@ impl DependencyIndex {
             nodes.insert(edge.to.clone());
         }
         nodes
-    }
-}
-
-fn sort_and_dedup_edges(index: &mut BTreeMap<CacheNode, Vec<DependencyEdge>>) {
-    for edges in index.values_mut() {
-        edges.sort();
-        edges.dedup();
     }
 }
 
@@ -664,8 +683,8 @@ mod tests {
     fn from_edges_stores_sorted_forward_reverse_edges_and_schema() {
         let source_a = source("src/a.ts");
         let source_b = source("src/b.ts");
-        let layer_a = CacheNode::Layer(layer("polint.ts.syntax", "a"));
-        let layer_b = CacheNode::Layer(layer("polint.ts.syntax", "b"));
+        let layer_a = CacheNode::layer(layer("polint.ts.syntax", "a"));
+        let layer_b = CacheNode::layer(layer("polint.ts.syntax", "b"));
 
         let index = DependencyIndex::from_edges(vec![
             edge(layer_b.clone(), source_b.clone(), ShapeKind::Syntax),
@@ -677,30 +696,30 @@ mod tests {
             .forward_edges(&layer_a)
             .expect("layer a should have forward edges");
         let expected_forward_a = [edge(layer_a.clone(), source_a, ShapeKind::Content)];
-        assert_eq!(forward_a, expected_forward_a.as_slice());
+        assert_eq!(forward_a, expected_forward_a.iter().collect::<Vec<_>>());
 
         let reverse_b = index
             .reverse_edges(&source_b)
             .expect("source b should have reverse edges");
         let expected_reverse_b = [edge(layer_b, source_b, ShapeKind::Syntax)];
-        assert_eq!(reverse_b, expected_reverse_b.as_slice());
+        assert_eq!(reverse_b, expected_reverse_b.iter().collect::<Vec<_>>());
     }
 
     #[test]
     fn from_edges_sorts_and_deduplicates_duplicate_rows() {
         let source = source("src/a.ts");
-        let layer = CacheNode::Layer(layer("polint.ts.syntax", "a"));
+        let layer = CacheNode::layer(layer("polint.ts.syntax", "a"));
         let duplicate = edge(layer.clone(), source.clone(), ShapeKind::Content);
 
         let index = DependencyIndex::from_edges(vec![duplicate.clone(), duplicate.clone()]);
 
         assert_eq!(
             index.forward_edges(&layer).expect("forward edges"),
-            std::slice::from_ref(&duplicate)
+            vec![&duplicate]
         );
         assert_eq!(
             index.reverse_edges(&source).expect("reverse edges"),
-            std::slice::from_ref(&duplicate)
+            vec![&duplicate]
         );
     }
 
@@ -748,8 +767,8 @@ mod tests {
             extension("extension"),
             CacheNode::Diagnostic(diagnostic),
             CacheNode::Summary(summary),
-            CacheNode::Query(query),
-            CacheNode::Layer(layer("polint.ts.syntax", "a")),
+            CacheNode::Query(query.into()),
+            CacheNode::layer(layer("polint.ts.syntax", "a")),
             source("src/a.ts"),
         ];
         nodes.sort();
@@ -921,7 +940,7 @@ mod tests {
         assert_eq!(edges.len(), declared.len() + key.layer_digests.len() + 3);
         for input in declared {
             assert!(edges.iter().any(|edge| {
-                edge.from == CacheNode::Query(key.clone())
+                edge.from == CacheNode::Query(key.clone().into())
                     && edge.to == CacheNode::DependencyInput(input.clone())
             }));
         }
@@ -953,7 +972,7 @@ mod tests {
     fn every_referenced_query_input_family_invalidates_the_query() {
         for (input, change_kind) in query_input_fixtures() {
             let key = query(QueryDependencyInputs::new(vec![input.clone()]));
-            let query_node = CacheNode::Query(key.clone());
+            let query_node = CacheNode::Query(key.clone().into());
             let index = DependencyIndex::from_edges(query_dependency_edges(&key));
             let change_set = ChangeSet::from_rows(vec![ChangeSetRow {
                 node: CacheNode::DependencyInput(input.clone()),
@@ -991,7 +1010,7 @@ mod tests {
         assert_eq!(after_sibling_change, baseline);
         assert_eq!(after_edges, baseline_edges);
 
-        let query_node = CacheNode::Query(baseline);
+        let query_node = CacheNode::Query(baseline.into());
         let index = DependencyIndex::from_edges(baseline_edges);
         let change_set = ChangeSet::from_rows(vec![ChangeSetRow {
             node: CacheNode::DependencyInput(changed_sibling.clone()),
@@ -1007,8 +1026,8 @@ mod tests {
 
     #[test]
     fn canonical_edges_and_indexes_ignore_all_twenty_four_provider_source_orders() {
-        let layer_a = CacheNode::Layer(layer("polint.ts.syntax", "a"));
-        let layer_b = CacheNode::Layer(layer("polint.ts.syntax", "b"));
+        let layer_a = CacheNode::layer(layer("polint.ts.syntax", "a"));
+        let layer_b = CacheNode::layer(layer("polint.ts.syntax", "b"));
         let mut rows = vec![
             edge(layer_a.clone(), source("src/a.ts"), ShapeKind::Content),
             edge(

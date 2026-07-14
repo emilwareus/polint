@@ -314,7 +314,7 @@ mod tests {
     }
 
     fn native_layer_node(provider_id: &str) -> CacheNode {
-        CacheNode::Layer(LayerKey::new(
+        CacheNode::layer(LayerKey::new(
             LayerKind::TsSyntax,
             provider_id,
             "1",
@@ -330,7 +330,7 @@ mod tests {
     }
 
     fn extension_layer_node(provider_id: &str, ext_label: &str) -> CacheNode {
-        CacheNode::Layer(LayerKey::new(
+        CacheNode::layer(LayerKey::new(
             LayerKind::Extension,
             provider_id,
             "1",
@@ -346,7 +346,7 @@ mod tests {
     }
 
     fn type_value_alias_layer_node(ext_label: &str) -> CacheNode {
-        CacheNode::Layer(LayerKey::new(
+        CacheNode::layer(LayerKey::new(
             LayerKind::TypeValueAlias,
             "polint.type_value_alias",
             "1",
@@ -503,15 +503,18 @@ mod tests {
 
     #[test]
     fn query_node_is_not_native_only() {
-        let node = CacheNode::Query(QueryKey::new(
-            "call_graph",
-            "1",
-            Digest::absent(DigestKind::QueryParameters, "none"),
-            QueryDependencyInputs::new(Vec::new()),
-            Vec::new(),
-            Digest::absent(DigestKind::Budget, "none"),
-            PrecisionTier::Syntax,
-        ));
+        let node = CacheNode::Query(
+            QueryKey::new(
+                "call_graph",
+                "1",
+                Digest::absent(DigestKind::QueryParameters, "none"),
+                QueryDependencyInputs::new(Vec::new()),
+                Vec::new(),
+                Digest::absent(DigestKind::Budget, "none"),
+                PrecisionTier::Syntax,
+            )
+            .into(),
+        );
         assert!(!is_native_only_node(&node));
     }
 
@@ -539,7 +542,7 @@ mod tests {
 
     #[test]
     fn layer_with_empty_extension_digests_is_native() {
-        let node = CacheNode::Layer(LayerKey::new(
+        let node = CacheNode::layer(LayerKey::new(
             LayerKind::TsSyntax,
             "polint.ts.syntax",
             "1",

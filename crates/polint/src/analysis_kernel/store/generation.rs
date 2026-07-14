@@ -11,25 +11,28 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
+use rusqlite::{
+    Connection, OptionalExtension, Row, Statement, Transaction, params, params_from_iter,
+};
 
 use crate::analysis_kernel::incremental::{
-    CacheNode, ConfigIdentity, DependencyEdge, DependencyIndex, DiagnosticKey, Digest, DigestKind,
-    GenerationIdentity, InputDependencyKey, LayerKey, QueryDependencyInputs, QueryKey, RunIdentity,
-    RunManifestKey, SummaryKey, WorkspaceIdentity,
+    CacheNode, CanonicalRunIdentities, ConfigIdentity, DependencyEdge, DependencyIndex,
+    DiagnosticKey, Digest, DigestKind, GenerationIdentity, InputDependencyKey, LayerKey,
+    QueryDependencyInputs, QueryKey, RunIdentity, RunManifestKey, SummaryKey, WorkspaceIdentity,
 };
+use crate::analysis_kernel::metadata::{StableFactKey, StableFactMetaRow};
 
 use super::commit_plan::{
     StoreAnalysisSettingRow, StoreCapabilityRequesterRow, StoreCapabilityRow, StoreCommitPlan,
     StoreDependencyEdgeRow, StoreDiagnosticRequestedViewRow, StoreDiagnosticRow, StoreFactRow,
     StoreFileRow, StoreGenerationStats, StoreIdentityRow, StoreInputComponentRow,
     StoreInputDetailRow, StoreInputSnapshotRow, StoreLayerDependencyRow, StoreLayerExtensionRow,
-    StoreLayerInputRow, StoreLayerRow, StoreLayerWarningRow, StoreProviderDependencyRow,
-    StoreProviderGenerationRow, StoreProviderManifestInputRow, StoreProviderManifestOutputRow,
-    StoreProviderManifestRow, StoreProviderManifestSchemaRow, StoreProviderSchemaRow,
-    StoreProviderSchemaVersionRow, StoreQueryInputRow, StoreQueryLayerRow, StoreQueryRow,
-    StoreRunManifestRow, StoreSemanticPlan, StoreSummaryDependencyRow, StoreSummaryRow,
-    StoreTelemetryRow, StoreValidationEventRow,
+    StoreLayerInputRow, StoreLayerRow, StoreLayerWarningRow, StoreNodeRef,
+    StoreProviderDependencyRow, StoreProviderGenerationRow, StoreProviderManifestInputRow,
+    StoreProviderManifestOutputRow, StoreProviderManifestRow, StoreProviderManifestSchemaRow,
+    StoreProviderSchemaRow, StoreProviderSchemaVersionRow, StoreQueryInputRow, StoreQueryLayerRow,
+    StoreQueryRow, StoreRunManifestRow, StoreSemanticPlan, StoreSummaryDependencyRow,
+    StoreSummaryRow, StoreTelemetryRow, StoreValidationEventRow,
 };
 use super::connection::{self, ConnectionError, ReadOnlyConnection, WriterConnection};
 use super::schema::{
@@ -46,8 +49,8 @@ use super::schema::{
     validate_relative_path,
 };
 use super::{
-    StoreConfig, StoreRebuildReason, StoreSkipReason, StoreStatus, map_connection_error,
-    prepare_store_path, record_store_io_attempt,
+    StoreConfig, StoreRebuildReason, StoreSkipReason, StoreStatistics, StoreStatus,
+    map_connection_error, prepare_store_path, record_store_io_attempt,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -200,7 +203,15 @@ impl From<SchemaCodecError> for ProjectionError {
 }
 
 pub(super) fn commit_generation(config: &StoreConfig, plan: &StoreCommitPlan) -> StoreStatus {
-    commit_generation_with_control(config, plan, CommitControl::default())
+    let mut owned = plan.clone();
+    commit_generation_inner(
+        config,
+        &mut owned,
+        CommitControl::default(),
+        true,
+        Some(plan.semantic.stats.clone()),
+    )
+    .0
 }
 
 pub(super) fn commit_generation_with_control(
@@ -208,32 +219,66 @@ pub(super) fn commit_generation_with_control(
     plan: &StoreCommitPlan,
     control: CommitControl,
 ) -> StoreStatus {
+    let mut owned = plan.clone();
+    commit_generation_inner(
+        config,
+        &mut owned,
+        control,
+        true,
+        Some(plan.semantic.stats.clone()),
+    )
+    .0
+}
+
+pub(super) fn commit_owned_prevalidated_generation(
+    config: &StoreConfig,
+    mut plan: StoreCommitPlan,
+    control: CommitControl,
+) -> (StoreStatus, Option<StoreGenerationStats>) {
+    commit_generation_inner(config, &mut plan, control, false, None)
+}
+
+fn commit_generation_inner(
+    config: &StoreConfig,
+    plan: &mut StoreCommitPlan,
+    control: CommitControl,
+    validate_plan: bool,
+    precomputed_stats: Option<StoreGenerationStats>,
+) -> (StoreStatus, Option<StoreGenerationStats>) {
     if !config.is_enabled() {
-        return StoreStatus::Disabled;
+        return (StoreStatus::Disabled, None);
     }
-    if plan.validate().is_err() {
-        return StoreStatus::Skipped(StoreSkipReason::InvalidPlan);
+    if validate_plan && plan.validate().is_err() {
+        return (StoreStatus::Skipped(StoreSkipReason::InvalidPlan), None);
     }
     record_store_io_attempt();
     if let Err(status) = prepare_store_path(config.path()) {
-        return status;
+        return (status, None);
     }
 
     let mut writer = match connection::open_writer(config.path()) {
         Ok(writer) => writer,
-        Err(error) => return map_connection_error(error),
+        Err(error) => return (map_connection_error(error), None),
     };
     let reservation = match reserve_generation(&mut writer, plan, &control) {
         Ok(reservation) => reservation,
-        Err(ReservationError::Connection(error)) => return map_connection_error(error),
+        Err(ReservationError::Connection(error)) => {
+            return (map_connection_error(error), None);
+        }
         Err(ReservationError::WorkspaceMismatch) => {
-            return StoreStatus::Skipped(StoreSkipReason::WorkspaceMismatch);
+            return (
+                StoreStatus::Skipped(StoreSkipReason::WorkspaceMismatch),
+                None,
+            );
         }
         Err(ReservationError::InvalidMetadata) => {
-            return StoreStatus::RebuildNeeded(StoreRebuildReason::InvalidMetadata);
+            return (
+                StoreStatus::RebuildNeeded(StoreRebuildReason::InvalidMetadata),
+                None,
+            );
         }
         Err(ReservationError::Injected) => {
-            return StoreStatus::Skipped(StoreSkipReason::CommitFailed);
+            return (StoreStatus::Skipped(StoreSkipReason::CommitFailed), None);
         }
     };
 
@@ -243,13 +288,13 @@ pub(super) fn commit_generation_with_control(
         interlock.release.wait();
     }
 
-    match publish_generation(&mut writer, plan, &reservation, &control) {
-        Ok(()) => StoreStatus::Ready,
+    match publish_generation(&mut writer, plan, &reservation, &control, precomputed_stats) {
+        Ok(stats) => (StoreStatus::Ready, Some(stats)),
         Err(error) => {
             if let Some((reason, stage)) = error.audit {
                 let _ = audit_failed_attempt(&mut writer, &reservation, reason, stage);
             }
-            error.status
+            (error.status, None)
         }
     }
 }
@@ -266,15 +311,111 @@ pub(super) fn read_active_complete(
     read_active_complete_from_reader(&reader, workspace).map_err(map_read_error)
 }
 
+pub(super) fn active_generation_statistics(
+    config: &StoreConfig,
+    identities: &CanonicalRunIdentities,
+    dependency_schema: &str,
+) -> Result<Option<StoreStatistics>, StoreStatus> {
+    prepare_store_path(config.path())?;
+    if !config.path().exists() {
+        return Ok(None);
+    }
+    record_store_io_attempt();
+    let reader = connection::open_read_only(config.path()).map_err(map_connection_error)?;
+    let connection = connection::read_connection(&reader);
+    connection::validate_schema(connection).map_err(map_connection_error)?;
+    let manifest = read_manifest(connection).map_err(map_read_error)?;
+    let workspace = identities.workspace();
+    match manifest.workspace.as_ref() {
+        None if manifest.active_generation.is_none() => return Ok(None),
+        Some(bound) if bound != workspace => {
+            return Err(StoreStatus::Skipped(StoreSkipReason::WorkspaceMismatch));
+        }
+        Some(_) => {}
+        None => {
+            return Err(StoreStatus::RebuildNeeded(
+                StoreRebuildReason::InvalidMetadata,
+            ));
+        }
+    }
+    let Some(active_handle) = manifest.active_generation else {
+        return Ok(None);
+    };
+    let header = read_generation_header(connection, active_handle).map_err(map_read_error)?;
+    let failure_count: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM generation_failure_events WHERE generation_id = ?1",
+            [active_handle],
+            |row| row.get(0),
+        )
+        .map_err(ProjectionError::from)
+        .map_err(map_read_error)?;
+    if header.status != GenerationStatus::Complete
+        || header.identities.workspace != *workspace
+        || failure_count != 0
+    {
+        return Err(StoreStatus::RebuildNeeded(
+            StoreRebuildReason::InvalidMetadata,
+        ));
+    }
+    if header.identities.workspace != *identities.workspace()
+        || header.identities.full_config != *identities.full_config()
+        || header.identities.input_snapshot != *identities.input_snapshot()
+        || header.identities.provider_manifest != *identities.provider_manifest()
+        || header.identities.provider_output != *identities.provider_output()
+        || header.identities.layer != *identities.layer()
+        || header.identities.summary != *identities.summary()
+        || header.identities.query != *identities.query()
+        || header.identities.fact != *identities.fact()
+        || header.identities.dependency != *identities.dependency()
+        || header.identities.validation != *identities.validation()
+        || header.identities.run != *identities.run()
+        || header.identities.generation != *identities.generation()
+        || header.dependency_schema != dependency_schema
+    {
+        return Ok(None);
+    }
+    let stats = read_stats(connection, active_handle).map_err(map_read_error)?;
+    if stats.input_digest != *identities.input_snapshot()
+        || stats.dependency_digest != *identities.dependency()
+        || stats.validation_digest != *identities.validation()
+    {
+        return Err(StoreStatus::RebuildNeeded(
+            StoreRebuildReason::InvalidMetadata,
+        ));
+    }
+    let payload_rows =
+        generation_payload_row_count(connection, active_handle).map_err(map_read_error)?;
+    let telemetry_rows: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM generation_telemetry WHERE generation_id = ?1",
+            [active_handle],
+            |row| row.get(0),
+        )
+        .map_err(ProjectionError::from)
+        .map_err(map_read_error)?;
+    let planned_semantic_row_count = payload_rows
+        .checked_sub(telemetry_rows)
+        .and_then(|rows| rows.checked_add(1))
+        .and_then(|rows| u64::try_from(rows).ok())
+        .ok_or(StoreStatus::RebuildNeeded(
+            StoreRebuildReason::InvalidMetadata,
+        ))?;
+    Ok(Some(StoreStatistics {
+        planned_semantic_row_count,
+        semantic_logical_bytes: stats.semantic_logical_bytes,
+        input_digest: stats.input_digest,
+        dependency_digest: stats.dependency_digest,
+        validation_digest: stats.validation_digest,
+    }))
+}
+
 fn reserve_generation(
     writer: &mut WriterConnection,
     plan: &StoreCommitPlan,
     control: &CommitControl,
 ) -> Result<Reservation, ReservationError> {
-    plan.validate()
-        .map_err(|_| ReservationError::InvalidMetadata)?;
     let transaction = connection::begin_immediate(writer).map_err(ReservationError::Connection)?;
-    connection::validate_schema(&transaction).map_err(ReservationError::Connection)?;
 
     #[cfg(test)]
     if let Some(interlock) = control.reservation_interlock {
@@ -382,7 +523,6 @@ fn reserve_generation(
     if control.fail_after == Some(GenerationFailureStage::Reservation) {
         return Err(ReservationError::Injected);
     }
-    connection::validate_schema(&transaction).map_err(ReservationError::Connection)?;
     transaction
         .commit()
         .map_err(|error| ReservationError::Connection(connection::classify_sqlite_error(error)))?;
@@ -397,16 +537,24 @@ fn reserve_generation(
 
 fn publish_generation(
     writer: &mut WriterConnection,
-    plan: &StoreCommitPlan,
+    plan: &mut StoreCommitPlan,
     reservation: &Reservation,
     control: &CommitControl,
-) -> Result<(), PublicationError> {
+    precomputed_stats: Option<StoreGenerationStats>,
+) -> Result<StoreGenerationStats, PublicationError> {
+    let expected_counts = generation_row_counts(plan);
+    let expected_validation_events = plan.semantic.validation_events.clone();
     let transaction = connection::begin_immediate(writer).map_err(|error| {
         publication_connection_error(error, GenerationFailureStage::StoreRunInput, true)
     })?;
-    connection::validate_schema(&transaction).map_err(|error| {
-        publication_connection_error(error, GenerationFailureStage::StoreRunInput, false)
-    })?;
+    // Every parent row is already present before its children are emitted, but
+    // deferring the checks lets SQLite validate the bulk projection as a set at
+    // the transaction boundary. Foreign-key enforcement remains enabled, and
+    // the explicit pre-publication integrity check still rejects any dangling
+    // row before activation.
+    transaction
+        .pragma_update(None, "defer_foreign_keys", true)
+        .map_err(|error| publication_sql_error(error, GenerationFailureStage::StoreRunInput))?;
     match validate_reservation(&transaction, reservation, plan) {
         Ok(()) => {}
         Err(ReservationValidationError::Stale) => {
@@ -423,38 +571,69 @@ fn publish_generation(
         }
     }
 
-    write_store_run_input(&transaction, reservation.handle, plan).map_err(|error| {
-        publication_projection_error(error, GenerationFailureStage::StoreRunInput)
-    })?;
-    inject_failure(control, GenerationFailureStage::StoreRunInput)?;
-
-    let _provider_handles = write_providers(&transaction, reservation.handle, plan)
-        .map_err(|error| publication_projection_error(error, GenerationFailureStage::Providers))?;
-    inject_failure(control, GenerationFailureStage::Providers)?;
-
-    let mut product_handles =
-        write_products(&transaction, reservation.handle, plan).map_err(|error| {
-            publication_projection_error(error, GenerationFailureStage::LayersSummariesQueries)
+    let write_pre_dependency_rows = || -> Result<ProductHandles, PublicationError> {
+        write_store_run_input(&transaction, reservation.handle, plan).map_err(|error| {
+            publication_projection_error(error, GenerationFailureStage::StoreRunInput)
         })?;
-    inject_failure(control, GenerationFailureStage::LayersSummariesQueries)?;
+        inject_failure(control, GenerationFailureStage::StoreRunInput)?;
 
-    write_facts(&transaction, reservation.handle, &plan.semantic.facts).map_err(|error| {
-        publication_projection_error(error, GenerationFailureStage::FactMetadata)
-    })?;
-    write_result_boundaries(&transaction, reservation.handle, plan, &mut product_handles).map_err(
-        |error| publication_projection_error(error, GenerationFailureStage::FactMetadata),
-    )?;
-    inject_failure(control, GenerationFailureStage::FactMetadata)?;
+        let _provider_handles =
+            write_providers(&transaction, reservation.handle, plan).map_err(|error| {
+                publication_projection_error(error, GenerationFailureStage::Providers)
+            })?;
+        inject_failure(control, GenerationFailureStage::Providers)?;
 
+        let mut product_handles =
+            write_products(&transaction, reservation.handle, plan).map_err(|error| {
+                publication_projection_error(error, GenerationFailureStage::LayersSummariesQueries)
+            })?;
+        inject_failure(control, GenerationFailureStage::LayersSummariesQueries)?;
+
+        write_facts(&transaction, reservation.handle, &plan.semantic.facts).map_err(|error| {
+            publication_projection_error(error, GenerationFailureStage::FactMetadata)
+        })?;
+        write_result_boundaries(&transaction, reservation.handle, plan, &mut product_handles)
+            .map_err(|error| {
+                publication_projection_error(error, GenerationFailureStage::FactMetadata)
+            })?;
+        inject_failure(control, GenerationFailureStage::FactMetadata)?;
+        Ok(product_handles)
+    };
+
+    let (product_handles, stats) = if let Some(stats) = precomputed_stats {
+        (write_pre_dependency_rows()?, stats)
+    } else {
+        std::thread::scope(|scope| {
+            let semantic = &plan.semantic;
+            let stats_task = scope.spawn(move || StoreGenerationStats::from_plan(semantic));
+            let rows = write_pre_dependency_rows();
+            let stats = stats_task
+                .join()
+                .map_err(|_| publication_integrity_error(GenerationFailureStage::Statistics));
+            match (rows, stats) {
+                (Ok(product_handles), Ok(stats)) => Ok((product_handles, stats)),
+                (Err(error), _) | (_, Err(error)) => Err(error),
+            }
+        })?
+    };
+
+    release_run_input_rows(plan);
+    release_provider_rows(plan);
+    release_product_rows(plan);
+    drop(std::mem::take(&mut plan.semantic.facts));
+    release_result_boundary_rows(plan);
+
+    let dependency_edges = std::mem::take(&mut plan.semantic.dependency_edges);
     write_dependency_edges(
         &transaction,
         reservation.handle,
-        &plan.semantic.dependency_edges,
+        &dependency_edges,
         &product_handles,
     )
     .map_err(|error| {
         publication_projection_error(error, GenerationFailureStage::DependencyEdges)
     })?;
+    drop(dependency_edges);
     inject_failure(control, GenerationFailureStage::DependencyEdges)?;
 
     write_validation_events(
@@ -467,7 +646,7 @@ fn publish_generation(
     })?;
     inject_failure(control, GenerationFailureStage::ValidationEvents)?;
 
-    write_stats(&transaction, reservation.handle, &plan.semantic.stats)
+    write_stats(&transaction, reservation.handle, &stats)
         .map_err(|error| publication_projection_error(error, GenerationFailureStage::Statistics))?;
     inject_failure(control, GenerationFailureStage::Statistics)?;
 
@@ -478,20 +657,14 @@ fn publish_generation(
         })?;
     }
 
-    let projected = read_generation_projection(
+    if validate_written_generation(
         &transaction,
-        reservation.handle,
-        TelemetryReadPolicy::Strict,
+        reservation,
+        &expected_counts,
+        &expected_validation_events,
+        &stats,
     )
-    .map_err(|error| publication_projection_error(error, GenerationFailureStage::Statistics))?;
-    if projected.plan != *plan
-        || projected.dependency_index.canonical_edges()
-            != plan
-                .semantic
-                .dependency_edges
-                .iter()
-                .map(to_dependency_edge)
-                .collect::<Vec<_>>()
+    .is_err()
     {
         return Err(PublicationError {
             status: StoreStatus::Skipped(StoreSkipReason::CommitFailed),
@@ -501,7 +674,6 @@ fn publish_generation(
             )),
         });
     }
-
     let completed = transaction
         .execute(
             "UPDATE generations SET status = ?1 WHERE id = ?2 AND status = ?3",
@@ -544,16 +716,24 @@ fn publish_generation(
     }
     inject_failure(control, GenerationFailureStage::Activation)?;
 
-    connection::validate_schema(&transaction).map_err(|error| {
-        publication_connection_error(error, GenerationFailureStage::Activation, false)
-    })?;
-    let active =
-        read_active_complete_from_connection(&transaction, &reservation.identities.workspace)
-            .map_err(|error| {
-                publication_projection_error(error, GenerationFailureStage::Activation)
-            })?
-            .ok_or_else(|| publication_integrity_error(GenerationFailureStage::Activation))?;
-    if active.plan != *plan {
+    let manifest = read_manifest(&transaction)
+        .map_err(|error| publication_projection_error(error, GenerationFailureStage::Activation))?;
+    let active_header = read_generation_header(&transaction, reservation.handle)
+        .map_err(|error| publication_projection_error(error, GenerationFailureStage::Activation))?;
+    let active_failure_count: i64 = transaction
+        .query_row(
+            "SELECT count(*) FROM generation_failure_events WHERE generation_id = ?1",
+            [reservation.handle],
+            |row| row.get(0),
+        )
+        .map_err(|error| publication_sql_error(error, GenerationFailureStage::Activation))?;
+    if manifest.workspace.as_ref() != Some(&reservation.identities.workspace)
+        || manifest.active_generation != Some(reservation.handle)
+        || active_header.status != GenerationStatus::Complete
+        || active_header.identities != reservation.identities
+        || active_header.dependency_schema != plan.semantic.dependency_schema
+        || active_failure_count != 0
+    {
         return Err(PublicationError {
             status: StoreStatus::Skipped(StoreSkipReason::CommitFailed),
             audit: Some((
@@ -565,7 +745,224 @@ fn publish_generation(
     inject_failure(control, GenerationFailureStage::TransactionCommit)?;
 
     transaction.commit().map_err(publication_commit_error)?;
+    Ok(stats)
+}
+
+fn release_run_input_rows(plan: &mut StoreCommitPlan) {
+    drop(std::mem::take(&mut plan.semantic.files));
+    drop(std::mem::take(&mut plan.semantic.input_components));
+    drop(std::mem::take(&mut plan.semantic.input_details));
+    drop(std::mem::take(&mut plan.semantic.analysis_settings));
+    drop(std::mem::take(&mut plan.semantic.capabilities));
+    drop(std::mem::take(&mut plan.semantic.capability_requesters));
+    drop(std::mem::take(&mut plan.semantic.provider_schemas));
+    drop(std::mem::take(&mut plan.semantic.provider_schema_versions));
+    drop(std::mem::take(&mut plan.telemetry));
+}
+
+fn release_provider_rows(plan: &mut StoreCommitPlan) {
+    drop(std::mem::take(&mut plan.semantic.provider_manifests));
+    drop(std::mem::take(&mut plan.semantic.provider_manifest_schemas));
+    drop(std::mem::take(&mut plan.semantic.provider_manifest_inputs));
+    drop(std::mem::take(&mut plan.semantic.provider_manifest_outputs));
+    drop(std::mem::take(&mut plan.semantic.provider_generations));
+    drop(std::mem::take(&mut plan.semantic.provider_dependencies));
+}
+
+fn release_product_rows(plan: &mut StoreCommitPlan) {
+    drop(std::mem::take(&mut plan.semantic.layers));
+    drop(std::mem::take(&mut plan.semantic.layer_inputs));
+    drop(std::mem::take(&mut plan.semantic.layer_dependencies));
+    drop(std::mem::take(&mut plan.semantic.layer_extensions));
+    drop(std::mem::take(&mut plan.semantic.layer_warnings));
+    drop(std::mem::take(&mut plan.semantic.summaries));
+    drop(std::mem::take(&mut plan.semantic.summary_dependencies));
+    drop(std::mem::take(&mut plan.semantic.queries));
+    drop(std::mem::take(&mut plan.semantic.query_inputs));
+    drop(std::mem::take(&mut plan.semantic.query_layers));
+}
+
+fn release_result_boundary_rows(plan: &mut StoreCommitPlan) {
+    drop(std::mem::take(&mut plan.semantic.diagnostics));
+    drop(std::mem::take(
+        &mut plan.semantic.diagnostic_requested_views,
+    ));
+}
+
+fn validate_written_generation(
+    transaction: &Transaction<'_>,
+    reservation: &Reservation,
+    expected_counts: &[(&'static str, usize)],
+    expected_validation_events: &[StoreValidationEventRow],
+    stats: &StoreGenerationStats,
+) -> Result<(), ProjectionError> {
+    let header = read_generation_header(transaction, reservation.handle)?;
+    if header.reservation_ordinal != reservation.reservation_ordinal
+        || header.identities != reservation.identities
+        || header.status != GenerationStatus::Pending
+    {
+        return Err(ProjectionError::InvalidMetadata);
+    }
+
+    for &(table, expected) in expected_counts {
+        let query = format!("SELECT count(*) FROM {table} WHERE generation_id = ?1");
+        let actual: i64 = transaction.query_row(&query, [reservation.handle], |row| row.get(0))?;
+        if actual != i64::try_from(expected).map_err(|_| ProjectionError::InvalidMetadata)? {
+            return Err(ProjectionError::InvalidMetadata);
+        }
+    }
+
+    if has_invalid_declared_child_counts(transaction, reservation.handle)?
+        || read_stats(transaction, reservation.handle)? != *stats
+        || read_validation_events(transaction, reservation.handle)? != expected_validation_events
+    {
+        return Err(ProjectionError::InvalidMetadata);
+    }
     Ok(())
+}
+
+fn generation_row_counts(plan: &StoreCommitPlan) -> Vec<(&'static str, usize)> {
+    let semantic = &plan.semantic;
+    vec![
+        ("input_snapshots", 1_usize),
+        ("input_files", semantic.files.len()),
+        ("input_components", semantic.input_components.len()),
+        ("input_component_details", semantic.input_details.len()),
+        ("analysis_settings", semantic.analysis_settings.len()),
+        ("requested_capabilities", semantic.capabilities.len()),
+        (
+            "capability_requesters",
+            semantic.capability_requesters.len(),
+        ),
+        ("provider_schema_snapshots", semantic.provider_schemas.len()),
+        (
+            "provider_schema_versions",
+            semantic.provider_schema_versions.len(),
+        ),
+        ("provider_manifests", semantic.provider_manifests.len()),
+        (
+            "provider_manifest_schemas",
+            semantic.provider_manifest_schemas.len(),
+        ),
+        (
+            "provider_manifest_inputs",
+            semantic.provider_manifest_inputs.len(),
+        ),
+        (
+            "provider_manifest_outputs",
+            semantic.provider_manifest_outputs.len(),
+        ),
+        ("provider_generations", semantic.provider_generations.len()),
+        (
+            "provider_dependencies",
+            semantic.provider_dependencies.len(),
+        ),
+        ("layers", semantic.layers.len()),
+        ("layer_input_digests", semantic.layer_inputs.len()),
+        (
+            "layer_dependency_digests",
+            semantic.layer_dependencies.len(),
+        ),
+        ("layer_extension_digests", semantic.layer_extensions.len()),
+        ("layer_warnings", semantic.layer_warnings.len()),
+        ("summaries", semantic.summaries.len()),
+        (
+            "summary_dependency_digests",
+            semantic.summary_dependencies.len(),
+        ),
+        ("queries", semantic.queries.len()),
+        ("query_inputs", semantic.query_inputs.len()),
+        ("query_layer_digests", semantic.query_layers.len()),
+        ("fact_metadata", semantic.facts.len()),
+        ("run_manifest_nodes", 1),
+        ("diagnostic_nodes", semantic.diagnostics.len()),
+        (
+            "diagnostic_requested_view_digests",
+            semantic.diagnostic_requested_views.len(),
+        ),
+        ("dependency_edges", semantic.dependency_edges.len()),
+        ("validation_events", semantic.validation_events.len()),
+        ("generation_stats", 1),
+        ("generation_telemetry", plan.telemetry.len()),
+        ("generation_failure_events", 0),
+    ]
+}
+
+fn has_invalid_declared_child_counts(
+    connection: &Connection,
+    generation_id: i64,
+) -> Result<bool, ProjectionError> {
+    let invalid: i64 = connection.query_row(
+        "SELECT EXISTS (
+             SELECT 1 FROM provider_schema_snapshots AS parent
+             WHERE parent.generation_id = ?1 AND parent.version_count != (
+                 SELECT count(*) FROM provider_schema_versions AS child
+                 WHERE child.generation_id = parent.generation_id
+                   AND child.provider_id = parent.provider_id
+             )
+             UNION ALL
+             SELECT 1 FROM provider_manifests AS parent
+             WHERE parent.generation_id = ?1 AND (
+                 parent.schema_count != (SELECT count(*) FROM provider_manifest_schemas AS child
+                     WHERE child.generation_id = parent.generation_id AND child.provider_id = parent.provider_id)
+                 OR parent.input_count != (SELECT count(*) FROM provider_manifest_inputs AS child
+                     WHERE child.generation_id = parent.generation_id AND child.provider_id = parent.provider_id)
+                 OR parent.output_count != (SELECT count(*) FROM provider_manifest_outputs AS child
+                     WHERE child.generation_id = parent.generation_id AND child.provider_id = parent.provider_id)
+             )
+             UNION ALL
+             SELECT 1 FROM provider_manifest_schemas AS child
+             WHERE child.generation_id = ?1 AND NOT EXISTS (
+                 SELECT 1 FROM provider_schema_versions AS schema
+                 WHERE schema.generation_id = child.generation_id
+                   AND schema.provider_id = child.provider_id
+                   AND schema.schema_version = child.schema_version
+             )
+             UNION ALL
+             SELECT 1 FROM provider_generations AS parent
+             WHERE parent.generation_id = ?1 AND (
+                 parent.dependency_count != (SELECT count(*) FROM provider_dependencies AS child
+                     WHERE child.generation_id = parent.generation_id AND child.provider_generation_id = parent.id)
+                 OR parent.layer_count != (SELECT count(*) FROM layers AS child
+                     WHERE child.generation_id = parent.generation_id AND child.provider_id = parent.provider_id)
+             )
+             UNION ALL
+             SELECT 1 FROM layers AS parent
+             WHERE parent.generation_id = ?1 AND (
+                 parent.input_count != (SELECT count(*) FROM layer_input_digests AS child
+                     WHERE child.generation_id = parent.generation_id AND child.layer_id = parent.id)
+                 OR parent.dependency_layer_count != (SELECT count(*) FROM layer_dependency_digests AS child
+                     WHERE child.generation_id = parent.generation_id AND child.layer_id = parent.id)
+                 OR parent.extension_count != (SELECT count(*) FROM layer_extension_digests AS child
+                     WHERE child.generation_id = parent.generation_id AND child.layer_id = parent.id)
+                 OR parent.warning_count != (SELECT count(*) FROM layer_warnings AS child
+                     WHERE child.generation_id = parent.generation_id AND child.layer_id = parent.id)
+             )
+             UNION ALL
+             SELECT 1 FROM summaries AS parent
+             WHERE parent.generation_id = ?1 AND parent.dependency_count != (
+                 SELECT count(*) FROM summary_dependency_digests AS child
+                 WHERE child.generation_id = parent.generation_id AND child.summary_id = parent.id
+             )
+             UNION ALL
+             SELECT 1 FROM queries AS parent
+             WHERE parent.generation_id = ?1 AND (
+                 parent.input_count != (SELECT count(*) FROM query_inputs AS child
+                     WHERE child.generation_id = parent.generation_id AND child.query_id = parent.id)
+                 OR parent.layer_count != (SELECT count(*) FROM query_layer_digests AS child
+                     WHERE child.generation_id = parent.generation_id AND child.query_id = parent.id)
+             )
+             UNION ALL
+             SELECT 1 FROM diagnostic_nodes AS parent
+             WHERE parent.generation_id = ?1 AND parent.requested_view_count != (
+                 SELECT count(*) FROM diagnostic_requested_view_digests AS child
+                 WHERE child.generation_id = parent.generation_id AND child.diagnostic_id = parent.id
+             )
+         )",
+        [generation_id],
+        |row| row.get(0),
+    )?;
+    Ok(invalid != 0)
 }
 
 fn audit_failed_attempt(
@@ -1567,11 +1964,11 @@ fn write_providers(
 
 #[derive(Default)]
 struct ProductHandles {
-    layers: BTreeMap<LayerKey, i64>,
-    summaries: BTreeMap<SummaryKey, i64>,
-    queries: BTreeMap<QueryKey, i64>,
-    run_manifests: BTreeMap<RunManifestKey, i64>,
-    diagnostics: BTreeMap<DiagnosticKey, i64>,
+    layers_by_ordinal: Vec<i64>,
+    summaries_by_ordinal: Vec<i64>,
+    queries_by_ordinal: Vec<i64>,
+    run_manifest: Option<i64>,
+    diagnostics_by_ordinal: Vec<i64>,
 }
 
 fn write_products(
@@ -1580,57 +1977,52 @@ fn write_products(
     plan: &StoreCommitPlan,
 ) -> Result<ProductHandles, ProjectionError> {
     let mut handles = ProductHandles::default();
+    let mut insert_layer = transaction.prepare(
+        "INSERT INTO layers (
+             generation_id, semantic_ordinal, layer_type, provider_id, provider_version,
+             schema_version, parameter_digest_kind, parameter_digest_value,
+             lifecycle_digest_kind, lifecycle_digest_value, settings_digest_kind,
+             settings_digest_value, toolchain_digest_kind, toolchain_digest_value,
+             output_digest_kind, output_digest_value, payload_digest_kind,
+             payload_digest_value, precision, validation, input_count,
+             dependency_layer_count, extension_count, edge_count, warning_count
+         ) VALUES (
+             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+             ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25
+         )",
+    )?;
     for (ordinal, row) in plan.semantic.layers.iter().enumerate() {
-        transaction.execute(
-            "INSERT INTO layers (
-                 generation_id, semantic_ordinal, layer_type, provider_id, provider_version,
-                 schema_version, parameter_digest_kind, parameter_digest_value,
-                 lifecycle_digest_kind, lifecycle_digest_value, settings_digest_kind,
-                 settings_digest_value, toolchain_digest_kind, toolchain_digest_value,
-                 output_digest_kind, output_digest_value, payload_digest_kind,
-                 payload_digest_value, precision, validation, input_count,
-                 dependency_layer_count, extension_count, edge_count, warning_count
-             ) VALUES (
-                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-                 ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25
-             )",
-            params![
-                generation_id,
-                sql_ordinal(ordinal)?,
-                row.key.layer_kind.label(),
-                row.key.provider_id,
-                row.key.provider_version,
-                row.key.schema_version,
-                row.key.parameter_digest.kind.label(),
-                row.key.parameter_digest.value,
-                row.key.lifecycle_digest.kind.label(),
-                row.key.lifecycle_digest.value,
-                row.key.analysis_settings_digest.kind.label(),
-                row.key.analysis_settings_digest.value,
-                row.key.toolchain_digest.kind.label(),
-                row.key.toolchain_digest.value,
-                row.output_digest.kind.label(),
-                row.output_digest.value,
-                row.payload_digest.kind.label(),
-                row.payload_digest.value,
-                row.precision,
-                row.validation,
-                sql_i64(row.input_count)?,
-                sql_i64(row.dependency_layer_count)?,
-                sql_i64(row.extension_count)?,
-                sql_i64(row.edge_count)?,
-                sql_i64(row.warning_count)?,
-            ],
-        )?;
-        if handles
-            .layers
-            .insert(row.key.clone(), transaction.last_insert_rowid())
-            .is_some()
-        {
-            return Err(ProjectionError::InvalidMetadata);
-        }
+        insert_layer.execute(params![
+            generation_id,
+            sql_ordinal(ordinal)?,
+            row.key.layer_kind.label(),
+            row.key.provider_id,
+            row.key.provider_version,
+            row.key.schema_version,
+            row.key.parameter_digest.kind.label(),
+            row.key.parameter_digest.value,
+            row.key.lifecycle_digest.kind.label(),
+            row.key.lifecycle_digest.value,
+            row.key.analysis_settings_digest.kind.label(),
+            row.key.analysis_settings_digest.value,
+            row.key.toolchain_digest.kind.label(),
+            row.key.toolchain_digest.value,
+            row.output_digest.kind.label(),
+            row.output_digest.value,
+            row.payload_digest.kind.label(),
+            row.payload_digest.value,
+            row.precision,
+            row.validation,
+            sql_i64(row.input_count)?,
+            sql_i64(row.dependency_layer_count)?,
+            sql_i64(row.extension_count)?,
+            sql_i64(row.edge_count)?,
+            sql_i64(row.warning_count)?,
+        ])?;
+        let handle = transaction.last_insert_rowid();
+        handles.layers_by_ordinal.push(handle);
     }
-    write_layer_children(transaction, generation_id, plan, &handles.layers)?;
+    write_layer_children(transaction, generation_id, plan, &handles.layers_by_ordinal)?;
 
     for (ordinal, row) in plan.semantic.summaries.iter().enumerate() {
         transaction.execute(
@@ -1652,22 +2044,13 @@ fn write_products(
                 sql_i64(row.dependency_count)?,
             ],
         )?;
-        if handles
-            .summaries
-            .insert(row.key.clone(), transaction.last_insert_rowid())
-            .is_some()
-        {
-            return Err(ProjectionError::InvalidMetadata);
-        }
+        let handle = transaction.last_insert_rowid();
+        handles.summaries_by_ordinal.push(handle);
     }
     let mut summary_ordinals = BTreeMap::new();
     for row in &plan.semantic.summary_dependencies {
-        let handle = handles
-            .summaries
-            .get(&row.key)
-            .copied()
-            .ok_or(ProjectionError::InvalidMetadata)?;
-        let ordinal = next_child_ordinal(&mut summary_ordinals, row.key.clone())?;
+        let handle = ordinal_handle(&handles.summaries_by_ordinal, row.summary_ordinal)?;
+        let ordinal = next_child_ordinal(&mut summary_ordinals, row.summary_ordinal)?;
         transaction.execute(
             "INSERT INTO summary_dependency_digests (
                  generation_id, summary_id, ordinal, digest_kind, digest_value
@@ -1682,9 +2065,8 @@ fn write_products(
         )?;
     }
 
-    for (ordinal, row) in plan.semantic.queries.iter().enumerate() {
-        transaction.execute(
-            "INSERT INTO queries (
+    let mut insert_query = transaction.prepare(
+        "INSERT INTO queries (
                  generation_id, semantic_ordinal, query_type, query_version,
                  parameter_digest_kind, parameter_digest_value, budget_digest_kind,
                  budget_digest_value, precision_tier, result_digest_kind,
@@ -1694,34 +2076,35 @@ fn write_products(
                  ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
                  ?14, ?15, ?16
              )",
-            params![
-                generation_id,
-                sql_ordinal(ordinal)?,
-                row.key.query_kind,
-                row.key.query_version,
-                row.key.parameter_digest.kind.label(),
-                row.key.parameter_digest.value,
-                row.key.budget_digest.kind.label(),
-                row.key.budget_digest.value,
-                row.key.precision_tier.label(),
-                row.result_digest.kind.label(),
-                row.result_digest.value,
-                row.precision,
-                row.provenance,
-                sql_i64(row.input_count)?,
-                sql_i64(row.layer_count)?,
-                sql_i64(row.edge_count)?,
-            ],
-        )?;
-        if handles
-            .queries
-            .insert(row.key.clone(), transaction.last_insert_rowid())
-            .is_some()
-        {
-            return Err(ProjectionError::InvalidMetadata);
-        }
+    )?;
+    for (ordinal, row) in plan.semantic.queries.iter().enumerate() {
+        insert_query.execute(params![
+            generation_id,
+            sql_ordinal(ordinal)?,
+            row.key.query_kind,
+            row.key.query_version,
+            row.key.parameter_digest.kind.label(),
+            row.key.parameter_digest.value,
+            row.key.budget_digest.kind.label(),
+            row.key.budget_digest.value,
+            row.key.precision_tier.label(),
+            row.result_digest.kind.label(),
+            row.result_digest.value,
+            row.precision,
+            row.provenance,
+            sql_i64(row.input_count)?,
+            sql_i64(row.layer_count)?,
+            sql_i64(row.edge_count)?,
+        ])?;
+        let handle = transaction.last_insert_rowid();
+        handles.queries_by_ordinal.push(handle);
     }
-    write_query_children(transaction, generation_id, plan, &handles.queries)?;
+    write_query_children(
+        transaction,
+        generation_id,
+        plan,
+        &handles.queries_by_ordinal,
+    )?;
     Ok(handles)
 }
 
@@ -1729,12 +2112,17 @@ fn write_layer_children(
     transaction: &Transaction<'_>,
     generation_id: i64,
     plan: &StoreCommitPlan,
-    handles: &BTreeMap<LayerKey, i64>,
+    handles: &[i64],
 ) -> Result<(), ProjectionError> {
     let mut input_ordinals = BTreeMap::new();
+    let mut insert_input = transaction.prepare(
+        "INSERT INTO layer_input_digests (
+             generation_id, layer_id, ordinal, digest_kind, digest_value
+         ) VALUES (?1, ?2, ?3, ?4, ?5)",
+    )?;
     for row in &plan.semantic.layer_inputs {
         write_layer_digest_child(
-            transaction,
+            &mut insert_input,
             generation_id,
             row,
             handles,
@@ -1742,85 +2130,68 @@ fn write_layer_children(
         )?;
     }
     let mut dependency_ordinals = BTreeMap::new();
-    for row in &plan.semantic.layer_dependencies {
-        let handle = handles
-            .get(&row.key)
-            .copied()
-            .ok_or(ProjectionError::InvalidMetadata)?;
-        let ordinal = next_child_ordinal(&mut dependency_ordinals, row.key.clone())?;
-        transaction.execute(
-            "INSERT INTO layer_dependency_digests (
-                 generation_id, layer_id, ordinal, digest_kind, digest_value
-             ) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                generation_id,
-                handle,
-                ordinal,
-                row.digest.kind.label(),
-                row.digest.value,
-            ],
-        )?;
-    }
-    let mut extension_ordinals = BTreeMap::new();
-    for row in &plan.semantic.layer_extensions {
-        let handle = handles
-            .get(&row.key)
-            .copied()
-            .ok_or(ProjectionError::InvalidMetadata)?;
-        let ordinal = next_child_ordinal(&mut extension_ordinals, row.key.clone())?;
-        transaction.execute(
-            "INSERT INTO layer_extension_digests (
-                 generation_id, layer_id, ordinal, digest_kind, digest_value
-             ) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                generation_id,
-                handle,
-                ordinal,
-                row.digest.kind.label(),
-                row.digest.value,
-            ],
-        )?;
-    }
-    let mut warning_ordinals = BTreeMap::new();
-    for row in &plan.semantic.layer_warnings {
-        let handle = handles
-            .get(&row.key)
-            .copied()
-            .ok_or(ProjectionError::InvalidMetadata)?;
-        let ordinal = next_child_ordinal(&mut warning_ordinals, row.key.clone())?;
-        transaction.execute(
-            "INSERT INTO layer_warnings (generation_id, layer_id, ordinal, warning_code)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![generation_id, handle, ordinal, row.warning_code],
-        )?;
-    }
-    Ok(())
-}
-
-fn write_layer_digest_child(
-    transaction: &Transaction<'_>,
-    generation_id: i64,
-    row: &StoreLayerInputRow,
-    handles: &BTreeMap<LayerKey, i64>,
-    ordinals: &mut BTreeMap<LayerKey, i64>,
-) -> Result<(), ProjectionError> {
-    let handle = handles
-        .get(&row.key)
-        .copied()
-        .ok_or(ProjectionError::InvalidMetadata)?;
-    let ordinal = next_child_ordinal(ordinals, row.key.clone())?;
-    transaction.execute(
-        "INSERT INTO layer_input_digests (
+    let mut insert_dependency = transaction.prepare(
+        "INSERT INTO layer_dependency_digests (
              generation_id, layer_id, ordinal, digest_kind, digest_value
          ) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![
+    )?;
+    for row in &plan.semantic.layer_dependencies {
+        let handle = ordinal_handle(handles, row.layer_ordinal)?;
+        let ordinal = next_child_ordinal(&mut dependency_ordinals, row.layer_ordinal)?;
+        insert_dependency.execute(params![
             generation_id,
             handle,
             ordinal,
             row.digest.kind.label(),
             row.digest.value,
-        ],
+        ])?;
+    }
+    let mut extension_ordinals = BTreeMap::new();
+    let mut insert_extension = transaction.prepare(
+        "INSERT INTO layer_extension_digests (
+             generation_id, layer_id, ordinal, digest_kind, digest_value
+         ) VALUES (?1, ?2, ?3, ?4, ?5)",
     )?;
+    for row in &plan.semantic.layer_extensions {
+        let handle = ordinal_handle(handles, row.layer_ordinal)?;
+        let ordinal = next_child_ordinal(&mut extension_ordinals, row.layer_ordinal)?;
+        insert_extension.execute(params![
+            generation_id,
+            handle,
+            ordinal,
+            row.digest.kind.label(),
+            row.digest.value,
+        ])?;
+    }
+    let mut warning_ordinals = BTreeMap::new();
+    let mut insert_warning = transaction.prepare(
+        "INSERT INTO layer_warnings (generation_id, layer_id, ordinal, warning_code)
+         VALUES (?1, ?2, ?3, ?4)",
+    )?;
+    for row in &plan.semantic.layer_warnings {
+        let handle = ordinal_handle(handles, row.layer_ordinal)?;
+        let ordinal = next_child_ordinal(&mut warning_ordinals, row.layer_ordinal)?;
+        insert_warning.execute(params![generation_id, handle, ordinal, row.warning_code])?;
+    }
+    Ok(())
+}
+
+fn write_layer_digest_child(
+    insert: &mut rusqlite::Statement<'_>,
+    generation_id: i64,
+    row: &StoreLayerInputRow,
+    handles: &[i64],
+    ordinals: &mut BTreeMap<u64, i64>,
+) -> Result<(), ProjectionError> {
+    let handle = ordinal_handle(handles, row.layer_ordinal)?;
+    let ordinal = next_child_ordinal(ordinals, row.layer_ordinal)?;
+    insert.execute(params![
+        generation_id,
+        handle,
+        ordinal,
+        row.digest.kind.label(),
+        row.digest.value,
+    ])?;
     Ok(())
 }
 
@@ -1828,51 +2199,45 @@ fn write_query_children(
     transaction: &Transaction<'_>,
     generation_id: i64,
     plan: &StoreCommitPlan,
-    handles: &BTreeMap<QueryKey, i64>,
+    handles: &[i64],
 ) -> Result<(), ProjectionError> {
     let mut input_ordinals = BTreeMap::new();
+    let mut insert_input = transaction.prepare(
+        "INSERT INTO query_inputs (
+             generation_id, query_id, ordinal, input_kind, stable_key,
+             digest_kind, digest_value, status
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+    )?;
     for row in &plan.semantic.query_inputs {
-        let handle = handles
-            .get(&row.key)
-            .copied()
-            .ok_or(ProjectionError::InvalidMetadata)?;
-        let ordinal = next_child_ordinal(&mut input_ordinals, row.key.clone())?;
-        transaction.execute(
-            "INSERT INTO query_inputs (
-                 generation_id, query_id, ordinal, input_kind, stable_key,
-                 digest_kind, digest_value, status
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                generation_id,
-                handle,
-                ordinal,
-                row.input.kind.label(),
-                row.input.stable_key,
-                row.input.digest.kind.label(),
-                row.input.digest.value,
-                row.input.status.label(),
-            ],
-        )?;
+        let handle = ordinal_handle(handles, row.query_ordinal)?;
+        let ordinal = next_child_ordinal(&mut input_ordinals, row.query_ordinal)?;
+        insert_input.execute(params![
+            generation_id,
+            handle,
+            ordinal,
+            row.input.kind.label(),
+            row.input.stable_key,
+            row.input.digest.kind.label(),
+            row.input.digest.value,
+            row.input.status.label(),
+        ])?;
     }
     let mut layer_ordinals = BTreeMap::new();
+    let mut insert_layer = transaction.prepare(
+        "INSERT INTO query_layer_digests (
+             generation_id, query_id, ordinal, digest_kind, digest_value
+         ) VALUES (?1, ?2, ?3, ?4, ?5)",
+    )?;
     for row in &plan.semantic.query_layers {
-        let handle = handles
-            .get(&row.key)
-            .copied()
-            .ok_or(ProjectionError::InvalidMetadata)?;
-        let ordinal = next_child_ordinal(&mut layer_ordinals, row.key.clone())?;
-        transaction.execute(
-            "INSERT INTO query_layer_digests (
-                 generation_id, query_id, ordinal, digest_kind, digest_value
-             ) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                generation_id,
-                handle,
-                ordinal,
-                row.layer_digest.kind.label(),
-                row.layer_digest.value,
-            ],
-        )?;
+        let handle = ordinal_handle(handles, row.query_ordinal)?;
+        let ordinal = next_child_ordinal(&mut layer_ordinals, row.query_ordinal)?;
+        insert_layer.execute(params![
+            generation_id,
+            handle,
+            ordinal,
+            row.layer_digest.kind.label(),
+            row.layer_digest.value,
+        ])?;
     }
     Ok(())
 }
@@ -1882,26 +2247,58 @@ fn write_facts(
     generation_id: i64,
     rows: &[StoreFactRow],
 ) -> Result<(), ProjectionError> {
-    for row in rows {
-        transaction.execute(
-            "INSERT INTO fact_metadata (
-                 generation_id, family, stable_key, producer_id, producer_layer_key,
-                 precision, confidence, validation, payload_digest
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
-                generation_id,
-                row.family,
-                row.stable_key,
-                row.producer_id,
-                row.layer_id,
-                row.precision,
-                row.confidence,
-                row.validation,
-                row.payload_digest,
-            ],
-        )?;
+    let mut insert = transaction.prepare(
+        "INSERT INTO fact_metadata (
+             generation_id, ordinal, family, stable_key, producer_id, producer_layer_key,
+             precision, confidence, validation, payload_digest
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+    )?;
+    insert.raw_bind_parameter(1, generation_id)?;
+    let mut prior_shape: Option<(&str, &str, &str, &str, &str, &str)> = None;
+    for (ordinal, row) in rows.iter().enumerate() {
+        let shape = (
+            row.family.label(),
+            row.producer_id.as_ref(),
+            row.layer_id.as_ref(),
+            row.precision.label(),
+            row.confidence.label(),
+            row.validation.label(),
+        );
+        if prior_shape != Some(shape) {
+            insert.raw_bind_parameter(3, shape.0)?;
+            insert.raw_bind_parameter(5, shape.1)?;
+            insert.raw_bind_parameter(6, shape.2)?;
+            insert.raw_bind_parameter(7, shape.3)?;
+            insert.raw_bind_parameter(8, shape.4)?;
+            insert.raw_bind_parameter(9, shape.5)?;
+            prior_shape = Some(shape);
+        }
+        let stable_key = row.stable_key.storage_bytes();
+        insert.raw_bind_parameter(2, sql_ordinal(ordinal)?)?;
+        insert.raw_bind_parameter(4, stable_key.as_ref())?;
+        insert.raw_bind_parameter(10, row.payload_digest.as_str())?;
+        insert.raw_execute()?;
     }
     Ok(())
+}
+
+fn batched_insert_sql(prefix: &str, column_count: usize, row_count: usize) -> String {
+    let mut sql = String::with_capacity(prefix.len() + row_count * (column_count * 2 + 3));
+    sql.push_str(prefix);
+    for row in 0..row_count {
+        if row != 0 {
+            sql.push(',');
+        }
+        sql.push('(');
+        for column in 0..column_count {
+            if column != 0 {
+                sql.push(',');
+            }
+            sql.push('?');
+        }
+        sql.push(')');
+    }
+    sql
 }
 
 fn write_result_boundaries(
@@ -1924,8 +2321,8 @@ fn write_result_boundaries(
         ],
     )?;
     if handles
-        .run_manifests
-        .insert(manifest.key.clone(), transaction.last_insert_rowid())
+        .run_manifest
+        .replace(transaction.last_insert_rowid())
         .is_some()
     {
         return Err(ProjectionError::InvalidMetadata);
@@ -1955,23 +2352,14 @@ fn write_result_boundaries(
                 sql_i64(row.requested_view_count)?,
             ],
         )?;
-        if handles
-            .diagnostics
-            .insert(row.key.clone(), transaction.last_insert_rowid())
-            .is_some()
-        {
-            return Err(ProjectionError::InvalidMetadata);
-        }
+        let handle = transaction.last_insert_rowid();
+        handles.diagnostics_by_ordinal.push(handle);
     }
 
     let mut ordinals = BTreeMap::new();
     for row in &plan.semantic.diagnostic_requested_views {
-        let handle = handles
-            .diagnostics
-            .get(&row.key)
-            .copied()
-            .ok_or(ProjectionError::InvalidMetadata)?;
-        let ordinal = next_child_ordinal(&mut ordinals, row.key.clone())?;
+        let handle = ordinal_handle(&handles.diagnostics_by_ordinal, row.diagnostic_ordinal)?;
+        let ordinal = next_child_ordinal(&mut ordinals, row.diagnostic_ordinal)?;
         transaction.execute(
             "INSERT INTO diagnostic_requested_view_digests (
                  generation_id, diagnostic_id, ordinal, digest_kind, digest_value
@@ -1988,12 +2376,12 @@ fn write_result_boundaries(
     Ok(())
 }
 
-struct EncodedEndpoint {
+struct EncodedEndpoint<'a> {
     node_kind: &'static str,
-    input_kind: Option<String>,
-    input_stable_key: Option<String>,
+    input_kind: Option<&'static str>,
+    input_stable_key: Option<&'a str>,
     input_digest_kind: Option<&'static str>,
-    input_digest_value: Option<String>,
+    input_digest_value: Option<&'a str>,
     input_status: Option<&'static str>,
     layer_id: Option<i64>,
     query_id: Option<i64>,
@@ -2002,17 +2390,17 @@ struct EncodedEndpoint {
     diagnostic_id: Option<i64>,
 }
 
-fn encode_endpoint(
-    node: &CacheNode,
+fn encode_endpoint<'a>(
+    node: &'a StoreNodeRef,
     handles: &ProductHandles,
-) -> Result<EncodedEndpoint, ProjectionError> {
+) -> Result<EncodedEndpoint<'a>, ProjectionError> {
     match node {
-        CacheNode::DependencyInput(input) => Ok(EncodedEndpoint {
-            node_kind: node.kind().label(),
-            input_kind: Some(input.kind.label().to_string()),
-            input_stable_key: Some(input.stable_key.clone()),
+        StoreNodeRef::DependencyInput(input) => Ok(EncodedEndpoint {
+            node_kind: "dependency_input",
+            input_kind: Some(input.kind.label()),
+            input_stable_key: Some(&input.stable_key),
             input_digest_kind: Some(input.digest.kind.label()),
-            input_digest_value: Some(input.digest.value.clone()),
+            input_digest_value: Some(&input.digest.value),
             input_status: Some(input.status.label()),
             layer_id: None,
             query_id: None,
@@ -2020,8 +2408,8 @@ fn encode_endpoint(
             run_manifest_id: None,
             diagnostic_id: None,
         }),
-        CacheNode::RunManifest(key) => Ok(EncodedEndpoint {
-            node_kind: node.kind().label(),
+        StoreNodeRef::RunManifest => Ok(EncodedEndpoint {
+            node_kind: "run_manifest",
             input_kind: None,
             input_stable_key: None,
             input_digest_kind: None,
@@ -2032,53 +2420,39 @@ fn encode_endpoint(
             summary_id: None,
             run_manifest_id: Some(
                 handles
-                    .run_manifests
-                    .get(key)
-                    .copied()
+                    .run_manifest
                     .ok_or(ProjectionError::InvalidMetadata)?,
             ),
             diagnostic_id: None,
         }),
-        CacheNode::Layer(key) => Ok(EncodedEndpoint {
-            node_kind: node.kind().label(),
+        StoreNodeRef::Layer(ordinal) => Ok(EncodedEndpoint {
+            node_kind: "layer",
             input_kind: None,
             input_stable_key: None,
             input_digest_kind: None,
             input_digest_value: None,
             input_status: None,
-            layer_id: Some(
-                handles
-                    .layers
-                    .get(key)
-                    .copied()
-                    .ok_or(ProjectionError::InvalidMetadata)?,
-            ),
+            layer_id: Some(ordinal_handle(&handles.layers_by_ordinal, *ordinal)?),
             query_id: None,
             summary_id: None,
             run_manifest_id: None,
             diagnostic_id: None,
         }),
-        CacheNode::Query(key) => Ok(EncodedEndpoint {
-            node_kind: node.kind().label(),
+        StoreNodeRef::Query(ordinal) => Ok(EncodedEndpoint {
+            node_kind: "query",
             input_kind: None,
             input_stable_key: None,
             input_digest_kind: None,
             input_digest_value: None,
             input_status: None,
             layer_id: None,
-            query_id: Some(
-                handles
-                    .queries
-                    .get(key)
-                    .copied()
-                    .ok_or(ProjectionError::InvalidMetadata)?,
-            ),
+            query_id: Some(ordinal_handle(&handles.queries_by_ordinal, *ordinal)?),
             summary_id: None,
             run_manifest_id: None,
             diagnostic_id: None,
         }),
-        CacheNode::Summary(key) => Ok(EncodedEndpoint {
-            node_kind: node.kind().label(),
+        StoreNodeRef::Summary(ordinal) => Ok(EncodedEndpoint {
+            node_kind: "summary",
             input_kind: None,
             input_stable_key: None,
             input_digest_kind: None,
@@ -2086,18 +2460,12 @@ fn encode_endpoint(
             input_status: None,
             layer_id: None,
             query_id: None,
-            summary_id: Some(
-                handles
-                    .summaries
-                    .get(key)
-                    .copied()
-                    .ok_or(ProjectionError::InvalidMetadata)?,
-            ),
+            summary_id: Some(ordinal_handle(&handles.summaries_by_ordinal, *ordinal)?),
             run_manifest_id: None,
             diagnostic_id: None,
         }),
-        CacheNode::Diagnostic(key) => Ok(EncodedEndpoint {
-            node_kind: node.kind().label(),
+        StoreNodeRef::Diagnostic(ordinal) => Ok(EncodedEndpoint {
+            node_kind: "diagnostic",
             input_kind: None,
             input_stable_key: None,
             input_digest_kind: None,
@@ -2107,28 +2475,74 @@ fn encode_endpoint(
             query_id: None,
             summary_id: None,
             run_manifest_id: None,
-            diagnostic_id: Some(
-                handles
-                    .diagnostics
-                    .get(key)
-                    .copied()
-                    .ok_or(ProjectionError::InvalidMetadata)?,
-            ),
+            diagnostic_id: Some(ordinal_handle(&handles.diagnostics_by_ordinal, *ordinal)?),
         }),
     }
 }
 
-fn write_dependency_edges(
-    transaction: &Transaction<'_>,
-    generation_id: i64,
-    rows: &[StoreDependencyEdgeRow],
-    handles: &ProductHandles,
-) -> Result<(), ProjectionError> {
-    for (ordinal, row) in rows.iter().enumerate() {
-        let from = encode_endpoint(&row.from, handles)?;
-        let to = encode_endpoint(&row.to, handles)?;
-        transaction.execute(
-            "INSERT INTO dependency_edges (
+fn ordinal_handle(handles: &[i64], ordinal: u64) -> Result<i64, ProjectionError> {
+    let index = usize::try_from(ordinal).map_err(|_| ProjectionError::InvalidMetadata)?;
+    handles
+        .get(index)
+        .copied()
+        .ok_or(ProjectionError::InvalidMetadata)
+}
+
+fn semantic_parent<R, K>(
+    rows: &[R],
+    ordinal: u64,
+    key: impl FnOnce(&R) -> &K,
+) -> Result<&K, ProjectionError> {
+    let index = usize::try_from(ordinal).map_err(|_| ProjectionError::InvalidMetadata)?;
+    rows.get(index)
+        .map(key)
+        .ok_or(ProjectionError::InvalidMetadata)
+}
+
+#[derive(Clone, Copy)]
+enum ProductEndpointKind {
+    Layer,
+    Query,
+    Summary,
+    RunManifest,
+    Diagnostic,
+}
+
+impl ProductEndpointKind {
+    fn sql_parts(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Layer => ("layer", "?,NULL,NULL,NULL,NULL"),
+            Self::Query => ("query", "NULL,?,NULL,NULL,NULL"),
+            Self::Summary => ("summary", "NULL,NULL,?,NULL,NULL"),
+            Self::RunManifest => ("run_manifest", "NULL,NULL,NULL,?,NULL"),
+            Self::Diagnostic => ("diagnostic", "NULL,NULL,NULL,NULL,?"),
+        }
+    }
+}
+
+struct ProductToInputRow<'row> {
+    ordinal: i64,
+    source_id: i64,
+    input: &'row InputDependencyKey,
+    input_kind: &'static str,
+    input_digest_kind: &'static str,
+    input_status: &'static str,
+    dependency_kind: &'static str,
+    required_shape: &'static str,
+}
+
+fn product_to_input_insert_sql(source_kind: ProductEndpointKind, row_count: usize) -> String {
+    let (source_kind, source_ids) = source_kind.sql_parts();
+    let row = format!(
+        "(?,?,
+           '{source_kind}',NULL,NULL,NULL,NULL,NULL,
+           {source_ids},
+           'dependency_input',?,?,?,?,?,
+           NULL,NULL,NULL,NULL,NULL,
+           ?,?)"
+    );
+    let mut sql = String::from(
+        "INSERT INTO dependency_edges (
                  generation_id, ordinal,
                  from_node_kind, from_input_kind, from_input_stable_key,
                  from_input_digest_kind, from_input_digest_value, from_input_status,
@@ -2139,41 +2553,241 @@ fn write_dependency_edges(
                  to_layer_id, to_query_id, to_summary_id,
                  to_run_manifest_id, to_diagnostic_id,
                  dependency_kind, required_shape
-             ) VALUES (
-                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
-                 ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22,
-                 ?23, ?24, ?25, ?26
-             )",
-            params![
-                generation_id,
-                sql_ordinal(ordinal)?,
-                from.node_kind,
-                from.input_kind,
-                from.input_stable_key,
-                from.input_digest_kind,
-                from.input_digest_value,
-                from.input_status,
-                from.layer_id,
-                from.query_id,
-                from.summary_id,
-                from.run_manifest_id,
-                from.diagnostic_id,
-                to.node_kind,
-                to.input_kind,
-                to.input_stable_key,
-                to.input_digest_kind,
-                to.input_digest_value,
-                to.input_status,
-                to.layer_id,
-                to.query_id,
-                to.summary_id,
-                to.run_manifest_id,
-                to.diagnostic_id,
-                row.kind.label(),
-                row.required_shape.label(),
-            ],
-        )?;
+             ) VALUES ",
+    );
+    for index in 0..row_count {
+        if index != 0 {
+            sql.push(',');
+        }
+        sql.push_str(&row);
     }
+    sql
+}
+
+fn write_product_to_input_batch(
+    insert: &mut Statement<'_>,
+    generation_id: i64,
+    rows: &[ProductToInputRow<'_>],
+) -> Result<(), ProjectionError> {
+    let mut parameters = Vec::<&dyn rusqlite::ToSql>::with_capacity(rows.len() * 10);
+    for row in rows {
+        parameters.push(&generation_id);
+        parameters.push(&row.ordinal);
+        parameters.push(&row.source_id);
+        parameters.push(&row.input_kind);
+        parameters.push(&row.input.stable_key);
+        parameters.push(&row.input_digest_kind);
+        parameters.push(&row.input.digest.value);
+        parameters.push(&row.input_status);
+        parameters.push(&row.dependency_kind);
+        parameters.push(&row.required_shape);
+    }
+    insert.execute(params_from_iter(parameters))?;
+    Ok(())
+}
+
+fn write_product_to_input_remainder(
+    transaction: &Transaction<'_>,
+    generation_id: i64,
+    source_kind: ProductEndpointKind,
+    rows: &[ProductToInputRow<'_>],
+) -> Result<(), ProjectionError> {
+    if !rows.is_empty() {
+        let sql = product_to_input_insert_sql(source_kind, rows.len());
+        let mut insert = transaction.prepare(&sql)?;
+        write_product_to_input_batch(&mut insert, generation_id, rows)?;
+    }
+    Ok(())
+}
+
+fn write_dependency_edges(
+    transaction: &Transaction<'_>,
+    generation_id: i64,
+    rows: &[StoreDependencyEdgeRow],
+    handles: &ProductHandles,
+) -> Result<(), ProjectionError> {
+    const BATCH_SIZE: usize = 1024;
+    let layer_sql = product_to_input_insert_sql(ProductEndpointKind::Layer, BATCH_SIZE);
+    let query_sql = product_to_input_insert_sql(ProductEndpointKind::Query, BATCH_SIZE);
+    let summary_sql = product_to_input_insert_sql(ProductEndpointKind::Summary, BATCH_SIZE);
+    let run_sql = product_to_input_insert_sql(ProductEndpointKind::RunManifest, BATCH_SIZE);
+    let diagnostic_sql = product_to_input_insert_sql(ProductEndpointKind::Diagnostic, BATCH_SIZE);
+    let mut layer_insert = transaction.prepare(&layer_sql)?;
+    let mut query_insert = transaction.prepare(&query_sql)?;
+    let mut summary_insert = transaction.prepare(&summary_sql)?;
+    let mut run_insert = transaction.prepare(&run_sql)?;
+    let mut diagnostic_insert = transaction.prepare(&diagnostic_sql)?;
+    let mut layer_rows = Vec::with_capacity(BATCH_SIZE);
+    let mut query_rows = Vec::with_capacity(BATCH_SIZE);
+    let mut summary_rows = Vec::with_capacity(BATCH_SIZE);
+    let mut run_rows = Vec::with_capacity(BATCH_SIZE);
+    let mut diagnostic_rows = Vec::with_capacity(BATCH_SIZE);
+    let mut fallback = Vec::new();
+    for (ordinal, row) in rows.iter().enumerate() {
+        let StoreNodeRef::DependencyInput(input) = &row.to else {
+            fallback.push((ordinal, row));
+            continue;
+        };
+        let (target, insert, source_id) = match &row.from {
+            StoreNodeRef::Layer(source) => (
+                &mut layer_rows,
+                &mut layer_insert,
+                ordinal_handle(&handles.layers_by_ordinal, *source)?,
+            ),
+            StoreNodeRef::Query(source) => (
+                &mut query_rows,
+                &mut query_insert,
+                ordinal_handle(&handles.queries_by_ordinal, *source)?,
+            ),
+            StoreNodeRef::Summary(source) => (
+                &mut summary_rows,
+                &mut summary_insert,
+                ordinal_handle(&handles.summaries_by_ordinal, *source)?,
+            ),
+            StoreNodeRef::RunManifest => (
+                &mut run_rows,
+                &mut run_insert,
+                handles
+                    .run_manifest
+                    .ok_or(ProjectionError::InvalidMetadata)?,
+            ),
+            StoreNodeRef::Diagnostic(source) => (
+                &mut diagnostic_rows,
+                &mut diagnostic_insert,
+                ordinal_handle(&handles.diagnostics_by_ordinal, *source)?,
+            ),
+            StoreNodeRef::DependencyInput(_) => {
+                fallback.push((ordinal, row));
+                continue;
+            }
+        };
+        target.push(ProductToInputRow {
+            ordinal: sql_ordinal(ordinal)?,
+            source_id,
+            input,
+            input_kind: input.kind.label(),
+            input_digest_kind: input.digest.kind.label(),
+            input_status: input.status.label(),
+            dependency_kind: row.kind.label(),
+            required_shape: row.required_shape.label(),
+        });
+        if target.len() == BATCH_SIZE {
+            write_product_to_input_batch(insert, generation_id, target)?;
+            target.clear();
+        }
+    }
+    drop((
+        layer_insert,
+        query_insert,
+        summary_insert,
+        run_insert,
+        diagnostic_insert,
+    ));
+    for (source_kind, source_rows) in [
+        (ProductEndpointKind::Layer, layer_rows.as_slice()),
+        (ProductEndpointKind::Query, query_rows.as_slice()),
+        (ProductEndpointKind::Summary, summary_rows.as_slice()),
+        (ProductEndpointKind::RunManifest, run_rows.as_slice()),
+        (ProductEndpointKind::Diagnostic, diagnostic_rows.as_slice()),
+    ] {
+        write_product_to_input_remainder(transaction, generation_id, source_kind, source_rows)?;
+    }
+    write_fallback_dependency_edges(transaction, generation_id, &fallback, handles)
+}
+
+fn write_fallback_dependency_edges(
+    transaction: &Transaction<'_>,
+    generation_id: i64,
+    rows: &[(usize, &StoreDependencyEdgeRow)],
+    handles: &ProductHandles,
+) -> Result<(), ProjectionError> {
+    const BATCH_SIZE: usize = 1024;
+    const COLUMN_COUNT: usize = 26;
+    const INSERT_PREFIX: &str = "INSERT INTO dependency_edges (
+             generation_id, ordinal,
+             from_node_kind, from_input_kind, from_input_stable_key,
+             from_input_digest_kind, from_input_digest_value, from_input_status,
+             from_layer_id, from_query_id, from_summary_id,
+             from_run_manifest_id, from_diagnostic_id,
+             to_node_kind, to_input_kind, to_input_stable_key,
+             to_input_digest_kind, to_input_digest_value, to_input_status,
+             to_layer_id, to_query_id, to_summary_id,
+             to_run_manifest_id, to_diagnostic_id,
+             dependency_kind, required_shape
+         ) VALUES ";
+
+    let mut chunks = rows.chunks_exact(BATCH_SIZE);
+    if rows.len() >= BATCH_SIZE {
+        let sql = batched_insert_sql(INSERT_PREFIX, COLUMN_COUNT, BATCH_SIZE);
+        let mut insert = transaction.prepare(&sql)?;
+        for chunk in &mut chunks {
+            write_dependency_batch(&mut insert, generation_id, chunk, handles)?;
+        }
+    }
+    let remainder = chunks.remainder();
+    if !remainder.is_empty() {
+        let sql = batched_insert_sql(INSERT_PREFIX, COLUMN_COUNT, remainder.len());
+        let mut insert = transaction.prepare(&sql)?;
+        write_dependency_batch(&mut insert, generation_id, remainder, handles)?;
+    }
+    Ok(())
+}
+
+fn write_dependency_batch(
+    insert: &mut Statement<'_>,
+    generation_id: i64,
+    rows: &[(usize, &StoreDependencyEdgeRow)],
+    handles: &ProductHandles,
+) -> Result<(), ProjectionError> {
+    let ordinals = rows
+        .iter()
+        .map(|(ordinal, _)| sql_ordinal(*ordinal))
+        .collect::<Result<Vec<_>, _>>()?;
+    let endpoints = rows
+        .iter()
+        .map(|(_, row)| {
+            Ok((
+                encode_endpoint(&row.from, handles)?,
+                encode_endpoint(&row.to, handles)?,
+            ))
+        })
+        .collect::<Result<Vec<_>, ProjectionError>>()?;
+    let labels = rows
+        .iter()
+        .map(|(_, row)| (row.kind.label(), row.required_shape.label()))
+        .collect::<Vec<_>>();
+    let mut parameters = Vec::<&dyn rusqlite::ToSql>::with_capacity(rows.len() * 26);
+    for ((ordinal, (from, to)), (kind, required_shape)) in
+        ordinals.iter().zip(&endpoints).zip(&labels)
+    {
+        parameters.push(&generation_id);
+        parameters.push(ordinal);
+        parameters.push(&from.node_kind);
+        parameters.push(&from.input_kind);
+        parameters.push(&from.input_stable_key);
+        parameters.push(&from.input_digest_kind);
+        parameters.push(&from.input_digest_value);
+        parameters.push(&from.input_status);
+        parameters.push(&from.layer_id);
+        parameters.push(&from.query_id);
+        parameters.push(&from.summary_id);
+        parameters.push(&from.run_manifest_id);
+        parameters.push(&from.diagnostic_id);
+        parameters.push(&to.node_kind);
+        parameters.push(&to.input_kind);
+        parameters.push(&to.input_stable_key);
+        parameters.push(&to.input_digest_kind);
+        parameters.push(&to.input_digest_value);
+        parameters.push(&to.input_status);
+        parameters.push(&to.layer_id);
+        parameters.push(&to.query_id);
+        parameters.push(&to.summary_id);
+        parameters.push(&to.run_manifest_id);
+        parameters.push(&to.diagnostic_id);
+        parameters.push(kind);
+        parameters.push(required_shape);
+    }
+    insert.execute(params_from_iter(parameters))?;
     Ok(())
 }
 
@@ -2340,19 +2954,12 @@ fn read_active_complete_from_connection(
     if failure_count != 0 {
         return Err(ProjectionError::InvalidMetadata);
     }
-    read_generation_projection(connection, active_handle, TelemetryReadPolicy::BestEffort).map(Some)
-}
-
-#[derive(Clone, Copy)]
-enum TelemetryReadPolicy {
-    Strict,
-    BestEffort,
+    read_generation_projection(connection, active_handle).map(Some)
 }
 
 fn read_generation_projection(
     connection: &Connection,
     generation_id: i64,
-    telemetry_policy: TelemetryReadPolicy,
 ) -> Result<ActiveCompleteGeneration, ProjectionError> {
     let header = read_generation_header(connection, generation_id)?;
     let input_snapshot = read_input_snapshot(connection, generation_id)?;
@@ -2394,11 +3001,7 @@ fn read_generation_projection(
     )?;
     let validation_events = read_validation_events(connection, generation_id)?;
     let stats = read_stats(connection, generation_id)?;
-    let telemetry = match (telemetry_policy, read_telemetry(connection, generation_id)) {
-        (_, Ok(telemetry)) => telemetry,
-        (TelemetryReadPolicy::BestEffort, Err(_)) => Vec::new(),
-        (TelemetryReadPolicy::Strict, Err(error)) => return Err(error),
-    };
+    let telemetry = read_telemetry(connection, generation_id).unwrap_or_default();
 
     let semantic = StoreSemanticPlan {
         identities: header.identities,
@@ -2446,8 +3049,8 @@ fn read_generation_projection(
         plan.semantic
             .dependency_edges
             .iter()
-            .map(to_dependency_edge)
-            .collect(),
+            .map(|row| to_dependency_edge(row, &plan.semantic))
+            .collect::<Result<Vec<_>, _>>()?,
     );
     if dependency_index.schema_version != plan.semantic.dependency_schema {
         return Err(ProjectionError::InvalidMetadata);
@@ -2473,12 +3076,39 @@ fn query_rows<T>(
     Ok(decoded)
 }
 
-fn to_dependency_edge(row: &StoreDependencyEdgeRow) -> DependencyEdge {
-    DependencyEdge {
-        from: row.from.clone(),
-        to: row.to.clone(),
+fn to_dependency_edge(
+    row: &StoreDependencyEdgeRow,
+    semantic: &StoreSemanticPlan,
+) -> Result<DependencyEdge, ProjectionError> {
+    Ok(DependencyEdge {
+        from: to_cache_node(&row.from, semantic)?,
+        to: to_cache_node(&row.to, semantic)?,
         kind: row.kind,
         required_shape: row.required_shape,
+    })
+}
+
+fn to_cache_node(
+    node: &StoreNodeRef,
+    semantic: &StoreSemanticPlan,
+) -> Result<CacheNode, ProjectionError> {
+    match node {
+        StoreNodeRef::DependencyInput(input) => Ok(CacheNode::DependencyInput(input.clone())),
+        StoreNodeRef::RunManifest => Ok(CacheNode::RunManifest(semantic.run_manifest.key.clone())),
+        StoreNodeRef::Layer(ordinal) => Ok(CacheNode::layer(
+            semantic_parent(&semantic.layers, *ordinal, |row| &row.key)?.clone(),
+        )),
+        StoreNodeRef::Query(ordinal) => Ok(CacheNode::Query(
+            semantic_parent(&semantic.queries, *ordinal, |row| &row.key)?
+                .clone()
+                .into(),
+        )),
+        StoreNodeRef::Summary(ordinal) => Ok(CacheNode::Summary(
+            semantic_parent(&semantic.summaries, *ordinal, |row| &row.key)?.clone(),
+        )),
+        StoreNodeRef::Diagnostic(ordinal) => Ok(CacheNode::Diagnostic(
+            semantic_parent(&semantic.diagnostics, *ordinal, |row| &row.key)?.clone(),
+        )),
     }
 }
 
@@ -3002,7 +3632,7 @@ type LayerReadProjection = (
     Vec<StoreLayerDependencyRow>,
     Vec<StoreLayerExtensionRow>,
     Vec<StoreLayerWarningRow>,
-    BTreeMap<i64, LayerKey>,
+    BTreeMap<i64, u64>,
 );
 
 fn read_layers(
@@ -3146,8 +3776,10 @@ fn read_layers(
     let mut extension_rows = Vec::new();
     let mut warning_rows = Vec::new();
     let mut handles = BTreeMap::new();
-    for (handle, row, warning_codes) in decoded {
-        if handles.insert(handle, row.key.clone()).is_some() {
+    for (ordinal, (handle, row, warning_codes)) in decoded.into_iter().enumerate() {
+        let semantic_ordinal =
+            u64::try_from(ordinal).map_err(|_| ProjectionError::InvalidMetadata)?;
+        if handles.insert(handle, semantic_ordinal).is_some() {
             return Err(ProjectionError::InvalidMetadata);
         }
         input_rows.extend(
@@ -3155,19 +3787,19 @@ fn read_layers(
                 .input_digests
                 .iter()
                 .map(|digest| StoreLayerInputRow {
-                    key: row.key.clone(),
+                    layer_ordinal: semantic_ordinal,
                     digest: digest.clone(),
                 }),
         );
         dependency_rows.extend(row.key.dependency_layer_digests.iter().map(|digest| {
             StoreLayerDependencyRow {
-                key: row.key.clone(),
+                layer_ordinal: semantic_ordinal,
                 digest: digest.clone(),
             }
         }));
         extension_rows.extend(row.key.extension_digests.iter().map(|digest| {
             StoreLayerExtensionRow {
-                key: row.key.clone(),
+                layer_ordinal: semantic_ordinal,
                 digest: digest.clone(),
             }
         }));
@@ -3175,7 +3807,7 @@ fn read_layers(
             warning_codes
                 .into_iter()
                 .map(|warning_code| StoreLayerWarningRow {
-                    key: row.key.clone(),
+                    layer_ordinal: semantic_ordinal,
                     warning_code,
                 }),
         );
@@ -3216,7 +3848,7 @@ fn read_layer_digest_groups(
 type SummaryReadProjection = (
     Vec<StoreSummaryRow>,
     Vec<StoreSummaryDependencyRow>,
-    BTreeMap<i64, SummaryKey>,
+    BTreeMap<i64, u64>,
 );
 
 fn read_summaries(
@@ -3288,13 +3920,15 @@ fn read_summaries(
     let mut rows = Vec::with_capacity(decoded.len());
     let mut child_rows = Vec::new();
     let mut handles = BTreeMap::new();
-    for (handle, row) in decoded {
-        if handles.insert(handle, row.key.clone()).is_some() {
+    for (ordinal, (handle, row)) in decoded.into_iter().enumerate() {
+        let semantic_ordinal =
+            u64::try_from(ordinal).map_err(|_| ProjectionError::InvalidMetadata)?;
+        if handles.insert(handle, semantic_ordinal).is_some() {
             return Err(ProjectionError::InvalidMetadata);
         }
         child_rows.extend(row.key.dependency_summary_digests.iter().map(|dependency| {
             StoreSummaryDependencyRow {
-                key: row.key.clone(),
+                summary_ordinal: semantic_ordinal,
                 dependency: dependency.clone(),
             }
         }));
@@ -3307,7 +3941,7 @@ type QueryReadProjection = (
     Vec<StoreQueryRow>,
     Vec<StoreQueryInputRow>,
     Vec<StoreQueryLayerRow>,
-    BTreeMap<i64, QueryKey>,
+    BTreeMap<i64, u64>,
 );
 
 fn read_queries(
@@ -3424,13 +4058,15 @@ fn read_queries(
     let mut input_rows = Vec::new();
     let mut layer_rows = Vec::new();
     let mut handles = BTreeMap::new();
-    for (handle, row) in decoded {
-        if handles.insert(handle, row.key.clone()).is_some() {
+    for (ordinal, (handle, row)) in decoded.into_iter().enumerate() {
+        let semantic_ordinal =
+            u64::try_from(ordinal).map_err(|_| ProjectionError::InvalidMetadata)?;
+        if handles.insert(handle, semantic_ordinal).is_some() {
             return Err(ProjectionError::InvalidMetadata);
         }
         input_rows.extend(row.key.dependency_inputs.as_slice().iter().map(|input| {
             StoreQueryInputRow {
-                key: row.key.clone(),
+                query_ordinal: semantic_ordinal,
                 input: input.clone(),
             }
         }));
@@ -3439,7 +4075,7 @@ fn read_queries(
                 .layer_digests
                 .iter()
                 .map(|layer_digest| StoreQueryLayerRow {
-                    key: row.key.clone(),
+                    query_ordinal: semantic_ordinal,
                     layer_digest: layer_digest.clone(),
                 }),
         );
@@ -3452,41 +4088,52 @@ fn read_facts(
     connection: &Connection,
     generation_id: i64,
 ) -> Result<Vec<StoreFactRow>, ProjectionError> {
-    query_rows(
+    let mut rows = query_rows(
         connection,
-        "SELECT family, stable_key, producer_id, producer_layer_key,
+        "SELECT ordinal, family, stable_key, producer_id, producer_layer_key,
                 precision, confidence, validation, payload_digest
          FROM fact_metadata WHERE generation_id = ?1
-         ORDER BY family, stable_key",
+         ORDER BY ordinal",
         generation_id,
         |row| {
-            let family: String = row.get(0)?;
-            decode_fact_family(&family)?;
-            let precision: String = row.get(4)?;
-            decode_fact_precision(&precision)?;
-            let confidence: String = row.get(5)?;
-            decode_fact_confidence(&confidence)?;
-            let validation: String = row.get(6)?;
-            decode_validation_status(&validation)?;
-            Ok(StoreFactRow {
-                family,
-                stable_key: row.get(1)?,
-                producer_id: row.get(2)?,
-                layer_id: row.get(3)?,
-                precision,
-                confidence,
-                validation,
-                payload_digest: row.get(7)?,
-            })
+            let ordinal: i64 = row.get(0)?;
+            let family = decode_fact_family(&row.get::<_, String>(1)?)?;
+            let precision = decode_fact_precision(&row.get::<_, String>(5)?)?;
+            let confidence = decode_fact_confidence(&row.get::<_, String>(6)?)?;
+            let validation = decode_validation_status(&row.get::<_, String>(7)?)?;
+            Ok((
+                ordinal,
+                StableFactMetaRow {
+                    family,
+                    stable_key: StableFactKey::from_storage(row.get(2)?)
+                        .map_err(|_| ProjectionError::Codec)?,
+                    producer_id: std::borrow::Cow::Owned(row.get(3)?),
+                    layer_id: std::borrow::Cow::Owned(row.get(4)?),
+                    precision,
+                    confidence,
+                    validation,
+                    payload_digest: row.get(8)?,
+                },
+            ))
         },
-    )
+    )?;
+    if rows
+        .iter()
+        .enumerate()
+        .any(|(expected, (actual, _))| i64::try_from(expected).ok() != Some(*actual))
+    {
+        return Err(ProjectionError::InvalidMetadata);
+    }
+    let mut rows = rows.drain(..).map(|(_, row)| row).collect::<Vec<_>>();
+    rows.sort();
+    Ok(rows)
 }
 
 fn read_run_manifest(
     connection: &Connection,
     generation_id: i64,
     identities: &StoreIdentityRow,
-) -> Result<(StoreRunManifestRow, BTreeMap<i64, RunManifestKey>), ProjectionError> {
+) -> Result<(StoreRunManifestRow, BTreeMap<i64, u64>), ProjectionError> {
     let raw: (i64, String, String, String, String) = connection
         .query_row(
             "SELECT id, run_kind, run_value, full_config_kind, full_config_value
@@ -3510,7 +4157,7 @@ fn read_run_manifest(
         return Err(ProjectionError::InvalidMetadata);
     }
     let key = RunManifestKey::new(identities.run.clone(), identities.full_config.clone());
-    let handles = BTreeMap::from([(raw.0, key.clone())]);
+    let handles = BTreeMap::from([(raw.0, 0)]);
     Ok((StoreRunManifestRow { key }, handles))
 }
 
@@ -3533,7 +4180,7 @@ struct RawDiagnostic {
 type DiagnosticProjection = (
     Vec<StoreDiagnosticRow>,
     Vec<StoreDiagnosticRequestedViewRow>,
-    BTreeMap<i64, DiagnosticKey>,
+    BTreeMap<i64, u64>,
 );
 
 fn read_diagnostics(
@@ -3587,7 +4234,9 @@ fn read_diagnostics(
     let mut diagnostics = Vec::with_capacity(raw_diagnostics.len());
     let mut requested_views = Vec::new();
     let mut handles = BTreeMap::new();
-    for raw in raw_diagnostics {
+    for (ordinal, raw) in raw_diagnostics.into_iter().enumerate() {
+        let semantic_ordinal =
+            u64::try_from(ordinal).map_err(|_| ProjectionError::InvalidMetadata)?;
         let requested_view_digests = requested_by_handle.remove(&raw.handle).unwrap_or_default();
         if raw.requested_view_count
             != u64::try_from(requested_view_digests.len()).unwrap_or(u64::MAX)
@@ -3626,11 +4275,11 @@ fn read_diagnostics(
         }
         requested_views.extend(key.requested_view_digests.iter().cloned().map(|digest| {
             StoreDiagnosticRequestedViewRow {
-                key: key.clone(),
+                diagnostic_ordinal: semantic_ordinal,
                 digest,
             }
         }));
-        if handles.insert(raw.handle, key.clone()).is_some() {
+        if handles.insert(raw.handle, semantic_ordinal).is_some() {
             return Err(ProjectionError::InvalidMetadata);
         }
         diagnostics.push(StoreDiagnosticRow {
@@ -3664,11 +4313,11 @@ struct RawEndpoint {
 fn read_dependency_edges(
     connection: &Connection,
     generation_id: i64,
-    layers: &BTreeMap<i64, LayerKey>,
-    queries: &BTreeMap<i64, QueryKey>,
-    summaries: &BTreeMap<i64, SummaryKey>,
-    run_manifests: &BTreeMap<i64, RunManifestKey>,
-    diagnostics: &BTreeMap<i64, DiagnosticKey>,
+    layers: &BTreeMap<i64, u64>,
+    queries: &BTreeMap<i64, u64>,
+    summaries: &BTreeMap<i64, u64>,
+    run_manifests: &BTreeMap<i64, u64>,
+    diagnostics: &BTreeMap<i64, u64>,
 ) -> Result<Vec<StoreDependencyEdgeRow>, ProjectionError> {
     query_rows(
         connection,
@@ -3731,12 +4380,12 @@ fn read_dependency_edges(
 
 fn decode_endpoint(
     endpoint: RawEndpoint,
-    layers: &BTreeMap<i64, LayerKey>,
-    queries: &BTreeMap<i64, QueryKey>,
-    summaries: &BTreeMap<i64, SummaryKey>,
-    run_manifests: &BTreeMap<i64, RunManifestKey>,
-    diagnostics: &BTreeMap<i64, DiagnosticKey>,
-) -> Result<CacheNode, ProjectionError> {
+    layers: &BTreeMap<i64, u64>,
+    queries: &BTreeMap<i64, u64>,
+    summaries: &BTreeMap<i64, u64>,
+    run_manifests: &BTreeMap<i64, u64>,
+    diagnostics: &BTreeMap<i64, u64>,
+) -> Result<StoreNodeRef, ProjectionError> {
     let kind = decode_cache_node_kind(&endpoint.node_kind)?;
     match kind {
         crate::analysis_kernel::incremental::CacheNodeKind::DependencyInput => {
@@ -3765,7 +4414,7 @@ fn decode_endpoint(
                     .input_status
                     .ok_or(ProjectionError::InvalidMetadata)?,
             };
-            Ok(CacheNode::DependencyInput(decode_input_dependency(
+            Ok(StoreNodeRef::DependencyInput(decode_input_dependency(
                 &encoded,
             )?))
         }
@@ -3781,12 +4430,10 @@ fn decode_endpoint(
             {
                 return Err(ProjectionError::InvalidMetadata);
             }
-            Ok(CacheNode::RunManifest(
-                run_manifests
-                    .get(&handle)
-                    .cloned()
-                    .ok_or(ProjectionError::InvalidMetadata)?,
-            ))
+            run_manifests
+                .contains_key(&handle)
+                .then_some(StoreNodeRef::RunManifest)
+                .ok_or(ProjectionError::InvalidMetadata)
         }
         crate::analysis_kernel::incremental::CacheNodeKind::Layer => {
             require_empty_input_endpoint(&endpoint)?;
@@ -3798,12 +4445,11 @@ fn decode_endpoint(
             {
                 return Err(ProjectionError::InvalidMetadata);
             }
-            Ok(CacheNode::Layer(
-                layers
-                    .get(&handle)
-                    .cloned()
-                    .ok_or(ProjectionError::InvalidMetadata)?,
-            ))
+            layers
+                .get(&handle)
+                .copied()
+                .map(StoreNodeRef::Layer)
+                .ok_or(ProjectionError::InvalidMetadata)
         }
         crate::analysis_kernel::incremental::CacheNodeKind::Query => {
             require_empty_input_endpoint(&endpoint)?;
@@ -3815,12 +4461,11 @@ fn decode_endpoint(
             {
                 return Err(ProjectionError::InvalidMetadata);
             }
-            Ok(CacheNode::Query(
-                queries
-                    .get(&handle)
-                    .cloned()
-                    .ok_or(ProjectionError::InvalidMetadata)?,
-            ))
+            queries
+                .get(&handle)
+                .copied()
+                .map(StoreNodeRef::Query)
+                .ok_or(ProjectionError::InvalidMetadata)
         }
         crate::analysis_kernel::incremental::CacheNodeKind::Summary => {
             require_empty_input_endpoint(&endpoint)?;
@@ -3834,12 +4479,11 @@ fn decode_endpoint(
             {
                 return Err(ProjectionError::InvalidMetadata);
             }
-            Ok(CacheNode::Summary(
-                summaries
-                    .get(&handle)
-                    .cloned()
-                    .ok_or(ProjectionError::InvalidMetadata)?,
-            ))
+            summaries
+                .get(&handle)
+                .copied()
+                .map(StoreNodeRef::Summary)
+                .ok_or(ProjectionError::InvalidMetadata)
         }
         crate::analysis_kernel::incremental::CacheNodeKind::Diagnostic => {
             require_empty_input_endpoint(&endpoint)?;
@@ -3853,12 +4497,11 @@ fn decode_endpoint(
             {
                 return Err(ProjectionError::InvalidMetadata);
             }
-            Ok(CacheNode::Diagnostic(
-                diagnostics
-                    .get(&handle)
-                    .cloned()
-                    .ok_or(ProjectionError::InvalidMetadata)?,
-            ))
+            diagnostics
+                .get(&handle)
+                .copied()
+                .map(StoreNodeRef::Diagnostic)
+                .ok_or(ProjectionError::InvalidMetadata)
         }
     }
 }
@@ -4011,4 +4654,52 @@ fn read_stats(
         return Err(ProjectionError::InvalidMetadata);
     }
     Ok(rows.remove(0))
+}
+
+#[cfg(test)]
+mod stable_key_codec_tests {
+    use super::*;
+
+    #[test]
+    fn repetitive_stable_key_round_trips_without_changing_identity() {
+        let stable_key = format!(
+            "{}{}",
+            "DataFlowEdge|source=17:cfg-node:entry|target=".repeat(4_096),
+            "terminal"
+        );
+        let encoded = StableFactKey::compressed(&stable_key)
+            .storage_bytes()
+            .into_owned();
+
+        assert!(encoded.len() < stable_key.len() / 8);
+        assert_eq!(
+            StableFactKey::from_storage(encoded).unwrap().decoded(),
+            stable_key
+        );
+    }
+
+    #[test]
+    fn legacy_plaintext_decodes_and_malformed_or_oversized_values_fail_closed() {
+        assert_eq!(
+            StableFactKey::from_storage(b"legacy:stable-key".to_vec())
+                .unwrap()
+                .decoded(),
+            "legacy:stable-key"
+        );
+
+        let mut truncated = StableFactKey::compressed("truncate-me")
+            .storage_bytes()
+            .into_owned();
+        truncated.pop();
+        assert!(StableFactKey::from_storage(truncated).is_err());
+
+        let mut oversized = StableFactKey::compressed("oversized")
+            .storage_bytes()
+            .into_owned();
+        let size_offset = b"polint-lz4-v1\0".len();
+        oversized[size_offset..size_offset + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(StableFactKey::from_storage(oversized).is_err());
+
+        assert!(StableFactKey::from_storage(vec![0xff, 0xfe]).is_err());
+    }
 }

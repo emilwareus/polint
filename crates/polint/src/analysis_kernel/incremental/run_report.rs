@@ -8,16 +8,20 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::sync::Arc;
 
+use rayon::prelude::*;
 use serde::Serialize;
 
 use super::demand::DemandQueryTrace;
+#[cfg(test)]
+use super::query_dependency_edges;
 use super::{
     CacheNode, CacheStats, ConfigIdentity, DemandCacheStatus, DependencyEdge, DependencyIndex,
     DependencyKind, DiagnosticKey, Digest, DigestKind, GenerationIdentity,
-    INPUT_SNAPSHOT_SCHEMA_VERSION, InputDependencyKey, InputSnapshot, LayerRunMetadata,
+    INPUT_SNAPSHOT_SCHEMA_VERSION, InputDependencyKey, InputSnapshot, LayerKey, LayerRunMetadata,
     PrecisionTier, ProviderOutputMeta, ProviderValidationStatus, QueryKey, RunIdentity,
-    RunManifestKey, ShapeKind, SummaryKey, WorkspaceIdentity, query_dependency_edges,
+    RunManifestKey, ShapeKind, SummaryKey, WorkspaceIdentity, query_dependency_edges_shared,
 };
 #[cfg(test)]
 use crate::analysis::summaries::provider::SccClosureDebugSnapshot;
@@ -29,7 +33,7 @@ use crate::analysis_kernel::validation::{
 };
 use crate::analysis_kernel::{ProviderManifest, StableFactMetaRow};
 
-type CanonicalQueryIdentity = QueryKey;
+type CanonicalQueryIdentity = Arc<QueryKey>;
 
 /// The semantic metadata from one globally validated kernel run.
 ///
@@ -57,6 +61,20 @@ pub(in crate::analysis_kernel) struct ValidatedRunMetadata {
     fact_rows: Vec<StableFactMetaRow>,
     validation_events: Vec<ValidationEvent>,
     identities: CanonicalRunIdentities,
+}
+
+pub(in crate::analysis_kernel) struct PreparedValidatedRunMetadata {
+    input_snapshot: InputSnapshot,
+    provider_manifests: Vec<CanonicalProviderManifest>,
+    provider_outputs: Vec<CanonicalProviderOutput>,
+    summary_keys: Vec<SummaryKey>,
+    query_rows: Vec<CanonicalQueryRow>,
+    run_manifest_key: RunManifestKey,
+    diagnostic_keys: Vec<DiagnosticKey>,
+    declared_dependency_edges: Vec<DependencyEdge>,
+    dependency_index: DependencyIndex,
+    dependency_digest: Digest,
+    validation_events: Vec<ValidationEvent>,
 }
 
 #[cfg_attr(
@@ -97,6 +115,29 @@ pub(in crate::analysis_kernel) struct CanonicalProviderOutput {
     validation: ProviderValidationStatus,
     dependency_inputs: Vec<Digest>,
     layers: Vec<LayerRunMetadata>,
+}
+
+#[derive(Serialize)]
+struct CanonicalProviderOutputIdentity<'a> {
+    provider_id: &'a str,
+    provider_version: &'a str,
+    schema_version: &'a str,
+    output_digest: &'a Digest,
+    precision: PrecisionTier,
+    validation: ProviderValidationStatus,
+    dependency_inputs: &'a [Digest],
+    layer_count: usize,
+}
+
+#[derive(Serialize)]
+struct CanonicalLayerIdentity<'a> {
+    key: &'a LayerKey,
+    output_digest: &'a Digest,
+    payload_digest: &'a Digest,
+    precision: PrecisionTier,
+    validation: ProviderValidationStatus,
+    edge_count: usize,
+    warning_codes: &'a [String],
 }
 
 #[cfg_attr(
@@ -168,7 +209,52 @@ impl ValidatedRunMetadata {
         manifests: &[ProviderManifest],
         fact_rows: Vec<StableFactMetaRow>,
     ) -> Result<Self, ValidatedRunMetadataError> {
+        let fact_rows = canonical_fact_rows(fact_rows)?;
         crate::analysis_kernel::store::record_handoff_materialization();
+        let prepared = Self::prepare_canonical_finalized_parts(
+            input_snapshot,
+            provider_output_rows,
+            demand_query_trace,
+            validation_event_rows,
+            manifests,
+            true,
+        )?;
+        Self::finish_canonical_finalized_parts(prepared, fact_rows, None, true)
+    }
+
+    pub(in crate::analysis_kernel) fn prepare_finalized_canonical_run(
+        input_snapshot: &InputSnapshot,
+        provider_output_rows: &[ProviderOutputMeta],
+        demand_query_trace: &DemandQueryTrace,
+        validation_event_rows: &[ValidationEvent],
+        manifests: &[ProviderManifest],
+    ) -> Result<PreparedValidatedRunMetadata, ValidatedRunMetadataError> {
+        Self::prepare_canonical_finalized_parts(
+            input_snapshot,
+            provider_output_rows,
+            demand_query_trace,
+            validation_event_rows,
+            manifests,
+            false,
+        )
+    }
+
+    pub(in crate::analysis_kernel) fn finish_prepared_canonical_run(
+        prepared: PreparedValidatedRunMetadata,
+        fact_rows: Vec<StableFactMetaRow>,
+        fact_digest: Digest,
+    ) -> Result<Self, ValidatedRunMetadataError> {
+        Self::finish_canonical_finalized_parts(prepared, fact_rows, Some(fact_digest), false)
+    }
+
+    fn prepare_canonical_finalized_parts(
+        input_snapshot: &InputSnapshot,
+        provider_output_rows: &[ProviderOutputMeta],
+        demand_query_trace: &DemandQueryTrace,
+        validation_event_rows: &[ValidationEvent],
+        manifests: &[ProviderManifest],
+        verify_reconstruction: bool,
+    ) -> Result<PreparedValidatedRunMetadata, ValidatedRunMetadataError> {
         if input_snapshot.schema_version != INPUT_SNAPSHOT_SCHEMA_VERSION {
             return Err(ValidatedRunMetadataError::new(format!(
                 "validated run uses unsupported input snapshot schema `{}`",
@@ -182,7 +268,7 @@ impl ValidatedRunMetadata {
             .semantic_projections()
             .into_iter()
             .map(|projection| CanonicalQueryRow {
-                query_key: projection.query_key.clone(),
+                query_key: Arc::clone(projection.query_key),
                 result_digest: projection.result_digest.clone(),
                 precision: projection.precision_tier,
                 provenance: projection.provenance.to_string(),
@@ -191,7 +277,6 @@ impl ValidatedRunMetadata {
         let summary_keys = Vec::new();
         let diagnostic_keys = Vec::new();
         let declared_dependency_edges = Vec::new();
-        let fact_rows = canonical_fact_rows(fact_rows)?;
         let validation_events = canonical_validation_events(validation_event_rows.to_vec())?;
         let run_manifest_key = run_manifest_key_for(input_snapshot, &provider_manifests)?;
         let dependency_index = dependency_index_for(
@@ -201,20 +286,58 @@ impl ValidatedRunMetadata {
             &run_manifest_key,
             &diagnostic_keys,
             &declared_dependency_edges,
+            verify_reconstruction,
         );
-        let identities = CanonicalRunIdentities::from_semantic_rows(
+        let dependency_digest = dependency_rows_digest(dependency_index.canonical_edges());
+        Ok(PreparedValidatedRunMetadata {
+            input_snapshot: input_snapshot.clone(),
+            provider_manifests,
+            provider_outputs,
+            summary_keys,
+            query_rows,
+            run_manifest_key,
+            diagnostic_keys,
+            declared_dependency_edges,
+            dependency_index,
+            dependency_digest,
+            validation_events,
+        })
+    }
+
+    fn finish_canonical_finalized_parts(
+        prepared: PreparedValidatedRunMetadata,
+        fact_rows: Vec<StableFactMetaRow>,
+        fact_digest: Option<Digest>,
+        verify_reconstruction: bool,
+    ) -> Result<Self, ValidatedRunMetadataError> {
+        let PreparedValidatedRunMetadata {
             input_snapshot,
+            provider_manifests,
+            provider_outputs,
+            summary_keys,
+            query_rows,
+            run_manifest_key,
+            diagnostic_keys,
+            declared_dependency_edges,
+            dependency_index,
+            dependency_digest,
+            validation_events,
+        } = prepared;
+        let identities = CanonicalRunIdentities::from_semantic_rows(
+            &input_snapshot,
             &provider_manifests,
             &provider_outputs,
             &summary_keys,
             &query_rows,
             &fact_rows,
+            fact_digest.as_ref(),
             &dependency_index,
+            Some(&dependency_digest),
             &validation_events,
         )?;
 
         let metadata = Self {
-            input_snapshot: input_snapshot.clone(),
+            input_snapshot,
             provider_manifests,
             provider_outputs,
             summary_keys,
@@ -227,7 +350,9 @@ impl ValidatedRunMetadata {
             validation_events,
             identities,
         };
-        metadata.validate_integrity()?;
+        if verify_reconstruction {
+            metadata.validate_integrity()?;
+        }
         Ok(metadata)
     }
 
@@ -269,8 +394,16 @@ impl ValidatedRunMetadata {
         &self.dependency_index
     }
 
+    pub(in crate::analysis_kernel) fn take_dependency_index(&mut self) -> DependencyIndex {
+        std::mem::take(&mut self.dependency_index)
+    }
+
     pub(in crate::analysis_kernel) fn fact_rows(&self) -> &[StableFactMetaRow] {
         &self.fact_rows
+    }
+
+    pub(in crate::analysis_kernel) fn take_fact_rows(&mut self) -> Vec<StableFactMetaRow> {
+        std::mem::take(&mut self.fact_rows)
     }
 
     pub(in crate::analysis_kernel) fn validation_events(&self) -> &[ValidationEvent] {
@@ -320,11 +453,7 @@ impl ValidatedRunMetadata {
             &self.provider_manifests,
             &self.provider_outputs,
         )?;
-        if canonical_fact_rows(self.fact_rows.clone())? != self.fact_rows {
-            return Err(ValidatedRunMetadataError::new(
-                "validated-run fact metadata rows are not canonical",
-            ));
-        }
+        validate_canonical_fact_rows(&self.fact_rows)?;
         if canonical_validation_events(self.validation_events.clone())? != self.validation_events {
             return Err(ValidatedRunMetadataError::new(
                 "validated-run validation events are not canonical",
@@ -345,6 +474,7 @@ impl ValidatedRunMetadata {
             &self.run_manifest_key,
             &self.diagnostic_keys,
             &self.declared_dependency_edges,
+            true,
         );
         if self.dependency_index != expected_dependency_index {
             return Err(ValidatedRunMetadataError::new(
@@ -359,7 +489,9 @@ impl ValidatedRunMetadata {
             &self.summary_keys,
             &self.query_rows,
             &self.fact_rows,
+            None,
             &self.dependency_index,
+            None,
             &self.validation_events,
         )?;
         if self.identities != expected_identities {
@@ -389,6 +521,7 @@ impl ValidatedRunMetadata {
             &self.run_manifest_key,
             &self.diagnostic_keys,
             &self.declared_dependency_edges,
+            true,
         );
         self.identities = CanonicalRunIdentities::from_semantic_rows(
             &self.input_snapshot,
@@ -397,7 +530,9 @@ impl ValidatedRunMetadata {
             &self.summary_keys,
             &self.query_rows,
             &self.fact_rows,
+            None,
             &self.dependency_index,
+            None,
             &self.validation_events,
         )?;
         self.validate_integrity()?;
@@ -482,7 +617,7 @@ impl CanonicalProviderOutput {
 }
 
 impl CanonicalQueryRow {
-    pub(in crate::analysis_kernel) fn query_key(&self) -> &CanonicalQueryIdentity {
+    pub(in crate::analysis_kernel) fn query_key(&self) -> &QueryKey {
         &self.query_key
     }
 
@@ -511,29 +646,56 @@ impl CanonicalRunIdentities {
         summary_keys: &[SummaryKey],
         query_rows: &[CanonicalQueryRow],
         fact_rows: &[StableFactMetaRow],
+        fact_digest: Option<&Digest>,
         dependency_index: &DependencyIndex,
+        dependency_digest: Option<&Digest>,
         validation_events: &[ValidationEvent],
     ) -> Result<Self, ValidatedRunMetadataError> {
         let input_snapshot_digest = input_snapshot.semantic_digest();
         let (provider_manifest, run) = run_identity_for(input_snapshot, provider_manifests)?;
+        let provider_output_rows = provider_outputs
+            .iter()
+            .map(|provider| CanonicalProviderOutputIdentity {
+                provider_id: &provider.provider_id,
+                provider_version: &provider.provider_version,
+                schema_version: &provider.schema_version,
+                output_digest: &provider.output_digest,
+                precision: provider.precision,
+                validation: provider.validation,
+                dependency_inputs: &provider.dependency_inputs,
+                layer_count: provider.layers.len(),
+            })
+            .collect::<Vec<_>>();
         let provider_output = serialized_rows_digest(
             DigestKind::ProviderOutput,
             "provider_output_rows",
-            provider_outputs,
+            &provider_output_rows,
         );
-        let layers = provider_outputs
+        let layer_rows = provider_outputs
             .iter()
-            .flat_map(|provider| provider.layers.iter().cloned())
+            .flat_map(|provider| provider.layers.iter())
+            .map(|layer| CanonicalLayerIdentity {
+                key: &layer.key,
+                output_digest: &layer.output_digest,
+                payload_digest: &layer.payload_digest,
+                precision: layer.precision,
+                validation: layer.validation,
+                edge_count: layer.dependencies.len(),
+                warning_codes: &layer.warning_codes,
+            })
             .collect::<Vec<_>>();
-        let layer = serialized_rows_digest(DigestKind::Layer, "layer_rows", &layers);
+        // Each normalized family contributes once: provider rows retain layer
+        // cardinality, layer rows retain edge cardinality, and concrete edges
+        // belong to the dependency aggregate composed into generation identity.
+        let layer = serialized_rows_digest(DigestKind::Layer, "layer_rows", &layer_rows);
         let summary = serialized_rows_digest(DigestKind::Summary, "summary_rows", summary_keys);
         let query = serialized_rows_digest(DigestKind::Query, "query_rows", query_rows);
-        let fact = fact_rows_digest(fact_rows);
-        let dependency = serialized_rows_digest(
-            DigestKind::Dependency,
-            "dependency_rows",
-            dependency_index.canonical_edges(),
-        );
+        let fact = fact_digest
+            .cloned()
+            .unwrap_or_else(|| fact_rows_digest(fact_rows));
+        let dependency = dependency_digest
+            .cloned()
+            .unwrap_or_else(|| dependency_rows_digest(dependency_index.canonical_edges()));
         let validation = serialized_rows_digest(
             DigestKind::ValidationEvent,
             "validation_rows",
@@ -922,6 +1084,29 @@ fn canonical_fact_rows(
     Ok(rows)
 }
 
+fn validate_canonical_fact_rows(
+    rows: &[StableFactMetaRow],
+) -> Result<(), ValidatedRunMetadataError> {
+    for pair in rows.windows(2) {
+        if pair[0].family == pair[1].family
+            && pair[0].stable_key == pair[1].stable_key
+            && pair[0] != pair[1]
+        {
+            return Err(ValidatedRunMetadataError::new(format!(
+                "conflicting finalized fact metadata for {} `{}`",
+                pair[0].family.label(),
+                pair[0].stable_key
+            )));
+        }
+        if pair[0] >= pair[1] {
+            return Err(ValidatedRunMetadataError::new(
+                "validated-run fact metadata rows are not canonical",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn canonical_validation_events(
     mut events: Vec<ValidationEvent>,
 ) -> Result<Vec<ValidationEvent>, ValidatedRunMetadataError> {
@@ -1009,10 +1194,11 @@ fn dependency_index_for(
     run_manifest_key: &RunManifestKey,
     diagnostic_keys: &[DiagnosticKey],
     declared_dependency_edges: &[DependencyEdge],
+    populate_adjacency: bool,
 ) -> DependencyIndex {
     let layer_edges = provider_outputs.iter().flat_map(|provider| {
         provider.layers.iter().flat_map(|layer| {
-            let from = CacheNode::Layer(layer.key.clone());
+            let from = CacheNode::layer(layer.key.clone());
             layer.dependencies.iter().cloned().map(move |mut edge| {
                 edge.from = from.clone();
                 edge
@@ -1021,15 +1207,18 @@ fn dependency_index_for(
     });
     let query_edges = query_rows
         .iter()
-        .flat_map(|row| query_dependency_edges(&row.query_key));
+        .flat_map(|row| query_dependency_edges_shared(Arc::clone(&row.query_key)));
     let boundary_edges = run_boundary_edges(input_snapshot, run_manifest_key, diagnostic_keys);
-    DependencyIndex::from_edges(
-        layer_edges
-            .chain(query_edges)
-            .chain(boundary_edges)
-            .chain(declared_dependency_edges.iter().cloned())
-            .collect(),
-    )
+    let edges = layer_edges
+        .chain(query_edges)
+        .chain(boundary_edges)
+        .chain(declared_dependency_edges.iter().cloned())
+        .collect();
+    if populate_adjacency {
+        DependencyIndex::from_edges(edges)
+    } else {
+        DependencyIndex::from_edges_for_persistence(edges)
+    }
 }
 
 fn run_boundary_edges(
@@ -1084,13 +1273,13 @@ fn run_boundary_edges(
     edges
 }
 
-fn serialized_rows_digest<T: Serialize>(
+fn serialized_rows_digest<T: Serialize + Sync>(
     kind: DigestKind,
     label: &'static str,
     rows: &[T],
 ) -> Digest {
     let row_digests = rows
-        .iter()
+        .par_iter()
         .map(|row| {
             let encoded = serde_json::to_string(row)
                 .expect("canonical in-memory semantic rows must serialize");
@@ -1100,16 +1289,82 @@ fn serialized_rows_digest<T: Serialize>(
     Digest::from_unordered(kind, label, row_digests)
 }
 
+fn dependency_rows_digest(rows: &[DependencyEdge]) -> Digest {
+    const LABEL: &str = "dependency_rows";
+
+    let mut encoded_from_nodes = Vec::<String>::new();
+    let mut row_from_ordinals = Vec::with_capacity(rows.len());
+    let mut prior_from = None::<(&CacheNode, usize)>;
+    for row in rows {
+        let from_ordinal = prior_from
+            .filter(|(node, _)| same_dependency_endpoint(node, &row.from))
+            .map(|(_, ordinal)| ordinal)
+            .unwrap_or_else(|| {
+                let ordinal = encoded_from_nodes.len();
+                encoded_from_nodes.push(
+                    serde_json::to_string(&row.from)
+                        .expect("canonical dependency endpoint serializes"),
+                );
+                prior_from = Some((&row.from, ordinal));
+                ordinal
+            });
+        row_from_ordinals.push(from_ordinal);
+    }
+
+    let row_digests = rows
+        .par_iter()
+        .zip(&row_from_ordinals)
+        .map(|(row, from_ordinal)| {
+            let from = encoded_from_nodes
+                .get(*from_ordinal)
+                .expect("from endpoint was encoded");
+            let to =
+                serde_json::to_string(&row.to).expect("canonical dependency endpoint serializes");
+            Digest::fingerprint_from_fragments(
+                DigestKind::Dependency,
+                LABEL,
+                &[
+                    "{\"from\":",
+                    from,
+                    ",\"to\":",
+                    &to,
+                    ",\"kind\":\"",
+                    row.kind.label(),
+                    "\",\"required_shape\":\"",
+                    row.required_shape.label(),
+                    "\"}",
+                ],
+            )
+        })
+        .collect();
+    Digest::from_unordered_same_kind_fingerprints(
+        DigestKind::Dependency,
+        LABEL,
+        DigestKind::Dependency,
+        row_digests,
+    )
+}
+
+fn same_dependency_endpoint(left: &CacheNode, right: &CacheNode) -> bool {
+    match (left, right) {
+        (CacheNode::Query(left), CacheNode::Query(right)) => {
+            Arc::ptr_eq(left, right) || left == right
+        }
+        _ => left == right,
+    }
+}
+
 fn fact_rows_digest(rows: &[StableFactMetaRow]) -> Digest {
     let row_digests = rows
         .iter()
         .map(|row| {
+            let stable_key = row.stable_key.decoded();
             Digest::from_parts(
                 DigestKind::FactMetadata,
                 "fact_metadata_row",
                 &[
                     row.family.label(),
-                    &row.stable_key,
+                    &stable_key,
                     &row.producer_id,
                     &row.layer_id,
                     row.precision.label(),
@@ -1266,8 +1521,9 @@ pub(crate) fn provider_output_digest_from_manifest(
         builder.labeled_part("output_family", output_family);
     }
     for row in metadata_rows {
+        let stable_key = row.stable_key.decoded();
         builder.labeled_part("fact_family", row.family.label());
-        builder.labeled_part("stable_key", &row.stable_key);
+        builder.labeled_part("stable_key", &stable_key);
         builder.labeled_part("producer_id", &row.producer_id);
         builder.labeled_part("layer_id", &row.layer_id);
         builder.labeled_part("fact_precision", row.precision.label());
@@ -1395,7 +1651,7 @@ mod tests {
             &[label],
         )];
         DemandQueryTraceEntry {
-            query_key,
+            query_key: query_key.into(),
             result_digest: Digest::from_parts(DigestKind::ProviderOutput, "query_result", &[label]),
             precision_tier: PrecisionTier::SetupAware,
             provenance: format!("native:{label}"),
@@ -1425,9 +1681,9 @@ mod tests {
     ) -> StableFactMetaRow {
         StableFactMetaRow {
             family: FactFamily::Import,
-            stable_key: stable_key.to_string(),
-            producer_id: manifest.id.to_string(),
-            layer_id: manifest.id.to_string(),
+            stable_key: stable_key.into(),
+            producer_id: manifest.id.into(),
+            layer_id: manifest.id.into(),
             precision: FactPrecision::Syntax,
             confidence: FactConfidence::High,
             validation: ValidationStatus::NativeTrusted,
@@ -1528,13 +1784,13 @@ mod tests {
         row.family = FactFamily::Function;
         mutations.push(row);
         let mut row = base.clone();
-        row.stable_key = "fact:changed".to_string();
+        row.stable_key = "fact:changed".into();
         mutations.push(row);
         let mut row = base.clone();
-        row.producer_id = "polint.changed.producer".to_string();
+        row.producer_id = "polint.changed.producer".into();
         mutations.push(row);
         let mut row = base.clone();
-        row.layer_id = "polint.changed.layer".to_string();
+        row.layer_id = "polint.changed.layer".into();
         mutations.push(row);
         let mut row = base.clone();
         row.precision = FactPrecision::Heuristic;
@@ -1625,6 +1881,21 @@ mod tests {
                 "provider output digest must exclude `{forbidden}`"
             );
         }
+    }
+
+    #[test]
+    fn cached_dependency_digest_matches_full_row_serialization() {
+        let (report, fact_rows) = finalized_run_fixture();
+        let report = report_with_query_rows(report);
+        let metadata =
+            validated_run_from_report(&report, AnalysisKernel::provider_manifests(), fact_rows)
+                .expect("fixture handoff is valid");
+        let rows = metadata.dependency_index().canonical_edges();
+
+        assert_eq!(
+            dependency_rows_digest(rows),
+            serialized_rows_digest(DigestKind::Dependency, "dependency_rows", rows)
+        );
     }
 
     #[test]

@@ -215,7 +215,7 @@ mod tests {
     fn from_rows_sorts_and_deduplicates_changes() {
         let source_digest = digest("source");
         let source = source("src/a.ts", source_digest.clone());
-        let layer = CacheNode::Layer(layer());
+        let layer = CacheNode::layer(layer());
         let first = ChangeSetRow {
             node: layer,
             kind: ChangeKind::SyntaxShape,

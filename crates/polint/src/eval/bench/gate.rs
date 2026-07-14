@@ -1,4 +1,4 @@
-//! Semantic-store regression-budget gate (BENCH-03).
+//! Semantic-store regression-budget gate.
 //!
 //! This gate turns the committed store-disabled baseline into an enforced
 //! budget: it compares a measured [`CurvePoint`] against the fixed
@@ -9,8 +9,7 @@
 //! A store change whose measured run regresses scale or latency past the budget
 //! fails its gate rather than passing silently ([`is_blocking`] returns `true`
 //! on Fail).
-//! This is the fail-not-silent mechanism the scale/latency outcome gates rely on
-//! (threat T-63-04-03).
+//! This is the fail-not-silent mechanism the scale/latency outcome gates rely on.
 //!
 //! Everything here stays `pub(crate)` under `eval::bench`; it is the
 //! crate-internal validation infrastructure, not a public CLI surface.
@@ -19,7 +18,7 @@ use crate::eval::baseline::{BaselineThresholds, StoreDisabledBaseline};
 use crate::eval::bench::curve::CurvePoint;
 use crate::eval::gates::{GateCheck, GateVerdict};
 
-/// Absolute peak-RSS noise floor (bytes, HI-03). A run may exceed the baseline
+/// Absolute peak-RSS noise floor in bytes. A run may exceed the baseline
 /// peak-RSS delta by up to this many bytes before it Fails, even when that
 /// exceeds the +20% ratio. Without it, a small baseline delta makes the ratio
 /// tolerance a fraction of a megabyte, so ordinary allocator jitter would Fail a
@@ -27,7 +26,7 @@ use crate::eval::gates::{GateCheck, GateVerdict};
 /// large enough that `baseline * 1.20` exceeds `baseline + this floor`.
 pub(crate) const PEAK_RSS_ABS_FLOOR_BYTES: u64 = 16 * 1024 * 1024;
 
-/// Absolute cold-wall-clock noise floor (milliseconds, HI-03). A run may exceed
+/// Absolute cold-wall-clock noise floor in milliseconds. A run may exceed
 /// the baseline cold wall-clock by up to this many milliseconds before it Fails,
 /// even when that exceeds the +25% ratio. A +25% ratio on a 20 ms baseline is
 /// only 5 ms — below scheduling jitter — so without this floor the gate would
@@ -140,23 +139,22 @@ pub(crate) fn evaluate_semantic_store_boundary(
 /// The peak-RSS budget compares the **run-attributable** `peak_rss_delta_bytes`,
 /// not the process-wide absolute `peak_rss_bytes`: the absolute high-water mark
 /// also reflects allocations made by whatever process hosts the measurement, so
-/// gating on it would confound unrelated memory with the analyzed run (HI-01).
+/// gating on it would confound unrelated memory with the analyzed run.
 ///
 /// Produces one [`GateCheck`] per budget; each Fails if the measured/baseline
 /// ratio exceeds its budget, else Passes. A zero baseline denominator is an
-/// explicit Fail ("missing baseline") rather than a divide-by-zero panic
-/// (threat T-63-04-02).
+/// explicit Fail ("missing baseline") rather than a divide-by-zero panic.
 ///
 /// When `measured_diagnostics_digest` is `Some`, a diagnostics-parity check is
 /// added and Fails if it differs from the baseline's `diagnostics_digest` — the
-/// store must not change the diagnostics polint emits (BENCH-03, LW-02).
+/// store must not change the diagnostics polint emits.
 /// Callers without a measured digest pass `None`; callers that provide one opt
 /// into the parity check.
 ///
 /// The baseline `diagnostics_digest` is CHECK-scoped for both the check and
 /// review baselines (see [`StoreDisabledBaseline::diagnostics_digest`]), so a
 /// caller that opts into the parity check MUST pass a check-scoped measured
-/// digest; a review-scoped (diff-subset) digest would spuriously Fail (LW-08).
+/// digest; a review-scoped (diff-subset) digest would spuriously fail.
 pub(crate) fn evaluate_regression_budget(
     baseline: &StoreDisabledBaseline,
     measured: &CurvePoint,
@@ -194,20 +192,19 @@ pub(crate) fn evaluate_regression_budget(
 }
 
 /// Whether a report is blocking. True exactly when the verdict is
-/// [`GateVerdict::Fail`], so an over-budget run cannot pass silently
-/// (threat T-63-04-03, BENCH-03).
+/// [`GateVerdict::Fail`], so an over-budget run cannot pass silently.
 pub(crate) fn is_blocking(report: &RegressionGateReport) -> bool {
     report.verdict == GateVerdict::Fail
 }
 
 /// Build a "measured must not exceed its budget" check with an absolute noise
-/// floor (HI-03). The measured value may exceed the baseline by up to the LARGER
+/// floor. The measured value may exceed the baseline by up to the larger
 /// of the ratio budget (`baseline * budget`) and an absolute tolerance
 /// (`baseline + abs_floor`) before it Fails. The floor keeps the gate robust to
 /// ms/MB jitter against a small baseline, while the locked ratio still governs
 /// any baseline whose ratio headroom already exceeds the floor. A zero baseline
 /// denominator is a Fail with a "missing baseline" observation rather than a
-/// divide-by-zero (threat T-63-04-02).
+/// divide-by-zero.
 fn ratio_budget_check(
     metric: &str,
     measured: u64,
@@ -239,7 +236,7 @@ fn ratio_budget_check(
     }
 }
 
-/// Build a diagnostics-parity check (LW-02, BENCH-03): the store must not change
+/// Build a diagnostics-parity check: the store must not change
 /// the diagnostics polint emits, so a measured digest that differs from the
 /// baseline's `diagnostics_digest` is a Fail. Only evaluated when the caller
 /// supplies a measured digest.
@@ -375,7 +372,7 @@ mod tests {
     fn small_baseline_within_absolute_floor_passes_despite_ratio_breach() {
         // A tiny baseline: 20 ms cold, ~1 MB peak-RSS delta. The naive ratio
         // budgets (+25% cold = 5 ms, +20% RSS ~= 0.2 MB) would Fail on ordinary
-        // jitter; the absolute floors (HI-03) exempt these sub-threshold deltas.
+        // jitter; the absolute floors exempt these sub-threshold deltas.
         let mut base = baseline();
         base.cold_wall_clock_ms = 20;
         base.peak_rss_delta_bytes = 1_000_000;
@@ -393,8 +390,7 @@ mod tests {
 
     #[test]
     fn zero_baseline_denominator_fails_rather_than_panicking() {
-        // A zero baseline peak-RSS delta is a missing-baseline Fail, not a panic
-        // (threat T-63-04-02).
+        // A zero baseline peak-RSS delta is a missing-baseline failure, not a panic.
         let mut base = baseline();
         base.peak_rss_delta_bytes = 0;
         let report = evaluate_regression_budget(
@@ -416,7 +412,7 @@ mod tests {
     fn changed_diagnostics_digest_fails_the_parity_check() {
         // A within-budget run whose diagnostics digest differs from the baseline
         // is a parity Fail: the store must not change the diagnostics polint
-        // emits (LW-02). The parity check is only added when a measured digest is
+        // emits. The parity check is only added when a measured digest is
         // supplied.
         let report = evaluate_regression_budget(
             &baseline(),

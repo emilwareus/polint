@@ -3591,6 +3591,13 @@ impl AnalysisDb {
         &self.fact_meta
     }
 
+    /// Transfers globally validated metadata to the durable-store handoff.
+    /// Fact rows remain available on the database, but their metadata has no
+    /// post-run consumer once provider execution and diagnostics are complete.
+    pub(crate) fn take_fact_meta_for_store(&mut self) -> FactMetaStore {
+        std::mem::take(&mut self.fact_meta)
+    }
+
     #[cfg(test)]
     pub(crate) fn fact_meta_mut_for_test(&mut self) -> &mut FactMetaStore {
         &mut self.fact_meta

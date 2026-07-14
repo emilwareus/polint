@@ -10,8 +10,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
 
+use rayon::prelude::*;
 use serde::Serialize;
 
+use crate::analysis_kernel::StableFactMetaRow;
 use crate::analysis_kernel::incremental::{
     CacheNode, ConfigIdentity, DependencyKind, DiagnosticKey, Digest, DigestKind,
     GenerationIdentity, INPUT_SNAPSHOT_SCHEMA_VERSION, InputComponent, InputComponentStatus,
@@ -19,7 +21,6 @@ use crate::analysis_kernel::incremental::{
     RunManifestKey, ShapeKind, SummaryKey, ValidatedRunMetadata, WorkspaceIdentity,
 };
 use crate::analysis_kernel::validation::{ValidationEventKind, ValidationEventStatus};
-use crate::analysis_kernel::{FactConfidence, FactFamily, FactPrecision, ValidationStatus};
 use crate::analysis_plan::CapabilitySetupStatus;
 use crate::core::CapabilitySupportStatus;
 
@@ -67,7 +68,7 @@ pub(super) enum StorePlanError {
         query_kind: String,
     },
     DanglingDependencyEndpoint {
-        endpoint: Box<CacheNode>,
+        endpoint: StoreNodeRef,
     },
     IdentityMismatch {
         family: &'static str,
@@ -393,25 +394,25 @@ pub(super) struct StoreLayerRow {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub(super) struct StoreLayerInputRow {
-    pub(super) key: LayerKey,
+    pub(super) layer_ordinal: u64,
     pub(super) digest: Digest,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub(super) struct StoreLayerDependencyRow {
-    pub(super) key: LayerKey,
+    pub(super) layer_ordinal: u64,
     pub(super) digest: Digest,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub(super) struct StoreLayerExtensionRow {
-    pub(super) key: LayerKey,
+    pub(super) layer_ordinal: u64,
     pub(super) digest: Digest,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub(super) struct StoreLayerWarningRow {
-    pub(super) key: LayerKey,
+    pub(super) layer_ordinal: u64,
     pub(super) warning_code: String,
 }
 
@@ -423,7 +424,7 @@ pub(super) struct StoreSummaryRow {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub(super) struct StoreSummaryDependencyRow {
-    pub(super) key: SummaryKey,
+    pub(super) summary_ordinal: u64,
     pub(super) dependency: Digest,
 }
 
@@ -440,27 +441,17 @@ pub(super) struct StoreQueryRow {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub(super) struct StoreQueryInputRow {
-    pub(super) key: QueryKey,
+    pub(super) query_ordinal: u64,
     pub(super) input: InputDependencyKey,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub(super) struct StoreQueryLayerRow {
-    pub(super) key: QueryKey,
+    pub(super) query_ordinal: u64,
     pub(super) layer_digest: Digest,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-pub(super) struct StoreFactRow {
-    pub(super) family: String,
-    pub(super) stable_key: String,
-    pub(super) producer_id: String,
-    pub(super) layer_id: String,
-    pub(super) precision: String,
-    pub(super) confidence: String,
-    pub(super) validation: String,
-    pub(super) payload_digest: String,
-}
+pub(super) type StoreFactRow = StableFactMetaRow;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(super) struct StoreRunManifestRow {
@@ -476,16 +467,26 @@ pub(super) struct StoreDiagnosticRow {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub(super) struct StoreDiagnosticRequestedViewRow {
-    pub(super) key: DiagnosticKey,
+    pub(super) diagnostic_ordinal: u64,
     pub(super) digest: Digest,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub(super) struct StoreDependencyEdgeRow {
-    pub(super) from: CacheNode,
-    pub(super) to: CacheNode,
+    pub(super) from: StoreNodeRef,
+    pub(super) to: StoreNodeRef,
     pub(super) kind: DependencyKind,
     pub(super) required_shape: ShapeKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub(super) enum StoreNodeRef {
+    DependencyInput(InputDependencyKey),
+    RunManifest,
+    Layer(u64),
+    Query(u64),
+    Summary(u64),
+    Diagnostic(u64),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -556,7 +557,25 @@ impl StoreCommitPlan {
             semantic,
             telemetry,
         };
-        plan.validate()?;
+        plan.semantic.validate_without_stats()?;
+        Ok(plan)
+    }
+
+    pub(super) fn from_owned_prevalidated_run(
+        mut validated: ValidatedRunMetadata,
+    ) -> Result<Self, StorePlanError> {
+        let telemetry = telemetry_rows(&validated);
+        let facts = validated.take_fact_rows();
+        let dependency_index = validated.take_dependency_index();
+        let semantic =
+            StoreSemanticPlan::from_validated_parts(&validated, facts, Some(dependency_index));
+        let plan = Self {
+            semantic,
+            telemetry,
+        };
+        // The owned handoff comes directly from the kernel's canonical metadata
+        // constructor. Revalidating it here would decode every compact fact key
+        // only to prove the ordering that constructor just established.
         Ok(plan)
     }
 
@@ -566,7 +585,58 @@ impl StoreCommitPlan {
 }
 
 impl StoreSemanticPlan {
+    pub(super) fn planned_semantic_row_count(&self) -> u64 {
+        [
+            1,
+            1,
+            self.files.len(),
+            self.input_components.len(),
+            self.input_details.len(),
+            self.analysis_settings.len(),
+            self.capabilities.len(),
+            self.capability_requesters.len(),
+            self.provider_schemas.len(),
+            self.provider_schema_versions.len(),
+            self.provider_manifests.len(),
+            self.provider_manifest_schemas.len(),
+            self.provider_manifest_inputs.len(),
+            self.provider_manifest_outputs.len(),
+            self.provider_generations.len(),
+            self.provider_dependencies.len(),
+            self.layers.len(),
+            self.layer_inputs.len(),
+            self.layer_dependencies.len(),
+            self.layer_extensions.len(),
+            self.layer_warnings.len(),
+            self.summaries.len(),
+            self.summary_dependencies.len(),
+            self.queries.len(),
+            self.query_inputs.len(),
+            self.query_layers.len(),
+            self.facts.len(),
+            1,
+            self.diagnostics.len(),
+            self.diagnostic_requested_views.len(),
+            self.dependency_edges.len(),
+            self.validation_events.len(),
+            1,
+        ]
+        .into_iter()
+        .fold(0_u64, |total, count| {
+            total.saturating_add(u64::try_from(count).unwrap_or(u64::MAX))
+        })
+    }
+
     fn from_validated(validated: &ValidatedRunMetadata) -> Self {
+        Self::from_validated_parts(validated, validated.fact_rows().to_vec(), None)
+    }
+
+    fn from_validated_parts(
+        validated: &ValidatedRunMetadata,
+        fact_rows: Vec<StableFactMetaRow>,
+        owned_dependency_index: Option<crate::analysis_kernel::incremental::DependencyIndex>,
+    ) -> Self {
+        let defer_stats = owned_dependency_index.is_some();
         let source_identities = validated.identities();
         let identities = StoreIdentityRow {
             workspace: source_identities.workspace().clone(),
@@ -790,35 +860,47 @@ impl StoreSemanticPlan {
                     edge_count: row_count(layer.dependencies.len()),
                     warning_count: row_count(layer.warning_codes.len()),
                 });
-                layer_inputs.extend(layer.key.input_digests.iter().map(|digest| {
-                    StoreLayerInputRow {
-                        key: layer.key.clone(),
-                        digest: digest.clone(),
-                    }
-                }));
-                layer_dependencies.extend(layer.key.dependency_layer_digests.iter().map(
-                    |digest| StoreLayerDependencyRow {
-                        key: layer.key.clone(),
-                        digest: digest.clone(),
-                    },
-                ));
-                layer_extensions.extend(layer.key.extension_digests.iter().map(|digest| {
-                    StoreLayerExtensionRow {
-                        key: layer.key.clone(),
-                        digest: digest.clone(),
-                    }
-                }));
-                layer_warnings.extend(layer.warning_codes.iter().map(|warning_code| {
-                    StoreLayerWarningRow {
-                        key: layer.key.clone(),
-                        warning_code: warning_code.clone(),
-                    }
-                }));
             }
         }
         provider_generations.sort();
         provider_dependencies.sort();
         layers.sort();
+        let layer_ordinals = layers
+            .iter()
+            .enumerate()
+            .map(|(ordinal, row)| (&row.key, row_count(ordinal)))
+            .collect::<BTreeMap<_, _>>();
+        for provider in validated.provider_outputs() {
+            for layer in provider.layers() {
+                let layer_ordinal = *layer_ordinals
+                    .get(&layer.key)
+                    .expect("validated layer has a canonical parent ordinal");
+                layer_inputs.extend(layer.key.input_digests.iter().map(|digest| {
+                    StoreLayerInputRow {
+                        layer_ordinal,
+                        digest: digest.clone(),
+                    }
+                }));
+                layer_dependencies.extend(layer.key.dependency_layer_digests.iter().map(
+                    |digest| StoreLayerDependencyRow {
+                        layer_ordinal,
+                        digest: digest.clone(),
+                    },
+                ));
+                layer_extensions.extend(layer.key.extension_digests.iter().map(|digest| {
+                    StoreLayerExtensionRow {
+                        layer_ordinal,
+                        digest: digest.clone(),
+                    }
+                }));
+                layer_warnings.extend(layer.warning_codes.iter().map(|warning_code| {
+                    StoreLayerWarningRow {
+                        layer_ordinal,
+                        warning_code: warning_code.clone(),
+                    }
+                }));
+            }
+        }
         layer_inputs.sort();
         layer_dependencies.sort();
         layer_extensions.sort();
@@ -831,19 +913,38 @@ impl StoreSemanticPlan {
                 key: key.clone(),
                 dependency_count: row_count(key.dependency_summary_digests.len()),
             });
+        }
+        summaries.sort();
+        let summary_ordinals = summaries
+            .iter()
+            .enumerate()
+            .map(|(ordinal, row)| (&row.key, row_count(ordinal)))
+            .collect::<BTreeMap<_, _>>();
+        for key in validated.summary_keys() {
+            let summary_ordinal = *summary_ordinals
+                .get(key)
+                .expect("validated summary has a canonical parent ordinal");
             summary_dependencies.extend(key.dependency_summary_digests.iter().map(|dependency| {
                 StoreSummaryDependencyRow {
-                    key: key.clone(),
+                    summary_ordinal,
                     dependency: dependency.clone(),
                 }
             }));
         }
-        summaries.sort();
         summary_dependencies.sort();
 
         let mut queries = Vec::with_capacity(validated.query_rows().len());
         let mut query_inputs = Vec::new();
         let mut query_layers = Vec::new();
+        let mut query_edge_counts = BTreeMap::<&QueryKey, usize>::new();
+        let dependency_index = owned_dependency_index
+            .as_ref()
+            .unwrap_or_else(|| validated.dependency_index());
+        for edge in dependency_index.canonical_edges() {
+            if let CacheNode::Query(key) = &edge.from {
+                *query_edge_counts.entry(key).or_default() += 1;
+            }
+        }
         for query in validated.query_rows() {
             let key = query.query_key();
             queries.push(StoreQueryRow {
@@ -853,18 +954,23 @@ impl StoreSemanticPlan {
                 provenance: query.provenance().to_string(),
                 input_count: row_count(key.dependency_inputs.as_slice().len()),
                 layer_count: row_count(key.layer_digests.len()),
-                edge_count: row_count(
-                    validated
-                        .dependency_index()
-                        .canonical_edges()
-                        .iter()
-                        .filter(|edge| edge.from == CacheNode::Query(key.clone()))
-                        .count(),
-                ),
+                edge_count: row_count(query_edge_counts.get(&key).copied().unwrap_or_default()),
             });
+        }
+        queries.sort();
+        let query_ordinals = queries
+            .iter()
+            .enumerate()
+            .map(|(ordinal, row)| (&row.key, row_count(ordinal)))
+            .collect::<BTreeMap<_, _>>();
+        for query in validated.query_rows() {
+            let key = query.query_key();
+            let query_ordinal = *query_ordinals
+                .get(key)
+                .expect("validated query has a canonical parent ordinal");
             query_inputs.extend(key.dependency_inputs.as_slice().iter().map(|input| {
                 StoreQueryInputRow {
-                    key: key.clone(),
+                    query_ordinal,
                     input: input.clone(),
                 }
             }));
@@ -872,31 +978,15 @@ impl StoreSemanticPlan {
                 key.layer_digests
                     .iter()
                     .map(|layer_digest| StoreQueryLayerRow {
-                        key: key.clone(),
+                        query_ordinal,
                         layer_digest: layer_digest.clone(),
                     }),
             );
         }
-        queries.sort();
         query_inputs.sort();
         query_layers.sort();
 
-        let mut facts = validated
-            .fact_rows()
-            .iter()
-            .map(|fact| StoreFactRow {
-                family: fact.family.label().to_string(),
-                stable_key: fact.stable_key.clone(),
-                producer_id: fact.producer_id.clone(),
-                layer_id: fact.layer_id.clone(),
-                precision: fact.precision.label().to_string(),
-                confidence: fact.confidence.label().to_string(),
-                validation: fact.validation.label().to_string(),
-                payload_digest: fact.payload_digest.clone(),
-            })
-            .collect::<Vec<_>>();
-        facts.sort();
-
+        let facts = fact_rows;
         let run_manifest = StoreRunManifestRow {
             key: validated.run_manifest_key().clone(),
         };
@@ -908,29 +998,59 @@ impl StoreSemanticPlan {
                 requested_views_digest: key.requested_views_digest(),
                 requested_view_count: row_count(key.requested_view_digests.len()),
             });
+        }
+        diagnostics.sort();
+        let diagnostic_ordinals = diagnostics
+            .iter()
+            .enumerate()
+            .map(|(ordinal, row)| (&row.key, row_count(ordinal)))
+            .collect::<BTreeMap<_, _>>();
+        for key in validated.diagnostic_keys() {
+            let diagnostic_ordinal = *diagnostic_ordinals
+                .get(key)
+                .expect("validated diagnostic has a canonical parent ordinal");
             diagnostic_requested_views.extend(key.requested_view_digests.iter().map(|digest| {
                 StoreDiagnosticRequestedViewRow {
-                    key: key.clone(),
+                    diagnostic_ordinal,
                     digest: digest.clone(),
                 }
             }));
         }
-        diagnostics.sort();
         diagnostic_requested_views.sort();
-
-        let mut dependency_edges = validated
-            .dependency_index()
-            .canonical_edges()
-            .iter()
+        let (dependency_schema, source_dependency_edges) = owned_dependency_index.map_or_else(
+            || {
+                (
+                    validated.dependency_index().schema_version.clone(),
+                    validated.dependency_index().canonical_edges().to_vec(),
+                )
+            },
+            |index| index.into_persistence_parts(),
+        );
+        let dependency_edges = source_dependency_edges
+            .into_iter()
             .map(|edge| StoreDependencyEdgeRow {
-                from: edge.from.clone(),
-                to: edge.to.clone(),
+                from: store_node_ref_owned(
+                    edge.from,
+                    &layer_ordinals,
+                    &query_ordinals,
+                    &summary_ordinals,
+                    &diagnostic_ordinals,
+                ),
+                to: store_node_ref_owned(
+                    edge.to,
+                    &layer_ordinals,
+                    &query_ordinals,
+                    &summary_ordinals,
+                    &diagnostic_ordinals,
+                ),
                 kind: edge.kind,
                 required_shape: edge.required_shape,
             })
             .collect::<Vec<_>>();
-        dependency_edges.sort();
-
+        drop(layer_ordinals);
+        drop(query_ordinals);
+        drop(summary_ordinals);
+        drop(diagnostic_ordinals);
         let mut validation_events = validated
             .validation_events()
             .iter()
@@ -975,16 +1095,23 @@ impl StoreSemanticPlan {
             run_manifest,
             diagnostics,
             diagnostic_requested_views,
-            dependency_schema: validated.dependency_index().schema_version.clone(),
+            dependency_schema,
             dependency_edges,
             validation_events,
             stats,
         };
-        plan.stats = StoreGenerationStats::from_plan(&plan);
+        if !defer_stats {
+            plan.stats = StoreGenerationStats::from_plan(&plan);
+        }
         plan
     }
 
     fn validate(&self) -> Result<(), StorePlanError> {
+        self.validate_without_stats()?;
+        self.validate_stats()
+    }
+
+    fn validate_without_stats(&self) -> Result<(), StorePlanError> {
         self.validate_schemas()?;
         self.validate_identity_copies()?;
         self.validate_paths()?;
@@ -995,8 +1122,7 @@ impl StoreSemanticPlan {
         self.validate_result_boundaries()?;
         self.validate_dependency_endpoints()?;
         self.validate_facts()?;
-        self.validate_canonical_order()?;
-        self.validate_stats()
+        self.validate_canonical_order()
     }
 
     fn validate_schemas(&self) -> Result<(), StorePlanError> {
@@ -1158,30 +1284,6 @@ impl StoreSemanticPlan {
             if query.precision != query.key.precision_tier.label() {
                 return Err(StorePlanError::IdentityMismatch { family: "query" });
             }
-        }
-        for fact in &self.facts {
-            FactFamily::parse_label(&fact.family).map_err(|_| StorePlanError::InvalidStatus {
-                family: "fact family",
-                value: fact.family.clone(),
-            })?;
-            FactPrecision::parse_label(&fact.precision).map_err(|_| {
-                StorePlanError::InvalidStatus {
-                    family: "fact precision",
-                    value: fact.precision.clone(),
-                }
-            })?;
-            FactConfidence::parse_label(&fact.confidence).map_err(|_| {
-                StorePlanError::InvalidStatus {
-                    family: "fact confidence",
-                    value: fact.confidence.clone(),
-                }
-            })?;
-            ValidationStatus::parse_label(&fact.validation).map_err(|_| {
-                StorePlanError::InvalidStatus {
-                    family: "fact validation",
-                    value: fact.validation.clone(),
-                }
-            })?;
         }
         for event in &self.validation_events {
             ValidationEventKind::parse_label(&event.kind).map_err(|_| {
@@ -1354,7 +1456,8 @@ impl StoreSemanticPlan {
             )?;
         }
 
-        for layer in &self.layers {
+        for (layer_ordinal, layer) in self.layers.iter().enumerate() {
+            let layer_ordinal = row_count(layer_ordinal);
             let Some(provider) = generations.get(layer.key.provider_id.as_str()) else {
                 return Err(StorePlanError::UnknownProvider {
                     provider_id: layer.key.provider_id.clone(),
@@ -1384,7 +1487,7 @@ impl StoreSemanticPlan {
                 layer.input_count,
                 self.layer_inputs
                     .iter()
-                    .filter(|row| row.key == layer.key)
+                    .filter(|row| row.layer_ordinal == layer_ordinal)
                     .count(),
             )?;
             check_count(
@@ -1392,7 +1495,7 @@ impl StoreSemanticPlan {
                 layer.dependency_layer_count,
                 self.layer_dependencies
                     .iter()
-                    .filter(|row| row.key == layer.key)
+                    .filter(|row| row.layer_ordinal == layer_ordinal)
                     .count(),
             )?;
             check_count(
@@ -1400,7 +1503,7 @@ impl StoreSemanticPlan {
                 layer.extension_count,
                 self.layer_extensions
                     .iter()
-                    .filter(|row| row.key == layer.key)
+                    .filter(|row| row.layer_ordinal == layer_ordinal)
                     .count(),
             )?;
             check_count(
@@ -1408,7 +1511,7 @@ impl StoreSemanticPlan {
                 layer.warning_count,
                 self.layer_warnings
                     .iter()
-                    .filter(|row| row.key == layer.key)
+                    .filter(|row| row.layer_ordinal == layer_ordinal)
                     .count(),
             )?;
         }
@@ -1418,16 +1521,38 @@ impl StoreSemanticPlan {
     fn validate_query_declarations(&self) -> Result<(), StorePlanError> {
         let mut expected_inputs = Vec::new();
         let mut expected_layers = Vec::new();
-        for query in &self.queries {
+        let mut edge_counts = vec![0_usize; self.queries.len()];
+        let mut declared_inputs = BTreeSet::<(u64, &InputDependencyKey)>::new();
+        for edge in &self.dependency_edges {
+            let StoreNodeRef::Query(ordinal) = edge.from else {
+                continue;
+            };
+            let index = usize::try_from(ordinal).map_err(|_| {
+                StorePlanError::DanglingDependencyEndpoint {
+                    endpoint: edge.from.clone(),
+                }
+            })?;
+            let count = edge_counts.get_mut(index).ok_or_else(|| {
+                StorePlanError::DanglingDependencyEndpoint {
+                    endpoint: edge.from.clone(),
+                }
+            })?;
+            *count += 1;
+            if let StoreNodeRef::DependencyInput(input) = &edge.to {
+                declared_inputs.insert((ordinal, input));
+            }
+        }
+        for (ordinal, query) in self.queries.iter().enumerate() {
+            let ordinal = row_count(ordinal);
             expected_inputs.extend(query.key.dependency_inputs.as_slice().iter().map(|input| {
                 StoreQueryInputRow {
-                    key: query.key.clone(),
+                    query_ordinal: ordinal,
                     input: input.clone(),
                 }
             }));
             expected_layers.extend(query.key.layer_digests.iter().map(|digest| {
                 StoreQueryLayerRow {
-                    key: query.key.clone(),
+                    query_ordinal: ordinal,
                     layer_digest: digest.clone(),
                 }
             }));
@@ -1441,21 +1566,20 @@ impl StoreSemanticPlan {
                 query.layer_count,
                 query.key.layer_digests.len(),
             )?;
-            let query_edges = self
-                .dependency_edges
-                .iter()
-                .filter(|edge| edge.from == CacheNode::Query(query.key.clone()))
-                .collect::<Vec<_>>();
-            if query.edge_count != row_count(query_edges.len()) {
+            if query.edge_count
+                != row_count(
+                    edge_counts
+                        .get(usize::try_from(ordinal).expect("query ordinal fits usize"))
+                        .copied()
+                        .unwrap_or_default(),
+                )
+            {
                 return Err(StorePlanError::DanglingQueryEndpoint {
                     query_kind: query.key.query_kind.clone(),
                 });
             }
             for input in query.key.dependency_inputs.as_slice() {
-                if !query_edges
-                    .iter()
-                    .any(|edge| edge.to == CacheNode::DependencyInput(input.clone()))
-                {
+                if !declared_inputs.contains(&(ordinal, input)) {
                     return Err(StorePlanError::DanglingQueryEndpoint {
                         query_kind: query.key.query_kind.clone(),
                     });
@@ -1493,51 +1617,45 @@ impl StoreSemanticPlan {
     }
 
     fn validate_dependency_endpoints(&self) -> Result<(), StorePlanError> {
-        let layers = self
-            .layers
-            .iter()
-            .map(|row| row.key.clone())
-            .collect::<BTreeSet<_>>();
-        let queries = self
-            .queries
-            .iter()
-            .map(|row| row.key.clone())
-            .collect::<BTreeSet<_>>();
-        let summaries = self
-            .summaries
-            .iter()
-            .map(|row| row.key.clone())
-            .collect::<BTreeSet<_>>();
-        let diagnostics = self
-            .diagnostics
-            .iter()
-            .map(|row| row.key.clone())
-            .collect::<BTreeSet<_>>();
+        let mut layer_edge_counts = vec![0_usize; self.layers.len()];
         for edge in &self.dependency_edges {
             for endpoint in [&edge.from, &edge.to] {
                 let retained = match endpoint {
-                    CacheNode::DependencyInput(_) => true,
-                    CacheNode::RunManifest(key) => key == &self.run_manifest.key,
-                    CacheNode::Layer(key) => layers.contains(key),
-                    CacheNode::Query(key) => queries.contains(key),
-                    CacheNode::Summary(key) => summaries.contains(key),
-                    CacheNode::Diagnostic(key) => diagnostics.contains(key),
+                    StoreNodeRef::DependencyInput(_) | StoreNodeRef::RunManifest => true,
+                    StoreNodeRef::Layer(ordinal) => usize::try_from(*ordinal)
+                        .ok()
+                        .is_some_and(|ordinal| ordinal < self.layers.len()),
+                    StoreNodeRef::Query(ordinal) => usize::try_from(*ordinal)
+                        .ok()
+                        .is_some_and(|ordinal| ordinal < self.queries.len()),
+                    StoreNodeRef::Summary(ordinal) => usize::try_from(*ordinal)
+                        .ok()
+                        .is_some_and(|ordinal| ordinal < self.summaries.len()),
+                    StoreNodeRef::Diagnostic(ordinal) => usize::try_from(*ordinal)
+                        .ok()
+                        .is_some_and(|ordinal| ordinal < self.diagnostics.len()),
                 };
                 if !retained {
                     return Err(StorePlanError::DanglingDependencyEndpoint {
-                        endpoint: Box::new(endpoint.clone()),
+                        endpoint: endpoint.clone(),
                     });
                 }
             }
+            if let StoreNodeRef::Layer(ordinal) = edge.from {
+                let count = usize::try_from(ordinal)
+                    .ok()
+                    .and_then(|ordinal| layer_edge_counts.get_mut(ordinal))
+                    .ok_or_else(|| StorePlanError::DanglingDependencyEndpoint {
+                        endpoint: edge.from.clone(),
+                    })?;
+                *count += 1;
+            }
         }
-        for layer in &self.layers {
+        for (ordinal, layer) in self.layers.iter().enumerate() {
             check_count(
                 "layer edge",
                 layer.edge_count,
-                self.dependency_edges
-                    .iter()
-                    .filter(|edge| edge.from == CacheNode::Layer(layer.key.clone()))
-                    .count(),
+                layer_edge_counts.get(ordinal).copied().unwrap_or_default(),
             )?;
         }
         Ok(())
@@ -1552,7 +1670,8 @@ impl StoreSemanticPlan {
             });
         }
         let mut expected_requested_views = Vec::new();
-        for diagnostic in &self.diagnostics {
+        for (diagnostic_ordinal, diagnostic) in self.diagnostics.iter().enumerate() {
+            let diagnostic_ordinal = row_count(diagnostic_ordinal);
             if diagnostic.requested_views_digest != diagnostic.key.requested_views_digest() {
                 return Err(StorePlanError::IdentityMismatch {
                     family: "diagnostic requested views",
@@ -1565,7 +1684,7 @@ impl StoreSemanticPlan {
             )?;
             expected_requested_views.extend(diagnostic.key.requested_view_digests.iter().map(
                 |digest| StoreDiagnosticRequestedViewRow {
-                    key: diagnostic.key.clone(),
+                    diagnostic_ordinal,
                     digest: digest.clone(),
                 },
             ));
@@ -1586,21 +1705,27 @@ impl StoreSemanticPlan {
             .map(|row| row.provider_id.as_str())
             .collect::<BTreeSet<_>>();
         for fact in &self.facts {
-            if fact.payload_digest.is_empty() {
-                return Err(StorePlanError::MissingPayloadDigest {
-                    family: fact.family.clone(),
-                    stable_key: fact.stable_key.clone(),
+            if fact.stable_key.is_empty() {
+                return Err(StorePlanError::InvalidStatus {
+                    family: "fact stable key",
+                    value: String::new(),
                 });
             }
-            if !provider_ids.contains(fact.producer_id.as_str()) {
+            if fact.payload_digest.is_empty() {
+                return Err(StorePlanError::MissingPayloadDigest {
+                    family: fact.family.label().to_string(),
+                    stable_key: fact.stable_key.to_string(),
+                });
+            }
+            if !provider_ids.contains(fact.producer_id.as_ref()) {
                 return Err(StorePlanError::UnknownProvider {
-                    provider_id: fact.producer_id.clone(),
+                    provider_id: fact.producer_id.to_string(),
                     family: "fact producer",
                 });
             }
-            if !provider_ids.contains(fact.layer_id.as_str()) {
+            if !provider_ids.contains(fact.layer_id.as_ref()) {
                 return Err(StorePlanError::UnknownProvider {
-                    provider_id: fact.layer_id.clone(),
+                    provider_id: fact.layer_id.to_string(),
                     family: "fact layer",
                 });
             }
@@ -1608,8 +1733,8 @@ impl StoreSemanticPlan {
         for pair in self.facts.windows(2) {
             if pair[0].family == pair[1].family && pair[0].stable_key == pair[1].stable_key {
                 return Err(StorePlanError::DuplicateFact {
-                    family: pair[0].family.clone(),
-                    stable_key: pair[0].stable_key.clone(),
+                    family: pair[0].family.label().to_string(),
+                    stable_key: pair[0].stable_key.to_string(),
                 });
             }
         }
@@ -1797,7 +1922,7 @@ impl StoreGenerationStats {
         }
     }
 
-    fn from_plan(plan: &StoreSemanticPlan) -> Self {
+    pub(super) fn from_plan(plan: &StoreSemanticPlan) -> Self {
         let mut stats = Self::empty(&plan.identities);
         stats.input_file_count = row_count(plan.files.len());
         stats.input_component_count = row_count(plan.input_components.len());
@@ -1814,37 +1939,55 @@ impl StoreGenerationStats {
         stats.diagnostic_count = row_count(plan.diagnostics.len());
         stats.dependency_edge_count = row_count(plan.dependency_edges.len());
         stats.validation_event_count = row_count(plan.validation_events.len());
-
-        stats.input_logical_bytes = logical_size(&plan.input_snapshot)
-            .saturating_add(logical_size(&plan.files))
-            .saturating_add(logical_size(&plan.input_components))
-            .saturating_add(logical_size(&plan.input_details))
-            .saturating_add(logical_size(&plan.analysis_settings))
-            .saturating_add(logical_size(&plan.capabilities))
-            .saturating_add(logical_size(&plan.capability_requesters))
-            .saturating_add(logical_size(&plan.provider_schemas))
-            .saturating_add(logical_size(&plan.provider_schema_versions))
-            .saturating_add(logical_size(&plan.run_manifest));
-        stats.provider_logical_bytes = logical_size(&plan.provider_manifests)
-            .saturating_add(logical_size(&plan.provider_manifest_schemas))
-            .saturating_add(logical_size(&plan.provider_manifest_inputs))
-            .saturating_add(logical_size(&plan.provider_manifest_outputs))
-            .saturating_add(logical_size(&plan.provider_generations))
-            .saturating_add(logical_size(&plan.provider_dependencies));
-        stats.layer_logical_bytes = logical_size(&plan.layers)
-            .saturating_add(logical_size(&plan.layer_inputs))
-            .saturating_add(logical_size(&plan.layer_dependencies))
-            .saturating_add(logical_size(&plan.layer_extensions))
-            .saturating_add(logical_size(&plan.layer_warnings));
+        (stats.input_logical_bytes, stats.provider_logical_bytes) = rayon::join(
+            || {
+                logical_size(&plan.input_snapshot)
+                    .saturating_add(logical_size(&plan.files))
+                    .saturating_add(logical_size(&plan.input_components))
+                    .saturating_add(logical_size(&plan.input_details))
+                    .saturating_add(logical_size(&plan.analysis_settings))
+                    .saturating_add(logical_size(&plan.capabilities))
+                    .saturating_add(logical_size(&plan.capability_requesters))
+                    .saturating_add(logical_size(&plan.provider_schemas))
+                    .saturating_add(logical_size(&plan.provider_schema_versions))
+                    .saturating_add(logical_size(&plan.run_manifest))
+            },
+            || {
+                logical_size(&plan.provider_manifests)
+                    .saturating_add(logical_size(&plan.provider_manifest_schemas))
+                    .saturating_add(logical_size(&plan.provider_manifest_inputs))
+                    .saturating_add(logical_size(&plan.provider_manifest_outputs))
+                    .saturating_add(logical_size(&plan.provider_generations))
+                    .saturating_add(logical_size(&plan.provider_dependencies))
+            },
+        );
+        (stats.layer_logical_bytes, stats.query_logical_bytes) = rayon::join(
+            || logical_layer_family_size(plan),
+            || logical_query_family_size(plan),
+        );
         stats.summary_logical_bytes =
-            logical_size(&plan.summaries).saturating_add(logical_size(&plan.summary_dependencies));
-        stats.query_logical_bytes = logical_size(&plan.queries)
-            .saturating_add(logical_size(&plan.query_inputs))
-            .saturating_add(logical_size(&plan.query_layers));
-        stats.fact_logical_bytes = logical_size(&plan.facts);
-        stats.diagnostic_logical_bytes = logical_rows_size(&plan.diagnostics)
-            .saturating_add(logical_rows_size(&plan.diagnostic_requested_views));
-        stats.dependency_logical_bytes = logical_size(&plan.dependency_edges);
+            logical_size(&plan.summaries).saturating_add(logical_parented_rows_size(
+                &plan.summary_dependencies,
+                "dependency",
+                &plan.summaries,
+                |row| &row.key,
+                |row| row.summary_ordinal,
+                |row| &row.dependency,
+            ));
+        (stats.fact_logical_bytes, stats.dependency_logical_bytes) = rayon::join(
+            || logical_fact_rows_size(&plan.facts),
+            || logical_dependency_rows_size(&plan.dependency_edges),
+        );
+        stats.diagnostic_logical_bytes = logical_rows_size(&plan.diagnostics).saturating_add(
+            logical_parented_individual_rows_size(
+                &plan.diagnostic_requested_views,
+                "digest",
+                &plan.diagnostics,
+                |row| &row.key,
+                |row| row.diagnostic_ordinal,
+                |row| &row.digest,
+            ),
+        );
         stats.validation_logical_bytes = logical_size(&plan.validation_events);
         stats.semantic_logical_bytes = logical_size(&plan.identities)
             .saturating_add(stats.input_logical_bytes)
@@ -1857,6 +2000,39 @@ impl StoreGenerationStats {
             .saturating_add(stats.dependency_logical_bytes)
             .saturating_add(stats.validation_logical_bytes);
         stats
+    }
+}
+
+fn store_node_ref_owned(
+    node: CacheNode,
+    layers: &BTreeMap<&LayerKey, u64>,
+    queries: &BTreeMap<&QueryKey, u64>,
+    summaries: &BTreeMap<&SummaryKey, u64>,
+    diagnostics: &BTreeMap<&DiagnosticKey, u64>,
+) -> StoreNodeRef {
+    match node {
+        CacheNode::DependencyInput(input) => StoreNodeRef::DependencyInput(input),
+        CacheNode::RunManifest(_) => StoreNodeRef::RunManifest,
+        CacheNode::Layer(key) => StoreNodeRef::Layer(
+            *layers
+                .get(key.as_ref())
+                .expect("validated dependency layer endpoint is retained"),
+        ),
+        CacheNode::Query(key) => StoreNodeRef::Query(
+            *queries
+                .get(key.as_ref())
+                .expect("validated dependency query endpoint is retained"),
+        ),
+        CacheNode::Summary(key) => StoreNodeRef::Summary(
+            *summaries
+                .get(&key)
+                .expect("validated dependency summary endpoint is retained"),
+        ),
+        CacheNode::Diagnostic(key) => StoreNodeRef::Diagnostic(
+            *diagnostics
+                .get(&key)
+                .expect("validated dependency diagnostic endpoint is retained"),
+        ),
     }
 }
 
@@ -1909,17 +2085,399 @@ fn row_count(count: usize) -> u64 {
     u64::try_from(count).expect("semantic row count fits in u64")
 }
 
+#[derive(Default)]
+struct LogicalSizeCounter {
+    bytes: u64,
+}
+
+impl std::io::Write for LogicalSizeCounter {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.bytes = self.bytes.saturating_add(row_count(buffer.len()));
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 fn logical_size<T: Serialize + ?Sized>(value: &T) -> u64 {
-    row_count(
-        serde_json::to_vec(value)
-            .expect("normalized semantic rows serialize")
-            .len(),
+    let mut counter = LogicalSizeCounter::default();
+    serde_json::to_writer(&mut counter, value).expect("normalized semantic rows serialize");
+    counter.bytes
+}
+
+const fn logical_ascii_struct_overhead(fields: &[&str]) -> u64 {
+    if fields.is_empty() {
+        return 2;
+    }
+    let mut total = (fields.len() as u64).saturating_mul(2).saturating_add(1);
+    let mut index = 0;
+    while index < fields.len() {
+        total = total
+            .saturating_add(fields[index].len() as u64)
+            .saturating_add(2);
+        index += 1;
+    }
+    total
+}
+
+fn logical_array_size(element_count: usize, element_bytes: u64) -> u64 {
+    2_u64
+        .saturating_add(row_count(element_count.saturating_sub(1)))
+        .saturating_add(element_bytes)
+}
+
+fn logical_u64_size(value: u64) -> u64 {
+    if value == 0 {
+        1
+    } else {
+        u64::from(value.ilog10()).saturating_add(1)
+    }
+}
+
+fn logical_digest_size(digest: &Digest) -> u64 {
+    const OVERHEAD: u64 = logical_ascii_struct_overhead(&["kind", "value"]);
+    OVERHEAD
+        .saturating_add(logical_json_string_size(digest.kind.label()))
+        .saturating_add(logical_json_string_size(&digest.value))
+}
+
+fn logical_digest_array_size(digests: &[Digest]) -> u64 {
+    logical_array_size(
+        digests.len(),
+        digests.iter().fold(0_u64, |total, digest| {
+            total.saturating_add(logical_digest_size(digest))
+        }),
     )
+}
+
+fn logical_layer_key_size(key: &LayerKey) -> u64 {
+    const OVERHEAD: u64 = logical_ascii_struct_overhead(&[
+        "layer_kind",
+        "provider_id",
+        "provider_version",
+        "schema_version",
+        "parameter_digest",
+        "lifecycle_digest",
+        "analysis_settings_digest",
+        "toolchain_digest",
+        "input_digests",
+        "dependency_layer_digests",
+        "extension_digests",
+    ]);
+    OVERHEAD
+        .saturating_add(logical_json_string_size(key.layer_kind.label()))
+        .saturating_add(logical_json_string_size(&key.provider_id))
+        .saturating_add(logical_json_string_size(&key.provider_version))
+        .saturating_add(logical_json_string_size(&key.schema_version))
+        .saturating_add(logical_digest_size(&key.parameter_digest))
+        .saturating_add(logical_digest_size(&key.lifecycle_digest))
+        .saturating_add(logical_digest_size(&key.analysis_settings_digest))
+        .saturating_add(logical_digest_size(&key.toolchain_digest))
+        .saturating_add(logical_digest_array_size(&key.input_digests))
+        .saturating_add(logical_digest_array_size(&key.dependency_layer_digests))
+        .saturating_add(logical_digest_array_size(&key.extension_digests))
+}
+
+fn logical_layer_row_size(row: &StoreLayerRow, key_size: u64) -> u64 {
+    const OVERHEAD: u64 = logical_ascii_struct_overhead(&[
+        "key",
+        "output_digest",
+        "payload_digest",
+        "precision",
+        "validation",
+        "input_count",
+        "dependency_layer_count",
+        "extension_count",
+        "edge_count",
+        "warning_count",
+    ]);
+    OVERHEAD
+        .saturating_add(key_size)
+        .saturating_add(logical_digest_size(&row.output_digest))
+        .saturating_add(logical_digest_size(&row.payload_digest))
+        .saturating_add(logical_json_string_size(&row.precision))
+        .saturating_add(logical_json_string_size(&row.validation))
+        .saturating_add(logical_u64_size(row.input_count))
+        .saturating_add(logical_u64_size(row.dependency_layer_count))
+        .saturating_add(logical_u64_size(row.extension_count))
+        .saturating_add(logical_u64_size(row.edge_count))
+        .saturating_add(logical_u64_size(row.warning_count))
+}
+
+fn logical_input_dependency_size(input: &InputDependencyKey) -> u64 {
+    const OVERHEAD: u64 =
+        logical_ascii_struct_overhead(&["kind", "stable_key", "digest", "status"]);
+    OVERHEAD
+        .saturating_add(logical_json_string_size(input.kind.label()))
+        .saturating_add(logical_json_string_size(&input.stable_key))
+        .saturating_add(logical_digest_size(&input.digest))
+        .saturating_add(logical_json_string_size(input.status.label()))
+}
+
+fn logical_query_key_size(key: &QueryKey) -> u64 {
+    const OVERHEAD: u64 = logical_ascii_struct_overhead(&[
+        "query_kind",
+        "query_version",
+        "parameter_digest",
+        "dependency_inputs",
+        "layer_digests",
+        "budget_digest",
+        "precision_tier",
+    ]);
+    let input_bytes = key
+        .dependency_inputs
+        .as_slice()
+        .iter()
+        .fold(0_u64, |total, input| {
+            total.saturating_add(logical_input_dependency_size(input))
+        });
+    OVERHEAD
+        .saturating_add(logical_json_string_size(&key.query_kind))
+        .saturating_add(logical_json_string_size(&key.query_version))
+        .saturating_add(logical_digest_size(&key.parameter_digest))
+        .saturating_add(logical_array_size(
+            key.dependency_inputs.as_slice().len(),
+            input_bytes,
+        ))
+        .saturating_add(logical_digest_array_size(&key.layer_digests))
+        .saturating_add(logical_digest_size(&key.budget_digest))
+        .saturating_add(logical_json_string_size(key.precision_tier.label()))
+}
+
+fn logical_query_row_size(row: &StoreQueryRow, key_size: u64) -> u64 {
+    const OVERHEAD: u64 = logical_ascii_struct_overhead(&[
+        "key",
+        "result_digest",
+        "precision",
+        "provenance",
+        "input_count",
+        "layer_count",
+        "edge_count",
+    ]);
+    OVERHEAD
+        .saturating_add(key_size)
+        .saturating_add(logical_digest_size(&row.result_digest))
+        .saturating_add(logical_json_string_size(&row.precision))
+        .saturating_add(logical_json_string_size(&row.provenance))
+        .saturating_add(logical_u64_size(row.input_count))
+        .saturating_add(logical_u64_size(row.layer_count))
+        .saturating_add(logical_u64_size(row.edge_count))
+}
+
+fn logical_parented_rows_size_from_keys<R>(
+    rows: &[R],
+    value_field: &str,
+    key_sizes: &[u64],
+    parent_ordinal: impl Fn(&R) -> u64,
+    value_size: impl Fn(&R) -> u64,
+) -> u64 {
+    let row_overhead = logical_ascii_struct_overhead(&["key", value_field]);
+    let element_bytes = rows.iter().fold(0_u64, |total, row| {
+        let key_size = usize::try_from(parent_ordinal(row))
+            .ok()
+            .and_then(|ordinal| key_sizes.get(ordinal))
+            .copied()
+            .expect("normalized child row references a retained parent");
+        total
+            .saturating_add(row_overhead)
+            .saturating_add(key_size)
+            .saturating_add(value_size(row))
+    });
+    logical_array_size(rows.len(), element_bytes)
+}
+
+fn logical_layer_family_size(plan: &StoreSemanticPlan) -> u64 {
+    let key_sizes = plan
+        .layers
+        .iter()
+        .map(|row| logical_layer_key_size(&row.key))
+        .collect::<Vec<_>>();
+    let layer_bytes = plan
+        .layers
+        .iter()
+        .zip(&key_sizes)
+        .fold(0_u64, |total, (row, key_size)| {
+            total.saturating_add(logical_layer_row_size(row, *key_size))
+        });
+    logical_array_size(plan.layers.len(), layer_bytes)
+        .saturating_add(logical_parented_rows_size_from_keys(
+            &plan.layer_inputs,
+            "digest",
+            &key_sizes,
+            |row| row.layer_ordinal,
+            |row| logical_digest_size(&row.digest),
+        ))
+        .saturating_add(logical_parented_rows_size_from_keys(
+            &plan.layer_dependencies,
+            "digest",
+            &key_sizes,
+            |row| row.layer_ordinal,
+            |row| logical_digest_size(&row.digest),
+        ))
+        .saturating_add(logical_parented_rows_size_from_keys(
+            &plan.layer_extensions,
+            "digest",
+            &key_sizes,
+            |row| row.layer_ordinal,
+            |row| logical_digest_size(&row.digest),
+        ))
+        .saturating_add(logical_parented_rows_size_from_keys(
+            &plan.layer_warnings,
+            "warning_code",
+            &key_sizes,
+            |row| row.layer_ordinal,
+            |row| logical_json_string_size(&row.warning_code),
+        ))
+}
+
+fn logical_query_family_size(plan: &StoreSemanticPlan) -> u64 {
+    let key_sizes = plan
+        .queries
+        .iter()
+        .map(|row| logical_query_key_size(&row.key))
+        .collect::<Vec<_>>();
+    let query_bytes = plan
+        .queries
+        .iter()
+        .zip(&key_sizes)
+        .fold(0_u64, |total, (row, key_size)| {
+            total.saturating_add(logical_query_row_size(row, *key_size))
+        });
+    logical_array_size(plan.queries.len(), query_bytes)
+        .saturating_add(logical_parented_rows_size_from_keys(
+            &plan.query_inputs,
+            "input",
+            &key_sizes,
+            |row| row.query_ordinal,
+            |row| logical_input_dependency_size(&row.input),
+        ))
+        .saturating_add(logical_parented_rows_size_from_keys(
+            &plan.query_layers,
+            "layer_digest",
+            &key_sizes,
+            |row| row.query_ordinal,
+            |row| logical_digest_size(&row.layer_digest),
+        ))
 }
 
 fn logical_rows_size<T: Serialize>(rows: &[T]) -> u64 {
     rows.iter()
         .fold(0, |total, row| total.saturating_add(logical_size(row)))
+}
+
+fn logical_parented_rows_size<R, P, K, V>(
+    rows: &[R],
+    value_field: &str,
+    parents: &[P],
+    parent_key: impl Fn(&P) -> &K,
+    parent_ordinal: impl Fn(&R) -> u64,
+    value_of: impl Fn(&R) -> &V,
+) -> u64
+where
+    K: Serialize,
+    V: Serialize,
+{
+    let array_punctuation = 2_u64.saturating_add(row_count(rows.len().saturating_sub(1)));
+    let row_punctuation = 5_u64
+        .saturating_add(logical_size("key"))
+        .saturating_add(logical_size(value_field));
+    let key_sizes = parents
+        .iter()
+        .map(|parent| logical_size(parent_key(parent)))
+        .collect::<Vec<_>>();
+    rows.iter().fold(array_punctuation, |total, row| {
+        let key_size = usize::try_from(parent_ordinal(row))
+            .ok()
+            .and_then(|ordinal| key_sizes.get(ordinal))
+            .copied()
+            .expect("normalized child row references a retained parent");
+        total
+            .saturating_add(row_punctuation)
+            .saturating_add(key_size)
+            .saturating_add(logical_size(value_of(row)))
+    })
+}
+
+fn logical_parented_individual_rows_size<R, P, K, V>(
+    rows: &[R],
+    value_field: &str,
+    parents: &[P],
+    parent_key: impl Fn(&P) -> &K,
+    parent_ordinal: impl Fn(&R) -> u64,
+    value_of: impl Fn(&R) -> &V,
+) -> u64
+where
+    K: Serialize,
+    V: Serialize,
+{
+    let array_punctuation = 2_u64.saturating_add(row_count(rows.len().saturating_sub(1)));
+    logical_parented_rows_size(
+        rows,
+        value_field,
+        parents,
+        parent_key,
+        parent_ordinal,
+        value_of,
+    )
+    .saturating_sub(array_punctuation)
+}
+
+fn logical_dependency_rows_size(rows: &[StoreDependencyEdgeRow]) -> u64 {
+    let array_punctuation = 2_u64.saturating_add(row_count(rows.len().saturating_sub(1)));
+    array_punctuation.saturating_add(
+        rows.par_iter()
+            .map(logical_size)
+            .reduce(|| 0, u64::saturating_add),
+    )
+}
+
+fn logical_fact_rows_size(rows: &[StoreFactRow]) -> u64 {
+    let array_punctuation = 2_u64.saturating_add(row_count(rows.len().saturating_sub(1)));
+    let field_names = [
+        "family",
+        "stable_key",
+        "producer_id",
+        "layer_id",
+        "precision",
+        "confidence",
+        "validation",
+        "payload_digest",
+    ]
+    .into_iter()
+    .fold(0_u64, |total, field| {
+        total.saturating_add(logical_size(field))
+    });
+    let row_punctuation = 2_u64
+        .saturating_add(8)
+        .saturating_add(7)
+        .saturating_add(field_names);
+    array_punctuation.saturating_add(
+        rows.par_iter()
+            .map(|row| {
+                row_punctuation
+                    .saturating_add(logical_json_string_size(row.family.label()))
+                    .saturating_add(row.stable_key.json_bytes())
+                    .saturating_add(logical_json_string_size(&row.producer_id))
+                    .saturating_add(logical_json_string_size(&row.layer_id))
+                    .saturating_add(logical_json_string_size(row.precision.label()))
+                    .saturating_add(logical_json_string_size(row.confidence.label()))
+                    .saturating_add(logical_json_string_size(row.validation.label()))
+                    .saturating_add(logical_json_string_size(&row.payload_digest))
+            })
+            .reduce(|| 0, u64::saturating_add),
+    )
+}
+
+fn logical_json_string_size(value: &str) -> u64 {
+    value.as_bytes().iter().fold(2_u64, |total, byte| {
+        total.saturating_add(match byte {
+            b'"' | b'\\' | b'\x08' | b'\x0c' | b'\n' | b'\r' | b'\t' => 2,
+            0..=0x1f => 6,
+            _ => 1,
+        })
+    })
 }
 
 fn check_count(family: &'static str, expected: u64, actual: usize) -> Result<(), StorePlanError> {
@@ -2043,7 +2601,7 @@ mod tests {
             &[label],
         )];
         DemandQueryTraceEntry {
-            query_key,
+            query_key: query_key.into(),
             result_digest: Digest::from_parts(DigestKind::ProviderOutput, "query_result", &[label]),
             precision_tier: PrecisionTier::SetupAware,
             provenance: format!("native:{label}"),
@@ -2085,9 +2643,236 @@ mod tests {
     }
 
     #[test]
+    fn optimized_logical_sizes_match_serialized_byte_lengths() {
+        let plan = plan_fixture();
+        let dependency_bytes =
+            serde_json::to_vec(&plan.semantic.dependency_edges).expect("dependency rows serialize");
+
+        assert_eq!(
+            logical_size(&plan.semantic.dependency_edges),
+            row_count(dependency_bytes.len())
+        );
+        assert_eq!(
+            logical_dependency_rows_size(&plan.semantic.dependency_edges),
+            logical_size(&plan.semantic.dependency_edges)
+        );
+        assert_eq!(
+            logical_fact_rows_size(&plan.semantic.facts),
+            logical_size(&plan.semantic.facts)
+        );
+        let serialized_layer_family = logical_size(&plan.semantic.layers)
+            .saturating_add(logical_parented_rows_size(
+                &plan.semantic.layer_inputs,
+                "digest",
+                &plan.semantic.layers,
+                |row| &row.key,
+                |row| row.layer_ordinal,
+                |row| &row.digest,
+            ))
+            .saturating_add(logical_parented_rows_size(
+                &plan.semantic.layer_dependencies,
+                "digest",
+                &plan.semantic.layers,
+                |row| &row.key,
+                |row| row.layer_ordinal,
+                |row| &row.digest,
+            ))
+            .saturating_add(logical_parented_rows_size(
+                &plan.semantic.layer_extensions,
+                "digest",
+                &plan.semantic.layers,
+                |row| &row.key,
+                |row| row.layer_ordinal,
+                |row| &row.digest,
+            ))
+            .saturating_add(logical_parented_rows_size(
+                &plan.semantic.layer_warnings,
+                "warning_code",
+                &plan.semantic.layers,
+                |row| &row.key,
+                |row| row.layer_ordinal,
+                |row| &row.warning_code,
+            ));
+        assert_eq!(
+            logical_layer_family_size(&plan.semantic),
+            serialized_layer_family
+        );
+        let serialized_query_family = logical_size(&plan.semantic.queries)
+            .saturating_add(logical_parented_rows_size(
+                &plan.semantic.query_inputs,
+                "input",
+                &plan.semantic.queries,
+                |row| &row.key,
+                |row| row.query_ordinal,
+                |row| &row.input,
+            ))
+            .saturating_add(logical_parented_rows_size(
+                &plan.semantic.query_layers,
+                "layer_digest",
+                &plan.semantic.queries,
+                |row| &row.key,
+                |row| row.query_ordinal,
+                |row| &row.layer_digest,
+            ));
+        assert_eq!(
+            logical_query_family_size(&plan.semantic),
+            serialized_query_family
+        );
+        assert_eq!(
+            logical_parented_rows_size(
+                &plan.semantic.layer_inputs,
+                "digest",
+                &plan.semantic.layers,
+                |row| &row.key,
+                |row| row.layer_ordinal,
+                |row| &row.digest,
+            ),
+            logical_size(
+                &plan
+                    .semantic
+                    .layer_inputs
+                    .iter()
+                    .map(|row| serde_json::json!({
+                        "key": plan.semantic.layers[row.layer_ordinal as usize].key,
+                        "digest": row.digest,
+                    }))
+                    .collect::<Vec<_>>()
+            )
+        );
+        assert_eq!(
+            logical_parented_rows_size(
+                &plan.semantic.layer_dependencies,
+                "digest",
+                &plan.semantic.layers,
+                |row| &row.key,
+                |row| row.layer_ordinal,
+                |row| &row.digest,
+            ),
+            logical_size(
+                &plan
+                    .semantic
+                    .layer_dependencies
+                    .iter()
+                    .map(|row| serde_json::json!({
+                        "key": plan.semantic.layers[row.layer_ordinal as usize].key,
+                        "digest": row.digest,
+                    }))
+                    .collect::<Vec<_>>()
+            )
+        );
+        assert_eq!(
+            logical_parented_rows_size(
+                &plan.semantic.layer_extensions,
+                "digest",
+                &plan.semantic.layers,
+                |row| &row.key,
+                |row| row.layer_ordinal,
+                |row| &row.digest,
+            ),
+            logical_size(
+                &plan
+                    .semantic
+                    .layer_extensions
+                    .iter()
+                    .map(|row| serde_json::json!({
+                        "key": plan.semantic.layers[row.layer_ordinal as usize].key,
+                        "digest": row.digest,
+                    }))
+                    .collect::<Vec<_>>()
+            )
+        );
+        assert_eq!(
+            logical_parented_rows_size(
+                &plan.semantic.layer_warnings,
+                "warning_code",
+                &plan.semantic.layers,
+                |row| &row.key,
+                |row| row.layer_ordinal,
+                |row| &row.warning_code,
+            ),
+            logical_size(
+                &plan
+                    .semantic
+                    .layer_warnings
+                    .iter()
+                    .map(|row| serde_json::json!({
+                        "key": plan.semantic.layers[row.layer_ordinal as usize].key,
+                        "warning_code": row.warning_code,
+                    }))
+                    .collect::<Vec<_>>()
+            )
+        );
+        assert_eq!(
+            logical_parented_rows_size(
+                &plan.semantic.summary_dependencies,
+                "dependency",
+                &plan.semantic.summaries,
+                |row| &row.key,
+                |row| row.summary_ordinal,
+                |row| &row.dependency,
+            ),
+            logical_size(
+                &plan
+                    .semantic
+                    .summary_dependencies
+                    .iter()
+                    .map(|row| serde_json::json!({
+                        "key": plan.semantic.summaries[row.summary_ordinal as usize].key,
+                        "dependency": row.dependency,
+                    }))
+                    .collect::<Vec<_>>()
+            )
+        );
+        assert_eq!(
+            logical_parented_rows_size(
+                &plan.semantic.query_inputs,
+                "input",
+                &plan.semantic.queries,
+                |row| &row.key,
+                |row| row.query_ordinal,
+                |row| &row.input,
+            ),
+            logical_size(
+                &plan
+                    .semantic
+                    .query_inputs
+                    .iter()
+                    .map(|row| serde_json::json!({
+                        "key": plan.semantic.queries[row.query_ordinal as usize].key,
+                        "input": row.input,
+                    }))
+                    .collect::<Vec<_>>()
+            )
+        );
+        assert_eq!(
+            logical_parented_rows_size(
+                &plan.semantic.query_layers,
+                "layer_digest",
+                &plan.semantic.queries,
+                |row| &row.key,
+                |row| row.query_ordinal,
+                |row| &row.layer_digest,
+            ),
+            logical_size(
+                &plan
+                    .semantic
+                    .query_layers
+                    .iter()
+                    .map(|row| serde_json::json!({
+                        "key": plan.semantic.queries[row.query_ordinal as usize].key,
+                        "layer_digest": row.layer_digest,
+                    }))
+                    .collect::<Vec<_>>()
+            )
+        );
+    }
+
+    #[test]
     fn complete_handoff_normalizes_every_semantic_family() {
         let plan = plan_fixture();
         plan.validate().expect("complete plan validates");
+        let mut independently_sorted_dependencies = plan.semantic.dependency_edges.clone();
+        independently_sorted_dependencies.sort();
 
         assert!(!plan.semantic.files.is_empty());
         assert!(!plan.semantic.input_components.is_empty());
@@ -2100,6 +2885,10 @@ mod tests {
         assert!(!plan.semantic.queries.is_empty());
         assert!(!plan.semantic.query_inputs.is_empty());
         assert!(!plan.semantic.dependency_edges.is_empty());
+        assert_eq!(
+            plan.semantic.dependency_edges, independently_sorted_dependencies,
+            "CacheNode-to-ordinal projection preserves canonical edge order"
+        );
         assert_eq!(
             plan.semantic.validation_events.len(),
             ValidationEventKind::ALL.len()
@@ -2287,12 +3076,11 @@ mod tests {
         ));
 
         let mut candidate = baseline.clone();
-        let query_key = candidate.semantic.queries[0].key.clone();
         let edge_position = candidate
             .semantic
             .dependency_edges
             .iter()
-            .position(|edge| edge.from == CacheNode::Query(query_key.clone()))
+            .position(|edge| edge.from == StoreNodeRef::Query(0))
             .expect("query has dependency edges");
         candidate.semantic.dependency_edges.remove(edge_position);
         assert!(matches!(
@@ -2302,20 +3090,12 @@ mod tests {
 
         let mut candidate = baseline.clone();
         let input = candidate.semantic.query_inputs[0].input.clone();
-        let missing_summary = SummaryKey {
-            callable_stable_key: "missing:callable".to_string(),
-            summary_domain: "missing".to_string(),
-            summary_version: "1".to_string(),
-            body_shape_digest: Digest::absent(DigestKind::SummaryBody, "missing"),
-            dependency_summary_digests: Vec::new(),
-            extension_digest: Digest::absent(DigestKind::ExtensionCode, "missing"),
-        };
         candidate
             .semantic
             .dependency_edges
             .push(StoreDependencyEdgeRow {
-                from: CacheNode::DependencyInput(input),
-                to: CacheNode::Summary(missing_summary),
+                from: StoreNodeRef::DependencyInput(input),
+                to: StoreNodeRef::Summary(u64::MAX),
                 kind: DependencyKind::Input,
                 required_shape: ShapeKind::Unknown,
             });
@@ -2422,7 +3202,7 @@ mod tests {
         assert!(production.contains("pub(super) enum StorePlanError"));
         assert!(production.contains("pub(super) struct StoreGenerationStats"));
         assert!(production.contains("fn from_validated_run"));
-        assert!(production.contains("validated: ValidatedRunMetadata"));
+        assert!(production.contains("validated: &ValidatedRunMetadata"));
         assert!(production.contains("validate_integrity()"));
         assert!(!production.contains("pub(crate) struct StoreCommitPlan"));
         assert!(!production.contains("pub struct StoreCommitPlan"));
@@ -2449,7 +3229,10 @@ mod tests {
         assert!(!facade.contains("pub(crate) mod commit_plan"));
         assert!(!facade.contains("pub mod commit_plan"));
 
-        let parent = include_str!("../mod.rs");
+        let parent = include_str!("../mod.rs")
+            .split_once("\n#[cfg(test)]\nmod tests")
+            .expect("kernel test boundary exists")
+            .0;
         assert!(!parent.contains("StoreCommitPlan"));
         assert!(!parent.contains("from_validated_run"));
     }

@@ -138,7 +138,7 @@ pub(crate) fn module_graph_layer_dependency_edges(
     ts_js_lifecycle_components: &[InputComponent],
     provider_manifest_digest: Digest,
 ) -> Vec<DependencyEdge> {
-    let from = CacheNode::Layer(key.clone());
+    let from = CacheNode::layer(key.clone());
     let mut edges = Vec::new();
 
     for file in sorted_files(db) {
@@ -330,7 +330,7 @@ pub(crate) fn module_topology_layer_dependency_edges(
     ts_js_lifecycle_components: &[InputComponent],
     provider_manifest_digest: Digest,
 ) -> Vec<DependencyEdge> {
-    let from = CacheNode::Layer(key.clone());
+    let from = CacheNode::layer(key.clone());
     let mut edges = Vec::new();
 
     for import in sorted_imports(db) {

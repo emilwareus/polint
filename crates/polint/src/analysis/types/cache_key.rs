@@ -225,10 +225,9 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_digest_changes_for_go_lifecycle_tool_and_upstream_inputs() {
+    fn snapshot_digest_changes_for_go_lifecycle_and_upstream_inputs() {
         let baseline_snapshot = snapshot("go-base", "tool-base");
         let changed_go = snapshot("go-changed", "tool-base");
-        let changed_tool = snapshot("go-base", "tool-changed");
         let upstream_base = [Digest::from_parts(
             DigestKind::ProviderOutput,
             "semantic_mir",
@@ -250,14 +249,26 @@ mod tests {
         );
         assert_ne!(
             baseline,
-            type_value_alias_provider_parameter_digest_for_snapshot(&changed_tool, &upstream_base)
-        );
-        assert_ne!(
-            baseline,
             type_value_alias_provider_parameter_digest_for_snapshot(
                 &baseline_snapshot,
                 &upstream_changed
             )
+        );
+    }
+
+    #[test]
+    fn snapshot_digest_ignores_unconsumed_raw_tool_inputs() {
+        let baseline_snapshot = snapshot("go-base", "tool-base");
+        let changed_tool = snapshot("go-base", "tool-changed");
+        let upstream = [Digest::from_parts(
+            DigestKind::ProviderOutput,
+            "semantic_mir",
+            &["base"],
+        )];
+
+        assert_eq!(
+            type_value_alias_provider_parameter_digest_for_snapshot(&baseline_snapshot, &upstream),
+            type_value_alias_provider_parameter_digest_for_snapshot(&changed_tool, &upstream)
         );
     }
 
@@ -285,7 +296,7 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_digest_changes_for_extension_inputs() {
+    fn snapshot_digest_ignores_unconsumed_raw_extension_inputs() {
         let mut baseline_snapshot = snapshot("go-base", "tool-base");
         let mut changed_extension = baseline_snapshot.clone();
         baseline_snapshot.extensions = vec![component(
@@ -304,7 +315,7 @@ mod tests {
 
         let baseline =
             type_value_alias_provider_parameter_digest_for_snapshot(&baseline_snapshot, &upstream);
-        assert_ne!(
+        assert_eq!(
             baseline,
             type_value_alias_provider_parameter_digest_for_snapshot(&changed_extension, &upstream)
         );

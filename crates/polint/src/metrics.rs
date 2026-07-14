@@ -243,7 +243,7 @@ fn metrics_layer_dependency_edges(
     analysis_settings_digest: Digest,
     provider_manifest_digest: Digest,
 ) -> Vec<DependencyEdge> {
-    let from = CacheNode::Layer(key.clone());
+    let from = CacheNode::layer(key.clone());
     let mut edges = Vec::new();
 
     for file in sorted_files(db) {

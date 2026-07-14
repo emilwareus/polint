@@ -3,12 +3,15 @@
 use std::path::Path;
 use std::time::Duration;
 
+use rusqlite::config::DbConfig;
 use rusqlite::{Connection, ErrorCode, OpenFlags, Transaction, TransactionBehavior};
 
 use super::migrations::{MigrationError, apply_migrations_in_transaction, preflight_schema};
 
 const BUSY_TIMEOUT: Duration = Duration::from_millis(250);
 const SYNCHRONOUS_NORMAL: i64 = 1;
+const WAL_AUTOCHECKPOINT_DISABLED: i64 = 0;
+const STORE_PAGE_SIZE_BYTES: i64 = 16 * 1024;
 
 pub(super) struct WriterConnection {
     connection: Connection,
@@ -48,6 +51,12 @@ fn open_uninitialized_writer(path: &Path) -> Result<WriterConnection, Connection
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
     )
     .map_err(classify_sqlite_error)?;
+    // New metadata stores use larger pages to keep their wide append-heavy
+    // B-trees shallow. SQLite leaves an existing database's page format
+    // unchanged, so reopening a compatible store remains non-destructive.
+    connection
+        .pragma_update(None, "page_size", STORE_PAGE_SIZE_BYTES)
+        .map_err(classify_sqlite_error)?;
     connection
         .busy_timeout(BUSY_TIMEOUT)
         .map_err(classify_sqlite_error)?;
@@ -68,6 +77,12 @@ fn open_uninitialized_writer(path: &Path) -> Result<WriterConnection, Connection
         .query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))
         .map_err(classify_sqlite_error)?;
     validate_journal_mode(&journal_mode)?;
+    connection
+        .pragma_update(None, "wal_autocheckpoint", WAL_AUTOCHECKPOINT_DISABLED)
+        .map_err(classify_sqlite_error)?;
+    connection
+        .set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true)
+        .map_err(classify_sqlite_error)?;
     Ok(WriterConnection { connection })
 }
 
@@ -169,6 +184,9 @@ pub(super) struct ConnectionPolicySnapshot {
     pub(super) journal_mode: String,
     pub(super) synchronous: i64,
     pub(super) busy_timeout_ms: i64,
+    pub(super) wal_autocheckpoint_pages: i64,
+    pub(super) no_checkpoint_on_close: bool,
+    pub(super) page_size_bytes: i64,
 }
 
 #[cfg(test)]
@@ -191,11 +209,26 @@ pub(super) fn writer_policy(
         .connection
         .pragma_query_value(None, "busy_timeout", |row| row.get(0))
         .map_err(classify_sqlite_error)?;
+    let wal_autocheckpoint_pages = writer
+        .connection
+        .pragma_query_value(None, "wal_autocheckpoint", |row| row.get(0))
+        .map_err(classify_sqlite_error)?;
+    let no_checkpoint_on_close = writer
+        .connection
+        .db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE)
+        .map_err(classify_sqlite_error)?;
+    let page_size_bytes = writer
+        .connection
+        .pragma_query_value(None, "page_size", |row| row.get(0))
+        .map_err(classify_sqlite_error)?;
     Ok(ConnectionPolicySnapshot {
         foreign_keys,
         journal_mode,
         synchronous,
         busy_timeout_ms,
+        wal_autocheckpoint_pages,
+        no_checkpoint_on_close,
+        page_size_bytes,
     })
 }
 

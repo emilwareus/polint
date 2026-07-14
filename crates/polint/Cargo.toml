@@ -16,9 +16,11 @@ bench = []
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+fnv.workspace = true
 globset.workspace = true
 ignore.workspace = true
 json-strip-comments.workspace = true
+lz4_flex.workspace = true
 oxc_allocator.workspace = true
 oxc_ast.workspace = true
 oxc_parser.workspace = true

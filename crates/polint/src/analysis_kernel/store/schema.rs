@@ -153,7 +153,7 @@ pub(super) const SEMANTIC_ORDER_BY: [(&str, &str); 33] = [
         "query_layer_digests",
         "ORDER BY query.semantic_ordinal, child.ordinal",
     ),
-    ("fact_metadata", "ORDER BY family, stable_key"),
+    ("fact_metadata", "ORDER BY ordinal"),
     ("diagnostic_nodes", "ORDER BY semantic_ordinal"),
     (
         "diagnostic_requested_view_digests",

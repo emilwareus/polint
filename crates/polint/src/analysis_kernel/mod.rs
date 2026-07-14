@@ -971,20 +971,39 @@ impl AnalysisKernel {
         let validation_events = validation_report.events;
         db.finish_all_fact_meta_insertions();
         let store_outcome = if input.cache.semantic_store_enabled() {
-            match db.fact_meta().stable_rows() {
-                Ok(fact_rows) => {
-                    match incremental::ValidatedRunMetadata::from_finalized_run(
-                        &input_snapshot,
-                        &provider_outputs,
-                        &scc_closure.demand_query_trace,
-                        &validation_events,
-                        Self::provider_manifests(),
-                        fact_rows,
-                    ) {
-                        Ok(validated) => store::SemanticStore::commit_validated_run(
-                            &store::StoreConfig::new(input.cache.semantic_store_path(), true),
-                            &validated,
-                        ),
+            let fact_meta = db.take_fact_meta_for_store();
+            store::record_handoff_materialization();
+            match fact_meta.prepare_compact_stable_rows() {
+                Ok(prepared_facts) => {
+                    let (prepared, (fact_rows, fact_digest)) = rayon::join(
+                        || {
+                            incremental::ValidatedRunMetadata::prepare_finalized_canonical_run(
+                                &input_snapshot,
+                                &provider_outputs,
+                                &scc_closure.demand_query_trace,
+                                &validation_events,
+                                Self::provider_manifests(),
+                            )
+                        },
+                        || prepared_facts.finish(),
+                    );
+                    match prepared {
+                        Ok(prepared) => {
+                            match incremental::ValidatedRunMetadata::finish_prepared_canonical_run(
+                                prepared,
+                                fact_rows,
+                                fact_digest,
+                            ) {
+                                Ok(validated) => store::SemanticStore::commit_validated_run(
+                                    &store::StoreConfig::new(
+                                        input.cache.semantic_store_path(),
+                                        true,
+                                    ),
+                                    validated,
+                                ),
+                                Err(_) => store::StoreOutcome::invalid_metadata(),
+                            }
+                        }
                         Err(_) => store::StoreOutcome::invalid_metadata(),
                     }
                 }
@@ -1446,8 +1465,11 @@ mod tests {
                 .find("if input.cache.semantic_store_enabled()")
                 .expect("enabled-only store branch");
             let handoff = production
-                .find("incremental::ValidatedRunMetadata::from_finalized_run")
+                .find("incremental::ValidatedRunMetadata::prepare_finalized_canonical_run")
                 .expect("validated-run handoff");
+            let handoff_finish = production
+                .find("incremental::ValidatedRunMetadata::finish_prepared_canonical_run")
+                .expect("validated-run handoff completion");
             let facade = production
                 .find("store::SemanticStore::commit_validated_run")
                 .expect("sole parent-facing store facade");
@@ -1459,6 +1481,8 @@ mod tests {
                     && diagnostics < finalization
                     && finalization < enabled_guard
                     && enabled_guard < handoff
+                    && handoff < handoff_finish
+                    && handoff_finish < facade
                     && handoff < facade
                     && enabled_guard < path
             );
@@ -1541,37 +1565,12 @@ mod tests {
             })
             .expect("kernel should run");
 
-            assert!(AnalysisKernel::missing_fact_metadata_for_test(&output.db).is_empty());
             assert_eq!(output.run_report.store_status(), &StoreStatus::Ready);
             assert_eq!(output.run_report.validation_events().len(), 20);
             assert!(store_path.is_file());
-            assert_eq!(store::materialization_counters_for_test(), (1, 1, 2));
-
-            let stable_rows = output
-                .db
-                .fact_meta()
-                .stable_rows()
-                .expect("finalized metadata rows are canonical");
-            let expected_fact_count = stable_rows.len();
-            let metadata = incremental::ValidatedRunMetadata::from_finalized_run(
-                &output.run_report.input_snapshot,
-                &output.run_report.provider_outputs,
-                output.run_report.demand_query_trace(),
-                output.run_report.validation_events(),
-                AnalysisKernel::provider_manifests(),
-                stable_rows,
-            )
-            .expect("validated run is a complete store-planning handoff");
-            assert_eq!(
-                metadata.provider_manifests().len(),
-                AnalysisKernel::provider_manifests().len()
-            );
-            assert_eq!(
-                metadata.provider_outputs().len(),
-                metadata.provider_manifests().len()
-            );
-            assert_eq!(metadata.fact_rows().len(), expected_fact_count);
-            assert_eq!(metadata.validation_events().len(), 20);
+            assert_eq!(store::materialization_counters_for_test(), (1, 1, 1));
+            assert!(!output.db.files().is_empty());
+            assert_eq!(output.db.fact_meta().rows().count(), 0);
         }
     }
 
@@ -1665,7 +1664,7 @@ mod tests {
                 StoreMode::Complete => {
                     let outcome = store::SemanticStore::commit_validated_run(
                         &config,
-                        setup.as_ref().expect("complete setup"),
+                        setup.as_ref().expect("complete setup").clone(),
                     );
                     assert_eq!(outcome.status, StoreStatus::Ready);
                 }
@@ -1677,13 +1676,13 @@ mod tests {
                     let other_cache = Cache::default_for_repo(other.path(), true);
                     let other_validated = validated_setup_run(&other_loaded, &other_cache, &plan);
                     let outcome =
-                        store::SemanticStore::commit_validated_run(&config, &other_validated);
+                        store::SemanticStore::commit_validated_run(&config, other_validated);
                     assert_eq!(outcome.status, StoreStatus::Ready);
                 }
                 StoreMode::FirstFailureRecovery => {
                     let outcome = store::SemanticStore::commit_validated_run(
                         &config,
-                        setup.as_ref().expect("failure-recovery setup"),
+                        setup.as_ref().expect("failure-recovery setup").clone(),
                     );
                     assert_eq!(outcome.status, StoreStatus::Ready);
                     store::inject_next_commit_failure_for_test();

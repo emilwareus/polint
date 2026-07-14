@@ -129,48 +129,10 @@ impl StoreOutcome {
 }
 
 impl StoreStatistics {
-    fn from_plan(plan: &commit_plan::StoreCommitPlan) -> Self {
-        let semantic = &plan.semantic;
-        let planned_semantic_row_count = [
-            1,
-            1,
-            semantic.files.len(),
-            semantic.input_components.len(),
-            semantic.input_details.len(),
-            semantic.analysis_settings.len(),
-            semantic.capabilities.len(),
-            semantic.capability_requesters.len(),
-            semantic.provider_schemas.len(),
-            semantic.provider_schema_versions.len(),
-            semantic.provider_manifests.len(),
-            semantic.provider_manifest_schemas.len(),
-            semantic.provider_manifest_inputs.len(),
-            semantic.provider_manifest_outputs.len(),
-            semantic.provider_generations.len(),
-            semantic.provider_dependencies.len(),
-            semantic.layers.len(),
-            semantic.layer_inputs.len(),
-            semantic.layer_dependencies.len(),
-            semantic.layer_extensions.len(),
-            semantic.layer_warnings.len(),
-            semantic.summaries.len(),
-            semantic.summary_dependencies.len(),
-            semantic.queries.len(),
-            semantic.query_inputs.len(),
-            semantic.query_layers.len(),
-            semantic.facts.len(),
-            1,
-            semantic.diagnostics.len(),
-            semantic.diagnostic_requested_views.len(),
-            semantic.dependency_edges.len(),
-            semantic.validation_events.len(),
-            1,
-        ]
-        .into_iter()
-        .fold(0_u64, |total, count| {
-            total.saturating_add(u64::try_from(count).unwrap_or(u64::MAX))
-        });
-        let stats = &semantic.stats;
+    fn from_planned_rows_and_stats(
+        planned_semantic_row_count: u64,
+        stats: &commit_plan::StoreGenerationStats,
+    ) -> Self {
         Self {
             planned_semantic_row_count,
             semantic_logical_bytes: stats.semantic_logical_bytes,
@@ -269,52 +231,69 @@ pub(crate) struct SemanticStore;
 impl SemanticStore {
     pub(in crate::analysis_kernel) fn commit_validated_run(
         config: &StoreConfig,
-        validated: &ValidatedRunMetadata,
+        validated: ValidatedRunMetadata,
     ) -> StoreOutcome {
         if !config.is_enabled() {
             return StoreOutcome::disabled();
         }
+        #[cfg(test)]
+        let force_publication = NEXT_COMMIT_FAILURE.with(|next| next.get().is_some());
+        #[cfg(not(test))]
+        let force_publication = false;
+        if !force_publication {
+            match generation::active_generation_statistics(
+                config,
+                validated.identities(),
+                &validated.dependency_index().schema_version,
+            ) {
+                Ok(Some(statistics)) => {
+                    return StoreOutcome {
+                        status: StoreStatus::Ready,
+                        statistics: Some(statistics),
+                    };
+                }
+                Ok(None) => {}
+                Err(status) => {
+                    return StoreOutcome {
+                        status,
+                        statistics: None,
+                    };
+                }
+            }
+        }
 
         record_plan_materialization();
-        let plan = match commit_plan::StoreCommitPlan::from_validated_run(validated) {
+        let plan = match commit_plan::StoreCommitPlan::from_owned_prevalidated_run(validated) {
             Ok(plan) => plan,
             Err(_) => return StoreOutcome::invalid_metadata(),
         };
+        let planned_semantic_row_count = plan.semantic.planned_semantic_row_count();
         #[cfg(test)]
-        let status = NEXT_COMMIT_FAILURE.with(|next| {
+        let control = NEXT_COMMIT_FAILURE.with(|next| {
             next.take().map_or_else(
-                || generation::commit_generation(config, &plan),
-                |stage| {
-                    generation::commit_generation_with_control(
-                        config,
-                        &plan,
-                        generation::CommitControl::fail_after(stage),
-                    )
-                },
+                generation::CommitControl::default,
+                generation::CommitControl::fail_after,
             )
         });
         #[cfg(not(test))]
-        let status = generation::commit_generation(config, &plan);
+        let control = generation::CommitControl::default();
+        let (status, computed_stats) =
+            generation::commit_owned_prevalidated_generation(config, plan, control);
         if status != StoreStatus::Ready {
             return StoreOutcome {
                 status,
                 statistics: None,
             };
         }
-
-        match generation::read_active_complete(config, &plan.semantic.identities.workspace) {
-            Ok(Some(active)) if active.plan == plan => StoreOutcome {
-                status: StoreStatus::Ready,
-                statistics: Some(StoreStatistics::from_plan(&active.plan)),
-            },
-            Ok(Some(_)) | Ok(None) => StoreOutcome {
-                status: StoreStatus::RebuildNeeded(StoreRebuildReason::InvalidMetadata),
-                statistics: None,
-            },
-            Err(status) => StoreOutcome {
-                status,
-                statistics: None,
-            },
+        let Some(stats) = computed_stats else {
+            return StoreOutcome::invalid_metadata();
+        };
+        StoreOutcome {
+            status: StoreStatus::Ready,
+            statistics: Some(StoreStatistics::from_planned_rows_and_stats(
+                planned_semantic_row_count,
+                &stats,
+            )),
         }
     }
 

@@ -8,6 +8,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::Arc;
 
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -98,7 +99,7 @@ pub(crate) struct DemandQueryResult {
 /// A single entry in the demand query trace for debug output.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct DemandQueryTraceEntry {
-    pub(crate) query_key: QueryKey,
+    pub(crate) query_key: Arc<QueryKey>,
     pub(crate) result_digest: Digest,
     pub(crate) precision_tier: PrecisionTier,
     pub(crate) provenance: String,
@@ -108,7 +109,7 @@ pub(crate) struct DemandQueryTraceEntry {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub(crate) struct DemandQuerySemanticProjection<'a> {
-    pub(crate) query_key: &'a QueryKey,
+    pub(crate) query_key: &'a Arc<QueryKey>,
     pub(crate) result_digest: &'a Digest,
     pub(crate) precision_tier: PrecisionTier,
     pub(crate) provenance: &'a str,
@@ -240,7 +241,7 @@ impl DemandQueryEngine {
     /// with a computed cache status.
     pub(crate) fn insert(&mut self, result: DemandQueryResult) {
         let trace_entry = DemandQueryTraceEntry {
-            query_key: result.query_key.clone(),
+            query_key: Arc::new(result.query_key.clone()),
             result_digest: result.output_digest.clone(),
             precision_tier: result.precision_tier,
             provenance: result.provenance.clone(),
@@ -259,7 +260,7 @@ impl DemandQueryEngine {
         duration_micros: u64,
     ) {
         let trace_entry = DemandQueryTraceEntry {
-            query_key: key.clone(),
+            query_key: Arc::new(key.clone()),
             result_digest: result.output_digest.clone(),
             precision_tier: result.precision_tier,
             provenance: result.provenance.clone(),
@@ -373,7 +374,7 @@ mod tests {
 
         let entries = engine.trace().entries();
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].query_key, first_key);
+        assert_eq!(entries[0].query_key.as_ref(), &first_key);
         assert_eq!(entries[0].result_digest, first_digest);
         assert_eq!(entries[0].precision_tier, PrecisionTier::SetupAware);
         assert_eq!(entries[0].provenance, "native");
@@ -468,7 +469,7 @@ mod tests {
         assert_ne!(result_changed.semantic_digest(), expected_digest);
 
         let mut key_changed = trace.clone();
-        key_changed.entries[0].query_key = test_query_key("function_cfg");
+        key_changed.entries[0].query_key = test_query_key("function_cfg").into();
         assert_ne!(key_changed.semantic_projections(), expected_rows);
         assert_ne!(key_changed.semantic_digest(), expected_digest);
 
@@ -497,7 +498,7 @@ mod tests {
         .expect("model query dependency uses a model-file digest");
 
         let mut changed = trace.clone();
-        changed.entries[0].query_key.dependency_inputs =
+        Arc::make_mut(&mut changed.entries[0].query_key).dependency_inputs =
             QueryDependencyInputs::new(vec![dependency]);
 
         assert_ne!(changed.semantic_projections(), expected_rows);
@@ -545,7 +546,7 @@ mod tests {
 
     fn trace_entry(query_kind: &str, result_label: &str) -> DemandQueryTraceEntry {
         DemandQueryTraceEntry {
-            query_key: test_query_key(query_kind),
+            query_key: test_query_key(query_kind).into(),
             result_digest: Digest::from_parts(
                 DigestKind::ProviderOutput,
                 "result",

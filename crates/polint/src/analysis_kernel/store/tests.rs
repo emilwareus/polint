@@ -132,8 +132,8 @@ mod metadata_invalidation_matrix {
             .collect::<Vec<_>>();
         let target_query = queries.first().cloned().expect("matrix target query");
         let sibling_query = queries.get(1).cloned().expect("matrix sibling query");
-        let target_query_node = CacheNode::Query(target_query.clone());
-        let sibling_query_node = CacheNode::Query(sibling_query);
+        let target_query_node = CacheNode::Query(target_query.clone().into());
+        let sibling_query_node = CacheNode::Query(sibling_query.into());
 
         let target_rule_code = typed_input(
             InputDependencyKind::RuleCode,
@@ -564,7 +564,7 @@ mod metadata_invalidation_matrix {
         validated: &ValidatedRunMetadata,
     ) -> generation::ActiveCompleteGeneration {
         let config = generation_store_config(root);
-        let outcome = SemanticStore::commit_validated_run(&config, validated);
+        let outcome = SemanticStore::commit_validated_run(&config, validated.clone());
         assert_eq!(outcome.status, StoreStatus::Ready);
         let statistics = outcome
             .statistics
@@ -673,8 +673,20 @@ mod metadata_invalidation_matrix {
             .iter()
             .map(|row| row.query_key().clone())
             .collect::<Vec<_>>();
-        let target = CacheNode::Query(queries.first().cloned().expect("transition target query"));
-        let sibling = CacheNode::Query(queries.get(1).cloned().expect("transition sibling query"));
+        let target = CacheNode::Query(
+            queries
+                .first()
+                .cloned()
+                .expect("transition target query")
+                .into(),
+        );
+        let sibling = CacheNode::Query(
+            queries
+                .get(1)
+                .cloned()
+                .expect("transition sibling query")
+                .into(),
+        );
         let input = typed_input(
             InputDependencyKind::AnalysisSetting,
             stable_key,
@@ -873,6 +885,46 @@ mod metadata_invalidation_matrix {
 
         assert_eq!(telemetry.plan.semantic, baseline.plan.semantic);
         assert_ne!(telemetry.plan.telemetry, baseline.plan.telemetry);
+        let baseline_identities = &baseline.plan.semantic.identities;
+        let telemetry_identities = &telemetry.plan.semantic.identities;
+        assert_eq!(
+            telemetry_identities.provider_output,
+            baseline_identities.provider_output
+        );
+        assert_eq!(telemetry_identities.layer, baseline_identities.layer);
+        assert_eq!(telemetry_identities.query, baseline_identities.query);
+        assert_eq!(telemetry_identities.fact, baseline_identities.fact);
+        assert_eq!(
+            telemetry_identities.dependency,
+            baseline_identities.dependency
+        );
+        assert_eq!(
+            telemetry_identities.validation,
+            baseline_identities.validation
+        );
+        assert_eq!(telemetry_identities.run, baseline_identities.run);
+        assert_eq!(
+            telemetry_identities.generation,
+            baseline_identities.generation
+        );
+
+        let baseline_stats = &baseline.plan.semantic.stats;
+        let telemetry_stats = &telemetry.plan.semantic.stats;
+        assert_eq!(
+            telemetry_stats.provider_output_digest,
+            baseline_stats.provider_output_digest
+        );
+        assert_eq!(telemetry_stats.layer_digest, baseline_stats.layer_digest);
+        assert_eq!(telemetry_stats.query_digest, baseline_stats.query_digest);
+        assert_eq!(telemetry_stats.fact_digest, baseline_stats.fact_digest);
+        assert_eq!(
+            telemetry_stats.dependency_digest,
+            baseline_stats.dependency_digest
+        );
+        assert_eq!(
+            telemetry_stats.validation_digest,
+            baseline_stats.validation_digest
+        );
         assert_eq!(telemetry.dependency_index, baseline.dependency_index);
         assert_eq!(
             plans_for_cases(&telemetry.dependency_index, &telemetry_topology),
@@ -993,7 +1045,7 @@ fn generation_query_trace_entry(label: &str) -> DemandQueryTraceEntry {
         &[label],
     )];
     DemandQueryTraceEntry {
-        query_key,
+        query_key: query_key.into(),
         result_digest: Digest::from_parts(DigestKind::ProviderOutput, "query_result", &[label]),
         precision_tier: PrecisionTier::SetupAware,
         provenance: format!("native:{label}"),
@@ -1085,7 +1137,7 @@ fn facade_disabled_guard_skips_plan_io_and_path_creation() {
     let config = StoreConfig::new(&path, false);
     reset_materialization_counters_for_test();
 
-    let outcome = SemanticStore::commit_validated_run(&config, &validated);
+    let outcome = SemanticStore::commit_validated_run(&config, validated);
 
     assert_eq!(outcome, StoreOutcome::disabled());
     assert_eq!(materialization_counters_for_test(), (0, 0, 0));
@@ -1150,6 +1202,9 @@ mod connection_policy {
         assert_eq!(policy.journal_mode, "wal");
         assert_eq!(policy.synchronous, 1);
         assert_eq!(policy.busy_timeout_ms, 250);
+        assert_eq!(policy.wal_autocheckpoint_pages, 0);
+        assert!(policy.no_checkpoint_on_close);
+        assert_eq!(policy.page_size_bytes, 16 * 1024);
         assert_eq!(
             connection::try_writer_lease(&mut writer).expect("writer lease"),
             connection::LeaseStatus::Acquired
@@ -1773,8 +1828,8 @@ mod active_complete_reader {
             .dependency_edges
             .iter()
             .map(|row| crate::analysis_kernel::incremental::DependencyEdge {
-                from: row.from.clone(),
-                to: row.to.clone(),
+                from: expanded_node(&active_plan.semantic, &row.from),
+                to: expanded_node(&active_plan.semantic, &row.to),
                 kind: row.kind,
                 required_shape: row.required_shape,
             })
@@ -1822,6 +1877,31 @@ mod active_complete_reader {
                 .expect("active generation remains visible");
         assert_eq!(visible.plan, active_plan);
         assert_eq!(visible.dependency_index, expected_index);
+    }
+
+    fn expanded_node(
+        semantic: &commit_plan::StoreSemanticPlan,
+        node: &commit_plan::StoreNodeRef,
+    ) -> crate::analysis_kernel::incremental::CacheNode {
+        use crate::analysis_kernel::incremental::CacheNode;
+        use commit_plan::StoreNodeRef;
+
+        match node {
+            StoreNodeRef::DependencyInput(input) => CacheNode::DependencyInput(input.clone()),
+            StoreNodeRef::RunManifest => CacheNode::RunManifest(semantic.run_manifest.key.clone()),
+            StoreNodeRef::Layer(ordinal) => {
+                CacheNode::layer(semantic.layers[*ordinal as usize].key.clone())
+            }
+            StoreNodeRef::Query(ordinal) => {
+                CacheNode::Query(semantic.queries[*ordinal as usize].key.clone().into())
+            }
+            StoreNodeRef::Summary(ordinal) => {
+                CacheNode::Summary(semantic.summaries[*ordinal as usize].key.clone())
+            }
+            StoreNodeRef::Diagnostic(ordinal) => {
+                CacheNode::Diagnostic(semantic.diagnostics[*ordinal as usize].key.clone())
+            }
+        }
     }
 
     #[test]

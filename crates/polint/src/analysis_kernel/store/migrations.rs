@@ -438,6 +438,7 @@ CREATE TABLE query_layer_digests (
 
 CREATE TABLE fact_metadata (
     generation_id INTEGER NOT NULL,
+    ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
     family TEXT NOT NULL CHECK (family <> ''),
     stable_key TEXT NOT NULL CHECK (stable_key <> ''),
     producer_id TEXT NOT NULL CHECK (producer_id <> ''),
@@ -446,9 +447,9 @@ CREATE TABLE fact_metadata (
     confidence TEXT NOT NULL CHECK (confidence <> ''),
     validation TEXT NOT NULL CHECK (validation <> ''),
     payload_digest TEXT NOT NULL CHECK (payload_digest <> ''),
-    PRIMARY KEY (generation_id, family, stable_key),
+    PRIMARY KEY (generation_id, ordinal),
     FOREIGN KEY (generation_id) REFERENCES generations(id) ON DELETE CASCADE
-);
+) WITHOUT ROWID;
 
 CREATE TABLE diagnostic_nodes (
     id INTEGER PRIMARY KEY,
@@ -1205,7 +1206,7 @@ fn validate_required_columns(connection: &Connection, version: i32) -> Result<()
         ),
         (
             "fact_metadata",
-            "generation_id family stable_key producer_id producer_layer_key precision confidence validation \
+            "generation_id ordinal family stable_key producer_id producer_layer_key precision confidence validation \
              payload_digest",
         ),
         (

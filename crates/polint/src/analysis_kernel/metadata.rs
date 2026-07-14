@@ -1,7 +1,11 @@
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
+use std::hash::{Hash, Hasher};
 
+use crate::analysis_kernel::incremental::{Digest, DigestKind};
 use crate::core::{ResolutionPrecision, ResolutionStatus, SymbolPrecision};
+use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum FactFamily {
@@ -538,22 +542,56 @@ impl ValidationStatus {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct StableFactMetaRow {
     pub(crate) family: FactFamily,
-    pub(crate) stable_key: String,
-    pub(crate) producer_id: String,
-    pub(crate) layer_id: String,
+    pub(crate) stable_key: StableFactKey,
+    pub(crate) producer_id: Cow<'static, str>,
+    pub(crate) layer_id: Cow<'static, str>,
     pub(crate) precision: FactPrecision,
     pub(crate) confidence: FactConfidence,
     pub(crate) validation: ValidationStatus,
     pub(crate) payload_digest: String,
 }
 
+impl serde::Serialize for StableFactMetaRow {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct as _;
+
+        let mut row = serializer.serialize_struct("StableFactMetaRow", 8)?;
+        row.serialize_field("family", self.family.label())?;
+        row.serialize_field("stable_key", &self.stable_key)?;
+        row.serialize_field("producer_id", &self.producer_id)?;
+        row.serialize_field("layer_id", &self.layer_id)?;
+        row.serialize_field("precision", self.precision.label())?;
+        row.serialize_field("confidence", self.confidence.label())?;
+        row.serialize_field("validation", self.validation.label())?;
+        row.serialize_field("payload_digest", &self.payload_digest)?;
+        row.end()
+    }
+}
+
 impl StableFactMetaRow {
     fn from_metadata(family: FactFamily, metadata: &FactMeta) -> Self {
         Self {
             family,
-            stable_key: metadata.stable_key.clone(),
-            producer_id: metadata.producer_id.to_string(),
-            layer_id: metadata.layer_id.to_string(),
+            stable_key: metadata.stable_key.clone().into(),
+            producer_id: Cow::Borrowed(metadata.producer_id),
+            layer_id: Cow::Borrowed(metadata.layer_id),
+            precision: metadata.precision,
+            confidence: metadata.confidence,
+            validation: metadata.validation,
+            payload_digest: metadata.payload_digest.clone(),
+        }
+    }
+
+    #[cfg(test)]
+    fn from_metadata_compact(family: FactFamily, metadata: &FactMeta) -> Self {
+        Self {
+            family,
+            stable_key: StableFactKey::compressed(&metadata.stable_key),
+            producer_id: Cow::Borrowed(metadata.producer_id),
+            layer_id: Cow::Borrowed(metadata.layer_id),
             precision: metadata.precision,
             confidence: metadata.confidence,
             validation: metadata.validation,
@@ -563,6 +601,198 @@ impl StableFactMetaRow {
 
     fn has_same_identity(&self, other: &Self) -> bool {
         self.family == other.family && self.stable_key == other.stable_key
+    }
+}
+
+const COMPRESSED_STABLE_KEY_PREFIX: &[u8] = b"polint-lz4-v1\0";
+const MAX_STABLE_KEY_BYTES: usize = 64 * 1024 * 1024;
+
+#[derive(Clone)]
+pub(crate) enum StableFactKey {
+    Plain(String),
+    Compressed { encoded: Vec<u8>, json_bytes: u64 },
+}
+
+impl StableFactKey {
+    pub(crate) fn compressed(stable_key: &str) -> Self {
+        let compressed = lz4_flex::compress_prepend_size(stable_key.as_bytes());
+        let mut encoded = Vec::with_capacity(COMPRESSED_STABLE_KEY_PREFIX.len() + compressed.len());
+        encoded.extend_from_slice(COMPRESSED_STABLE_KEY_PREFIX);
+        encoded.extend_from_slice(&compressed);
+        Self::Compressed {
+            encoded,
+            json_bytes: serialized_string_bytes(stable_key),
+        }
+    }
+
+    fn compressed_with_scratch(
+        stable_key: &str,
+        scratch: &mut Vec<u8>,
+        table: &mut lz4_flex::block::CompressTable,
+    ) -> Self {
+        let input = stable_key.as_bytes();
+        let maximum_output = lz4_flex::block::get_maximum_output_size(input.len());
+        scratch.resize(maximum_output, 0);
+        let compressed_len = lz4_flex::block::compress_into_with_table(input, scratch, table)
+            .expect("maximum-size LZ4 scratch buffer accepts compressed stable key");
+        let input_len = u32::try_from(input.len())
+            .expect("validated stable keys fit the LZ4 size-prefixed representation");
+        let mut encoded =
+            Vec::with_capacity(COMPRESSED_STABLE_KEY_PREFIX.len() + 4 + compressed_len);
+        encoded.extend_from_slice(COMPRESSED_STABLE_KEY_PREFIX);
+        encoded.extend_from_slice(&input_len.to_le_bytes());
+        encoded.extend_from_slice(&scratch[..compressed_len]);
+        Self::Compressed {
+            encoded,
+            json_bytes: serialized_string_bytes(stable_key),
+        }
+    }
+
+    pub(crate) fn from_storage(encoded: Vec<u8>) -> Result<Self, ()> {
+        let Some(compressed) = encoded.strip_prefix(COMPRESSED_STABLE_KEY_PREFIX) else {
+            let stable_key = String::from_utf8(encoded).map_err(|_| ())?;
+            return Ok(Self::Plain(stable_key));
+        };
+        let declared_size = compressed
+            .get(..4)
+            .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
+            .map(u32::from_le_bytes)
+            .and_then(|size| usize::try_from(size).ok())
+            .ok_or(())?;
+        if declared_size == 0 || declared_size > MAX_STABLE_KEY_BYTES {
+            return Err(());
+        }
+        let decoded = lz4_flex::decompress_size_prepended(compressed).map_err(|_| ())?;
+        let stable_key = std::str::from_utf8(&decoded).map_err(|_| ())?;
+        Ok(Self::Compressed {
+            encoded,
+            json_bytes: serialized_string_bytes(stable_key),
+        })
+    }
+
+    pub(crate) fn decoded(&self) -> Cow<'_, str> {
+        match self {
+            Self::Plain(stable_key) => Cow::Borrowed(stable_key),
+            Self::Compressed { encoded, .. } => {
+                let compressed = encoded
+                    .strip_prefix(COMPRESSED_STABLE_KEY_PREFIX)
+                    .expect("compressed stable-key representation has its codec prefix");
+                let decoded = lz4_flex::decompress_size_prepended(compressed)
+                    .expect("compressed stable-key representation was validated");
+                Cow::Owned(
+                    String::from_utf8(decoded)
+                        .expect("compressed stable-key representation is valid UTF-8"),
+                )
+            }
+        }
+    }
+
+    pub(crate) fn storage_bytes(&self) -> Cow<'_, [u8]> {
+        match self {
+            Self::Plain(stable_key) => match Self::compressed(stable_key) {
+                Self::Compressed { encoded, .. } => Cow::Owned(encoded),
+                Self::Plain(_) => unreachable!("compression always returns encoded bytes"),
+            },
+            Self::Compressed { encoded, .. } => Cow::Borrowed(encoded),
+        }
+    }
+
+    pub(crate) fn json_bytes(&self) -> u64 {
+        match self {
+            Self::Plain(stable_key) => serialized_string_bytes(stable_key),
+            Self::Compressed { json_bytes, .. } => *json_bytes,
+        }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        match self {
+            Self::Plain(stable_key) => stable_key.is_empty(),
+            Self::Compressed { encoded, .. } => {
+                encoded
+                    .get(COMPRESSED_STABLE_KEY_PREFIX.len()..COMPRESSED_STABLE_KEY_PREFIX.len() + 4)
+                    .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
+                    .map(u32::from_le_bytes)
+                    == Some(0)
+            }
+        }
+    }
+}
+
+fn serialized_string_bytes(value: &str) -> u64 {
+    value.as_bytes().iter().fold(2_u64, |total, byte| {
+        total.saturating_add(match byte {
+            b'"' | b'\\' | b'\x08' | b'\x0c' | b'\n' | b'\r' | b'\t' => 2,
+            0x00..=0x1f => 6,
+            _ => 1,
+        })
+    })
+}
+
+impl From<String> for StableFactKey {
+    fn from(value: String) -> Self {
+        Self::Plain(value)
+    }
+}
+
+impl From<&str> for StableFactKey {
+    fn from(value: &str) -> Self {
+        Self::Plain(value.to_string())
+    }
+}
+
+impl fmt::Debug for StableFactKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_tuple("StableFactKey")
+            .field(&self.decoded())
+            .finish()
+    }
+}
+
+impl fmt::Display for StableFactKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.decoded())
+    }
+}
+
+impl PartialEq for StableFactKey {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Plain(left), Self::Plain(right)) => left == right,
+            (Self::Compressed { encoded: left, .. }, Self::Compressed { encoded: right, .. }) => {
+                left == right
+            }
+            _ => self.decoded() == other.decoded(),
+        }
+    }
+}
+
+impl Eq for StableFactKey {}
+
+impl PartialOrd for StableFactKey {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for StableFactKey {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.decoded().cmp(&other.decoded())
+    }
+}
+
+impl Hash for StableFactKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.decoded().hash(state);
+    }
+}
+
+impl serde::Serialize for StableFactKey {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.decoded())
     }
 }
 
@@ -667,6 +897,14 @@ impl FactFamilyRows {
                     .iter()
                     .map(|(run_id, metadata)| (*run_id, metadata)),
             )
+    }
+
+    fn into_rows(self) -> impl Iterator<Item = (u64, FactMeta)> {
+        self.dense
+            .into_iter()
+            .enumerate()
+            .filter_map(|(run_id, metadata)| metadata.map(|metadata| (run_id as u64, metadata)))
+            .chain(self.sparse)
     }
 }
 
@@ -785,6 +1023,196 @@ impl FactMetaStore {
             StableFactMetaRow::from_metadata(reference.family, metadata)
         }))
     }
+
+    #[cfg(test)]
+    pub(crate) fn compact_stable_rows(
+        &self,
+    ) -> Result<(Vec<StableFactMetaRow>, Digest), StableFactMetaConflict> {
+        let mut rows = self.rows().collect::<Vec<_>>();
+        rows.sort_by(|(left_ref, left), (right_ref, right)| {
+            left_ref
+                .family
+                .cmp(&right_ref.family)
+                .then_with(|| left.stable_key.cmp(&right.stable_key))
+                .then_with(|| left.producer_id.cmp(right.producer_id))
+                .then_with(|| left.layer_id.cmp(right.layer_id))
+                .then_with(|| left.precision.cmp(&right.precision))
+                .then_with(|| left.confidence.cmp(&right.confidence))
+                .then_with(|| left.validation.cmp(&right.validation))
+                .then_with(|| left.payload_digest.cmp(&right.payload_digest))
+        });
+        let mut canonical_rows = Vec::with_capacity(rows.len());
+        let mut prior: Option<(FactRef, &FactMeta)> = None;
+        for (reference, metadata) in rows {
+            if let Some((prior_ref, prior_metadata)) = prior
+                && prior_ref.family == reference.family
+                && prior_metadata.stable_key == metadata.stable_key
+            {
+                if prior_metadata == metadata {
+                    continue;
+                }
+                return Err(StableFactMetaConflict {
+                    family: reference.family,
+                    stable_key: metadata.stable_key.clone(),
+                    existing: Box::new(StableFactMetaRow::from_metadata(
+                        prior_ref.family,
+                        prior_metadata,
+                    )),
+                    incoming: Box::new(StableFactMetaRow::from_metadata(
+                        reference.family,
+                        metadata,
+                    )),
+                });
+            }
+            canonical_rows.push((reference, metadata));
+            prior = Some((reference, metadata));
+        }
+        let (canonical, row_digests): (Vec<_>, Vec<_>) = canonical_rows
+            .par_iter()
+            .map(|(reference, metadata)| {
+                let digest = Digest::from_parts(
+                    DigestKind::FactMetadata,
+                    "fact_metadata_row",
+                    &[
+                        reference.family.label(),
+                        &metadata.stable_key,
+                        metadata.producer_id,
+                        metadata.layer_id,
+                        metadata.precision.label(),
+                        metadata.confidence.label(),
+                        metadata.validation.label(),
+                        &metadata.payload_digest,
+                    ],
+                );
+                (
+                    StableFactMetaRow::from_metadata_compact(reference.family, metadata),
+                    digest,
+                )
+            })
+            .unzip();
+        Ok((
+            canonical,
+            Digest::from_unordered(DigestKind::FactMetadata, "fact_metadata_rows", row_digests),
+        ))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn into_compact_stable_rows(
+        self,
+    ) -> Result<(Vec<StableFactMetaRow>, Digest), StableFactMetaConflict> {
+        Ok(self.prepare_compact_stable_rows()?.finish())
+    }
+
+    pub(crate) fn prepare_compact_stable_rows(
+        self,
+    ) -> Result<PreparedCompactStableRows, StableFactMetaConflict> {
+        let Self {
+            rows,
+            stable_key_owners,
+            stable_key_conflicts,
+        } = self;
+        drop(stable_key_owners);
+        drop(stable_key_conflicts);
+
+        let mut rows = rows
+            .into_iter()
+            .flat_map(|(family, rows)| {
+                rows.into_rows()
+                    .map(move |(_, metadata)| StableFactMetaRow {
+                        family,
+                        stable_key: StableFactKey::Plain(metadata.stable_key),
+                        producer_id: Cow::Borrowed(metadata.producer_id),
+                        layer_id: Cow::Borrowed(metadata.layer_id),
+                        precision: metadata.precision,
+                        confidence: metadata.confidence,
+                        validation: metadata.validation,
+                        payload_digest: metadata.payload_digest,
+                    })
+            })
+            .collect::<Vec<_>>();
+        rows.par_sort_unstable_by(|left, right| {
+            let StableFactKey::Plain(left_stable_key) = &left.stable_key else {
+                unreachable!("newly materialized fact rows retain plain stable keys")
+            };
+            let StableFactKey::Plain(right_stable_key) = &right.stable_key else {
+                unreachable!("newly materialized fact rows retain plain stable keys")
+            };
+            left.family
+                .cmp(&right.family)
+                .then_with(|| left_stable_key.cmp(right_stable_key))
+                .then_with(|| left.producer_id.cmp(&right.producer_id))
+                .then_with(|| left.layer_id.cmp(&right.layer_id))
+                .then_with(|| left.precision.cmp(&right.precision))
+                .then_with(|| left.confidence.cmp(&right.confidence))
+                .then_with(|| left.validation.cmp(&right.validation))
+                .then_with(|| left.payload_digest.cmp(&right.payload_digest))
+        });
+
+        for pair in rows.windows(2) {
+            let prior = &pair[0];
+            let incoming = &pair[1];
+            if prior.has_same_identity(incoming) && prior != incoming {
+                return Err(StableFactMetaConflict {
+                    family: incoming.family,
+                    stable_key: incoming.stable_key.decoded().into_owned(),
+                    existing: Box::new(prior.clone()),
+                    incoming: Box::new(incoming.clone()),
+                });
+            }
+        }
+        rows.dedup_by(|right, left| right.has_same_identity(left));
+
+        Ok(PreparedCompactStableRows { rows })
+    }
+}
+
+pub(crate) struct PreparedCompactStableRows {
+    rows: Vec<StableFactMetaRow>,
+}
+
+impl PreparedCompactStableRows {
+    pub(crate) fn finish(mut self) -> (Vec<StableFactMetaRow>, Digest) {
+        let row_fingerprints = self
+            .rows
+            .par_iter_mut()
+            .map_init(
+                || (Vec::new(), lz4_flex::block::CompressTable::default()),
+                |(compression_scratch, compression_table), row| {
+                    let StableFactKey::Plain(stable_key) = &row.stable_key else {
+                        unreachable!("newly materialized fact rows retain plain stable keys")
+                    };
+                    let fingerprint = Digest::fingerprint_from_parts(
+                        DigestKind::FactMetadata,
+                        "fact_metadata_row",
+                        &[
+                            row.family.label(),
+                            stable_key,
+                            &row.producer_id,
+                            &row.layer_id,
+                            row.precision.label(),
+                            row.confidence.label(),
+                            row.validation.label(),
+                            &row.payload_digest,
+                        ],
+                    );
+                    let compressed = StableFactKey::compressed_with_scratch(
+                        stable_key,
+                        compression_scratch,
+                        compression_table,
+                    );
+                    row.stable_key = compressed;
+                    fingerprint
+                },
+            )
+            .collect();
+        let digest = Digest::from_unordered_same_kind_fingerprints(
+            DigestKind::FactMetadata,
+            "fact_metadata_rows",
+            DigestKind::FactMetadata,
+            row_fingerprints,
+        );
+        (self.rows, digest)
+    }
 }
 
 fn canonical_stable_rows(
@@ -802,7 +1230,7 @@ fn canonical_stable_rows(
             }
             return Err(StableFactMetaConflict {
                 family: row.family,
-                stable_key: row.stable_key.clone(),
+                stable_key: row.stable_key.decoded().into_owned(),
                 existing: Box::new(existing.clone()),
                 incoming: Box::new(row),
             });
@@ -1103,6 +1531,93 @@ mod tests {
     }
 
     #[test]
+    fn compact_stable_rows_preserve_semantics_and_round_trip_storage() {
+        let mut store = FactMetaStore::default();
+        let stable_key = format!("import:{}", "repeated/segment/".repeat(64));
+        store.insert(
+            FactRef::new(FactFamily::Import, 7),
+            test_meta(&stable_key, "payload:a"),
+        );
+
+        let plain = store.stable_rows().expect("plain stable rows");
+        let (compact, compact_digest) = store.compact_stable_rows().expect("compact stable rows");
+        let (staged, staged_digest) = store
+            .clone()
+            .prepare_compact_stable_rows()
+            .expect("prepared compact stable rows")
+            .finish();
+        let (consumed, consumed_digest) = store
+            .into_compact_stable_rows()
+            .expect("consumed compact stable rows");
+        let expected_digest = Digest::from_unordered(
+            DigestKind::FactMetadata,
+            "fact_metadata_rows",
+            plain
+                .iter()
+                .map(|row| {
+                    let decoded = row.stable_key.decoded();
+                    Digest::from_parts(
+                        DigestKind::FactMetadata,
+                        "fact_metadata_row",
+                        &[
+                            row.family.label(),
+                            &decoded,
+                            &row.producer_id,
+                            &row.layer_id,
+                            row.precision.label(),
+                            row.confidence.label(),
+                            row.validation.label(),
+                            &row.payload_digest,
+                        ],
+                    )
+                })
+                .collect(),
+        );
+
+        assert_eq!(compact, plain);
+        assert_eq!(compact_digest, expected_digest);
+        assert_eq!(staged, compact);
+        assert_eq!(staged_digest, compact_digest);
+        assert_eq!(consumed, compact);
+        assert_eq!(consumed_digest, compact_digest);
+        let StableFactKey::Compressed { encoded, .. } = &compact[0].stable_key else {
+            panic!("compact rows must retain the encoded stable key")
+        };
+        assert!(encoded.starts_with(COMPRESSED_STABLE_KEY_PREFIX));
+        assert!(encoded.len() < stable_key.len());
+        assert_eq!(
+            StableFactKey::from_storage(encoded.clone()).expect("encoded key round trips"),
+            plain[0].stable_key
+        );
+    }
+
+    #[test]
+    fn scratch_compression_matches_size_prefixed_codec_byte_for_byte() {
+        let table_boundary = (0..usize::from(u16::MAX) + 257)
+            .map(|index| char::from(b' ' + (index % 95) as u8))
+            .collect::<String>();
+        let cases = [
+            String::new(),
+            "x".to_string(),
+            "quote:\" slash:\\ newline:\n control:\u{1f}".to_string(),
+            "repeated/segment/".repeat(256),
+            table_boundary,
+            "small key after table upgrade".to_string(),
+        ];
+        let mut scratch = Vec::new();
+        let mut table = lz4_flex::block::CompressTable::default();
+
+        for stable_key in cases {
+            assert_eq!(
+                StableFactKey::compressed_with_scratch(&stable_key, &mut scratch, &mut table,),
+                StableFactKey::compressed(&stable_key),
+                "stable key length {}",
+                stable_key.len()
+            );
+        }
+    }
+
+    #[test]
     fn stable_rows_deduplicate_identical_semantic_rows() {
         let mut store = FactMetaStore::default();
         store.insert(
@@ -1142,6 +1657,11 @@ mod tests {
             conflict.existing.payload_digest,
             conflict.incoming.payload_digest
         );
+
+        let consumed_conflict = store
+            .into_compact_stable_rows()
+            .expect_err("consumed rows preserve the conflict");
+        assert_eq!(consumed_conflict, conflict);
     }
 
     #[test]
