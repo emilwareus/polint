@@ -975,18 +975,18 @@ impl AnalysisKernel {
             store::record_handoff_materialization();
             match fact_meta.prepare_compact_stable_rows() {
                 Ok(prepared_facts) => {
-                    let (prepared, finalized_facts) = rayon::join(
-                        || {
-                            incremental::ValidatedRunMetadata::prepare_finalized_canonical_run(
-                                &input_snapshot,
-                                &provider_outputs,
-                                &scc_closure.demand_query_trace,
-                                &validation_events,
-                                Self::provider_manifests(),
-                            )
-                        },
-                        || prepared_facts.finish_validated(),
-                    );
+                    // Both operations use internal data parallelism. Finish the
+                    // large fact-key compaction first so its plain source keys
+                    // do not coexist with the canonical dependency projection.
+                    let finalized_facts = prepared_facts.finish_validated();
+                    let prepared =
+                        incremental::ValidatedRunMetadata::prepare_finalized_canonical_run(
+                            &input_snapshot,
+                            &provider_outputs,
+                            &scc_closure.demand_query_trace,
+                            &validation_events,
+                            Self::provider_manifests(),
+                        );
                     match prepared {
                         Ok(prepared) => {
                             match incremental::ValidatedRunMetadata::finish_prepared_canonical_run(

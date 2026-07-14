@@ -75,7 +75,34 @@ pub(in crate::analysis_kernel) struct PreparedValidatedRunMetadata {
     declared_dependency_edges: Vec<DependencyEdge>,
     dependency_index: DependencyIndex,
     dependency_digest: Digest,
+    canonical_dependency_proof: CanonicalDependencyIndexProof,
     validation_events: Vec<ValidationEvent>,
+}
+
+struct CanonicalDependencyIndexProof {
+    schema_version: String,
+    edge_count: usize,
+    digest: Digest,
+}
+
+impl CanonicalDependencyIndexProof {
+    // The proof is sealed inside this module and is constructed at the same
+    // point as the sorted, deduplicated persistence index and its digest. It
+    // lets the optimized handoff verify that exact construction without
+    // cloning every dependency edge into a second adjacency index.
+    fn from_canonical_index(index: &DependencyIndex, digest: &Digest) -> Self {
+        Self {
+            schema_version: index.schema_version.clone(),
+            edge_count: index.canonical_edges().len(),
+            digest: digest.clone(),
+        }
+    }
+
+    fn matches(&self, index: &DependencyIndex, digest: Option<&Digest>) -> bool {
+        index.schema_version == self.schema_version
+            && index.canonical_edges().len() == self.edge_count
+            && digest == Some(&self.digest)
+    }
 }
 
 #[cfg_attr(
@@ -290,6 +317,10 @@ impl ValidatedRunMetadata {
             verify_reconstruction,
         );
         let dependency_digest = dependency_rows_digest(dependency_index.canonical_edges());
+        let canonical_dependency_proof = CanonicalDependencyIndexProof::from_canonical_index(
+            &dependency_index,
+            &dependency_digest,
+        );
         Ok(PreparedValidatedRunMetadata {
             input_snapshot: input_snapshot.clone(),
             provider_manifests,
@@ -301,6 +332,7 @@ impl ValidatedRunMetadata {
             declared_dependency_edges,
             dependency_index,
             dependency_digest,
+            canonical_dependency_proof,
             validation_events,
         })
     }
@@ -322,6 +354,7 @@ impl ValidatedRunMetadata {
             declared_dependency_edges,
             dependency_index,
             dependency_digest,
+            canonical_dependency_proof,
             validation_events,
         } = prepared;
         let identities = CanonicalRunIdentities::from_semantic_rows(
@@ -359,8 +392,11 @@ impl ValidatedRunMetadata {
                     "optimized validated-run handoff is missing its canonical fact digest",
                 )
             })?;
-            metadata
-                .validate_integrity_with_canonical_fact_proof(fact_digest, &dependency_digest)?;
+            metadata.validate_integrity_with_canonical_proofs(
+                fact_digest,
+                &dependency_digest,
+                &canonical_dependency_proof,
+            )?;
         }
         Ok(metadata)
     }
@@ -451,13 +487,14 @@ impl ValidatedRunMetadata {
     pub(in crate::analysis_kernel) fn validate_integrity(
         &self,
     ) -> Result<(), ValidatedRunMetadataError> {
-        self.validate_integrity_inner(None, None, false)
+        self.validate_integrity_inner(None, None, false, None)
     }
 
-    fn validate_integrity_with_canonical_fact_proof(
+    fn validate_integrity_with_canonical_proofs(
         &self,
         fact_digest: &Digest,
         dependency_digest: &Digest,
+        dependency_proof: &CanonicalDependencyIndexProof,
     ) -> Result<(), ValidatedRunMetadataError> {
         if fact_digest.kind != DigestKind::FactMetadata
             || dependency_digest.kind != DigestKind::Dependency
@@ -466,7 +503,12 @@ impl ValidatedRunMetadata {
                 "optimized validated-run handoff has a wrong-purpose canonical digest",
             ));
         }
-        self.validate_integrity_inner(Some(fact_digest), Some(dependency_digest), true)
+        self.validate_integrity_inner(
+            Some(fact_digest),
+            Some(dependency_digest),
+            true,
+            Some(dependency_proof),
+        )
     }
 
     fn validate_integrity_inner(
@@ -474,6 +516,7 @@ impl ValidatedRunMetadata {
         fact_digest: Option<&Digest>,
         dependency_digest: Option<&Digest>,
         fact_rows_are_canonical: bool,
+        canonical_dependency_proof: Option<&CanonicalDependencyIndexProof>,
     ) -> Result<(), ValidatedRunMetadataError> {
         if self.input_snapshot.schema_version != INPUT_SNAPSHOT_SCHEMA_VERSION {
             return Err(ValidatedRunMetadataError::new(
@@ -527,20 +570,20 @@ impl ValidatedRunMetadata {
                 "validated-run manifest key does not match canonical run identity",
             ));
         }
-        let expected_dependency_index = dependency_index_for(
-            &self.input_snapshot,
-            &self.provider_outputs,
-            &self.query_rows,
-            &self.run_manifest_key,
-            &self.diagnostic_keys,
-            &self.declared_dependency_edges,
-            true,
-        );
-        let dependency_index_matches = if fact_rows_are_canonical {
-            self.dependency_index.schema_version == expected_dependency_index.schema_version
-                && self.dependency_index.canonical_edges()
-                    == expected_dependency_index.canonical_edges()
+        let dependency_index_matches = if let Some(proof) = canonical_dependency_proof {
+            proof.matches(&self.dependency_index, dependency_digest)
         } else {
+            // General callers can supply an independently assembled handoff, so
+            // retain the full reconstruction check when no sealed proof exists.
+            let expected_dependency_index = dependency_index_for(
+                &self.input_snapshot,
+                &self.provider_outputs,
+                &self.query_rows,
+                &self.run_manifest_key,
+                &self.diagnostic_keys,
+                &self.declared_dependency_edges,
+                true,
+            );
             self.dependency_index == expected_dependency_index
         };
         if !dependency_index_matches {
@@ -2104,6 +2147,32 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn canonical_dependency_proof_binds_schema_count_and_digest() {
+        let index = DependencyIndex::from_edges_for_persistence(Vec::new());
+        let digest = dependency_rows_digest(index.canonical_edges());
+        let proof = CanonicalDependencyIndexProof::from_canonical_index(&index, &digest);
+        assert!(proof.matches(&index, Some(&digest)));
+
+        let wrong_digest = Digest::from_parts(DigestKind::Dependency, "wrong", &["digest"]);
+        assert!(!proof.matches(&index, Some(&wrong_digest)));
+
+        let mut wrong_schema = index;
+        wrong_schema.schema_version.push_str(".tampered");
+        assert!(!proof.matches(&wrong_schema, Some(&digest)));
+
+        let query = dependency_free_test_query_key(
+            "proof-count",
+            "1",
+            Digest::from_parts(DigestKind::QueryParameters, "proof", &["parameters"]),
+            Digest::from_parts(DigestKind::Budget, "proof", &["budget"]),
+            PrecisionTier::SetupAware,
+        );
+        let wrong_count =
+            DependencyIndex::from_edges_for_persistence(query_dependency_edges(&query));
+        assert!(!proof.matches(&wrong_count, Some(&digest)));
     }
 
     #[test]

@@ -240,19 +240,31 @@ impl SemanticStore {
         let force_publication = NEXT_COMMIT_FAILURE.with(|next| next.get().is_some());
         #[cfg(not(test))]
         let force_publication = false;
-        if !force_publication {
-            match generation::active_generation_statistics(
+        let validated = if !force_publication {
+            match generation::match_active_generation(
                 config,
                 validated.identities(),
                 &validated.dependency_index().schema_version,
             ) {
-                Ok(Some(statistics)) => {
-                    return StoreOutcome {
-                        status: StoreStatus::Ready,
-                        statistics: Some(statistics),
+                Ok(generation::ActiveGenerationMatch::Identical(matched)) => {
+                    // An identity match has no publication fallback: invalid
+                    // persisted rows return RebuildNeeded. Release the newly
+                    // produced handoff before decoding the complete active
+                    // projection so both validated representations do not
+                    // coexist at peak size.
+                    drop(validated);
+                    return match generation::validate_active_generation_statistics(matched) {
+                        Ok(statistics) => StoreOutcome {
+                            status: StoreStatus::Ready,
+                            statistics: Some(statistics),
+                        },
+                        Err(status) => StoreOutcome {
+                            status,
+                            statistics: None,
+                        },
                     };
                 }
-                Ok(None) => {}
+                Ok(generation::ActiveGenerationMatch::Different) => validated,
                 Err(status) => {
                     return StoreOutcome {
                         status,
@@ -260,7 +272,9 @@ impl SemanticStore {
                     };
                 }
             }
-        }
+        } else {
+            validated
+        };
 
         record_plan_materialization();
         let plan = match commit_plan::StoreCommitPlan::from_owned_validated_run(validated) {

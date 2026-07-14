@@ -59,6 +59,16 @@ pub(super) struct ActiveCompleteGeneration {
     pub(super) dependency_index: DependencyIndex,
 }
 
+pub(super) enum ActiveGenerationMatch {
+    Identical(MatchedActiveGeneration),
+    Different,
+}
+
+pub(super) struct MatchedActiveGeneration {
+    reader: ReadOnlyConnection,
+    handle: i64,
+}
+
 #[derive(Clone, Debug)]
 struct Reservation {
     handle: i64,
@@ -318,14 +328,14 @@ pub(super) fn read_active_complete(
     read_active_complete_from_reader(&reader, workspace).map_err(map_read_error)
 }
 
-pub(super) fn active_generation_statistics(
+pub(super) fn match_active_generation(
     config: &StoreConfig,
     identities: &CanonicalRunIdentities,
     dependency_schema: &str,
-) -> Result<Option<StoreStatistics>, StoreStatus> {
+) -> Result<ActiveGenerationMatch, StoreStatus> {
     prepare_store_path(config.path())?;
     if !config.path().exists() {
-        return Ok(None);
+        return Ok(ActiveGenerationMatch::Different);
     }
     record_store_io_attempt();
     let reader = connection::open_read_only(config.path()).map_err(map_connection_error)?;
@@ -334,7 +344,9 @@ pub(super) fn active_generation_statistics(
     let manifest = read_manifest(connection).map_err(map_read_error)?;
     let workspace = identities.workspace();
     match manifest.workspace.as_ref() {
-        None if manifest.active_generation.is_none() => return Ok(None),
+        None if manifest.active_generation.is_none() => {
+            return Ok(ActiveGenerationMatch::Different);
+        }
         Some(bound) if bound != workspace => {
             return Err(StoreStatus::Skipped(StoreSkipReason::WorkspaceMismatch));
         }
@@ -346,7 +358,7 @@ pub(super) fn active_generation_statistics(
         }
     }
     let Some(active_handle) = manifest.active_generation else {
-        return Ok(None);
+        return Ok(ActiveGenerationMatch::Different);
     };
     let header = read_generation_header(connection, active_handle).map_err(map_read_error)?;
     let failure_count: i64 = connection
@@ -380,18 +392,28 @@ pub(super) fn active_generation_statistics(
         || header.identities.generation != *identities.generation()
         || header.dependency_schema != dependency_schema
     {
-        return Ok(None);
+        return Ok(ActiveGenerationMatch::Different);
     }
-    let active = read_generation_projection(connection, active_handle).map_err(map_read_error)?;
+    Ok(ActiveGenerationMatch::Identical(MatchedActiveGeneration {
+        reader,
+        handle: active_handle,
+    }))
+}
+
+pub(super) fn validate_active_generation_statistics(
+    matched: MatchedActiveGeneration,
+) -> Result<StoreStatistics, StoreStatus> {
+    let connection = connection::read_connection(&matched.reader);
+    let active = read_generation_projection(connection, matched.handle).map_err(map_read_error)?;
     let semantic = &active.plan.semantic;
     let stats = &semantic.stats;
-    Ok(Some(StoreStatistics {
+    Ok(StoreStatistics {
         planned_semantic_row_count: semantic.planned_semantic_row_count(),
         semantic_logical_bytes: stats.semantic_logical_bytes,
         input_digest: stats.input_digest.clone(),
         dependency_digest: stats.dependency_digest.clone(),
         validation_digest: stats.validation_digest.clone(),
-    }))
+    })
 }
 
 fn reserve_generation(
