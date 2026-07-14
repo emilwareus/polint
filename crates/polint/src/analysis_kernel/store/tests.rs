@@ -2115,6 +2115,73 @@ mod active_complete_reader {
             ))
         );
     }
+
+    #[test]
+    fn identical_rerun_rejects_tampered_active_scalar_and_child_rows() {
+        let tampers = [
+            (
+                "input-scalar",
+                "UPDATE input_files
+                 SET source_digest_value = source_digest_value || '.tampered'
+                 WHERE generation_id = (
+                     SELECT active_generation_id FROM store_manifest WHERE id = 1
+                 );",
+            ),
+            (
+                "fact-child",
+                "DELETE FROM fact_metadata
+                 WHERE (generation_id, ordinal) IN (
+                     SELECT generation_id, ordinal FROM fact_metadata
+                     WHERE generation_id = (
+                         SELECT active_generation_id FROM store_manifest WHERE id = 1
+                     ) LIMIT 1
+                 );",
+            ),
+            (
+                "query-child",
+                "DELETE FROM query_inputs
+                 WHERE (generation_id, query_id, ordinal) IN (
+                     SELECT generation_id, query_id, ordinal FROM query_inputs
+                     WHERE generation_id = (
+                         SELECT active_generation_id FROM store_manifest WHERE id = 1
+                     ) LIMIT 1
+                 );",
+            ),
+            (
+                "dependency-child",
+                "DELETE FROM dependency_edges
+                 WHERE (generation_id, ordinal) IN (
+                     SELECT generation_id, ordinal FROM dependency_edges
+                     WHERE generation_id = (
+                         SELECT active_generation_id FROM store_manifest WHERE id = 1
+                     ) LIMIT 1
+                 );",
+            ),
+        ];
+
+        for (label, tamper) in tampers {
+            let temp = tempfile::tempdir().expect("temp directory");
+            let validated = generation_validated_fixture(&temp.path().join("repo"), label);
+            let config = generation_store_config(temp.path());
+            assert_eq!(
+                SemanticStore::commit_validated_run(&config, validated.clone()).status,
+                StoreStatus::Ready,
+                "{label}"
+            );
+            let database = Connection::open(config.path()).expect("open store");
+            database.execute_batch(tamper).expect("tamper active rows");
+            drop(database);
+
+            let outcome = SemanticStore::commit_validated_run(&config, validated);
+
+            assert_eq!(
+                outcome.status,
+                StoreStatus::RebuildNeeded(StoreRebuildReason::InvalidMetadata),
+                "{label}"
+            );
+            assert_eq!(outcome.statistics, None, "{label}");
+        }
+    }
 }
 
 mod recovery {

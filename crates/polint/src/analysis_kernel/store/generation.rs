@@ -382,38 +382,15 @@ pub(super) fn active_generation_statistics(
     {
         return Ok(None);
     }
-    let stats = read_stats(connection, active_handle).map_err(map_read_error)?;
-    if stats.input_digest != *identities.input_snapshot()
-        || stats.dependency_digest != *identities.dependency()
-        || stats.validation_digest != *identities.validation()
-    {
-        return Err(StoreStatus::RebuildNeeded(
-            StoreRebuildReason::InvalidMetadata,
-        ));
-    }
-    let payload_rows =
-        generation_payload_row_count(connection, active_handle).map_err(map_read_error)?;
-    let telemetry_rows: i64 = connection
-        .query_row(
-            "SELECT count(*) FROM generation_telemetry WHERE generation_id = ?1",
-            [active_handle],
-            |row| row.get(0),
-        )
-        .map_err(ProjectionError::from)
-        .map_err(map_read_error)?;
-    let planned_semantic_row_count = payload_rows
-        .checked_sub(telemetry_rows)
-        .and_then(|rows| rows.checked_add(1))
-        .and_then(|rows| u64::try_from(rows).ok())
-        .ok_or(StoreStatus::RebuildNeeded(
-            StoreRebuildReason::InvalidMetadata,
-        ))?;
+    let active = read_generation_projection(connection, active_handle).map_err(map_read_error)?;
+    let semantic = &active.plan.semantic;
+    let stats = &semantic.stats;
     Ok(Some(StoreStatistics {
-        planned_semantic_row_count,
+        planned_semantic_row_count: semantic.planned_semantic_row_count(),
         semantic_logical_bytes: stats.semantic_logical_bytes,
-        input_digest: stats.input_digest,
-        dependency_digest: stats.dependency_digest,
-        validation_digest: stats.validation_digest,
+        input_digest: stats.input_digest.clone(),
+        dependency_digest: stats.dependency_digest.clone(),
+        validation_digest: stats.validation_digest.clone(),
     }))
 }
 
