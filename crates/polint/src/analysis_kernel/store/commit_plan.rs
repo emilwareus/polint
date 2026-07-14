@@ -30,6 +30,8 @@ pub(super) struct StoreCommitPlan {
     pub(super) telemetry: Vec<StoreTelemetryRow>,
 }
 
+pub(super) struct ValidatedStoreCommitPlan(StoreCommitPlan);
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum StorePlanError {
     InvalidHandoff {
@@ -561,9 +563,9 @@ impl StoreCommitPlan {
         Ok(plan)
     }
 
-    pub(super) fn from_owned_prevalidated_run(
+    pub(super) fn from_owned_validated_run(
         mut validated: ValidatedRunMetadata,
-    ) -> Result<Self, StorePlanError> {
+    ) -> Result<ValidatedStoreCommitPlan, StorePlanError> {
         let telemetry = telemetry_rows(&validated);
         let facts = validated.take_fact_rows();
         let dependency_index = validated.take_dependency_index();
@@ -573,14 +575,28 @@ impl StoreCommitPlan {
             semantic,
             telemetry,
         };
-        // The owned handoff comes directly from the kernel's canonical metadata
-        // constructor. Revalidating it here would decode every compact fact key
-        // only to prove the ordering that constructor just established.
-        Ok(plan)
+        plan.semantic
+            .validate_without_stats_with_canonical_fact_proof()?;
+        Ok(ValidatedStoreCommitPlan(plan))
     }
 
     pub(super) fn validate(&self) -> Result<(), StorePlanError> {
         self.semantic.validate()
+    }
+
+    pub(super) fn into_validated(self) -> Result<ValidatedStoreCommitPlan, StorePlanError> {
+        self.validate()?;
+        Ok(ValidatedStoreCommitPlan(self))
+    }
+}
+
+impl ValidatedStoreCommitPlan {
+    pub(super) fn planned_semantic_row_count(&self) -> u64 {
+        self.0.semantic.planned_semantic_row_count()
+    }
+
+    pub(super) fn into_inner(self) -> StoreCommitPlan {
+        self.0
     }
 }
 
@@ -1112,6 +1128,17 @@ impl StoreSemanticPlan {
     }
 
     fn validate_without_stats(&self) -> Result<(), StorePlanError> {
+        self.validate_without_stats_inner(false)
+    }
+
+    fn validate_without_stats_with_canonical_fact_proof(&self) -> Result<(), StorePlanError> {
+        self.validate_without_stats_inner(true)
+    }
+
+    fn validate_without_stats_inner(
+        &self,
+        fact_rows_are_canonical: bool,
+    ) -> Result<(), StorePlanError> {
         self.validate_schemas()?;
         self.validate_identity_copies()?;
         self.validate_paths()?;
@@ -1122,7 +1149,7 @@ impl StoreSemanticPlan {
         self.validate_result_boundaries()?;
         self.validate_dependency_endpoints()?;
         self.validate_facts()?;
-        self.validate_canonical_order()
+        self.validate_canonical_order(fact_rows_are_canonical)
     }
 
     fn validate_schemas(&self) -> Result<(), StorePlanError> {
@@ -1741,7 +1768,10 @@ impl StoreSemanticPlan {
         Ok(())
     }
 
-    fn validate_canonical_order(&self) -> Result<(), StorePlanError> {
+    fn validate_canonical_order(
+        &self,
+        fact_rows_are_canonical: bool,
+    ) -> Result<(), StorePlanError> {
         require_strictly_sorted(&self.files, "file")?;
         require_strictly_sorted(&self.input_components, "input component")?;
         require_strictly_sorted(&self.input_details, "input detail")?;
@@ -1766,7 +1796,9 @@ impl StoreSemanticPlan {
         require_strictly_sorted(&self.queries, "query")?;
         require_strictly_sorted(&self.query_inputs, "query input")?;
         require_strictly_sorted(&self.query_layers, "query layer")?;
-        require_strictly_sorted(&self.facts, "fact")?;
+        if !fact_rows_are_canonical {
+            require_strictly_sorted(&self.facts, "fact")?;
+        }
         require_strictly_sorted(&self.diagnostics, "diagnostic")?;
         require_strictly_sorted(
             &self.diagnostic_requested_views,
@@ -3199,11 +3231,15 @@ mod tests {
             .expect("test boundary exists")
             .0;
         assert!(production.contains("pub(super) struct StoreCommitPlan"));
+        assert!(production.contains("pub(super) struct ValidatedStoreCommitPlan"));
         assert!(production.contains("pub(super) enum StorePlanError"));
         assert!(production.contains("pub(super) struct StoreGenerationStats"));
         assert!(production.contains("fn from_validated_run"));
+        assert!(production.contains("fn from_owned_validated_run"));
+        assert!(production.contains("validate_without_stats_with_canonical_fact_proof"));
         assert!(production.contains("validated: &ValidatedRunMetadata"));
         assert!(production.contains("validate_integrity()"));
+        assert!(!production.contains("from_owned_prevalidated_run"));
         assert!(!production.contains("pub(crate) struct StoreCommitPlan"));
         assert!(!production.contains("pub struct StoreCommitPlan"));
         assert!(!production.contains("Digest::from_parts"));
@@ -3235,6 +3271,11 @@ mod tests {
             .0;
         assert!(!parent.contains("StoreCommitPlan"));
         assert!(!parent.contains("from_validated_run"));
+
+        let generation = include_str!("generation.rs");
+        assert!(generation.contains("plan: ValidatedStoreCommitPlan"));
+        assert!(!generation.contains("validate_plan"));
+        assert!(!generation.contains("prevalidated"));
     }
 
     fn contains_exact_key(value: &serde_json::Value, expected: &str) -> bool {

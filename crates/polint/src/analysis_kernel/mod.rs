@@ -975,7 +975,7 @@ impl AnalysisKernel {
             store::record_handoff_materialization();
             match fact_meta.prepare_compact_stable_rows() {
                 Ok(prepared_facts) => {
-                    let (prepared, (fact_rows, fact_digest)) = rayon::join(
+                    let (prepared, finalized_facts) = rayon::join(
                         || {
                             incremental::ValidatedRunMetadata::prepare_finalized_canonical_run(
                                 &input_snapshot,
@@ -985,14 +985,13 @@ impl AnalysisKernel {
                                 Self::provider_manifests(),
                             )
                         },
-                        || prepared_facts.finish(),
+                        || prepared_facts.finish_validated(),
                     );
                     match prepared {
                         Ok(prepared) => {
                             match incremental::ValidatedRunMetadata::finish_prepared_canonical_run(
                                 prepared,
-                                fact_rows,
-                                fact_digest,
+                                finalized_facts,
                             ) {
                                 Ok(validated) => store::SemanticStore::commit_validated_run(
                                     &store::StoreConfig::new(

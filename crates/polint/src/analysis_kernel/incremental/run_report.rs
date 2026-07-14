@@ -25,6 +25,7 @@ use super::{
 };
 #[cfg(test)]
 use crate::analysis::summaries::provider::SccClosureDebugSnapshot;
+use crate::analysis_kernel::metadata::FinalizedCanonicalFactRows;
 use crate::analysis_kernel::store::StoreOutcome;
 #[cfg(test)]
 use crate::analysis_kernel::store::StoreStatus;
@@ -241,9 +242,9 @@ impl ValidatedRunMetadata {
 
     pub(in crate::analysis_kernel) fn finish_prepared_canonical_run(
         prepared: PreparedValidatedRunMetadata,
-        fact_rows: Vec<StableFactMetaRow>,
-        fact_digest: Digest,
+        finalized_facts: FinalizedCanonicalFactRows,
     ) -> Result<Self, ValidatedRunMetadataError> {
+        let (fact_rows, fact_digest) = finalized_facts.into_parts();
         Self::finish_canonical_finalized_parts(prepared, fact_rows, Some(fact_digest), false)
     }
 
@@ -352,6 +353,14 @@ impl ValidatedRunMetadata {
         };
         if verify_reconstruction {
             metadata.validate_integrity()?;
+        } else {
+            let fact_digest = fact_digest.as_ref().ok_or_else(|| {
+                ValidatedRunMetadataError::new(
+                    "optimized validated-run handoff is missing its canonical fact digest",
+                )
+            })?;
+            metadata
+                .validate_integrity_with_canonical_fact_proof(fact_digest, &dependency_digest)?;
         }
         Ok(metadata)
     }
@@ -406,6 +415,31 @@ impl ValidatedRunMetadata {
         std::mem::take(&mut self.fact_rows)
     }
 
+    #[cfg(test)]
+    pub(crate) fn corrupt_first_fact_stable_key_for_store_test(&mut self) {
+        self.fact_rows
+            .first_mut()
+            .expect("store fixture has fact metadata")
+            .stable_key = String::new().into();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn corrupt_first_fact_producer_for_store_test(&mut self) {
+        self.fact_rows
+            .first_mut()
+            .expect("store fixture has fact metadata")
+            .producer_id = "unknown.provider".into();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn corrupt_first_file_path_for_store_test(&mut self) {
+        self.input_snapshot
+            .files
+            .first_mut()
+            .expect("store fixture has an input file")
+            .relative_path = "/private/not-repository-relative.go".to_string();
+    }
+
     pub(in crate::analysis_kernel) fn validation_events(&self) -> &[ValidationEvent] {
         &self.validation_events
     }
@@ -416,6 +450,30 @@ impl ValidatedRunMetadata {
 
     pub(in crate::analysis_kernel) fn validate_integrity(
         &self,
+    ) -> Result<(), ValidatedRunMetadataError> {
+        self.validate_integrity_inner(None, None, false)
+    }
+
+    fn validate_integrity_with_canonical_fact_proof(
+        &self,
+        fact_digest: &Digest,
+        dependency_digest: &Digest,
+    ) -> Result<(), ValidatedRunMetadataError> {
+        if fact_digest.kind != DigestKind::FactMetadata
+            || dependency_digest.kind != DigestKind::Dependency
+        {
+            return Err(ValidatedRunMetadataError::new(
+                "optimized validated-run handoff has a wrong-purpose canonical digest",
+            ));
+        }
+        self.validate_integrity_inner(Some(fact_digest), Some(dependency_digest), true)
+    }
+
+    fn validate_integrity_inner(
+        &self,
+        fact_digest: Option<&Digest>,
+        dependency_digest: Option<&Digest>,
+        fact_rows_are_canonical: bool,
     ) -> Result<(), ValidatedRunMetadataError> {
         if self.input_snapshot.schema_version != INPUT_SNAPSHOT_SCHEMA_VERSION {
             return Err(ValidatedRunMetadataError::new(
@@ -453,7 +511,9 @@ impl ValidatedRunMetadata {
             &self.provider_manifests,
             &self.provider_outputs,
         )?;
-        validate_canonical_fact_rows(&self.fact_rows)?;
+        if !fact_rows_are_canonical {
+            validate_canonical_fact_rows(&self.fact_rows)?;
+        }
         if canonical_validation_events(self.validation_events.clone())? != self.validation_events {
             return Err(ValidatedRunMetadataError::new(
                 "validated-run validation events are not canonical",
@@ -476,7 +536,14 @@ impl ValidatedRunMetadata {
             &self.declared_dependency_edges,
             true,
         );
-        if self.dependency_index != expected_dependency_index {
+        let dependency_index_matches = if fact_rows_are_canonical {
+            self.dependency_index.schema_version == expected_dependency_index.schema_version
+                && self.dependency_index.canonical_edges()
+                    == expected_dependency_index.canonical_edges()
+        } else {
+            self.dependency_index == expected_dependency_index
+        };
+        if !dependency_index_matches {
             return Err(ValidatedRunMetadataError::new(
                 "validated-run dependency index does not match canonical layer and query declarations",
             ));
@@ -489,9 +556,9 @@ impl ValidatedRunMetadata {
             &self.summary_keys,
             &self.query_rows,
             &self.fact_rows,
-            None,
+            fact_digest,
             &self.dependency_index,
-            None,
+            dependency_digest,
             &self.validation_events,
         )?;
         if self.identities != expected_identities {

@@ -1804,6 +1804,66 @@ mod generation_lifecycle {
         );
         assert!(!config.path().exists());
     }
+
+    #[test]
+    fn malformed_kernel_handoffs_never_reserve_complete_or_activate() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let repository = temp.path().join("repo");
+        let active = generation_validated_fixture(&repository, "handoff-active");
+        let active_plan = commit_plan::StoreCommitPlan::from_validated_run(&active)
+            .expect("active handoff produces a plan");
+        let config = generation_store_config(temp.path());
+        assert_eq!(
+            SemanticStore::commit_validated_run(&config, active).status,
+            StoreStatus::Ready
+        );
+        let database = Connection::open(config.path()).expect("open store");
+        let original_active = active_generation(&database);
+
+        type CorruptHandoff = fn(&mut ValidatedRunMetadata);
+        let corruptions: [(&str, CorruptHandoff); 3] = [
+            (
+                "empty-stable-key",
+                ValidatedRunMetadata::corrupt_first_fact_stable_key_for_store_test,
+            ),
+            (
+                "unknown-producer",
+                ValidatedRunMetadata::corrupt_first_fact_producer_for_store_test,
+            ),
+            (
+                "absolute-path",
+                ValidatedRunMetadata::corrupt_first_file_path_for_store_test,
+            ),
+        ];
+        for (label, corrupt) in corruptions {
+            let mut candidate = generation_validated_fixture(&repository, label);
+            let candidate_generation = candidate.identities().generation().digest().value.clone();
+            corrupt(&mut candidate);
+
+            let outcome = SemanticStore::commit_validated_run(&config, candidate);
+
+            assert_eq!(
+                outcome.status,
+                StoreStatus::Skipped(StoreSkipReason::InvalidPlan),
+                "{label}"
+            );
+            let candidate_count: i64 = database
+                .query_row(
+                    "SELECT count(*) FROM generations WHERE generation_value = ?1",
+                    [candidate_generation],
+                    |row| row.get(0),
+                )
+                .expect("count candidate attempts");
+            assert_eq!(candidate_count, 0, "{label}");
+            assert_eq!(active_generation(&database), original_active, "{label}");
+        }
+
+        let visible =
+            generation::read_active_complete(&config, &active_plan.semantic.identities.workspace)
+                .expect("read active generation")
+                .expect("active generation remains available");
+        assert_eq!(visible.plan, active_plan);
+    }
 }
 
 mod active_complete_reader {

@@ -263,11 +263,11 @@ impl SemanticStore {
         }
 
         record_plan_materialization();
-        let plan = match commit_plan::StoreCommitPlan::from_owned_prevalidated_run(validated) {
+        let plan = match commit_plan::StoreCommitPlan::from_owned_validated_run(validated) {
             Ok(plan) => plan,
             Err(_) => return StoreOutcome::invalid_metadata(),
         };
-        let planned_semantic_row_count = plan.semantic.planned_semantic_row_count();
+        let planned_semantic_row_count = plan.planned_semantic_row_count();
         #[cfg(test)]
         let control = NEXT_COMMIT_FAILURE.with(|next| {
             next.take().map_or_else(
@@ -278,7 +278,7 @@ impl SemanticStore {
         #[cfg(not(test))]
         let control = generation::CommitControl::default();
         let (status, computed_stats) =
-            generation::commit_owned_prevalidated_generation(config, plan, control);
+            generation::commit_owned_validated_generation(config, plan, control);
         if status != StoreStatus::Ready {
             return StoreOutcome {
                 status,

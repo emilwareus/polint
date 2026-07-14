@@ -1170,8 +1170,29 @@ pub(crate) struct PreparedCompactStableRows {
     rows: Vec<StableFactMetaRow>,
 }
 
+pub(in crate::analysis_kernel) struct FinalizedCanonicalFactRows {
+    rows: Vec<StableFactMetaRow>,
+    digest: Digest,
+}
+
+impl FinalizedCanonicalFactRows {
+    pub(in crate::analysis_kernel) fn into_parts(self) -> (Vec<StableFactMetaRow>, Digest) {
+        (self.rows, self.digest)
+    }
+}
+
 impl PreparedCompactStableRows {
-    pub(crate) fn finish(mut self) -> (Vec<StableFactMetaRow>, Digest) {
+    #[cfg(test)]
+    pub(crate) fn finish(self) -> (Vec<StableFactMetaRow>, Digest) {
+        self.finish_parts()
+    }
+
+    pub(in crate::analysis_kernel) fn finish_validated(self) -> FinalizedCanonicalFactRows {
+        let (rows, digest) = self.finish_parts();
+        FinalizedCanonicalFactRows { rows, digest }
+    }
+
+    fn finish_parts(mut self) -> (Vec<StableFactMetaRow>, Digest) {
         let row_fingerprints = self
             .rows
             .par_iter_mut()

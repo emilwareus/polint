@@ -32,7 +32,7 @@ use super::commit_plan::{
     StoreProviderManifestOutputRow, StoreProviderManifestRow, StoreProviderManifestSchemaRow,
     StoreProviderSchemaRow, StoreProviderSchemaVersionRow, StoreQueryInputRow, StoreQueryLayerRow,
     StoreQueryRow, StoreRunManifestRow, StoreSemanticPlan, StoreSummaryDependencyRow,
-    StoreSummaryRow, StoreTelemetryRow, StoreValidationEventRow,
+    StoreSummaryRow, StoreTelemetryRow, StoreValidationEventRow, ValidatedStoreCommitPlan,
 };
 use super::connection::{self, ConnectionError, ReadOnlyConnection, WriterConnection};
 use super::schema::{
@@ -203,12 +203,17 @@ impl From<SchemaCodecError> for ProjectionError {
 }
 
 pub(super) fn commit_generation(config: &StoreConfig, plan: &StoreCommitPlan) -> StoreStatus {
-    let mut owned = plan.clone();
+    if !config.is_enabled() {
+        return StoreStatus::Disabled;
+    }
+    let owned = match plan.clone().into_validated() {
+        Ok(plan) => plan,
+        Err(_) => return StoreStatus::Skipped(StoreSkipReason::InvalidPlan),
+    };
     commit_generation_inner(
         config,
-        &mut owned,
+        owned,
         CommitControl::default(),
-        true,
         Some(plan.semantic.stats.clone()),
     )
     .0
@@ -219,38 +224,34 @@ pub(super) fn commit_generation_with_control(
     plan: &StoreCommitPlan,
     control: CommitControl,
 ) -> StoreStatus {
-    let mut owned = plan.clone();
-    commit_generation_inner(
-        config,
-        &mut owned,
-        control,
-        true,
-        Some(plan.semantic.stats.clone()),
-    )
-    .0
+    if !config.is_enabled() {
+        return StoreStatus::Disabled;
+    }
+    let owned = match plan.clone().into_validated() {
+        Ok(plan) => plan,
+        Err(_) => return StoreStatus::Skipped(StoreSkipReason::InvalidPlan),
+    };
+    commit_generation_inner(config, owned, control, Some(plan.semantic.stats.clone())).0
 }
 
-pub(super) fn commit_owned_prevalidated_generation(
+pub(super) fn commit_owned_validated_generation(
     config: &StoreConfig,
-    mut plan: StoreCommitPlan,
+    plan: ValidatedStoreCommitPlan,
     control: CommitControl,
 ) -> (StoreStatus, Option<StoreGenerationStats>) {
-    commit_generation_inner(config, &mut plan, control, false, None)
+    commit_generation_inner(config, plan, control, None)
 }
 
 fn commit_generation_inner(
     config: &StoreConfig,
-    plan: &mut StoreCommitPlan,
+    validated_plan: ValidatedStoreCommitPlan,
     control: CommitControl,
-    validate_plan: bool,
     precomputed_stats: Option<StoreGenerationStats>,
 ) -> (StoreStatus, Option<StoreGenerationStats>) {
     if !config.is_enabled() {
         return (StoreStatus::Disabled, None);
     }
-    if validate_plan && plan.validate().is_err() {
-        return (StoreStatus::Skipped(StoreSkipReason::InvalidPlan), None);
-    }
+    let mut plan = validated_plan.into_inner();
     record_store_io_attempt();
     if let Err(status) = prepare_store_path(config.path()) {
         return (status, None);
@@ -260,7 +261,7 @@ fn commit_generation_inner(
         Ok(writer) => writer,
         Err(error) => return (map_connection_error(error), None),
     };
-    let reservation = match reserve_generation(&mut writer, plan, &control) {
+    let reservation = match reserve_generation(&mut writer, &plan, &control) {
         Ok(reservation) => reservation,
         Err(ReservationError::Connection(error)) => {
             return (map_connection_error(error), None);
@@ -288,7 +289,13 @@ fn commit_generation_inner(
         interlock.release.wait();
     }
 
-    match publish_generation(&mut writer, plan, &reservation, &control, precomputed_stats) {
+    match publish_generation(
+        &mut writer,
+        &mut plan,
+        &reservation,
+        &control,
+        precomputed_stats,
+    ) {
         Ok(stats) => (StoreStatus::Ready, Some(stats)),
         Err(error) => {
             if let Some((reason, stage)) = error.audit {
