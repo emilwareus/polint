@@ -1,6 +1,6 @@
 ---
 phase: 65-generation-manifest-and-metadata-mirroring
-reviewed: 2026-07-14T21:47:45Z
+reviewed: 2026-07-14T22:45:03Z
 depth: standard
 files_reviewed: 63
 files_reviewed_list:
@@ -69,157 +69,114 @@ files_reviewed_list:
   - tests/eval-fixtures/cache/input-snapshots/expected.polint-eval.toml
 findings:
   critical: 0
-  warning: 3
+  warning: 0
   info: 0
-  total: 3
-status: issues_found
+  total: 0
+status: clean
 ---
 
 # Phase 65 Code Review Report
 
-**Reviewed:** 2026-07-14T21:47:45Z
+**Reviewed:** 2026-07-14T22:45:03Z
 **Depth:** standard
 **Files Reviewed:** 63
-**Diff:** `b72cea44..63cfd9f6`
-**Status:** issues_found
+**Diff:** `b72cea44..d73c7c48`
+**Fix commits:** `d7d89a2d`, `b909b52b`, `d73c7c48`
+**Status:** clean
 
 ## Summary
 
-The standard-depth pass covered the requested 63-file scope, all 19 phase plans
-and summaries, and the full phase diff. The identity, dependency, privacy,
-generation-lifecycle, batching, and public-visibility work is generally coherent,
-and the focused test suites pass. Three fail-closed guarantees are incomplete,
-however: the optimized production write path no longer proves the plan it
-publishes, the identical-generation shortcut does not validate the active
-semantic projection, and current-version schema validation trusts object names
-rather than the schema semantics behind those names.
+The iteration-2 standard-depth pass re-read the requested 63-file scope, all 19
+phase plans and summaries, the committed review at `c491082a`, the uncommitted
+fix report, the three fix commits, and the affected callers and tests. The three
+prior warning-level findings are resolved. No new correctness, security,
+determinism, performance, API-visibility, or maintainability issue was found in
+the reviewed scope.
 
-The semantic store remains default-disabled, which limits current exposure, but
-each issue can make an enabled store accept or reuse state that the full typed
-reader would reject.
+## Prior Warning Resolution
 
-## Narrative Findings (AI reviewer)
+### WR-01: Resolved — optimized writes require sealed facts and a validated store plan
 
-The three findings below are independent warning-level correctness and robustness
-gaps in the enabled semantic-store path.
+`FinalizedCanonicalFactRows` is a private sealed handoff produced only by
+`finish_validated` after canonical fact preparation
+(`metadata.rs:1173-1192`). The optimized metadata finalizer validates the full
+handoff before it reaches the store. `StoreCommitPlan::from_owned_validated_run`
+then validates the complete plan and returns the private
+`ValidatedStoreCommitPlan` wrapper (`commit_plan.rs:33,566-593`); generation
+commit entry points require that wrapper (`generation.rs:239-247`). The former
+boolean/prevalidated bypass is gone, so reservation and activation cannot occur
+before validation succeeds.
 
-## Warnings
+The regression at `store/tests.rs:1809` exercises an empty stable fact key, an
+unknown producer, and an absolute path through the production handoff. Each is
+rejected without reserving, completing, or activating a candidate, while the
+previous active generation remains intact.
 
-### WR-01: The optimized kernel write path can activate a plan that was never integrity-validated
+### WR-02: Resolved — identical reuse reconstructs and validates active rows
 
-**Files:**
+After matching lifecycle/header identity, `active_generation_statistics`
+reconstructs the active generation through `read_generation_projection`
+(`generation.rs:321-385,2944`) and therefore runs the same typed row decoding and
+complete plan validation used by ordinary active reads. It no longer trusts only
+header values and selected statistics digests.
 
-- `crates/polint/src/analysis_kernel/incremental/run_report.rs:225-248,307-356`
-- `crates/polint/src/analysis_kernel/metadata.rs:607-665,1106-1215`
-- `crates/polint/src/analysis_kernel/store/commit_plan.rs:544-580,1109-1125,1701-1741`
-- `crates/polint/src/analysis_kernel/store/generation.rs:233-253,792-821`
-- `crates/polint/src/analysis_kernel/store/migrations.rs:439-452`
-- `crates/polint/src/analysis_kernel/store/mod.rs:232-281`
+The tamper matrix at `store/tests.rs:2120` changes an input scalar and fact,
+query-child, and dependency-child rows. An identical rerun fails closed with
+`RebuildNeeded(InvalidMetadata)` instead of returning `Ready`.
 
-**Issue:** The ordinary constructor calls `ValidatedRunMetadata::validate_integrity`
-and `StoreSemanticPlan::validate_without_stats`, but the production kernel uses
-the optimized `prepare_finalized_canonical_run` / `finish_prepared_canonical_run`
-pair with `verify_reconstruction = false`. It then calls
-`from_owned_prevalidated_run`, whose comment substitutes provenance for validation,
-and finally `commit_owned_prevalidated_generation`, which passes
-`validate_plan = false`. Post-write validation checks row counts, a subset of
-declared child counts, stats readback, and validation-event equality; it never
-reconstructs or otherwise proves the skipped identity, path, relationship,
-endpoint, fact, and canonical-order invariants before marking the generation
-complete and active.
+### WR-03: Resolved — current schema validation compares exact canonical definitions
 
-This is not merely duplicate defensive work. For example,
-`prepare_compact_stable_rows` accepts an empty fact stable key and the compact
-codec persists it as a non-empty LZ4 blob. `StoreSemanticPlan::validate_facts`
-would reject that key, while `StableFactKey::from_storage` also rejects its
-declared decoded length of zero. The optimized path skips the former, the SQL
-`stable_key <> ''` check sees a non-empty encoded blob, and the post-write checks
-do not decode it. A provider defect can therefore publish a generation that the
-full active-generation reader cannot read.
+`validate_current_schema` now builds the expected schema in an in-memory database
+from the owned migrations, reads every non-SQLite object from `sqlite_schema`,
+normalizes definitions with quote-aware whitespace handling, and compares the
+complete ordered `(type, name, table, SQL)` inventory. This covers table
+constraints, foreign keys, checks, defaults, column order, `WITHOUT ROWID`, index
+columns, trigger bodies, and unexpected objects rather than checking names alone.
 
-**Fix:** Preserve the allocation-saving handoff, but make the proof explicit.
-Construct a sealed, private validated-handoff type only after an allocation-light
-integrity pass has checked every invariant currently covered by
-`validate_integrity` and `validate_without_stats`, and require that type at the
-unvalidated commit entry point. Alternatively, run the existing plan validation
-before reservation until equivalent streaming validation exists. Add a
-kernel-path regression test that injects malformed fact metadata (at minimum an
-empty stable key, plus an invalid producer or path) and proves the candidate
-never becomes complete or active.
+Negative tests at `migrations.rs:1984-2026` reject a weakened required table, a
+same-name trigger with the wrong program, a same-name index with the wrong
+columns, and an extra payload-bearing table. Version-zero unknown schemas also
+remain fail-closed without losing existing data.
 
-### WR-02: Identical-generation reuse trusts headers and three stats digests without validating active rows
+## Full-Scope Review Notes
 
-**Files:**
-
-- `crates/polint/src/analysis_kernel/store/mod.rs:232-263`
-- `crates/polint/src/analysis_kernel/store/generation.rs:314-410,2919-3057`
-
-**Issue:** Before materializing a commit plan, `commit_validated_run` calls
-`active_generation_statistics` and returns `Ready` when it finds matching header
-identities. That shortcut verifies lifecycle state, the generation header, and
-only the input, dependency, and validation digests copied into `generation_stats`.
-It counts all payload rows solely to produce a reported size; it does not compare
-the per-family counts to the stats, decode semantic fields, recompute aggregates,
-or validate child declarations and dependency endpoints. In contrast, the normal
-active reader reconstructs every row family and calls `plan.validate()`.
-
-Consequently, same-version corruption that leaves the header and three selected
-stats columns intact is treated as a valid cache hit. For example, changing an
-`input_files.source_digest_value`, deleting a query child, or altering a fact row
-can leave all shortcut comparisons true. An unchanged subsequent run then returns
-`Ready` without detecting that the active projection no longer matches the
-identity it claims.
-
-**Fix:** Do not treat the header as a content-authenticated projection. Before
-reusing an identical active generation, perform the typed read/plan validation,
-or add a genuinely equivalent cheap integrity check that compares every family
-count and recomputes row-bound semantic aggregates from persisted values. Add
-tamper tests for a scalar input field and representative fact/query/dependency
-child rows; an identical rerun must return controlled `RebuildNeeded`, never
-`Ready`.
-
-### WR-03: Current-version schema validation accepts weakened constraints and arbitrary extra schema objects
-
-**Files:**
-
-- `crates/polint/src/analysis_kernel/store/migrations.rs:947-1023,1026-1072,1074-1277`
-- `crates/polint/src/analysis_kernel/store/tests.rs:1978-2021`
-
-**Issue:** `validate_current_schema` proves that required table, index, and
-trigger *names* exist. For tables, `validate_required_columns` then compares only
-an unordered set of column names. It does not verify declared types, `NOT NULL`,
-primary/foreign keys, `CHECK` constraints, defaults, column order,
-`WITHOUT ROWID`, index definitions, or trigger bodies. The table inventory is
-also not exact: only eleven specifically named payload-like tables or columns are
-forbidden, so an arbitrary extra table such as `cached_sources(contents BLOB)`
-passes the metadata-only gate.
-
-The existing active-pointer tamper test illustrates the blind spot: it replaces
-`store_manifest_active_must_be_complete` with a same-name no-op trigger. Schema
-validation notices the invalid *data state* created afterward, but the weakened
-trigger itself satisfies the current schema check. A same-version database can
-therefore pass validation while omitting the relational enforcement publication
-and recovery depend on, and the promised strict metadata-only boundary is not
-actually established.
-
-**Fix:** Validate an exact schema inventory and canonical object definitions.
-Use `table_xinfo`, `foreign_key_list`, `index_list` / `index_xinfo`, and normalized
-`sqlite_master.sql` (or a versioned canonical schema hash) to verify table
-constraints, index columns, trigger programs, and allowed auxiliary objects.
-Add negative tests that recreate a required table without its checks/FKs, replace
-a required trigger or index with a same-name wrong definition, and add an
-unrecognized payload-bearing table.
+- The validated-type boundaries are private to `analysis_kernel`; no supported
+  `polint::sdk` or `polint::runner` surface was widened.
+- Canonical ordering, digest construction, dependency endpoint validation,
+  generation publication, and recovery paths remain deterministic and
+  fail-closed.
+- Exact schema matching is appropriate for this migration-owned private store;
+  it rejects semantically altered or unrecognized same-version databases before
+  payload access.
+- Full projection validation makes the identical-reuse path deliberately more
+  expensive, but it closes the integrity gap without changing public behavior.
 
 ## Verification
 
-- `cargo test -p polint analysis_kernel::store --lib` — 71 passed.
-- `cargo test -p polint --test public_surface_leak` — 7 passed.
-- `git diff --check b72cea..HEAD` — passed.
-- No supported public API widening was found in the reviewed scope.
-- No source files were modified by this review.
+- `cargo test -p polint --lib analysis_kernel::store --locked -- --test-threads=1`
+  — 77 passed, 0 failed.
+- `cargo test -p polint --test public_surface_leak --locked -- --test-threads=1`
+  — 7 passed, 0 failed.
+- `cargo test -p polint --lib analysis_kernel::tests::semantic_store_check_parity::all_store_modes_preserve_byte_identical_json_and_exit_semantics --locked -- --exact --test-threads=1`
+  — 1 passed, 0 failed.
+- `cargo test -p polint --lib eval::bench::runner::tests::semantic_store::isolated_modes_report_real_store_bytes_and_equal_diagnostics_digest --locked -- --exact --test-threads=1`
+  — 1 passed, 0 failed; enabled mode reported nonzero store bytes and the same
+  diagnostics digest.
+- `cargo test -p polint --lib eval::bench::gate::tests::semantic_store_boundary::real_store_enabled_measurement_passes_locked_boundary --locked -- --exact --ignored --test-threads=1 --nocapture`
+  — the first sample exceeded the peak-RSS ratio (`1.2406 > 1.2000`) while the
+  cold-time ratio passed (`1.2324 <= 1.2500`); an immediate identical rerun passed
+  both locked boundaries (RSS `1.1317`, cold time `1.1740`), reported
+  `120352592` store bytes, and preserved digest `28cac8a32a5bb2a9`. The enabled
+  absolute RSS measurement was nearly unchanged across samples (about 1.05 GB),
+  so the isolated failure was attributable to comparison-baseline variance and
+  was not reproducible as an implementation regression.
+- `cargo fmt --all -- --check` — passed.
+- `git diff --check c491082a..HEAD` and `git diff --check b72cea44..HEAD` — passed.
+- No source files or the untracked `65-REVIEW-FIX.md` were modified by this
+  review.
 
 ---
 
-_Reviewed: 2026-07-14T21:47:45Z_
+_Reviewed: 2026-07-14T22:45:03Z_
 _Reviewer: the agent (gsd-code-reviewer)_
 _Depth: standard_
