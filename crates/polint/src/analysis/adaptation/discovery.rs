@@ -3,10 +3,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::analysis_kernel::incremental::{Digest, DigestKind};
-use crate::module_graph::paths::read_repo_file_to_string_with_limit;
+use crate::module_graph::paths::read_repo_file_anchored_to_string_with_limit;
 
 pub(crate) const ADAPTATION_MODEL_DIR: &str = ".polint/models";
 pub(crate) const ADAPTATION_MODEL_MAX_BYTES: u64 = 1_048_576;
+const ADAPTATION_MODEL_MAX_VISITED_ENTRIES: usize = 4_096;
+const ADAPTATION_MODEL_MAX_VISITED_DIRECTORIES: usize = 256;
+const ADAPTATION_MODEL_MAX_PENDING_ENTRIES: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AdaptationModelFileInput {
@@ -28,6 +31,15 @@ pub(crate) struct AdaptationModelInventory {
     pub(crate) issues: Vec<AdaptationModelDiscoveryIssue>,
     pub(crate) budget_exceeded_at: Option<String>,
     pub(crate) digest: Digest,
+    traversal_stats: TraversalStats,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct TraversalStats {
+    visited_entries: usize,
+    visited_directories: usize,
+    peak_pending_entries: usize,
+    peak_retained_paths: usize,
 }
 
 #[derive(Debug)]
@@ -38,9 +50,24 @@ enum DiscoveryEntry {
 
 impl AdaptationModelInventory {
     pub(crate) fn discover(root: &Path, max_model_files: usize) -> Self {
+        Self::discover_inner(root, max_model_files, &mut |_| {})
+    }
+
+    fn discover_inner(
+        root: &Path,
+        max_model_files: usize,
+        before_read: &mut impl FnMut(&str),
+    ) -> Self {
         let mut issues = Vec::new();
         let mut paths = Vec::new();
         let mut budget_exceeded_at = None;
+        let mut visited_entries = 0_usize;
+        let mut visited_directories = 0_usize;
+        let mut peak_pending_entries = 0_usize;
+        let mut peak_retained_paths = 0_usize;
+        let mut pending_was_truncated = false;
+        let mut directory_budget_exceeded_at = None;
+        let mut entry_budget_exceeded = false;
         let model_root = root.join(ADAPTATION_MODEL_DIR);
         let metadata = match fs::symlink_metadata(&model_root) {
             Ok(metadata) => Some(metadata),
@@ -69,15 +96,22 @@ impl AdaptationModelInventory {
                     ADAPTATION_MODEL_DIR.to_string(),
                     DiscoveryEntry::Directory(model_root),
                 )]);
-                while let Some((relative_path, entry)) = pending.pop_first() {
+                peak_pending_entries = pending.len();
+                'walk: while let Some((relative_path, entry)) = pending.pop_first() {
                     let DiscoveryEntry::Directory(absolute_dir) = entry else {
                         if paths.len() >= max_model_files {
                             budget_exceeded_at = Some(relative_path);
                             break;
                         }
                         paths.push(relative_path);
+                        peak_retained_paths = peak_retained_paths.max(paths.len());
                         continue;
                     };
+                    if visited_directories >= ADAPTATION_MODEL_MAX_VISITED_DIRECTORIES {
+                        directory_budget_exceeded_at = Some(relative_path);
+                        break;
+                    }
+                    visited_directories += 1;
                     let raw_entries = match fs::read_dir(&absolute_dir) {
                         Ok(entries) => entries,
                         Err(_) => {
@@ -90,20 +124,24 @@ impl AdaptationModelInventory {
                             continue;
                         }
                     };
-                    let mut entries = Vec::new();
                     for entry in raw_entries {
-                        match entry {
-                            Ok(entry) => entries.push(entry),
-                            Err(_) => issues.push(issue(
-                                &relative_path,
-                                "Adaptation model directory entry could not be read.",
-                                "read_error",
-                                "directory entry unavailable",
-                            )),
+                        if visited_entries >= ADAPTATION_MODEL_MAX_VISITED_ENTRIES {
+                            entry_budget_exceeded = true;
+                            break 'walk;
                         }
-                    }
-                    entries.sort_by_key(|entry| entry.file_name());
-                    for entry in entries {
+                        visited_entries += 1;
+                        let entry = match entry {
+                            Ok(entry) => entry,
+                            Err(_) => {
+                                issues.push(issue(
+                                    &relative_path,
+                                    "Adaptation model directory entry could not be read.",
+                                    "read_error",
+                                    "directory entry unavailable",
+                                ));
+                                continue;
+                            }
+                        };
                         let file_name = entry.file_name().to_string_lossy().to_string();
                         let child_relative_path = format!("{relative_path}/{file_name}");
                         let path = entry.path();
@@ -135,14 +173,49 @@ impl AdaptationModelInventory {
                         {
                             pending.insert(child_relative_path, DiscoveryEntry::File);
                         }
+                        if pending.len() > ADAPTATION_MODEL_MAX_PENDING_ENTRIES {
+                            pending.pop_last();
+                            pending_was_truncated = true;
+                        }
+                        peak_pending_entries = peak_pending_entries.max(pending.len());
                     }
                 }
             }
         }
 
+        if entry_budget_exceeded {
+            paths.clear();
+            issues.clear();
+            budget_exceeded_at = None;
+            issues.push(issue(
+                ADAPTATION_MODEL_DIR,
+                "Adaptation model discovery stopped because the traversal-entry budget was exceeded.",
+                "budget",
+                format!("max_visited_entries={ADAPTATION_MODEL_MAX_VISITED_ENTRIES}"),
+            ));
+        } else {
+            if let Some(relative_path) = directory_budget_exceeded_at {
+                issues.push(issue(
+                    relative_path,
+                    "Adaptation model discovery stopped because the directory budget was exceeded.",
+                    "budget",
+                    format!("max_visited_directories={ADAPTATION_MODEL_MAX_VISITED_DIRECTORIES}"),
+                ));
+            }
+            if pending_was_truncated {
+                issues.push(issue(
+                    ADAPTATION_MODEL_DIR,
+                    "Adaptation model discovery retained only the lexicographically earliest bounded traversal frontier.",
+                    "budget",
+                    format!("max_pending_entries={ADAPTATION_MODEL_MAX_PENDING_ENTRIES}"),
+                ));
+            }
+        }
+
         let mut files = Vec::new();
         for relative_path in paths {
-            match read_repo_file_to_string_with_limit(
+            before_read(&relative_path);
+            match read_repo_file_anchored_to_string_with_limit(
                 root,
                 &relative_path,
                 ADAPTATION_MODEL_MAX_BYTES,
@@ -181,6 +254,12 @@ impl AdaptationModelInventory {
             issues,
             budget_exceeded_at,
             digest,
+            traversal_stats: TraversalStats {
+                visited_entries,
+                visited_directories,
+                peak_pending_entries,
+                peak_retained_paths,
+            },
         }
     }
 
@@ -255,5 +334,79 @@ mod tests {
         assert_ne!(absent.digest, added.digest);
         assert_ne!(added.digest, edited.digest);
         assert_eq!(deleted.digest, absent.digest);
+    }
+
+    #[test]
+    fn large_flat_inventory_keeps_frontier_and_retained_paths_bounded() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let model_root = temp.path().join(ADAPTATION_MODEL_DIR);
+        fs::create_dir_all(&model_root).expect("model directory");
+        for index in 0..1_000 {
+            fs::write(
+                model_root.join(format!("model-{index:04}.toml")),
+                "schema = 1\n",
+            )
+            .expect("write model");
+        }
+
+        let inventory = AdaptationModelInventory::discover(temp.path(), 32);
+
+        assert!(
+            inventory.traversal_stats.peak_pending_entries <= ADAPTATION_MODEL_MAX_PENDING_ENTRIES
+        );
+        assert!(inventory.traversal_stats.peak_retained_paths <= 32);
+        assert_eq!(inventory.files.len(), 32);
+    }
+
+    #[test]
+    fn traversal_entry_ceiling_fails_closed_without_order_dependent_files() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let model_root = temp.path().join(ADAPTATION_MODEL_DIR);
+        fs::create_dir_all(&model_root).expect("model directory");
+        for index in 0..=ADAPTATION_MODEL_MAX_VISITED_ENTRIES {
+            fs::write(
+                model_root.join(format!("model-{index:05}.toml")),
+                "schema = 1\n",
+            )
+            .expect("write model");
+        }
+
+        let inventory = AdaptationModelInventory::discover(temp.path(), 32);
+
+        assert!(inventory.files.is_empty());
+        assert_eq!(
+            inventory.traversal_stats.visited_entries,
+            ADAPTATION_MODEL_MAX_VISITED_ENTRIES
+        );
+        assert!(inventory.issues.iter().any(|issue| {
+            issue.evidence_value
+                == format!("max_visited_entries={ADAPTATION_MODEL_MAX_VISITED_ENTRIES}")
+        }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inventory_read_rejects_file_swapped_to_outside_symlink() {
+        let repo = tempfile::tempdir().expect("repo");
+        let outside = tempfile::tempdir().expect("outside");
+        let model_root = repo.path().join(ADAPTATION_MODEL_DIR);
+        fs::create_dir_all(&model_root).expect("model directory");
+        let model = model_root.join("rules.toml");
+        fs::write(&model, "schema = 1\n").expect("write model");
+        let outside_model = outside.path().join("outside.toml");
+        fs::write(&outside_model, "secret = \"outside\"\n").expect("write outside model");
+
+        let inventory = AdaptationModelInventory::discover_inner(repo.path(), 32, &mut |_| {
+            fs::remove_file(&model).expect("remove model");
+            std::os::unix::fs::symlink(&outside_model, &model).expect("replace with symlink");
+        });
+
+        assert!(inventory.files.is_empty());
+        assert!(
+            inventory
+                .issues
+                .iter()
+                .any(|issue| issue.evidence_value == "path escapes repository root")
+        );
     }
 }

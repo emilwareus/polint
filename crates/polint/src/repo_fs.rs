@@ -29,6 +29,9 @@ pub(crate) enum RepoFileReadError {
     InvalidUtf8,
     #[error("read failed")]
     Read,
+    #[cfg(not(unix))]
+    #[error("secure anchored file reads are unavailable on this platform")]
+    SecureOpenUnavailable,
     #[error("create directory failed")]
     CreateDir,
     #[error("write failed")]
@@ -53,6 +56,8 @@ impl RepoFileReadError {
             }
             Self::InvalidUtf8 => "invalid utf-8",
             Self::Read => "read failed",
+            #[cfg(not(unix))]
+            Self::SecureOpenUnavailable => "secure anchored file reads unavailable",
             Self::CreateDir => "directory creation failed",
             Self::Write => "write failed",
             Self::Persist => "atomic persist failed",
@@ -209,6 +214,133 @@ pub(crate) fn read_repo_file_to_string_with_limit(
 ) -> Result<String, RepoFileReadError> {
     let bytes = read_repo_file_with_limit(root, relative_path, max_bytes)?;
     String::from_utf8(bytes).map_err(|_| RepoFileReadError::InvalidUtf8)
+}
+
+pub(crate) fn read_repo_file_anchored_to_string_with_limit(
+    root: &Path,
+    relative_path: impl AsRef<Path>,
+    max_bytes: u64,
+) -> Result<String, RepoFileReadError> {
+    let bytes = read_repo_file_anchored_with_limit(root, relative_path, max_bytes)?;
+    String::from_utf8(bytes).map_err(|_| RepoFileReadError::InvalidUtf8)
+}
+
+#[cfg(unix)]
+fn read_repo_file_anchored_with_limit(
+    root: &Path,
+    relative_path: impl AsRef<Path>,
+    max_bytes: u64,
+) -> Result<Vec<u8>, RepoFileReadError> {
+    use std::ffi::CString;
+    use std::os::fd::{AsRawFd, OwnedFd};
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let relative_path =
+        normalize_repo_relative_input(relative_path).ok_or(RepoFileReadError::AbsolutePath)?;
+    let components = relative_path
+        .components()
+        .map(|component| match component {
+            Component::Normal(segment) => Ok(segment),
+            _ => Err(RepoFileReadError::AbsolutePath),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if components.is_empty() {
+        return Err(RepoFileReadError::NotFile);
+    }
+
+    let root_dir = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW)
+        .open(root)
+        .map_err(map_anchored_open_error)?;
+    if !root_dir
+        .metadata()
+        .map_err(|_| RepoFileReadError::Metadata)?
+        .is_dir()
+    {
+        return Err(RepoFileReadError::RootUnavailable);
+    }
+
+    let mut directory: OwnedFd = root_dir.into();
+    for (index, component) in components.iter().enumerate() {
+        let name = CString::new(component.as_bytes()).map_err(|_| RepoFileReadError::Metadata)?;
+        let is_file = index + 1 == components.len();
+        let mut flags = libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW;
+        if !is_file {
+            flags |= libc::O_DIRECTORY;
+        }
+        let opened = openat_no_follow(directory.as_raw_fd(), &name, flags)
+            .map_err(map_anchored_open_error)?;
+        if is_file {
+            let file = fs::File::from(opened);
+            let metadata = file.metadata().map_err(|_| RepoFileReadError::Metadata)?;
+            if !metadata.is_file() {
+                return Err(RepoFileReadError::NotFile);
+            }
+            return read_open_file_with_limit(file, metadata.len(), max_bytes);
+        }
+        directory = opened;
+    }
+
+    Err(RepoFileReadError::NotFile)
+}
+
+#[cfg(unix)]
+#[allow(unsafe_code)]
+fn openat_no_follow(
+    directory: std::os::fd::RawFd,
+    name: &std::ffi::CStr,
+    flags: libc::c_int,
+) -> std::io::Result<std::os::fd::OwnedFd> {
+    use std::os::fd::FromRawFd;
+
+    // SAFETY: `directory` is a live directory descriptor, `name` is NUL-terminated,
+    // and ownership of a successful descriptor is transferred exactly once.
+    let descriptor = unsafe { libc::openat(directory, name.as_ptr(), flags) };
+    if descriptor < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: `openat` returned a new owned descriptor on success.
+    Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(descriptor) })
+}
+
+#[cfg(unix)]
+fn map_anchored_open_error(error: std::io::Error) -> RepoFileReadError {
+    match error.raw_os_error() {
+        Some(libc::ENOENT) => RepoFileReadError::NotFound,
+        Some(libc::ELOOP) => RepoFileReadError::EscapesRepo,
+        Some(libc::ENOTDIR) => RepoFileReadError::NotDirectory,
+        _ => RepoFileReadError::Read,
+    }
+}
+
+#[cfg(not(unix))]
+fn read_repo_file_anchored_with_limit(
+    _root: &Path,
+    _relative_path: impl AsRef<Path>,
+    _max_bytes: u64,
+) -> Result<Vec<u8>, RepoFileReadError> {
+    Err(RepoFileReadError::SecureOpenUnavailable)
+}
+
+fn read_open_file_with_limit(
+    mut file: fs::File,
+    file_len: u64,
+    max_bytes: u64,
+) -> Result<Vec<u8>, RepoFileReadError> {
+    if file_len > max_bytes {
+        return Err(RepoFileReadError::TooLarge { max_bytes });
+    }
+    let mut bytes = Vec::new();
+    std::io::Read::by_ref(&mut file)
+        .take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|_| RepoFileReadError::Read)?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(RepoFileReadError::TooLarge { max_bytes });
+    }
+    Ok(bytes)
 }
 
 pub(crate) fn repo_relative_existing_path(root: &Path, path: &Path) -> Option<String> {
