@@ -1,263 +1,174 @@
 ---
 phase: 65-generation-manifest-and-metadata-mirroring
-reviewed: 2026-07-15T18:07:24Z
+reviewed: 2026-07-15T20:28:43Z
 depth: deep
-files_reviewed: 77
+files_reviewed: 15
 files_reviewed_list:
-  - Cargo.lock
-  - Cargo.toml
-  - crates/polint/Cargo.toml
+  - .planning/phases/65-generation-manifest-and-metadata-mirroring/65-17-PLAN.md
   - crates/polint/go-sidecar/polint-go-frontend/internal/semantic/emit.go
-  - crates/polint/src/analysis/adaptation/discovery.rs
-  - crates/polint/src/analysis/adaptation/mod.rs
-  - crates/polint/src/analysis/calls/provider.rs
-  - crates/polint/src/analysis/calls/validate.rs
-  - crates/polint/src/analysis/cfg/provider.rs
-  - crates/polint/src/analysis/data_flow/cache_key.rs
-  - crates/polint/src/analysis/data_flow/provider.rs
-  - crates/polint/src/analysis/demand/query.rs
-  - crates/polint/src/analysis/domains/provider.rs
-  - crates/polint/src/analysis/entrypoints/provider.rs
-  - crates/polint/src/analysis/entrypoints/validate.rs
-  - crates/polint/src/analysis/evidence/cache_key.rs
-  - crates/polint/src/analysis/evidence/provider.rs
-  - crates/polint/src/analysis/extensions/cache_key.rs
   - crates/polint/src/analysis/extensions/provider.rs
-  - crates/polint/src/analysis/identity/provider.rs
-  - crates/polint/src/analysis/provider.rs
-  - crates/polint/src/analysis/reachability/provider.rs
-  - crates/polint/src/analysis/refined_calls/cache_key.rs
-  - crates/polint/src/analysis/refined_calls/provider.rs
-  - crates/polint/src/analysis/semantic_graph/provider.rs
-  - crates/polint/src/analysis/solver/provider.rs
-  - crates/polint/src/analysis/summaries/closure.rs
-  - crates/polint/src/analysis/summaries/provider.rs
-  - crates/polint/src/analysis/types/cache_key.rs
-  - crates/polint/src/analysis/types/provider.rs
-  - crates/polint/src/analysis_kernel/debug.rs
-  - crates/polint/src/analysis_kernel/incremental/change_set.rs
-  - crates/polint/src/analysis_kernel/incremental/demand.rs
-  - crates/polint/src/analysis_kernel/incremental/dependency_index.rs
-  - crates/polint/src/analysis_kernel/incremental/dependency_input.rs
-  - crates/polint/src/analysis_kernel/incremental/digest.rs
-  - crates/polint/src/analysis_kernel/incremental/input_snapshot.rs
-  - crates/polint/src/analysis_kernel/incremental/invalidation.rs
-  - crates/polint/src/analysis_kernel/incremental/keys.rs
-  - crates/polint/src/analysis_kernel/incremental/layer_cache.rs
-  - crates/polint/src/analysis_kernel/incremental/mod.rs
-  - crates/polint/src/analysis_kernel/incremental/quarantine.rs
-  - crates/polint/src/analysis_kernel/incremental/run_report.rs
-  - crates/polint/src/analysis_kernel/incremental/stats.rs
-  - crates/polint/src/analysis_kernel/metadata.rs
   - crates/polint/src/analysis_kernel/mod.rs
-  - crates/polint/src/analysis_kernel/provider.rs
   - crates/polint/src/analysis_kernel/store/commit_plan.rs
-  - crates/polint/src/analysis_kernel/store/connection.rs
   - crates/polint/src/analysis_kernel/store/generation.rs
   - crates/polint/src/analysis_kernel/store/migrations.rs
-  - crates/polint/src/analysis_kernel/store/mod.rs
-  - crates/polint/src/analysis_kernel/store/schema.rs
-  - crates/polint/src/analysis_kernel/store/tests.rs
   - crates/polint/src/analysis_kernel/validation.rs
   - crates/polint/src/analysis_plan.rs
-  - crates/polint/src/cache/keys.rs
-  - crates/polint/src/core/mod.rs
-  - crates/polint/src/eval/bench/gate.rs
-  - crates/polint/src/eval/bench/runner.rs
-  - crates/polint/src/eval/observed.rs
-  - crates/polint/src/eval/performance.rs
-  - crates/polint/src/go/adapter.rs
   - crates/polint/src/go/semantic/client.rs
   - crates/polint/src/go/semantic/process.rs
-  - crates/polint/src/go/semantic/provider.rs
-  - crates/polint/src/go/tests.rs
-  - crates/polint/src/metrics.rs
-  - crates/polint/src/module_graph/mod.rs
+  - crates/polint/src/go/semantic/protocol.rs
+  - crates/polint/src/policy_queries.rs
   - crates/polint/src/repo_fs.rs
-  - crates/polint/src/symbol_graph/mod.rs
-  - crates/polint/src/ts/adapter.rs
-  - crates/polint/src/ts/tests.rs
-  - crates/polint/tests/cli.rs
-  - crates/polint/tests/public_surface_leak.rs
-  - tests/eval-fixtures/cache/input-snapshots/expected.polint-eval.toml
-  - tests/fixtures/public-surface-leak-probe/Cargo.lock
+  - crates/polint/src/runner/mod.rs
 findings:
   critical: 0
-  warning: 9
+  warning: 6
   info: 0
-  total: 9
+  total: 6
 status: issues_found
 ---
 
 # Phase 65 Deep Code Re-review Report
 
-**Reviewed:** 2026-07-15T18:07:24Z
+**Reviewed:** 2026-07-15T20:28:43Z
 **Depth:** deep, three fresh independent post-fix reviewers
-**Fix range:** `0dda5032..3b9e1ba8`
-**Full diff:** `origin/main...3b9e1ba8`
+**Fix range:** `4bb2be13..ba099af7`
+**Full diff:** `origin/main...ba099af7`
 **Status:** issues found
 
 ## Summary
 
-The second fix pass resolved all fourteen prior findings and passed `make check`,
-but a fresh adversarial review found nine novel defects in provider outcome
-semantics, the active-store trust boundary, and sealed Go frontend execution.
-The reviewers also rechecked the repaired stable-fact accounting, runtime
-content framing, private-cache permissions, and supported public surfaces.
+The third fix pass resolved all nine prior findings and a full-gate cache
+publication race, then passed `make check` end to end. A fresh fourth review
+found six novel issues: three incomplete Go execution boundaries, one
+post-execution capability-trust gap, and two publication/ordinal integrity gaps
+in the semantic store.
 
-## Provider and Capability Semantics
+## Go Runtime and Toolchain Boundaries
 
-### WR-20 (P2): Per-file cache-write warnings become durable syntax facts
+### SEC-05 (P1): Sealed Go identity excludes the toolchain closure it executes
 
-**Files:** `go/adapter.rs:425-468`, `ts/adapter.rs:464-507`
+**File:** `go/semantic/process.rs:294,1511-1547,1719,2030`
 
-Go and TypeScript per-file analysis-cache write failures are inserted into the
-`SyntaxLayerPayload`. That payload is then hashed and persisted in the layer
-cache, so a transient write warning changes semantic identity and can be
-replayed by a later warm hit after the underlying failure has disappeared. The
-existing failed-write parity tests cover the layer-cache write rather than this
-earlier per-file write path.
+Preparation hashes and seals only `GOROOT/bin/go`, while retaining and passing
+the original mutable `GOROOT`. The launcher subsequently executes compiler,
+linker, and other tools under `pkg/tool` and consumes standard-library data, but
+identity records only the launcher digest and GOROOT pathname. Mutating a helper
+under the same root can therefore change cold-run behavior without rotating the
+active-generation identity.
 
-Keep persistence warnings in run-local telemetry and out of semantic payloads,
-digests, and cached diagnostics. Add cold/warm regressions that fail a per-file
-analysis-cache write while allowing the layer cache to publish, then prove the
-semantic identity is unchanged and the warning is not replayed.
+Certify and pin the complete execution closure. At minimum, bind and revalidate
+all selected `GOTOOLDIR` executables and relevant GOROOT content; preferably
+execute from a sealed content-addressed closure. Add two GOROOT fixtures with
+identical launchers/version output but different delegated tool bytes, then
+prove a post-prepare swap is pinned, rejected, or identity-rotating.
 
-### WR-21 (P2): Extensions can succeed on an unauthenticated partial universe
+### WR-25 (P1): Ambient Go module-resolution state remains unauthenticated
 
-**Files:** `analysis_kernel/mod.rs:842`, `analysis/extensions/provider.rs:124`
+**Files:** `go/semantic/process.rs:25,294,1706`,
+`go/semantic/client.rs:90`,
+`go-sidecar/polint-go-frontend/internal/semantic/emit.go:105,1079`
 
-The extensions provider still runs after unsupported symbol or entrypoint
-dependencies and builds from `native_stable_keys(db)`, which silently returns a
-partial universe. It may therefore publish `Succeeded` / `NativeTrusted`, while
-its digest does not bind the failed upstream status or output identity.
+The normalized environment leaves module/proxy/cache/VCS inputs such as
+`GOPROXY`, `GOPRIVATE`, `GONOPROXY`, `GONOSUMDB`, `GOSUMDB`, `GOPATH`,
+`GOMODCACHE`, `GOCACHE`, `GOVCS`, and proxy credentials inherited. The
+frontend passes a fresh `os.Environ()` to `packages.Load`, yet these values are
+absent from tool identity. The same source snapshot can therefore reuse facts
+produced with different dependency resolution or package-loading results.
 
-Make the required dependency contract explicit: either skip extensions when a
-required universe provider is unsupported, or deliberately model degradation.
-In both cases, bind every consumed dependency's stable status and digest into
-the extension identity. Add failed-versus-absent dependency-chain tests.
+Use one explicit allowlisted environment for every Go subprocess and pass that
+certified environment into `packages.Load`. Normalize and bind every retained
+resolution/cache/proxy/VCS input and selected external executable, or force a
+deterministic value. Add controlled proxy/module-cache fixtures that produce
+error versus resolved facts and require identity rotation or identical sealed
+behavior.
 
-### WR-22 (P1): Late provider failures do not revoke advertised capabilities
+### REL-02 (P1): Go subprocess deadlines and allocation bounds are incomplete
 
-**Files:** `analysis_kernel/mod.rs:342`, `analysis_plan.rs:770`,
-`core/mod.rs:7738`, `policy_queries.rs:57`
+**Files:** `go/semantic/process.rs:1377,1547,1990`,
+`go/semantic/client.rs:135-177`, `go/semantic/protocol.rs:139`
 
-`capability_support` is frozen before late providers execute. Calls, control
-flow, and dataflow can remain statically `Supported` after their provider fails
-or is dependency-blocked, so requesting rules execute against empty or fallback
-views instead of receiving a `polint/capability` diagnostic.
+`go version` and `go build` use unbounded `Command::output()`. Runtime pipe
+readers use unbounded `read_to_end`, protocol decoding accumulates unbounded
+rows and fields, and the timeout path joins reader threads after only the direct
+child is handled. A descendant retaining a pipe can block forever; large output
+can exhaust memory; source preparation can hang before the timed client starts.
 
-Derive effective capability availability from completed provider outcomes and
-use it before rule execution. Failed and dependency-blocked hard capabilities
-must prevent the rule from running; planned absence must remain distinct. Add
-end-to-end rule tests for failed calls, CFG, and dataflow providers.
+Route probes, builds, and semantic execution through a single bounded runner
+with a deadline that remains active until process exit and pipe EOF, total and
+per-stream byte ceilings, NDJSON line/row/field limits, and complete process-tree
+cleanup. Test sleeping/spamming version and build commands, oversized semantic
+streams, and a direct child that exits while a descendant retains both pipes;
+all must return within a short deadline with bounded allocation and no survivor.
 
-## Active Store Trust Boundary
+## Provider Trust and Rule Dispatch
 
-### WR-23 (P2): Identical-generation validation spans two active snapshots
+### WR-26 (P1): Failed global fact validation does not revoke capabilities
 
-**File:** `analysis_kernel/store/generation.rs:344-412,3013-3124`
+**Files:** `analysis_kernel/mod.rs:1193-1203,1359-1389`,
+`analysis_kernel/validation.rs:325-379`, `runner/mod.rs:424-431`
 
-`match_active_generation` reads the manifest and header without the later read
-transaction. A concurrent publisher can rotate the active pointer after that
-match; `validate_active_generation_statistics` then validates the old immutable
-handle without rechecking that it remains active and may return `Ready` with
-statistics for inactive truth.
+Effective capability support is finalized before global fact validation. A
+provider can execute successfully, install malformed CFG, call, refined-call,
+or data-flow facts, then fail validation while its metadata remains
+`NativeTrusted` and dependent rules still execute against invalid facts. This
+is distinct from an execution failure: the provider returned success and only
+the authoritative defense-in-depth validation rejected its output.
 
-Carry the expected identities and schema into the matched handle. Inside the
-projection transaction, re-read the manifest, require the same active handle,
-and authenticate the header again. Add an interlock regression that publishes a
-new generation between match and validation and proves the old match cannot
-return `Ready`.
+Validate before capability finalization, fold failed validation kinds into
+effective availability, and downgrade the corresponding provider metadata.
+CFG/call/refined-call failures must revoke calls and control flow; data-flow
+failure must revoke dataflow. Add a full kernel/runner injection regression that
+asserts the internal validation diagnostic, capability diagnostics, zero rule
+invocations, non-trusted metadata, and cold/warm parity.
 
-### PERF-07 (P2): Non-fact metadata is materialized without allocation preflight
+## Semantic Store Integrity
 
-**Files:** `analysis_kernel/store/generation.rs:3021-3139,3293-3318`,
-`analysis_kernel/store/migrations.rs:145-156`
+### WR-27 (P2): Publication can activate scalar data it never authenticated
 
-The active reader preflights fact storage, but first materializes every input,
-provider, layer, summary, query, diagnostic, dependency, and telemetry row into
-unbounded vectors and strings. A hostile active store can allocate an enormous
-TEXT value, or many short metadata rows, before count or identity rejection.
+**Files:** `analysis_kernel/store/generation.rs:675-877,3417-3523`,
+`.planning/phases/65-generation-manifest-and-metadata-mirroring/65-17-PLAN.md:64`
 
-Apply a writer-symmetric store-wide row and byte budget to every persisted
-family. Preflight SQLite storage classes, byte lengths, bounded row counts, and
-aggregate overhead before any active materialization. Add huge-TEXT and
-many-short-row tests in a non-fact family with a decode seam proving zero rows
-were materialized before rejection.
+After writing, the in-memory plan is released. `validate_written_generation`
+checks storage shape, counts, declared child counts, copied statistics, and
+validation events, but never decodes the persisted projection or recomputes its
+canonical identities before marking it complete and rotating the active
+pointer. A binding regression or transaction-local scalar tamper can therefore
+activate an invalid candidate and displace the previous valid generation; only
+the next reader detects the corruption and requests a rebuild.
 
-### WR-24 (P3): Canonical metadata ordinals are not authenticated
+Before completion and activation, run the pending candidate through the typed
+projection decoder plus canonical identity/reference validation inside the same
+transaction, or compare equivalent streaming family digests to the reservation
+identities. Add a post-write scalar-tamper seam and prove commit fails, the
+candidate never activates, and the previous complete generation remains ready.
 
-**File:** `analysis_kernel/store/generation.rs:3297-4531`
+### WR-28 (P2): Ordinal validation accepts value-preserving swaps
 
-Outside fact metadata, readers order by stored ordinals but usually do not
-select or validate them. Parent `semantic_ordinal` values are discarded and
-regenerated with `enumerate`. Changing a one-child ordinal from `0` to `999`
-therefore preserves order, counts, logical projection, and recomputed identities
-even though the store is no longer the canonical writer projection.
+**File:** `analysis_kernel/store/generation.rs:3247-3307,3722-3747,4579-4623,4797-4876`
 
-Select and validate every persisted parent and child ordinal as a contiguous
-`0..n` sequence, globally or per parent as appropriate, before discarding it.
-Add gap and offset tamper tests for each ordinal family.
+The new validator orders only by ordinal and proves that every partition
+contains the set `{0..n}`. It does not authenticate which canonical row owns
+each ordinal. Swapping `0` and `1` between two rows preserves the contiguous
+set, while downstream readers sort or canonicalize content again, so identities
+still match and the tampered store is accepted.
 
-## Runtime and Toolchain Boundaries
-
-### SEC-04 (P1): The Go executable used by package loading is not sealed into identity
-
-**Files:** `go/semantic/process.rs:204-306,1286-1299`,
-`go-sidecar/polint-go-frontend/internal/semantic/emit.go:98-129,1080-1085`
-
-Prepared frontend identity binds frontend bytes, but binary and installed modes
-record no Go toolchain. Runtime execution inherits `PATH`, while
-`packages.Load` resolves `go` independently through `os.Environ()`. The same
-frontend identity can therefore cache facts under Go A and reuse them under Go
-B; source mode also does not prove that probe, build, and runtime selected the
-same executable.
-
-Resolve one exact Go executable for every frontend mode; bind its content,
-canonical selection, version, and normalized module environment into provenance
-and identity; then force both build and package loading to use that sealed
-selection. Test two fake launchers and a `PATH` swap: identity must rotate or
-execution must stay pinned to the first verified toolchain.
-
-### PERF-08 (P2): Custom frontend source traversal is unbounded before its limit
-
-**File:** `go/semantic/process.rs:785-878`
-
-`capture_source_snapshot` checks the 512-file limit only after recursive
-collection. The walker has no entry, directory, depth, or frontier ceiling, so
-a large tree can grow the vector without bound, irrelevant entries consume
-unbounded time, and deep nesting risks stack overflow.
-
-Use iterative descriptor-anchored traversal with entry, directory, depth, file,
-and frontier budgets enforced while walking. Add flat overflow, excessive depth,
-and irrelevant-entry fixtures that prove deterministic early rejection.
-
-### REL-01 (P3): Frontend staging directories can collide and leak on errors
-
-**File:** `go/semantic/process.rs:749-754,926-942,1073-1110,1176-1183`
-
-Persistent staging names contain only the PID and wall-clock nanoseconds, which
-does not guarantee uniqueness across threads. Multiple `?` exits after creation
-bypass cleanup, leaving source, build, and seal staging trees behind after
-transient failures; a timestamp collision can make callers share a directory.
-
-Allocate staging directories atomically with unpredictable/create-new names and
-an RAII cleanup guard that is disarmed only after successful publication. Add
-failure injection at every post-create step, concurrent allocation coverage,
-and bounded cleanup for stale staging entries.
+Authenticate ordinal-to-content association: order each partition by canonical
+semantic columns and require the stored ordinal to equal the enumerated index,
+or preserve raw ordinal order and require it already matches the canonical row
+sequence. Extend the tamper matrix with two-row swaps in a global family and
+partitioned child families; active reads and identical-generation validation
+must fail closed.
 
 ## Clean Areas
 
-The repaired fact writer/reader accounting is symmetric for UTF-8 byte lengths,
-encoded and decoded stable-key limits, empty keys, fixed row overhead, aggregate
-budgeting, SQLite blob preflight, and LZ4 declared sizes. No additional defect
-was found in SHA-256 framing, special-file nonblocking rejection, sealed frontend
-byte reuse, Unix ownership and modes, descriptor closure, macOS POSIX behavior,
-intentional non-Unix fail-closed behavior, supported SDK/CLI visibility, or
-Cargo/MSRV compatibility.
+The fourth review found no additional defect in transient syntax-cache warning
+handling, exact extension dependency scoping, execution-failure capability
+revocation, active-pointer revalidation, all-table storage preflight, row/byte
+budget symmetry, cache create-or-validate security, private frontend cache
+ownership, content framing, supported SDK/CLI visibility, or Cargo/MSRV
+compatibility.
 
 ---
 
-_Reviewed: 2026-07-15T18:07:24Z_
+_Reviewed: 2026-07-15T20:28:43Z_
 _Review mode: fresh three-domain post-fix deep review_
