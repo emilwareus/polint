@@ -3962,7 +3962,7 @@ mod tests {
     fn source_keeps_the_plan_private_and_storage_independent() {
         let source = include_str!("commit_plan.rs");
         let production = source
-            .split_once("#[cfg(test)]")
+            .split_once("#[cfg(test)]\nmod tests")
             .expect("test boundary exists")
             .0;
         assert!(production.contains("pub(super) struct StoreCommitPlan"));
