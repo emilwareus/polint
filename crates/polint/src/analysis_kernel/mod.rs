@@ -75,6 +75,13 @@ const DATA_FLOW_PIPELINE_TRIGGER_CAPABILITIES: &[&str] = &["dataflow"];
 
 pub(crate) struct AnalysisKernel;
 
+#[cfg(test)]
+std::thread_local! {
+    static INJECT_NEXT_CFG_VALIDATION_FAILURE: std::cell::Cell<bool> = const {
+        std::cell::Cell::new(false)
+    };
+}
+
 macro_rules! dependency_blocked_output {
     ($output_type:ty) => {{
         let mut output = <$output_type>::default();
@@ -1190,16 +1197,23 @@ impl AnalysisKernel {
             metrics_output_digest,
             metrics_layers,
         ));
+        tracing::info!(target: "polint::kernel", "stage: metrics + derived done");
+        #[cfg(test)]
+        Self::maybe_inject_cfg_validation_failure_for_test(&mut db);
+        let validation_report = validation::validate_fact_metadata(&db, Self::provider_manifests());
+        diagnostics.extend(validation_report.diagnostics);
+        let validation_events = validation_report.events;
+        Self::revoke_provider_trust_after_fact_validation(
+            &mut provider_outputs,
+            &validation_events,
+        );
         let (capability_support, capability_diagnostics) = Self::effective_capability_support(
             &capability_support,
             refined_calls_dependency_output.status,
             data_flow_status,
+            &validation_events,
         );
         diagnostics.extend(capability_diagnostics);
-        tracing::info!(target: "polint::kernel", "stage: metrics + derived done");
-        let validation_report = validation::validate_fact_metadata(&db, Self::provider_manifests());
-        diagnostics.extend(validation_report.diagnostics);
-        let validation_events = validation_report.events;
         db.finish_all_fact_meta_insertions();
         let store_outcome = if input.cache.semantic_store_enabled() {
             let fact_meta = db.take_fact_meta_for_store();
@@ -1420,19 +1434,38 @@ impl AnalysisKernel {
         planned: &CapabilitySupportView,
         refined_calls_status: incremental::InputComponentStatus,
         data_flow_status: incremental::InputComponentStatus,
+        validation_events: &[validation::ValidationEvent],
     ) -> (CapabilitySupportView, Vec<Diagnostic>) {
         let mut entries = planned.entries().to_vec();
         let mut diagnostics = Vec::new();
+        let call_validation_failed = Self::fact_validation_failed(
+            validation_events,
+            &[
+                validation::ValidationEventKind::Cfg,
+                validation::ValidationEventKind::Calls,
+                validation::ValidationEventKind::RefinedCalls,
+            ],
+        );
+        let data_flow_validation_failed = Self::fact_validation_failed(
+            validation_events,
+            &[validation::ValidationEventKind::DataFlow],
+        );
         for entry in &mut entries {
             if entry.status != CapabilitySupportStatus::Supported {
                 continue;
             }
-            let provider_status = match entry.capability.as_str() {
-                "calls" | "control_flow" => Some(refined_calls_status),
-                "dataflow" => Some(data_flow_status),
+            let unavailable = match entry.capability.as_str() {
+                "calls" | "control_flow" => Some(
+                    refined_calls_status == incremental::InputComponentStatus::Unsupported
+                        || call_validation_failed,
+                ),
+                "dataflow" => Some(
+                    data_flow_status == incremental::InputComponentStatus::Unsupported
+                        || data_flow_validation_failed,
+                ),
                 _ => None,
             };
-            if provider_status != Some(incremental::InputComponentStatus::Unsupported) {
+            if unavailable != Some(true) {
                 continue;
             }
 
@@ -1448,6 +1481,65 @@ impl AnalysisKernel {
             }));
         }
         (CapabilitySupportView::new(entries), diagnostics)
+    }
+
+    fn fact_validation_failed(
+        events: &[validation::ValidationEvent],
+        kinds: &[validation::ValidationEventKind],
+    ) -> bool {
+        events.iter().any(|event| {
+            kinds.contains(&event.kind) && event.status == validation::ValidationEventStatus::Failed
+        })
+    }
+
+    fn revoke_provider_trust_after_fact_validation(
+        provider_outputs: &mut [incremental::ProviderOutputMeta],
+        events: &[validation::ValidationEvent],
+    ) {
+        const VALIDATION_PROVIDERS: &[(validation::ValidationEventKind, &str)] = &[
+            (validation::ValidationEventKind::Cfg, "polint.cfg"),
+            (validation::ValidationEventKind::Calls, "polint.calls"),
+            (
+                validation::ValidationEventKind::RefinedCalls,
+                "polint.refined_calls",
+            ),
+            (
+                validation::ValidationEventKind::DataFlow,
+                "polint.data_flow",
+            ),
+        ];
+
+        for (kind, provider_id) in VALIDATION_PROVIDERS {
+            if !Self::fact_validation_failed(events, &[*kind]) {
+                continue;
+            }
+            let Some(output) = provider_outputs
+                .iter_mut()
+                .find(|output| output.provider_id == *provider_id)
+            else {
+                continue;
+            };
+            output.validation = incremental::ProviderValidationStatus::ProviderFailed;
+            for layer in &mut output.layers {
+                layer.validation = incremental::ProviderValidationStatus::ProviderFailed;
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn inject_next_cfg_validation_failure_for_test() {
+        INJECT_NEXT_CFG_VALIDATION_FAILURE.set(true);
+    }
+
+    #[cfg(test)]
+    fn maybe_inject_cfg_validation_failure_for_test(db: &mut AnalysisDb) {
+        let should_inject = INJECT_NEXT_CFG_VALIDATION_FAILURE.replace(false);
+        if should_inject {
+            assert!(
+                db.inject_dangling_cfg_entry_for_test(),
+                "CFG validation injection requires a produced CFG function"
+            );
+        }
     }
 
     fn directly_requests_any_capability(plan: &AnalysisPlan, capabilities: &[&str]) -> bool {
@@ -2651,6 +2743,7 @@ mod tests {
             plan.support_view(),
             incremental::InputComponentStatus::Unsupported,
             incremental::InputComponentStatus::Absent,
+            &[],
         );
         let rule_diagnostics = crate::core::run_rules_with_capability_support(
             &AnalysisDb::new(),
@@ -2696,6 +2789,7 @@ mod tests {
             plan.support_view(),
             incremental::InputComponentStatus::Present,
             incremental::InputComponentStatus::Unsupported,
+            &[],
         );
         let rule_diagnostics = crate::core::run_rules_with_capability_support(
             &AnalysisDb::new(),
@@ -2730,6 +2824,7 @@ mod tests {
             plan.support_view(),
             incremental::InputComponentStatus::Absent,
             incremental::InputComponentStatus::Absent,
+            &[],
         );
         let rule_diagnostics = crate::core::run_rules_with_capability_support(
             &AnalysisDb::new(),
@@ -2747,6 +2842,106 @@ mod tests {
         assert!(diagnostics.is_empty());
         assert!(rule_diagnostics.is_empty());
         assert_eq!(calls_ran.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn failed_cfg_validation_revokes_capabilities_and_provider_trust_on_cold_and_warm_runs() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join("app.ts"),
+            "export function app(value: boolean) { return value ? 1 : 2; }\n",
+        )
+        .expect("write source");
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let cache = Cache::new(temp.path().join("cache"), true);
+        let calls_ran = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let control_flow_ran = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let rules = vec![
+            capability_probe_rule(
+                "test/needs-calls-after-validation",
+                Capabilities::new().calls(),
+                std::sync::Arc::clone(&calls_ran),
+            ),
+            capability_probe_rule(
+                "test/needs-control-flow-after-validation",
+                Capabilities::new().control_flow(),
+                std::sync::Arc::clone(&control_flow_ran),
+            ),
+        ];
+        let plan = AnalysisPlan::from_rules(&rules, None, &std::collections::BTreeMap::new());
+
+        let run = || {
+            AnalysisKernel::inject_next_cfg_validation_failure_for_test();
+            AnalysisKernel::run(KernelInput {
+                loaded: &loaded,
+                cache: &cache,
+                config_digest: "config",
+                rule_digest: "rules",
+                plan: &plan,
+                parallel: false,
+            })
+            .expect("kernel should preserve validation failure as diagnostics")
+        };
+        let cold = run();
+        let warm = run();
+
+        for output in [&cold, &warm] {
+            let cfg_event = output
+                .run_report
+                .validation_events()
+                .iter()
+                .find(|event| event.kind == validation::ValidationEventKind::Cfg)
+                .expect("CFG validation event");
+            assert_eq!(cfg_event.status, validation::ValidationEventStatus::Failed);
+            assert_eq!(
+                output.capability_support.status_for("calls"),
+                Some(CapabilitySupportStatus::Unsupported)
+            );
+            assert_eq!(
+                output.capability_support.status_for("control_flow"),
+                Some(CapabilitySupportStatus::Unsupported)
+            );
+            assert_eq!(
+                provider_output(output, "polint.cfg").validation,
+                incremental::ProviderValidationStatus::ProviderFailed
+            );
+            assert!(output.diagnostics.iter().any(|diagnostic| {
+                diagnostic.rule_id == "polint/internal"
+                    && diagnostic.message.contains("CFG validation failed")
+            }));
+            assert_eq!(
+                output
+                    .diagnostics
+                    .iter()
+                    .filter(|diagnostic| diagnostic.rule_id == "polint/capability")
+                    .count(),
+                2
+            );
+
+            let rule_diagnostics = crate::core::run_rules_with_capability_support(
+                &output.db,
+                &rules,
+                &std::collections::BTreeMap::new(),
+                None,
+                false,
+                &output.capability_support,
+            );
+            assert!(rule_diagnostics.is_empty());
+        }
+
+        assert_eq!(
+            provider_output(&cold, "polint.cfg").semantic_projection(),
+            provider_output(&warm, "polint.cfg").semantic_projection()
+        );
+        assert_eq!(
+            cold.run_report.validation_events(),
+            warm.run_report.validation_events()
+        );
+        assert_eq!(calls_ran.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(
+            control_flow_ran.load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
     }
 
     fn capability_probe_rule(

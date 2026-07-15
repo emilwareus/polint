@@ -4031,6 +4031,15 @@ impl AnalysisDb {
         &self.cfg_control_dependence
     }
 
+    #[cfg(test)]
+    pub(crate) fn inject_dangling_cfg_entry_for_test(&mut self) -> bool {
+        let Some(function) = self.cfg_functions.first_mut() else {
+            return false;
+        };
+        function.entry_node = crate::analysis::cfg::ids::CfgNodeId(u64::MAX);
+        true
+    }
+
     pub(crate) fn unsupported_control_flow(&self) -> &[UnsupportedControlFlowFact] {
         &self.unsupported_control_flow
     }
