@@ -2540,16 +2540,49 @@ mod tests {
     }
 
     #[test]
-    fn kernel_surfaces_metrics_layer_cache_write_diagnostics() {
+    fn kernel_preserves_provider_and_run_identities_when_layer_cache_write_fails() {
+        fn validated_metadata(output: &KernelOutput) -> incremental::ValidatedRunMetadata {
+            let fact_rows = output
+                .db
+                .fact_meta()
+                .stable_rows()
+                .expect("fact metadata is canonical");
+            incremental::ValidatedRunMetadata::from_finalized_run(
+                &output.run_report.input_snapshot,
+                &output.run_report.provider_outputs,
+                output.run_report.demand_query_trace(),
+                output.run_report.validation_events(),
+                AnalysisKernel::provider_manifests(),
+                fact_rows,
+            )
+            .expect("kernel output is a complete metadata handoff")
+        }
+
         let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join("app.ts"),
+            "export function handler() { return 1; }\n",
+        )
+        .expect("write source");
         let loaded = load_config(temp.path()).expect("default config loads");
+        let plan = AnalysisPlan::from_capability_names_for_test(&["calls", "file_metrics"]);
+        let disabled_cache = Cache::new(temp.path().join("disabled-cache"), false);
+        let baseline = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &disabled_cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("disabled-cache kernel should run");
+
         let cache_root = temp.path().join("cache");
         std::fs::create_dir_all(&cache_root).expect("cache root");
         std::fs::write(cache_root.join("layers"), "not a directory").expect("layer root file");
         let cache = Cache::new(cache_root.join("analysis"), true);
-        let plan = AnalysisPlan::from_capability_names_for_test(&["file_metrics"]);
 
-        let output = AnalysisKernel::run(KernelInput {
+        let failed_write = AnalysisKernel::run(KernelInput {
             loaded: &loaded,
             cache: &cache,
             config_digest: "config",
@@ -2558,30 +2591,55 @@ mod tests {
             parallel: false,
         })
         .expect("kernel should run");
-        let metrics = provider_output(&output, "polint.metrics");
+        let metrics = provider_output(&failed_write, "polint.metrics");
 
         assert_eq!(metrics.cache_stats.misses, 0);
         assert_eq!(metrics.cache_stats.invalid_evicted_reads, 1);
         assert_eq!(metrics.cache_stats.recomputes, 1);
         assert_eq!(metrics.cache_stats.writes, 0);
-        assert!(metrics.layers.is_empty());
+        assert_eq!(metrics.layers.len(), 1);
         assert_eq!(
             metrics.validation,
-            incremental::ProviderValidationStatus::ProviderFailed
+            incremental::ProviderValidationStatus::NativeTrusted
         );
-        assert_eq!(
-            metrics.output_digest,
-            incremental::Digest::unsupported(
-                incremental::DigestKind::ProviderOutput,
-                "polint.metrics",
-                "provider execution failed"
-            )
-        );
-        assert!(output.diagnostics.iter().any(|diagnostic| {
+        assert!(failed_write.diagnostics.iter().any(|diagnostic| {
             diagnostic.rule_id == "internal/cache"
                 && diagnostic.file == "metrics layer"
                 && diagnostic.message.contains("cache write failed")
         }));
+
+        for provider_id in [
+            "polint.go.syntax",
+            "polint.ts.syntax",
+            "polint.module_graph",
+            "polint.symbol_graph",
+            "polint.module_topology",
+            "polint.metrics",
+        ] {
+            let expected = provider_output(&baseline, provider_id);
+            let actual = provider_output(&failed_write, provider_id);
+            assert_eq!(actual.validation, expected.validation, "{provider_id}");
+            assert_eq!(
+                actual.output_digest, expected.output_digest,
+                "{provider_id}"
+            );
+            assert_eq!(actual.layers, expected.layers, "{provider_id}");
+        }
+
+        let baseline_metadata = validated_metadata(&baseline);
+        let failed_write_metadata = validated_metadata(&failed_write);
+        assert_eq!(
+            failed_write_metadata.identities().provider_output(),
+            baseline_metadata.identities().provider_output()
+        );
+        assert_eq!(
+            failed_write_metadata.identities().run(),
+            baseline_metadata.identities().run()
+        );
+        assert_eq!(
+            failed_write_metadata.identities().generation(),
+            baseline_metadata.identities().generation()
+        );
     }
 
     #[test]

@@ -214,22 +214,20 @@ pub(crate) fn derive_requested_symbols_with_cache_stats(
                         return derivation;
                     }
                 };
-            let write_succeeded = status == LayerCacheReadStatus::BypassedDisabled
-                || write_symbol_graph_layer_payload(
+            if status != LayerCacheReadStatus::BypassedDisabled {
+                write_symbol_graph_layer_payload(
                     &store,
                     &manifest,
                     payload_bytes,
                     &mut cache_stats,
                     &mut derivation.diagnostics,
                 );
+            }
             let layer = LayerRunMetadata::from_manifest(manifest);
-            derivation.execution = if write_succeeded {
-                crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded
-            } else {
-                crate::analysis_kernel::incremental::ProviderExecutionOutcome::Failed
-            };
-            derivation.output_digest = write_succeeded.then(|| layer.output_digest.clone());
-            derivation.layers = write_succeeded.then_some(layer).into_iter().collect();
+            derivation.execution =
+                crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded;
+            derivation.output_digest = Some(layer.output_digest.clone());
+            derivation.layers = vec![layer];
             derivation.cache_stats = cache_stats;
             derivation
         }

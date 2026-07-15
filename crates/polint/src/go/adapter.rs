@@ -187,27 +187,24 @@ pub(crate) fn analyze_with_plan_options_and_cache_stats(
                     };
                 }
             };
-            let write_succeeded = status == LayerCacheReadStatus::BypassedDisabled
-                || write_syntax_layer_payload(
+            if status != LayerCacheReadStatus::BypassedDisabled {
+                write_syntax_layer_payload(
                     &layer_store,
                     &manifest,
                     &payload,
                     &mut cache_stats,
                     &mut write_diagnostics,
                 );
+            }
             let layer = LayerRunMetadata::from_manifest(manifest);
             let mut diagnostics = restore_syntax_layer_payload(db, payload);
             diagnostics.extend(write_diagnostics);
             ProviderAnalysisResult {
                 diagnostics,
                 cache_stats,
-                execution: if write_succeeded {
-                    crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded
-                } else {
-                    crate::analysis_kernel::incremental::ProviderExecutionOutcome::Failed
-                },
-                output_digest: write_succeeded.then(|| layer.output_digest.clone()),
-                layers: write_succeeded.then_some(layer).into_iter().collect(),
+                execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded,
+                output_digest: Some(layer.output_digest.clone()),
+                layers: vec![layer],
             }
         }
     }

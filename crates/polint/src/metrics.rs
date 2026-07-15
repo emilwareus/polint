@@ -135,22 +135,20 @@ pub(crate) fn derive_requested_metrics_with_cache_stats(
                     return derivation;
                 }
             };
-            let write_succeeded = status == LayerCacheReadStatus::BypassedDisabled
-                || write_metrics_layer_payload(
+            if status != LayerCacheReadStatus::BypassedDisabled {
+                write_metrics_layer_payload(
                     &store,
                     &manifest,
                     &payload,
                     &mut cache_stats,
                     &mut derivation.diagnostics,
                 );
+            }
             let layer = LayerRunMetadata::from_manifest(manifest);
-            derivation.execution = if write_succeeded {
-                crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded
-            } else {
-                crate::analysis_kernel::incremental::ProviderExecutionOutcome::Failed
-            };
-            derivation.output_digest = write_succeeded.then(|| layer.output_digest.clone());
-            derivation.layers = write_succeeded.then_some(layer).into_iter().collect();
+            derivation.execution =
+                crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded;
+            derivation.output_digest = Some(layer.output_digest.clone());
+            derivation.layers = vec![layer];
             derivation.cache_stats = cache_stats;
             derivation
         }
@@ -1285,6 +1283,12 @@ mod tests {
             assert_eq!(derivation.cache_stats.invalid_evicted_reads, 1);
             assert_eq!(derivation.cache_stats.recomputes, 1);
             assert_eq!(derivation.cache_stats.writes, 0);
+            assert_eq!(
+                derivation.execution,
+                crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded
+            );
+            assert!(derivation.output_digest.is_some());
+            assert_eq!(derivation.layers.len(), 1);
             assert!(derivation.diagnostics.iter().any(|diagnostic| {
                 diagnostic.rule_id == "internal/cache"
                     && diagnostic.file == "metrics layer"
