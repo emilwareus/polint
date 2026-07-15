@@ -66,7 +66,6 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
     identity_output_digest: Digest,
     abstract_domains_output_digest: Digest,
     entrypoints_output_digest: Digest,
-    reachability_output_digest: Digest,
     type_value_alias_output_digest: Digest,
     symbol_output_digest: Digest,
     module_topology_output_digest: Digest,
@@ -126,7 +125,6 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
         &identity_output_digest,
         &abstract_domains_output_digest,
         &entrypoints_output_digest,
-        &reachability_output_digest,
         &type_value_alias_output_digest,
         &symbol_output_digest,
         &module_topology_output_digest,
@@ -443,9 +441,8 @@ fn adaptation_model_diagnostic(
 /// The folded upstream digests cover the producers of every fact family
 /// `build_semantic_graph` reads: `go`/`ts` syntax (functions, packages), symbol
 /// graph (scopes), calls (call sites), type/value/alias (value facts) and semantic
-/// MIR (places). `identity`/`abstract_domains`/`entrypoints`/`reachability`/
-/// `module_topology` are folded as well so the keystone over-invalidates rather than
-/// risks a stale graph as later stages begin consuming them.
+/// MIR (places). `identity`/`abstract_domains`/`entrypoints`/`module_topology` are
+/// folded as well so every declared input has an explicit consumer.
 #[allow(clippy::too_many_arguments)]
 fn semantic_graph_output_digest(
     db: &AnalysisDb,
@@ -455,7 +452,6 @@ fn semantic_graph_output_digest(
     identity_output_digest: &Digest,
     abstract_domains_output_digest: &Digest,
     entrypoints_output_digest: &Digest,
-    reachability_output_digest: &Digest,
     type_value_alias_output_digest: &Digest,
     symbol_output_digest: &Digest,
     module_topology_output_digest: &Digest,
@@ -476,7 +472,6 @@ fn semantic_graph_output_digest(
         format!("identity_output={identity_output_digest}"),
         format!("abstract_domains_output={abstract_domains_output_digest}"),
         format!("entrypoints_output={entrypoints_output_digest}"),
-        format!("reachability_output={reachability_output_digest}"),
         format!("type_value_alias_output={type_value_alias_output_digest}"),
         format!("symbol_graph={symbol_output_digest}"),
         format!("module_topology={module_topology_output_digest}"),
@@ -782,7 +777,6 @@ mod tests {
             absent("polint.identity"),
             absent("polint.abstract_domains"),
             absent("polint.entrypoints"),
-            absent("polint.reachability"),
             absent("polint.type_value_alias"),
             absent("polint.symbol_graph"),
             absent("polint.module_topology"),
@@ -955,7 +949,6 @@ evidence = ["cmd/app/main.go:1"]
             absent("polint.identity"),
             absent("polint.abstract_domains"),
             absent("polint.entrypoints"),
-            absent("polint.reachability"),
             absent("polint.type_value_alias"),
             absent("polint.symbol_graph"),
             absent("polint.module_topology"),
@@ -976,7 +969,6 @@ evidence = ["cmd/app/main.go:1"]
             absent("polint.identity"),
             absent("polint.abstract_domains"),
             absent("polint.entrypoints"),
-            absent("polint.reachability"),
             absent("polint.type_value_alias"),
             absent("polint.symbol_graph"),
             absent("polint.module_topology"),
@@ -1014,7 +1006,6 @@ evidence = ["cmd/app/main.go:1"]
             &absent("polint.identity"),
             &absent("polint.abstract_domains"),
             &absent("polint.entrypoints"),
-            &absent("polint.reachability"),
             &absent("polint.type_value_alias"),
             &absent("polint.symbol_graph"),
             &base_module_topology,
@@ -1034,7 +1025,6 @@ evidence = ["cmd/app/main.go:1"]
             &absent("polint.identity"),
             &absent("polint.abstract_domains"),
             &absent("polint.entrypoints"),
-            &absent("polint.reachability"),
             &absent("polint.type_value_alias"),
             &absent("polint.symbol_graph"),
             &base_module_topology,
@@ -1054,7 +1044,6 @@ evidence = ["cmd/app/main.go:1"]
             &absent("polint.identity"),
             &absent("polint.abstract_domains"),
             &absent("polint.entrypoints"),
-            &absent("polint.reachability"),
             &absent("polint.type_value_alias"),
             &absent("polint.symbol_graph"),
             &changed_module_topology,

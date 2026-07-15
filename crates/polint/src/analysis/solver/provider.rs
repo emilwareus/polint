@@ -353,7 +353,6 @@ mod tests {
             absent("polint.identity"),
             absent("polint.abstract_domains"),
             absent("polint.entrypoints"),
-            absent("polint.reachability"),
             absent("polint.type_value_alias"),
             absent("polint.symbol_graph"),
             absent("polint.module_topology"),

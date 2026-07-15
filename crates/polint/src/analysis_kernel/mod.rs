@@ -686,15 +686,6 @@ impl AnalysisKernel {
         let polint_reachability_cache_stats = reachability.cache_stats.clone();
         let reachability_output_digest = reachability.output_digest;
         diagnostics.extend(reachability.diagnostics);
-        // In-scope dependency digest for the polint.semantic_graph run splice below
-        // (the Option is moved into the provider-output push next).
-        let reachability_dependency_output_digest =
-            reachability_output_digest.clone().unwrap_or_else(|| {
-                incremental::Digest::absent(
-                    incremental::DigestKind::ProviderOutput,
-                    "polint.reachability",
-                )
-            });
         provider_outputs.push(Self::provider_output_for_with_optional_digest(
             "polint.reachability",
             &db,
@@ -796,7 +787,6 @@ impl AnalysisKernel {
                 identity_dependency_output_digest,
                 abstract_domains_dependency_output_digest,
                 entrypoints_dependency_output_digest.clone(),
-                reachability_dependency_output_digest,
                 type_value_alias_dependency_output_digest.clone(),
                 entrypoints_symbol_digest,
                 entrypoints_topology_digest,
@@ -3835,7 +3825,13 @@ fn main() {
         assert_same_provider_digests(
             &baseline.output,
             &reachability_changed.output,
-            &["polint.calls", "polint.direct_summaries"],
+            &[
+                "polint.calls",
+                "polint.direct_summaries",
+                "polint.semantic_graph",
+                "polint.solver",
+                "polint.refined_calls",
+            ],
             "reachability roots",
         );
         assert!(scc_backdated_count(&reachability_changed.output) > 0);
