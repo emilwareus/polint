@@ -4476,7 +4476,7 @@ mod layer_run_metadata_path_tests {
     }
 
     #[test]
-    fn ts_layer_run_metadata_is_identical_across_successful_cache_paths() {
+    fn ts_layer_run_metadata_is_identical_across_hit_miss_disabled_invalid_read_and_failed_write() {
         let scratch = tempfile::TempDir::new().expect("scratch directory");
         let cache_root = scratch.path().join("cache");
         let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
@@ -4537,12 +4537,12 @@ mod layer_run_metadata_path_tests {
         std::fs::create_dir_all(&failed_root).expect("failed-write cache parent");
         std::fs::write(failed_root.join("layers"), "not a directory")
             .expect("failed-write fixture");
-        let failed = run(&crate::cache::Cache::new(
+        let failed_write = run(&crate::cache::Cache::new(
             failed_root.join("analysis"),
             true,
         ));
         assert_eq!(
-            failed.cache_stats,
+            failed_write.cache_stats,
             CacheStats {
                 recomputes: 1,
                 invalid_evicted_reads: 1,
@@ -4550,13 +4550,17 @@ mod layer_run_metadata_path_tests {
             }
         );
         assert!(
-            failed
+            failed_write
                 .diagnostics
                 .iter()
                 .any(|diagnostic| diagnostic.rule_id == "internal/cache")
         );
 
-        for result in [&cold, &warm, &disabled, &invalid] {
+        for result in [&cold, &warm, &disabled, &invalid, &failed_write] {
+            assert_eq!(
+                result.execution,
+                crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded
+            );
             assert_eq!(result.layers.len(), 1);
             assert_eq!(result.layers, cold.layers);
             assert_eq!(
@@ -4566,11 +4570,5 @@ mod layer_run_metadata_path_tests {
             assert_eq!(result.output_digest, cold.output_digest);
             assert_layer_projection_excludes_cache_telemetry(result);
         }
-        assert_eq!(
-            failed.execution,
-            crate::analysis_kernel::incremental::ProviderExecutionOutcome::Failed
-        );
-        assert!(failed.output_digest.is_none());
-        assert!(failed.layers.is_empty());
     }
 }
