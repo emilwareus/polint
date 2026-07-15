@@ -70,6 +70,8 @@ pub(super) enum ActiveGenerationMatch {
 pub(super) struct MatchedActiveGeneration {
     reader: ReadOnlyConnection,
     handle: i64,
+    expected_identities: Box<CanonicalRunIdentities>,
+    expected_dependency_schema: String,
 }
 
 #[derive(Clone, Debug)]
@@ -380,19 +382,7 @@ pub(super) fn match_active_generation(
             StoreRebuildReason::InvalidMetadata,
         ));
     }
-    if header.identities.workspace != *identities.workspace()
-        || header.identities.full_config != *identities.full_config()
-        || header.identities.input_snapshot != *identities.input_snapshot()
-        || header.identities.provider_manifest != *identities.provider_manifest()
-        || header.identities.provider_output != *identities.provider_output()
-        || header.identities.layer != *identities.layer()
-        || header.identities.summary != *identities.summary()
-        || header.identities.query != *identities.query()
-        || header.identities.fact != *identities.fact()
-        || header.identities.dependency != *identities.dependency()
-        || header.identities.validation != *identities.validation()
-        || header.identities.run != *identities.run()
-        || header.identities.generation != *identities.generation()
+    if !generation_header_matches_identities(&header, identities)
         || header.dependency_schema != dependency_schema
     {
         return Ok(ActiveGenerationMatch::Different);
@@ -400,6 +390,8 @@ pub(super) fn match_active_generation(
     Ok(ActiveGenerationMatch::Identical(MatchedActiveGeneration {
         reader,
         handle: active_handle,
+        expected_identities: Box::new(identities.clone()),
+        expected_dependency_schema: dependency_schema.to_string(),
     }))
 }
 
@@ -408,6 +400,34 @@ pub(super) fn validate_active_generation_statistics(
 ) -> Result<StoreStatistics, StoreStatus> {
     let mut reader = matched.reader;
     let transaction = connection::begin_read(&mut reader).map_err(map_connection_error)?;
+    connection::validate_schema(&transaction).map_err(map_connection_error)?;
+    let manifest = read_manifest(&transaction).map_err(map_read_error)?;
+    if manifest.workspace.as_ref() != Some(matched.expected_identities.workspace()) {
+        return Err(StoreStatus::RebuildNeeded(
+            StoreRebuildReason::InvalidMetadata,
+        ));
+    }
+    if manifest.active_generation != Some(matched.handle) {
+        return Err(StoreStatus::Skipped(StoreSkipReason::StaleReservation));
+    }
+    let header = read_generation_header(&transaction, matched.handle).map_err(map_read_error)?;
+    let failure_count: i64 = transaction
+        .query_row(
+            "SELECT count(*) FROM generation_failure_events WHERE generation_id = ?1",
+            [matched.handle],
+            |row| row.get(0),
+        )
+        .map_err(ProjectionError::from)
+        .map_err(map_read_error)?;
+    if header.status != GenerationStatus::Complete
+        || failure_count != 0
+        || !generation_header_matches_identities(&header, &matched.expected_identities)
+        || header.dependency_schema != matched.expected_dependency_schema
+    {
+        return Err(StoreStatus::RebuildNeeded(
+            StoreRebuildReason::InvalidMetadata,
+        ));
+    }
     let active =
         read_generation_projection(&transaction, matched.handle).map_err(map_read_error)?;
     let semantic = &active.plan.semantic;
@@ -419,6 +439,25 @@ pub(super) fn validate_active_generation_statistics(
         dependency_digest: stats.dependency_digest.clone(),
         validation_digest: stats.validation_digest.clone(),
     })
+}
+
+fn generation_header_matches_identities(
+    header: &StoredGenerationHeader,
+    identities: &CanonicalRunIdentities,
+) -> bool {
+    header.identities.workspace == *identities.workspace()
+        && header.identities.full_config == *identities.full_config()
+        && header.identities.input_snapshot == *identities.input_snapshot()
+        && header.identities.provider_manifest == *identities.provider_manifest()
+        && header.identities.provider_output == *identities.provider_output()
+        && header.identities.layer == *identities.layer()
+        && header.identities.summary == *identities.summary()
+        && header.identities.query == *identities.query()
+        && header.identities.fact == *identities.fact()
+        && header.identities.dependency == *identities.dependency()
+        && header.identities.validation == *identities.validation()
+        && header.identities.run == *identities.run()
+        && header.identities.generation == *identities.generation()
 }
 
 fn reserve_generation(

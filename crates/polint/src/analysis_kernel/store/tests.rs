@@ -1122,6 +1122,40 @@ fn generation_store_config(root: &Path) -> StoreConfig {
 }
 
 #[test]
+fn identical_generation_validation_rechecks_the_active_pointer_in_its_transaction() {
+    let temp = tempfile::tempdir().expect("temporary store root");
+    let repository = temp.path().join("repo");
+    let first = generation_validated_fixture(&repository, "first-active-snapshot");
+    let second = generation_validated_fixture(&repository, "second-active-snapshot");
+    let config = generation_store_config(temp.path());
+    assert_ne!(first.identities(), second.identities());
+    assert_eq!(
+        SemanticStore::commit_validated_run(&config, first.clone()).status,
+        StoreStatus::Ready
+    );
+
+    let matched = match generation::match_active_generation(
+        &config,
+        first.identities(),
+        &first.dependency_index().schema_version,
+    )
+    .expect("first generation matches before rotation")
+    {
+        generation::ActiveGenerationMatch::Identical(matched) => matched,
+        generation::ActiveGenerationMatch::Different => panic!("first generation must match"),
+    };
+    assert_eq!(
+        SemanticStore::commit_validated_run(&config, second).status,
+        StoreStatus::Ready
+    );
+
+    assert_eq!(
+        generation::validate_active_generation_statistics(matched),
+        Err(StoreStatus::Skipped(StoreSkipReason::StaleReservation))
+    );
+}
+
+#[test]
 fn provider_failure_status_round_trips_through_the_semantic_store() {
     let temp = tempfile::tempdir().expect("temporary store root");
     let mut fixture = generation_finalized_fixture(&temp.path().join("repo"), "provider-failure");
