@@ -248,12 +248,18 @@ impl AnalysisKernel {
             ts_layers,
         ));
 
-        let go_dependency_output_digest = go_output_digest.unwrap_or_else(|| {
-            incremental::Digest::absent(incremental::DigestKind::ProviderOutput, "polint.go.syntax")
-        });
-        let ts_dependency_output_digest = ts_output_digest.unwrap_or_else(|| {
-            incremental::Digest::absent(incremental::DigestKind::ProviderOutput, "polint.ts.syntax")
-        });
+        let go_dependency_output = incremental::ProviderOutputDependency::from_execution(
+            "polint.go.syntax",
+            go_execution,
+            go_output_digest,
+        );
+        let ts_dependency_output = incremental::ProviderOutputDependency::from_execution(
+            "polint.ts.syntax",
+            ts_execution,
+            ts_output_digest,
+        );
+        let go_dependency_output_digest = go_dependency_output.output_digest.clone();
+        let ts_dependency_output_digest = ts_dependency_output.output_digest.clone();
         let module_graph = crate::module_graph::derive_requested_module_graph_with_cache_stats(
             &mut db,
             input.loaded,
@@ -261,10 +267,7 @@ impl AnalysisKernel {
             input.cache,
             &input_snapshot,
             Self::provider_manifest("polint.module_graph"),
-            vec![
-                go_dependency_output_digest.clone(),
-                ts_dependency_output_digest.clone(),
-            ],
+            vec![go_dependency_output.clone(), ts_dependency_output.clone()],
         );
         let module_support = module_graph.support_view(input.plan.support_view());
         // Keep polint.module_graph cache_stats internal to KernelRunReport.
@@ -295,10 +298,7 @@ impl AnalysisKernel {
             &input_snapshot,
             Self::provider_manifest("polint.symbol_graph"),
             module_dependency_output_digest.clone(),
-            vec![
-                go_dependency_output_digest.clone(),
-                ts_dependency_output_digest.clone(),
-            ],
+            vec![go_dependency_output.clone(), ts_dependency_output.clone()],
         );
         let capability_support = symbol_graph.support_view(&module_support);
         let polint_symbol_graph_cache_stats = symbol_graph.cache_stats.clone();
@@ -814,8 +814,8 @@ impl AnalysisKernel {
                 type_value_alias_dependency_output_digest.clone(),
                 entrypoints_symbol_digest,
                 entrypoints_topology_digest,
-                go_dependency_output_digest.clone(),
-                ts_dependency_output_digest.clone(),
+                go_dependency_output_digest,
+                ts_dependency_output_digest,
                 entrypoints_semantic_mir_digest.clone(),
                 go_semantic_dependency_output_digest.clone(),
             )
@@ -971,7 +971,7 @@ impl AnalysisKernel {
             input.cache,
             &input_snapshot,
             Self::provider_manifest("polint.metrics"),
-            vec![go_dependency_output_digest, ts_dependency_output_digest],
+            vec![go_dependency_output, ts_dependency_output],
         );
         let polint_metrics_cache_stats = metrics.cache_stats.clone();
         let metrics_execution = metrics.execution;
@@ -1612,6 +1612,132 @@ mod tests {
             assert_eq!(store::materialization_counters_for_test(), (1, 1, 1));
             assert!(!output.db.files().is_empty());
             assert_eq!(output.db.fact_meta().rows().count(), 0);
+        }
+
+        fn assert_syntax_dependency_status(
+            output: &KernelOutput,
+            syntax_provider_id: &str,
+            expected: incremental::InputComponentStatus,
+        ) {
+            for provider_id in [
+                "polint.module_graph",
+                "polint.symbol_graph",
+                "polint.metrics",
+            ] {
+                let provider = super::provider_output(output, provider_id);
+                let layer = provider
+                    .layers
+                    .first()
+                    .unwrap_or_else(|| panic!("{provider_id} should publish a retained layer"));
+                let input = layer
+                    .dependencies
+                    .iter()
+                    .find_map(|edge| match &edge.to {
+                        incremental::CacheNode::DependencyInput(input)
+                            if input.kind == incremental::InputDependencyKind::UpstreamLayer
+                                && input.stable_key.starts_with(syntax_provider_id) =>
+                        {
+                            Some(input)
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("{provider_id} should depend on {syntax_provider_id}")
+                    });
+                assert_eq!(input.status, expected, "{provider_id} dependency status");
+            }
+        }
+
+        #[test]
+        fn language_syntax_availability_round_trips_through_retained_stores() {
+            for (initial_path, initial_source, added_path, added_source, present, absent) in [
+                (
+                    "main.go",
+                    "package main\nfunc main() {}\n",
+                    "app.ts",
+                    "export const app = 1;\n",
+                    "polint.go.syntax",
+                    "polint.ts.syntax",
+                ),
+                (
+                    "app.ts",
+                    "export const app = 1;\n",
+                    "main.go",
+                    "package main\nfunc main() {}\n",
+                    "polint.ts.syntax",
+                    "polint.go.syntax",
+                ),
+            ] {
+                let temp = tempfile::tempdir().expect("temporary language fixture");
+                std::fs::write(temp.path().join(initial_path), initial_source)
+                    .expect("write initial language source");
+                let loaded = load_config(temp.path()).expect("default config loads");
+                let cache = Cache::default_for_repo(temp.path(), true)
+                    .with_semantic_store_enabled_for_test();
+                let plan = AnalysisPlan::from_capability_names_for_test(&[
+                    "module_graph",
+                    "symbols",
+                    "references",
+                    "file_metrics",
+                ]);
+                let run = || {
+                    AnalysisKernel::run(KernelInput {
+                        loaded: &loaded,
+                        cache: &cache,
+                        config_digest: "config",
+                        rule_digest: "rules",
+                        plan: &plan,
+                        parallel: false,
+                    })
+                    .expect("language availability kernel run")
+                };
+
+                let cold = run();
+                assert_eq!(cold.run_report.store_status(), &StoreStatus::Ready);
+                assert_syntax_dependency_status(
+                    &cold,
+                    present,
+                    incremental::InputComponentStatus::Present,
+                );
+                assert_syntax_dependency_status(
+                    &cold,
+                    absent,
+                    incremental::InputComponentStatus::Absent,
+                );
+
+                let warm = run();
+                assert_eq!(warm.run_report.store_status(), &StoreStatus::Ready);
+                assert_syntax_dependency_status(
+                    &warm,
+                    absent,
+                    incremental::InputComponentStatus::Absent,
+                );
+                for provider_id in [
+                    "polint.module_graph",
+                    "polint.symbol_graph",
+                    "polint.metrics",
+                ] {
+                    assert_eq!(
+                        super::provider_output(&warm, provider_id).cache_stats.hits,
+                        1
+                    );
+                }
+
+                std::fs::write(temp.path().join(added_path), added_source)
+                    .expect("write sibling language source");
+                let with_sibling = run();
+                assert_eq!(with_sibling.run_report.store_status(), &StoreStatus::Ready);
+                assert_syntax_dependency_status(
+                    &with_sibling,
+                    "polint.go.syntax",
+                    incremental::InputComponentStatus::Present,
+                );
+                assert_syntax_dependency_status(
+                    &with_sibling,
+                    "polint.ts.syntax",
+                    incremental::InputComponentStatus::Present,
+                );
+            }
         }
     }
 

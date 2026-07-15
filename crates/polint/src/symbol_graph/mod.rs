@@ -10,7 +10,7 @@ use crate::analysis_kernel::incremental::{
     CacheNode, CacheStats, DependencyEdge, DependencyKind, Digest, DigestKind, InputComponent,
     InputComponentStatus, InputDependencyKey, InputSnapshot, LayerCacheManifest,
     LayerCacheReadStatus, LayerCacheStore, LayerCacheWriteStatus, LayerKey, LayerKind,
-    LayerRunMetadata, PrecisionTier, ProviderValidationStatus, ShapeKind,
+    LayerRunMetadata, PrecisionTier, ProviderOutputDependency, ProviderValidationStatus, ShapeKind,
     relative_manifest_dependency_source, semantic_provider_parameter_digest,
 };
 use crate::analysis_plan::AnalysisPlan;
@@ -116,7 +116,7 @@ pub(crate) fn derive_requested_symbols_with_cache_stats(
     input_snapshot: &InputSnapshot,
     manifest: &ProviderManifest,
     module_graph_output_digest: Digest,
-    upstream_syntax_output_digests: Vec<Digest>,
+    upstream_syntax_outputs: Vec<ProviderOutputDependency>,
 ) -> SymbolGraphDerivation {
     if !plan.requests_any_capability(SYMBOL_GRAPH_CAPABILITIES) {
         return SymbolGraphDerivation::default();
@@ -135,6 +135,10 @@ pub(crate) fn derive_requested_symbols_with_cache_stats(
         "symbol_graph_ts_js_lifecycle",
         &input_snapshot.ts_js_lifecycle.components,
     );
+    let upstream_syntax_output_digests = upstream_syntax_outputs
+        .iter()
+        .map(|output| output.output_digest.clone())
+        .collect::<Vec<_>>();
     let layer_key = symbol_graph_layer_key(
         db,
         manifest,
@@ -142,7 +146,7 @@ pub(crate) fn derive_requested_symbols_with_cache_stats(
         go_lifecycle_digest,
         ts_js_lifecycle_digest,
         module_graph_output_digest.clone(),
-        upstream_syntax_output_digests.clone(),
+        upstream_syntax_output_digests,
     );
     let store = cache.layer_cache_store();
     let mut cache_stats = CacheStats::default();
@@ -190,7 +194,7 @@ pub(crate) fn derive_requested_symbols_with_cache_stats(
                 &layer_key,
                 manifest,
                 &module_graph_output_digest,
-                &upstream_syntax_output_digests,
+                &upstream_syntax_outputs,
                 analysis_settings_digest,
                 &input_snapshot.go_lifecycle.components,
                 &input_snapshot.ts_js_lifecycle.components,
@@ -310,7 +314,7 @@ fn symbol_graph_layer_dependency_edges(
     key: &LayerKey,
     manifest: &ProviderManifest,
     module_graph_output_digest: &Digest,
-    upstream_syntax_output_digests: &[Digest],
+    upstream_syntax_outputs: &[ProviderOutputDependency],
     analysis_settings_digest: Digest,
     go_lifecycle_components: &[InputComponent],
     ts_js_lifecycle_components: &[InputComponent],
@@ -436,12 +440,13 @@ fn symbol_graph_layer_dependency_edges(
             LayerKind::ModuleGraph,
             "polint.module_graph",
             module_graph_output_digest.clone(),
+            InputComponentStatus::Present,
         ),
         DependencyKind::UpstreamLayer,
         ShapeKind::Output,
     ));
 
-    for (index, output_digest) in upstream_syntax_output_digests.iter().cloned().enumerate() {
+    for (index, output) in upstream_syntax_outputs.iter().enumerate() {
         let (layer_kind, provider_id) = match index {
             0 => (LayerKind::GoSyntax, "polint.go.syntax"),
             1 => (LayerKind::TsSyntax, "polint.ts.syntax"),
@@ -449,7 +454,12 @@ fn symbol_graph_layer_dependency_edges(
         };
         edges.push(dependency_edge(
             &from,
-            upstream_layer_dependency(layer_kind, provider_id, output_digest),
+            upstream_layer_dependency(
+                layer_kind,
+                provider_id,
+                output.output_digest.clone(),
+                output.status,
+            ),
             DependencyKind::UpstreamLayer,
             ShapeKind::Output,
         ));
@@ -969,12 +979,13 @@ fn upstream_layer_dependency(
     layer_kind: LayerKind,
     provider_id: &str,
     output_digest: Digest,
+    status: InputComponentStatus,
 ) -> CacheNode {
     dependency_input(
         InputDependencyKey::upstream_layer(
             format!("{provider_id}/{}", layer_kind.label()),
             crate::analysis_kernel::incremental::dependency_layer_digest(output_digest),
-            InputComponentStatus::Present,
+            status,
         ),
         "upstream-layer dependency",
     )
@@ -1212,7 +1223,7 @@ mod symbol_graph_derivation {
     use super::{SymbolGraphDerivation, derive_requested_symbols};
     use crate::analysis_kernel::incremental::{
         CacheNode, DependencyKind, Digest, DigestKind, InputComponentStatus, InputDependencyKind,
-        InputSnapshot,
+        InputSnapshot, ProviderOutputDependency,
     };
     use crate::analysis_kernel::{
         FactConfidence, FactFamily, FactPrecision, FactRef, ValidationStatus,
@@ -1367,6 +1378,10 @@ mod symbol_graph_derivation {
     ) -> SymbolGraphDerivation {
         let snapshot = symbol_input_snapshot(loaded, db, plan, config_digest);
         let (module_graph_output_digest, syntax_output_digests) = upstream_digests(upstream_label);
+        let syntax_outputs = syntax_output_digests
+            .into_iter()
+            .map(ProviderOutputDependency::present)
+            .collect();
         super::derive_requested_symbols_with_cache_stats(
             db,
             loaded,
@@ -1375,7 +1390,7 @@ mod symbol_graph_derivation {
             &snapshot,
             symbol_graph_manifest(),
             module_graph_output_digest,
-            syntax_output_digests,
+            syntax_outputs,
         )
     }
 
@@ -1777,7 +1792,19 @@ export function answer() {{
             "symbol_graph_ts_js_lifecycle",
             &snapshot.ts_js_lifecycle.components,
         );
-        let (module_graph_output, syntax_outputs) = upstream_digests("typed");
+        let (module_graph_output, syntax_output_digests) = upstream_digests("typed");
+        let syntax_dependencies = vec![
+            ProviderOutputDependency::present(syntax_output_digests[0].clone()),
+            ProviderOutputDependency::from_execution(
+                "polint.ts.syntax",
+                crate::analysis_kernel::incremental::ProviderExecutionOutcome::Skipped,
+                None,
+            ),
+        ];
+        let syntax_outputs = syntax_dependencies
+            .iter()
+            .map(|output| output.output_digest.clone())
+            .collect::<Vec<_>>();
         let key = super::symbol_graph_layer_key(
             &db,
             symbol_graph_manifest(),
@@ -1785,15 +1812,14 @@ export function answer() {{
             go_lifecycle,
             ts_js_lifecycle,
             module_graph_output.clone(),
-            syntax_outputs.clone(),
+            syntax_outputs,
         );
-
         let edges = super::symbol_graph_layer_dependency_edges(
             &db,
             &key,
             symbol_graph_manifest(),
             &module_graph_output,
-            &syntax_outputs,
+            &syntax_dependencies,
             analysis_settings,
             &snapshot.go_lifecycle.components,
             &snapshot.ts_js_lifecycle.components,
@@ -1828,8 +1854,15 @@ export function answer() {{
         }));
         assert!(typed_inputs.iter().any(|input| {
             input.kind == InputDependencyKind::UpstreamLayer
+                && input.stable_key.starts_with("polint.go.syntax/")
                 && input.digest.kind == DigestKind::DependencyLayer
                 && input.status == InputComponentStatus::Present
+        }));
+        assert!(typed_inputs.iter().any(|input| {
+            input.kind == InputDependencyKind::UpstreamLayer
+                && input.stable_key.starts_with("polint.ts.syntax/")
+                && input.digest.kind == DigestKind::DependencyLayer
+                && input.status == InputComponentStatus::Absent
         }));
         for component in snapshot
             .go_lifecycle
@@ -2223,11 +2256,11 @@ export function answer() {
             &snapshot,
             manifest(),
             Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
-            vec![Digest::from_parts(
+            vec![ProviderOutputDependency::present(Digest::from_parts(
                 DigestKind::ProviderOutput,
                 "ts_syntax",
                 &["base"],
-            )],
+            ))],
         );
 
         let payload = symbol_graph_layer_payload(&db, &derivation);

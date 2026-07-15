@@ -194,5 +194,6 @@ pub(crate) use run_report::{
     provider_output_from_manifest_with_layers,
 };
 pub(crate) use stats::{
-    CacheStats, ProviderExecutionOutcome, ProviderOutputMeta, ProviderValidationStatus,
+    CacheStats, ProviderExecutionOutcome, ProviderOutputDependency, ProviderOutputMeta,
+    ProviderValidationStatus,
 };

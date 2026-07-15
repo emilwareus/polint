@@ -3,7 +3,7 @@ use crate::analysis_kernel::incremental::{
     CacheNode, CacheStats, DependencyEdge, DependencyKind, Digest, DigestKind,
     InputComponentStatus, InputDependencyKey, InputSnapshot, LayerCacheManifest,
     LayerCacheReadStatus, LayerCacheStore, LayerCacheWriteStatus, LayerKey, LayerKind,
-    LayerRunMetadata, PrecisionTier, ProviderValidationStatus, ShapeKind,
+    LayerRunMetadata, PrecisionTier, ProviderOutputDependency, ProviderValidationStatus, ShapeKind,
     relative_manifest_dependency_source,
 };
 use crate::analysis_plan::AnalysisPlan;
@@ -54,7 +54,7 @@ pub(crate) fn derive_requested_metrics_with_cache_stats(
     cache: &Cache,
     input_snapshot: &InputSnapshot,
     manifest: &ProviderManifest,
-    upstream_syntax_output_digests: Vec<Digest>,
+    upstream_syntax_outputs: Vec<ProviderOutputDependency>,
 ) -> MetricsDerivation {
     if !plan.requests_any_capability(METRIC_CAPABILITIES) {
         return MetricsDerivation::default();
@@ -63,11 +63,15 @@ pub(crate) fn derive_requested_metrics_with_cache_stats(
     let analysis_settings_digest = input_snapshot
         .analysis_settings_digest(AnalysisSettingsScope::Metrics)
         .clone();
+    let upstream_syntax_output_digests = upstream_syntax_outputs
+        .iter()
+        .map(|output| output.output_digest.clone())
+        .collect::<Vec<_>>();
     let layer_key = metrics_layer_key(
         db,
         manifest,
         analysis_settings_digest.clone(),
-        upstream_syntax_output_digests.clone(),
+        upstream_syntax_output_digests,
     );
     let store = cache.layer_cache_store();
     let mut cache_stats = CacheStats::default();
@@ -114,7 +118,7 @@ pub(crate) fn derive_requested_metrics_with_cache_stats(
                 db,
                 &layer_key,
                 manifest,
-                &upstream_syntax_output_digests,
+                &upstream_syntax_outputs,
                 analysis_settings_digest,
                 provider_manifest_dependency_digest(input_snapshot, manifest),
             );
@@ -249,7 +253,7 @@ fn metrics_layer_dependency_edges(
     db: &AnalysisDb,
     key: &LayerKey,
     manifest: &ProviderManifest,
-    upstream_syntax_output_digests: &[Digest],
+    upstream_syntax_outputs: &[ProviderOutputDependency],
     analysis_settings_digest: Digest,
     provider_manifest_digest: Digest,
 ) -> Vec<DependencyEdge> {
@@ -330,7 +334,7 @@ fn metrics_layer_dependency_edges(
         ShapeKind::Toolchain,
     ));
 
-    for (index, output_digest) in upstream_syntax_output_digests.iter().cloned().enumerate() {
+    for (index, output) in upstream_syntax_outputs.iter().enumerate() {
         let (layer_kind, provider_id) = match index {
             0 => (LayerKind::GoSyntax, "polint.go.syntax"),
             1 => (LayerKind::TsSyntax, "polint.ts.syntax"),
@@ -338,7 +342,12 @@ fn metrics_layer_dependency_edges(
         };
         edges.push(dependency_edge(
             &from,
-            upstream_layer_dependency(layer_kind, provider_id, output_digest),
+            upstream_layer_dependency(
+                layer_kind,
+                provider_id,
+                output.output_digest.clone(),
+                output.status,
+            ),
             DependencyKind::UpstreamLayer,
             ShapeKind::Output,
         ));
@@ -615,12 +624,13 @@ fn upstream_layer_dependency(
     layer_kind: LayerKind,
     provider_id: &str,
     output_digest: Digest,
+    status: InputComponentStatus,
 ) -> CacheNode {
     dependency_input(
         InputDependencyKey::upstream_layer(
             format!("{provider_id}/{}", layer_kind.label()),
             crate::analysis_kernel::incremental::dependency_layer_digest(output_digest),
-            InputComponentStatus::Present,
+            status,
         ),
         "upstream-layer dependency",
     )
@@ -773,8 +783,16 @@ mod tests {
             &snapshot,
             metrics_manifest(),
             vec![
-                Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &[upstream_label]),
-                Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &[upstream_label]),
+                ProviderOutputDependency::present(Digest::from_parts(
+                    DigestKind::ProviderOutput,
+                    "go_syntax",
+                    &[upstream_label],
+                )),
+                ProviderOutputDependency::present(Digest::from_parts(
+                    DigestKind::ProviderOutput,
+                    "ts_syntax",
+                    &[upstream_label],
+                )),
             ],
         )
     }
@@ -1075,22 +1093,33 @@ mod tests {
         let analysis_settings = snapshot
             .analysis_settings_digest(AnalysisSettingsScope::Metrics)
             .clone();
-        let syntax_outputs = vec![
-            Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["typed"]),
-            Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["typed"]),
+        let syntax_dependencies = vec![
+            ProviderOutputDependency::present(Digest::from_parts(
+                DigestKind::ProviderOutput,
+                "go_syntax",
+                &["typed"],
+            )),
+            ProviderOutputDependency::from_execution(
+                "polint.ts.syntax",
+                crate::analysis_kernel::incremental::ProviderExecutionOutcome::Skipped,
+                None,
+            ),
         ];
+        let syntax_outputs = syntax_dependencies
+            .iter()
+            .map(|output| output.output_digest.clone())
+            .collect::<Vec<_>>();
         let key = metrics_layer_key(
             &db,
             metrics_manifest(),
             analysis_settings.clone(),
-            syntax_outputs.clone(),
+            syntax_outputs,
         );
-
         let edges = metrics_layer_dependency_edges(
             &db,
             &key,
             metrics_manifest(),
-            &syntax_outputs,
+            &syntax_dependencies,
             analysis_settings,
             provider_manifest_dependency_digest(&snapshot, metrics_manifest()),
         );
@@ -1107,6 +1136,16 @@ mod tests {
                 && input.stable_key == "src/app.ts"
                 && input.digest.kind == DigestKind::SourceText
                 && input.status == InputComponentStatus::Present
+        }));
+        assert!(typed_inputs.iter().any(|input| {
+            input.kind == crate::analysis_kernel::incremental::InputDependencyKind::UpstreamLayer
+                && input.stable_key.starts_with("polint.go.syntax/")
+                && input.status == InputComponentStatus::Present
+        }));
+        assert!(typed_inputs.iter().any(|input| {
+            input.kind == crate::analysis_kernel::incremental::InputDependencyKind::UpstreamLayer
+                && input.stable_key.starts_with("polint.ts.syntax/")
+                && input.status == InputComponentStatus::Absent
         }));
         assert!(typed_inputs.iter().any(|input| {
             input.kind == crate::analysis_kernel::incremental::InputDependencyKind::AnalysisSetting

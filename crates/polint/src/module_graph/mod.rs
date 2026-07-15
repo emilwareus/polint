@@ -10,7 +10,7 @@ use crate::analysis_kernel::incremental::{
     CacheNode, CacheStats, DependencyEdge, DependencyKind, Digest, DigestKind, InputComponent,
     InputComponentStatus, InputDependencyKey, InputSnapshot, LayerCacheManifest,
     LayerCacheReadStatus, LayerCacheStore, LayerCacheWriteStatus, LayerKey, LayerKind,
-    LayerRunMetadata, PrecisionTier, ProviderValidationStatus, ShapeKind,
+    LayerRunMetadata, PrecisionTier, ProviderOutputDependency, ProviderValidationStatus, ShapeKind,
     module_graph_topology_input_digest_rows, module_graph_topology_input_digests,
     relative_manifest_dependency_source, semantic_provider_parameter_digest,
 };
@@ -134,7 +134,7 @@ pub(crate) fn module_graph_layer_dependency_edges(
     db: &AnalysisDb,
     key: &LayerKey,
     manifest: &ProviderManifest,
-    upstream_syntax_output_digests: &[Digest],
+    upstream_syntax_outputs: &[ProviderOutputDependency],
     analysis_settings_digest: Digest,
     go_lifecycle_components: &[InputComponent],
     ts_js_lifecycle_components: &[InputComponent],
@@ -303,10 +303,10 @@ pub(crate) fn module_graph_layer_dependency_edges(
         ShapeKind::Toolchain,
     ));
 
-    for (index, output_digest) in upstream_syntax_output_digests.iter().cloned().enumerate() {
+    for (index, output) in upstream_syntax_outputs.iter().enumerate() {
         edges.push(dependency_edge(
             &from,
-            upstream_syntax_dependency(index, output_digest),
+            upstream_syntax_dependency(index, output),
             DependencyKind::UpstreamLayer,
             ShapeKind::Output,
         ));
@@ -473,6 +473,7 @@ pub(crate) fn module_topology_layer_dependency_edges(
             LayerKind::ModuleGraph,
             "polint.module_graph",
             module_graph_output_digest,
+            InputComponentStatus::Present,
         ),
         DependencyKind::UpstreamLayer,
         ShapeKind::Output,
@@ -483,6 +484,7 @@ pub(crate) fn module_topology_layer_dependency_edges(
             LayerKind::SymbolGraph,
             "polint.symbol_graph",
             symbol_graph_output_digest,
+            InputComponentStatus::Present,
         ),
         DependencyKind::UpstreamLayer,
         ShapeKind::Output,
@@ -1202,7 +1204,7 @@ pub(crate) fn derive_requested_module_graph_with_cache_stats(
     cache: &Cache,
     input_snapshot: &InputSnapshot,
     manifest: &ProviderManifest,
-    upstream_syntax_output_digests: Vec<Digest>,
+    upstream_syntax_outputs: Vec<ProviderOutputDependency>,
 ) -> ModuleGraphDerivation {
     if !plan.requests_any_capability(MODULE_GRAPH_TRIGGER_CAPABILITIES) {
         return ModuleGraphDerivation::default();
@@ -1221,6 +1223,10 @@ pub(crate) fn derive_requested_module_graph_with_cache_stats(
         "module_graph_ts_js_lifecycle",
         &input_snapshot.ts_js_lifecycle.components,
     );
+    let upstream_syntax_output_digests = upstream_syntax_outputs
+        .iter()
+        .map(|output| output.output_digest.clone())
+        .collect::<Vec<_>>();
     let layer_key = module_graph_layer_key(
         loaded.root.as_path(),
         db,
@@ -1228,7 +1234,7 @@ pub(crate) fn derive_requested_module_graph_with_cache_stats(
         analysis_settings_digest.clone(),
         go_lifecycle_digest,
         ts_js_lifecycle_digest,
-        upstream_syntax_output_digests.clone(),
+        upstream_syntax_output_digests,
     );
     let store = cache.layer_cache_store();
     let mut cache_stats = CacheStats::default();
@@ -1275,7 +1281,7 @@ pub(crate) fn derive_requested_module_graph_with_cache_stats(
                 db,
                 &layer_key,
                 manifest,
-                &upstream_syntax_output_digests,
+                &upstream_syntax_outputs,
                 analysis_settings_digest,
                 &input_snapshot.go_lifecycle.components,
                 &input_snapshot.ts_js_lifecycle.components,
@@ -2265,25 +2271,31 @@ fn dependency_edge(
     }
 }
 
-fn upstream_syntax_dependency(index: usize, output_digest: Digest) -> CacheNode {
+fn upstream_syntax_dependency(index: usize, output: &ProviderOutputDependency) -> CacheNode {
     let (layer_kind, provider_id) = match index {
         0 => (LayerKind::GoSyntax, "polint.go.syntax"),
         1 => (LayerKind::TsSyntax, "polint.ts.syntax"),
         _ => (LayerKind::Extension, "polint.unknown_upstream"),
     };
-    upstream_layer_dependency(layer_kind, provider_id, output_digest)
+    upstream_layer_dependency(
+        layer_kind,
+        provider_id,
+        output.output_digest.clone(),
+        output.status,
+    )
 }
 
 fn upstream_layer_dependency(
     layer_kind: LayerKind,
     provider_id: &'static str,
     output_digest: Digest,
+    status: InputComponentStatus,
 ) -> CacheNode {
     dependency_input(
         InputDependencyKey::upstream_layer(
             format!("{provider_id}/{}", layer_kind.label()),
             crate::analysis_kernel::incremental::dependency_layer_digest(output_digest),
-            InputComponentStatus::Present,
+            status,
         ),
         "upstream-layer dependency",
     )
@@ -2448,7 +2460,7 @@ mod tests {
     use super::{derive_requested_module_graph, paths, query, ts};
     use crate::analysis_kernel::incremental::{
         CacheNode, DependencyKind, Digest, DigestKind, InputComponentStatus, InputDependencyKind,
-        InputSnapshot, LayerKey, ShapeKind,
+        InputSnapshot, LayerKey, ProviderOutputDependency, ShapeKind,
     };
     use crate::analysis_kernel::{
         FactConfidence, FactFamily, FactPrecision, FactRef, ValidationStatus,
@@ -2607,8 +2619,16 @@ mod tests {
             &snapshot,
             module_graph_manifest(),
             vec![
-                Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["stable"]),
-                Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["stable"]),
+                ProviderOutputDependency::present(Digest::from_parts(
+                    DigestKind::ProviderOutput,
+                    "go_syntax",
+                    &["stable"],
+                )),
+                ProviderOutputDependency::present(Digest::from_parts(
+                    DigestKind::ProviderOutput,
+                    "ts_syntax",
+                    &["stable"],
+                )),
             ],
         )
     }
@@ -2950,12 +2970,17 @@ mod tests {
             ts_js_lifecycle_digest,
             upstream.clone(),
         );
+        let upstream_dependencies = upstream
+            .iter()
+            .cloned()
+            .map(ProviderOutputDependency::present)
+            .collect::<Vec<_>>();
         let dependencies = super::module_graph_layer_dependency_edges(
             temp.path(),
             &first,
             &key,
             module_graph_manifest(),
-            &upstream,
+            &upstream_dependencies,
             analysis_settings_digest,
             &snapshot.go_lifecycle.components,
             &snapshot.ts_js_lifecycle.components,
@@ -3157,16 +3182,22 @@ mod tests {
         let key = module_graph_key(&db);
         let go_syntax_output =
             Digest::from_parts(DigestKind::ProviderOutput, "go_syntax", &["base"]);
-        let ts_syntax_output =
-            Digest::from_parts(DigestKind::ProviderOutput, "ts_syntax", &["base"]);
         let snapshot = module_graph_dependency_snapshot(temp.path(), &db);
+        let syntax_outputs = [
+            ProviderOutputDependency::present(go_syntax_output),
+            ProviderOutputDependency::from_execution(
+                "polint.ts.syntax",
+                crate::analysis_kernel::incremental::ProviderExecutionOutcome::Skipped,
+                None,
+            ),
+        ];
 
         let edges = super::module_graph_layer_dependency_edges(
             temp.path(),
             &db,
             &key,
             module_graph_manifest(),
-            &[go_syntax_output, ts_syntax_output],
+            &syntax_outputs,
             Digest::from_parts(
                 DigestKind::AnalysisSettings,
                 "provider_analysis_settings",
@@ -3242,8 +3273,15 @@ mod tests {
         }));
         assert!(typed_inputs.iter().any(|input| {
             input.kind == InputDependencyKind::UpstreamLayer
+                && input.stable_key.starts_with("polint.go.syntax/")
                 && input.digest.kind == DigestKind::DependencyLayer
                 && input.status == InputComponentStatus::Present
+        }));
+        assert!(typed_inputs.iter().any(|input| {
+            input.kind == InputDependencyKind::UpstreamLayer
+                && input.stable_key.starts_with("polint.ts.syntax/")
+                && input.digest.kind == DigestKind::DependencyLayer
+                && input.status == InputComponentStatus::Absent
         }));
     }
 

@@ -3,7 +3,8 @@ use std::fmt;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::digest::Digest;
+use super::digest::{Digest, DigestKind};
+use super::input_snapshot::InputComponentStatus;
 use super::keys::PrecisionTier;
 use super::layer_cache::LayerRunMetadata;
 
@@ -92,6 +93,49 @@ pub(crate) enum ProviderExecutionOutcome {
     Skipped,
     Succeeded,
     Failed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ProviderOutputDependency {
+    pub(crate) output_digest: Digest,
+    pub(crate) status: InputComponentStatus,
+}
+
+impl ProviderOutputDependency {
+    pub(crate) fn from_execution(
+        provider_id: &str,
+        execution: ProviderExecutionOutcome,
+        output_digest: Option<Digest>,
+    ) -> Self {
+        match (execution, output_digest) {
+            (ProviderExecutionOutcome::Succeeded, Some(output_digest)) => Self {
+                output_digest,
+                status: InputComponentStatus::Present,
+            },
+            (ProviderExecutionOutcome::Skipped, _) => Self {
+                output_digest: Digest::absent(DigestKind::ProviderOutput, provider_id),
+                status: InputComponentStatus::Absent,
+            },
+            (ProviderExecutionOutcome::Failed, _) | (ProviderExecutionOutcome::Succeeded, None) => {
+                Self {
+                    output_digest: Digest::unsupported(
+                        DigestKind::ProviderOutput,
+                        provider_id,
+                        "provider execution failed",
+                    ),
+                    status: InputComponentStatus::Unsupported,
+                }
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn present(output_digest: Digest) -> Self {
+        Self {
+            output_digest,
+            status: InputComponentStatus::Present,
+        }
+    }
 }
 
 impl<'de> Deserialize<'de> for ProviderValidationStatus {
@@ -345,6 +389,36 @@ mod tests {
 
         assert!(ProviderValidationStatus::parse_label("metadata_conflict").is_err());
         assert!(serde_json::from_str::<ProviderValidationStatus>("\"metadata_conflict\"").is_err());
+    }
+
+    #[test]
+    fn provider_output_dependencies_preserve_execution_availability() {
+        let present_digest = Digest::from_parts(DigestKind::ProviderOutput, "go", &["present"]);
+        let present = ProviderOutputDependency::from_execution(
+            "polint.go.syntax",
+            ProviderExecutionOutcome::Succeeded,
+            Some(present_digest.clone()),
+        );
+        let absent = ProviderOutputDependency::from_execution(
+            "polint.ts.syntax",
+            ProviderExecutionOutcome::Skipped,
+            None,
+        );
+        let failed = ProviderOutputDependency::from_execution(
+            "polint.ts.syntax",
+            ProviderExecutionOutcome::Failed,
+            Some(present_digest.clone()),
+        );
+
+        assert_eq!(present.output_digest, present_digest);
+        assert_eq!(present.status, InputComponentStatus::Present);
+        assert_eq!(absent.status, InputComponentStatus::Absent);
+        assert_eq!(
+            absent.output_digest,
+            Digest::absent(DigestKind::ProviderOutput, "polint.ts.syntax")
+        );
+        assert_eq!(failed.status, InputComponentStatus::Unsupported);
+        assert_ne!(failed.output_digest, present_digest);
     }
 
     #[test]
