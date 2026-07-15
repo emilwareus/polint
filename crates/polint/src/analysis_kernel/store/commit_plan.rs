@@ -3758,7 +3758,7 @@ mod tests {
             })
         ));
 
-        let mut candidate = baseline.clone();
+        let mut candidate = baseline;
         candidate.semantic.capabilities[0].requester_count = candidate.semantic.capabilities[0]
             .requester_count
             .saturating_add(1);
@@ -3769,20 +3769,71 @@ mod tests {
                 ..
             })
         ));
+    }
 
-        if !baseline.semantic.summaries.is_empty() {
-            let mut candidate = baseline;
-            candidate.semantic.summaries[0].dependency_count = candidate.semantic.summaries[0]
-                .dependency_count
-                .saturating_add(1);
-            assert!(matches!(
-                candidate.validate(),
-                Err(StorePlanError::CountMismatch {
-                    family: "summary dependency",
-                    ..
-                })
-            ));
-        }
+    #[test]
+    fn summary_children_reject_same_count_reassignment() {
+        let mut plan = plan_fixture();
+        let first_dependency = Digest::from_parts(
+            DigestKind::SummaryDependency,
+            "summary dependency",
+            &["first"],
+        );
+        let second_dependency = Digest::from_parts(
+            DigestKind::SummaryDependency,
+            "summary dependency",
+            &["second"],
+        );
+        plan.semantic.summaries = vec![
+            StoreSummaryRow {
+                key: SummaryKey::new(
+                    "callable:first",
+                    "effects",
+                    "1",
+                    Digest::from_parts(DigestKind::SummaryBody, "summary body", &["first"]),
+                    vec![first_dependency],
+                    Digest::absent(DigestKind::ExtensionCode, "summary extension"),
+                ),
+                dependency_count: 1,
+            },
+            StoreSummaryRow {
+                key: SummaryKey::new(
+                    "callable:second",
+                    "effects",
+                    "1",
+                    Digest::from_parts(DigestKind::SummaryBody, "summary body", &["second"]),
+                    vec![second_dependency],
+                    Digest::absent(DigestKind::ExtensionCode, "summary extension"),
+                ),
+                dependency_count: 1,
+            },
+        ];
+        plan.semantic.summaries.sort();
+        plan.semantic.summary_dependencies = plan
+            .semantic
+            .summaries
+            .iter()
+            .enumerate()
+            .map(|(ordinal, summary)| StoreSummaryDependencyRow {
+                summary_ordinal: row_count(ordinal),
+                dependency: summary.key.dependency_summary_digests[0].clone(),
+            })
+            .collect();
+        plan.semantic.summary_dependencies.sort();
+        assert_eq!(plan.semantic.validate_summary_relationships(), Ok(()));
+
+        let first_ordinal = plan.semantic.summary_dependencies[0].summary_ordinal;
+        plan.semantic.summary_dependencies[0].summary_ordinal =
+            plan.semantic.summary_dependencies[1].summary_ordinal;
+        plan.semantic.summary_dependencies[1].summary_ordinal = first_ordinal;
+        plan.semantic.summary_dependencies.sort();
+
+        assert!(matches!(
+            plan.semantic.validate_summary_relationships(),
+            Err(StorePlanError::NonCanonicalRows {
+                family: "summary dependency"
+            })
+        ));
     }
 
     #[test]

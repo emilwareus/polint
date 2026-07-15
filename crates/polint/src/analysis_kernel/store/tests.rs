@@ -2274,14 +2274,17 @@ mod active_complete_reader {
             ),
             (
                 "summary-dependency-count",
-                "UPDATE summaries SET dependency_count = dependency_count + 1
-                 WHERE generation_id = (
-                     SELECT active_generation_id FROM store_manifest WHERE id = 1
-                 ) AND rowid = (
-                     SELECT rowid FROM summaries WHERE generation_id = (
-                         SELECT active_generation_id FROM store_manifest WHERE id = 1
-                     ) LIMIT 1
-                 );",
+                "INSERT INTO summaries (
+                     id, generation_id, semantic_ordinal, callable_stable_key,
+                     summary_domain, summary_version, body_shape_digest_kind,
+                     body_shape_digest_value, extension_digest_kind,
+                     extension_digest_value, dependency_count
+                 )
+                 SELECT coalesce(max(id), 0) + 1,
+                        (SELECT active_generation_id FROM store_manifest WHERE id = 1),
+                        0, 'callable:tampered', 'effects', '1', 'summary_body',
+                        'tampered-body', 'extension_code', 'tampered-extension', 1
+                 FROM summaries;",
             ),
         ];
 
@@ -2296,11 +2299,7 @@ mod active_complete_reader {
             );
             let database = Connection::open(config.path()).expect("open store");
             let changed = database.execute(tamper, []).expect("tamper child metadata");
-            if label != "summary-dependency-count" {
-                assert_eq!(changed, 1, "{label}");
-            } else if changed == 0 {
-                continue;
-            }
+            assert_eq!(changed, 1, "{label}");
             drop(database);
 
             let outcome = SemanticStore::commit_validated_run(&config, validated);
