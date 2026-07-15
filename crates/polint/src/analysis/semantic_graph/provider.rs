@@ -57,12 +57,8 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
     input_snapshot: &InputSnapshot,
     manifest: &ProviderManifest,
     calls_output_digest: Digest,
-    identity_output_digest: Digest,
-    abstract_domains_output_digest: Digest,
-    entrypoints_output_digest: Digest,
     type_value_alias_output_digest: Digest,
     symbol_output_digest: Digest,
-    module_topology_output_digest: Digest,
     go_syntax_output_digest: Digest,
     ts_syntax_output_digest: Digest,
     semantic_mir_output_digest: Digest,
@@ -77,12 +73,8 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
         input_snapshot,
         manifest,
         calls_output_digest,
-        identity_output_digest,
-        abstract_domains_output_digest,
-        entrypoints_output_digest,
         type_value_alias_output_digest,
         symbol_output_digest,
-        module_topology_output_digest,
         go_syntax_output_digest,
         ts_syntax_output_digest,
         semantic_mir_output_digest,
@@ -98,12 +90,8 @@ pub(crate) fn derive_semantic_graph_with_cache_stats_and_models(
     input_snapshot: &InputSnapshot,
     manifest: &ProviderManifest,
     calls_output_digest: Digest,
-    identity_output_digest: Digest,
-    abstract_domains_output_digest: Digest,
-    entrypoints_output_digest: Digest,
     type_value_alias_output_digest: Digest,
     symbol_output_digest: Digest,
-    module_topology_output_digest: Digest,
     go_syntax_output_digest: Digest,
     ts_syntax_output_digest: Digest,
     semantic_mir_output_digest: Digest,
@@ -159,12 +147,8 @@ pub(crate) fn derive_semantic_graph_with_cache_stats_and_models(
         manifest,
         input_snapshot,
         &calls_output_digest,
-        &identity_output_digest,
-        &abstract_domains_output_digest,
-        &entrypoints_output_digest,
         &type_value_alias_output_digest,
         &symbol_output_digest,
-        &module_topology_output_digest,
         &go_syntax_output_digest,
         &ts_syntax_output_digest,
         &semantic_mir_output_digest,
@@ -304,21 +288,17 @@ fn adaptation_model_diagnostic(
 ///
 /// The folded upstream digests cover the producers of every fact family
 /// `build_semantic_graph` reads: `go`/`ts` syntax (functions, packages), symbol
-/// graph (scopes), calls (call sites), type/value/alias (value facts) and semantic
-/// MIR (places). `identity`/`abstract_domains`/`entrypoints`/`module_topology` are
-/// folded as well so every declared input has an explicit consumer.
+/// graph (scopes), calls (call sites), type/value/alias (value facts), semantic MIR
+/// (places), and Go semantic facts. Provider outputs that the projection does not
+/// read are intentionally absent from this identity.
 #[allow(clippy::too_many_arguments)]
 fn semantic_graph_output_digest(
     db: &AnalysisDb,
     manifest: &ProviderManifest,
     input_snapshot: &InputSnapshot,
     calls_output_digest: &Digest,
-    identity_output_digest: &Digest,
-    abstract_domains_output_digest: &Digest,
-    entrypoints_output_digest: &Digest,
     type_value_alias_output_digest: &Digest,
     symbol_output_digest: &Digest,
-    module_topology_output_digest: &Digest,
     go_syntax_output_digest: &Digest,
     ts_syntax_output_digest: &Digest,
     semantic_mir_output_digest: &Digest,
@@ -332,16 +312,6 @@ fn semantic_graph_output_digest(
         format!("provider_version={}", manifest.provider_version()),
         format!("schema={}", manifest.primary_schema_label()),
         format!("parameters={}", semantic_graph_provider_parameter_digest()),
-        format!("calls_output={calls_output_digest}"),
-        format!("identity_output={identity_output_digest}"),
-        format!("abstract_domains_output={abstract_domains_output_digest}"),
-        format!("entrypoints_output={entrypoints_output_digest}"),
-        format!("type_value_alias_output={type_value_alias_output_digest}"),
-        format!("symbol_graph={symbol_output_digest}"),
-        format!("module_topology={module_topology_output_digest}"),
-        format!("go_syntax={go_syntax_output_digest}"),
-        format!("ts_syntax={ts_syntax_output_digest}"),
-        format!("semantic_mir={semantic_mir_output_digest}"),
         format!("ts_direct_binding_output={ts_direct_binding_output_digest}"),
         format!("adaptation_model_input={adaptation_model_input_digest}"),
         format!(
@@ -352,12 +322,20 @@ fn semantic_graph_output_digest(
             "go_semantic_output={}",
             go_semantic_output_digest_from_db(db)
         ),
-        format!("go_semantic_provider_output={go_semantic_output_digest}"),
         format!(
             "ts_object_model_output={}",
             ts_object_model_output_digest_from_db(db)
         ),
     ];
+    parts.extend(semantic_graph_upstream_digest_parts(
+        calls_output_digest,
+        type_value_alias_output_digest,
+        symbol_output_digest,
+        go_syntax_output_digest,
+        ts_syntax_output_digest,
+        semantic_mir_output_digest,
+        go_semantic_output_digest,
+    ));
     extend_component_parts(
         &mut parts,
         "go_lifecycle",
@@ -417,6 +395,26 @@ fn semantic_graph_output_digest(
     parts.sort();
     let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
     Digest::from_parts(DigestKind::ProviderOutput, "semantic_graph_output", &refs)
+}
+
+fn semantic_graph_upstream_digest_parts(
+    calls_output_digest: &Digest,
+    type_value_alias_output_digest: &Digest,
+    symbol_output_digest: &Digest,
+    go_syntax_output_digest: &Digest,
+    ts_syntax_output_digest: &Digest,
+    semantic_mir_output_digest: &Digest,
+    go_semantic_output_digest: &Digest,
+) -> Vec<String> {
+    vec![
+        format!("calls_output={calls_output_digest}"),
+        format!("type_value_alias_output={type_value_alias_output_digest}"),
+        format!("symbol_graph={symbol_output_digest}"),
+        format!("go_syntax={go_syntax_output_digest}"),
+        format!("ts_syntax={ts_syntax_output_digest}"),
+        format!("semantic_mir={semantic_mir_output_digest}"),
+        format!("go_semantic_provider_output={go_semantic_output_digest}"),
+    ]
 }
 
 fn go_semantic_output_digest_from_db(db: &AnalysisDb) -> String {
@@ -633,12 +631,8 @@ mod tests {
             &snapshot,
             manifest(),
             absent("polint.calls"),
-            absent("polint.identity"),
-            absent("polint.abstract_domains"),
-            absent("polint.entrypoints"),
             absent("polint.type_value_alias"),
             absent("polint.symbol_graph"),
-            absent("polint.module_topology"),
             absent("polint.go.syntax"),
             absent("polint.ts.syntax"),
             absent("polint.semantic_mir"),
@@ -810,12 +804,8 @@ evidence = ["cmd/app/main.go:1"]
             &snapshot,
             manifest(),
             absent("polint.calls"),
-            absent("polint.identity"),
-            absent("polint.abstract_domains"),
-            absent("polint.entrypoints"),
             absent("polint.type_value_alias"),
             absent("polint.symbol_graph"),
-            absent("polint.module_topology"),
             absent("polint.go.syntax"),
             absent("polint.ts.syntax"),
             absent("polint.semantic_mir"),
@@ -830,12 +820,8 @@ evidence = ["cmd/app/main.go:1"]
             &snapshot,
             manifest(),
             Digest::from_parts(DigestKind::ProviderOutput, "polint.calls", &["changed"]),
-            absent("polint.identity"),
-            absent("polint.abstract_domains"),
-            absent("polint.entrypoints"),
             absent("polint.type_value_alias"),
             absent("polint.symbol_graph"),
-            absent("polint.module_topology"),
             absent("polint.go.syntax"),
             absent("polint.ts.syntax"),
             absent("polint.semantic_mir"),
@@ -846,7 +832,7 @@ evidence = ["cmd/app/main.go:1"]
     }
 
     #[test]
-    fn output_digest_folds_ts_direct_binding_and_module_topology_digests() {
+    fn output_digest_folds_ts_direct_binding_digest() {
         let snapshot = snapshot(&AnalysisDb::new());
         let output = SemanticGraphOutput::empty();
         let base_ts_direct =
@@ -856,10 +842,6 @@ evidence = ["cmd/app/main.go:1"]
             "ts_direct_binding",
             &["changed"],
         );
-        let base_module_topology =
-            Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["base"]);
-        let changed_module_topology =
-            Digest::from_parts(DigestKind::ProviderOutput, "module_topology", &["changed"]);
         let db = AnalysisDb::new();
 
         let base = semantic_graph_output_digest(
@@ -867,12 +849,8 @@ evidence = ["cmd/app/main.go:1"]
             manifest(),
             &snapshot,
             &absent("polint.calls"),
-            &absent("polint.identity"),
-            &absent("polint.abstract_domains"),
-            &absent("polint.entrypoints"),
             &absent("polint.type_value_alias"),
             &absent("polint.symbol_graph"),
-            &base_module_topology,
             &absent("polint.go.syntax"),
             &absent("polint.ts.syntax"),
             &absent("polint.semantic_mir"),
@@ -886,12 +864,8 @@ evidence = ["cmd/app/main.go:1"]
             manifest(),
             &snapshot,
             &absent("polint.calls"),
-            &absent("polint.identity"),
-            &absent("polint.abstract_domains"),
-            &absent("polint.entrypoints"),
             &absent("polint.type_value_alias"),
             &absent("polint.symbol_graph"),
-            &base_module_topology,
             &absent("polint.go.syntax"),
             &absent("polint.ts.syntax"),
             &absent("polint.semantic_mir"),
@@ -900,28 +874,55 @@ evidence = ["cmd/app/main.go:1"]
             &absent("polint.go.semantic"),
             &output,
         );
-        let changed_topology = semantic_graph_output_digest(
-            &db,
-            manifest(),
-            &snapshot,
+        assert_ne!(base, changed_direct);
+    }
+
+    fn consumed_upstream_identity_parts() -> Vec<String> {
+        semantic_graph_upstream_digest_parts(
             &absent("polint.calls"),
-            &absent("polint.identity"),
-            &absent("polint.abstract_domains"),
-            &absent("polint.entrypoints"),
             &absent("polint.type_value_alias"),
             &absent("polint.symbol_graph"),
-            &changed_module_topology,
             &absent("polint.go.syntax"),
             &absent("polint.ts.syntax"),
             &absent("polint.semantic_mir"),
-            &base_ts_direct,
-            &absent("adaptation_model_input"),
             &absent("polint.go.semantic"),
-            &output,
-        );
+        )
+    }
 
-        assert_ne!(base, changed_direct);
-        assert_ne!(base, changed_topology);
+    #[test]
+    fn output_identity_excludes_unconsumed_identity_provider() {
+        assert!(
+            consumed_upstream_identity_parts()
+                .iter()
+                .all(|part| !part.starts_with("identity_output="))
+        );
+    }
+
+    #[test]
+    fn output_identity_excludes_unconsumed_abstract_domains_provider() {
+        assert!(
+            consumed_upstream_identity_parts()
+                .iter()
+                .all(|part| !part.starts_with("abstract_domains_output="))
+        );
+    }
+
+    #[test]
+    fn output_identity_excludes_unconsumed_entrypoints_provider() {
+        assert!(
+            consumed_upstream_identity_parts()
+                .iter()
+                .all(|part| !part.starts_with("entrypoints_output="))
+        );
+    }
+
+    #[test]
+    fn output_identity_excludes_unconsumed_module_topology_provider() {
+        assert!(
+            consumed_upstream_identity_parts()
+                .iter()
+                .all(|part| !part.starts_with("module_topology="))
+        );
     }
 
     #[test]
