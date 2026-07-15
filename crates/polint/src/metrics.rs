@@ -24,6 +24,7 @@ const METRICS_LAYER_SCHEMA: &str = "metrics-facts-v1";
 pub(crate) struct MetricsDerivation {
     pub(crate) cache_stats: CacheStats,
     pub(crate) diagnostics: Vec<Diagnostic>,
+    pub(crate) execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome,
     pub(crate) output_digest: Option<Digest>,
     pub(crate) layers: Vec<LayerRunMetadata>,
 }
@@ -90,6 +91,7 @@ pub(crate) fn derive_requested_metrics_with_cache_stats(
             MetricsDerivation {
                 cache_stats,
                 diagnostics: Vec::new(),
+                execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded,
                 output_digest: Some(layer.output_digest.clone()),
                 layers: vec![layer],
             }
@@ -123,21 +125,28 @@ pub(crate) fn derive_requested_metrics_with_cache_stats(
                         .diagnostics
                         .push(cache_write_diagnostic("metrics layer", error));
                     derivation.cache_stats = cache_stats;
+                    derivation.execution =
+                        crate::analysis_kernel::incremental::ProviderExecutionOutcome::Failed;
+                    derivation.output_digest = None;
                     return derivation;
                 }
             };
-            if status != LayerCacheReadStatus::BypassedDisabled {
-                write_metrics_layer_payload(
+            let write_succeeded = status == LayerCacheReadStatus::BypassedDisabled
+                || write_metrics_layer_payload(
                     &store,
                     &manifest,
                     &payload,
                     &mut cache_stats,
                     &mut derivation.diagnostics,
                 );
-            }
             let layer = LayerRunMetadata::from_manifest(manifest);
-            derivation.output_digest = Some(layer.output_digest.clone());
-            derivation.layers = vec![layer];
+            derivation.execution = if write_succeeded {
+                crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded
+            } else {
+                crate::analysis_kernel::incremental::ProviderExecutionOutcome::Failed
+            };
+            derivation.output_digest = write_succeeded.then(|| layer.output_digest.clone());
+            derivation.layers = write_succeeded.then_some(layer).into_iter().collect();
             derivation.cache_stats = cache_stats;
             derivation
         }
@@ -227,6 +236,7 @@ fn derive_requested_metrics_uncached(
     MetricsDerivation {
         cache_stats: CacheStats::default(),
         diagnostics: Vec::new(),
+        execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded,
         output_digest: Some(metrics_output_digest_for_payload(
             &metrics_layer_payload(db),
             None,
@@ -436,11 +446,20 @@ fn write_metrics_layer_payload(
     payload: &MetricsLayerPayload,
     stats: &mut CacheStats,
     diagnostics: &mut Vec<Diagnostic>,
-) {
+) -> bool {
     match store.write_json(manifest, payload) {
-        Ok(LayerCacheWriteStatus::Written) => stats.record_write(),
-        Ok(LayerCacheWriteStatus::BypassedDisabled) => stats.record_disabled_bypass(),
-        Err(error) => diagnostics.push(cache_write_diagnostic("metrics layer", error)),
+        Ok(LayerCacheWriteStatus::Written) => {
+            stats.record_write();
+            true
+        }
+        Ok(LayerCacheWriteStatus::BypassedDisabled) => {
+            stats.record_disabled_bypass();
+            true
+        }
+        Err(error) => {
+            diagnostics.push(cache_write_diagnostic("metrics layer", error));
+            false
+        }
     }
 }
 

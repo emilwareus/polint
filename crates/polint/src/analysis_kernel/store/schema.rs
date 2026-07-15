@@ -897,6 +897,7 @@ mod tests {
         for value in [
             ProviderValidationStatus::NativeTrusted,
             ProviderValidationStatus::ProviderFailed,
+            ProviderValidationStatus::Skipped,
         ] {
             assert_eq!(
                 decode_provider_validation_status(encode_provider_validation_status(value)),

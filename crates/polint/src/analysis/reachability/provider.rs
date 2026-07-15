@@ -16,6 +16,7 @@ use crate::diagnostics::{Diagnostic, TextRange};
 pub(crate) struct ReachabilityProviderRunOutput {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) cache_stats: CacheStats,
+    pub(crate) execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome,
     pub(crate) output_digest: Option<Digest>,
 }
 
@@ -101,6 +102,7 @@ pub(crate) fn derive_reachability_with_cache_stats(
         Ok(()) => ReachabilityProviderRunOutput {
             diagnostics,
             cache_stats,
+            execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded,
             output_digest: Some(output_digest),
         },
         Err(error) => {
@@ -113,6 +115,7 @@ pub(crate) fn derive_reachability_with_cache_stats(
             ReachabilityProviderRunOutput {
                 diagnostics,
                 cache_stats,
+                execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome::Failed,
                 output_digest: None,
             }
         }

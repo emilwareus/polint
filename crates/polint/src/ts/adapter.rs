@@ -113,6 +113,7 @@ pub(crate) fn analyze_with_plan_options(
 pub(crate) struct ProviderAnalysisResult {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) cache_stats: CacheStats,
+    pub(crate) execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome,
     pub(crate) output_digest: Option<Digest>,
     pub(crate) layers: Vec<LayerRunMetadata>,
 }
@@ -136,6 +137,7 @@ pub(crate) fn analyze_with_plan_options_and_cache_stats(
         return ProviderAnalysisResult {
             diagnostics: Vec::new(),
             cache_stats,
+            execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome::Skipped,
             output_digest: None,
             layers: Vec::new(),
         };
@@ -177,6 +179,7 @@ pub(crate) fn analyze_with_plan_options_and_cache_stats(
             ProviderAnalysisResult {
                 diagnostics: restore_syntax_layer_payload(db, payload),
                 cache_stats,
+                execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded,
                 output_digest: Some(layer.output_digest.clone()),
                 layers: vec![layer],
             }
@@ -209,28 +212,34 @@ pub(crate) fn analyze_with_plan_options_and_cache_stats(
                     return ProviderAnalysisResult {
                         diagnostics,
                         cache_stats,
+                        execution:
+                            crate::analysis_kernel::incremental::ProviderExecutionOutcome::Failed,
                         output_digest: None,
                         layers: Vec::new(),
                     };
                 }
             };
-            if status != LayerCacheReadStatus::BypassedDisabled {
-                write_syntax_layer_payload(
+            let write_succeeded = status == LayerCacheReadStatus::BypassedDisabled
+                || write_syntax_layer_payload(
                     &layer_store,
                     &manifest,
                     &payload,
                     &mut cache_stats,
                     &mut write_diagnostics,
                 );
-            }
             let layer = LayerRunMetadata::from_manifest(manifest);
             let mut diagnostics = restore_syntax_layer_payload(db, payload);
             diagnostics.extend(write_diagnostics);
             ProviderAnalysisResult {
                 diagnostics,
                 cache_stats,
-                output_digest: Some(layer.output_digest.clone()),
-                layers: vec![layer],
+                execution: if write_succeeded {
+                    crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded
+                } else {
+                    crate::analysis_kernel::incremental::ProviderExecutionOutcome::Failed
+                },
+                output_digest: write_succeeded.then(|| layer.output_digest.clone()),
+                layers: write_succeeded.then_some(layer).into_iter().collect(),
             }
         }
     }
@@ -390,11 +399,20 @@ fn write_syntax_layer_payload(
     payload: &SyntaxLayerPayload,
     stats: &mut CacheStats,
     diagnostics: &mut Vec<Diagnostic>,
-) {
+) -> bool {
     match store.write_json(manifest, payload) {
-        Ok(LayerCacheWriteStatus::Written) => stats.record_write(),
-        Ok(LayerCacheWriteStatus::BypassedDisabled) => stats.record_disabled_bypass(),
-        Err(error) => diagnostics.push(cache_write_diagnostic("ts syntax layer", error)),
+        Ok(LayerCacheWriteStatus::Written) => {
+            stats.record_write();
+            true
+        }
+        Ok(LayerCacheWriteStatus::BypassedDisabled) => {
+            stats.record_disabled_bypass();
+            true
+        }
+        Err(error) => {
+            diagnostics.push(cache_write_diagnostic("ts syntax layer", error));
+            false
+        }
     }
 }
 
@@ -4461,7 +4479,7 @@ mod layer_run_metadata_path_tests {
     }
 
     #[test]
-    fn ts_layer_run_metadata_is_identical_across_hit_miss_disabled_invalid_read_and_failed_write() {
+    fn ts_layer_run_metadata_is_identical_across_successful_cache_paths() {
         let scratch = tempfile::TempDir::new().expect("scratch directory");
         let cache_root = scratch.path().join("cache");
         let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
@@ -4541,7 +4559,7 @@ mod layer_run_metadata_path_tests {
                 .any(|diagnostic| diagnostic.rule_id == "internal/cache")
         );
 
-        for result in [&cold, &warm, &disabled, &invalid, &failed] {
+        for result in [&cold, &warm, &disabled, &invalid] {
             assert_eq!(result.layers.len(), 1);
             assert_eq!(result.layers, cold.layers);
             assert_eq!(
@@ -4551,5 +4569,11 @@ mod layer_run_metadata_path_tests {
             assert_eq!(result.output_digest, cold.output_digest);
             assert_layer_projection_excludes_cache_telemetry(result);
         }
+        assert_eq!(
+            failed.execution,
+            crate::analysis_kernel::incremental::ProviderExecutionOutcome::Failed
+        );
+        assert!(failed.output_digest.is_none());
+        assert!(failed.layers.is_empty());
     }
 }

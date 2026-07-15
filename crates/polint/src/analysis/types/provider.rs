@@ -16,6 +16,7 @@ pub(crate) const TYPE_VALUE_ALIAS_PROVIDER_ID: &str = "polint.type_value_alias";
 pub(crate) struct TypeValueAliasProviderOutput {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) cache_stats: CacheStats,
+    pub(crate) execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome,
     pub(crate) output_digest: Option<Digest>,
 }
 
@@ -100,6 +101,7 @@ pub(crate) fn derive_type_value_alias_with_cache_stats(
     TypeValueAliasProviderOutput {
         diagnostics,
         cache_stats,
+        execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded,
         output_digest: Some(output_digest),
     }
 }

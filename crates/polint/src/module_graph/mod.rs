@@ -48,6 +48,7 @@ pub(crate) struct ModuleGraphDerivation {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) capability_support: Vec<CapabilitySupport>,
     pub(crate) cache_stats: CacheStats,
+    pub(crate) execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome,
     pub(crate) output_digest: Option<Digest>,
     pub(crate) layers: Vec<LayerRunMetadata>,
 }
@@ -57,6 +58,7 @@ pub(crate) struct ModuleTopologyDerivation {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) capability_support: Vec<CapabilitySupport>,
     pub(crate) cache_stats: CacheStats,
+    pub(crate) execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome,
     pub(crate) output_digest: Option<Digest>,
     pub(crate) layers: Vec<LayerRunMetadata>,
 }
@@ -716,6 +718,7 @@ pub(crate) fn derive_module_topology_with_cache_stats(
     if db.imports().is_empty() {
         db.replace_import_to_package_facts(Vec::new());
         return ModuleTopologyDerivation {
+            execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded,
             output_digest: Some(module_topology_output_digest_for_payload(
                 &ModuleTopologyLayerPayload {
                     schema: MODULE_TOPOLOGY_LAYER_SCHEMA.to_string(),
@@ -774,6 +777,7 @@ pub(crate) fn derive_module_topology_with_cache_stats(
                 diagnostics: payload.diagnostics,
                 capability_support: payload.capability_support,
                 cache_stats,
+                execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded,
                 output_digest: Some(layer.output_digest.clone()),
                 layers: vec![layer],
             }
@@ -808,21 +812,28 @@ pub(crate) fn derive_module_topology_with_cache_stats(
                         .diagnostics
                         .push(cache_write_diagnostic("module topology layer", error));
                     derivation.cache_stats = cache_stats;
+                    derivation.execution =
+                        crate::analysis_kernel::incremental::ProviderExecutionOutcome::Failed;
+                    derivation.output_digest = None;
                     return derivation;
                 }
             };
-            if status != LayerCacheReadStatus::BypassedDisabled {
-                persist_module_topology_layer_payload(
+            let write_succeeded = status == LayerCacheReadStatus::BypassedDisabled
+                || persist_module_topology_layer_payload(
                     &store,
                     &manifest,
                     &payload,
                     &mut cache_stats,
                     &mut derivation.diagnostics,
                 );
-            }
             let layer = LayerRunMetadata::from_manifest(manifest);
-            derivation.output_digest = Some(layer.output_digest.clone());
-            derivation.layers = vec![layer];
+            derivation.execution = if write_succeeded {
+                crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded
+            } else {
+                crate::analysis_kernel::incremental::ProviderExecutionOutcome::Failed
+            };
+            derivation.output_digest = write_succeeded.then(|| layer.output_digest.clone());
+            derivation.layers = write_succeeded.then_some(layer).into_iter().collect();
             derivation.cache_stats = cache_stats;
             derivation
         }
@@ -842,6 +853,7 @@ fn derive_module_topology_uncached(db: &mut AnalysisDb) -> ModuleTopologyDerivat
         diagnostics: Vec::new(),
         capability_support: Vec::new(),
         cache_stats: CacheStats::default(),
+        execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded,
         output_digest: Some(module_topology_output_digest_for_payload(&payload, None)),
         layers: Vec::new(),
     }
@@ -1241,6 +1253,7 @@ pub(crate) fn derive_requested_module_graph_with_cache_stats(
                 diagnostics: payload.diagnostics,
                 capability_support: payload.capability_support,
                 cache_stats,
+                execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded,
                 output_digest: Some(layer.output_digest.clone()),
                 layers: vec![layer],
             }
@@ -1275,21 +1288,28 @@ pub(crate) fn derive_requested_module_graph_with_cache_stats(
                         .diagnostics
                         .push(cache_write_diagnostic("module graph layer", error));
                     derivation.cache_stats = cache_stats;
+                    derivation.execution =
+                        crate::analysis_kernel::incremental::ProviderExecutionOutcome::Failed;
+                    derivation.output_digest = None;
                     return derivation;
                 }
             };
-            if status != LayerCacheReadStatus::BypassedDisabled {
-                persist_module_graph_layer_payload(
+            let write_succeeded = status == LayerCacheReadStatus::BypassedDisabled
+                || persist_module_graph_layer_payload(
                     &store,
                     &manifest,
                     &payload,
                     &mut cache_stats,
                     &mut derivation.diagnostics,
                 );
-            }
             let layer = LayerRunMetadata::from_manifest(manifest);
-            derivation.output_digest = Some(layer.output_digest.clone());
-            derivation.layers = vec![layer];
+            derivation.execution = if write_succeeded {
+                crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded
+            } else {
+                crate::analysis_kernel::incremental::ProviderExecutionOutcome::Failed
+            };
+            derivation.output_digest = write_succeeded.then(|| layer.output_digest.clone());
+            derivation.layers = write_succeeded.then_some(layer).into_iter().collect();
             derivation.cache_stats = cache_stats;
             derivation
         }
@@ -1457,6 +1477,7 @@ fn derive_requested_module_graph_uncached(
         diagnostics,
         capability_support,
         cache_stats: CacheStats::default(),
+        execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded,
         output_digest,
         layers: Vec::new(),
     }
@@ -1565,11 +1586,20 @@ fn persist_module_graph_layer_payload(
     payload: &ModuleGraphLayerPayload,
     stats: &mut CacheStats,
     diagnostics: &mut Vec<Diagnostic>,
-) {
+) -> bool {
     match store.write_json(manifest, payload) {
-        Ok(LayerCacheWriteStatus::Written) => stats.record_write(),
-        Ok(LayerCacheWriteStatus::BypassedDisabled) => stats.record_disabled_bypass(),
-        Err(error) => diagnostics.push(cache_write_diagnostic("module graph layer", error)),
+        Ok(LayerCacheWriteStatus::Written) => {
+            stats.record_write();
+            true
+        }
+        Ok(LayerCacheWriteStatus::BypassedDisabled) => {
+            stats.record_disabled_bypass();
+            true
+        }
+        Err(error) => {
+            diagnostics.push(cache_write_diagnostic("module graph layer", error));
+            false
+        }
     }
 }
 
@@ -1597,11 +1627,20 @@ fn persist_module_topology_layer_payload(
     payload: &ModuleTopologyLayerPayload,
     stats: &mut CacheStats,
     diagnostics: &mut Vec<Diagnostic>,
-) {
+) -> bool {
     match store.write_json(manifest, payload) {
-        Ok(LayerCacheWriteStatus::Written) => stats.record_write(),
-        Ok(LayerCacheWriteStatus::BypassedDisabled) => stats.record_disabled_bypass(),
-        Err(error) => diagnostics.push(cache_write_diagnostic("module topology layer", error)),
+        Ok(LayerCacheWriteStatus::Written) => {
+            stats.record_write();
+            true
+        }
+        Ok(LayerCacheWriteStatus::BypassedDisabled) => {
+            stats.record_disabled_bypass();
+            true
+        }
+        Err(error) => {
+            diagnostics.push(cache_write_diagnostic("module topology layer", error));
+            false
+        }
     }
 }
 

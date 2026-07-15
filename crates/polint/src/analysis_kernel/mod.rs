@@ -212,14 +212,15 @@ impl AnalysisKernel {
             input.plan,
             input.parallel,
         );
+        let go_execution = go_output.execution;
         let go_output_digest = go_output.output_digest.clone();
         let go_layers = go_output.layers;
         tracing::info!(target: "polint::kernel", "stage: go.syntax done");
         diagnostics.extend(go_output.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest_and_layers(
+        provider_outputs.push(Self::provider_output_for_outcome_and_layers(
             "polint.go.syntax",
-            &db,
             go_output.cache_stats,
+            go_execution,
             go_output_digest.clone(),
             go_layers,
         ));
@@ -234,14 +235,15 @@ impl AnalysisKernel {
             input.plan,
             input.parallel,
         );
+        let ts_execution = ts_output.execution;
         let ts_output_digest = ts_output.output_digest.clone();
         let ts_layers = ts_output.layers;
         tracing::info!(target: "polint::kernel", "stage: ts.syntax done");
         diagnostics.extend(ts_output.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest_and_layers(
+        provider_outputs.push(Self::provider_output_for_outcome_and_layers(
             "polint.ts.syntax",
-            &db,
             ts_output.cache_stats,
+            ts_execution,
             ts_output_digest.clone(),
             ts_layers,
         ));
@@ -267,13 +269,14 @@ impl AnalysisKernel {
         let module_support = module_graph.support_view(input.plan.support_view());
         // Keep polint.module_graph cache_stats internal to KernelRunReport.
         let polint_module_graph_cache_stats = module_graph.cache_stats.clone();
+        let module_execution = module_graph.execution;
         let module_output_digest = module_graph.output_digest.clone();
         let module_graph_layers = module_graph.layers;
         diagnostics.extend(module_graph.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest_and_layers(
+        provider_outputs.push(Self::provider_output_for_outcome_and_layers(
             "polint.module_graph",
-            &db,
             polint_module_graph_cache_stats,
+            module_execution,
             module_output_digest.clone(),
             module_graph_layers,
         ));
@@ -299,13 +302,14 @@ impl AnalysisKernel {
         );
         let capability_support = symbol_graph.support_view(&module_support);
         let polint_symbol_graph_cache_stats = symbol_graph.cache_stats.clone();
+        let symbol_execution = symbol_graph.execution;
         let symbol_output_digest = symbol_graph.output_digest.clone();
         let symbol_graph_layers = symbol_graph.layers;
         diagnostics.extend(symbol_graph.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest_and_layers(
+        provider_outputs.push(Self::provider_output_for_outcome_and_layers(
             "polint.symbol_graph",
-            &db,
             polint_symbol_graph_cache_stats,
+            symbol_execution,
             symbol_output_digest.clone(),
             symbol_graph_layers,
         ));
@@ -329,13 +333,14 @@ impl AnalysisKernel {
             Default::default()
         };
         let polint_module_topology_cache_stats = module_topology.cache_stats.clone();
+        let module_topology_execution = module_topology.execution;
         let module_topology_output_digest = module_topology.output_digest.clone();
         let module_topology_layers = module_topology.layers;
         diagnostics.extend(module_topology.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest_and_layers(
+        provider_outputs.push(Self::provider_output_for_outcome_and_layers(
             "polint.module_topology",
-            &db,
             polint_module_topology_cache_stats,
+            module_topology_execution,
             module_topology_output_digest.clone(),
             module_topology_layers,
         ));
@@ -363,12 +368,13 @@ impl AnalysisKernel {
             Default::default()
         };
         let polint_semantic_mir_cache_stats = semantic_mir.cache_stats.clone();
+        let semantic_mir_execution = semantic_mir.execution;
         let semantic_mir_output_digest = semantic_mir.output_digest.clone();
         diagnostics.extend(semantic_mir.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+        provider_outputs.push(Self::provider_output_for_outcome(
             "polint.semantic_mir",
-            &db,
             polint_semantic_mir_cache_stats,
+            semantic_mir_execution,
             semantic_mir_output_digest.clone(),
         ));
 
@@ -394,12 +400,13 @@ impl AnalysisKernel {
             Default::default()
         };
         let polint_cfg_cache_stats = cfg.cache_stats.clone();
+        let cfg_execution = cfg.execution;
         let cfg_output_digest = cfg.output_digest.clone();
         diagnostics.extend(cfg.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+        provider_outputs.push(Self::provider_output_for_outcome(
             "polint.cfg",
-            &db,
             polint_cfg_cache_stats,
+            cfg_execution,
             cfg_output_digest.clone(),
         ));
 
@@ -436,12 +443,13 @@ impl AnalysisKernel {
             Default::default()
         };
         let polint_calls_cache_stats = calls.cache_stats.clone();
+        let calls_execution = calls.execution;
         let calls_output_digest = calls.output_digest.clone();
         diagnostics.extend(calls.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+        provider_outputs.push(Self::provider_output_for_outcome(
             "polint.calls",
-            &db,
             polint_calls_cache_stats,
+            calls_execution,
             calls_output_digest.clone(),
         ));
 
@@ -461,12 +469,13 @@ impl AnalysisKernel {
             Default::default()
         };
         let polint_go_semantic_cache_stats = go_semantic.cache_stats.clone();
+        let go_semantic_execution = go_semantic.execution;
         let go_semantic_output_digest = go_semantic.output_digest.clone();
         diagnostics.extend(go_semantic.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+        provider_outputs.push(Self::provider_output_for_outcome(
             "polint.go.semantic",
-            &db,
             polint_go_semantic_cache_stats,
+            go_semantic_execution,
             go_semantic_output_digest.clone(),
         ));
         let go_semantic_dependency_output_digest = go_semantic_output_digest.unwrap_or_else(|| {
@@ -488,12 +497,13 @@ impl AnalysisKernel {
             Default::default()
         };
         let polint_identity_cache_stats = identity.cache_stats.clone();
+        let identity_execution = identity.execution;
         let identity_output_digest = identity.output_digest;
         diagnostics.extend(identity.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+        provider_outputs.push(Self::provider_output_for_outcome(
             "polint.identity",
-            &db,
             polint_identity_cache_stats,
+            identity_execution,
             identity_output_digest.clone(),
         ));
         let identity_dependency_output_digest = identity_output_digest.unwrap_or_else(|| {
@@ -534,12 +544,13 @@ impl AnalysisKernel {
             Default::default()
         };
         let polint_abstract_domains_cache_stats = abstract_domains.cache_stats.clone();
+        let abstract_domains_execution = abstract_domains.execution;
         let abstract_domains_output_digest = abstract_domains.output_digest;
         diagnostics.extend(abstract_domains.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+        provider_outputs.push(Self::provider_output_for_outcome(
             "polint.abstract_domains",
-            &db,
             polint_abstract_domains_cache_stats,
+            abstract_domains_execution,
             abstract_domains_output_digest.clone(),
         ));
 
@@ -575,6 +586,7 @@ impl AnalysisKernel {
             Default::default()
         };
         let polint_direct_summaries_cache_stats = direct_summaries.cache_stats.clone();
+        let direct_summaries_execution = direct_summaries.execution;
         let direct_summaries_initial_output_digest =
             direct_summaries.output_digest.clone().unwrap_or_else(|| {
                 incremental::Digest::absent(
@@ -586,17 +598,18 @@ impl AnalysisKernel {
 
         // SCC closure: interprocedural summary improvement over SCCs.
         // Runs after direct summaries so callee summaries are available.
-        let scc_closure = if run_full_refinement_pipeline {
-            crate::analysis::summaries::provider::run_scc_closure_with_cache(
-                &mut db,
-                input.cache,
-                &input_snapshot,
-                &direct_summaries_initial_output_digest,
-                &entrypoints_calls_digest,
-            )
-        } else {
-            Default::default()
-        };
+        let scc_closure =
+            if direct_summaries_execution == incremental::ProviderExecutionOutcome::Succeeded {
+                crate::analysis::summaries::provider::run_scc_closure_with_cache(
+                    &mut db,
+                    input.cache,
+                    &input_snapshot,
+                    &direct_summaries_initial_output_digest,
+                    &entrypoints_calls_digest,
+                )
+            } else {
+                Default::default()
+            };
         #[cfg(test)]
         let scc_closure_debug = scc_closure.debug_snapshot;
         diagnostics.extend(scc_closure.diagnostics);
@@ -604,28 +617,31 @@ impl AnalysisKernel {
             summaries: db.summary_facts().to_vec(),
             events: db.summary_events().to_vec(),
         };
-        let direct_summaries_output_digest =
-            crate::analysis::summaries::provider::direct_summaries_output_digest(
-                Self::provider_manifest("polint.direct_summaries"),
-                &input_snapshot,
-                &entrypoints_semantic_mir_digest,
-                &entrypoints_cfg_digest,
-                &entrypoints_calls_digest,
-                &abstract_domains_dependency_output_digest,
-                &entrypoints_symbol_digest,
-                &entrypoints_topology_digest,
-                &[
-                    go_dependency_output_digest.clone(),
-                    ts_dependency_output_digest.clone(),
-                ],
-                &crate::analysis::summaries::provider::callable_stable_key_map(&db),
-                &final_direct_summaries_output,
-            );
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+        let direct_summaries_output_digest = (direct_summaries_execution
+            == incremental::ProviderExecutionOutcome::Succeeded)
+            .then(|| {
+                crate::analysis::summaries::provider::direct_summaries_output_digest(
+                    Self::provider_manifest("polint.direct_summaries"),
+                    &input_snapshot,
+                    &entrypoints_semantic_mir_digest,
+                    &entrypoints_cfg_digest,
+                    &entrypoints_calls_digest,
+                    &abstract_domains_dependency_output_digest,
+                    &entrypoints_symbol_digest,
+                    &entrypoints_topology_digest,
+                    &[
+                        go_dependency_output_digest.clone(),
+                        ts_dependency_output_digest.clone(),
+                    ],
+                    &crate::analysis::summaries::provider::callable_stable_key_map(&db),
+                    &final_direct_summaries_output,
+                )
+            });
+        provider_outputs.push(Self::provider_output_for_outcome(
             "polint.direct_summaries",
-            &db,
             polint_direct_summaries_cache_stats,
-            Some(direct_summaries_output_digest.clone()),
+            direct_summaries_execution,
+            direct_summaries_output_digest.clone(),
         ));
 
         let entrypoints = if run_full_refinement_pipeline {
@@ -647,16 +663,23 @@ impl AnalysisKernel {
             Default::default()
         };
         let polint_entrypoints_cache_stats = entrypoints.cache_stats.clone();
+        let entrypoints_execution = entrypoints.execution;
         let entrypoints_output_digest = entrypoints.output_digest.clone();
         diagnostics.extend(entrypoints.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+        provider_outputs.push(Self::provider_output_for_outcome(
             "polint.entrypoints",
-            &db,
             polint_entrypoints_cache_stats,
+            entrypoints_execution,
             entrypoints_output_digest.clone(),
         ));
 
-        let direct_summaries_dependency_output_digest = direct_summaries_output_digest;
+        let direct_summaries_dependency_output_digest = direct_summaries_output_digest
+            .unwrap_or_else(|| {
+                incremental::Digest::absent(
+                    incremental::DigestKind::ProviderOutput,
+                    "polint.direct_summaries",
+                )
+            });
         let entrypoints_dependency_output_digest = entrypoints_output_digest.unwrap_or_else(|| {
             incremental::Digest::absent(
                 incremental::DigestKind::ProviderOutput,
@@ -682,12 +705,13 @@ impl AnalysisKernel {
             Default::default()
         };
         let polint_reachability_cache_stats = reachability.cache_stats.clone();
+        let reachability_execution = reachability.execution;
         let reachability_output_digest = reachability.output_digest;
         diagnostics.extend(reachability.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+        provider_outputs.push(Self::provider_output_for_outcome(
             "polint.reachability",
-            &db,
             polint_reachability_cache_stats,
+            reachability_execution,
             reachability_output_digest,
         ));
 
@@ -702,12 +726,13 @@ impl AnalysisKernel {
             Default::default()
         };
         let polint_extensions_cache_stats = extensions.cache_stats.clone();
+        let extensions_execution = extensions.execution;
         let extensions_output_digest = extensions.output_digest.clone();
         diagnostics.extend(extensions.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+        provider_outputs.push(Self::provider_output_for_outcome(
             "polint.extensions",
-            &db,
             polint_extensions_cache_stats,
+            extensions_execution,
             extensions_output_digest.clone(),
         ));
         let extensions_dependency_output_digest = extensions_output_digest.unwrap_or_else(|| {
@@ -740,12 +765,13 @@ impl AnalysisKernel {
             Default::default()
         };
         let polint_type_value_alias_cache_stats = type_value_alias.cache_stats.clone();
+        let type_value_alias_execution = type_value_alias.execution;
         let type_value_alias_output_digest = type_value_alias.output_digest.clone();
         diagnostics.extend(type_value_alias.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+        provider_outputs.push(Self::provider_output_for_outcome(
             "polint.type_value_alias",
-            &db,
             polint_type_value_alias_cache_stats,
+            type_value_alias_execution,
             type_value_alias_output_digest.clone(),
         ));
 
@@ -797,12 +823,13 @@ impl AnalysisKernel {
             Default::default()
         };
         let polint_semantic_graph_cache_stats = semantic_graph.cache_stats.clone();
+        let semantic_graph_execution = semantic_graph.execution;
         let semantic_graph_output_digest = semantic_graph.output_digest.clone();
         diagnostics.extend(semantic_graph.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+        provider_outputs.push(Self::provider_output_for_outcome(
             "polint.semantic_graph",
-            &db,
             polint_semantic_graph_cache_stats,
+            semantic_graph_execution,
             semantic_graph_output_digest.clone(),
         ));
 
@@ -832,12 +859,13 @@ impl AnalysisKernel {
             Default::default()
         };
         let polint_solver_cache_stats = solver.cache_stats.clone();
+        let solver_execution = solver.execution;
         let solver_output_digest = solver.output_digest.clone();
         diagnostics.extend(solver.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+        provider_outputs.push(Self::provider_output_for_outcome(
             "polint.solver",
-            &db,
             polint_solver_cache_stats,
+            solver_execution,
             solver_output_digest.clone(),
         ));
         let solver_dependency_output_digest = solver_output_digest.unwrap_or_else(|| {
@@ -860,12 +888,13 @@ impl AnalysisKernel {
             Default::default()
         };
         let polint_refined_calls_cache_stats = refined_calls.cache_stats.clone();
+        let refined_calls_execution = refined_calls.execution;
         let refined_calls_output_digest = refined_calls.output_digest.clone();
         diagnostics.extend(refined_calls.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+        provider_outputs.push(Self::provider_output_for_outcome(
             "polint.refined_calls",
-            &db,
             polint_refined_calls_cache_stats,
+            refined_calls_execution,
             refined_calls_output_digest.clone(),
         ));
 
@@ -894,12 +923,13 @@ impl AnalysisKernel {
             Default::default()
         };
         let polint_data_flow_cache_stats = data_flow.cache_stats.clone();
+        let data_flow_execution = data_flow.execution;
         let data_flow_output_digest = data_flow.output_digest.clone();
         diagnostics.extend(data_flow.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+        provider_outputs.push(Self::provider_output_for_outcome(
             "polint.data_flow",
-            &db,
             polint_data_flow_cache_stats,
+            data_flow_execution,
             data_flow_output_digest.clone(),
         ));
 
@@ -925,12 +955,13 @@ impl AnalysisKernel {
             Default::default()
         };
         let polint_evidence_cache_stats = evidence.cache_stats.clone();
+        let evidence_execution = evidence.execution;
         let evidence_output_digest = evidence.output_digest;
         diagnostics.extend(evidence.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
+        provider_outputs.push(Self::provider_output_for_outcome(
             "polint.evidence",
-            &db,
             polint_evidence_cache_stats,
+            evidence_execution,
             evidence_output_digest,
         ));
 
@@ -943,13 +974,14 @@ impl AnalysisKernel {
             vec![go_dependency_output_digest, ts_dependency_output_digest],
         );
         let polint_metrics_cache_stats = metrics.cache_stats.clone();
+        let metrics_execution = metrics.execution;
         let metrics_output_digest = metrics.output_digest;
         let metrics_layers = metrics.layers;
         diagnostics.extend(metrics.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest_and_layers(
+        provider_outputs.push(Self::provider_output_for_outcome_and_layers(
             "polint.metrics",
-            &db,
             polint_metrics_cache_stats,
+            metrics_execution,
             metrics_output_digest,
             metrics_layers,
         ));
@@ -1061,55 +1093,77 @@ impl AnalysisKernel {
         db: &AnalysisDb,
         cache_stats: incremental::CacheStats,
     ) -> incremental::ProviderOutputMeta {
-        Self::provider_output_for_with_optional_digest(provider_id, db, cache_stats, None)
+        let manifest = Self::provider_manifest(provider_id);
+        let (output_digest, validation) = match provider_output_summary_parts(db, manifest) {
+            Ok(rows) => (
+                incremental::provider_output_digest_from_manifest(manifest, &rows),
+                incremental::ProviderValidationStatus::NativeTrusted,
+            ),
+            Err(_) => (
+                incremental::Digest::unsupported(
+                    incremental::DigestKind::ProviderOutput,
+                    manifest.id,
+                    "conflicting stable fact metadata",
+                ),
+                incremental::ProviderValidationStatus::ProviderFailed,
+            ),
+        };
+        let mut meta = incremental::provider_output_from_manifest_with_layers(
+            manifest,
+            output_digest,
+            Vec::new(),
+            cache_stats,
+        );
+        meta.validation = validation;
+        meta
     }
 
-    fn provider_output_for_with_optional_digest(
+    fn provider_output_for_outcome(
         provider_id: &'static str,
-        db: &AnalysisDb,
         cache_stats: incremental::CacheStats,
+        execution: incremental::ProviderExecutionOutcome,
         output_digest: Option<incremental::Digest>,
     ) -> incremental::ProviderOutputMeta {
-        Self::provider_output_for_with_optional_digest_and_layers(
+        Self::provider_output_for_outcome_and_layers(
             provider_id,
-            db,
             cache_stats,
+            execution,
             output_digest,
             Vec::new(),
         )
     }
 
-    fn provider_output_for_with_optional_digest_and_layers(
+    fn provider_output_for_outcome_and_layers(
         provider_id: &'static str,
-        db: &AnalysisDb,
         cache_stats: incremental::CacheStats,
+        execution: incremental::ProviderExecutionOutcome,
         output_digest: Option<incremental::Digest>,
         layers: Vec<incremental::LayerRunMetadata>,
     ) -> incremental::ProviderOutputMeta {
         let manifest = Self::provider_manifest(provider_id);
-        let (output_digest, validation) = match output_digest {
-            Some(output_digest) => (
+        let layers = if execution == incremental::ProviderExecutionOutcome::Succeeded {
+            layers
+        } else {
+            Vec::new()
+        };
+        let (output_digest, validation) = match (execution, output_digest) {
+            (incremental::ProviderExecutionOutcome::Succeeded, Some(output_digest)) => (
                 output_digest,
                 incremental::ProviderValidationStatus::NativeTrusted,
             ),
-            None if provider_id == "polint.data_flow" || provider_id == "polint.evidence" => (
+            (incremental::ProviderExecutionOutcome::Skipped, _) => (
                 incremental::Digest::absent(incremental::DigestKind::ProviderOutput, provider_id),
+                incremental::ProviderValidationStatus::Skipped,
+            ),
+            (incremental::ProviderExecutionOutcome::Failed, _)
+            | (incremental::ProviderExecutionOutcome::Succeeded, None) => (
+                incremental::Digest::unsupported(
+                    incremental::DigestKind::ProviderOutput,
+                    manifest.id,
+                    "provider execution failed",
+                ),
                 incremental::ProviderValidationStatus::ProviderFailed,
             ),
-            None => match provider_output_summary_parts(db, manifest) {
-                Ok(rows) => (
-                    incremental::provider_output_digest_from_manifest(manifest, &rows),
-                    incremental::ProviderValidationStatus::NativeTrusted,
-                ),
-                Err(_) => (
-                    incremental::Digest::unsupported(
-                        incremental::DigestKind::ProviderOutput,
-                        manifest.id,
-                        "conflicting stable fact metadata",
-                    ),
-                    incremental::ProviderValidationStatus::ProviderFailed,
-                ),
-            },
         };
         let mut meta = incremental::provider_output_from_manifest_with_layers(
             manifest,
@@ -1937,10 +1991,64 @@ mod tests {
 
     #[test]
     fn failed_derived_provider_output_is_not_reported_as_trusted_fallback_digest() {
-        let row = AnalysisKernel::provider_output_for_with_optional_digest(
+        let candidate = incremental::Digest::from_parts(
+            incremental::DigestKind::ProviderOutput,
+            "candidate",
+            &["must-not-be-trusted"],
+        );
+        let row = AnalysisKernel::provider_output_for_outcome(
             "polint.data_flow",
-            &AnalysisDb::default(),
             incremental::CacheStats::default(),
+            incremental::ProviderExecutionOutcome::Failed,
+            Some(candidate.clone()),
+        );
+
+        assert_eq!(
+            row.validation,
+            incremental::ProviderValidationStatus::ProviderFailed
+        );
+        assert_ne!(row.output_digest, candidate);
+        assert_eq!(
+            row.output_digest.kind,
+            incremental::DigestKind::ProviderOutput
+        );
+        assert!(row.layers.is_empty());
+    }
+
+    #[test]
+    fn skipped_provider_output_is_distinct_from_failure_and_discards_candidate_state() {
+        let candidate = incremental::Digest::from_parts(
+            incremental::DigestKind::ProviderOutput,
+            "candidate",
+            &["must-not-be-reported"],
+        );
+        let row = AnalysisKernel::provider_output_for_outcome(
+            "polint.ts.syntax",
+            incremental::CacheStats::default(),
+            incremental::ProviderExecutionOutcome::Skipped,
+            Some(candidate),
+        );
+
+        assert_eq!(
+            row.validation,
+            incremental::ProviderValidationStatus::Skipped
+        );
+        assert_eq!(
+            row.output_digest,
+            incremental::Digest::absent(
+                incremental::DigestKind::ProviderOutput,
+                "polint.ts.syntax"
+            )
+        );
+        assert!(row.layers.is_empty());
+    }
+
+    #[test]
+    fn successful_provider_without_an_output_digest_fails_closed() {
+        let row = AnalysisKernel::provider_output_for_outcome(
+            "polint.data_flow",
+            incremental::CacheStats::default(),
+            incremental::ProviderExecutionOutcome::Succeeded,
             None,
         );
 
@@ -1949,8 +2057,12 @@ mod tests {
             incremental::ProviderValidationStatus::ProviderFailed
         );
         assert_eq!(
-            row.output_digest.kind,
-            incremental::DigestKind::ProviderOutput
+            row.output_digest,
+            incremental::Digest::unsupported(
+                incremental::DigestKind::ProviderOutput,
+                "polint.data_flow",
+                "provider execution failed"
+            )
         );
     }
 
@@ -2321,8 +2433,19 @@ mod tests {
         assert_eq!(metrics.cache_stats.invalid_evicted_reads, 1);
         assert_eq!(metrics.cache_stats.recomputes, 1);
         assert_eq!(metrics.cache_stats.writes, 0);
-        assert_eq!(metrics.layers.len(), 1);
-        assert_eq!(metrics.output_digest, metrics.layers[0].output_digest);
+        assert!(metrics.layers.is_empty());
+        assert_eq!(
+            metrics.validation,
+            incremental::ProviderValidationStatus::ProviderFailed
+        );
+        assert_eq!(
+            metrics.output_digest,
+            incremental::Digest::unsupported(
+                incremental::DigestKind::ProviderOutput,
+                "polint.metrics",
+                "provider execution failed"
+            )
+        );
         assert!(output.diagnostics.iter().any(|diagnostic| {
             diagnostic.rule_id == "internal/cache"
                 && diagnostic.file == "metrics layer"

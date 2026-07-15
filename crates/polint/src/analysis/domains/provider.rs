@@ -17,6 +17,7 @@ const REQUESTED_CAPABILITIES: &[&str] = &["calls", "control_flow", "dataflow"];
 pub(crate) struct AbstractDomainsProviderOutput {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) cache_stats: CacheStats,
+    pub(crate) execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome,
     pub(crate) output_digest: Option<Digest>,
 }
 
@@ -124,6 +125,7 @@ fn derive_abstract_domains_with_materialization(
     AbstractDomainsProviderOutput {
         diagnostics: Vec::new(),
         cache_stats,
+        execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded,
         output_digest: Some(output_digest),
     }
 }

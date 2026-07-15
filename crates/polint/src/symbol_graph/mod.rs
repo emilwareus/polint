@@ -37,6 +37,7 @@ pub(crate) struct SymbolGraphDerivation {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) capability_support: Vec<CapabilitySupport>,
     pub(crate) cache_stats: CacheStats,
+    pub(crate) execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome,
     pub(crate) output_digest: Option<Digest>,
     pub(crate) layers: Vec<LayerRunMetadata>,
 }
@@ -166,6 +167,7 @@ pub(crate) fn derive_requested_symbols_with_cache_stats(
                 diagnostics: payload.diagnostics,
                 capability_support: payload.capability_support,
                 cache_stats,
+                execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded,
                 output_digest: Some(layer.output_digest.clone()),
                 layers: vec![layer],
             }
@@ -202,21 +204,28 @@ pub(crate) fn derive_requested_symbols_with_cache_stats(
                             .diagnostics
                             .push(cache_write_diagnostic("symbol graph layer", error));
                         derivation.cache_stats = cache_stats;
+                        derivation.execution =
+                            crate::analysis_kernel::incremental::ProviderExecutionOutcome::Failed;
+                        derivation.output_digest = None;
                         return derivation;
                     }
                 };
-            if status != LayerCacheReadStatus::BypassedDisabled {
-                write_symbol_graph_layer_payload(
+            let write_succeeded = status == LayerCacheReadStatus::BypassedDisabled
+                || write_symbol_graph_layer_payload(
                     &store,
                     &manifest,
                     payload_bytes,
                     &mut cache_stats,
                     &mut derivation.diagnostics,
                 );
-            }
             let layer = LayerRunMetadata::from_manifest(manifest);
-            derivation.output_digest = Some(layer.output_digest.clone());
-            derivation.layers = vec![layer];
+            derivation.execution = if write_succeeded {
+                crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded
+            } else {
+                crate::analysis_kernel::incremental::ProviderExecutionOutcome::Failed
+            };
+            derivation.output_digest = write_succeeded.then(|| layer.output_digest.clone());
+            derivation.layers = write_succeeded.then_some(layer).into_iter().collect();
             derivation.cache_stats = cache_stats;
             derivation
         }
@@ -287,6 +296,7 @@ fn derive_requested_symbols_uncached_with_payload(
         .extend(capability_diagnostics(&derivation.capability_support));
     sort_symbol_derivation(&mut derivation);
     let payload = symbol_graph_layer_payload(db, &derivation);
+    derivation.execution = crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded;
     derivation.output_digest = Some(symbol_graph_output_digest_for_payload(&payload, None));
     (derivation, Some(payload))
 }
@@ -706,11 +716,20 @@ fn write_symbol_graph_layer_payload(
     payload_bytes: Vec<u8>,
     stats: &mut CacheStats,
     diagnostics: &mut Vec<Diagnostic>,
-) {
+) -> bool {
     match store.write_json_bytes(manifest, payload_bytes) {
-        Ok(LayerCacheWriteStatus::Written) => stats.record_write(),
-        Ok(LayerCacheWriteStatus::BypassedDisabled) => stats.record_disabled_bypass(),
-        Err(error) => diagnostics.push(cache_write_diagnostic("symbol graph layer", error)),
+        Ok(LayerCacheWriteStatus::Written) => {
+            stats.record_write();
+            true
+        }
+        Ok(LayerCacheWriteStatus::BypassedDisabled) => {
+            stats.record_disabled_bypass();
+            true
+        }
+        Err(error) => {
+            diagnostics.push(cache_write_diagnostic("symbol graph layer", error));
+            false
+        }
     }
 }
 

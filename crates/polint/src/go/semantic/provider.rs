@@ -23,6 +23,7 @@ const REQUESTED_CAPABILITIES: &[&str] = &["calls", "control_flow", "dataflow"];
 pub(crate) struct GoSemanticProviderRunOutput {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) cache_stats: CacheStats,
+    pub(crate) execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome,
     pub(crate) output_digest: Option<Digest>,
 }
 
@@ -68,6 +69,7 @@ fn derive_go_semantic_with_runner(
                 digest_inputs: EmptyDigestInputs::default().into(),
                 cache_stats,
                 diagnostics: Vec::new(),
+                execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome::Skipped,
             },
         );
     }
@@ -86,6 +88,8 @@ fn derive_go_semantic_with_runner(
                     digest_inputs: EmptyDigestInputs::from_lifecycle_error(error.reason()).into(),
                     cache_stats,
                     diagnostics: vec![setup_missing_diagnostic(error.reason())],
+                    execution:
+                        crate::analysis_kernel::incremental::ProviderExecutionOutcome::Failed,
                 },
             );
         }
@@ -113,6 +117,7 @@ fn derive_go_semantic_with_runner(
                 .into(),
                 cache_stats,
                 diagnostics,
+                execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome::Failed,
             },
         );
     }
@@ -134,6 +139,7 @@ fn derive_go_semantic_with_runner(
                     "configured Go module roots are missing go.mod: {}.",
                     missing_roots.join(", ")
                 ))],
+                execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome::Failed,
             },
         );
     }
@@ -152,6 +158,8 @@ fn derive_go_semantic_with_runner(
                     digest_inputs: EmptyDigestInputs::from_client_error(&error).into(),
                     cache_stats,
                     diagnostics: vec![client_error_diagnostic(error)],
+                    execution:
+                        crate::analysis_kernel::incremental::ProviderExecutionOutcome::Failed,
                 },
             );
         }
@@ -163,6 +171,7 @@ fn derive_go_semantic_with_runner(
             return GoSemanticProviderRunOutput {
                 diagnostics: vec![provider_error_diagnostic(error.to_string())],
                 cache_stats,
+                execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome::Failed,
                 output_digest: None,
             };
         }
@@ -184,6 +193,7 @@ fn derive_go_semantic_with_runner(
             digest_inputs,
             cache_stats,
             diagnostics,
+            execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded,
         },
     )
 }
@@ -231,6 +241,7 @@ struct StoreOutputParts {
     cache_stats: CacheStats,
     diagnostics: Vec<Diagnostic>,
     digest_inputs: DigestInputs,
+    execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome,
 }
 
 fn store_output(
@@ -272,12 +283,16 @@ fn store_output(
             GoSemanticProviderRunOutput {
                 diagnostics,
                 cache_stats: parts.cache_stats,
-                output_digest: Some(output_digest),
+                execution: parts.execution,
+                output_digest: (parts.execution
+                    == crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded)
+                    .then_some(output_digest),
             }
         }
         Err(error) => GoSemanticProviderRunOutput {
             diagnostics: vec![provider_error_diagnostic(error.to_string())],
             cache_stats: parts.cache_stats,
+            execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome::Failed,
             output_digest: None,
         },
     }
@@ -688,6 +703,10 @@ mod tests {
             },
         );
 
+        assert_eq!(
+            output.execution,
+            crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded
+        );
         assert!(output.output_digest.is_some());
         assert_eq!(db.go_semantic_packages().len(), 1);
     }
@@ -744,6 +763,10 @@ mod tests {
             },
         );
 
+        assert_eq!(
+            output.execution,
+            crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded
+        );
         assert!(output.output_digest.is_some());
         // The discriminant-less row was dropped, so the DB holds zero dynamic-dispatch rows.
         assert!(db.go_semantic_dynamic_dispatch().is_empty());
@@ -909,7 +932,11 @@ mod tests {
             |_config| panic!("missing inferred module root should not run sidecar"),
         );
 
-        assert!(output.output_digest.is_some());
+        assert_eq!(
+            output.execution,
+            crate::analysis_kernel::incremental::ProviderExecutionOutcome::Failed
+        );
+        assert!(output.output_digest.is_none());
         assert!(output.diagnostics.is_empty());
         assert!(db.go_semantic_packages().is_empty());
     }
@@ -948,7 +975,11 @@ mod tests {
             |_config| panic!("explicit mismatch should not run sidecar"),
         );
 
-        assert!(output.output_digest.is_some());
+        assert_eq!(
+            output.execution,
+            crate::analysis_kernel::incremental::ProviderExecutionOutcome::Failed
+        );
+        assert!(output.output_digest.is_none());
         assert_eq!(output.diagnostics.len(), 1);
         assert!(
             output.diagnostics[0]

@@ -62,6 +62,7 @@ impl CacheStats {
 pub(crate) enum ProviderValidationStatus {
     NativeTrusted,
     ProviderFailed,
+    Skipped,
 }
 
 impl ProviderValidationStatus {
@@ -69,6 +70,7 @@ impl ProviderValidationStatus {
         match self {
             Self::NativeTrusted => "native_trusted",
             Self::ProviderFailed => "provider_failed",
+            Self::Skipped => "skipped",
         }
     }
 
@@ -76,11 +78,20 @@ impl ProviderValidationStatus {
         match label {
             "native_trusted" => Ok(Self::NativeTrusted),
             "provider_failed" => Ok(Self::ProviderFailed),
+            "skipped" => Ok(Self::Skipped),
             _ => Err(UnknownProviderValidationStatusLabel {
                 label: label.to_string(),
             }),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ProviderExecutionOutcome {
+    #[default]
+    Skipped,
+    Succeeded,
+    Failed,
 }
 
 impl<'de> Deserialize<'de> for ProviderValidationStatus {
@@ -320,6 +331,7 @@ mod tests {
         for status in [
             ProviderValidationStatus::NativeTrusted,
             ProviderValidationStatus::ProviderFailed,
+            ProviderValidationStatus::Skipped,
         ] {
             assert_eq!(
                 ProviderValidationStatus::parse_label(status.label()),

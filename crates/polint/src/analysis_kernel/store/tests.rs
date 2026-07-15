@@ -2,8 +2,8 @@ use super::*;
 
 use crate::analysis_kernel::incremental::{
     DemandCacheStatus, DemandQueryTrace, DemandQueryTraceEntry, Digest, DigestKind,
-    InputComponentStatus, InputDependencyKey, PrecisionTier, QueryDependencyInputs,
-    ValidatedRunMetadata, dependency_free_test_query_key,
+    InputComponentStatus, InputDependencyKey, PrecisionTier, ProviderValidationStatus,
+    QueryDependencyInputs, ValidatedRunMetadata, dependency_free_test_query_key,
 };
 use crate::analysis_kernel::{AnalysisKernel, KernelInput};
 use crate::analysis_plan::AnalysisPlan;
@@ -1119,6 +1119,57 @@ fn generation_plan_fixture(root: &Path, label: &str) -> commit_plan::StoreCommit
 
 fn generation_store_config(root: &Path) -> StoreConfig {
     StoreConfig::new(root.join("cache/semantic-store/store.sqlite3"), true)
+}
+
+#[test]
+fn provider_failure_status_round_trips_through_the_semantic_store() {
+    let temp = tempfile::tempdir().expect("temporary store root");
+    let mut fixture = generation_finalized_fixture(&temp.path().join("repo"), "provider-failure");
+    let failed_provider = fixture
+        .report
+        .provider_outputs
+        .iter_mut()
+        .find(|provider| provider.provider_id == "polint.data_flow")
+        .expect("data-flow provider output");
+    failed_provider.output_digest = Digest::unsupported(
+        DigestKind::ProviderOutput,
+        "polint.data_flow",
+        "injected provider failure",
+    );
+    failed_provider.validation = ProviderValidationStatus::ProviderFailed;
+    failed_provider.layers.clear();
+
+    let validated = ValidatedRunMetadata::from_finalized_run(
+        &fixture.report.input_snapshot,
+        &fixture.report.provider_outputs,
+        &fixture.report.demand_query_trace,
+        fixture.report.validation_events(),
+        &fixture.manifests,
+        fixture.facts,
+    )
+    .expect("provider failure remains valid run metadata");
+    let expected = commit_plan::StoreCommitPlan::from_validated_run(&validated)
+        .expect("provider failure produces a store plan");
+    let config = generation_store_config(temp.path());
+
+    assert_eq!(
+        SemanticStore::commit_validated_run(&config, validated).status,
+        StoreStatus::Ready
+    );
+    let active = generation::read_active_complete(&config, &expected.semantic.identities.workspace)
+        .expect("read active provider-failure generation")
+        .expect("provider-failure generation is active");
+    let persisted = active
+        .plan
+        .semantic
+        .provider_generations
+        .iter()
+        .find(|provider| provider.provider_id == "polint.data_flow")
+        .expect("persisted data-flow provider output");
+
+    assert_eq!(active.plan, expected);
+    assert_eq!(persisted.validation, "provider_failed");
+    assert_eq!(persisted.layer_count, 0);
 }
 
 #[test]

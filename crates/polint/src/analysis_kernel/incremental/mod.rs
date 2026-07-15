@@ -193,4 +193,6 @@ pub(crate) use run_report::{
     KernelRunReport, provider_output_digest_from_manifest,
     provider_output_from_manifest_with_layers,
 };
-pub(crate) use stats::{CacheStats, ProviderOutputMeta, ProviderValidationStatus};
+pub(crate) use stats::{
+    CacheStats, ProviderExecutionOutcome, ProviderOutputMeta, ProviderValidationStatus,
+};

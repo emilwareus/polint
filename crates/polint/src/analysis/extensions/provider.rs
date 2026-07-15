@@ -19,6 +19,7 @@ use crate::diagnostics::{Diagnostic, Severity, TextRange};
 pub(crate) struct ExtensionProviderOutput {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) cache_stats: CacheStats,
+    pub(crate) execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome,
     pub(crate) output_digest: Option<Digest>,
 }
 
@@ -36,6 +37,7 @@ pub(crate) fn derive_extension_provider_outputs_with_cache_stats(
         return ExtensionProviderOutput {
             diagnostics: Vec::new(),
             cache_stats,
+            execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded,
             output_digest: Some(extension_output_digest(manifest, input_snapshot, db)),
         };
     }
@@ -183,6 +185,7 @@ pub(crate) fn derive_extension_provider_outputs_with_cache_stats(
     ExtensionProviderOutput {
         diagnostics,
         cache_stats,
+        execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded,
         output_digest: Some(extension_output_digest(manifest, input_snapshot, db)),
     }
 }

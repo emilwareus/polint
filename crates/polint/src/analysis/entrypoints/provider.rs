@@ -19,6 +19,7 @@ pub(crate) const ENTRYPOINTS_PROVIDER_ID: &str = "polint.entrypoints";
 pub(crate) struct EntrypointsProviderOutput {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) cache_stats: CacheStats,
+    pub(crate) execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome,
     pub(crate) output_digest: Option<Digest>,
 }
 
@@ -56,12 +57,14 @@ pub(crate) fn derive_entrypoints_with_cache_stats(
         Ok(()) => EntrypointsProviderOutput {
             diagnostics: Vec::new(),
             cache_stats,
+            execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded,
             output_digest: Some(output_digest),
         },
         Err(error) => EntrypointsProviderOutput {
             diagnostics: vec![provider_error_diagnostic(error.to_string())],
             cache_stats,
-            output_digest: Some(output_digest),
+            execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome::Failed,
+            output_digest: None,
         },
     }
 }

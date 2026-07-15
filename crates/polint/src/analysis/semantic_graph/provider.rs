@@ -33,6 +33,7 @@ const ADAPTATION_MODEL_MAX_BYTES: u64 = 1_048_576;
 pub(crate) struct SemanticGraphProviderRunOutput {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) cache_stats: CacheStats,
+    pub(crate) execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome,
     pub(crate) output_digest: Option<Digest>,
 }
 
@@ -92,6 +93,7 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
         return SemanticGraphProviderRunOutput {
             diagnostics: vec![provider_error_diagnostic(error.to_string())],
             cache_stats,
+            execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome::Failed,
             output_digest: None,
         };
     }
@@ -149,6 +151,7 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
             SemanticGraphProviderRunOutput {
                 diagnostics: adaptation_models.diagnostics,
                 cache_stats,
+                execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded,
                 output_digest: Some(output_digest),
             }
         }
@@ -159,6 +162,7 @@ pub(crate) fn derive_semantic_graph_with_cache_stats(
                 diagnostics
             },
             cache_stats,
+            execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome::Failed,
             output_digest: None,
         },
     }

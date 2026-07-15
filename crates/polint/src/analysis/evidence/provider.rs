@@ -28,6 +28,7 @@ pub(crate) const EVIDENCE_PROVIDER_ID: &str = "polint.evidence";
 pub(crate) struct EvidenceProviderOutput {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) cache_stats: CacheStats,
+    pub(crate) execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome,
     pub(crate) output_digest: Option<Digest>,
 }
 
@@ -72,11 +73,13 @@ pub(crate) fn derive_evidence_with_cache_stats(
         Ok(()) => EvidenceProviderOutput {
             diagnostics: Vec::new(),
             cache_stats,
+            execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded,
             output_digest: Some(output_digest),
         },
         Err(error) => EvidenceProviderOutput {
             diagnostics: vec![provider_error_diagnostic(error.to_string())],
             cache_stats,
+            execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome::Failed,
             output_digest: None,
         },
     }
