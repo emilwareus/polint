@@ -2272,6 +2272,34 @@ mod active_complete_reader {
     }
 
     #[test]
+    fn fact_row_decode_materialization_count_is_isolated_per_reader_thread() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let repository = temp.path().join("repo");
+        let plan = generation_plan_fixture(&repository, "reader-thread-isolation");
+        let config = generation_store_config(temp.path());
+        assert_eq!(
+            generation::commit_generation(&config, &plan),
+            StoreStatus::Ready
+        );
+        generation::reset_fact_row_decode_materializations_for_test();
+
+        let reader_config = config;
+        let workspace = plan.semantic.identities.workspace;
+        let reader_materializations = std::thread::spawn(move || {
+            generation::reset_fact_row_decode_materializations_for_test();
+            generation::read_active_complete(&reader_config, &workspace)
+                .expect("read active generation")
+                .expect("active generation exists");
+            generation::fact_row_decode_materializations_for_test()
+        })
+        .join()
+        .expect("reader thread completes");
+
+        assert!(reader_materializations > 0);
+        assert_eq!(generation::fact_row_decode_materializations_for_test(), 0);
+    }
+
+    #[test]
     fn active_read_authenticates_input_and_summary_child_relationships() {
         let tampers = [
             (

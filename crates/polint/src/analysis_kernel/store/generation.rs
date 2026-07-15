@@ -4166,7 +4166,7 @@ fn read_facts(
             let confidence = decode_fact_confidence(&row.get::<_, String>(6)?)?;
             let validation = decode_validation_status(&row.get::<_, String>(7)?)?;
             #[cfg(test)]
-            FACT_ROW_DECODE_MATERIALIZATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            record_fact_row_decode_materialization_for_test();
             Ok((
                 ordinal,
                 StableFactMetaRow {
@@ -4260,17 +4260,26 @@ fn sqlite_length(row: &Row<'_>, index: usize) -> Result<usize, ProjectionError> 
 }
 
 #[cfg(test)]
-static FACT_ROW_DECODE_MATERIALIZATIONS: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
+std::thread_local! {
+    static FACT_ROW_DECODE_MATERIALIZATIONS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn record_fact_row_decode_materialization_for_test() {
+    FACT_ROW_DECODE_MATERIALIZATIONS.with(|materializations| {
+        materializations.set(materializations.get().saturating_add(1));
+    });
+}
 
 #[cfg(test)]
 pub(super) fn reset_fact_row_decode_materializations_for_test() {
-    FACT_ROW_DECODE_MATERIALIZATIONS.store(0, std::sync::atomic::Ordering::Relaxed);
+    FACT_ROW_DECODE_MATERIALIZATIONS.with(|materializations| materializations.set(0));
 }
 
 #[cfg(test)]
 pub(super) fn fact_row_decode_materializations_for_test() -> usize {
-    FACT_ROW_DECODE_MATERIALIZATIONS.load(std::sync::atomic::Ordering::Relaxed)
+    FACT_ROW_DECODE_MATERIALIZATIONS.with(std::cell::Cell::get)
 }
 
 fn read_run_manifest(
