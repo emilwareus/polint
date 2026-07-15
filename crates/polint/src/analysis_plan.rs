@@ -623,30 +623,49 @@ fn capability_collection_error(meta: &RuleMeta) -> Diagnostic {
 }
 
 fn capability_diagnostic(capability: &PlannedCapability, rule_id: &str) -> Diagnostic {
-    let message = match capability.status {
+    capability_diagnostic_from_parts(
+        &capability.capability,
+        &capability.status,
+        capability.docs_path.as_deref(),
+        rule_id,
+    )
+}
+
+pub(crate) fn capability_support_diagnostic(
+    capability: &CapabilitySupport,
+    rule_id: &str,
+) -> Diagnostic {
+    capability_diagnostic_from_parts(
+        &capability.capability,
+        &capability.status,
+        capability.docs_path.as_deref(),
+        rule_id,
+    )
+}
+
+fn capability_diagnostic_from_parts(
+    capability: &str,
+    status: &CapabilitySupportStatus,
+    docs_path: Option<&str>,
+    rule_id: &str,
+) -> Diagnostic {
+    let message = match status {
         CapabilitySupportStatus::Supported => unreachable!("supported capabilities are filtered"),
-        CapabilitySupportStatus::Unsupported => format!(
-            "Rule `{rule_id}` requested unsupported capability `{}`.",
-            capability.capability
-        ),
+        CapabilitySupportStatus::Unsupported => {
+            format!("Rule `{rule_id}` requested unsupported capability `{capability}`.")
+        }
         CapabilitySupportStatus::SetupMissing => format!(
-            "Rule `{rule_id}` requested capability `{}`, but required setup is missing.",
-            capability.capability
+            "Rule `{rule_id}` requested capability `{capability}`, but required setup is missing."
         ),
     };
-    let docs_path = capability
-        .docs_path
-        .as_deref()
-        .unwrap_or("docs/facts/capability-plans.md");
-    let help = match capability.status {
+    let docs_path = docs_path.unwrap_or("docs/facts/capability-plans.md");
+    let help = match status {
         CapabilitySupportStatus::Supported => unreachable!("supported capabilities are filtered"),
-        CapabilitySupportStatus::Unsupported => format!(
-            "Capability `{}` is not currently supported; see {docs_path}.",
-            capability.capability
-        ),
+        CapabilitySupportStatus::Unsupported => {
+            format!("Capability `{capability}` is not currently supported; see {docs_path}.")
+        }
         CapabilitySupportStatus::SetupMissing => format!(
-            "Capability `{}` needs additional local setup before this rule can run; see {docs_path}.",
-            capability.capability
+            "Capability `{capability}` needs additional local setup before this rule can run; see {docs_path}."
         ),
     };
 
@@ -657,11 +676,8 @@ fn capability_diagnostic(capability: &PlannedCapability, rule_id: &str) -> Diagn
         message,
     )
     .with_evidence("rule", rule_id.to_string())
-    .with_evidence("capability", capability.capability.clone())
-    .with_evidence(
-        "status",
-        capability_status_json(&capability.status).to_string(),
-    )
+    .with_evidence("capability", capability.to_string())
+    .with_evidence("status", capability_status_json(status).to_string())
     .with_help(help)
 }
 

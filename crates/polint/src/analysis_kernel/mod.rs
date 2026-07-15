@@ -1,7 +1,7 @@
 use crate::analysis_plan::AnalysisPlan;
 use crate::cache::Cache;
 use crate::config::LoadedConfig;
-use crate::core::{AnalysisDb, CapabilitySupportView};
+use crate::core::{AnalysisDb, CapabilitySupportStatus, CapabilitySupportView};
 use crate::diagnostics::Diagnostic;
 
 #[rustfmt::skip]
@@ -1173,6 +1173,7 @@ impl AnalysisKernel {
             data_flow_execution,
             data_flow_output_digest,
         );
+        let data_flow_status = data_flow_dependency_output.status;
         let evidence = if !run_data_flow_pipeline {
             Default::default()
         } else if Self::provider_dependencies_ready(
@@ -1237,6 +1238,12 @@ impl AnalysisKernel {
             metrics_output_digest,
             metrics_layers,
         ));
+        let (capability_support, capability_diagnostics) = Self::effective_capability_support(
+            &capability_support,
+            refined_calls_dependency_output.status,
+            data_flow_status,
+        );
+        diagnostics.extend(capability_diagnostics);
         tracing::info!(target: "polint::kernel", "stage: metrics + derived done");
         let validation_report = validation::validate_fact_metadata(&db, Self::provider_manifests());
         diagnostics.extend(validation_report.diagnostics);
@@ -1455,6 +1462,40 @@ impl AnalysisKernel {
             .iter()
             .find(|manifest| manifest.id == provider_id)
             .unwrap_or_else(|| panic!("missing provider manifest {provider_id}"))
+    }
+
+    fn effective_capability_support(
+        planned: &CapabilitySupportView,
+        refined_calls_status: incremental::InputComponentStatus,
+        data_flow_status: incremental::InputComponentStatus,
+    ) -> (CapabilitySupportView, Vec<Diagnostic>) {
+        let mut entries = planned.entries().to_vec();
+        let mut diagnostics = Vec::new();
+        for entry in &mut entries {
+            if entry.status != CapabilitySupportStatus::Supported {
+                continue;
+            }
+            let provider_status = match entry.capability.as_str() {
+                "calls" | "control_flow" => Some(refined_calls_status),
+                "dataflow" => Some(data_flow_status),
+                _ => None,
+            };
+            if provider_status != Some(incremental::InputComponentStatus::Unsupported) {
+                continue;
+            }
+
+            entry.status = CapabilitySupportStatus::Unsupported;
+            entry.reason =
+                Some("Analysis could not produce this capability for the current run.".to_string());
+            entry.hint = Some(
+                "Resolve the earlier analysis diagnostics, then run the rule again.".to_string(),
+            );
+            entry.docs_path = Some("docs/facts/capability-plans.md".to_string());
+            diagnostics.extend(entry.rules.iter().map(|rule_id| {
+                crate::analysis_plan::capability_support_diagnostic(entry, rule_id)
+            }));
+        }
+        (CapabilitySupportView::new(entries), diagnostics)
     }
 
     fn directly_requests_any_capability(plan: &AnalysisPlan, capabilities: &[&str]) -> bool {
@@ -2634,6 +2675,146 @@ mod tests {
             &[&symbol, &absent_entrypoints],
             &[&skipped_go_semantic],
         ));
+    }
+
+    #[test]
+    fn failed_refined_call_chain_revokes_calls_and_control_flow_before_rules_run() {
+        let calls_ran = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let control_flow_ran = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let rules = vec![
+            capability_probe_rule(
+                "test/needs-calls",
+                Capabilities::new().calls(),
+                std::sync::Arc::clone(&calls_ran),
+            ),
+            capability_probe_rule(
+                "test/needs-control-flow",
+                Capabilities::new().control_flow(),
+                std::sync::Arc::clone(&control_flow_ran),
+            ),
+        ];
+        let plan = AnalysisPlan::from_rules(&rules, None, &std::collections::BTreeMap::new());
+
+        let (support, diagnostics) = AnalysisKernel::effective_capability_support(
+            plan.support_view(),
+            incremental::InputComponentStatus::Unsupported,
+            incremental::InputComponentStatus::Absent,
+        );
+        let rule_diagnostics = crate::core::run_rules_with_capability_support(
+            &AnalysisDb::new(),
+            &rules,
+            &std::collections::BTreeMap::new(),
+            None,
+            false,
+            &support,
+        );
+
+        assert_eq!(
+            support.status_for("calls"),
+            Some(CapabilitySupportStatus::Unsupported)
+        );
+        assert_eq!(
+            support.status_for("control_flow"),
+            Some(CapabilitySupportStatus::Unsupported)
+        );
+        assert_eq!(diagnostics.len(), 2, "{diagnostics:#?}");
+        assert!(diagnostics.iter().all(|diagnostic| {
+            diagnostic.rule_id == "polint/capability"
+                && !diagnostic.message.contains("polint.refined_calls")
+        }));
+        assert!(rule_diagnostics.is_empty());
+        assert_eq!(calls_ran.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(
+            control_flow_ran.load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+    }
+
+    #[test]
+    fn failed_data_flow_provider_revokes_dataflow_before_rule_runs() {
+        let dataflow_ran = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let rules = vec![capability_probe_rule(
+            "test/needs-dataflow",
+            Capabilities::new().dataflow(),
+            std::sync::Arc::clone(&dataflow_ran),
+        )];
+        let plan = AnalysisPlan::from_rules(&rules, None, &std::collections::BTreeMap::new());
+
+        let (support, diagnostics) = AnalysisKernel::effective_capability_support(
+            plan.support_view(),
+            incremental::InputComponentStatus::Present,
+            incremental::InputComponentStatus::Unsupported,
+        );
+        let rule_diagnostics = crate::core::run_rules_with_capability_support(
+            &AnalysisDb::new(),
+            &rules,
+            &std::collections::BTreeMap::new(),
+            None,
+            false,
+            &support,
+        );
+
+        assert_eq!(
+            support.status_for("dataflow"),
+            Some(CapabilitySupportStatus::Unsupported)
+        );
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+        assert_eq!(diagnostics[0].rule_id, "polint/capability");
+        assert!(rule_diagnostics.is_empty());
+        assert_eq!(dataflow_ran.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn planned_provider_absence_does_not_revoke_capability_support() {
+        let calls_ran = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let rules = vec![capability_probe_rule(
+            "test/needs-calls",
+            Capabilities::new().calls(),
+            std::sync::Arc::clone(&calls_ran),
+        )];
+        let plan = AnalysisPlan::from_rules(&rules, None, &std::collections::BTreeMap::new());
+
+        let (support, diagnostics) = AnalysisKernel::effective_capability_support(
+            plan.support_view(),
+            incremental::InputComponentStatus::Absent,
+            incremental::InputComponentStatus::Absent,
+        );
+        let rule_diagnostics = crate::core::run_rules_with_capability_support(
+            &AnalysisDb::new(),
+            &rules,
+            &std::collections::BTreeMap::new(),
+            None,
+            false,
+            &support,
+        );
+
+        assert_eq!(
+            support.status_for("calls"),
+            Some(CapabilitySupportStatus::Supported)
+        );
+        assert!(diagnostics.is_empty());
+        assert!(rule_diagnostics.is_empty());
+        assert_eq!(calls_ran.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    fn capability_probe_rule(
+        id: &'static str,
+        capabilities: Capabilities,
+        run_count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) -> Rule {
+        Rule::from_parts(
+            move || RuleMeta {
+                id: id.to_string(),
+                description: "Capability execution probe".to_string(),
+                severity: Severity::Warn,
+                kind: RuleKind::Check,
+            },
+            move || capabilities,
+            move |_db, _ctx| {
+                run_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            },
+        )
     }
 
     #[test]
