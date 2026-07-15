@@ -1313,6 +1313,448 @@ fn writer_applies_the_same_generation_byte_budget_before_store_io() {
     assert!(!config.path().exists());
 }
 
+#[derive(Clone, Copy, Debug)]
+enum OrdinalTamper {
+    Gap,
+    Offset,
+}
+
+impl OrdinalTamper {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Gap => "gap",
+            Self::Offset => "offset",
+        }
+    }
+}
+
+fn active_generation_id(database: &Connection) -> i64 {
+    database
+        .query_row(
+            "SELECT active_generation_id FROM store_manifest WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read active generation")
+}
+
+fn seed_summary_pair(database: &Connection, generation_id: i64) {
+    let inserted = database
+        .execute(
+            "WITH offsets(value) AS (VALUES (0), (1)),
+                  next_id(value) AS (SELECT coalesce(max(id), 0) + 1 FROM summaries),
+                  next_ordinal(value) AS (
+                      SELECT coalesce(max(semantic_ordinal), -1) + 1
+                      FROM summaries WHERE generation_id = ?1
+                  )
+             INSERT INTO summaries (
+                 id, generation_id, semantic_ordinal, callable_stable_key,
+                 summary_domain, summary_version, body_shape_digest_kind,
+                 body_shape_digest_value, extension_digest_kind,
+                 extension_digest_value, dependency_count
+             )
+             SELECT next_id.value + offsets.value, ?1,
+                    next_ordinal.value + offsets.value,
+                    'ordinal-seed-callable-' || offsets.value,
+                    'effects', '1', 'summary_body',
+                    'ordinal-seed-body-' || offsets.value,
+                    'extension_code', 'ordinal-seed-extension-' || offsets.value, 0
+             FROM offsets CROSS JOIN next_id CROSS JOIN next_ordinal",
+            [generation_id],
+        )
+        .expect("seed summary ordinal pair");
+    assert_eq!(inserted, 2);
+}
+
+fn seed_diagnostic_pair(database: &Connection, generation_id: i64) {
+    let inserted = database
+        .execute(
+            "WITH offsets(value) AS (VALUES (0), (1)),
+                  next_id(value) AS (SELECT coalesce(max(id), 0) + 1 FROM diagnostic_nodes),
+                  next_ordinal(value) AS (
+                      SELECT coalesce(max(semantic_ordinal), -1) + 1
+                      FROM diagnostic_nodes WHERE generation_id = ?1
+                  )
+             INSERT INTO diagnostic_nodes (
+                 id, generation_id, semantic_ordinal, rule_id, rule_version,
+                 rule_code_kind, rule_code_value, options_kind, options_value,
+                 evidence_kind, evidence_value, requested_views_digest_kind,
+                 requested_views_digest_value, requested_view_count
+             )
+             SELECT next_id.value + offsets.value, ?1,
+                    next_ordinal.value + offsets.value,
+                    'ordinal-seed-rule-' || offsets.value, '1',
+                    'rule_code', 'ordinal-seed-code-' || offsets.value,
+                    'rule_options', 'ordinal-seed-options-' || offsets.value,
+                    'evidence', 'ordinal-seed-evidence-' || offsets.value,
+                    'dependency', 'ordinal-seed-views-' || offsets.value, 0
+             FROM offsets CROSS JOIN next_id CROSS JOIN next_ordinal",
+            [generation_id],
+        )
+        .expect("seed diagnostic ordinal pair");
+    assert_eq!(inserted, 2);
+}
+
+fn ensure_ordinal_pair(database: &Connection, generation_id: i64, table: &str) {
+    let changed = match table {
+        "input_component_details" => database.execute(
+            "INSERT INTO input_component_details (
+                 generation_id, component_group, component_name, ordinal,
+                 component_digest_kind, component_digest_value, detail
+             )
+             SELECT source.generation_id, source.component_group, source.component_name,
+                    (SELECT max(sibling.ordinal) + 1
+                     FROM input_component_details AS sibling
+                     WHERE sibling.generation_id = source.generation_id
+                       AND sibling.component_group = source.component_group
+                       AND sibling.component_name = source.component_name),
+                    source.component_digest_kind, source.component_digest_value,
+                    'ordinal-seed-detail'
+             FROM input_component_details AS source
+             WHERE source.generation_id = ?1
+             ORDER BY source.component_group, source.component_name, source.ordinal
+             LIMIT 1",
+            [generation_id],
+        ),
+        "provider_dependencies" => database.execute(
+            "INSERT INTO provider_dependencies (
+                 generation_id, provider_generation_id, ordinal,
+                 dependency_digest_kind, dependency_digest_value
+             )
+             SELECT source.generation_id, source.provider_generation_id,
+                    (SELECT max(sibling.ordinal) + 1
+                     FROM provider_dependencies AS sibling
+                     WHERE sibling.generation_id = source.generation_id
+                       AND sibling.provider_generation_id = source.provider_generation_id),
+                    source.dependency_digest_kind,
+                    'ordinal-seed-provider-' || source.provider_generation_id
+             FROM provider_dependencies AS source
+             WHERE source.generation_id = ?1
+             ORDER BY source.provider_generation_id, source.ordinal
+             LIMIT 1",
+            [generation_id],
+        ),
+        "layer_input_digests" => database.execute(
+            "INSERT INTO layer_input_digests (
+                 generation_id, layer_id, ordinal, digest_kind, digest_value
+             )
+             SELECT source.generation_id, source.layer_id,
+                    (SELECT max(sibling.ordinal) + 1
+                     FROM layer_input_digests AS sibling
+                     WHERE sibling.generation_id = source.generation_id
+                       AND sibling.layer_id = source.layer_id),
+                    source.digest_kind, 'ordinal-seed-input-' || source.layer_id
+             FROM layer_input_digests AS source
+             WHERE source.generation_id = ?1
+             ORDER BY source.layer_id, source.ordinal
+             LIMIT 1",
+            [generation_id],
+        ),
+        "layer_dependency_digests" => database.execute(
+            "INSERT INTO layer_dependency_digests (
+                 generation_id, layer_id, ordinal, digest_kind, digest_value
+             )
+             SELECT source.generation_id, source.layer_id,
+                    (SELECT max(sibling.ordinal) + 1
+                     FROM layer_dependency_digests AS sibling
+                     WHERE sibling.generation_id = source.generation_id
+                       AND sibling.layer_id = source.layer_id),
+                    'dependency_layer', 'ordinal-seed-dependency-' || source.layer_id
+             FROM layer_dependency_digests AS source
+             WHERE source.generation_id = ?1
+             ORDER BY source.layer_id, source.ordinal
+             LIMIT 1",
+            [generation_id],
+        ),
+        "layer_extension_digests" => database.execute(
+            "INSERT INTO layer_extension_digests (
+                 generation_id, layer_id, ordinal, digest_kind, digest_value
+             )
+             SELECT source.generation_id, source.layer_id,
+                    (SELECT max(sibling.ordinal) + 1
+                     FROM layer_extension_digests AS sibling
+                     WHERE sibling.generation_id = source.generation_id
+                       AND sibling.layer_id = source.layer_id),
+                    'extension_code', 'ordinal-seed-extension-' || source.layer_id
+             FROM layer_extension_digests AS source
+             WHERE source.generation_id = ?1
+             ORDER BY source.layer_id, source.ordinal
+             LIMIT 1",
+            [generation_id],
+        ),
+        "layer_warnings" => database.execute(
+            "WITH offsets(value) AS (VALUES (0), (1))
+             INSERT INTO layer_warnings (
+                 generation_id, layer_id, ordinal, warning_code
+             )
+             SELECT ?1, (SELECT min(id) FROM layers WHERE generation_id = ?1),
+                    offsets.value, 'ordinal-seed-warning-' || offsets.value
+             FROM offsets",
+            [generation_id],
+        ),
+        "summary_dependency_digests" => {
+            seed_summary_pair(database, generation_id);
+            database.execute(
+                "WITH offsets(value) AS (VALUES (0), (1))
+                 INSERT INTO summary_dependency_digests (
+                     generation_id, summary_id, ordinal, digest_kind, digest_value
+                 )
+                 SELECT ?1,
+                        (SELECT min(id) FROM summaries WHERE generation_id = ?1),
+                        offsets.value, 'summary_dependency',
+                        'ordinal-seed-summary-dependency-' || offsets.value
+                 FROM offsets",
+                [generation_id],
+            )
+        }
+        "query_inputs" => database.execute(
+            "INSERT INTO query_inputs (
+                 generation_id, query_id, ordinal, input_kind, stable_key,
+                 digest_kind, digest_value, status
+             )
+             SELECT source.generation_id, source.query_id,
+                    (SELECT max(sibling.ordinal) + 1
+                     FROM query_inputs AS sibling
+                     WHERE sibling.generation_id = source.generation_id
+                       AND sibling.query_id = source.query_id),
+                    source.input_kind, 'ordinal-seed-input-' || source.query_id,
+                    source.digest_kind, 'ordinal-seed-query-' || source.query_id,
+                    source.status
+             FROM query_inputs AS source
+             WHERE source.generation_id = ?1
+             ORDER BY source.query_id, source.ordinal
+             LIMIT 1",
+            [generation_id],
+        ),
+        "query_layer_digests" => database.execute(
+            "INSERT INTO query_layer_digests (
+                 generation_id, query_id, ordinal, digest_kind, digest_value
+             )
+             SELECT source.generation_id, source.query_id,
+                    (SELECT max(sibling.ordinal) + 1
+                     FROM query_layer_digests AS sibling
+                     WHERE sibling.generation_id = source.generation_id
+                       AND sibling.query_id = source.query_id),
+                    'provider_output', 'ordinal-seed-query-layer-' || source.query_id
+             FROM query_layer_digests AS source
+             WHERE source.generation_id = ?1
+             ORDER BY source.query_id, source.ordinal
+             LIMIT 1",
+            [generation_id],
+        ),
+        "diagnostic_requested_view_digests" => {
+            seed_diagnostic_pair(database, generation_id);
+            database.execute(
+                "WITH offsets(value) AS (VALUES (0), (1))
+                 INSERT INTO diagnostic_requested_view_digests (
+                     generation_id, diagnostic_id, ordinal, digest_kind, digest_value
+                 )
+                 SELECT ?1,
+                        (SELECT min(id) FROM diagnostic_nodes WHERE generation_id = ?1),
+                        offsets.value, 'provider_output',
+                        'ordinal-seed-diagnostic-view-' || offsets.value
+                 FROM offsets",
+                [generation_id],
+            )
+        }
+        "summaries" => {
+            seed_summary_pair(database, generation_id);
+            return;
+        }
+        "diagnostic_nodes" => {
+            seed_diagnostic_pair(database, generation_id);
+            return;
+        }
+        "layers" | "queries" | "fact_metadata" | "dependency_edges" => return,
+        unexpected => panic!("missing ordinal fixture for {unexpected}"),
+    }
+    .expect("seed ordinal pair");
+    assert!(changed > 0, "{table}");
+}
+
+fn tamper_ordinals(
+    database: &Connection,
+    generation_id: i64,
+    table: &str,
+    ordinal: &str,
+    tamper: OrdinalTamper,
+) {
+    match tamper {
+        OrdinalTamper::Gap => {
+            database
+                .execute(
+                    &format!(
+                        "UPDATE {table} SET {ordinal} = {ordinal} + 1000000 \
+                         WHERE generation_id = ?1"
+                    ),
+                    [generation_id],
+                )
+                .expect("move ordinals outside their current unique-key range");
+            database
+                .execute(
+                    &format!(
+                        "UPDATE {table} SET {ordinal} = ({ordinal} - 1000000) * 2 \
+                         WHERE generation_id = ?1"
+                    ),
+                    [generation_id],
+                )
+                .expect("create ordinal gap");
+        }
+        OrdinalTamper::Offset => {
+            database
+                .execute(
+                    &format!(
+                        "UPDATE {table} SET {ordinal} = {ordinal} + 1000000 \
+                         WHERE generation_id = ?1"
+                    ),
+                    [generation_id],
+                )
+                .expect("move ordinals outside their current unique-key range");
+            database
+                .execute(
+                    &format!(
+                        "UPDATE {table} SET {ordinal} = {ordinal} - 999001 \
+                         WHERE generation_id = ?1"
+                    ),
+                    [generation_id],
+                )
+                .expect("create nonzero ordinal offset");
+        }
+    }
+}
+
+#[test]
+fn canonical_ordinal_validator_covers_every_schema_ordinal_family() {
+    let temp = tempfile::tempdir().expect("temporary store root");
+    let validated = generation_validated_fixture(&temp.path().join("repo"), "ordinal-schema");
+    let config = generation_store_config(temp.path());
+    assert_eq!(
+        SemanticStore::commit_validated_run(&config, validated).status,
+        StoreStatus::Ready
+    );
+    let database = Connection::open(config.path()).expect("open store");
+    let mut schema_ordinals = std::collections::BTreeSet::new();
+    for table in schema::REQUIRED_V2_TABLES {
+        let mut statement = database
+            .prepare(&format!("PRAGMA table_info(\"{table}\")"))
+            .expect("inspect table columns");
+        let columns = statement
+            .query_map([], |row| row.get::<_, String>(1))
+            .expect("query table columns")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect table columns");
+        for column in columns {
+            if matches!(
+                column.as_str(),
+                "ordinal" | "semantic_ordinal" | "reservation_ordinal"
+            ) {
+                schema_ordinals.insert((table.to_string(), column));
+            }
+        }
+    }
+
+    assert!(
+        schema_ordinals.remove(&("generations".to_string(), "reservation_ordinal".to_string()))
+    );
+    let authenticated_ordinals = generation::ordinal_family_columns_for_test()
+        .into_iter()
+        .map(|(table, ordinal)| (table.to_string(), ordinal.to_string()))
+        .collect();
+    assert_eq!(schema_ordinals, authenticated_ordinals);
+}
+
+#[test]
+fn every_projection_ordinal_family_rejects_gaps_and_nonzero_offsets() {
+    for (table, ordinal) in generation::ordinal_family_columns_for_test()
+        .into_iter()
+        .filter(|(table, _)| *table != "generation_failure_events")
+    {
+        for tamper in [OrdinalTamper::Gap, OrdinalTamper::Offset] {
+            let temp = tempfile::tempdir().expect("temporary store root");
+            let label = format!("ordinal-{table}-{}", tamper.label());
+            let validated = generation_validated_fixture(&temp.path().join("repo"), &label);
+            let config = generation_store_config(temp.path());
+            assert_eq!(
+                SemanticStore::commit_validated_run(&config, validated).status,
+                StoreStatus::Ready,
+                "{label}"
+            );
+            let database = Connection::open(config.path()).expect("open store");
+            let generation_id = active_generation_id(&database);
+            ensure_ordinal_pair(&database, generation_id, table);
+            assert!(
+                generation::generation_ordinals_are_valid_for_test(&database, generation_id),
+                "baseline {label}"
+            );
+
+            tamper_ordinals(&database, generation_id, table, ordinal, tamper);
+
+            assert!(
+                !generation::generation_ordinals_are_valid_for_test(&database, generation_id),
+                "tampered {label}"
+            );
+        }
+    }
+}
+
+#[test]
+fn failure_event_ordinals_reject_gaps_and_nonzero_offsets() {
+    for tamper in [OrdinalTamper::Gap, OrdinalTamper::Offset] {
+        let temp = tempfile::tempdir().expect("temporary store root");
+        let plan = generation_plan_fixture(
+            &temp.path().join("repo"),
+            &format!("failure-ordinal-{}", tamper.label()),
+        );
+        let config = generation_store_config(temp.path());
+        let reservation =
+            generation::reserve_only_for_test(&config, &plan).expect("reserve generation");
+        let generation_id = reservation.handle();
+        let mut writer = connection::open_writer(config.path()).expect("open audit writer");
+        assert_eq!(
+            generation::audit_reservation_for_test(
+                &mut writer,
+                &reservation,
+                schema::GenerationFailureReason::WriteFailed,
+                schema::GenerationFailureStage::StoreRunInput,
+            ),
+            generation::AuditOutcome::Recorded
+        );
+        drop(writer);
+
+        let database = Connection::open(config.path()).expect("open store");
+        let inserted = database
+            .execute(
+                "INSERT INTO generation_failure_events (
+                     generation_id, ordinal, event_code, reason_code, stage_code
+                 )
+                 SELECT generation_id, 1, event_code, reason_code, stage_code
+                 FROM generation_failure_events
+                 WHERE generation_id = ?1 AND ordinal = 0",
+                [generation_id],
+            )
+            .expect("seed failure-event ordinal pair");
+        assert_eq!(inserted, 1);
+        assert!(generation::generation_ordinals_are_valid_for_test(
+            &database,
+            generation_id
+        ));
+
+        tamper_ordinals(
+            &database,
+            generation_id,
+            "generation_failure_events",
+            "ordinal",
+            tamper,
+        );
+
+        assert!(
+            !generation::generation_ordinals_are_valid_for_test(&database, generation_id),
+            "{}",
+            tamper.label()
+        );
+    }
+}
+
 #[test]
 fn provider_failure_status_round_trips_through_the_semantic_store() {
     let temp = tempfile::tempdir().expect("temporary store root");

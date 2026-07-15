@@ -1110,7 +1110,10 @@ fn audit_failed_attempt(
             stage.label(),
         ],
     );
-    if !matches!(inserted, Ok(1)) || connection::validate_schema(&transaction).is_err() {
+    if !matches!(inserted, Ok(1))
+        || validate_generation_ordinals(&transaction, reservation.handle).is_err()
+        || connection::validate_schema(&transaction).is_err()
+    {
         return AuditOutcome::NotTrusted;
     }
     if transaction.commit().is_ok() {
@@ -3081,6 +3084,108 @@ struct StorageColumn {
     nullable: bool,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum OrdinalPartition {
+    Global,
+    Integer(&'static str),
+    TextPair(&'static str, &'static str),
+}
+
+#[derive(Clone, Copy, Debug)]
+struct OrdinalFamily {
+    table: &'static str,
+    ordinal: &'static str,
+    partition: OrdinalPartition,
+}
+
+const ORDINAL_FAMILIES: &[OrdinalFamily] = &[
+    OrdinalFamily {
+        table: "input_component_details",
+        ordinal: "ordinal",
+        partition: OrdinalPartition::TextPair("component_group", "component_name"),
+    },
+    OrdinalFamily {
+        table: "provider_dependencies",
+        ordinal: "ordinal",
+        partition: OrdinalPartition::Integer("provider_generation_id"),
+    },
+    OrdinalFamily {
+        table: "layers",
+        ordinal: "semantic_ordinal",
+        partition: OrdinalPartition::Global,
+    },
+    OrdinalFamily {
+        table: "layer_input_digests",
+        ordinal: "ordinal",
+        partition: OrdinalPartition::Integer("layer_id"),
+    },
+    OrdinalFamily {
+        table: "layer_dependency_digests",
+        ordinal: "ordinal",
+        partition: OrdinalPartition::Integer("layer_id"),
+    },
+    OrdinalFamily {
+        table: "layer_extension_digests",
+        ordinal: "ordinal",
+        partition: OrdinalPartition::Integer("layer_id"),
+    },
+    OrdinalFamily {
+        table: "layer_warnings",
+        ordinal: "ordinal",
+        partition: OrdinalPartition::Integer("layer_id"),
+    },
+    OrdinalFamily {
+        table: "summaries",
+        ordinal: "semantic_ordinal",
+        partition: OrdinalPartition::Global,
+    },
+    OrdinalFamily {
+        table: "summary_dependency_digests",
+        ordinal: "ordinal",
+        partition: OrdinalPartition::Integer("summary_id"),
+    },
+    OrdinalFamily {
+        table: "queries",
+        ordinal: "semantic_ordinal",
+        partition: OrdinalPartition::Global,
+    },
+    OrdinalFamily {
+        table: "query_inputs",
+        ordinal: "ordinal",
+        partition: OrdinalPartition::Integer("query_id"),
+    },
+    OrdinalFamily {
+        table: "query_layer_digests",
+        ordinal: "ordinal",
+        partition: OrdinalPartition::Integer("query_id"),
+    },
+    OrdinalFamily {
+        table: "fact_metadata",
+        ordinal: "ordinal",
+        partition: OrdinalPartition::Global,
+    },
+    OrdinalFamily {
+        table: "diagnostic_nodes",
+        ordinal: "semantic_ordinal",
+        partition: OrdinalPartition::Global,
+    },
+    OrdinalFamily {
+        table: "diagnostic_requested_view_digests",
+        ordinal: "ordinal",
+        partition: OrdinalPartition::Integer("diagnostic_id"),
+    },
+    OrdinalFamily {
+        table: "dependency_edges",
+        ordinal: "ordinal",
+        partition: OrdinalPartition::Global,
+    },
+    OrdinalFamily {
+        table: "generation_failure_events",
+        ordinal: "ordinal",
+        partition: OrdinalPartition::Global,
+    },
+];
+
 #[derive(Debug, Default)]
 struct GenerationStorageBudget {
     rows: u64,
@@ -3135,7 +3240,87 @@ fn preflight_generation_storage(
         };
         preflight_storage_table(connection, table, selector, generation_id, &mut budget)?;
     }
+    validate_generation_ordinals(connection, generation_id)?;
     preflight_fact_rows(connection, generation_id)
+}
+
+fn validate_generation_ordinals(
+    connection: &Connection,
+    generation_id: i64,
+) -> Result<(), ProjectionError> {
+    for family in ORDINAL_FAMILIES {
+        let table = quote_schema_identifier(family.table)?;
+        let ordinal = quote_schema_identifier(family.ordinal)?;
+        match family.partition {
+            OrdinalPartition::Global => {
+                let sql = format!(
+                    "SELECT {ordinal} FROM {table} WHERE generation_id = ?1 ORDER BY {ordinal}"
+                );
+                let mut statement = connection.prepare(&sql)?;
+                let mut rows = statement.query([generation_id])?;
+                let mut expected = 0_i64;
+                while let Some(row) = rows.next()? {
+                    validate_next_ordinal(row.get(0)?, &mut expected)?;
+                }
+            }
+            OrdinalPartition::Integer(parent) => {
+                let parent = quote_schema_identifier(parent)?;
+                let sql = format!(
+                    "SELECT {parent}, {ordinal} FROM {table}
+                     WHERE generation_id = ?1 ORDER BY {parent}, {ordinal}"
+                );
+                let mut statement = connection.prepare(&sql)?;
+                let mut rows = statement.query([generation_id])?;
+                let mut expected = BTreeMap::<i64, i64>::new();
+                while let Some(row) = rows.next()? {
+                    let parent = row.get::<_, i64>(0)?;
+                    validate_next_ordinal(row.get(1)?, expected.entry(parent).or_default())?;
+                }
+            }
+            OrdinalPartition::TextPair(first, second) => {
+                let first = quote_schema_identifier(first)?;
+                let second = quote_schema_identifier(second)?;
+                let sql = format!(
+                    "SELECT {first}, {second}, {ordinal} FROM {table}
+                     WHERE generation_id = ?1 ORDER BY {first}, {second}, {ordinal}"
+                );
+                let mut statement = connection.prepare(&sql)?;
+                let mut rows = statement.query([generation_id])?;
+                let mut expected = BTreeMap::<(String, String), i64>::new();
+                while let Some(row) = rows.next()? {
+                    let parent = (row.get::<_, String>(0)?, row.get::<_, String>(1)?);
+                    validate_next_ordinal(row.get(2)?, expected.entry(parent).or_default())?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_next_ordinal(actual: i64, expected: &mut i64) -> Result<(), ProjectionError> {
+    if actual != *expected {
+        return Err(ProjectionError::InvalidMetadata);
+    }
+    *expected = expected
+        .checked_add(1)
+        .ok_or(ProjectionError::InvalidMetadata)?;
+    Ok(())
+}
+
+#[cfg(test)]
+pub(super) fn generation_ordinals_are_valid_for_test(
+    connection: &Connection,
+    generation_id: i64,
+) -> bool {
+    validate_generation_ordinals(connection, generation_id).is_ok()
+}
+
+#[cfg(test)]
+pub(super) fn ordinal_family_columns_for_test() -> Vec<(&'static str, &'static str)> {
+    ORDINAL_FAMILIES
+        .iter()
+        .map(|family| (family.table, family.ordinal))
+        .collect()
 }
 
 fn preflight_storage_table(
