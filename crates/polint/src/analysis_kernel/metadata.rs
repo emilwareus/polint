@@ -605,7 +605,9 @@ impl StableFactMetaRow {
 }
 
 const COMPRESSED_STABLE_KEY_PREFIX: &[u8] = b"polint-lz4-v1\0";
-const MAX_STABLE_KEY_BYTES: usize = 64 * 1024 * 1024;
+const MAX_STABLE_KEY_ENCODED_BYTES: usize = 256 * 1024;
+const MAX_STABLE_KEY_DECODED_BYTES: usize = 256 * 1024;
+pub(crate) const MAX_STABLE_KEY_TOTAL_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Clone)]
 pub(crate) enum StableFactKey {
@@ -648,9 +650,25 @@ impl StableFactKey {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn from_storage(encoded: Vec<u8>) -> Result<Self, ()> {
+        let mut remaining = MAX_STABLE_KEY_TOTAL_BYTES;
+        Self::from_storage_with_budget(encoded, &mut remaining)
+    }
+
+    pub(crate) fn from_storage_with_budget(
+        encoded: Vec<u8>,
+        remaining: &mut usize,
+    ) -> Result<Self, ()> {
+        if encoded.len() > MAX_STABLE_KEY_ENCODED_BYTES || encoded.len() > *remaining {
+            return Err(());
+        }
         let Some(compressed) = encoded.strip_prefix(COMPRESSED_STABLE_KEY_PREFIX) else {
             let stable_key = String::from_utf8(encoded).map_err(|_| ())?;
+            if stable_key.len() > MAX_STABLE_KEY_DECODED_BYTES {
+                return Err(());
+            }
+            *remaining = remaining.checked_sub(stable_key.len()).ok_or(())?;
             return Ok(Self::Plain(stable_key));
         };
         let declared_size = compressed
@@ -659,15 +677,20 @@ impl StableFactKey {
             .map(u32::from_le_bytes)
             .and_then(|size| usize::try_from(size).ok())
             .ok_or(())?;
-        if declared_size == 0 || declared_size > MAX_STABLE_KEY_BYTES {
+        if declared_size == 0 || declared_size > MAX_STABLE_KEY_DECODED_BYTES {
+            return Err(());
+        }
+        let resident_bytes = encoded.len().checked_add(declared_size).ok_or(())?;
+        if resident_bytes > *remaining {
             return Err(());
         }
         let decoded = lz4_flex::decompress_size_prepended(compressed).map_err(|_| ())?;
-        let stable_key = std::str::from_utf8(&decoded).map_err(|_| ())?;
-        Ok(Self::Compressed {
-            encoded,
-            json_bytes: serialized_string_bytes(stable_key),
-        })
+        if decoded.len() != declared_size {
+            return Err(());
+        }
+        let stable_key = String::from_utf8(decoded).map_err(|_| ())?;
+        *remaining = remaining.checked_sub(resident_bytes).ok_or(())?;
+        Ok(Self::Plain(stable_key))
     }
 
     pub(crate) fn decoded(&self) -> Cow<'_, str> {
@@ -757,13 +780,7 @@ impl fmt::Display for StableFactKey {
 
 impl PartialEq for StableFactKey {
     fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Plain(left), Self::Plain(right)) => left == right,
-            (Self::Compressed { encoded: left, .. }, Self::Compressed { encoded: right, .. }) => {
-                left == right
-            }
-            _ => self.decoded() == other.decoded(),
-        }
+        self.decoded() == other.decoded()
     }
 }
 
@@ -1636,6 +1653,70 @@ mod tests {
                 stable_key.len()
             );
         }
+    }
+
+    #[test]
+    fn stable_fact_key_equality_ordering_and_hash_use_one_semantic_value() {
+        let stable_key = "alternate/encoding/".repeat(64);
+        let canonical = StableFactKey::compressed(&stable_key);
+        let mut alternate =
+            Vec::with_capacity(COMPRESSED_STABLE_KEY_PREFIX.len() + 4 + stable_key.len() + 8);
+        alternate.extend_from_slice(COMPRESSED_STABLE_KEY_PREFIX);
+        alternate.extend_from_slice(
+            &u32::try_from(stable_key.len())
+                .expect("test key fits the codec")
+                .to_le_bytes(),
+        );
+        alternate.push(0xf0);
+        let mut remaining_literal_bytes = stable_key.len() - 15;
+        while remaining_literal_bytes >= 255 {
+            alternate.push(255);
+            remaining_literal_bytes -= 255;
+        }
+        alternate.push(u8::try_from(remaining_literal_bytes).expect("literal extension byte fits"));
+        alternate.extend_from_slice(stable_key.as_bytes());
+        let decoded = StableFactKey::from_storage(alternate).expect("alternate LZ4 block decodes");
+
+        let mut canonical_hash = std::collections::hash_map::DefaultHasher::new();
+        canonical.hash(&mut canonical_hash);
+        let mut decoded_hash = std::collections::hash_map::DefaultHasher::new();
+        decoded.hash(&mut decoded_hash);
+
+        assert_eq!(canonical, decoded);
+        assert_eq!(canonical.cmp(&decoded), std::cmp::Ordering::Equal);
+        assert_eq!(canonical_hash.finish(), decoded_hash.finish());
+    }
+
+    #[test]
+    fn stable_fact_key_storage_limits_reject_oversized_and_empty_payloads() {
+        assert!(StableFactKey::from_storage(vec![b'x'; MAX_STABLE_KEY_DECODED_BYTES + 1]).is_err());
+
+        let mut oversized_encoded = Vec::from(COMPRESSED_STABLE_KEY_PREFIX);
+        oversized_encoded.resize(MAX_STABLE_KEY_ENCODED_BYTES + 1, 0);
+        assert!(StableFactKey::from_storage(oversized_encoded).is_err());
+
+        let mut empty_output = Vec::from(COMPRESSED_STABLE_KEY_PREFIX);
+        empty_output.extend_from_slice(&0_u32.to_le_bytes());
+        assert!(StableFactKey::from_storage(empty_output).is_err());
+    }
+
+    #[test]
+    fn stable_fact_key_storage_budget_bounds_many_compressed_rows() {
+        let stable_key = "budgeted/repeated-segment/".repeat(8_000);
+        assert!(stable_key.len() < MAX_STABLE_KEY_DECODED_BYTES);
+        let encoded = StableFactKey::compressed(&stable_key)
+            .storage_bytes()
+            .into_owned();
+        let resident_bytes = encoded.len() + stable_key.len();
+        let mut remaining = resident_bytes * 3;
+
+        for _ in 0..3 {
+            StableFactKey::from_storage_with_budget(encoded.clone(), &mut remaining)
+                .expect("row stays within the aggregate budget");
+        }
+
+        assert_eq!(remaining, 0);
+        assert!(StableFactKey::from_storage_with_budget(encoded, &mut remaining).is_err());
     }
 
     #[test]

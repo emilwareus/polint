@@ -20,7 +20,9 @@ use crate::analysis_kernel::incremental::{
     DiagnosticKey, Digest, DigestKind, GenerationIdentity, InputDependencyKey, LayerKey,
     QueryDependencyInputs, QueryKey, RunIdentity, RunManifestKey, SummaryKey, WorkspaceIdentity,
 };
-use crate::analysis_kernel::metadata::{StableFactKey, StableFactMetaRow};
+use crate::analysis_kernel::metadata::{
+    MAX_STABLE_KEY_TOTAL_BYTES, StableFactKey, StableFactMetaRow,
+};
 
 use super::commit_plan::{
     StoreAnalysisSettingRow, StoreCapabilityRequesterRow, StoreCapabilityRow, StoreCommitPlan,
@@ -4094,6 +4096,7 @@ fn read_facts(
     connection: &Connection,
     generation_id: i64,
 ) -> Result<Vec<StoreFactRow>, ProjectionError> {
+    let mut remaining_stable_key_bytes = MAX_STABLE_KEY_TOTAL_BYTES;
     let mut rows = query_rows(
         connection,
         "SELECT ordinal, family, stable_key, producer_id, producer_layer_key,
@@ -4111,8 +4114,11 @@ fn read_facts(
                 ordinal,
                 StableFactMetaRow {
                     family,
-                    stable_key: StableFactKey::from_storage(row.get(2)?)
-                        .map_err(|_| ProjectionError::Codec)?,
+                    stable_key: StableFactKey::from_storage_with_budget(
+                        row.get(2)?,
+                        &mut remaining_stable_key_bytes,
+                    )
+                    .map_err(|_| ProjectionError::Codec)?,
                     producer_id: std::borrow::Cow::Owned(row.get(3)?),
                     layer_id: std::borrow::Cow::Owned(row.get(4)?),
                     precision,
@@ -4705,6 +4711,12 @@ mod stable_key_codec_tests {
         let size_offset = b"polint-lz4-v1\0".len();
         oversized[size_offset..size_offset + 4].copy_from_slice(&u32::MAX.to_le_bytes());
         assert!(StableFactKey::from_storage(oversized).is_err());
+
+        let mut forged_size = StableFactKey::compressed("forged-size")
+            .storage_bytes()
+            .into_owned();
+        forged_size[size_offset..size_offset + 4].copy_from_slice(&1_u32.to_le_bytes());
+        assert!(StableFactKey::from_storage(forged_size).is_err());
 
         assert!(StableFactKey::from_storage(vec![0xff, 0xfe]).is_err());
     }

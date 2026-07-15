@@ -2182,6 +2182,90 @@ mod active_complete_reader {
             assert_eq!(outcome.statistics, None, "{label}");
         }
     }
+
+    #[test]
+    fn identical_rerun_rejects_duplicate_fact_identity_with_alternate_lz4_bytes() {
+        use crate::analysis_kernel::metadata::StableFactKey;
+
+        let temp = tempfile::tempdir().expect("temp directory");
+        let validated =
+            generation_validated_fixture(&temp.path().join("repo"), "duplicate-alternate-fact-key");
+        let config = generation_store_config(temp.path());
+        assert_eq!(
+            SemanticStore::commit_validated_run(&config, validated.clone()).status,
+            StoreStatus::Ready
+        );
+        let database = Connection::open(config.path()).expect("open store");
+        let active: i64 = database
+            .query_row(
+                "SELECT active_generation_id FROM store_manifest WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read active generation");
+        let family: String = database
+            .query_row(
+                "SELECT family FROM fact_metadata WHERE generation_id = ?1
+                 GROUP BY family HAVING count(*) > 1 ORDER BY family LIMIT 1",
+                [active],
+                |row| row.get(0),
+            )
+            .expect("fixture has a repeated fact family");
+        let mut statement = database
+            .prepare(
+                "SELECT ordinal, stable_key FROM fact_metadata
+                 WHERE generation_id = ?1 AND family = ?2 ORDER BY ordinal LIMIT 2",
+            )
+            .expect("prepare fact selection");
+        let rows = statement
+            .query_map(rusqlite::params![active, family], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })
+            .expect("query facts")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("decode facts");
+        drop(statement);
+        let stable_key = StableFactKey::from_storage(rows[0].1.clone())
+            .expect("stored key decodes")
+            .decoded()
+            .into_owned();
+        let mut alternate = Vec::with_capacity(32 + stable_key.len());
+        alternate.extend_from_slice(b"polint-lz4-v1\0");
+        alternate.extend_from_slice(
+            &u32::try_from(stable_key.len())
+                .expect("fixture key fits codec")
+                .to_le_bytes(),
+        );
+        if stable_key.len() < 15 {
+            alternate.push(u8::try_from(stable_key.len()).expect("short literal length") << 4);
+        } else {
+            alternate.push(0xf0);
+            let mut remaining = stable_key.len() - 15;
+            while remaining >= 255 {
+                alternate.push(255);
+                remaining -= 255;
+            }
+            alternate.push(u8::try_from(remaining).expect("literal extension"));
+        }
+        alternate.extend_from_slice(stable_key.as_bytes());
+        let changed = database
+            .execute(
+                "UPDATE fact_metadata SET stable_key = ?1
+                 WHERE generation_id = ?2 AND ordinal = ?3",
+                rusqlite::params![alternate, active, rows[1].0],
+            )
+            .expect("replace fact key with alternate encoding");
+        assert_eq!(changed, 1);
+        drop(database);
+
+        let outcome = SemanticStore::commit_validated_run(&config, validated);
+
+        assert_eq!(
+            outcome.status,
+            StoreStatus::RebuildNeeded(StoreRebuildReason::InvalidMetadata)
+        );
+        assert_eq!(outcome.statistics, None);
+    }
 }
 
 mod recovery {
