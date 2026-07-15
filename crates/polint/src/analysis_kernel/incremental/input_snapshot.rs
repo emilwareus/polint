@@ -171,6 +171,15 @@ impl InputSnapshot {
         &source.digest
     }
 
+    pub(crate) fn provider_manifest_digest(&self, provider_id: &str) -> &Digest {
+        &self
+            .provider_schemas
+            .iter()
+            .find(|provider| provider.provider_id == provider_id)
+            .unwrap_or_else(|| panic!("input snapshot is missing provider `{provider_id}`"))
+            .provider_manifest_digest
+    }
+
     pub(crate) fn analysis_requirements_digest_for(&self, capabilities: &[&str]) -> Digest {
         let capabilities = capabilities.iter().copied().collect::<BTreeSet<_>>();
         let mut inputs = self
@@ -810,7 +819,7 @@ impl InputComponent {
 }
 
 impl ProviderSchemaSnapshot {
-    fn from_manifest(manifest: &ProviderManifest) -> Self {
+    pub(crate) fn from_manifest(manifest: &ProviderManifest) -> Self {
         let schema_versions = sorted_schema_labels(manifest.schema_versions);
         let language_scope = manifest.language_scope.label().to_string();
         let cache_policy = manifest.cache_policy.label().into_owned();

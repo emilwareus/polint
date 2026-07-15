@@ -500,6 +500,9 @@ mod metadata_invalidation_matrix {
             InputDependencyKind::ProviderSchema => {
                 InputDependencyKey::provider_schema(stable_key, digest, status)
             }
+            InputDependencyKind::ProviderParameters => {
+                InputDependencyKey::provider_parameters(stable_key, digest, status)
+            }
             InputDependencyKind::RequestedCapability => {
                 InputDependencyKey::requested_capability(stable_key, digest, status)
             }

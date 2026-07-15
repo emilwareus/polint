@@ -202,14 +202,13 @@ impl AnalysisKernel {
             incremental::CacheStats::default(),
         ));
 
-        let go_analysis_settings_hash = input_snapshot
-            .analysis_settings_digest(crate::cache::keys::AnalysisSettingsScope::GoSyntax)
-            .value
-            .clone();
+        let go_analysis_settings_digest = input_snapshot
+            .analysis_settings_digest(crate::cache::keys::AnalysisSettingsScope::GoSyntax);
         let go_output = crate::go::analyze_with_plan_options_and_cache_stats(
             &mut db,
             input.cache,
-            &go_analysis_settings_hash,
+            go_analysis_settings_digest,
+            input_snapshot.provider_manifest_digest("polint.go.syntax"),
             input.plan,
             input.parallel,
         );
@@ -225,14 +224,13 @@ impl AnalysisKernel {
             go_layers,
         ));
 
-        let ts_analysis_settings_hash = input_snapshot
-            .analysis_settings_digest(crate::cache::keys::AnalysisSettingsScope::TsSyntax)
-            .value
-            .clone();
+        let ts_analysis_settings_digest = input_snapshot
+            .analysis_settings_digest(crate::cache::keys::AnalysisSettingsScope::TsSyntax);
         let ts_output = crate::ts::analyze_with_plan_options_and_cache_stats(
             &mut db,
             input.cache,
-            &ts_analysis_settings_hash,
+            ts_analysis_settings_digest,
+            input_snapshot.provider_manifest_digest("polint.ts.syntax"),
             input.plan,
             input.parallel,
         );

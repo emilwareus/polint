@@ -1,7 +1,7 @@
 use crate::analysis_kernel::incremental::{
-    CacheStats, Digest, DigestKind, LayerCacheManifest, LayerCacheReadStatus, LayerCacheStore,
-    LayerCacheWriteStatus, LayerKey, LayerKind, LayerRunMetadata, PrecisionTier,
-    ProviderValidationStatus,
+    CacheStats, DependencyEdge, Digest, DigestKind, LayerCacheManifest, LayerCacheReadStatus,
+    LayerCacheStore, LayerCacheWriteStatus, LayerKey, LayerKind, LayerRunMetadata, PrecisionTier,
+    ProviderSchemaSnapshot, ProviderValidationStatus, syntax_layer_dependency_edges,
 };
 use crate::analysis_plan::AnalysisPlan;
 use crate::cache::CacheReadStatus;
@@ -64,8 +64,17 @@ pub(crate) fn analyze_with_plan_options(
     plan: &AnalysisPlan,
     parallel: bool,
 ) -> Vec<Diagnostic> {
-    analyze_with_plan_options_and_cache_stats(db, cache, analysis_settings_hash, plan, parallel)
-        .diagnostics
+    let analysis_settings_digest = legacy_analysis_settings_digest(analysis_settings_hash);
+    let provider_manifest_digest = syntax_provider_manifest_digest();
+    analyze_with_plan_options_and_cache_stats(
+        db,
+        cache,
+        &analysis_settings_digest,
+        &provider_manifest_digest,
+        plan,
+        parallel,
+    )
+    .diagnostics
 }
 
 #[allow(dead_code)]
@@ -79,7 +88,8 @@ pub(crate) struct ProviderAnalysisResult {
 pub(crate) fn analyze_with_plan_options_and_cache_stats(
     db: &mut AnalysisDb,
     cache: &crate::cache::Cache,
-    analysis_settings_hash: &str,
+    analysis_settings_digest: &Digest,
+    provider_manifest_digest: &Digest,
     _plan: &AnalysisPlan,
     parallel: bool,
 ) -> ProviderAnalysisResult {
@@ -100,11 +110,24 @@ pub(crate) fn analyze_with_plan_options_and_cache_stats(
     }
 
     let layer_store = cache.layer_cache_store();
-    let layer_key = go_syntax_layer_key(&files, analysis_settings_hash);
+    let layer_key = go_syntax_layer_key(&files, analysis_settings_digest);
+    let dependencies = syntax_layer_dependency_edges(
+        &layer_key,
+        files
+            .iter()
+            .map(|file| (file.relative_path.clone(), source_text_digest(file))),
+        provider_manifest_digest.clone(),
+    );
     let read = layer_store.read_json_validated::<SyntaxLayerPayload, _>(
         &layer_key,
         |payload, manifest| {
-            validate_syntax_layer_payload(payload, manifest, GO_SYNTAX_LAYER_SCHEMA, &files)
+            validate_syntax_layer_payload(
+                payload,
+                manifest,
+                GO_SYNTAX_LAYER_SCHEMA,
+                &files,
+                &dependencies,
+            )
         },
     );
 
@@ -138,10 +161,14 @@ pub(crate) fn analyze_with_plan_options_and_cache_stats(
                 LayerCacheReadStatus::Hit => {}
             }
             cache_stats.record_recompute();
-            let payload =
-                parse_go_syntax_layer_payload(&files, cache, analysis_settings_hash, parallel);
+            let payload = parse_go_syntax_layer_payload(
+                &files,
+                cache,
+                &analysis_settings_digest.value,
+                parallel,
+            );
             let mut write_diagnostics = Vec::new();
-            let manifest = match go_syntax_layer_manifest(layer_key, &payload) {
+            let manifest = match go_syntax_layer_manifest(layer_key, dependencies, &payload) {
                 Ok(manifest) => manifest,
                 Err(error) => {
                     write_diagnostics.push(cache_write_diagnostic("go syntax layer", error));
@@ -198,18 +225,14 @@ struct SyntaxLayerFile {
     facts: Option<crate::core::CachedFileFacts>,
 }
 
-fn go_syntax_layer_key(files: &[&SourceFile], analysis_settings_hash: &str) -> LayerKey {
+fn go_syntax_layer_key(files: &[&SourceFile], analysis_settings_digest: &Digest) -> LayerKey {
     LayerKey::syntax_layer_key(
         LayerKind::GoSyntax,
         GO_PROVIDER_ID,
         env!("CARGO_PKG_VERSION"),
         GO_CACHE_SCHEMA,
         files.iter().map(|file| source_text_digest(file)).collect(),
-        Digest::from_parts(
-            DigestKind::AnalysisSettings,
-            "provider_analysis_settings",
-            &[GO_PROVIDER_ID, analysis_settings_hash],
-        ),
+        analysis_settings_digest.clone(),
         Digest::absent(DigestKind::GoLifecycle, "go_syntax_lifecycle_absent"),
         Digest::from_parts(
             DigestKind::ToolInvocation,
@@ -247,6 +270,7 @@ fn validate_syntax_layer_payload(
     manifest: &LayerCacheManifest,
     schema: &str,
     files: &[&SourceFile],
+    expected_dependencies: &[DependencyEdge],
 ) -> bool {
     if payload.schema != schema || payload.files.len() != files.len() {
         return false;
@@ -261,7 +285,9 @@ fn validate_syntax_layer_payload(
         .iter()
         .map(|file| (file.relative_path.as_str(), file.content_hash.as_str()))
         .collect::<Vec<_>>();
-    actual == expected && manifest.output_digest == go_syntax_output_digest_for_payload(payload)
+    actual == expected
+        && manifest.output_digest == go_syntax_output_digest_for_payload(payload)
+        && manifest.has_exact_dependencies(expected_dependencies)
 }
 
 fn parse_go_syntax_layer_payload(
@@ -335,6 +361,7 @@ fn write_syntax_layer_payload(
 
 fn go_syntax_layer_manifest(
     layer_key: LayerKey,
+    dependencies: Vec<DependencyEdge>,
     payload: &SyntaxLayerPayload,
 ) -> Result<LayerCacheManifest> {
     let payload_digest = LayerCacheStore::payload_digest_for_json(payload)?;
@@ -343,11 +370,27 @@ fn go_syntax_layer_manifest(
         layer_key,
         output_digest,
         payload_digest,
-        Vec::new(),
+        dependencies,
         PrecisionTier::Syntax,
         ProviderValidationStatus::NativeTrusted,
         Vec::new(),
     ))
+}
+
+pub(super) fn legacy_analysis_settings_digest(analysis_settings_hash: &str) -> Digest {
+    Digest::from_parts(
+        DigestKind::AnalysisSettings,
+        "provider_analysis_settings",
+        &[GO_PROVIDER_ID, analysis_settings_hash],
+    )
+}
+
+pub(super) fn syntax_provider_manifest_digest() -> Digest {
+    let manifest = crate::analysis_kernel::AnalysisKernel::provider_manifests()
+        .iter()
+        .find(|manifest| manifest.id == GO_PROVIDER_ID)
+        .expect("Go syntax provider manifest");
+    ProviderSchemaSnapshot::from_manifest(manifest).provider_manifest_digest
 }
 
 fn go_syntax_output_digest_for_payload(payload: &SyntaxLayerPayload) -> Digest {
@@ -1699,10 +1742,13 @@ mod layer_run_metadata_path_tests {
     }
 
     fn run(cache: &crate::cache::Cache) -> ProviderAnalysisResult {
+        let settings = legacy_analysis_settings_digest("stable-settings");
+        let provider_manifest = syntax_provider_manifest_digest();
         analyze_with_plan_options_and_cache_stats(
             &mut database(),
             cache,
-            "stable-settings",
+            &settings,
+            &provider_manifest,
             &AnalysisPlan::empty(),
             false,
         )

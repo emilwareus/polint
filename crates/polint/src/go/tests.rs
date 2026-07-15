@@ -23,6 +23,28 @@ fn db_with_go_file(relative_path: &str, source: &str) -> AnalysisDb {
     db
 }
 
+fn analyze_with_syntax_settings(
+    db: &mut AnalysisDb,
+    cache: &crate::cache::Cache,
+    settings: &crate::analysis_kernel::incremental::Digest,
+    plan: &AnalysisPlan,
+    parallel: bool,
+) -> super::adapter::ProviderAnalysisResult {
+    let provider_manifest = super::adapter::syntax_provider_manifest_digest();
+    super::adapter::analyze_with_plan_options_and_cache_stats(
+        db,
+        cache,
+        settings,
+        &provider_manifest,
+        plan,
+        parallel,
+    )
+}
+
+fn test_syntax_settings(value: &str) -> crate::analysis_kernel::incremental::Digest {
+    super::adapter::legacy_analysis_settings_digest(value)
+}
+
 fn unique_cache_root() -> PathBuf {
     let sequence = CACHE_ROOT_COUNTER.fetch_add(1, Ordering::Relaxed);
     let nanos = SystemTime::now()
@@ -134,6 +156,42 @@ fn corrupt_first_manifest_output_digest(cache_root: &Path) {
     .expect("write manifest");
 }
 
+#[derive(Clone, Copy)]
+enum DependencyTamper {
+    Missing,
+    Replaced,
+    Unrelated,
+}
+
+fn tamper_first_manifest_dependency(cache_root: &Path, tamper: DependencyTamper) {
+    let manifest_path = first_layer_file(cache_root, "manifests");
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(&manifest_path).expect("read manifest"))
+            .expect("manifest json");
+    let dependencies = manifest["dependencies"]
+        .as_array_mut()
+        .expect("manifest dependency rows");
+    assert!(dependencies.len() >= 2, "syntax manifest dependencies");
+    match tamper {
+        DependencyTamper::Missing => {
+            dependencies.pop();
+        }
+        DependencyTamper::Replaced => {
+            dependencies[0]["to"] = dependencies[1]["to"].clone();
+        }
+        DependencyTamper::Unrelated => {
+            let mut unrelated = dependencies[0].clone();
+            unrelated["to"]["dependency_input"]["stable_key"] = serde_json::json!("unrelated.go");
+            dependencies.push(unrelated);
+        }
+    }
+    fs::write(
+        manifest_path,
+        serde_json::to_vec(&manifest).expect("serialize manifest"),
+    )
+    .expect("write manifest");
+}
+
 #[test]
 fn cache_writes_and_restores_go_facts() {
     let cache_root = unique_cache_root();
@@ -195,8 +253,8 @@ func Authorize() {}
 "#;
     let mut first = db_with_go_file("payment.go", source);
 
-    let first_result =
-        analyze_with_plan_options_and_cache_stats(&mut first, &cache, "config", &plan, false);
+    let settings = test_syntax_settings("config");
+    let first_result = analyze_with_syntax_settings(&mut first, &cache, &settings, &plan, false);
 
     assert!(first_result.diagnostics.is_empty());
     assert_eq!(first_result.cache_stats.misses, 1);
@@ -207,14 +265,40 @@ func Authorize() {}
     assert!(cache_root.join("layers").exists());
 
     let mut second = db_with_go_file("payment.go", source);
-    let second_result =
-        analyze_with_plan_options_and_cache_stats(&mut second, &cache, "config", &plan, false);
+    let second_result = analyze_with_syntax_settings(&mut second, &cache, &settings, &plan, false);
 
     assert!(second_result.diagnostics.is_empty());
     assert_eq!(second_result.cache_stats.hits, 1);
     assert_eq!(second_result.cache_stats.verified_reuse, 1);
     assert_eq!(second_result.cache_stats.recomputes, 0);
     assert_eq!(second_result.cache_stats.writes, 0);
+
+    fs::remove_dir_all(cache_root).ok();
+}
+
+#[test]
+fn go_syntax_layer_cache_rejects_inexact_dependency_manifests() {
+    let cache_root = unique_cache_root();
+    let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
+    let plan = AnalysisPlan::empty();
+    let settings = test_syntax_settings("config");
+    let source = "package main\nfunc main() {}\n";
+    let mut cold_db = db_with_go_file("main.go", source);
+    let cold = analyze_with_syntax_settings(&mut cold_db, &cache, &settings, &plan, false);
+    assert_eq!(cold.cache_stats.writes, 1);
+
+    for tamper in [
+        DependencyTamper::Missing,
+        DependencyTamper::Replaced,
+        DependencyTamper::Unrelated,
+    ] {
+        tamper_first_manifest_dependency(&cache_root, tamper);
+        let mut db = db_with_go_file("main.go", source);
+        let result = analyze_with_syntax_settings(&mut db, &cache, &settings, &plan, false);
+        assert_eq!(result.cache_stats.invalid_evicted_reads, 1);
+        assert_eq!(result.cache_stats.recomputes, 1);
+        assert_eq!(result.cache_stats.writes, 1);
+    }
 
     fs::remove_dir_all(cache_root).ok();
 }
@@ -230,13 +314,7 @@ fn go_syntax_caches_use_only_declared_analysis_settings() {
     let baseline_settings = analysis_settings_hash(&baseline, AnalysisSettingsScope::GoSyntax);
     let mut first = db_with_go_file("main.go", source);
 
-    let cold = analyze_with_plan_options_and_cache_stats(
-        &mut first,
-        &cache,
-        &baseline_settings.value,
-        &plan,
-        false,
-    );
+    let cold = analyze_with_syntax_settings(&mut first, &cache, &baseline_settings, &plan, false);
     assert_eq!(cold.cache_stats.misses, 1);
     assert_eq!(cold.cache_stats.recomputes, 1);
     let first_key = super::adapter::go_syntax_file_cache_key(
@@ -259,13 +337,7 @@ fn go_syntax_caches_use_only_declared_analysis_settings() {
         assert_eq!(baseline_settings, mutated_settings, "{field}");
 
         let mut db = db_with_go_file("main.go", source);
-        let warm = analyze_with_plan_options_and_cache_stats(
-            &mut db,
-            &cache,
-            &mutated_settings.value,
-            &plan,
-            false,
-        );
+        let warm = analyze_with_syntax_settings(&mut db, &cache, &mutated_settings, &plan, false);
         assert_eq!(warm.cache_stats.hits, 1, "{field}");
         assert_eq!(warm.cache_stats.recomputes, 0, "{field}");
 
@@ -289,13 +361,8 @@ fn go_syntax_caches_use_only_declared_analysis_settings() {
     assert_ne!(baseline_config_hash, config_hash(&unrelated));
     assert_eq!(baseline_settings, unrelated_settings);
     let mut unrelated_db = db_with_go_file("main.go", source);
-    let unrelated_hit = analyze_with_plan_options_and_cache_stats(
-        &mut unrelated_db,
-        &cache,
-        &unrelated_settings.value,
-        &plan,
-        false,
-    );
+    let unrelated_hit =
+        analyze_with_syntax_settings(&mut unrelated_db, &cache, &unrelated_settings, &plan, false);
     assert_eq!(unrelated_hit.cache_stats.hits, 1);
     assert_eq!(unrelated_hit.cache_stats.recomputes, 0);
 
@@ -307,13 +374,8 @@ fn go_syntax_caches_use_only_declared_analysis_settings() {
     let changed_settings = analysis_settings_hash(&parser_changed, AnalysisSettingsScope::GoSyntax);
     assert_ne!(baseline_settings, changed_settings);
     let mut changed_db = db_with_go_file("main.go", source);
-    let invalidated = analyze_with_plan_options_and_cache_stats(
-        &mut changed_db,
-        &cache,
-        &changed_settings.value,
-        &plan,
-        false,
-    );
+    let invalidated =
+        analyze_with_syntax_settings(&mut changed_db, &cache, &changed_settings, &plan, false);
     assert_eq!(invalidated.cache_stats.misses, 1);
     assert_eq!(invalidated.cache_stats.recomputes, 1);
 
@@ -334,16 +396,15 @@ fn go_syntax_layer_cache_corrupt() {
     let source = "package main\nfunc main() {}\n";
     let mut first = db_with_go_file("main.go", source);
 
-    let first_result =
-        analyze_with_plan_options_and_cache_stats(&mut first, &cache, "config", &plan, false);
+    let settings = test_syntax_settings("config");
+    let first_result = analyze_with_syntax_settings(&mut first, &cache, &settings, &plan, false);
     assert!(first_result.diagnostics.is_empty());
 
     let manifest = first_layer_file(&cache_root, "manifests");
     fs::write(manifest, "{not-json").expect("corrupt manifest");
 
     let mut second = db_with_go_file("main.go", source);
-    let second_result =
-        analyze_with_plan_options_and_cache_stats(&mut second, &cache, "config", &plan, false);
+    let second_result = analyze_with_syntax_settings(&mut second, &cache, &settings, &plan, false);
 
     assert!(second_result.diagnostics.is_empty());
     assert_eq!(second_result.cache_stats.invalid_evicted_reads, 1);
@@ -361,14 +422,13 @@ fn go_syntax_layer_cache_output_digest_mismatch_recomputes() {
     let source = "package main\nfunc main() {}\n";
     let mut first = db_with_go_file("main.go", source);
 
-    let first_result =
-        analyze_with_plan_options_and_cache_stats(&mut first, &cache, "config", &plan, false);
+    let settings = test_syntax_settings("config");
+    let first_result = analyze_with_syntax_settings(&mut first, &cache, &settings, &plan, false);
     assert!(first_result.diagnostics.is_empty());
     corrupt_first_manifest_output_digest(&cache_root);
 
     let mut second = db_with_go_file("main.go", source);
-    let second_result =
-        analyze_with_plan_options_and_cache_stats(&mut second, &cache, "config", &plan, false);
+    let second_result = analyze_with_syntax_settings(&mut second, &cache, &settings, &plan, false);
 
     assert!(second_result.diagnostics.is_empty());
     assert_eq!(second_result.cache_stats.invalid_evicted_reads, 1);
@@ -395,7 +455,8 @@ fn go_syntax_layer_cache_disabled_bypass() {
         "package second\nfunc Two() {}\n".to_string(),
     );
 
-    let result = analyze_with_plan_options_and_cache_stats(&mut db, &cache, "config", &plan, false);
+    let settings = test_syntax_settings("config");
+    let result = analyze_with_syntax_settings(&mut db, &cache, &settings, &plan, false);
 
     assert!(result.diagnostics.is_empty());
     assert_eq!(result.cache_stats.bypasses_disabled, 1);
@@ -412,7 +473,8 @@ fn go_syntax_layer_cache_payload_excludes_source_and_temp_paths() {
     let source = "package main\nfunc main() {}\n";
     let mut db = db_with_go_file("main.go", source);
 
-    let result = analyze_with_plan_options_and_cache_stats(&mut db, &cache, "config", &plan, false);
+    let settings = test_syntax_settings("config");
+    let result = analyze_with_syntax_settings(&mut db, &cache, &settings, &plan, false);
 
     assert!(result.diagnostics.is_empty());
     assert!(

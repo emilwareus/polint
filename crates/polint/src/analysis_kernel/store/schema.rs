@@ -865,6 +865,7 @@ mod tests {
         }
         for value in [
             InputDependencyKind::SourceFile,
+            InputDependencyKind::ProviderParameters,
             InputDependencyKind::RequestedCapability,
             InputDependencyKind::AnalysisSetting,
             InputDependencyKind::UpstreamLayer,

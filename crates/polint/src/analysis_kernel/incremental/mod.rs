@@ -164,7 +164,7 @@ pub(crate) use keys::{
 pub(crate) use layer_cache::{
     LAYER_CACHE_MANIFEST_SCHEMA, LayerCacheManifest, LayerCacheReadOutcome, LayerCacheReadStatus,
     LayerCacheStore, LayerCacheWriteStatus, LayerRunMetadata, LayerSemanticProjection,
-    relative_manifest_dependency_source,
+    relative_manifest_dependency_source, syntax_layer_dependency_edges,
 };
 #[cfg_attr(
     test,

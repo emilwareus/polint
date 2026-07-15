@@ -86,6 +86,157 @@ impl LayerCacheManifest {
         }
         sort_and_dedup_manifest_dependencies(&mut self.dependencies);
     }
+
+    pub(crate) fn has_exact_dependencies(&self, expected: &[DependencyEdge]) -> bool {
+        let mut expected = expected.to_vec();
+        let from = relative_manifest_dependency_source();
+        for edge in &mut expected {
+            edge.from = from.clone();
+        }
+        sort_and_dedup_manifest_dependencies(&mut expected);
+        self.dependencies == expected
+    }
+}
+
+pub(crate) fn syntax_layer_dependency_edges(
+    key: &LayerKey,
+    source_inputs: impl IntoIterator<Item = (String, Digest)>,
+    provider_manifest_digest: Digest,
+) -> Vec<DependencyEdge> {
+    assert!(
+        matches!(key.layer_kind, LayerKind::GoSyntax | LayerKind::TsSyntax),
+        "syntax dependency edges require a syntax layer key"
+    );
+
+    let from = CacheNode::layer(key.clone());
+    let mut source_inputs = source_inputs.into_iter().collect::<Vec<_>>();
+    source_inputs.sort();
+    let mut source_digests = source_inputs
+        .iter()
+        .map(|(_, digest)| digest.clone())
+        .collect::<Vec<_>>();
+    source_digests.sort();
+    assert_eq!(
+        source_digests,
+        key.input_digests.as_ref().as_slice(),
+        "syntax dependency sources must match the layer key"
+    );
+
+    let mut edges = source_inputs
+        .into_iter()
+        .map(|(stable_key, digest)| {
+            dependency_edge(
+                &from,
+                InputDependencyKey::source_file(stable_key, digest, InputComponentStatus::Present)
+                    .expect("syntax source dependencies use source-text digests"),
+                DependencyKind::SourceText,
+                ShapeKind::Content,
+            )
+        })
+        .collect::<Vec<_>>();
+
+    edges.push(dependency_edge(
+        &from,
+        InputDependencyKey::analysis_setting(
+            format!("{}/analysis-settings", key.provider_id),
+            key.analysis_settings_digest.clone(),
+            InputComponentStatus::Present,
+        )
+        .expect("syntax settings dependencies use analysis-settings digests"),
+        DependencyKind::Config,
+        ShapeKind::Unknown,
+    ));
+    edges.push(dependency_edge(
+        &from,
+        InputDependencyKey::language_lifecycle(
+            format!("{}/lifecycle", key.provider_id),
+            key.lifecycle_digest.clone(),
+            InputComponentStatus::Absent,
+        )
+        .expect("syntax lifecycle dependencies use language-lifecycle digests"),
+        DependencyKind::Lifecycle,
+        ShapeKind::Lifecycle,
+    ));
+    edges.push(dependency_edge(
+        &from,
+        InputDependencyKey::tool_invocation(
+            format!("{}/toolchain", key.provider_id),
+            key.toolchain_digest.clone(),
+            InputComponentStatus::Present,
+        )
+        .expect("syntax tool dependencies use tool-invocation digests"),
+        DependencyKind::Toolchain,
+        ShapeKind::Toolchain,
+    ));
+    edges.push(dependency_edge(
+        &from,
+        InputDependencyKey::provider_parameters(
+            format!("{}/parameters", key.provider_id),
+            key.parameter_digest.clone(),
+            InputComponentStatus::Present,
+        )
+        .expect("syntax parameter dependencies use provider-parameter digests"),
+        DependencyKind::Input,
+        ShapeKind::Unknown,
+    ));
+    edges.push(dependency_edge(
+        &from,
+        InputDependencyKey::provider_manifest(
+            key.provider_id.clone(),
+            provider_manifest_digest.clone(),
+            InputComponentStatus::Present,
+        )
+        .expect("syntax provider dependencies use provider-manifest digests"),
+        DependencyKind::Provider,
+        ShapeKind::ProviderVersion,
+    ));
+    edges.push(dependency_edge(
+        &from,
+        InputDependencyKey::provider_schema(
+            format!("{}/{}", key.provider_id, key.schema_version),
+            provider_manifest_digest,
+            InputComponentStatus::Present,
+        )
+        .expect("syntax schema dependencies use provider-manifest digests"),
+        DependencyKind::ProviderSchema,
+        ShapeKind::ProviderVersion,
+    ));
+    edges.extend(
+        key.extension_digests
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(index, digest)| {
+                dependency_edge(
+                    &from,
+                    InputDependencyKey::extension_code(
+                        format!("{}/extension/{index}", key.provider_id),
+                        digest,
+                        InputComponentStatus::Absent,
+                    )
+                    .expect("syntax extension dependencies use extension-code digests"),
+                    DependencyKind::Extension,
+                    ShapeKind::ExtensionCode,
+                )
+            }),
+    );
+    edges.sort();
+    edges.dedup();
+    edges
+}
+
+fn dependency_edge(
+    from: &CacheNode,
+    input: InputDependencyKey,
+    kind: DependencyKind,
+    required_shape: ShapeKind,
+) -> DependencyEdge {
+    DependencyEdge {
+        from: from.clone(),
+        to: CacheNode::DependencyInput(input),
+        kind,
+        required_shape,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

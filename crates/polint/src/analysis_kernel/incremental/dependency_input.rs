@@ -18,6 +18,7 @@ pub(crate) enum InputDependencyKind {
     PackageProject,
     ProviderManifest,
     ProviderSchema,
+    ProviderParameters,
     RequestedCapability,
     AnalysisSetting,
     LanguageLifecycle,
@@ -103,6 +104,7 @@ impl InputDependencyKind {
             Self::PackageProject => "package_project",
             Self::ProviderManifest => "provider_manifest",
             Self::ProviderSchema => "provider_schema",
+            Self::ProviderParameters => "provider_parameters",
             Self::RequestedCapability => "requested_capability",
             Self::AnalysisSetting => "analysis_setting",
             Self::LanguageLifecycle => "language_lifecycle",
@@ -127,6 +129,7 @@ impl InputDependencyKind {
             "package_project" => Ok(Self::PackageProject),
             "provider_manifest" => Ok(Self::ProviderManifest),
             "provider_schema" => Ok(Self::ProviderSchema),
+            "provider_parameters" => Ok(Self::ProviderParameters),
             "requested_capability" => Ok(Self::RequestedCapability),
             "analysis_setting" => Ok(Self::AnalysisSetting),
             "language_lifecycle" => Ok(Self::LanguageLifecycle),
@@ -155,6 +158,7 @@ impl InputDependencyKind {
             Self::ProviderManifest | Self::ProviderSchema => {
                 digest_kind == DigestKind::ProviderManifest
             }
+            Self::ProviderParameters => digest_kind == DigestKind::ProviderParameters,
             Self::RequestedCapability => digest_kind == DigestKind::AnalysisRequirements,
             Self::AnalysisSetting => digest_kind == DigestKind::AnalysisSettings,
             Self::LanguageLifecycle => {
@@ -243,6 +247,19 @@ impl InputDependencyKey {
     ) -> Result<Self, InputDependencyDigestKindError> {
         Self::new(
             InputDependencyKind::ProviderSchema,
+            stable_key,
+            digest,
+            status,
+        )
+    }
+
+    pub(crate) fn provider_parameters(
+        stable_key: impl Into<String>,
+        digest: Digest,
+        status: InputComponentStatus,
+    ) -> Result<Self, InputDependencyDigestKindError> {
+        Self::new(
+            InputDependencyKind::ProviderParameters,
             stable_key,
             digest,
             status,
@@ -446,6 +463,11 @@ mod tests {
             DigestKind::ProviderManifest,
         ),
         (
+            InputDependencyKind::ProviderParameters,
+            "provider_parameters",
+            DigestKind::ProviderParameters,
+        ),
+        (
             InputDependencyKind::RequestedCapability,
             "requested_capability",
             DigestKind::AnalysisRequirements,
@@ -539,6 +561,9 @@ mod tests {
             }
             InputDependencyKind::ProviderSchema => {
                 InputDependencyKey::provider_schema(stable_key, digest, status)
+            }
+            InputDependencyKind::ProviderParameters => {
+                InputDependencyKey::provider_parameters(stable_key, digest, status)
             }
             InputDependencyKind::RequestedCapability => {
                 InputDependencyKey::requested_capability(stable_key, digest, status)
