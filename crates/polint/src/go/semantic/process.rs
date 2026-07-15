@@ -4,6 +4,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use sha2::{Digest as ShaDigest, Sha256};
+
 use crate::go::semantic::protocol::GO_SEMANTIC_SCHEMA;
 
 pub(crate) const GO_SEMANTIC_FRONTEND_ENV: &str = "POLINT_GO_FRONTEND";
@@ -179,11 +181,11 @@ struct FrontendBuildProvenance {
 
 impl FrontendBuildProvenance {
     fn cache_key(&self) -> String {
-        crate::cache::stable_hash(&[
-            &format!("source_digest={}", self.source_digest),
-            &format!("toolchain_version={}", self.toolchain_version),
-            &format!("host_target={}", self.host_target.label()),
-            &format!("environment_policy={}", self.environment_policy),
+        security_digest_strings(&[
+            format!("source_digest={}", self.source_digest),
+            format!("toolchain_version={}", self.toolchain_version),
+            format!("host_target={}", self.host_target.label()),
+            format!("environment_policy={}", self.environment_policy),
         ])
     }
 
@@ -207,25 +209,26 @@ impl PreparedGoSemanticFrontend {
 
     fn prepare_with_cache_root(cache_root: &Path) -> Result<Self, GoSemanticProcessError> {
         ensure_private_cache_root(cache_root)?;
-        match resolve_go_semantic_frontend_in(cache_root)? {
+        let cache_root = canonical_private_cache_root(cache_root)?;
+        match resolve_go_semantic_frontend_in(&cache_root)? {
             GoSemanticCommand::Binary(executable) => {
-                prepare_binary_frontend(cache_root, &executable)
+                prepare_binary_frontend(&cache_root, &executable)
             }
             GoSemanticCommand::SourceDir(source_dir) => {
                 let source = capture_source_snapshot(&source_dir)?;
                 let toolchain = local_go_toolchain()?;
                 ensure_go_toolchain_supported(&toolchain.version)?;
-                let source_dir = materialize_source_snapshot(cache_root, &source)?;
+                let source_dir = materialize_source_snapshot(&cache_root, &source)?;
                 let provenance = FrontendBuildProvenance {
                     source_digest: source.digest.clone(),
                     toolchain_version: toolchain.version.clone(),
                     host_target: toolchain.host_target.clone(),
                     environment_policy: GO_ENVIRONMENT_POLICY,
                 };
-                let built = ensure_frontend_binary(cache_root, &source_dir, &provenance)?;
+                let built = ensure_frontend_binary(&cache_root, &source_dir, &provenance)?;
                 let bytes = read_regular_file_no_follow(&built)?;
-                let executable_digest = stable_bytes_hash(&bytes);
-                let executable = seal_executable(cache_root, &bytes, &executable_digest)?;
+                let executable_digest = security_digest_bytes(&bytes);
+                let executable = seal_executable(&cache_root, &bytes, &executable_digest)?;
                 Ok(Self {
                     executable,
                     executable_digest,
@@ -263,8 +266,7 @@ impl PreparedGoSemanticFrontend {
 
     pub(crate) fn identity_digest(&self) -> String {
         let parts = self.identity_parts();
-        let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
-        crate::cache::stable_hash(&refs)
+        security_digest_strings(&parts)
     }
 
     #[cfg(test)]
@@ -292,7 +294,7 @@ fn prepare_binary_frontend(
     executable: &Path,
 ) -> Result<PreparedGoSemanticFrontend, GoSemanticProcessError> {
     let bytes = read_regular_file_no_follow(executable)?;
-    let executable_digest = stable_bytes_hash(&bytes);
+    let executable_digest = security_digest_bytes(&bytes);
     let executable = seal_executable(cache_root, &bytes, &executable_digest)?;
     Ok(PreparedGoSemanticFrontend {
         executable,
@@ -344,7 +346,7 @@ impl GoSemanticToolPreparation {
 pub(crate) fn resolve_go_semantic_frontend() -> Result<GoSemanticCommand, GoSemanticProcessError> {
     let cache_root = default_frontend_cache_root()?;
     ensure_private_cache_root(&cache_root)?;
-    resolve_go_semantic_frontend_in(&cache_root)
+    resolve_go_semantic_frontend_in(&canonical_private_cache_root(&cache_root)?)
 }
 
 fn resolve_go_semantic_frontend_in(
@@ -425,6 +427,9 @@ fn default_frontend_cache_root() -> Result<PathBuf, GoSemanticProcessError> {
 fn ensure_private_cache_root(root: &Path) -> Result<(), GoSemanticProcessError> {
     use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 
+    let root = normalized_private_cache_root(root)?;
+    let root = root.as_path();
+    validate_private_cache_ancestors(root)?;
     match fs::symlink_metadata(root) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             return Err(GoSemanticProcessError::CommandFailed(format!(
@@ -494,6 +499,158 @@ fn ensure_private_cache_root(root: &Path) -> Result<(), GoSemanticProcessError> 
             root.display()
         )));
     }
+    validate_private_cache_ancestors(root)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn canonical_private_cache_root(root: &Path) -> Result<PathBuf, GoSemanticProcessError> {
+    let normalized = normalized_private_cache_root(root)?;
+    let canonical = normalized.canonicalize().map_err(|error| {
+        GoSemanticProcessError::CommandFailed(format!(
+            "failed to canonicalize private Go semantic frontend cache `{}`: {error}",
+            root.display()
+        ))
+    })?;
+    validate_private_cache_ancestors(&canonical)?;
+    Ok(canonical)
+}
+
+#[cfg(unix)]
+fn normalized_private_cache_root(root: &Path) -> Result<PathBuf, GoSemanticProcessError> {
+    use std::os::unix::fs::MetadataExt;
+
+    if !root.is_absolute() {
+        return Err(GoSemanticProcessError::CommandFailed(
+            "Go semantic frontend cache root must be absolute.".to_string(),
+        ));
+    }
+    if root.components().any(|component| {
+        !matches!(
+            component,
+            std::path::Component::RootDir | std::path::Component::Normal(_)
+        )
+    }) {
+        return Err(GoSemanticProcessError::CommandFailed(
+            "Go semantic frontend cache root must not contain relative path components."
+                .to_string(),
+        ));
+    }
+
+    let mut current = PathBuf::new();
+    for component in root.components() {
+        current.push(component.as_os_str());
+        let metadata = match fs::symlink_metadata(&current) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(GoSemanticProcessError::CommandFailed(format!(
+                    "failed to inspect Go semantic frontend cache ancestor `{}`: {error}",
+                    current.display()
+                )));
+            }
+        };
+        if metadata.file_type().is_symlink() && (current == root || metadata.uid() != 0) {
+            return Err(GoSemanticProcessError::CommandFailed(format!(
+                "Go semantic frontend cache ancestor `{}` must not be a symlink.",
+                current.display()
+            )));
+        }
+    }
+
+    let mut existing = root;
+    let mut missing = Vec::new();
+    loop {
+        match fs::symlink_metadata(existing) {
+            Ok(_) => break,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let Some(name) = existing.file_name() else {
+                    return Err(GoSemanticProcessError::CommandFailed(format!(
+                        "failed to find an existing ancestor for private Go semantic frontend cache `{}`.",
+                        root.display()
+                    )));
+                };
+                missing.push(name.to_os_string());
+                existing = existing.parent().ok_or_else(|| {
+                    GoSemanticProcessError::CommandFailed(format!(
+                        "failed to find an existing ancestor for private Go semantic frontend cache `{}`.",
+                        root.display()
+                    ))
+                })?;
+            }
+            Err(error) => {
+                return Err(GoSemanticProcessError::CommandFailed(format!(
+                    "failed to inspect private Go semantic frontend cache `{}`: {error}",
+                    existing.display()
+                )));
+            }
+        }
+    }
+    let mut normalized = existing.canonicalize().map_err(|error| {
+        GoSemanticProcessError::CommandFailed(format!(
+            "failed to canonicalize private Go semantic frontend cache ancestor `{}`: {error}",
+            existing.display()
+        ))
+    })?;
+    for component in missing.into_iter().rev() {
+        normalized.push(component);
+    }
+    validate_private_cache_ancestors(&normalized)?;
+    Ok(normalized)
+}
+
+#[cfg(unix)]
+fn validate_private_cache_ancestors(root: &Path) -> Result<(), GoSemanticProcessError> {
+    use std::os::unix::fs::MetadataExt;
+
+    if !root.is_absolute() {
+        return Err(GoSemanticProcessError::CommandFailed(
+            "Go semantic frontend cache root must be absolute.".to_string(),
+        ));
+    }
+    let mut current = PathBuf::new();
+    let mut missing_ancestor = false;
+    for component in root.components() {
+        current.push(component.as_os_str());
+        if missing_ancestor {
+            continue;
+        }
+        let metadata = match fs::symlink_metadata(&current) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                missing_ancestor = true;
+                continue;
+            }
+            Err(error) => {
+                return Err(GoSemanticProcessError::CommandFailed(format!(
+                    "failed to inspect Go semantic frontend cache ancestor `{}`: {error}",
+                    current.display()
+                )));
+            }
+        };
+        if metadata.file_type().is_symlink() {
+            return Err(GoSemanticProcessError::CommandFailed(format!(
+                "Go semantic frontend cache ancestor `{}` must not be a symlink.",
+                current.display()
+            )));
+        }
+        if !metadata.is_dir() {
+            return Err(GoSemanticProcessError::CommandFailed(format!(
+                "Go semantic frontend cache ancestor `{}` is not a directory.",
+                current.display()
+            )));
+        }
+        let mode = metadata.mode();
+        let owner_can_replace =
+            metadata.uid() != 0 && metadata.uid() != effective_user_id() && mode & 0o200 != 0;
+        let shared_writable_without_sticky = mode & 0o022 != 0 && mode & 0o1000 == 0;
+        if owner_can_replace || shared_writable_without_sticky {
+            return Err(GoSemanticProcessError::CommandFailed(format!(
+                "Go semantic frontend cache ancestor `{}` is mutable by another user.",
+                current.display()
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -506,6 +663,13 @@ fn effective_user_id() -> u32 {
 
 #[cfg(not(unix))]
 fn ensure_private_cache_root(_root: &Path) -> Result<(), GoSemanticProcessError> {
+    Err(GoSemanticProcessError::CommandUnavailable(
+        "private Go semantic frontend execution is unavailable on this platform.".to_string(),
+    ))
+}
+
+#[cfg(not(unix))]
+fn canonical_private_cache_root(_root: &Path) -> Result<PathBuf, GoSemanticProcessError> {
     Err(GoSemanticProcessError::CommandUnavailable(
         "private Go semantic frontend execution is unavailable on this platform.".to_string(),
     ))
@@ -599,7 +763,7 @@ pub(crate) fn frontend_digest(
     match frontend {
         GoSemanticCommand::Binary(path) => {
             let bytes = read_regular_file_no_follow(path)?;
-            Ok(stable_bytes_hash(&bytes))
+            Ok(security_digest_bytes(&bytes))
         }
         GoSemanticCommand::SourceDir(path) => Ok(capture_source_snapshot(path)?.digest),
     }
@@ -668,11 +832,10 @@ fn source_snapshot_digest(files: &[FrontendSourceFile]) -> String {
         format!(
             "{}:{}",
             file.relative_path.to_string_lossy().replace('\\', "/"),
-            stable_bytes_hash(&file.bytes)
+            security_digest_bytes(&file.bytes)
         )
     }));
-    let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
-    crate::cache::stable_hash(&refs)
+    security_digest_strings(&parts)
 }
 
 fn collect_frontend_source_files(
@@ -879,13 +1042,20 @@ fn verify_source_directory(
     Ok(true)
 }
 
-fn stable_bytes_hash(bytes: &[u8]) -> String {
-    let mut hash = 0xcbf29ce484222325_u64;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
+fn security_digest_strings(parts: &[String]) -> String {
+    let mut hasher = Sha256::new();
+    for part in parts {
+        let bytes = part.as_bytes();
+        hasher.update(u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_le_bytes());
+        hasher.update(bytes);
     }
-    format!("{hash:016x}")
+    format!("{:x}", hasher.finalize())
+}
+
+fn security_digest_bytes(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
 }
 
 fn ensure_frontend_binary(
@@ -931,7 +1101,7 @@ fn ensure_frontend_binary(
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
-    let executable_digest = stable_bytes_hash(&read_regular_file_no_follow(&binary)?);
+    let executable_digest = security_digest_bytes(&read_regular_file_no_follow(&binary)?);
     write_new_private_file(
         &staging.join("provenance"),
         provenance.stamp(&executable_digest).as_bytes(),
@@ -974,7 +1144,7 @@ fn verify_cached_build(
         )));
     }
     let binary = directory.join(frontend_binary_name());
-    let executable_digest = stable_bytes_hash(&read_regular_file_no_follow(&binary)?);
+    let executable_digest = security_digest_bytes(&read_regular_file_no_follow(&binary)?);
     let stamp = read_regular_file_no_follow(&directory.join("provenance"))?;
     if stamp != provenance.stamp(&executable_digest).as_bytes() {
         return Err(GoSemanticProcessError::CommandFailed(format!(
@@ -991,66 +1161,126 @@ fn seal_executable(
     executable_digest: &str,
 ) -> Result<PathBuf, GoSemanticProcessError> {
     let execution_root = ensure_private_subdirectory(cache_root, Path::new("executables"))?;
-    let directory = ensure_private_subdirectory(
-        cache_root,
-        &Path::new("executables").join(executable_digest),
-    )?;
-    let executable = directory.join(frontend_binary_name());
-    match fs::symlink_metadata(&executable) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
-            return Err(GoSemanticProcessError::CommandFailed(format!(
-                "sealed Go semantic frontend `{}` is unsafe.",
-                executable.display()
-            )));
-        }
-        Ok(_) => {
-            if read_regular_file_no_follow(&executable)? == bytes {
-                return Ok(executable);
-            }
-            return Err(GoSemanticProcessError::CommandFailed(format!(
-                "sealed Go semantic frontend `{}` failed content verification.",
-                executable.display()
-            )));
-        }
+    let directory = execution_root.join(executable_digest);
+    match fs::symlink_metadata(&directory) {
+        Ok(_) => return verify_sealed_executable(&directory, bytes),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => {
             return Err(GoSemanticProcessError::CommandFailed(format!(
-                "failed to inspect sealed Go semantic frontend `{}`: {error}",
-                executable.display()
+                "failed to inspect sealed Go semantic frontend directory `{}`: {error}",
+                directory.display()
             )));
         }
     }
 
-    let staging = execution_root.join(format!(
+    let staging_directory = execution_root.join(format!(
         ".seal-{executable_digest}-{}-{}",
         std::process::id(),
         unique_materialization_suffix()
     ));
-    write_new_private_file(&staging, bytes, true)?;
-    match fs::hard_link(&staging, &executable) {
-        Ok(()) => {
-            let _ = fs::remove_file(&staging);
-            Ok(executable)
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            let _ = fs::remove_file(&staging);
-            if read_regular_file_no_follow(&executable)? == bytes {
-                Ok(executable)
-            } else {
-                Err(GoSemanticProcessError::CommandFailed(format!(
-                    "concurrently sealed Go semantic frontend `{}` failed verification.",
-                    executable.display()
-                )))
-            }
+    create_private_directory(&staging_directory)?;
+    write_new_private_file(&staging_directory.join(frontend_binary_name()), bytes, true)?;
+    seal_execution_directory(&staging_directory)?;
+    match fs::rename(&staging_directory, &directory) {
+        Ok(()) => verify_sealed_executable(&directory, bytes),
+        Err(_) if fs::symlink_metadata(&directory).is_ok() => {
+            let _ = make_directory_tree_writable(&staging_directory);
+            let _ = fs::remove_dir_all(&staging_directory);
+            verify_sealed_executable(&directory, bytes)
         }
         Err(error) => {
-            let _ = fs::remove_file(&staging);
+            let _ = make_directory_tree_writable(&staging_directory);
+            let _ = fs::remove_dir_all(&staging_directory);
             Err(GoSemanticProcessError::CommandFailed(format!(
-                "failed to seal Go semantic frontend `{}`: {error}",
-                executable.display()
+                "failed to publish sealed Go semantic frontend `{}`: {error}",
+                directory.display()
             )))
         }
     }
+}
+
+fn verify_sealed_executable(
+    directory: &Path,
+    expected_bytes: &[u8],
+) -> Result<PathBuf, GoSemanticProcessError> {
+    let directory_metadata = fs::symlink_metadata(directory).map_err(|error| {
+        GoSemanticProcessError::CommandFailed(format!(
+            "failed to inspect sealed Go semantic frontend directory `{}`: {error}",
+            directory.display()
+        ))
+    })?;
+    if directory_metadata.file_type().is_symlink() || !directory_metadata.is_dir() {
+        return Err(GoSemanticProcessError::CommandFailed(format!(
+            "sealed Go semantic frontend directory `{}` is unsafe.",
+            directory.display()
+        )));
+    }
+    let executable = directory.join(frontend_binary_name());
+    if read_regular_file_no_follow(&executable)? != expected_bytes {
+        return Err(GoSemanticProcessError::CommandFailed(format!(
+            "sealed Go semantic frontend `{}` failed content verification.",
+            executable.display()
+        )));
+    }
+    verify_sealed_permissions(directory, &directory_metadata, &executable)?;
+    Ok(executable)
+}
+
+#[cfg(unix)]
+fn seal_execution_directory(directory: &Path) -> Result<(), GoSemanticProcessError> {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::set_permissions(directory, fs::Permissions::from_mode(0o500)).map_err(|error| {
+        GoSemanticProcessError::CommandFailed(format!(
+            "failed to make sealed Go semantic frontend directory immutable `{}`: {error}",
+            directory.display()
+        ))
+    })
+}
+
+#[cfg(not(unix))]
+fn seal_execution_directory(_directory: &Path) -> Result<(), GoSemanticProcessError> {
+    Err(GoSemanticProcessError::CommandUnavailable(
+        "private Go semantic frontend execution is unavailable on this platform.".to_string(),
+    ))
+}
+
+#[cfg(unix)]
+fn verify_sealed_permissions(
+    _directory: &Path,
+    directory_metadata: &fs::Metadata,
+    executable: &Path,
+) -> Result<(), GoSemanticProcessError> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let executable_metadata = fs::symlink_metadata(executable).map_err(|error| {
+        GoSemanticProcessError::CommandFailed(format!(
+            "failed to inspect sealed Go semantic frontend `{}`: {error}",
+            executable.display()
+        ))
+    })?;
+    let owned = directory_metadata.uid() == effective_user_id()
+        && executable_metadata.uid() == effective_user_id();
+    let modes_are_sealed = directory_metadata.permissions().mode() & 0o777 == 0o500
+        && executable_metadata.permissions().mode() & 0o777 == 0o500;
+    if !owned || !modes_are_sealed || !executable_metadata.is_file() {
+        return Err(GoSemanticProcessError::CommandFailed(format!(
+            "sealed Go semantic frontend `{}` failed ownership or permission verification.",
+            executable.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn verify_sealed_permissions(
+    _directory: &Path,
+    _directory_metadata: &fs::Metadata,
+    _executable: &Path,
+) -> Result<(), GoSemanticProcessError> {
+    Err(GoSemanticProcessError::CommandUnavailable(
+        "private Go semantic frontend execution is unavailable on this platform.".to_string(),
+    ))
 }
 
 fn configure_go_environment(command: &mut Command, target: &GoHostTarget) {
@@ -1120,7 +1350,7 @@ fn read_regular_file_no_follow(path: &Path) -> Result<Vec<u8>, GoSemanticProcess
 
     let file = fs::OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)
         .map_err(|error| {
             GoSemanticProcessError::CommandFailed(format!(
@@ -1403,6 +1633,11 @@ fn parse_go_version_numbers(version: &str) -> Option<(u32, u32)> {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    fn test_cache_root(temp: &tempfile::TempDir) -> PathBuf {
+        temp.path().join("cache")
+    }
+
     #[test]
     fn command_for_path_accepts_source_directory() {
         let temp = tempfile::tempdir().expect("temp dir");
@@ -1413,7 +1648,15 @@ mod tests {
 
     #[test]
     fn embedded_frontend_hash_includes_schema() {
-        assert!(!embedded_frontend_hash().is_empty());
+        assert_eq!(embedded_frontend_hash().len(), 64);
+    }
+
+    #[test]
+    fn security_content_digest_is_full_sha256() {
+        assert_eq!(
+            security_digest_bytes(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
     }
 
     #[test]
@@ -1513,7 +1756,7 @@ mod tests {
     fn private_cache_root_rejects_symlink() {
         let temp = tempfile::tempdir().expect("tempdir");
         let outside = tempfile::tempdir().expect("outside");
-        let cache = temp.path().join("cache");
+        let cache = test_cache_root(&temp);
         std::os::unix::fs::symlink(outside.path(), &cache).expect("symlink cache root");
 
         let error = ensure_private_cache_root(&cache).expect_err("symlink root must fail");
@@ -1523,14 +1766,40 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn private_cache_root_rejects_symlink_ancestor() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let outside = tempfile::tempdir().expect("outside");
+        let ancestor = temp.path().join("cache-link");
+        std::os::unix::fs::symlink(outside.path(), &ancestor).expect("symlink cache ancestor");
+        let cache = ancestor.join("cache");
+
+        let error = ensure_private_cache_root(&cache).expect_err("symlink ancestor must fail");
+
+        assert!(error.to_string().contains("ancestor"));
+        assert!(error.to_string().contains("must not be a symlink"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_cache_root_rejects_parent_components() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cache = temp.path().join("missing").join("..").join("cache");
+
+        let error = ensure_private_cache_root(&cache).expect_err("parent component must fail");
+
+        assert!(error.to_string().contains("relative path components"));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn sealed_executable_rejects_hostile_preseed_with_wrong_bytes() {
         use std::os::unix::fs::PermissionsExt;
 
         let temp = tempfile::tempdir().expect("tempdir");
-        let cache = temp.path().join("cache");
+        let cache = test_cache_root(&temp);
         ensure_private_cache_root(&cache).expect("private cache");
         let expected = b"#!/bin/sh\nprintf 'expected\\n'\n";
-        let digest = stable_bytes_hash(expected);
+        let digest = security_digest_bytes(expected);
         let directory =
             ensure_private_subdirectory(&cache, &Path::new("executables").join(&digest))
                 .expect("execution directory");
@@ -1550,7 +1819,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let temp = tempfile::tempdir().expect("tempdir");
-        let cache = temp.path().join("cache");
+        let cache = test_cache_root(&temp);
         ensure_private_cache_root(&cache).expect("private cache");
         let source = temp.path().join("frontend");
         fs::write(&source, b"#!/bin/sh\nprintf 'A\\n'\n").expect("write frontend A");
@@ -1564,13 +1833,58 @@ mod tests {
             .expect("run sealed frontend");
 
         assert_eq!(String::from_utf8_lossy(&output.stdout), "A\n");
+        fs::set_permissions(
+            prepared.executable.parent().expect("sealed directory"),
+            fs::Permissions::from_mode(0o700),
+        )
+        .expect("reopen sealed directory for cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sealed_execution_target_rejects_direct_mutation_and_replacement() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cache = test_cache_root(&temp);
+        ensure_private_cache_root(&cache).expect("private cache");
+        let source = temp.path().join("frontend");
+        fs::write(&source, b"#!/bin/sh\nprintf 'sealed\\n'\n").expect("write frontend");
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o700)).expect("frontend mode");
+        let prepared = prepare_binary_frontend(&cache, &source).expect("prepare frontend");
+        let sealed_directory = prepared.executable.parent().expect("sealed directory");
+        let source_bytes = read_regular_file_no_follow(&source).expect("read source bytes");
+        let reused = seal_executable(&cache, &source_bytes, &security_digest_bytes(&source_bytes))
+            .expect("reuse verified sealed frontend");
+        let replacement = temp.path().join("replacement");
+        fs::write(&replacement, b"#!/bin/sh\nprintf 'replacement\\n'\n")
+            .expect("write replacement");
+
+        let directory_mode = fs::metadata(sealed_directory)
+            .expect("sealed directory metadata")
+            .mode()
+            & 0o777;
+        assert_eq!(directory_mode, 0o500);
+        assert_eq!(reused, prepared.executable);
+        if effective_user_id() != 0 {
+            assert!(
+                fs::OpenOptions::new()
+                    .write(true)
+                    .truncate(true)
+                    .open(&prepared.executable)
+                    .is_err()
+            );
+            assert!(fs::rename(&replacement, &prepared.executable).is_err());
+        }
+        fs::set_permissions(sealed_directory, fs::Permissions::from_mode(0o700))
+            .expect("reopen sealed directory for cleanup");
     }
 
     #[cfg(unix)]
     #[test]
     fn materialized_source_rejects_completion_marker_preseed() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let cache = temp.path().join("cache");
+        let cache = test_cache_root(&temp);
         ensure_private_cache_root(&cache).expect("private cache");
         let snapshot = embedded_source_snapshot();
         let directory =
@@ -1588,7 +1902,7 @@ mod tests {
     #[test]
     fn cached_source_build_is_rejected_before_lookup_for_old_toolchain() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let cache = temp.path().join("cache");
+        let cache = test_cache_root(&temp);
         ensure_private_cache_root(&cache).expect("private cache");
         let provenance = FrontendBuildProvenance {
             source_digest: "source".to_string(),
@@ -1642,6 +1956,7 @@ mod tests {
         .collect::<BTreeSet<_>>();
 
         assert_eq!(keys.len(), 5);
+        assert!(keys.iter().all(|key| key.len() == 64));
     }
 
     #[test]
@@ -1674,5 +1989,29 @@ mod tests {
         assert_eq!(environment.get("GOFLAGS"), Some(&Some(String::new())));
         assert_eq!(environment.get("CGO_ENABLED"), Some(&Some("0".to_string())));
         assert_eq!(environment.get("GOAMD64"), Some(&None));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hostile_fifo_is_rejected_without_blocking() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let fifo = temp.path().join("frontend");
+        let status = Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("run mkfifo");
+        assert!(status.success());
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let reader_path = fifo;
+        let reader = std::thread::spawn(move || {
+            let _ = sender.send(read_regular_file_no_follow(&reader_path));
+        });
+
+        let result = receiver
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("FIFO rejection must not block");
+
+        assert!(result.is_err());
+        reader.join().expect("join FIFO reader");
     }
 }

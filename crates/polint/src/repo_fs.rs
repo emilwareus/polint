@@ -266,7 +266,7 @@ fn read_repo_file_anchored_with_limit(
     for (index, component) in components.iter().enumerate() {
         let name = CString::new(component.as_bytes()).map_err(|_| RepoFileReadError::Metadata)?;
         let is_file = index + 1 == components.len();
-        let mut flags = libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW;
+        let mut flags = libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK;
         if !is_file {
             flags |= libc::O_DIRECTORY;
         }
