@@ -45,10 +45,138 @@ impl std::fmt::Display for GoSemanticProcessError {
 
 impl std::error::Error for GoSemanticProcessError {}
 
+impl GoSemanticProcessError {
+    pub(crate) fn stable_reason(&self) -> &'static str {
+        match self {
+            Self::CommandFailed(_) => "command_failed",
+            Self::CommandUnavailable(_) => "command_unavailable",
+            Self::VersionUnsupported(_) => "version_unsupported",
+            Self::Timeout(_) => "timeout",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) enum GoSemanticCommand {
     Binary(PathBuf),
     SourceDir(PathBuf),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PreparedGoSemanticFrontend {
+    executable: PathBuf,
+    executable_digest: String,
+    source_digest: Option<String>,
+    toolchain_version: Option<String>,
+}
+
+impl PreparedGoSemanticFrontend {
+    pub(crate) fn prepare() -> Result<Self, GoSemanticProcessError> {
+        match resolve_go_semantic_frontend()? {
+            GoSemanticCommand::Binary(executable) => {
+                let executable_digest =
+                    frontend_digest(&GoSemanticCommand::Binary(executable.clone()))?;
+                Ok(Self {
+                    executable,
+                    executable_digest,
+                    source_digest: None,
+                    toolchain_version: None,
+                })
+            }
+            GoSemanticCommand::SourceDir(source_dir) => {
+                let source_digest =
+                    frontend_digest(&GoSemanticCommand::SourceDir(source_dir.clone()))?;
+                let toolchain_version = local_go_toolchain_version()?;
+                let executable =
+                    ensure_frontend_binary_with_version(&source_dir, &toolchain_version)?;
+                let executable_digest =
+                    frontend_digest(&GoSemanticCommand::Binary(executable.clone()))?;
+                Ok(Self {
+                    executable,
+                    executable_digest,
+                    source_digest: Some(source_digest),
+                    toolchain_version: Some(toolchain_version),
+                })
+            }
+        }
+    }
+
+    pub(crate) fn command(&self, root: &Path) -> Command {
+        let mut command = Command::new(&self.executable);
+        command.current_dir(root);
+        command
+    }
+
+    pub(crate) fn identity_parts(&self) -> Vec<String> {
+        vec![
+            format!("executable_digest={}", self.executable_digest),
+            format!(
+                "source_digest={}",
+                self.source_digest.as_deref().unwrap_or("prebuilt")
+            ),
+            format!(
+                "toolchain_version={}",
+                self.toolchain_version.as_deref().unwrap_or("embedded")
+            ),
+        ]
+    }
+
+    pub(crate) fn identity_digest(&self) -> String {
+        let parts = self.identity_parts();
+        let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
+        crate::cache::stable_hash(&refs)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        executable_digest: &str,
+        source_digest: Option<&str>,
+        toolchain_version: Option<&str>,
+    ) -> Self {
+        Self {
+            executable: PathBuf::from("polint-go-frontend-test"),
+            executable_digest: executable_digest.to_string(),
+            source_digest: source_digest.map(str::to_string),
+            toolchain_version: toolchain_version.map(str::to_string),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum GoSemanticToolPreparation {
+    NotInvoked {
+        reason: String,
+    },
+    SetupMissing {
+        reason: String,
+        process_error: Option<GoSemanticProcessError>,
+    },
+    Ready(PreparedGoSemanticFrontend),
+}
+
+impl GoSemanticToolPreparation {
+    pub(crate) fn not_invoked(reason: impl Into<String>) -> Self {
+        Self::NotInvoked {
+            reason: reason.into(),
+        }
+    }
+
+    pub(crate) fn setup_missing(reason: impl Into<String>) -> Self {
+        Self::SetupMissing {
+            reason: reason.into(),
+            process_error: None,
+        }
+    }
+
+    pub(crate) fn prepare() -> Self {
+        match PreparedGoSemanticFrontend::prepare() {
+            Ok(frontend) => Self::Ready(frontend),
+            Err(error) => Self::SetupMissing {
+                reason: error.stable_reason().to_string(),
+                process_error: Some(error),
+            },
+        }
+    }
 }
 
 pub(crate) fn resolve_go_semantic_frontend() -> Result<GoSemanticCommand, GoSemanticProcessError> {
@@ -344,11 +472,19 @@ pub(crate) fn command_for_frontend(
 /// its materialized source, returning the binary path. Concurrent builds are
 /// made safe by compiling to a unique staging path and atomically renaming.
 fn ensure_frontend_binary(source_dir: &Path) -> Result<PathBuf, GoSemanticProcessError> {
+    let version = local_go_toolchain_version()?;
+    ensure_frontend_binary_with_version(source_dir, &version)
+}
+
+fn ensure_frontend_binary_with_version(
+    source_dir: &Path,
+    toolchain_version: &str,
+) -> Result<PathBuf, GoSemanticProcessError> {
     let binary = source_dir.join(frontend_binary_name());
     if binary.is_file() {
         return Ok(binary);
     }
-    ensure_local_go_toolchain_supported()?;
+    ensure_go_toolchain_supported(toolchain_version)?;
     let staging = source_dir.join(format!(
         ".build-{}-{}",
         std::process::id(),
@@ -395,9 +531,8 @@ fn ensure_frontend_binary(source_dir: &Path) -> Result<PathBuf, GoSemanticProces
     }
 }
 
-fn ensure_local_go_toolchain_supported() -> Result<(), GoSemanticProcessError> {
-    let version = local_go_toolchain_version()?;
-    if !go_version_at_least(&version, 1, 25) {
+fn ensure_go_toolchain_supported(version: &str) -> Result<(), GoSemanticProcessError> {
+    if !go_version_at_least(version, 1, 25) {
         return Err(GoSemanticProcessError::VersionUnsupported(format!(
             "polint-go-frontend source mode requires Go 1.25 or newer on PATH; found {version}"
         )));
@@ -520,5 +655,39 @@ mod tests {
         );
         assert!(go_version_at_least("go1.25.0", 1, 25));
         assert!(!go_version_at_least("go1.24.9", 1, 25));
+    }
+
+    #[test]
+    fn prepared_frontend_identity_tracks_executable_source_and_toolchain() {
+        let baseline = PreparedGoSemanticFrontend::for_test(
+            "executable-a",
+            Some("source-a"),
+            Some("go1.25.0"),
+        );
+        let executable_changed = PreparedGoSemanticFrontend::for_test(
+            "executable-b",
+            Some("source-a"),
+            Some("go1.25.0"),
+        );
+        let source_changed = PreparedGoSemanticFrontend::for_test(
+            "executable-a",
+            Some("source-b"),
+            Some("go1.25.0"),
+        );
+        let toolchain_changed = PreparedGoSemanticFrontend::for_test(
+            "executable-a",
+            Some("source-a"),
+            Some("go1.26.0"),
+        );
+
+        assert_ne!(
+            baseline.identity_digest(),
+            executable_changed.identity_digest()
+        );
+        assert_ne!(baseline.identity_digest(), source_changed.identity_digest());
+        assert_ne!(
+            baseline.identity_digest(),
+            toolchain_changed.identity_digest()
+        );
     }
 }

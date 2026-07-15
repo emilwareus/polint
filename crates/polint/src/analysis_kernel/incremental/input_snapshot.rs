@@ -6,12 +6,15 @@ use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::{ConfigIdentity, Digest, DigestKind, WorkspaceIdentity};
+use crate::analysis::adaptation::budget::AdaptationModelBudget;
+use crate::analysis::adaptation::discovery::AdaptationModelInventory;
 use crate::analysis::extensions::discovery::{DiscoveredExtension, discover_local_extensions};
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_plan::{AnalysisPlan, RequestedCapabilitySnapshot};
 use crate::cache::keys::{AnalysisSettingsScope, analysis_settings_hash};
 use crate::config::LoadedConfig;
 use crate::core::{AnalysisDb, CapabilitySupportStatus, Language, SourceFile};
+use crate::go::semantic::process::GoSemanticToolPreparation;
 use crate::module_graph::paths::{
     TOPOLOGY_LOCKFILE_MAX_BYTES, TOPOLOGY_MANIFEST_MAX_BYTES, normalize_repo_relative,
     normalize_repo_relative_input, read_repo_file_to_string_with_limit, read_repo_file_with_limit,
@@ -151,6 +154,29 @@ pub(crate) struct InputSnapshotIdentitySources {
     pub(crate) analysis_requirements_identity: Digest,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct InputSnapshotRuntimeSources {
+    pub(crate) adaptation_models: AdaptationModelInventory,
+    pub(crate) go_semantic_tool: GoSemanticToolPreparation,
+}
+
+impl InputSnapshotRuntimeSources {
+    pub(crate) fn prepare(
+        loaded: &LoadedConfig,
+        db: &AnalysisDb,
+        run_go_semantic: bool,
+        adaptation_budget: AdaptationModelBudget,
+    ) -> Self {
+        Self {
+            adaptation_models: AdaptationModelInventory::discover(
+                &loaded.root,
+                adaptation_budget.max_model_files,
+            ),
+            go_semantic_tool: prepare_go_semantic_tool(loaded, db, run_go_semantic),
+        }
+    }
+}
+
 impl InputSnapshot {
     pub(crate) fn analysis_settings_digest(&self, scope: AnalysisSettingsScope) -> &Digest {
         let source = self
@@ -209,6 +235,13 @@ impl InputSnapshot {
         }
     }
 
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "direct snapshot construction remains available to focused provider tests"
+        )
+    )]
     pub(crate) fn from_run_inputs_with_plan(
         loaded: &LoadedConfig,
         db: &AnalysisDb,
@@ -216,6 +249,33 @@ impl InputSnapshot {
         rule_digest: &str,
         plan: &AnalysisPlan,
         provider_manifests: &[ProviderManifest],
+    ) -> Self {
+        let runtime_sources = InputSnapshotRuntimeSources::prepare(
+            loaded,
+            db,
+            plan.requests_any_capability(&["calls", "control_flow", "dataflow"]),
+            AdaptationModelBudget::default(),
+        );
+        Self::from_run_inputs_with_plan_and_runtime_sources(
+            loaded,
+            db,
+            config_digest,
+            rule_digest,
+            plan,
+            provider_manifests,
+            &runtime_sources,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_run_inputs_with_plan_and_runtime_sources(
+        loaded: &LoadedConfig,
+        db: &AnalysisDb,
+        config_digest: &str,
+        rule_digest: &str,
+        plan: &AnalysisPlan,
+        provider_manifests: &[ProviderManifest],
+        runtime_sources: &InputSnapshotRuntimeSources,
     ) -> Self {
         let identity_sources = Self::identity_sources_from_plan(loaded, plan);
         debug_assert_eq!(
@@ -244,6 +304,7 @@ impl InputSnapshot {
             rule_digest,
             plan,
             provider_manifests,
+            runtime_sources,
         );
         debug_assert_eq!(snapshot.semantic_digest().kind, DigestKind::InputSnapshot);
         snapshot
@@ -276,6 +337,7 @@ impl InputSnapshot {
         rule_digest: &str,
         plan: &AnalysisPlan,
         provider_manifests: &[ProviderManifest],
+        runtime_sources: &InputSnapshotRuntimeSources,
     ) -> Self {
         let identity_sources = Self::identity_sources_from_plan(loaded, plan);
         let workspace_identity = WorkspaceIdentity::from_roots([loaded.root.as_path()]);
@@ -294,7 +356,8 @@ impl InputSnapshot {
             .map(ProviderSchemaSnapshot::from_manifest)
             .collect::<Vec<_>>();
         provider_schemas.sort_by(|left, right| left.provider_id.cmp(&right.provider_id));
-        let go_lifecycle = GoLifecycleSnapshot::from_loaded(loaded, db);
+        let go_tool_invocation = go_tool_invocation_component(&runtime_sources.go_semantic_tool);
+        let go_lifecycle = GoLifecycleSnapshot::from_loaded(loaded, db, &go_tool_invocation);
         let ts_js_lifecycle = TsJsLifecycleSnapshot::from_loaded(loaded, db);
         let mut tool_invocations = vec![
             go_lifecycle.tool_invocation_component().clone(),
@@ -314,11 +377,7 @@ impl InputSnapshot {
             go_lifecycle,
             ts_js_lifecycle,
             rules: rule_components(rule_digest, plan),
-            models: vec![InputComponent::absent(
-                "model.files",
-                DigestKind::ModelFile,
-                "no model files configured",
-            )],
+            models: adaptation_model_components(&runtime_sources.adaptation_models),
             extensions: extension_components_from_repo(&loaded.root),
             tool_invocations,
             provider_schemas,
@@ -650,10 +709,14 @@ impl<'de> Deserialize<'de> for RequestedCapabilitySnapshot {
 }
 
 impl GoLifecycleSnapshot {
-    fn from_loaded(loaded: &LoadedConfig, db: &AnalysisDb) -> Self {
+    fn from_loaded(
+        loaded: &LoadedConfig,
+        db: &AnalysisDb,
+        tool_invocation: &InputComponent,
+    ) -> Self {
         let components = match crate::go::lifecycle::GoAnalysisConfig::from_loaded(loaded, db) {
-            Ok(config) => go_lifecycle_components(loaded, &config),
-            Err(error) => go_lifecycle_error_components(loaded, error.reason()),
+            Ok(config) => go_lifecycle_components(loaded, &config, tool_invocation),
+            Err(error) => go_lifecycle_error_components(loaded, error.reason(), tool_invocation),
         };
 
         Self {
@@ -863,9 +926,108 @@ impl ProviderSchemaSnapshot {
     }
 }
 
+fn prepare_go_semantic_tool(
+    loaded: &LoadedConfig,
+    db: &AnalysisDb,
+    run_go_semantic: bool,
+) -> GoSemanticToolPreparation {
+    if !run_go_semantic {
+        return GoSemanticToolPreparation::not_invoked(
+            "Go semantic analysis was not requested by this run",
+        );
+    }
+    let files = crate::go::lifecycle::go_files(db);
+    if files.is_empty() {
+        return GoSemanticToolPreparation::not_invoked("no Go source files were discovered");
+    }
+    let config = match crate::go::lifecycle::GoAnalysisConfig::from_loaded_files(loaded, &files) {
+        Ok(config) => config,
+        Err(error) => return GoSemanticToolPreparation::setup_missing(error.reason()),
+    };
+    if !config.files_without_module_root.is_empty() {
+        return GoSemanticToolPreparation::setup_missing("files outside module roots");
+    }
+    if !config.missing_module_roots(&loaded.root).is_empty() {
+        return GoSemanticToolPreparation::setup_missing("missing module roots");
+    }
+    GoSemanticToolPreparation::prepare()
+}
+
+fn go_tool_invocation_component(preparation: &GoSemanticToolPreparation) -> InputComponent {
+    match preparation {
+        GoSemanticToolPreparation::NotInvoked { reason } => {
+            InputComponent::absent("go.tool_invocation", DigestKind::ToolInvocation, reason)
+        }
+        GoSemanticToolPreparation::SetupMissing {
+            reason,
+            process_error,
+        } => {
+            let mut parts = vec![format!("reason={reason}")];
+            if let Some(error) = process_error {
+                parts.push(format!("process_error={}", error.stable_reason()));
+            }
+            let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
+            InputComponent::new(
+                "go.tool_invocation",
+                InputComponentStatus::SetupMissing,
+                Digest::from_parts(
+                    DigestKind::ToolInvocation,
+                    "go.tool_invocation.setup_missing",
+                    &refs,
+                ),
+                parts,
+            )
+        }
+        GoSemanticToolPreparation::Ready(frontend) => {
+            let parts = frontend.identity_parts();
+            let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
+            InputComponent::new(
+                "go.tool_invocation",
+                InputComponentStatus::Present,
+                Digest::from_parts(DigestKind::ToolInvocation, "go.tool_invocation", &refs),
+                parts,
+            )
+        }
+    }
+}
+
+fn adaptation_model_components(inventory: &AdaptationModelInventory) -> Vec<InputComponent> {
+    if inventory.is_absent() {
+        return vec![InputComponent::absent(
+            "model.files",
+            DigestKind::ModelFile,
+            "no model files configured",
+        )];
+    }
+
+    let mut detail = inventory
+        .files
+        .iter()
+        .map(|file| format!("file={}", file.relative_path))
+        .collect::<Vec<_>>();
+    detail.extend(inventory.issues.iter().map(|issue| {
+        format!(
+            "issue={}:{}={}",
+            issue.relative_path, issue.evidence_key, issue.evidence_value
+        )
+    }));
+    let status = if inventory.files.is_empty() {
+        InputComponentStatus::SetupMissing
+    } else {
+        InputComponentStatus::Present
+    };
+    vec![InputComponent::new(
+        "model.files",
+        status,
+        inventory.digest.clone(),
+        detail,
+    )]
+}
+
 fn go_lifecycle_components(
     loaded: &LoadedConfig,
     config: &crate::go::lifecycle::GoAnalysisConfig,
+    tool_invocation: &InputComponent,
 ) -> Vec<InputComponent> {
     vec![
         values_component(
@@ -924,11 +1086,7 @@ fn go_lifecycle_components(
             DigestKind::GoLifecycle,
             config.package_patterns.clone(),
         ),
-        InputComponent::unsupported(
-            "go.tool_invocation",
-            DigestKind::ToolInvocation,
-            "not invoked by input snapshot",
-        ),
+        tool_invocation.clone(),
         values_component(
             "go.environment_policy",
             DigestKind::GoLifecycle,
@@ -937,7 +1095,11 @@ fn go_lifecycle_components(
     ]
 }
 
-fn go_lifecycle_error_components(loaded: &LoadedConfig, reason: &str) -> Vec<InputComponent> {
+fn go_lifecycle_error_components(
+    loaded: &LoadedConfig,
+    reason: &str,
+    tool_invocation: &InputComponent,
+) -> Vec<InputComponent> {
     let setup_detail = vec![format!("error={reason}")];
     let unavailable_detail = vec![format!("module roots unavailable: {reason}")];
     vec![
@@ -993,11 +1155,7 @@ fn go_lifecycle_error_components(loaded: &LoadedConfig, reason: &str) -> Vec<Inp
                 &["./..."],
             ),
         ),
-        InputComponent::unsupported(
-            "go.tool_invocation",
-            DigestKind::ToolInvocation,
-            "not invoked by input snapshot",
-        ),
+        tool_invocation.clone(),
         InputComponent::setup_missing(
             "go.environment_policy",
             DigestKind::GoLifecycle,
@@ -1746,6 +1904,7 @@ mod source_config_rule_model_extension {
     use crate::cache::keys::{AnalysisSettingsScope, config_hash};
     use crate::config::{LoadedConfig, PolintConfig, RuleConfig};
     use crate::core::{AnalysisDb, CapabilitySupportStatus};
+    use crate::go::semantic::process::PreparedGoSemanticFrontend;
     use std::path::Path;
     use tempfile::TempDir;
 
@@ -2230,6 +2389,104 @@ mod source_config_rule_model_extension {
     }
 
     #[test]
+    fn model_file_add_edit_and_delete_change_snapshot_identity() {
+        let temp = TempDir::new().expect("create temp repo");
+        let loaded = loaded_config(temp.path());
+        let db = db_with_files(temp.path(), &[("src/app.ts", "export const app = 1;\n")]);
+        let manifests = crate::analysis_kernel::AnalysisKernel::provider_manifests();
+
+        let absent = snapshot_for(&loaded, &db, manifests);
+        std::fs::create_dir_all(temp.path().join(".polint/models"))
+            .expect("create model directory");
+        let model_path = temp.path().join(".polint/models/framework.toml");
+        std::fs::write(&model_path, "[[facts]]\nsource_pattern = \"a\"\n").expect("add model");
+        let added = snapshot_for(&loaded, &db, manifests);
+        std::fs::write(&model_path, "[[facts]]\nsource_pattern = \"b\"\n").expect("edit model");
+        let edited = snapshot_for(&loaded, &db, manifests);
+        std::fs::remove_file(model_path).expect("delete model");
+        let deleted = snapshot_for(&loaded, &db, manifests);
+
+        assert_eq!(absent.models[0].status, InputComponentStatus::Absent);
+        assert_eq!(added.models[0].status, InputComponentStatus::Present);
+        assert_ne!(absent.models[0].digest, added.models[0].digest);
+        assert_ne!(added.models[0].digest, edited.models[0].digest);
+        assert_eq!(absent.models[0].digest, deleted.models[0].digest);
+        assert_ne!(absent.semantic_digest(), added.semantic_digest());
+        assert_ne!(added.semantic_digest(), edited.semantic_digest());
+        assert_eq!(absent.semantic_digest(), deleted.semantic_digest());
+    }
+
+    #[test]
+    fn prepared_go_frontend_and_toolchain_change_snapshot_identity() {
+        let temp = TempDir::new().expect("create temp repo");
+        std::fs::write(temp.path().join("go.mod"), "module example.test/app\n")
+            .expect("write go.mod");
+        let loaded = loaded_config(temp.path());
+        let db = db_with_files(temp.path(), &[("main.go", "package main\n")]);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["calls"]);
+        let manifests = crate::analysis_kernel::AnalysisKernel::provider_manifests();
+        let snapshot = |frontend: PreparedGoSemanticFrontend| {
+            let runtime_sources = InputSnapshotRuntimeSources {
+                adaptation_models: AdaptationModelInventory::discover(temp.path(), 32),
+                go_semantic_tool: GoSemanticToolPreparation::Ready(frontend),
+            };
+            InputSnapshot::from_run_inputs_with_plan_and_runtime_sources(
+                &loaded,
+                &db,
+                "config-digest",
+                "rule-digest",
+                &plan,
+                manifests,
+                &runtime_sources,
+            )
+        };
+
+        let baseline = snapshot(PreparedGoSemanticFrontend::for_test(
+            "executable-a",
+            Some("source-a"),
+            Some("go1.25.0"),
+        ));
+        let executable_changed = snapshot(PreparedGoSemanticFrontend::for_test(
+            "executable-b",
+            Some("source-a"),
+            Some("go1.25.0"),
+        ));
+        let version_changed = snapshot(PreparedGoSemanticFrontend::for_test(
+            "executable-a",
+            Some("source-a"),
+            Some("go1.26.0"),
+        ));
+
+        let baseline_tool = baseline
+            .tool_invocations
+            .iter()
+            .find(|component| component.name == "go.tool_invocation")
+            .expect("Go tool component");
+        assert_eq!(baseline_tool.status, InputComponentStatus::Present);
+        assert_eq!(
+            baseline_tool,
+            baseline
+                .go_lifecycle
+                .components
+                .iter()
+                .find(|component| component.name == "go.tool_invocation")
+                .expect("Go lifecycle tool component")
+        );
+        assert_ne!(
+            baseline_tool.digest,
+            executable_changed.tool_invocations[0].digest
+        );
+        assert_ne!(
+            baseline.semantic_digest(),
+            executable_changed.semantic_digest()
+        );
+        assert_ne!(
+            baseline.semantic_digest(),
+            version_changed.semantic_digest()
+        );
+    }
+
+    #[test]
     fn configured_local_extension_records_present_extension_code_component() {
         let temp = TempDir::new().expect("create temp repo");
         let loaded = loaded_config(temp.path());
@@ -2584,7 +2841,7 @@ mod lifecycle {
         );
         assert_eq!(
             component(&snapshot.go_lifecycle.components, "go.tool_invocation").status,
-            InputComponentStatus::Unsupported
+            InputComponentStatus::Absent
         );
     }
 
@@ -2806,7 +3063,7 @@ mod lifecycle {
     }
 
     #[test]
-    fn official_tool_identity_components_are_unsupported_when_not_invoked() {
+    fn tool_identity_distinguishes_not_invoked_from_unsupported() {
         let temp = TempDir::new().expect("create temp repo");
         let loaded = default_loaded_config(temp.path());
         let db = db_with_files(
@@ -2825,7 +3082,7 @@ mod lifecycle {
 
         assert_eq!(
             component(&snapshot.go_lifecycle.components, "go.tool_invocation").status,
-            InputComponentStatus::Unsupported
+            InputComponentStatus::Absent
         );
         assert_eq!(
             component(
@@ -2835,10 +3092,12 @@ mod lifecycle {
             .status,
             InputComponentStatus::Unsupported
         );
-        assert!(snapshot.tool_invocations.iter().all(|component| {
-            component.status == InputComponentStatus::Unsupported
-                && component.digest.kind == DigestKind::ToolInvocation
-        }));
+        assert!(
+            snapshot
+                .tool_invocations
+                .iter()
+                .all(|component| component.digest.kind == DigestKind::ToolInvocation)
+        );
     }
 
     #[test]

@@ -14,7 +14,7 @@ use crate::go::semantic::diagnostics::{
     category_for_unsupported_go_version,
 };
 use crate::go::semantic::lower::lower_go_semantic;
-use crate::go::semantic::process::GoSemanticProcessError;
+use crate::go::semantic::process::{GoSemanticProcessError, GoSemanticToolPreparation};
 use crate::go::semantic::store::{GoSemanticFactsOutput, StructuralDuplicateReport};
 
 const REQUESTED_CAPABILITIES: &[&str] = &["calls", "control_flow", "dataflow"];
@@ -33,6 +33,7 @@ pub(crate) fn derive_go_semantic_with_cache_stats(
     input_snapshot: &InputSnapshot,
     manifest: &ProviderManifest,
     go_syntax_output_digest: Digest,
+    tool_preparation: &GoSemanticToolPreparation,
 ) -> GoSemanticProviderRunOutput {
     derive_go_semantic_with_runner(
         db,
@@ -40,7 +41,21 @@ pub(crate) fn derive_go_semantic_with_cache_stats(
         input_snapshot,
         manifest,
         go_syntax_output_digest,
-        |config| GoSemanticClient::new(loaded.root.clone()).run(config),
+        |config| match tool_preparation {
+            GoSemanticToolPreparation::Ready(frontend) => {
+                GoSemanticClient::new(loaded.root.clone()).run_prepared(config, frontend)
+            }
+            GoSemanticToolPreparation::SetupMissing {
+                process_error: Some(error),
+                ..
+            } => Err(GoSemanticClientError::Process(error.clone())),
+            GoSemanticToolPreparation::SetupMissing { reason, .. }
+            | GoSemanticToolPreparation::NotInvoked { reason } => Err(
+                GoSemanticClientError::Process(GoSemanticProcessError::CommandUnavailable(
+                    format!("Go semantic frontend was not prepared: {reason}"),
+                )),
+            ),
+        },
     )
 }
 

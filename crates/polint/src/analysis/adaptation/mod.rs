@@ -6,6 +6,7 @@
 
 pub(crate) mod budget;
 pub(crate) mod cache_key;
+pub(crate) mod discovery;
 pub(crate) mod facts;
 pub(crate) mod loader;
 pub(crate) mod store;

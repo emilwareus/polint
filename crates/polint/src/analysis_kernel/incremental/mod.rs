@@ -108,7 +108,7 @@ pub(crate) use digest::{
 pub(crate) use input_snapshot::{
     AnalysisSettingSource, FileSnapshot, GoLifecycleSnapshot, INPUT_SNAPSHOT_SCHEMA_VERSION,
     InputComponent, InputComponentStatus, InputSnapshot, InputSnapshotIdentitySources,
-    ProviderSchemaSnapshot, TsJsLifecycleSnapshot,
+    InputSnapshotRuntimeSources, ProviderSchemaSnapshot, TsJsLifecycleSnapshot,
 };
 pub(in crate::analysis_kernel) use input_snapshot::{
     digest_semantic_row as input_snapshot_digest_row, semantic_row as input_snapshot_semantic_row,

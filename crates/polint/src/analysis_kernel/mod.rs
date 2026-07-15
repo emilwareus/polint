@@ -185,14 +185,32 @@ impl AnalysisKernel {
                 "stage: source files loaded"
             );
         }
-        let input_snapshot = incremental::InputSnapshot::from_run_inputs_with_plan(
+        // Prepare external runtime inputs before sealing the run identity. The same
+        // bounded model inventory and exact Go frontend selection are then consumed
+        // by their providers, so snapshot identity cannot drift from execution.
+        let solver_budget = crate::analysis::solver::budget::SolverBudget {
+            go: input.loaded.config.solver.to_go_sub_budget(),
+            js: input.loaded.config.solver.to_js_sub_budget(),
+            object_model_enabled: input.loaded.config.solver.js_object_model_enabled(),
+            object: input.loaded.config.solver.to_js_object_sub_budget(),
+            ..crate::analysis::solver::budget::SolverBudget::default()
+        };
+        let runtime_sources = incremental::InputSnapshotRuntimeSources::prepare(
             input.loaded,
             &db,
-            input.config_digest,
-            input.rule_digest,
-            input.plan,
-            Self::provider_manifests(),
+            run_full_refinement_pipeline,
+            solver_budget.adaptation,
         );
+        let input_snapshot =
+            incremental::InputSnapshot::from_run_inputs_with_plan_and_runtime_sources(
+                input.loaded,
+                &db,
+                input.config_digest,
+                input.rule_digest,
+                input.plan,
+                Self::provider_manifests(),
+                &runtime_sources,
+            );
         let mut diagnostics = Vec::new();
         let mut provider_outputs = Vec::new();
 
@@ -464,6 +482,7 @@ impl AnalysisKernel {
                 &input_snapshot,
                 Self::provider_manifest("polint.go.semantic"),
                 go_dependency_output_digest.clone(),
+                &runtime_sources.go_semantic_tool,
             )
         } else {
             Default::default()
@@ -783,28 +802,14 @@ impl AnalysisKernel {
                 )
             });
 
-        // Thread the per-language solver config into SolverBudget, mirroring how
-        // the reachability provider receives `reachability.roots`.
-        // Cross-domain fields stay at their defaults; absent config falls back to each
-        // sub-budget default. The adaptation sub-budget is passed to semantic_graph as
-        // well because model files lower into semantic constraints before the solver
-        // expands them.
-        let solver_budget = crate::analysis::solver::budget::SolverBudget {
-            go: input.loaded.config.solver.to_go_sub_budget(),
-            js: input.loaded.config.solver.to_js_sub_budget(),
-            object_model_enabled: input.loaded.config.solver.js_object_model_enabled(),
-            object: input.loaded.config.solver.to_js_object_sub_budget(),
-            ..crate::analysis::solver::budget::SolverBudget::default()
-        };
-
         // Semantic graph projection runs after type/value aliases. It projects the
         // unified graph from stored facts and repo-local adaptation models, folding
         // every consumed upstream provider output into its own identity.
         let semantic_graph = if run_full_refinement_pipeline {
-            crate::analysis::semantic_graph::provider::derive_semantic_graph_with_cache_stats(
+            crate::analysis::semantic_graph::provider::derive_semantic_graph_with_cache_stats_and_models(
                 &mut db,
-                input.loaded,
                 solver_budget.adaptation,
+                &runtime_sources.adaptation_models,
                 &input_snapshot,
                 Self::provider_manifest("polint.semantic_graph"),
                 entrypoints_calls_digest.clone(),

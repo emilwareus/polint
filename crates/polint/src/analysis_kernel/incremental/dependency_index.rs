@@ -993,35 +993,52 @@ mod tests {
     }
 
     #[test]
-    fn unreferenced_snapshot_sibling_preserves_query_key_edges_and_reuse() {
+    fn unreferenced_model_and_tool_siblings_preserve_query_reuse() {
         let capability = query_input_fixtures().remove(0).0;
         let baseline = query(QueryDependencyInputs::new(vec![capability]));
         let baseline_edges = query_dependency_edges(&baseline);
-        let mut changed_sibling = InputDependencyKey::model(
-            "model.unreferenced",
-            digest(DigestKind::ModelFile, "unreferenced_model"),
-            InputComponentStatus::Present,
-        )
-        .expect("model dependency");
-        changed_sibling.digest = digest(DigestKind::ModelFile, "changed_unreferenced_model");
+        let changed_siblings = [
+            (
+                InputDependencyKey::model(
+                    "model.files",
+                    digest(DigestKind::ModelFile, "changed_unreferenced_model"),
+                    InputComponentStatus::Present,
+                )
+                .expect("model dependency"),
+                ChangeKind::ModelFile,
+            ),
+            (
+                InputDependencyKey::tool_invocation(
+                    "go.tool_invocation",
+                    digest(DigestKind::ToolInvocation, "changed_unreferenced_tool"),
+                    InputComponentStatus::Present,
+                )
+                .expect("tool dependency"),
+                ChangeKind::Toolchain,
+            ),
+        ];
 
         let after_sibling_change = baseline.clone();
-        let after_edges = query_dependency_edges(&after_sibling_change);
+        assert_eq!(
+            query_dependency_edges(&after_sibling_change),
+            baseline_edges
+        );
         assert_eq!(after_sibling_change, baseline);
-        assert_eq!(after_edges, baseline_edges);
 
         let query_node = CacheNode::Query(baseline.into());
         let index = DependencyIndex::from_edges(baseline_edges);
-        let change_set = ChangeSet::from_rows(vec![ChangeSetRow {
-            node: CacheNode::DependencyInput(changed_sibling.clone()),
-            kind: ChangeKind::ModelFile,
-            digest: changed_sibling.digest,
-        }]);
-        let plan = InvalidationPlan::from_change_set(&index, &change_set);
-        assert!(matches!(
-            plan.action_for(&query_node),
-            Some(InvalidationAction::Reuse(_))
-        ));
+        for (changed_sibling, kind) in changed_siblings {
+            let change_set = ChangeSet::from_rows(vec![ChangeSetRow {
+                node: CacheNode::DependencyInput(changed_sibling.clone()),
+                kind,
+                digest: changed_sibling.digest,
+            }]);
+            let plan = InvalidationPlan::from_change_set(&index, &change_set);
+            assert!(matches!(
+                plan.action_for(&query_node),
+                Some(InvalidationAction::Reuse(_))
+            ));
+        }
     }
 
     #[test]

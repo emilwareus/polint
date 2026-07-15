@@ -6,9 +6,7 @@ use std::time::{Duration, Instant};
 
 use crate::go::lifecycle::GoAnalysisConfig;
 use crate::go::semantic::diagnostics::GO_SIDECAR_TIMEOUT;
-use crate::go::semantic::process::{
-    GoSemanticProcessError, command_for_frontend, frontend_digest, resolve_go_semantic_frontend,
-};
+use crate::go::semantic::process::{GoSemanticProcessError, PreparedGoSemanticFrontend};
 use crate::go::semantic::protocol::{GoSemanticOutput, GoSemanticProtocolError, decode_ndjson};
 
 #[derive(Debug)]
@@ -69,15 +67,22 @@ impl GoSemanticClient {
         &self,
         config: &GoAnalysisConfig,
     ) -> Result<GoSemanticClientRun, GoSemanticClientError> {
-        let frontend = resolve_go_semantic_frontend()?;
-        let digest = frontend_digest(&frontend)?;
-        let mut command = command_for_frontend(&frontend, &self.root)?;
+        let frontend = PreparedGoSemanticFrontend::prepare()?;
+        self.run_prepared(config, &frontend)
+    }
+
+    pub(crate) fn run_prepared(
+        &self,
+        config: &GoAnalysisConfig,
+        frontend: &PreparedGoSemanticFrontend,
+    ) -> Result<GoSemanticClientRun, GoSemanticClientError> {
+        let mut command = frontend.command(&self.root);
         append_request_args(&mut command, &self.root, config);
         let stdout = run_with_timeout(command, self.timeout, &self.root)?;
         let output = decode_ndjson(&stdout).map_err(GoSemanticClientError::from)?;
         Ok(GoSemanticClientRun {
             output,
-            frontend_digest: digest,
+            frontend_digest: frontend.identity_digest(),
         })
     }
 }
