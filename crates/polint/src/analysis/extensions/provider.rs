@@ -10,9 +10,11 @@ use super::sinks::{
 };
 use super::store::{AcceptedExtensionFact, ExtensionActivationRow, ExtensionOutput};
 use super::validate::{ExtensionValidationInput, validate_extension_output};
+use crate::analysis_kernel::FactFamily;
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
-    CacheStats, Digest, DigestKind, InputSnapshot, input_component_identity_rows,
+    CacheStats, Digest, DigestKind, InputComponentStatus, InputSnapshot, ProviderOutputDependency,
+    input_component_identity_rows,
 };
 use crate::core::AnalysisDb;
 use crate::diagnostics::{Diagnostic, Severity, TextRange};
@@ -25,11 +27,32 @@ pub(crate) struct ExtensionProviderOutput {
     pub(crate) output_digest: Option<Digest>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct ExtensionProviderDependency {
+    provider_id: &'static str,
+    status: InputComponentStatus,
+    output_digest: Digest,
+}
+
+impl ExtensionProviderDependency {
+    pub(crate) fn from_provider_output(
+        provider_id: &'static str,
+        dependency: &ProviderOutputDependency,
+    ) -> Self {
+        Self {
+            provider_id,
+            status: dependency.status,
+            output_digest: dependency.output_digest.clone(),
+        }
+    }
+}
+
 pub(crate) fn derive_extension_provider_outputs_with_cache_stats(
     db: &mut AnalysisDb,
     repo_root: &std::path::Path,
     input_snapshot: &InputSnapshot,
     manifest: &ProviderManifest,
+    dependencies: &[ExtensionProviderDependency],
 ) -> ExtensionProviderOutput {
     let discovered = discover_local_extensions(repo_root);
     if discovered.is_empty() {
@@ -40,7 +63,12 @@ pub(crate) fn derive_extension_provider_outputs_with_cache_stats(
             diagnostics: Vec::new(),
             cache_stats,
             execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded,
-            output_digest: Some(extension_output_digest(manifest, input_snapshot, db)),
+            output_digest: Some(extension_output_digest(
+                manifest,
+                input_snapshot,
+                dependencies,
+                db,
+            )),
         };
     }
 
@@ -121,15 +149,16 @@ pub(crate) fn derive_extension_provider_outputs_with_cache_stats(
                                     )
                                 })
                                 .collect::<Vec<_>>();
+                            let declared_outputs = provider
+                                .declared_outputs
+                                .iter()
+                                .map(|label| label.as_str().to_string())
+                                .collect::<BTreeSet<_>>();
                             validate_extension_output(
                                 db,
                                 ExtensionValidationInput {
-                                    declared_outputs: provider
-                                        .declared_outputs
-                                        .iter()
-                                        .map(|label| label.as_str().to_string())
-                                        .collect::<BTreeSet<_>>(),
-                                    native_stable_keys: native_stable_keys(db),
+                                    native_stable_keys: native_stable_keys(db, &declared_outputs),
+                                    declared_outputs,
                                     exact_validation_evidence: BTreeSet::new(),
                                     candidates,
                                 },
@@ -188,13 +217,19 @@ pub(crate) fn derive_extension_provider_outputs_with_cache_stats(
         diagnostics,
         cache_stats,
         execution: crate::analysis_kernel::incremental::ProviderExecutionOutcome::Succeeded,
-        output_digest: Some(extension_output_digest(manifest, input_snapshot, db)),
+        output_digest: Some(extension_output_digest(
+            manifest,
+            input_snapshot,
+            dependencies,
+            db,
+        )),
     }
 }
 
 fn extension_output_digest(
     manifest: &ProviderManifest,
     input_snapshot: &InputSnapshot,
+    dependencies: &[ExtensionProviderDependency],
     db: &AnalysisDb,
 ) -> Digest {
     let mut parts = vec![
@@ -205,6 +240,14 @@ fn extension_output_digest(
         "extension_input",
         &input_snapshot.extensions,
     ));
+    parts.extend(dependencies.iter().map(|dependency| {
+        format!(
+            "provider_dependency={}:{}:{}",
+            dependency.provider_id,
+            dependency.status.label(),
+            dependency.output_digest
+        )
+    }));
     for row in db.extension_activations() {
         let provider_id = row.provider_id.as_deref().unwrap_or("<handshake>");
         parts.push(format!(
@@ -346,10 +389,23 @@ fn host_error_digest(error: &ExtensionHostError) -> String {
     crate::cache::stable_hash(&refs)
 }
 
-fn native_stable_keys(db: &AnalysisDb) -> BTreeSet<String> {
+fn native_stable_keys(db: &AnalysisDb, declared_outputs: &BTreeSet<String>) -> BTreeSet<String> {
+    let native_families = declared_outputs
+        .iter()
+        .filter_map(|output| match output.as_str() {
+            "entrypoint" => Some(FactFamily::Entrypoint),
+            "trust_boundary" => Some(FactFamily::TrustBoundary),
+            "dispatch_edge" => Some(FactFamily::DispatchEdge),
+            "unresolved_framework" => Some(FactFamily::UnresolvedFramework),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
     db.fact_meta()
         .rows()
-        .filter(|(_reference, metadata)| !metadata.producer_id.starts_with("polint.extension."))
+        .filter(|(reference, metadata)| {
+            native_families.contains(&reference.family)
+                && !metadata.producer_id.starts_with("polint.extension.")
+        })
         .map(|(_reference, metadata)| metadata.stable_key.clone())
         .collect()
 }
@@ -483,6 +539,7 @@ mod tests {
                 .find(|manifest| manifest.id == "polint.extensions")
                 .expect("extension provider manifest exists"),
             &snapshot,
+            &[],
             &db,
         );
 
@@ -516,16 +573,63 @@ mod tests {
             rejected: Vec::new(),
         });
 
-        let first_digest = extension_output_digest(manifest, &snapshot, &first);
+        let first_digest = extension_output_digest(manifest, &snapshot, &[], &first);
 
         assert_ne!(
             first_digest,
-            extension_output_digest(manifest, &snapshot, &second)
+            extension_output_digest(manifest, &snapshot, &[], &second)
         );
         assert_ne!(
             first_digest,
-            extension_output_digest(manifest, &snapshot, &third)
+            extension_output_digest(manifest, &snapshot, &[], &third)
         );
+    }
+
+    #[test]
+    fn extension_output_digest_authenticates_upstream_status_and_identity() {
+        let snapshot = empty_snapshot();
+        let manifest = crate::analysis_kernel::AnalysisKernel::provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.extensions")
+            .expect("extension provider manifest exists");
+        let db = AnalysisDb::new();
+
+        let first_present = ProviderOutputDependency::present(Digest::from_parts(
+            DigestKind::ProviderOutput,
+            "polint.symbol_graph",
+            &["first"],
+        ));
+        let second_present = ProviderOutputDependency::present(Digest::from_parts(
+            DigestKind::ProviderOutput,
+            "polint.symbol_graph",
+            &["second"],
+        ));
+        let failed = ProviderOutputDependency::from_execution(
+            "polint.symbol_graph",
+            crate::analysis_kernel::incremental::ProviderExecutionOutcome::Failed,
+            None,
+        );
+        let absent = ProviderOutputDependency::from_execution(
+            "polint.symbol_graph",
+            crate::analysis_kernel::incremental::ProviderExecutionOutcome::Skipped,
+            None,
+        );
+
+        let digest = |dependency: &ProviderOutputDependency| {
+            extension_output_digest(
+                manifest,
+                &snapshot,
+                &[ExtensionProviderDependency::from_provider_output(
+                    "polint.symbol_graph",
+                    dependency,
+                )],
+                &db,
+            )
+        };
+
+        assert_ne!(digest(&first_present), digest(&second_present));
+        assert_ne!(digest(&failed), digest(&absent));
+        assert_ne!(digest(&first_present), digest(&failed));
     }
 
     #[test]

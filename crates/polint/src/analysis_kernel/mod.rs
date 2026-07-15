@@ -369,7 +369,7 @@ impl AnalysisKernel {
                 input.cache,
                 &input_snapshot,
                 Self::provider_manifest("polint.module_topology"),
-                module_dependency_output,
+                module_dependency_output.clone(),
                 symbol_dependency_output.clone(),
             )
         } else {
@@ -814,7 +814,7 @@ impl AnalysisKernel {
                 &input.loaded.config.reachability.roots,
                 entrypoints_calls_digest.clone(),
                 entrypoints_dependency_output.output_digest.clone(),
-                identity_dependency_output.output_digest,
+                identity_dependency_output.output_digest.clone(),
                 entrypoints_symbol_digest.clone(),
                 entrypoints_topology_digest.clone(),
             )
@@ -839,15 +839,81 @@ impl AnalysisKernel {
             reachability_output_digest,
         );
 
-        let extensions = if run_full_refinement_pipeline {
+        let extension_dependencies = [
+            crate::analysis::extensions::provider::ExtensionProviderDependency::from_provider_output(
+                "polint.go.syntax",
+                &go_dependency_output,
+            ),
+            crate::analysis::extensions::provider::ExtensionProviderDependency::from_provider_output(
+                "polint.ts.syntax",
+                &ts_dependency_output,
+            ),
+            crate::analysis::extensions::provider::ExtensionProviderDependency::from_provider_output(
+                "polint.module_graph",
+                &module_dependency_output,
+            ),
+            crate::analysis::extensions::provider::ExtensionProviderDependency::from_provider_output(
+                "polint.symbol_graph",
+                &symbol_dependency_output,
+            ),
+            crate::analysis::extensions::provider::ExtensionProviderDependency::from_provider_output(
+                "polint.module_topology",
+                &module_topology_dependency_output,
+            ),
+            crate::analysis::extensions::provider::ExtensionProviderDependency::from_provider_output(
+                "polint.semantic_mir",
+                &semantic_mir_dependency_output,
+            ),
+            crate::analysis::extensions::provider::ExtensionProviderDependency::from_provider_output(
+                "polint.cfg",
+                &cfg_dependency_output,
+            ),
+            crate::analysis::extensions::provider::ExtensionProviderDependency::from_provider_output(
+                "polint.calls",
+                &calls_dependency_output,
+            ),
+            crate::analysis::extensions::provider::ExtensionProviderDependency::from_provider_output(
+                "polint.go.semantic",
+                &go_semantic_dependency_output,
+            ),
+            crate::analysis::extensions::provider::ExtensionProviderDependency::from_provider_output(
+                "polint.identity",
+                &identity_dependency_output,
+            ),
+            crate::analysis::extensions::provider::ExtensionProviderDependency::from_provider_output(
+                "polint.abstract_domains",
+                &abstract_domains_dependency_output,
+            ),
+            crate::analysis::extensions::provider::ExtensionProviderDependency::from_provider_output(
+                "polint.direct_summaries",
+                &direct_summaries_dependency_output,
+            ),
+            crate::analysis::extensions::provider::ExtensionProviderDependency::from_provider_output(
+                "polint.entrypoints",
+                &entrypoints_dependency_output,
+            ),
+            crate::analysis::extensions::provider::ExtensionProviderDependency::from_provider_output(
+                "polint.reachability",
+                &reachability_dependency_output,
+            ),
+        ];
+        let extensions = if !run_full_refinement_pipeline {
+            Default::default()
+        } else if Self::provider_dependencies_ready(
+            &[&symbol_dependency_output, &entrypoints_dependency_output],
+            &[&go_dependency_output, &ts_dependency_output],
+        ) {
             crate::analysis::extensions::provider::derive_extension_provider_outputs_with_cache_stats(
                 &mut db,
                 &input.loaded.root,
                 &input_snapshot,
                 Self::provider_manifest("polint.extensions"),
+                &extension_dependencies,
             )
         } else {
-            Default::default()
+            dependency_blocked_output!(
+                crate::analysis::extensions::provider::ExtensionProviderOutput
+            )
         };
         let polint_extensions_cache_stats = extensions.cache_stats.clone();
         let extensions_execution = extensions.execution;
@@ -2535,6 +2601,39 @@ mod tests {
             plan_skipped_topology.status,
             incremental::InputComponentStatus::Absent
         );
+
+        let entrypoints = present("polint.entrypoints");
+        assert!(!AnalysisKernel::provider_dependencies_ready(
+            &[&symbol_dependency, &entrypoints],
+            &[&skipped_go_semantic],
+        ));
+        let extensions = dependency_blocked_output!(
+            crate::analysis::extensions::provider::ExtensionProviderOutput
+        );
+        let extension_dependency = incremental::ProviderOutputDependency::from_execution(
+            "polint.extensions",
+            extensions.execution,
+            extensions.output_digest,
+        );
+        assert_eq!(
+            extension_dependency.status,
+            incremental::InputComponentStatus::Unsupported
+        );
+
+        let symbol = present("polint.symbol_graph");
+        assert!(AnalysisKernel::provider_dependencies_ready(
+            &[&symbol, &entrypoints],
+            &[&skipped_go_semantic],
+        ));
+        let absent_entrypoints = incremental::ProviderOutputDependency::from_execution(
+            "polint.entrypoints",
+            incremental::ProviderExecutionOutcome::Skipped,
+            None,
+        );
+        assert!(!AnalysisKernel::provider_dependencies_ready(
+            &[&symbol, &absent_entrypoints],
+            &[&skipped_go_semantic],
+        ));
     }
 
     #[test]
