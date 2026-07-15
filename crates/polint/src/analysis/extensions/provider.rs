@@ -615,21 +615,34 @@ mod tests {
             None,
         );
 
-        let digest = |dependency: &ProviderOutputDependency| {
+        let digest = |provider_id, dependency: &ProviderOutputDependency| {
             extension_output_digest(
                 manifest,
                 &snapshot,
                 &[ExtensionProviderDependency::from_provider_output(
-                    "polint.symbol_graph",
+                    provider_id,
                     dependency,
                 )],
                 &db,
             )
         };
 
-        assert_ne!(digest(&first_present), digest(&second_present));
-        assert_ne!(digest(&failed), digest(&absent));
-        assert_ne!(digest(&first_present), digest(&failed));
+        assert_ne!(
+            digest("polint.symbol_graph", &first_present),
+            digest("polint.symbol_graph", &second_present)
+        );
+        assert_ne!(
+            digest("polint.symbol_graph", &failed),
+            digest("polint.symbol_graph", &absent)
+        );
+        assert_ne!(
+            digest("polint.symbol_graph", &first_present),
+            digest("polint.symbol_graph", &failed)
+        );
+        assert_ne!(
+            digest("polint.symbol_graph", &first_present),
+            digest("polint.entrypoints", &first_present)
+        );
     }
 
     #[test]
