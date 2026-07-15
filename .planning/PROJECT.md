@@ -48,6 +48,8 @@ Phase 63 of v2.0 (Ground Truth and Performance Baseline) completed on 2026-07-09
 
 Phase 64 of v2.0 (Store Foundation and Boundary Proof) completed on 2026-07-10. polint now has a bundled-rusqlite, cache-owned, crate-private semantic-store facade with strict transactional `PRAGMA user_version` migrations, future/invalid/corrupt-store refusal and safe recovery, WAL/foreign-key/bounded-timeout connection policy, a `BEGIN IMMEDIATE` writer lease, and separate read-only connections. Production activation remains disabled and zero-I/O; six store states preserve byte-identical policy output and exit behavior. Public leak gates keep SQLite/store internals out of the SDK, CLI, docs, examples, JSON, and generated skill text, while the real tiny-fixture boundary passes the locked RSS/cold/digest gates. STORE-01/02/03/06/07/08, PERF-03, PROD-01, and VAL-02 validated; manifests, generations, facts, and queries remain assigned to later phases.
 
+Phase 65 of v2.0 (Generation Manifest and Metadata Mirroring) completed on 2026-07-15. The private semantic store now mirrors the kernel's canonical input snapshots, provider manifests and generations, layer/summary/query identities, dependency indexes, validation events, stable fact metadata, and store statistics. A sealed validated handoff feeds an exact schema-v2 relational projection; transactional reservation, complete publication, active selection, readback validation, failure audit, and recovery preserve one complete generation as durable truth. Disabled, failed, and enabled store paths remain policy-neutral and private, while the real serialized boundary passes the unchanged RSS/cold budgets. STORE-04/05 and META-01/04 validated; broad fact payload, graph adjacency, query, and search ingestion remain assigned to later phases.
+
 Archived milestone records:
 
 - `.planning/milestones/v1.0-ROADMAP.md`
@@ -134,10 +136,11 @@ Archived milestone records:
 - [x] **SAE-PREC-04**: polint has internal slicing, path explanation, structured evidence nodes/edges, ranked paths, summary expansion handles, provenance-rich diagnostic evidence, and JSON/SARIF evidence rendering. Validated in Phase 39: Slicing, Paths, and Evidence Bundles.
 - [x] **SAE-PROM-01**: polint has external benchmark adapters and promotion gates that record default-vs-extension deltas, runtime, memory, cache reuse, unknown counts, graph/path metrics, and accepted/rejected extension facts. Validated in Phase 40: External Benchmark Adapters and Promotion Gates.
 - [x] **SAE-PROM-02**: Validated typed SDK query views and agent ergonomics are promoted only where contracts are proven, including bounded query builders and stable JSON for accepted public commands. Validated in Phase 41: Public SDK Query Views and Agent Ergonomics.
+- [x] **STORE-04 / STORE-05 / META-01 / META-04**: Persist canonical kernel metadata and invalidation dependencies through atomic, complete-generation publication and fail-closed recovery without introducing a second identity system. Validated in Phase 65: Generation Manifest and Metadata Mirroring.
 
 ### Active
 
-v2.0 Static Analysis 2.0 Implementation requirements are approved in `.planning/REQUIREMENTS.md` (67 requirements: product boundaries, ground-truth benchmarks, pipeline cost discipline, store foundation, metadata/invalidation, summary persistence, warm review payoff, internal query engine, graph CLI, search boundary, validation/recovery/scale) and mapped to roadmap phases 63-71 in `.planning/ROADMAP.md`. The milestone is anchored on falsifiable outcome gates: scale (≤ +20% peak RSS / +25% cold wall-clock regression budget over the store-disabled baseline), latency (warm `polint review` recomputes only the instrumented invalidation frontier), honesty (unknown/budget states durable end to end), and accuracy visibility (persisted-graph recall baseline recorded, not raised). Phase 70 (Tantivy lexical search) is the designated scope-cut.
+v2.0 Static Analysis 2.0 Implementation requirements are approved in `.planning/REQUIREMENTS.md` (67 requirements: product boundaries, ground-truth benchmarks, pipeline cost discipline, store foundation, metadata/invalidation, summary persistence, warm review payoff, internal query engine, graph CLI, search boundary, validation/recovery/scale) and mapped to roadmap phases 63-71 in `.planning/ROADMAP.md`. Phases 63-65 are complete; Phase 66 is next. The milestone is anchored on falsifiable outcome gates: scale (≤ +20% peak RSS / +25% cold wall-clock regression budget over the store-disabled baseline), latency (warm `polint review` recomputes only the instrumented invalidation frontier), honesty (unknown/budget states durable end to end), and accuracy visibility (persisted-graph recall baseline recorded, not raised). Phase 70 (Tantivy lexical search) is the designated scope-cut.
 
 ### Out of Scope
 
@@ -219,6 +222,7 @@ v2.0 Static Analysis 2.0 Implementation requirements are approved in `.planning/
 | Own the public fact model even when adapters use language-native tooling | Rule authors should consume normalized polint facts while adapters may use Oxc, `go/packages`, Python tooling, javac, JavaParser, coverage.py, LCOV, or JaCoCo behind the boundary. | Accepted for v1.2 sequencing |
 | Build the static-analysis substrate before promoting broad public graph/query APIs | The research roadmap shows kernel, provenance, evaluation, cache, MIR, CFG, summaries, extensions, and benchmark gates must precede stable public advanced query surfaces. | Accepted for v1.2 |
 | Keep the semantic store private and disabled until it has complete validated generations to serve | Phase 64 proves SQLite lifecycle, safety, parity, and cost boundaries without adding a premature CLI/config contract or persisting partial product data. | Accepted in Phase 64; Phase 65 owns manifests and complete-generation metadata |
+| Use canonical kernel metadata as the store's sole identity and invalidation vocabulary | A sealed validated handoff, exact private schema, and complete-generation transaction prevent the durable store from inventing parallel semantic truth. | Accepted and validated in Phase 65 |
 
 ## Next Milestone Goals
 
@@ -242,4 +246,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-07-10 after completing Phase 64 (Store Foundation and Boundary Proof) of v2.0 Static Analysis 2.0 Implementation*
+*Last updated: 2026-07-15 after completing Phase 65 (Generation Manifest and Metadata Mirroring) of v2.0 Static Analysis 2.0 Implementation*
