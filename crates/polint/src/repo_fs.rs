@@ -372,7 +372,7 @@ pub(crate) fn ensure_repo_dir(
             Ok(metadata) if metadata.is_dir() => {}
             Ok(_) => return Err(RepoFileReadError::NotDirectory),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                fs::create_dir(&current).map_err(|_| RepoFileReadError::CreateDir)?;
+                create_or_validate_repo_dir_component(&current)?;
             }
             Err(_) => return Err(RepoFileReadError::Metadata),
         }
@@ -384,6 +384,23 @@ pub(crate) fn ensure_repo_dir(
         }
     }
     Ok(current)
+}
+
+fn create_or_validate_repo_dir_component(path: &Path) -> Result<(), RepoFileReadError> {
+    match fs::create_dir(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let metadata = fs::symlink_metadata(path).map_err(|_| RepoFileReadError::Metadata)?;
+            if metadata.file_type().is_symlink() {
+                Err(RepoFileReadError::EscapesRepo)
+            } else if metadata.is_dir() {
+                Ok(())
+            } else {
+                Err(RepoFileReadError::NotDirectory)
+            }
+        }
+        Err(_) => Err(RepoFileReadError::CreateDir),
+    }
 }
 
 pub(crate) fn write_repo_file_atomic(
@@ -655,6 +672,68 @@ mod tests {
 
         assert!(matches!(error, RepoFileReadError::EscapesRepo));
         assert!(!outside.path().join("output/latest.json").exists());
+    }
+
+    #[test]
+    fn concurrent_repo_writes_share_new_parent_directories() {
+        let repo = tempfile::tempdir().expect("repo");
+        let worker_count = 32;
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(worker_count));
+        let mut workers = Vec::new();
+        for worker in 0..worker_count {
+            let root = repo.path().to_path_buf();
+            let barrier = std::sync::Arc::clone(&barrier);
+            workers.push(std::thread::spawn(move || {
+                barrier.wait();
+                let relative = format!(".polint/cache/analysis/{worker}.json");
+                write_repo_file_atomic(&root, &relative, format!("{worker}\n"))
+                    .unwrap_or_else(|error| panic!("worker {worker}: {error}"));
+            }));
+        }
+        for worker in workers {
+            worker.join().expect("cache writer completes");
+        }
+        for worker in 0..worker_count {
+            assert_eq!(
+                std::fs::read_to_string(
+                    repo.path()
+                        .join(format!(".polint/cache/analysis/{worker}.json"))
+                )
+                .expect("read cache entry"),
+                format!("{worker}\n")
+            );
+        }
+    }
+
+    #[test]
+    fn lost_directory_creation_race_revalidates_the_winner() {
+        let repo = tempfile::tempdir().expect("repo");
+        let directory = repo.path().join("cache");
+        std::fs::create_dir(&directory).expect("simulate winning directory creator");
+
+        create_or_validate_repo_dir_component(&directory)
+            .expect("an existing real directory wins the creation race");
+
+        let file = repo.path().join("not-a-directory");
+        std::fs::write(&file, "hostile").expect("write hostile entry");
+        assert!(matches!(
+            create_or_validate_repo_dir_component(&file),
+            Err(RepoFileReadError::NotDirectory)
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lost_directory_creation_race_rejects_a_symlink_winner() {
+        let repo = tempfile::tempdir().expect("repo");
+        let outside = tempfile::tempdir().expect("outside");
+        let link = repo.path().join("cache");
+        std::os::unix::fs::symlink(outside.path(), &link).expect("create hostile symlink");
+
+        assert!(matches!(
+            create_or_validate_repo_dir_component(&link),
+            Err(RepoFileReadError::EscapesRepo)
+        ));
     }
 
     #[test]
