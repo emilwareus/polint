@@ -63,7 +63,7 @@ pub(crate) struct SolverProviderRunOutput {
 /// 6. on store error return `output_digest: None`.
 pub(crate) fn derive_solver_with_cache_stats(
     db: &mut AnalysisDb,
-    input_snapshot: &InputSnapshot,
+    _input_snapshot: &InputSnapshot,
     manifest: &ProviderManifest,
     budget: SolverBudget,
     semantic_graph_output_digest: Digest,
@@ -88,17 +88,22 @@ pub(crate) fn derive_solver_with_cache_stats(
     // spurious solver_output_digest bust, WR-06) — a redundant double-solve with a
     // harmful side effect. Register only the edge-contributing policies.
     let constraints = db.semantic_constraints().to_vec();
-    let engine = SolverEngine::new(solver_policies_for_db(db, &budget), budget);
+    let go_rta_inputs = GoRtaInputs::from_db(db);
+    let go_rta_roots_digest = go_rta_roots_digest(&go_rta_inputs);
+    let engine = SolverEngine::new(
+        solver_policies_for_inputs(db, &budget, go_rta_inputs),
+        budget,
+    );
     let output = engine.run_to_solver_output(&constraints);
 
     // Step: digest over the stored stable KEYS + upstream digests + the budget.
     let output_digest = solver_output_digest(
         manifest,
-        input_snapshot,
         &budget,
         &semantic_graph_output_digest,
         &type_value_alias_output_digest,
         &go_semantic_output_digest,
+        &go_rta_roots_digest,
         &output,
     );
 
@@ -142,14 +147,27 @@ pub(crate) fn derive_solver_with_cache_stats(
 }
 
 fn solver_policies_for_db(db: &AnalysisDb, budget: &SolverBudget) -> Vec<Box<dyn SolverPolicy>> {
+    solver_policies_for_inputs(db, budget, GoRtaInputs::from_db(db))
+}
+
+fn solver_policies_for_inputs(
+    db: &AnalysisDb,
+    budget: &SolverBudget,
+    go_rta_inputs: GoRtaInputs,
+) -> Vec<Box<dyn SolverPolicy>> {
     let mut policies: Vec<Box<dyn SolverPolicy>> = vec![
         // The real Go RTA policy (GO-05): contributes resolved call edges.
-        Box::new(GoRtaPolicy::new(GoRtaInputs::from_db(db))),
+        Box::new(GoRtaPolicy::new(go_rta_inputs)),
         // The TS token policy owns a closed JS/TS snapshot (JS-04).
         Box::new(TsTokensPolicy::new(TsTokenInputs::from_db(db))),
     ];
     register_ts_object_model_policy_if_enabled(&mut policies, db, budget);
     policies
+}
+
+fn go_rta_roots_digest(inputs: &GoRtaInputs) -> Digest {
+    let roots = inputs.roots.iter().map(String::as_str).collect::<Vec<_>>();
+    Digest::from_parts(DigestKind::ProviderOutput, "go_rta_roots", &roots)
 }
 
 fn register_ts_object_model_policy_if_enabled(
@@ -181,11 +199,11 @@ fn register_ts_object_model_policy_if_enabled(
 /// `Digest::from_parts`.
 fn solver_output_digest(
     manifest: &ProviderManifest,
-    _input_snapshot: &InputSnapshot,
     budget: &SolverBudget,
     semantic_graph_output_digest: &Digest,
     type_value_alias_output_digest: &Digest,
     go_semantic_output_digest: &Digest,
+    go_rta_roots_digest: &Digest,
     output: &SolverOutput,
 ) -> Digest {
     let mut parts = vec![
@@ -201,6 +219,7 @@ fn solver_output_digest(
         // edges and MUST invalidate the solver cache (FIX 4). Fold the go.semantic output
         // digest like the other consumed upstream digests.
         format!("go_semantic_output={go_semantic_output_digest}"),
+        format!("go_rta_roots={go_rta_roots_digest}"),
         // Run-level budget status (WR-06): two runs over the same inputs that produce
         // the same SURVIVING edge set but differ in whether the budget was exhausted
         // (WithinBudget vs BudgetExceeded) must NOT share an output digest. A fixpoint
@@ -269,20 +288,30 @@ fn provider_error_diagnostic(message: String) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+
     use crate::analysis::adaptation::budget::AdaptationModelBudget;
     use crate::analysis::ids::SemanticConstraintId;
     use crate::analysis::points_to::facts::{PointsToPrecision, PointsToStatus};
+    use crate::analysis::reachability::facts::{
+        ReachabilityRootFact, RootKind, RootPrecision, RootProvenance, RootStatus,
+        compute_reachability_root_stable_key,
+    };
+    use crate::analysis::reachability::store::ReachabilityProviderOutput;
     use crate::analysis::semantic_graph::constraints::{ConstraintFact, ConstraintKind};
     use crate::analysis::semantic_graph::facts::{NodeKind, SemanticNodeFact, SemanticPrecision};
     use crate::analysis::semantic_graph::provider::derive_semantic_graph_with_cache_stats;
     use crate::analysis::semantic_graph::store::SEMANTIC_GRAPH_PROVIDER_ID;
     use crate::analysis::semantic_graph::store::SemanticGraphOutput;
     use crate::analysis::solver::budget::{BudgetReason, JsObjectModelSubBudget, SolverBudget};
+    use crate::analysis::solver::go_rta::inputs::{GoRtaCallsite, GoRtaMethod};
+    use crate::analysis::solver::go_rta::solve_go_rta;
     use crate::analysis_kernel::AnalysisKernel;
     use crate::analysis_kernel::incremental::{Digest, DigestKind};
     use crate::analysis_plan::AnalysisPlan;
     use crate::config::{LoadedConfig, load_config};
-    use crate::core::{AnalysisDb, FunctionId};
+    use crate::core::{AnalysisDb, FunctionFact, FunctionId, Language, Span};
     use std::fs;
     use tempfile::tempdir;
 
@@ -421,6 +450,136 @@ mod tests {
             absent("polint.type_value_alias"),
             absent("polint.go.semantic"),
         )
+    }
+
+    fn go_dispatch_inputs(roots: &[&str]) -> GoRtaInputs {
+        let function_node = BTreeMap::from([
+            ("main.main".to_string(), SemanticNodeId(1)),
+            ("(pkg.File).Read".to_string(), SemanticNodeId(3)),
+        ]);
+        let method_sets =
+            BTreeMap::from([("pkg.File".to_string(), BTreeSet::from(["Read".to_string()]))]);
+        let method_set_keys = BTreeMap::from([("pkg.File".to_string(), "ms|pkg.File".to_string())]);
+        let instantiated = BTreeSet::from(["pkg.File".to_string()]);
+        let instantiated_keys =
+            BTreeMap::from([("pkg.File".to_string(), "inst|pkg.File".to_string())]);
+        let methods_by_receiver = BTreeMap::from([(
+            "pkg.File".to_string(),
+            vec![GoRtaMethod {
+                method_name: "Read".to_string(),
+                qualified: "(pkg.File).Read".to_string(),
+                node: SemanticNodeId(3),
+            }],
+        )]);
+
+        GoRtaInputs {
+            roots: roots.iter().map(|root| (*root).to_string()).collect(),
+            callsites: vec![GoRtaCallsite {
+                caller: "main.main".to_string(),
+                callsite_node: SemanticNodeId(2),
+                callsite_stable_key: "cs|main:read".to_string(),
+                interface_method: Some("Read".to_string()),
+                signature: None,
+                dispatch_stable_key: "dd|main:read".to_string(),
+            }],
+            method_sets,
+            method_set_keys,
+            instantiated,
+            instantiated_keys,
+            function_node,
+            methods_by_receiver,
+            ..GoRtaInputs::default()
+        }
+        .finalize_indexes()
+    }
+
+    #[test]
+    fn go_root_mutation_changes_rta_output_and_solver_identity() {
+        let unrooted_inputs = go_dispatch_inputs(&[]);
+        let rooted_inputs = go_dispatch_inputs(&["main.main"]);
+        let budget = SolverBudget::default();
+        let unrooted_output = solve_go_rta(&unrooted_inputs, &budget);
+        let rooted_output = solve_go_rta(&rooted_inputs, &budget);
+        let unrooted_digest = solver_output_digest(
+            manifest(),
+            &budget,
+            &absent("polint.semantic_graph"),
+            &absent("polint.type_value_alias"),
+            &absent("polint.go.semantic"),
+            &go_rta_roots_digest(&unrooted_inputs),
+            &unrooted_output,
+        );
+        let rooted_digest = solver_output_digest(
+            manifest(),
+            &budget,
+            &absent("polint.semantic_graph"),
+            &absent("polint.type_value_alias"),
+            &absent("polint.go.semantic"),
+            &go_rta_roots_digest(&rooted_inputs),
+            &rooted_output,
+        );
+
+        assert!(unrooted_output.derived_edges.is_empty());
+        assert_eq!(rooted_output.derived_edges.len(), 1);
+        assert_ne!(unrooted_digest, rooted_digest);
+    }
+
+    #[test]
+    fn typescript_reachability_root_does_not_change_go_rta_root_identity() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            PathBuf::from("src/app.ts"),
+            "src/app.ts".to_string(),
+            "export function app() {}\n".to_string(),
+        );
+        let span = Span {
+            file,
+            start_byte: 0,
+            end_byte: 24,
+            start_line: 1,
+            start_col: 1,
+            end_line: 1,
+            end_col: 25,
+        };
+        let function = db.push_function(FunctionFact {
+            id: FunctionId(0),
+            file,
+            name: "app".to_string(),
+            span: span.clone(),
+            language: Language::TypeScript,
+            is_test: false,
+            is_exported: true,
+            cyclomatic_complexity: 1,
+            calls: Vec::new(),
+        });
+        let baseline = go_rta_roots_digest(&GoRtaInputs::from_db(&db));
+        db.replace_reachability_facts(ReachabilityProviderOutput {
+            roots: vec![ReachabilityRootFact {
+                id: crate::analysis::ids::ReachabilityRootId(0),
+                kind: RootKind::Exported,
+                language: Language::TypeScript,
+                target_function: function,
+                target_symbol: None,
+                originating_entrypoint: None,
+                file,
+                span: span.clone(),
+                precision: RootPrecision::ResolvedStatic,
+                provenance: RootProvenance::NativeDiscovery,
+                status: RootStatus::Resolved,
+                provider_id: "polint.reachability".to_string(),
+                stable_key: compute_reachability_root_stable_key(
+                    RootKind::Exported,
+                    Language::TypeScript,
+                    "src/app.app",
+                    file,
+                    &span,
+                ),
+            }],
+            marks: Vec::new(),
+        })
+        .expect("TypeScript reachability root stores");
+
+        assert_eq!(go_rta_roots_digest(&GoRtaInputs::from_db(&db)), baseline);
     }
 
     #[test]
@@ -968,9 +1127,8 @@ max_object_receiver_candidates_per_callsite = 127
         // budget_status (WithinBudget vs BudgetExceeded) must produce DIFFERENT output
         // digests, so a cache layer keyed on the digest cannot serve a truncated
         // (BudgetExceeded) result under a complete (WithinBudget) run's digest.
-        let db = db_with_copy_chain();
-        let snapshot = snapshot(&db);
         let budget = SolverBudget::default();
+        let roots_digest = go_rta_roots_digest(&GoRtaInputs::default());
 
         // Identical (empty) edge sets; only the run-level status differs.
         let within = SolverOutput {
@@ -986,20 +1144,20 @@ max_object_receiver_candidates_per_callsite = 127
 
         let within_digest = solver_output_digest(
             manifest(),
-            &snapshot,
             &budget,
             &absent("polint.semantic_graph"),
             &absent("polint.type_value_alias"),
             &absent("polint.go.semantic"),
+            &roots_digest,
             &within,
         );
         let exceeded_digest = solver_output_digest(
             manifest(),
-            &snapshot,
             &budget,
             &absent("polint.semantic_graph"),
             &absent("polint.type_value_alias"),
             &absent("polint.go.semantic"),
+            &roots_digest,
             &exceeded,
         );
 
