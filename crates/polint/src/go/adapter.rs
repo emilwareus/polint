@@ -164,7 +164,10 @@ pub(crate) fn analyze_with_plan_options_and_cache_stats(
                 LayerCacheReadStatus::Hit => {}
             }
             cache_stats.record_recompute();
-            let payload = parse_go_syntax_layer_payload(
+            let ParsedSyntaxLayer {
+                payload,
+                transient_diagnostics,
+            } = parse_go_syntax_layer_payload(
                 &files,
                 cache,
                 &analysis_settings_digest.value,
@@ -176,6 +179,7 @@ pub(crate) fn analyze_with_plan_options_and_cache_stats(
                 Err(error) => {
                     write_diagnostics.push(cache_write_diagnostic("go syntax layer", error));
                     let mut diagnostics = restore_syntax_layer_payload(db, payload);
+                    diagnostics.extend(transient_diagnostics);
                     diagnostics.extend(write_diagnostics);
                     return ProviderAnalysisResult {
                         diagnostics,
@@ -198,6 +202,7 @@ pub(crate) fn analyze_with_plan_options_and_cache_stats(
             }
             let layer = LayerRunMetadata::from_manifest(manifest);
             let mut diagnostics = restore_syntax_layer_payload(db, payload);
+            diagnostics.extend(transient_diagnostics);
             diagnostics.extend(write_diagnostics);
             ProviderAnalysisResult {
                 diagnostics,
@@ -214,7 +219,13 @@ struct GoFileAnalysis {
     relative_path: String,
     content_hash: String,
     diagnostics: Vec<Diagnostic>,
+    transient_diagnostics: Vec<Diagnostic>,
     facts: Option<crate::core::CachedFileFacts>,
+}
+
+struct ParsedSyntaxLayer {
+    payload: SyntaxLayerPayload,
+    transient_diagnostics: Vec<Diagnostic>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -301,7 +312,7 @@ fn parse_go_syntax_layer_payload(
     cache: &crate::cache::Cache,
     analysis_settings_hash: &str,
     parallel: bool,
-) -> SyntaxLayerPayload {
+) -> ParsedSyntaxLayer {
     let mut results = if parallel {
         files
             .par_iter()
@@ -315,17 +326,25 @@ fn parse_go_syntax_layer_payload(
     };
     results.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
 
-    SyntaxLayerPayload {
-        schema: GO_SYNTAX_LAYER_SCHEMA.to_string(),
-        files: results
-            .into_iter()
-            .map(|result| SyntaxLayerFile {
+    let mut transient_diagnostics = Vec::new();
+    let files = results
+        .into_iter()
+        .map(|result| {
+            transient_diagnostics.extend(result.transient_diagnostics);
+            SyntaxLayerFile {
                 relative_path: result.relative_path,
                 content_hash: result.content_hash,
                 diagnostics: result.diagnostics,
                 facts: result.facts,
-            })
-            .collect(),
+            }
+        })
+        .collect();
+    ParsedSyntaxLayer {
+        payload: SyntaxLayerPayload {
+            schema: GO_SYNTAX_LAYER_SCHEMA.to_string(),
+            files,
+        },
+        transient_diagnostics,
     }
 }
 
@@ -437,6 +456,7 @@ fn analyze_go_source_file(
             relative_path: file.relative_path.clone(),
             content_hash: file.content_hash.clone(),
             diagnostics: cached.diagnostics,
+            transient_diagnostics: Vec::new(),
             facts: Some(cached.facts),
         };
     }
@@ -449,7 +469,7 @@ fn analyze_go_source_file(
         Arc::clone(&file.source),
         file.content_hash.clone(),
     );
-    let mut diagnostics = match parse_go_file(&mut local_db, local_file) {
+    let diagnostics = match parse_go_file(&mut local_db, local_file) {
         Ok(file_diagnostics) => file_diagnostics,
         Err(error) => {
             return GoFileAnalysis {
@@ -461,6 +481,7 @@ fn analyze_go_source_file(
                     TextRange::point(1, 1),
                     format!("Failed to parse Go file: {error}"),
                 )],
+                transient_diagnostics: Vec::new(),
                 facts: None,
             };
         }
@@ -471,13 +492,17 @@ fn analyze_go_source_file(
         diagnostics: diagnostics.clone(),
         facts: facts.clone(),
     };
-    if let Err(error) = cache.write_json(&key, &cached) {
-        diagnostics.push(cache_write_diagnostic(file.relative_path.as_str(), error));
-    };
+    let transient_diagnostics = cache
+        .write_json(&key, &cached)
+        .err()
+        .map(|error| cache_write_diagnostic(file.relative_path.as_str(), error))
+        .into_iter()
+        .collect();
     GoFileAnalysis {
         relative_path: file.relative_path.clone(),
         content_hash: file.content_hash.clone(),
         diagnostics,
+        transient_diagnostics,
         facts: Some(facts),
     }
 }
@@ -1895,5 +1920,39 @@ mod layer_run_metadata_path_tests {
             assert_eq!(result.output_digest, cold.output_digest);
             assert_layer_projection_excludes_cache_telemetry(result);
         }
+    }
+
+    #[test]
+    fn go_per_file_cache_write_warning_is_run_local_and_excluded_from_syntax_identity() {
+        let scratch = tempfile::TempDir::new().expect("scratch directory");
+        let healthy = run(&crate::cache::Cache::new(
+            scratch.path().join("healthy/analysis"),
+            true,
+        ));
+        let failed_root = scratch.path().join("failed");
+        std::fs::create_dir_all(&failed_root).expect("failed cache parent");
+        std::fs::write(failed_root.join("analysis"), "not a directory")
+            .expect("poison per-file cache root");
+        let failed_cache = crate::cache::Cache::new(failed_root.join("analysis"), true);
+
+        let cold = run(&failed_cache);
+        let warm = run(&failed_cache);
+
+        assert!(
+            cold.diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.rule_id == "internal/cache")
+        );
+        assert!(
+            !warm
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.rule_id == "internal/cache")
+        );
+        assert_eq!(cold.layers, healthy.layers);
+        assert_eq!(warm.layers, healthy.layers);
+        assert_eq!(cold.output_digest, healthy.output_digest);
+        assert_eq!(warm.output_digest, healthy.output_digest);
+        assert!(failed_root.join("layers").is_dir());
     }
 }
