@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -13,7 +14,14 @@ const GO_FRONTEND_CACHE_VERSION: &str = "v1";
 const GO_ENVIRONMENT_POLICY: &str = "host-target-clean-env-v1";
 const GO_FRONTEND_MAX_SOURCE_FILES: usize = 512;
 const GO_FRONTEND_MAX_SOURCE_BYTES: usize = 32 * 1_048_576;
+const GO_FRONTEND_MAX_SOURCE_ENTRIES: usize = 4_096;
+const GO_FRONTEND_MAX_SOURCE_DIRECTORIES: usize = 512;
+const GO_FRONTEND_MAX_SOURCE_DEPTH: usize = 64;
+const GO_FRONTEND_MAX_SOURCE_FRONTIER: usize = 512;
 const GO_FRONTEND_MAX_EXECUTABLE_BYTES: usize = 64 * 1_048_576;
+const GO_FRONTEND_MAX_STALE_STAGING_SCAN: usize = 64;
+const GO_FRONTEND_STALE_STAGING_AGE: std::time::Duration =
+    std::time::Duration::from_secs(24 * 60 * 60);
 const GO_ENVIRONMENT_MODIFIERS: &[&str] = &[
     "GO386",
     "GOAMD64",
@@ -98,8 +106,7 @@ pub(crate) struct PreparedGoSemanticFrontend {
     executable: PathBuf,
     executable_digest: String,
     source_digest: Option<String>,
-    toolchain_version: Option<String>,
-    host_target: GoHostTarget,
+    toolchain: Box<PreparedGoToolchain>,
     environment_policy: &'static str,
 }
 
@@ -155,8 +162,25 @@ impl GoHostTarget {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct GoToolchain {
+    executable: PathBuf,
+    executable_digest: String,
+    canonical_selection: PathBuf,
     version: String,
     host_target: GoHostTarget,
+    goroot: PathBuf,
+    search_path: OsString,
+}
+
+#[derive(Debug, Clone)]
+struct PreparedGoToolchain {
+    executable: PathBuf,
+    executable_digest: String,
+    canonical_selection: PathBuf,
+    version: String,
+    host_target: GoHostTarget,
+    goroot: PathBuf,
+    search_path: OsString,
+    runtime_search_path: OsString,
 }
 
 #[derive(Debug, Clone)]
@@ -175,6 +199,10 @@ struct FrontendSourceSnapshot {
 struct FrontendBuildProvenance {
     source_digest: String,
     toolchain_version: String,
+    toolchain_executable_digest: String,
+    toolchain_selection: String,
+    goroot: String,
+    search_path: String,
     host_target: GoHostTarget,
     environment_policy: &'static str,
 }
@@ -184,6 +212,13 @@ impl FrontendBuildProvenance {
         security_digest_strings(&[
             format!("source_digest={}", self.source_digest),
             format!("toolchain_version={}", self.toolchain_version),
+            format!(
+                "toolchain_executable_digest={}",
+                self.toolchain_executable_digest
+            ),
+            format!("toolchain_selection={}", self.toolchain_selection),
+            format!("goroot={}", self.goroot),
+            format!("search_path={}", self.search_path),
             format!("host_target={}", self.host_target.label()),
             format!("environment_policy={}", self.environment_policy),
         ])
@@ -191,9 +226,13 @@ impl FrontendBuildProvenance {
 
     fn stamp(&self, executable_digest: &str) -> String {
         format!(
-            "source_digest={}\ntoolchain_version={}\nhost_target={}\nenvironment_policy={}\nexecutable_digest={}\n",
+            "source_digest={}\ntoolchain_version={}\ntoolchain_executable_digest={}\ntoolchain_selection={}\ngoroot={}\nsearch_path={}\nhost_target={}\nenvironment_policy={}\nexecutable_digest={}\n",
             self.source_digest,
             self.toolchain_version,
+            self.toolchain_executable_digest,
+            self.toolchain_selection,
+            self.goroot,
+            self.search_path,
             self.host_target.label(),
             self.environment_policy,
             executable_digest
@@ -210,22 +249,27 @@ impl PreparedGoSemanticFrontend {
     fn prepare_with_cache_root(cache_root: &Path) -> Result<Self, GoSemanticProcessError> {
         ensure_private_cache_root(cache_root)?;
         let cache_root = canonical_private_cache_root(cache_root)?;
+        let toolchain = prepare_go_toolchain(&cache_root, local_go_toolchain()?)?;
         match resolve_go_semantic_frontend_in(&cache_root)? {
             GoSemanticCommand::Binary(executable) => {
-                prepare_binary_frontend(&cache_root, &executable)
+                prepare_binary_frontend(&cache_root, &executable, toolchain)
             }
             GoSemanticCommand::SourceDir(source_dir) => {
                 let source = capture_source_snapshot(&source_dir)?;
-                let toolchain = local_go_toolchain()?;
                 ensure_go_toolchain_supported(&toolchain.version)?;
                 let source_dir = materialize_source_snapshot(&cache_root, &source)?;
                 let provenance = FrontendBuildProvenance {
                     source_digest: source.digest.clone(),
                     toolchain_version: toolchain.version.clone(),
+                    toolchain_executable_digest: toolchain.executable_digest.clone(),
+                    toolchain_selection: normalized_path_label(&toolchain.canonical_selection),
+                    goroot: normalized_path_label(&toolchain.goroot),
+                    search_path: toolchain.search_path.to_string_lossy().into_owned(),
                     host_target: toolchain.host_target.clone(),
                     environment_policy: GO_ENVIRONMENT_POLICY,
                 };
-                let built = ensure_frontend_binary(&cache_root, &source_dir, &provenance)?;
+                let built =
+                    ensure_frontend_binary(&cache_root, &source_dir, &provenance, &toolchain)?;
                 let bytes = read_regular_file_no_follow(&built)?;
                 let executable_digest = security_digest_bytes(&bytes);
                 let executable = seal_executable(&cache_root, &bytes, &executable_digest)?;
@@ -233,8 +277,7 @@ impl PreparedGoSemanticFrontend {
                     executable,
                     executable_digest,
                     source_digest: Some(source.digest),
-                    toolchain_version: Some(toolchain.version),
-                    host_target: toolchain.host_target,
+                    toolchain: Box::new(toolchain),
                     environment_policy: GO_ENVIRONMENT_POLICY,
                 })
             }
@@ -244,7 +287,7 @@ impl PreparedGoSemanticFrontend {
     pub(crate) fn command(&self, root: &Path) -> Command {
         let mut command = Command::new(&self.executable);
         command.current_dir(root);
-        configure_go_environment(&mut command, &self.host_target);
+        configure_go_environment(&mut command, &self.toolchain);
         command
     }
 
@@ -255,11 +298,21 @@ impl PreparedGoSemanticFrontend {
                 "source_digest={}",
                 self.source_digest.as_deref().unwrap_or("prebuilt")
             ),
+            format!("toolchain_version={}", self.toolchain.version),
             format!(
-                "toolchain_version={}",
-                self.toolchain_version.as_deref().unwrap_or("embedded")
+                "toolchain_executable_digest={}",
+                self.toolchain.executable_digest
             ),
-            format!("host_target={}", self.host_target.label()),
+            format!(
+                "toolchain_selection={}",
+                normalized_path_label(&self.toolchain.canonical_selection)
+            ),
+            format!("goroot={}", normalized_path_label(&self.toolchain.goroot)),
+            format!(
+                "search_path={}",
+                self.toolchain.search_path.to_string_lossy()
+            ),
+            format!("host_target={}", self.toolchain.host_target.label()),
             format!("environment_policy={}", self.environment_policy),
         ]
     }
@@ -275,15 +328,24 @@ impl PreparedGoSemanticFrontend {
         source_digest: Option<&str>,
         toolchain_version: Option<&str>,
     ) -> Self {
+        let version = toolchain_version.unwrap_or("go-test").to_string();
         Self {
             executable: PathBuf::from("polint-go-frontend-test"),
             executable_digest: executable_digest.to_string(),
             source_digest: source_digest.map(str::to_string),
-            toolchain_version: toolchain_version.map(str::to_string),
-            host_target: GoHostTarget {
-                os: "test".to_string(),
-                arch: "test".to_string(),
-            },
+            toolchain: Box::new(PreparedGoToolchain {
+                executable: PathBuf::from("go-test"),
+                executable_digest: format!("go-executable-{version}"),
+                canonical_selection: PathBuf::from("/test/bin/go"),
+                version,
+                host_target: GoHostTarget {
+                    os: "test".to_string(),
+                    arch: "test".to_string(),
+                },
+                goroot: PathBuf::from("/test/go"),
+                search_path: OsString::from("/test/bin"),
+                runtime_search_path: OsString::from("/sealed/toolchain:/test/bin"),
+            }),
             environment_policy: GO_ENVIRONMENT_POLICY,
         }
     }
@@ -292,6 +354,7 @@ impl PreparedGoSemanticFrontend {
 fn prepare_binary_frontend(
     cache_root: &Path,
     executable: &Path,
+    toolchain: PreparedGoToolchain,
 ) -> Result<PreparedGoSemanticFrontend, GoSemanticProcessError> {
     let bytes = read_regular_file_no_follow(executable)?;
     let executable_digest = security_digest_bytes(&bytes);
@@ -300,8 +363,7 @@ fn prepare_binary_frontend(
         executable,
         executable_digest,
         source_digest: None,
-        toolchain_version: None,
-        host_target: GoHostTarget::current_process()?,
+        toolchain: Box::new(toolchain),
         environment_policy: GO_ENVIRONMENT_POLICY,
     })
 }
@@ -746,11 +808,77 @@ fn create_private_directory(_path: &Path) -> Result<(), GoSemanticProcessError> 
     ))
 }
 
-fn unique_materialization_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default()
+struct StagingDirectory {
+    path: PathBuf,
+    cleanup: bool,
+}
+
+impl StagingDirectory {
+    fn create(parent: &Path, prefix: &str) -> Result<Self, GoSemanticProcessError> {
+        cleanup_stale_staging_directories(parent, prefix, GO_FRONTEND_STALE_STAGING_AGE);
+        let directory = tempfile::Builder::new()
+            .prefix(prefix)
+            .tempdir_in(parent)
+            .map_err(|error| {
+                GoSemanticProcessError::CommandFailed(format!(
+                    "failed to allocate private Go semantic frontend staging directory: {error}"
+                ))
+            })?;
+        Ok(Self {
+            path: directory.keep(),
+            cleanup: true,
+        })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn mark_published(&mut self) {
+        self.cleanup = false;
+    }
+}
+
+fn cleanup_stale_staging_directories(
+    parent: &Path,
+    prefix: &str,
+    minimum_age: std::time::Duration,
+) {
+    let Ok(entries) = fs::read_dir(parent) else {
+        return;
+    };
+    for entry in entries.take(GO_FRONTEND_MAX_STALE_STAGING_SCAN).flatten() {
+        let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        if !name.starts_with(prefix) {
+            continue;
+        }
+        let Ok(metadata) = fs::symlink_metadata(entry.path()) else {
+            continue;
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            continue;
+        }
+        let Ok(modified) = metadata.modified() else {
+            continue;
+        };
+        if modified.elapsed().unwrap_or_default() < minimum_age {
+            continue;
+        }
+        let _ = make_directory_tree_writable(&entry.path());
+        let _ = fs::remove_dir_all(entry.path());
+    }
+}
+
+impl Drop for StagingDirectory {
+    fn drop(&mut self) {
+        if !self.cleanup {
+            return;
+        }
+        let _ = make_directory_tree_writable(&self.path);
+        let _ = fs::remove_dir_all(&self.path);
+    }
 }
 
 pub(crate) fn embedded_frontend_hash() -> String {
@@ -782,35 +910,129 @@ fn embedded_source_snapshot() -> FrontendSourceSnapshot {
     FrontendSourceSnapshot { digest, files }
 }
 
+#[cfg(unix)]
 fn capture_source_snapshot(path: &Path) -> Result<FrontendSourceSnapshot, GoSemanticProcessError> {
-    let mut files = Vec::new();
-    collect_frontend_source_files(path, path, &mut files)?;
-    files.sort();
-    if files.len() > GO_FRONTEND_MAX_SOURCE_FILES {
+    use std::ffi::CString;
+    use std::os::fd::{AsRawFd, OwnedFd};
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let root = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW)
+        .open(path)
+        .map_err(|error| {
+            GoSemanticProcessError::CommandFailed(format!(
+                "failed to anchor Go semantic frontend source directory `{}`: {error}",
+                path.display()
+            ))
+        })?;
+    if !root
+        .metadata()
+        .map_err(|error| {
+            GoSemanticProcessError::CommandFailed(format!(
+                "failed to inspect Go semantic frontend source directory `{}`: {error}",
+                path.display()
+            ))
+        })?
+        .is_dir()
+    {
         return Err(GoSemanticProcessError::CommandFailed(format!(
-            "Go semantic frontend source contains more than {GO_FRONTEND_MAX_SOURCE_FILES} files."
+            "Go semantic frontend source `{}` is not a directory.",
+            path.display()
         )));
     }
-    let mut captured = Vec::with_capacity(files.len());
+
+    let mut frontier = vec![(OwnedFd::from(root), PathBuf::new(), 0_usize)];
+    let mut visited_entries = 0_usize;
+    let mut visited_directories = 1_usize;
+    let mut captured = Vec::new();
     let mut total_bytes = 0_usize;
-    for relative_path in files {
-        let full_path = path.join(&relative_path);
-        let bytes = read_regular_file_no_follow(&full_path)?;
-        total_bytes = total_bytes.checked_add(bytes.len()).ok_or_else(|| {
-            GoSemanticProcessError::CommandFailed(
-                "Go semantic frontend source size overflowed.".to_string(),
-            )
-        })?;
-        if total_bytes > GO_FRONTEND_MAX_SOURCE_BYTES {
-            return Err(GoSemanticProcessError::CommandFailed(format!(
-                "Go semantic frontend source exceeds {GO_FRONTEND_MAX_SOURCE_BYTES} bytes."
-            )));
+
+    while let Some((directory, relative_directory, depth)) = frontier.pop() {
+        let mut names = directory_entry_names(&directory, &mut visited_entries)?;
+        names.sort();
+        for name in names.into_iter().rev() {
+            let relative_path = relative_directory.join(&name);
+            let name = CString::new(name.as_bytes()).map_err(|_| {
+                GoSemanticProcessError::CommandFailed(
+                    "Go semantic frontend source contains an invalid path.".to_string(),
+                )
+            })?;
+            let directory_flags =
+                libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_DIRECTORY;
+            match open_frontend_at(directory.as_raw_fd(), &name, directory_flags) {
+                Ok(child) => {
+                    if skip_frontend_digest_dir(&relative_path) {
+                        continue;
+                    }
+                    let child_depth = depth.saturating_add(1);
+                    if child_depth > GO_FRONTEND_MAX_SOURCE_DEPTH {
+                        return Err(GoSemanticProcessError::CommandFailed(format!(
+                            "Go semantic frontend source exceeds traversal depth {GO_FRONTEND_MAX_SOURCE_DEPTH}."
+                        )));
+                    }
+                    visited_directories = visited_directories.checked_add(1).ok_or_else(|| {
+                        GoSemanticProcessError::CommandFailed(
+                            "Go semantic frontend source directory count overflowed.".to_string(),
+                        )
+                    })?;
+                    if visited_directories > GO_FRONTEND_MAX_SOURCE_DIRECTORIES {
+                        return Err(GoSemanticProcessError::CommandFailed(format!(
+                            "Go semantic frontend source contains more than {GO_FRONTEND_MAX_SOURCE_DIRECTORIES} directories."
+                        )));
+                    }
+                    frontier.push((child, relative_path, child_depth));
+                    if frontier.len() > GO_FRONTEND_MAX_SOURCE_FRONTIER {
+                        return Err(GoSemanticProcessError::CommandFailed(format!(
+                            "Go semantic frontend source traversal frontier exceeds {GO_FRONTEND_MAX_SOURCE_FRONTIER} directories."
+                        )));
+                    }
+                }
+                Err(error) if error.raw_os_error() == Some(libc::ELOOP) => {}
+                Err(error) if error.raw_os_error() == Some(libc::ENOTDIR) => {
+                    if !is_frontend_digest_source(&relative_path) {
+                        continue;
+                    }
+                    if captured.len() >= GO_FRONTEND_MAX_SOURCE_FILES {
+                        return Err(GoSemanticProcessError::CommandFailed(format!(
+                            "Go semantic frontend source contains more than {GO_FRONTEND_MAX_SOURCE_FILES} files."
+                        )));
+                    }
+                    let file = open_frontend_at(
+                        directory.as_raw_fd(),
+                        &name,
+                        libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK,
+                    )
+                    .map_err(|error| {
+                        GoSemanticProcessError::CommandFailed(format!(
+                            "failed to open Go semantic frontend source `{}`: {error}",
+                            relative_path.display()
+                        ))
+                    })?;
+                    let remaining = GO_FRONTEND_MAX_SOURCE_BYTES.saturating_sub(total_bytes);
+                    let bytes =
+                        read_open_frontend_source(fs::File::from(file), &relative_path, remaining)?;
+                    total_bytes = total_bytes.checked_add(bytes.len()).ok_or_else(|| {
+                        GoSemanticProcessError::CommandFailed(
+                            "Go semantic frontend source size overflowed.".to_string(),
+                        )
+                    })?;
+                    captured.push(FrontendSourceFile {
+                        relative_path,
+                        bytes,
+                    });
+                }
+                Err(error) => {
+                    return Err(GoSemanticProcessError::CommandFailed(format!(
+                        "failed to inspect Go semantic frontend source `{}`: {error}",
+                        relative_path.display()
+                    )));
+                }
+            }
         }
-        captured.push(FrontendSourceFile {
-            relative_path,
-            bytes,
-        });
     }
+    captured.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     if !captured
         .iter()
         .any(|file| file.relative_path == Path::new("go.mod"))
@@ -826,6 +1048,13 @@ fn capture_source_snapshot(path: &Path) -> Result<FrontendSourceSnapshot, GoSema
     })
 }
 
+#[cfg(not(unix))]
+fn capture_source_snapshot(_path: &Path) -> Result<FrontendSourceSnapshot, GoSemanticProcessError> {
+    Err(GoSemanticProcessError::CommandUnavailable(
+        "secure Go semantic frontend source traversal is unavailable on this platform.".to_string(),
+    ))
+}
+
 fn source_snapshot_digest(files: &[FrontendSourceFile]) -> String {
     let mut parts = vec![GO_SEMANTIC_SCHEMA.to_string()];
     parts.extend(files.iter().map(|file| {
@@ -838,44 +1067,121 @@ fn source_snapshot_digest(files: &[FrontendSourceFile]) -> String {
     security_digest_strings(&parts)
 }
 
-fn collect_frontend_source_files(
-    root: &Path,
-    directory: &Path,
-    files: &mut Vec<PathBuf>,
-) -> Result<(), GoSemanticProcessError> {
-    let entries = fs::read_dir(directory).map_err(|error| {
-        GoSemanticProcessError::CommandFailed(format!(
-            "failed to read Go semantic frontend source directory `{}` for digest: {error}",
-            directory.display()
-        ))
-    })?;
-    for entry in entries {
-        let entry = entry.map_err(|error| {
-            GoSemanticProcessError::CommandFailed(format!(
-                "failed to read Go semantic frontend source directory entry `{}` for digest: {error}",
-                directory.display()
-            ))
-        })?;
-        let path = entry.path();
-        let file_type = entry.file_type().map_err(|error| {
-            GoSemanticProcessError::CommandFailed(format!(
-                "failed to read Go semantic frontend source file type `{}` for digest: {error}",
-                path.display()
-            ))
-        })?;
-        if file_type.is_dir() && !skip_frontend_digest_dir(&path) {
-            collect_frontend_source_files(root, &path, files)?;
-        } else if file_type.is_file() && is_frontend_digest_source(&path) {
-            let relative_path = path.strip_prefix(root).map_err(|error| {
-                GoSemanticProcessError::CommandFailed(format!(
-                    "failed to relativize Go semantic frontend source `{}` for digest: {error}",
-                    path.display()
-                ))
-            })?;
-            files.push(relative_path.to_path_buf());
+#[cfg(unix)]
+#[allow(unsafe_code)]
+fn directory_entry_names(
+    directory: &std::os::fd::OwnedFd,
+    visited_entries: &mut usize,
+) -> Result<Vec<std::ffi::OsString>, GoSemanticProcessError> {
+    use std::ffi::{CStr, OsString};
+    use std::os::fd::AsRawFd;
+    use std::os::unix::ffi::OsStringExt;
+
+    let duplicated = unsafe { libc::dup(directory.as_raw_fd()) };
+    if duplicated < 0 {
+        return Err(GoSemanticProcessError::CommandFailed(format!(
+            "failed to duplicate Go semantic frontend source directory handle: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    let stream = unsafe { libc::fdopendir(duplicated) };
+    if stream.is_null() {
+        let error = std::io::Error::last_os_error();
+        unsafe { libc::close(duplicated) };
+        return Err(GoSemanticProcessError::CommandFailed(format!(
+            "failed to enumerate Go semantic frontend source directory: {error}"
+        )));
+    }
+
+    struct DirectoryStream(*mut libc::DIR);
+    impl Drop for DirectoryStream {
+        fn drop(&mut self) {
+            unsafe { libc::closedir(self.0) };
         }
     }
-    Ok(())
+
+    let stream = DirectoryStream(stream);
+    let mut names = Vec::new();
+    loop {
+        let entry = unsafe { libc::readdir(stream.0) };
+        if entry.is_null() {
+            break;
+        }
+        let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) }.to_bytes();
+        if matches!(name, b"." | b"..") {
+            continue;
+        }
+        *visited_entries = visited_entries.checked_add(1).ok_or_else(|| {
+            GoSemanticProcessError::CommandFailed(
+                "Go semantic frontend source entry count overflowed.".to_string(),
+            )
+        })?;
+        if *visited_entries > GO_FRONTEND_MAX_SOURCE_ENTRIES {
+            return Err(GoSemanticProcessError::CommandFailed(format!(
+                "Go semantic frontend source contains more than {GO_FRONTEND_MAX_SOURCE_ENTRIES} entries."
+            )));
+        }
+        names.push(OsString::from_vec(name.to_vec()));
+    }
+    Ok(names)
+}
+
+#[cfg(unix)]
+#[allow(unsafe_code)]
+fn open_frontend_at(
+    directory: std::os::fd::RawFd,
+    name: &std::ffi::CStr,
+    flags: libc::c_int,
+) -> std::io::Result<std::os::fd::OwnedFd> {
+    use std::os::fd::FromRawFd;
+
+    let descriptor = unsafe { libc::openat(directory, name.as_ptr(), flags) };
+    if descriptor < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(descriptor) })
+}
+
+#[cfg(unix)]
+fn read_open_frontend_source(
+    mut file: fs::File,
+    relative_path: &Path,
+    remaining_bytes: usize,
+) -> Result<Vec<u8>, GoSemanticProcessError> {
+    use std::io::Read;
+
+    let metadata = file.metadata().map_err(|error| {
+        GoSemanticProcessError::CommandFailed(format!(
+            "failed to inspect Go semantic frontend source `{}`: {error}",
+            relative_path.display()
+        ))
+    })?;
+    let file_len = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
+    if !metadata.is_file() || file_len > remaining_bytes {
+        return Err(GoSemanticProcessError::CommandFailed(format!(
+            "Go semantic frontend source exceeds {GO_FRONTEND_MAX_SOURCE_BYTES} bytes."
+        )));
+    }
+    let mut bytes = Vec::with_capacity(file_len);
+    std::io::Read::by_ref(&mut file)
+        .take(
+            u64::try_from(remaining_bytes)
+                .unwrap_or(u64::MAX)
+                .saturating_add(1),
+        )
+        .read_to_end(&mut bytes)
+        .map_err(|error| {
+            GoSemanticProcessError::CommandFailed(format!(
+                "failed to read Go semantic frontend source `{}`: {error}",
+                relative_path.display()
+            ))
+        })?;
+    if bytes.len() > remaining_bytes {
+        return Err(GoSemanticProcessError::CommandFailed(format!(
+            "Go semantic frontend source exceeds {GO_FRONTEND_MAX_SOURCE_BYTES} bytes."
+        )));
+    }
+    Ok(bytes)
 }
 
 fn skip_frontend_digest_dir(path: &Path) -> bool {
@@ -923,29 +1229,24 @@ fn materialize_source_snapshot(
         }
     }
 
-    let staging = sources_root.join(format!(
-        ".{}-{}-{}",
-        snapshot.digest,
-        std::process::id(),
-        unique_materialization_suffix()
-    ));
-    create_private_directory(&staging)?;
+    let mut staging = StagingDirectory::create(&sources_root, ".source-")?;
     for file in &snapshot.files {
-        let path = staging.join(&file.relative_path);
+        let path = staging.path().join(&file.relative_path);
         if let Some(parent) = file.relative_path.parent()
             && !parent.as_os_str().is_empty()
         {
-            ensure_private_subdirectory(&staging, parent)?;
+            ensure_private_subdirectory(staging.path(), parent)?;
         }
         write_new_private_file(&path, &file.bytes, false)?;
     }
-    make_source_snapshot_read_only(&staging, snapshot)?;
+    make_source_snapshot_read_only(staging.path(), snapshot)?;
 
-    match fs::rename(&staging, &destination) {
-        Ok(()) => Ok(destination),
+    match fs::rename(staging.path(), &destination) {
+        Ok(()) => {
+            staging.mark_published();
+            Ok(destination)
+        }
         Err(_) if destination.is_dir() => {
-            let _ = make_source_snapshot_writable(&staging, snapshot);
-            let _ = fs::remove_dir_all(&staging);
             if source_snapshot_matches(&destination, snapshot)? {
                 Ok(destination)
             } else {
@@ -955,14 +1256,10 @@ fn materialize_source_snapshot(
                 )))
             }
         }
-        Err(error) => {
-            let _ = make_source_snapshot_writable(&staging, snapshot);
-            let _ = fs::remove_dir_all(&staging);
-            Err(GoSemanticProcessError::CommandFailed(format!(
-                "failed to publish Go semantic frontend source `{}`: {error}",
-                destination.display()
-            )))
-        }
+        Err(error) => Err(GoSemanticProcessError::CommandFailed(format!(
+            "failed to publish Go semantic frontend source `{}`: {error}",
+            destination.display()
+        ))),
     }
 }
 
@@ -1058,10 +1355,15 @@ fn security_digest_bytes(bytes: &[u8]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+fn normalized_path_label(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
 fn ensure_frontend_binary(
     cache_root: &Path,
     source_dir: &Path,
     provenance: &FrontendBuildProvenance,
+    toolchain: &PreparedGoToolchain,
 ) -> Result<PathBuf, GoSemanticProcessError> {
     ensure_go_toolchain_supported(&provenance.toolchain_version)?;
     let builds_root = ensure_private_subdirectory(cache_root, Path::new("builds"))?;
@@ -1070,16 +1372,10 @@ fn ensure_frontend_binary(
         return verify_cached_build(&destination, provenance);
     }
 
-    let staging = builds_root.join(format!(
-        ".build-{}-{}-{}",
-        provenance.cache_key(),
-        std::process::id(),
-        unique_materialization_suffix()
-    ));
-    create_private_directory(&staging)?;
-    let binary = staging.join(frontend_binary_name());
-    let mut command = Command::new("go");
-    configure_go_environment(&mut command, &provenance.host_target);
+    let mut staging = StagingDirectory::create(&builds_root, ".build-")?;
+    let binary = staging.path().join(frontend_binary_name());
+    let mut command = Command::new(&toolchain.executable);
+    configure_go_environment(&mut command, toolchain);
     let output = command
         .arg("build")
         .arg("-trimpath")
@@ -1095,7 +1391,6 @@ fn ensure_frontend_binary(
             ))
         })?;
     if !output.status.success() {
-        let _ = fs::remove_dir_all(&staging);
         return Err(GoSemanticProcessError::CommandFailed(format!(
             "Go semantic frontend build failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
@@ -1103,27 +1398,22 @@ fn ensure_frontend_binary(
     }
     let executable_digest = security_digest_bytes(&read_regular_file_no_follow(&binary)?);
     write_new_private_file(
-        &staging.join("provenance"),
+        &staging.path().join("provenance"),
         provenance.stamp(&executable_digest).as_bytes(),
         false,
     )?;
     make_file_executable_read_only(&binary)?;
 
-    match fs::rename(&staging, &destination) {
-        Ok(()) => Ok(destination.join(frontend_binary_name())),
-        Err(_) if destination.is_dir() => {
-            let _ = make_directory_tree_writable(&staging);
-            let _ = fs::remove_dir_all(&staging);
-            verify_cached_build(&destination, provenance)
+    match fs::rename(staging.path(), &destination) {
+        Ok(()) => {
+            staging.mark_published();
+            Ok(destination.join(frontend_binary_name()))
         }
-        Err(error) => {
-            let _ = make_directory_tree_writable(&staging);
-            let _ = fs::remove_dir_all(&staging);
-            Err(GoSemanticProcessError::CommandFailed(format!(
-                "failed to publish verified Go semantic frontend build `{}`: {error}",
-                destination.display()
-            )))
-        }
+        Err(_) if destination.is_dir() => verify_cached_build(&destination, provenance),
+        Err(error) => Err(GoSemanticProcessError::CommandFailed(format!(
+            "failed to publish verified Go semantic frontend build `{}`: {error}",
+            destination.display()
+        ))),
     }
 }
 
@@ -1173,29 +1463,21 @@ fn seal_executable(
         }
     }
 
-    let staging_directory = execution_root.join(format!(
-        ".seal-{executable_digest}-{}-{}",
-        std::process::id(),
-        unique_materialization_suffix()
-    ));
-    create_private_directory(&staging_directory)?;
-    write_new_private_file(&staging_directory.join(frontend_binary_name()), bytes, true)?;
-    seal_execution_directory(&staging_directory)?;
-    match fs::rename(&staging_directory, &directory) {
-        Ok(()) => verify_sealed_executable(&directory, bytes),
-        Err(_) if fs::symlink_metadata(&directory).is_ok() => {
-            let _ = make_directory_tree_writable(&staging_directory);
-            let _ = fs::remove_dir_all(&staging_directory);
+    let mut staging = StagingDirectory::create(&execution_root, ".seal-")?;
+    write_new_private_file(&staging.path().join(frontend_binary_name()), bytes, true)?;
+    seal_execution_directory(staging.path())?;
+    match fs::rename(staging.path(), &directory) {
+        Ok(()) => {
+            staging.mark_published();
             verify_sealed_executable(&directory, bytes)
         }
-        Err(error) => {
-            let _ = make_directory_tree_writable(&staging_directory);
-            let _ = fs::remove_dir_all(&staging_directory);
-            Err(GoSemanticProcessError::CommandFailed(format!(
-                "failed to publish sealed Go semantic frontend `{}`: {error}",
-                directory.display()
-            )))
+        Err(_) if fs::symlink_metadata(&directory).is_ok() => {
+            verify_sealed_executable(&directory, bytes)
         }
+        Err(error) => Err(GoSemanticProcessError::CommandFailed(format!(
+            "failed to publish sealed Go semantic frontend `{}`: {error}",
+            directory.display()
+        ))),
     }
 }
 
@@ -1224,6 +1506,144 @@ fn verify_sealed_executable(
     }
     verify_sealed_permissions(directory, &directory_metadata, &executable)?;
     Ok(executable)
+}
+
+fn prepare_go_toolchain(
+    cache_root: &Path,
+    toolchain: GoToolchain,
+) -> Result<PreparedGoToolchain, GoSemanticProcessError> {
+    let bytes = read_regular_file_no_follow(&toolchain.executable)?;
+    let digest = security_digest_bytes(&bytes);
+    if digest != toolchain.executable_digest {
+        return Err(GoSemanticProcessError::CommandFailed(
+            "selected Go executable changed during preparation.".to_string(),
+        ));
+    }
+    let executable = seal_go_toolchain_executable(cache_root, &bytes, &digest)?;
+    let runtime_search_path = prepend_toolchain_path(&executable, &toolchain.search_path)?;
+    let mut prepared = PreparedGoToolchain {
+        executable,
+        executable_digest: digest,
+        canonical_selection: toolchain.canonical_selection,
+        version: toolchain.version,
+        host_target: toolchain.host_target,
+        goroot: toolchain.goroot,
+        search_path: toolchain.search_path,
+        runtime_search_path,
+    };
+    let (version, host_target) = probe_prepared_go_toolchain(&prepared)?;
+    if host_target != GoHostTarget::current_process()? {
+        return Err(GoSemanticProcessError::CommandUnavailable(format!(
+            "selected Go executable targets {}, but polint is running on {}.",
+            host_target.label(),
+            GoHostTarget::current_process()?.label()
+        )));
+    }
+    prepared.version = version;
+    prepared.host_target = host_target;
+    Ok(prepared)
+}
+
+fn probe_prepared_go_toolchain(
+    toolchain: &PreparedGoToolchain,
+) -> Result<(String, GoHostTarget), GoSemanticProcessError> {
+    let mut command = Command::new(&toolchain.executable);
+    configure_go_environment(&mut command, toolchain);
+    let output = command.arg("version").output().map_err(|error| {
+        GoSemanticProcessError::CommandFailed(format!(
+            "failed to run sealed `go version` for Go semantic frontend: {error}"
+        ))
+    })?;
+    if !output.status.success() {
+        return Err(GoSemanticProcessError::CommandFailed(format!(
+            "sealed `go version` exited with status {}",
+            output.status
+        )));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_go_toolchain(stdout.as_ref()).ok_or_else(|| {
+        GoSemanticProcessError::CommandFailed(format!(
+            "failed to parse sealed Go toolchain version and host target from `{}`",
+            stdout.trim()
+        ))
+    })
+}
+
+fn seal_go_toolchain_executable(
+    cache_root: &Path,
+    bytes: &[u8],
+    executable_digest: &str,
+) -> Result<PathBuf, GoSemanticProcessError> {
+    let toolchains_root = ensure_private_subdirectory(cache_root, Path::new("toolchains"))?;
+    let directory = toolchains_root.join(executable_digest);
+    match fs::symlink_metadata(&directory) {
+        Ok(_) => return verify_sealed_go_toolchain(&directory, bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(GoSemanticProcessError::CommandFailed(format!(
+                "failed to inspect sealed Go toolchain directory `{}`: {error}",
+                directory.display()
+            )));
+        }
+    }
+
+    let mut staging = StagingDirectory::create(&toolchains_root, ".toolchain-")?;
+    write_new_private_file(
+        &staging.path().join(go_toolchain_binary_name()),
+        bytes,
+        true,
+    )?;
+    seal_execution_directory(staging.path())?;
+    match fs::rename(staging.path(), &directory) {
+        Ok(()) => {
+            staging.mark_published();
+            verify_sealed_go_toolchain(&directory, bytes)
+        }
+        Err(_) if fs::symlink_metadata(&directory).is_ok() => {
+            verify_sealed_go_toolchain(&directory, bytes)
+        }
+        Err(error) => Err(GoSemanticProcessError::CommandFailed(format!(
+            "failed to publish sealed Go toolchain `{}`: {error}",
+            directory.display()
+        ))),
+    }
+}
+
+fn verify_sealed_go_toolchain(
+    directory: &Path,
+    expected_bytes: &[u8],
+) -> Result<PathBuf, GoSemanticProcessError> {
+    let directory_metadata = fs::symlink_metadata(directory).map_err(|error| {
+        GoSemanticProcessError::CommandFailed(format!(
+            "failed to inspect sealed Go toolchain directory `{}`: {error}",
+            directory.display()
+        ))
+    })?;
+    if directory_metadata.file_type().is_symlink() || !directory_metadata.is_dir() {
+        return Err(GoSemanticProcessError::CommandFailed(format!(
+            "sealed Go toolchain directory `{}` is unsafe.",
+            directory.display()
+        )));
+    }
+    let executable = directory.join(go_toolchain_binary_name());
+    if read_regular_file_no_follow(&executable)? != expected_bytes {
+        return Err(GoSemanticProcessError::CommandFailed(format!(
+            "sealed Go toolchain `{}` failed content verification.",
+            executable.display()
+        )));
+    }
+    verify_sealed_permissions(directory, &directory_metadata, &executable)?;
+    Ok(executable)
+}
+
+#[cfg(windows)]
+fn go_toolchain_binary_name() -> &'static str {
+    "go.exe"
+}
+
+#[cfg(not(windows))]
+fn go_toolchain_binary_name() -> &'static str {
+    "go"
 }
 
 #[cfg(unix)]
@@ -1283,19 +1703,39 @@ fn verify_sealed_permissions(
     ))
 }
 
-fn configure_go_environment(command: &mut Command, target: &GoHostTarget) {
+fn configure_go_environment(command: &mut Command, toolchain: &PreparedGoToolchain) {
     for variable in GO_ENVIRONMENT_MODIFIERS {
         command.env_remove(variable);
     }
     command
-        .env("GOOS", &target.os)
-        .env("GOARCH", &target.arch)
+        .env("GOOS", &toolchain.host_target.os)
+        .env("GOARCH", &toolchain.host_target.arch)
         .env("CGO_ENABLED", "0")
         .env("GOENV", "off")
         .env("GOFLAGS", "")
         .env("GO111MODULE", "on")
         .env("GOTOOLCHAIN", "local")
-        .env("GOWORK", "off");
+        .env("GOWORK", "off")
+        .env("GOROOT", &toolchain.goroot)
+        .env("PATH", &toolchain.runtime_search_path);
+}
+
+fn prepend_toolchain_path(
+    executable: &Path,
+    search_path: &OsString,
+) -> Result<OsString, GoSemanticProcessError> {
+    let mut paths = executable
+        .parent()
+        .into_iter()
+        .map(Path::to_path_buf)
+        .chain(std::env::split_paths(search_path))
+        .collect::<Vec<_>>();
+    paths.dedup();
+    std::env::join_paths(paths).map_err(|error| {
+        GoSemanticProcessError::CommandFailed(format!(
+            "failed to construct sealed Go toolchain search path: {error}"
+        ))
+    })
 }
 
 #[cfg(unix)]
@@ -1477,37 +1917,6 @@ fn make_source_snapshot_read_only(
 }
 
 #[cfg(unix)]
-fn make_source_snapshot_writable(
-    root: &Path,
-    snapshot: &FrontendSourceSnapshot,
-) -> Result<(), GoSemanticProcessError> {
-    use std::os::unix::fs::PermissionsExt;
-
-    make_directory_tree_writable(root)?;
-    for file in &snapshot.files {
-        let path = root.join(&file.relative_path);
-        if path.exists() {
-            fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(|error| {
-                GoSemanticProcessError::CommandFailed(format!(
-                    "failed to reopen Go semantic frontend staging file: {error}"
-                ))
-            })?;
-        }
-    }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn make_source_snapshot_writable(
-    _root: &Path,
-    _snapshot: &FrontendSourceSnapshot,
-) -> Result<(), GoSemanticProcessError> {
-    Err(GoSemanticProcessError::CommandUnavailable(
-        "private Go semantic frontend execution is unavailable on this platform.".to_string(),
-    ))
-}
-
-#[cfg(unix)]
 fn make_directory_tree_writable(root: &Path) -> Result<(), GoSemanticProcessError> {
     use std::os::unix::fs::PermissionsExt;
 
@@ -1564,22 +1973,33 @@ pub(crate) fn local_go_toolchain_version() -> Result<String, GoSemanticProcessEr
 }
 
 fn local_go_toolchain() -> Result<GoToolchain, GoSemanticProcessError> {
-    let output = Command::new("go")
-        .arg("version")
-        .env("GOENV", "off")
-        .env("GOTOOLCHAIN", "local")
-        .output()
-        .map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                GoSemanticProcessError::CommandUnavailable(
-                    "go executable was not found for the Go semantic frontend.".to_string(),
-                )
-            } else {
-                GoSemanticProcessError::CommandFailed(format!(
-                    "failed to run `go version` for Go semantic frontend: {error}"
-                ))
-            }
-        })?;
+    let search_path = std::env::var_os("PATH").ok_or_else(|| {
+        GoSemanticProcessError::CommandUnavailable(
+            "PATH is unavailable while resolving the Go semantic toolchain.".to_string(),
+        )
+    })?;
+    local_go_toolchain_in(search_path)
+}
+
+fn local_go_toolchain_in(search_path: OsString) -> Result<GoToolchain, GoSemanticProcessError> {
+    let canonical_selection = resolve_go_executable(&search_path)?;
+    let executable_bytes = read_regular_file_no_follow(&canonical_selection)?;
+    let executable_digest = security_digest_bytes(&executable_bytes);
+    let target = GoHostTarget::current_process()?;
+
+    let mut version_command = Command::new(&canonical_selection);
+    configure_go_probe_environment(&mut version_command, &target, &search_path);
+    let output = version_command.arg("version").output().map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            GoSemanticProcessError::CommandUnavailable(
+                "go executable was not found for the Go semantic frontend.".to_string(),
+            )
+        } else {
+            GoSemanticProcessError::CommandFailed(format!(
+                "failed to run `go version` for Go semantic frontend: {error}"
+            ))
+        }
+    })?;
     if !output.status.success() {
         return Err(GoSemanticProcessError::CommandFailed(format!(
             "`go version` exited with status {}",
@@ -1587,24 +2007,99 @@ fn local_go_toolchain() -> Result<GoToolchain, GoSemanticProcessError> {
         )));
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_go_toolchain(stdout.as_ref()).ok_or_else(|| {
+    let (version, host_target) = parse_go_toolchain(stdout.as_ref()).ok_or_else(|| {
         GoSemanticProcessError::CommandFailed(format!(
             "failed to parse Go toolchain version and host target from `{}`",
             stdout.trim()
         ))
+    })?;
+
+    let goroot = infer_go_root(&canonical_selection)?;
+
+    Ok(GoToolchain {
+        executable: canonical_selection.clone(),
+        executable_digest,
+        canonical_selection,
+        version,
+        host_target,
+        goroot,
+        search_path,
     })
 }
 
-fn parse_go_toolchain(output: &str) -> Option<GoToolchain> {
+fn infer_go_root(executable: &Path) -> Result<PathBuf, GoSemanticProcessError> {
+    let goroot = executable.parent().and_then(Path::parent).ok_or_else(|| {
+        GoSemanticProcessError::CommandUnavailable(format!(
+            "selected Go executable `{}` is not located under GOROOT/bin.",
+            executable.display()
+        ))
+    })?;
+    let goroot = fs::canonicalize(goroot).map_err(|error| {
+        GoSemanticProcessError::CommandFailed(format!(
+            "failed to canonicalize selected Go toolchain root `{}`: {error}",
+            goroot.display()
+        ))
+    })?;
+    if !goroot.is_dir() {
+        return Err(GoSemanticProcessError::CommandUnavailable(format!(
+            "selected Go toolchain root `{}` is not a directory.",
+            goroot.display()
+        )));
+    }
+    Ok(goroot)
+}
+
+fn resolve_go_executable(search_path: &OsString) -> Result<PathBuf, GoSemanticProcessError> {
+    for directory in std::env::split_paths(search_path) {
+        let candidate = directory.join(go_toolchain_binary_name());
+        let Ok(metadata) = fs::symlink_metadata(&candidate) else {
+            continue;
+        };
+        if metadata.is_dir() {
+            continue;
+        }
+        let canonical = fs::canonicalize(&candidate).map_err(|error| {
+            GoSemanticProcessError::CommandFailed(format!(
+                "failed to canonicalize selected Go executable `{}`: {error}",
+                candidate.display()
+            ))
+        })?;
+        if canonical.is_file() {
+            return Ok(canonical);
+        }
+    }
+    Err(GoSemanticProcessError::CommandUnavailable(
+        "go executable was not found for the Go semantic frontend.".to_string(),
+    ))
+}
+
+fn configure_go_probe_environment(
+    command: &mut Command,
+    target: &GoHostTarget,
+    search_path: &OsString,
+) {
+    for variable in GO_ENVIRONMENT_MODIFIERS {
+        command.env_remove(variable);
+    }
+    command
+        .env("GOOS", &target.os)
+        .env("GOARCH", &target.arch)
+        .env("CGO_ENABLED", "0")
+        .env("GOENV", "off")
+        .env("GOFLAGS", "")
+        .env("GO111MODULE", "on")
+        .env("GOTOOLCHAIN", "local")
+        .env("GOWORK", "off")
+        .env("PATH", search_path);
+}
+
+fn parse_go_toolchain(output: &str) -> Option<(String, GoHostTarget)> {
     let mut parts = output.split_whitespace();
     let _go = parts.next()?;
     let _version_word = parts.next()?;
     let version = parts.next()?.to_string();
     let host_target = parts.next().and_then(GoHostTarget::parse_label)?;
-    Some(GoToolchain {
-        version,
-        host_target,
-    })
+    Some((version, host_target))
 }
 
 fn parse_go_version(output: &str) -> Option<String> {
@@ -1636,6 +2131,36 @@ mod tests {
     #[cfg(unix)]
     fn test_cache_root(temp: &tempfile::TempDir) -> PathBuf {
         temp.path().join("cache")
+    }
+
+    fn prepared_toolchain_for_test(version: &str) -> PreparedGoToolchain {
+        PreparedGoToolchain {
+            executable: PathBuf::from("/sealed/toolchain/go"),
+            executable_digest: format!("digest-{version}"),
+            canonical_selection: PathBuf::from("/selected/bin/go"),
+            version: version.to_string(),
+            host_target: GoHostTarget {
+                os: "linux".to_string(),
+                arch: "amd64".to_string(),
+            },
+            goroot: PathBuf::from("/selected/go"),
+            search_path: OsString::from("/selected/bin:/usr/bin:/bin"),
+            runtime_search_path: OsString::from("/sealed/toolchain:/selected/bin:/usr/bin:/bin"),
+        }
+    }
+
+    fn build_provenance_for_test(version: &str) -> FrontendBuildProvenance {
+        let toolchain = prepared_toolchain_for_test(version);
+        FrontendBuildProvenance {
+            source_digest: "source".to_string(),
+            toolchain_version: toolchain.version,
+            toolchain_executable_digest: toolchain.executable_digest,
+            toolchain_selection: normalized_path_label(&toolchain.canonical_selection),
+            goroot: normalized_path_label(&toolchain.goroot),
+            search_path: toolchain.search_path.to_string_lossy().into_owned(),
+            host_target: toolchain.host_target,
+            environment_policy: GO_ENVIRONMENT_POLICY,
+        }
     }
 
     #[test]
@@ -1707,13 +2232,13 @@ mod tests {
         assert!(!go_version_at_least("go1.24.9", 1, 25));
         assert_eq!(
             parse_go_toolchain("go version go1.26.2 darwin/arm64"),
-            Some(GoToolchain {
-                version: "go1.26.2".to_string(),
-                host_target: GoHostTarget {
+            Some((
+                "go1.26.2".to_string(),
+                GoHostTarget {
                     os: "darwin".to_string(),
                     arch: "arm64".to_string(),
-                },
-            })
+                }
+            ))
         );
     }
 
@@ -1824,7 +2349,9 @@ mod tests {
         let source = temp.path().join("frontend");
         fs::write(&source, b"#!/bin/sh\nprintf 'A\\n'\n").expect("write frontend A");
         fs::set_permissions(&source, fs::Permissions::from_mode(0o700)).expect("frontend mode");
-        let prepared = prepare_binary_frontend(&cache, &source).expect("prepare frontend A");
+        let prepared =
+            prepare_binary_frontend(&cache, &source, prepared_toolchain_for_test("go1.25.0"))
+                .expect("prepare frontend A");
         fs::write(&source, b"#!/bin/sh\nprintf 'B\\n'\n").expect("replace source with B");
 
         let output = prepared
@@ -1851,7 +2378,9 @@ mod tests {
         let source = temp.path().join("frontend");
         fs::write(&source, b"#!/bin/sh\nprintf 'sealed\\n'\n").expect("write frontend");
         fs::set_permissions(&source, fs::Permissions::from_mode(0o700)).expect("frontend mode");
-        let prepared = prepare_binary_frontend(&cache, &source).expect("prepare frontend");
+        let prepared =
+            prepare_binary_frontend(&cache, &source, prepared_toolchain_for_test("go1.25.0"))
+                .expect("prepare frontend");
         let sealed_directory = prepared.executable.parent().expect("sealed directory");
         let source_bytes = read_regular_file_no_follow(&source).expect("read source bytes");
         let reused = seal_executable(&cache, &source_bytes, &security_digest_bytes(&source_bytes))
@@ -1904,19 +2433,12 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let cache = test_cache_root(&temp);
         ensure_private_cache_root(&cache).expect("private cache");
-        let provenance = FrontendBuildProvenance {
-            source_digest: "source".to_string(),
-            toolchain_version: "go1.24.9".to_string(),
-            host_target: GoHostTarget {
-                os: "linux".to_string(),
-                arch: "amd64".to_string(),
-            },
-            environment_policy: GO_ENVIRONMENT_POLICY,
-        };
+        let provenance = build_provenance_for_test("go1.24.9");
+        let toolchain = prepared_toolchain_for_test("go1.24.9");
         ensure_private_subdirectory(&cache, &Path::new("builds").join(provenance.cache_key()))
             .expect("preseed old build cache");
 
-        let error = ensure_frontend_binary(&cache, temp.path(), &provenance)
+        let error = ensure_frontend_binary(&cache, temp.path(), &provenance, &toolchain)
             .expect_err("old toolchain cache must fail");
 
         assert!(matches!(
@@ -1927,19 +2449,20 @@ mod tests {
 
     #[test]
     fn source_build_cache_key_binds_source_toolchain_target_and_environment() {
-        let baseline = FrontendBuildProvenance {
-            source_digest: "source-a".to_string(),
-            toolchain_version: "go1.25.0".to_string(),
-            host_target: GoHostTarget {
-                os: "linux".to_string(),
-                arch: "amd64".to_string(),
-            },
-            environment_policy: GO_ENVIRONMENT_POLICY,
-        };
+        let mut baseline = build_provenance_for_test("go1.25.0");
+        baseline.source_digest = "source-a".to_string();
         let mut source_changed = baseline.clone();
         source_changed.source_digest = "source-b".to_string();
         let mut toolchain_changed = baseline.clone();
         toolchain_changed.toolchain_version = "go1.26.0".to_string();
+        let mut executable_changed = baseline.clone();
+        executable_changed.toolchain_executable_digest = "other-executable".to_string();
+        let mut selection_changed = baseline.clone();
+        selection_changed.toolchain_selection = "/other/bin/go".to_string();
+        let mut goroot_changed = baseline.clone();
+        goroot_changed.goroot = "/other/go".to_string();
+        let mut search_path_changed = baseline.clone();
+        search_path_changed.search_path = "/other/bin".to_string();
         let mut target_changed = baseline.clone();
         target_changed.host_target.arch = "arm64".to_string();
         let mut environment_changed = baseline.clone();
@@ -1949,13 +2472,17 @@ mod tests {
             baseline.cache_key(),
             source_changed.cache_key(),
             toolchain_changed.cache_key(),
+            executable_changed.cache_key(),
+            selection_changed.cache_key(),
+            goroot_changed.cache_key(),
+            search_path_changed.cache_key(),
             target_changed.cache_key(),
             environment_changed.cache_key(),
         ]
         .into_iter()
         .collect::<BTreeSet<_>>();
 
-        assert_eq!(keys.len(), 5);
+        assert_eq!(keys.len(), 9);
         assert!(keys.iter().all(|key| key.len() == 64));
     }
 
@@ -1968,12 +2495,9 @@ mod tests {
             .env("GOFLAGS", "-tags=hostile")
             .env("GOAMD64", "v4")
             .env("CGO_ENABLED", "1");
-        let target = GoHostTarget {
-            os: "linux".to_string(),
-            arch: "amd64".to_string(),
-        };
+        let toolchain = prepared_toolchain_for_test("go1.25.0");
 
-        configure_go_environment(&mut command, &target);
+        configure_go_environment(&mut command, &toolchain);
 
         let environment = command
             .get_envs()
@@ -1989,6 +2513,202 @@ mod tests {
         assert_eq!(environment.get("GOFLAGS"), Some(&Some(String::new())));
         assert_eq!(environment.get("CGO_ENABLED"), Some(&Some("0".to_string())));
         assert_eq!(environment.get("GOAMD64"), Some(&None));
+        assert_eq!(
+            environment.get("GOROOT"),
+            Some(&Some("/selected/go".to_string()))
+        );
+        assert!(
+            environment
+                .get("PATH")
+                .and_then(Option::as_ref)
+                .is_some_and(|path| path.starts_with("/sealed/toolchain"))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prepared_frontend_pins_selected_go_toolchain_after_launcher_replacement() {
+        use std::os::unix::fs::PermissionsExt;
+
+        fn write_launcher(path: &Path, label: &str, target: &str, goroot: &Path) {
+            let script = format!(
+                "#!/bin/sh\nif [ \"$1\" = version ]; then\n  printf 'go version go1.25.0 {target} {label}\\n'\nelif [ \"$1\" = env ] && [ \"$2\" = GOROOT ]; then\n  printf '%s\\n' '{}'\nelse\n  exit 9\nfi\n",
+                goroot.display()
+            );
+            fs::write(path, script).expect("write fake go launcher");
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+                .expect("make fake go executable");
+        }
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cache = test_cache_root(&temp);
+        ensure_private_cache_root(&cache).expect("private cache");
+        let target = GoHostTarget::current_process()
+            .expect("supported host")
+            .label();
+        let goroot_a = temp.path().join("goroot-a");
+        let goroot_b = temp.path().join("goroot-b");
+        fs::create_dir(&goroot_a).expect("create goroot A");
+        fs::create_dir(&goroot_b).expect("create goroot B");
+        let bin_a = goroot_a.join("bin");
+        let bin_b = goroot_b.join("bin");
+        fs::create_dir(&bin_a).expect("create bin A");
+        fs::create_dir(&bin_b).expect("create bin B");
+        let go_a = bin_a.join("go");
+        let go_b = bin_b.join("go");
+        write_launcher(&go_a, "A", &target, &goroot_a);
+        write_launcher(&go_b, "B", &target, &goroot_b);
+        let path_a = std::env::join_paths([&bin_a]).expect("PATH A");
+        let path_b = std::env::join_paths([&bin_b]).expect("PATH B");
+        let prepared_go_a =
+            prepare_go_toolchain(&cache, local_go_toolchain_in(path_a).expect("toolchain A"))
+                .expect("prepare toolchain A");
+        let prepared_go_b =
+            prepare_go_toolchain(&cache, local_go_toolchain_in(path_b).expect("toolchain B"))
+                .expect("prepare toolchain B");
+        let frontend = temp.path().join("frontend");
+        fs::write(&frontend, "#!/bin/sh\nexec go version\n").expect("write frontend");
+        fs::set_permissions(&frontend, fs::Permissions::from_mode(0o700))
+            .expect("make frontend executable");
+        let prepared_a =
+            prepare_binary_frontend(&cache, &frontend, prepared_go_a).expect("prepare frontend A");
+        let prepared_b =
+            prepare_binary_frontend(&cache, &frontend, prepared_go_b).expect("prepare frontend B");
+        write_launcher(&go_a, "REPLACED", &target, &goroot_a);
+
+        let output = prepared_a
+            .command(temp.path())
+            .output()
+            .expect("run prepared frontend");
+
+        assert_ne!(prepared_a.identity_digest(), prepared_b.identity_digest());
+        assert!(String::from_utf8_lossy(&output.stdout).contains(" A"));
+        make_directory_tree_writable(&cache).expect("reopen cache for cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn source_snapshot_rejects_flat_file_overflow_during_walk() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        fs::write(temp.path().join("go.mod"), "module example.test/frontend\n")
+            .expect("write go.mod");
+        for index in 0..GO_FRONTEND_MAX_SOURCE_FILES {
+            fs::write(
+                temp.path().join(format!("source-{index:04}.go")),
+                "package main\n",
+            )
+            .expect("write source");
+        }
+
+        let error = capture_source_snapshot(temp.path()).expect_err("file overflow must fail");
+
+        assert!(error.to_string().contains("more than 512 files"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn source_snapshot_rejects_excessive_depth_during_walk() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        fs::write(temp.path().join("go.mod"), "module example.test/frontend\n")
+            .expect("write go.mod");
+        let mut directory = temp.path().to_path_buf();
+        for index in 0..=GO_FRONTEND_MAX_SOURCE_DEPTH {
+            directory.push(format!("d{index}"));
+            fs::create_dir(&directory).expect("create nested directory");
+        }
+
+        let error = capture_source_snapshot(temp.path()).expect_err("depth overflow must fail");
+
+        assert!(error.to_string().contains("traversal depth"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn source_snapshot_rejects_irrelevant_entry_overflow_during_walk() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        fs::write(temp.path().join("go.mod"), "module example.test/frontend\n")
+            .expect("write go.mod");
+        for index in 0..GO_FRONTEND_MAX_SOURCE_ENTRIES {
+            fs::write(
+                temp.path().join(format!("ignored-{index:04}.txt")),
+                "ignored",
+            )
+            .expect("write irrelevant entry");
+        }
+
+        let error = capture_source_snapshot(temp.path()).expect_err("entry overflow must fail");
+
+        assert!(error.to_string().contains("more than 4096 entries"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staging_guard_cleans_every_partial_permission_state() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        for state in 0..4 {
+            let path;
+            {
+                let staging = StagingDirectory::create(temp.path(), ".failure-")
+                    .expect("create staging directory");
+                path = staging.path().to_path_buf();
+                if state >= 1 {
+                    write_new_private_file(&path.join("file"), b"contents", false)
+                        .expect("write staging file");
+                }
+                if state >= 2 {
+                    let nested = ensure_private_subdirectory(&path, Path::new("nested"))
+                        .expect("create nested staging directory");
+                    write_new_private_file(&nested.join("file"), b"contents", false)
+                        .expect("write nested staging file");
+                }
+                if state >= 3 {
+                    seal_execution_directory(&path).expect("seal staging directory");
+                }
+            }
+            assert!(!path.exists(), "staging state {state} leaked");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staging_allocation_is_unique_under_concurrency() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let parent = std::sync::Arc::new(temp.path().to_path_buf());
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(16));
+        let mut handles = Vec::new();
+        for _ in 0..16 {
+            let parent = std::sync::Arc::clone(&parent);
+            let barrier = std::sync::Arc::clone(&barrier);
+            handles.push(std::thread::spawn(move || {
+                let staging = StagingDirectory::create(&parent, ".concurrent-")
+                    .expect("allocate staging directory");
+                let path = staging.path().to_path_buf();
+                barrier.wait();
+                path
+            }));
+        }
+        let paths = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("join staging allocator"))
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(paths.len(), 16);
+        assert!(paths.iter().all(|path| !path.exists()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stale_staging_cleanup_is_bounded_and_prefix_scoped() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let stale = temp.path().join(".source-stale");
+        let unrelated = temp.path().join("published");
+        fs::create_dir(&stale).expect("create stale staging directory");
+        fs::create_dir(&unrelated).expect("create unrelated directory");
+
+        cleanup_stale_staging_directories(temp.path(), ".source-", std::time::Duration::ZERO);
+
+        assert!(!stale.exists());
+        assert!(unrelated.exists());
     }
 
     #[cfg(unix)]
