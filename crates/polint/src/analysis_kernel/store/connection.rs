@@ -130,6 +130,15 @@ pub(super) fn begin_immediate(
         .map_err(classify_sqlite_error)
 }
 
+pub(super) fn begin_read(
+    reader: &mut ReadOnlyConnection,
+) -> Result<Transaction<'_>, ConnectionError> {
+    reader
+        .connection
+        .transaction_with_behavior(TransactionBehavior::Deferred)
+        .map_err(classify_sqlite_error)
+}
+
 pub(super) fn read_connection(reader: &ReadOnlyConnection) -> &Connection {
     &reader.connection
 }

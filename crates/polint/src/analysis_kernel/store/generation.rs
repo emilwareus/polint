@@ -21,7 +21,8 @@ use crate::analysis_kernel::incremental::{
     QueryDependencyInputs, QueryKey, RunIdentity, RunManifestKey, SummaryKey, WorkspaceIdentity,
 };
 use crate::analysis_kernel::metadata::{
-    MAX_STABLE_KEY_TOTAL_BYTES, StableFactKey, StableFactMetaRow,
+    STABLE_KEY_PREFLIGHT_BYTES, StableFactKey, StableFactMetaRow, StableFactRowBudget,
+    StableFactRowStorageLengths,
 };
 
 use super::commit_plan::{
@@ -326,8 +327,8 @@ pub(super) fn read_active_complete(
         return Err(StoreStatus::Disabled);
     }
     record_store_io_attempt();
-    let reader = connection::open_read_only(config.path()).map_err(map_connection_error)?;
-    read_active_complete_from_reader(&reader, workspace).map_err(map_read_error)
+    let mut reader = connection::open_read_only(config.path()).map_err(map_connection_error)?;
+    read_active_complete_from_reader(&mut reader, workspace).map_err(map_read_error)
 }
 
 pub(super) fn match_active_generation(
@@ -405,8 +406,10 @@ pub(super) fn match_active_generation(
 pub(super) fn validate_active_generation_statistics(
     matched: MatchedActiveGeneration,
 ) -> Result<StoreStatistics, StoreStatus> {
-    let connection = connection::read_connection(&matched.reader);
-    let active = read_generation_projection(connection, matched.handle).map_err(map_read_error)?;
+    let mut reader = matched.reader;
+    let transaction = connection::begin_read(&mut reader).map_err(map_connection_error)?;
+    let active =
+        read_generation_projection(&transaction, matched.handle).map_err(map_read_error)?;
     let semantic = &active.plan.semantic;
     let stats = &semantic.stats;
     Ok(StoreStatistics {
@@ -902,6 +905,40 @@ fn has_invalid_declared_child_counts(
 ) -> Result<bool, ProjectionError> {
     let invalid: i64 = connection.query_row(
         "SELECT EXISTS (
+             SELECT 1 FROM input_components AS parent
+             WHERE parent.generation_id = ?1 AND parent.detail_count != (
+                 SELECT count(*) FROM input_component_details AS child
+                 WHERE child.generation_id = parent.generation_id
+                   AND child.component_group = parent.component_group
+                   AND child.component_name = parent.name
+             )
+             UNION ALL
+             SELECT 1 FROM input_component_details AS child
+             WHERE child.generation_id = ?1 AND NOT EXISTS (
+                 SELECT 1 FROM input_components AS parent
+                 WHERE parent.generation_id = child.generation_id
+                   AND parent.component_group = child.component_group
+                   AND parent.name = child.component_name
+                   AND parent.digest_kind = child.component_digest_kind
+                   AND parent.digest_value = child.component_digest_value
+             )
+             UNION ALL
+             SELECT 1 FROM requested_capabilities AS parent
+             WHERE parent.generation_id = ?1 AND parent.requester_count != (
+                 SELECT count(*) FROM capability_requesters AS child
+                 WHERE child.generation_id = parent.generation_id
+                   AND child.capability = parent.capability
+                   AND child.language = parent.language
+             )
+             UNION ALL
+             SELECT 1 FROM capability_requesters AS child
+             WHERE child.generation_id = ?1 AND NOT EXISTS (
+                 SELECT 1 FROM requested_capabilities AS parent
+                 WHERE parent.generation_id = child.generation_id
+                   AND parent.capability = child.capability
+                   AND parent.language = child.language
+             )
+             UNION ALL
              SELECT 1 FROM provider_schema_snapshots AS parent
              WHERE parent.generation_id = ?1 AND parent.version_count != (
                  SELECT count(*) FROM provider_schema_versions AS child
@@ -951,6 +988,13 @@ fn has_invalid_declared_child_counts(
              WHERE parent.generation_id = ?1 AND parent.dependency_count != (
                  SELECT count(*) FROM summary_dependency_digests AS child
                  WHERE child.generation_id = parent.generation_id AND child.summary_id = parent.id
+             )
+             UNION ALL
+             SELECT 1 FROM summary_dependency_digests AS child
+             WHERE child.generation_id = ?1 AND NOT EXISTS (
+                 SELECT 1 FROM summaries AS parent
+                 WHERE parent.generation_id = child.generation_id
+                   AND parent.id = child.summary_id
              )
              UNION ALL
              SELECT 1 FROM queries AS parent
@@ -2925,10 +2969,11 @@ fn sql_ordinal(value: usize) -> Result<i64, ProjectionError> {
 }
 
 fn read_active_complete_from_reader(
-    reader: &ReadOnlyConnection,
+    reader: &mut ReadOnlyConnection,
     workspace: &WorkspaceIdentity,
 ) -> Result<Option<ActiveCompleteGeneration>, ProjectionError> {
-    read_active_complete_from_connection(connection::read_connection(reader), workspace)
+    let transaction = connection::begin_read(reader).map_err(ProjectionError::Connection)?;
+    read_active_complete_from_connection(&transaction, workspace)
 }
 
 fn read_active_complete_from_connection(
@@ -2970,6 +3015,9 @@ fn read_generation_projection(
     generation_id: i64,
 ) -> Result<ActiveCompleteGeneration, ProjectionError> {
     let header = read_generation_header(connection, generation_id)?;
+    if has_invalid_declared_child_counts(connection, generation_id)? {
+        return Err(ProjectionError::InvalidMetadata);
+    }
     let input_snapshot = read_input_snapshot(connection, generation_id)?;
     let files = read_files(connection, generation_id)?;
     let input_components = read_input_components(connection, generation_id)?;
@@ -4103,7 +4151,7 @@ fn read_facts(
     connection: &Connection,
     generation_id: i64,
 ) -> Result<Vec<StoreFactRow>, ProjectionError> {
-    let mut remaining_stable_key_bytes = MAX_STABLE_KEY_TOTAL_BYTES;
+    preflight_fact_rows(connection, generation_id)?;
     let mut rows = query_rows(
         connection,
         "SELECT ordinal, family, stable_key, producer_id, producer_layer_key,
@@ -4117,15 +4165,14 @@ fn read_facts(
             let precision = decode_fact_precision(&row.get::<_, String>(5)?)?;
             let confidence = decode_fact_confidence(&row.get::<_, String>(6)?)?;
             let validation = decode_validation_status(&row.get::<_, String>(7)?)?;
+            #[cfg(test)]
+            FACT_ROW_DECODE_MATERIALIZATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             Ok((
                 ordinal,
                 StableFactMetaRow {
                     family,
-                    stable_key: StableFactKey::from_storage_with_budget(
-                        row.get(2)?,
-                        &mut remaining_stable_key_bytes,
-                    )
-                    .map_err(|_| ProjectionError::Codec)?,
+                    stable_key: StableFactKey::from_storage(row.get(2)?)
+                        .map_err(|_| ProjectionError::Codec)?,
                     producer_id: std::borrow::Cow::Owned(row.get(3)?),
                     layer_id: std::borrow::Cow::Owned(row.get(4)?),
                     precision,
@@ -4146,6 +4193,84 @@ fn read_facts(
     let mut rows = rows.drain(..).map(|(_, row)| row).collect::<Vec<_>>();
     rows.sort();
     Ok(rows)
+}
+
+fn preflight_fact_rows(connection: &Connection, generation_id: i64) -> Result<(), ProjectionError> {
+    let mut statement = connection.prepare(
+        "SELECT ordinal, typeof(ordinal),
+                typeof(family), length(family),
+                typeof(stable_key), length(stable_key), substr(stable_key, 1, ?2),
+                typeof(producer_id), length(producer_id),
+                typeof(producer_layer_key), length(producer_layer_key),
+                typeof(precision), length(precision),
+                typeof(confidence), length(confidence),
+                typeof(validation), length(validation),
+                typeof(payload_digest), length(payload_digest)
+         FROM fact_metadata WHERE generation_id = ?1
+         ORDER BY ordinal",
+    )?;
+    let prefix_bytes =
+        i64::try_from(STABLE_KEY_PREFLIGHT_BYTES).map_err(|_| ProjectionError::InvalidMetadata)?;
+    let mut rows = statement.query(params![generation_id, prefix_bytes])?;
+    let mut budget = StableFactRowBudget::new();
+    let mut expected_ordinal = 0_i64;
+    while let Some(row) = rows.next()? {
+        let ordinal: i64 = row.get(0)?;
+        if ordinal != expected_ordinal
+            || row.get::<_, String>(1)? != "integer"
+            || row.get::<_, String>(2)? != "text"
+            || row.get::<_, String>(4)? != "blob"
+            || row.get::<_, String>(7)? != "text"
+            || row.get::<_, String>(9)? != "text"
+            || row.get::<_, String>(11)? != "text"
+            || row.get::<_, String>(13)? != "text"
+            || row.get::<_, String>(15)? != "text"
+            || row.get::<_, String>(17)? != "text"
+        {
+            return Err(ProjectionError::InvalidMetadata);
+        }
+        expected_ordinal = expected_ordinal
+            .checked_add(1)
+            .ok_or(ProjectionError::InvalidMetadata)?;
+        let encoded_stable_key = sqlite_length(row, 5)?;
+        let prefix: Vec<u8> = row.get(6)?;
+        let decoded_stable_key =
+            StableFactKey::decoded_len_from_storage_prefix(encoded_stable_key, &prefix)
+                .map_err(|_| ProjectionError::Codec)?;
+        budget
+            .charge(StableFactRowStorageLengths {
+                family: sqlite_length(row, 3)?,
+                encoded_stable_key,
+                decoded_stable_key,
+                producer_id: sqlite_length(row, 8)?,
+                layer_id: sqlite_length(row, 10)?,
+                precision: sqlite_length(row, 12)?,
+                confidence: sqlite_length(row, 14)?,
+                validation: sqlite_length(row, 16)?,
+                payload_digest: sqlite_length(row, 18)?,
+            })
+            .map_err(|_| ProjectionError::Codec)?;
+    }
+    Ok(())
+}
+
+fn sqlite_length(row: &Row<'_>, index: usize) -> Result<usize, ProjectionError> {
+    let length: i64 = row.get(index)?;
+    usize::try_from(length).map_err(|_| ProjectionError::InvalidMetadata)
+}
+
+#[cfg(test)]
+static FACT_ROW_DECODE_MATERIALIZATIONS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+pub(super) fn reset_fact_row_decode_materializations_for_test() {
+    FACT_ROW_DECODE_MATERIALIZATIONS.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(test)]
+pub(super) fn fact_row_decode_materializations_for_test() -> usize {
+    FACT_ROW_DECODE_MATERIALIZATIONS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 fn read_run_manifest(

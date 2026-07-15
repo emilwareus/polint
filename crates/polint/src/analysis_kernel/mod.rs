@@ -1003,28 +1003,32 @@ impl AnalysisKernel {
                     // Both operations use internal data parallelism. Finish the
                     // large fact-key compaction first so its plain source keys
                     // do not coexist with the canonical dependency projection.
-                    let finalized_facts = prepared_facts.finish_validated();
-                    let prepared =
-                        incremental::ValidatedRunMetadata::prepare_finalized_canonical_run(
-                            &input_snapshot,
-                            &provider_outputs,
-                            &scc_closure.demand_query_trace,
-                            &validation_events,
-                            Self::provider_manifests(),
-                        );
-                    match prepared {
-                        Ok(prepared) => {
-                            match incremental::ValidatedRunMetadata::finish_prepared_canonical_run(
-                                prepared,
-                                finalized_facts,
-                            ) {
-                                Ok(validated) => store::SemanticStore::commit_validated_run(
-                                    &store::StoreConfig::new(
-                                        input.cache.semantic_store_path(),
-                                        true,
-                                    ),
-                                    validated,
-                                ),
+                    match prepared_facts.finish_validated() {
+                        Ok(finalized_facts) => {
+                            let prepared =
+                                incremental::ValidatedRunMetadata::prepare_finalized_canonical_run(
+                                    &input_snapshot,
+                                    &provider_outputs,
+                                    &scc_closure.demand_query_trace,
+                                    &validation_events,
+                                    Self::provider_manifests(),
+                                );
+                            match prepared {
+                                Ok(prepared) => {
+                                    match incremental::ValidatedRunMetadata::finish_prepared_canonical_run(
+                                        prepared,
+                                        finalized_facts,
+                                    ) {
+                                        Ok(validated) => store::SemanticStore::commit_validated_run(
+                                            &store::StoreConfig::new(
+                                                input.cache.semantic_store_path(),
+                                                true,
+                                            ),
+                                            validated,
+                                        ),
+                                        Err(_) => store::StoreOutcome::invalid_metadata(),
+                                    }
+                                }
                                 Err(_) => store::StoreOutcome::invalid_metadata(),
                             }
                         }

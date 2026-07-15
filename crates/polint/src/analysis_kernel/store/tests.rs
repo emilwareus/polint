@@ -2171,6 +2171,149 @@ mod active_complete_reader {
     }
 
     #[test]
+    fn fact_row_preflight_rejects_large_or_excessive_blobs_before_materialization() {
+        let cases = [
+            (
+                "oversized-blob",
+                "UPDATE fact_metadata SET stable_key = zeroblob(262145)
+                 WHERE generation_id = (
+                     SELECT active_generation_id FROM store_manifest WHERE id = 1
+                 ) AND ordinal = 0;",
+            ),
+            (
+                "many-short-rows",
+                "WITH RECURSIVE ordinals(value) AS (
+                     VALUES(1000000)
+                     UNION ALL
+                     SELECT value + 1 FROM ordinals WHERE value < 1249999
+                 )
+                 INSERT INTO fact_metadata (
+                     generation_id, ordinal, family, stable_key, producer_id,
+                     producer_layer_key, precision, confidence, validation, payload_digest
+                 )
+                 SELECT source.generation_id, ordinals.value, source.family, x'78',
+                        source.producer_id, source.producer_layer_key, source.precision,
+                        source.confidence, source.validation, source.payload_digest
+                 FROM fact_metadata AS source CROSS JOIN ordinals
+                 WHERE source.generation_id = (
+                     SELECT active_generation_id FROM store_manifest WHERE id = 1
+                 ) AND source.ordinal = 0;",
+            ),
+        ];
+
+        for (label, tamper) in cases {
+            let temp = tempfile::tempdir().expect("temp directory");
+            let repository = temp.path().join("repo");
+            let plan = generation_plan_fixture(&repository, label);
+            let config = generation_store_config(temp.path());
+            assert_eq!(
+                generation::commit_generation(&config, &plan),
+                StoreStatus::Ready,
+                "{label}"
+            );
+            let database = Connection::open(config.path()).expect("open store");
+            database
+                .execute_batch(tamper)
+                .expect("tamper stable fact rows");
+            drop(database);
+            generation::reset_fact_row_decode_materializations_for_test();
+
+            assert_eq!(
+                generation::read_active_complete(&config, &plan.semantic.identities.workspace),
+                Err(StoreStatus::RebuildNeeded(
+                    StoreRebuildReason::InvalidMetadata
+                )),
+                "{label}"
+            );
+            assert_eq!(
+                generation::fact_row_decode_materializations_for_test(),
+                0,
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
+    fn active_read_authenticates_input_and_summary_child_relationships() {
+        let tampers = [
+            (
+                "input-detail-count",
+                "UPDATE input_components SET detail_count = detail_count + 1
+                 WHERE generation_id = (
+                     SELECT active_generation_id FROM store_manifest WHERE id = 1
+                 ) AND rowid = (
+                     SELECT rowid FROM input_components WHERE generation_id = (
+                         SELECT active_generation_id FROM store_manifest WHERE id = 1
+                     ) LIMIT 1
+                 );",
+            ),
+            (
+                "input-detail-digest",
+                "UPDATE input_component_details
+                 SET component_digest_value =
+                     substr(component_digest_value, 1, length(component_digest_value) - 1) ||
+                     CASE substr(component_digest_value, -1) WHEN '0' THEN '1' ELSE '0' END
+                 WHERE generation_id = (
+                     SELECT active_generation_id FROM store_manifest WHERE id = 1
+                 ) AND rowid = (
+                     SELECT rowid FROM input_component_details WHERE generation_id = (
+                         SELECT active_generation_id FROM store_manifest WHERE id = 1
+                     ) LIMIT 1
+                 );",
+            ),
+            (
+                "capability-requester-count",
+                "UPDATE requested_capabilities SET requester_count = requester_count + 1
+                 WHERE generation_id = (
+                     SELECT active_generation_id FROM store_manifest WHERE id = 1
+                 ) AND rowid = (
+                     SELECT rowid FROM requested_capabilities WHERE generation_id = (
+                         SELECT active_generation_id FROM store_manifest WHERE id = 1
+                     ) LIMIT 1
+                 );",
+            ),
+            (
+                "summary-dependency-count",
+                "UPDATE summaries SET dependency_count = dependency_count + 1
+                 WHERE generation_id = (
+                     SELECT active_generation_id FROM store_manifest WHERE id = 1
+                 ) AND rowid = (
+                     SELECT rowid FROM summaries WHERE generation_id = (
+                         SELECT active_generation_id FROM store_manifest WHERE id = 1
+                     ) LIMIT 1
+                 );",
+            ),
+        ];
+
+        for (label, tamper) in tampers {
+            let temp = tempfile::tempdir().expect("temp directory");
+            let validated = generation_validated_fixture(&temp.path().join("repo"), label);
+            let config = generation_store_config(temp.path());
+            assert_eq!(
+                SemanticStore::commit_validated_run(&config, validated.clone()).status,
+                StoreStatus::Ready,
+                "{label}"
+            );
+            let database = Connection::open(config.path()).expect("open store");
+            let changed = database.execute(tamper, []).expect("tamper child metadata");
+            if label != "summary-dependency-count" {
+                assert_eq!(changed, 1, "{label}");
+            } else if changed == 0 {
+                continue;
+            }
+            drop(database);
+
+            let outcome = SemanticStore::commit_validated_run(&config, validated);
+            assert_eq!(
+                outcome.status,
+                StoreStatus::RebuildNeeded(StoreRebuildReason::InvalidMetadata),
+                "{label}"
+            );
+            assert_eq!(outcome.statistics, None, "{label}");
+        }
+    }
+
+    #[test]
     fn identical_rerun_rejects_tampered_active_scalar_and_child_rows() {
         let tampers = [
             (

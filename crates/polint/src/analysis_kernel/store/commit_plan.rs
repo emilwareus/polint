@@ -24,6 +24,7 @@ use crate::analysis_kernel::incremental::{
     input_snapshot_semantic_row_builder, provider_manifest_digest_from_fields,
     provider_manifest_rows_digest, serialized_rows_digest,
 };
+use crate::analysis_kernel::metadata::StableFactRowBudget;
 use crate::analysis_kernel::validation::{
     ValidationEvent, ValidationEventKind, ValidationEventStatus,
 };
@@ -100,6 +101,7 @@ pub(super) enum StorePlanError {
     IncompleteGeneration {
         family: &'static str,
     },
+    InvalidFactStorage,
 }
 
 impl fmt::Display for StorePlanError {
@@ -184,6 +186,9 @@ impl fmt::Display for StorePlanError {
             ),
             Self::IncompleteGeneration { family } => {
                 write!(formatter, "generation is missing required {family} rows")
+            }
+            Self::InvalidFactStorage => {
+                formatter.write_str("fact metadata exceeds the stable storage budget")
             }
         }
     }
@@ -1549,7 +1554,9 @@ impl StoreSemanticPlan {
         self.validate_paths()?;
         self.validate_statuses()?;
         self.validate_required_events()?;
+        self.validate_input_relationships()?;
         self.validate_provider_relationships()?;
+        self.validate_summary_relationships()?;
         self.validate_query_declarations()?;
         self.validate_result_boundaries()?;
         self.validate_dependency_endpoints()?;
@@ -1764,6 +1771,100 @@ impl StoreSemanticPlan {
                     family: "validation event",
                 });
             }
+        }
+        Ok(())
+    }
+
+    fn validate_input_relationships(&self) -> Result<(), StorePlanError> {
+        let components = self
+            .input_components
+            .iter()
+            .map(|component| ((component.group, component.name.as_str()), component))
+            .collect::<BTreeMap<_, _>>();
+        for detail in &self.input_details {
+            let component = components
+                .get(&(detail.group, detail.component_name.as_str()))
+                .ok_or(StorePlanError::IncompleteGeneration {
+                    family: "input component parent",
+                })?;
+            if detail.component_digest != component.digest {
+                return Err(StorePlanError::IdentityMismatch {
+                    family: "input component detail",
+                });
+            }
+        }
+        for component in &self.input_components {
+            check_count(
+                "input component detail",
+                component.detail_count,
+                self.input_details
+                    .iter()
+                    .filter(|detail| {
+                        detail.group == component.group && detail.component_name == component.name
+                    })
+                    .count(),
+            )?;
+        }
+
+        let capabilities = self
+            .capabilities
+            .iter()
+            .map(|capability| {
+                (
+                    (
+                        capability.capability.as_str(),
+                        capability.language.as_deref(),
+                    ),
+                    capability,
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        for requester in &self.capability_requesters {
+            if !capabilities
+                .contains_key(&(requester.capability.as_str(), requester.language.as_deref()))
+            {
+                return Err(StorePlanError::IncompleteGeneration {
+                    family: "capability requester parent",
+                });
+            }
+        }
+        for capability in &self.capabilities {
+            check_count(
+                "capability requester",
+                capability.requester_count,
+                self.capability_requesters
+                    .iter()
+                    .filter(|requester| {
+                        requester.capability == capability.capability
+                            && requester.language == capability.language
+                    })
+                    .count(),
+            )?;
+        }
+        Ok(())
+    }
+
+    fn validate_summary_relationships(&self) -> Result<(), StorePlanError> {
+        let mut expected_dependencies = Vec::new();
+        for (ordinal, summary) in self.summaries.iter().enumerate() {
+            let ordinal = row_count(ordinal);
+            check_count(
+                "summary dependency",
+                summary.dependency_count,
+                summary.key.dependency_summary_digests.len(),
+            )?;
+            expected_dependencies.extend(summary.key.dependency_summary_digests.iter().map(
+                |dependency| StoreSummaryDependencyRow {
+                    summary_ordinal: ordinal,
+                    dependency: dependency.clone(),
+                },
+            ));
+        }
+        expected_dependencies.sort();
+        if expected_dependencies != self.summary_dependencies {
+            return Err(StorePlanError::NonCanonicalRows {
+                family: "summary dependency",
+            });
         }
         Ok(())
     }
@@ -2136,6 +2237,7 @@ impl StoreSemanticPlan {
             .iter()
             .map(|row| row.provider_id.as_str())
             .collect::<BTreeSet<_>>();
+        let mut storage_budget = StableFactRowBudget::new();
         for fact in &self.facts {
             if fact.stable_key.is_empty() {
                 return Err(StorePlanError::InvalidStatus {
@@ -2161,6 +2263,13 @@ impl StoreSemanticPlan {
                     family: "fact layer",
                 });
             }
+            let lengths = fact
+                .stable_key
+                .storage_lengths(fact)
+                .map_err(|_| StorePlanError::InvalidFactStorage)?;
+            storage_budget
+                .charge(lengths)
+                .map_err(|_| StorePlanError::InvalidFactStorage)?;
         }
         for pair in self.facts.windows(2) {
             if pair[0].family == pair[1].family && pair[0].stable_key == pair[1].stable_key {
@@ -3607,6 +3716,73 @@ mod tests {
             message: "fixture".to_string(),
         };
         assert!(handoff_error.to_string().contains("validated-run handoff"));
+    }
+
+    #[test]
+    fn input_and_summary_children_must_match_their_authenticated_parents() {
+        let baseline = plan_fixture();
+        assert!(!baseline.semantic.input_details.is_empty());
+        assert!(!baseline.semantic.capability_requesters.is_empty());
+
+        let mut candidate = baseline.clone();
+        candidate.semantic.input_components[0].detail_count = candidate.semantic.input_components
+            [0]
+        .detail_count
+        .saturating_add(1);
+        assert!(matches!(
+            candidate.validate(),
+            Err(StorePlanError::CountMismatch {
+                family: "input component detail",
+                ..
+            })
+        ));
+
+        let mut candidate = baseline.clone();
+        let replacement = if candidate.semantic.input_details[0]
+            .component_digest
+            .value
+            .starts_with('f')
+        {
+            "e"
+        } else {
+            "f"
+        };
+        candidate.semantic.input_details[0]
+            .component_digest
+            .value
+            .replace_range(..1, replacement);
+        assert!(matches!(
+            candidate.validate(),
+            Err(StorePlanError::IdentityMismatch {
+                family: "input component detail"
+            })
+        ));
+
+        let mut candidate = baseline.clone();
+        candidate.semantic.capabilities[0].requester_count = candidate.semantic.capabilities[0]
+            .requester_count
+            .saturating_add(1);
+        assert!(matches!(
+            candidate.validate(),
+            Err(StorePlanError::CountMismatch {
+                family: "capability requester",
+                ..
+            })
+        ));
+
+        if !baseline.semantic.summaries.is_empty() {
+            let mut candidate = baseline;
+            candidate.semantic.summaries[0].dependency_count = candidate.semantic.summaries[0]
+                .dependency_count
+                .saturating_add(1);
+            assert!(matches!(
+                candidate.validate(),
+                Err(StorePlanError::CountMismatch {
+                    family: "summary dependency",
+                    ..
+                })
+            ));
+        }
     }
 
     #[test]

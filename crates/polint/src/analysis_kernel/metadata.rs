@@ -605,9 +605,89 @@ impl StableFactMetaRow {
 }
 
 const COMPRESSED_STABLE_KEY_PREFIX: &[u8] = b"polint-lz4-v1\0";
+pub(crate) const STABLE_KEY_PREFLIGHT_BYTES: usize = COMPRESSED_STABLE_KEY_PREFIX.len() + 4;
 const MAX_STABLE_KEY_ENCODED_BYTES: usize = 256 * 1024;
 const MAX_STABLE_KEY_DECODED_BYTES: usize = 256 * 1024;
 pub(crate) const MAX_STABLE_KEY_TOTAL_BYTES: usize = 32 * 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StableFactStorageError {
+    EmptyStableKey,
+    EncodedStableKeyTooLarge,
+    DecodedStableKeyTooLarge,
+    InvalidStableKeyEncoding,
+    AggregateBudgetExceeded,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct StableFactRowStorageLengths {
+    pub(crate) family: usize,
+    pub(crate) encoded_stable_key: usize,
+    pub(crate) decoded_stable_key: usize,
+    pub(crate) producer_id: usize,
+    pub(crate) layer_id: usize,
+    pub(crate) precision: usize,
+    pub(crate) confidence: usize,
+    pub(crate) validation: usize,
+    pub(crate) payload_digest: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct StableFactRowBudget {
+    remaining: usize,
+}
+
+impl StableFactRowBudget {
+    pub(crate) fn new() -> Self {
+        Self {
+            remaining: MAX_STABLE_KEY_TOTAL_BYTES,
+        }
+    }
+
+    pub(crate) fn charge(
+        &mut self,
+        lengths: StableFactRowStorageLengths,
+    ) -> Result<(), StableFactStorageError> {
+        if lengths.decoded_stable_key == 0 {
+            return Err(StableFactStorageError::EmptyStableKey);
+        }
+        if lengths.encoded_stable_key > MAX_STABLE_KEY_ENCODED_BYTES {
+            return Err(StableFactStorageError::EncodedStableKeyTooLarge);
+        }
+        if lengths.decoded_stable_key > MAX_STABLE_KEY_DECODED_BYTES {
+            return Err(StableFactStorageError::DecodedStableKeyTooLarge);
+        }
+
+        let dynamic_bytes = [
+            lengths.family,
+            lengths.encoded_stable_key,
+            lengths.decoded_stable_key,
+            lengths.producer_id,
+            lengths.layer_id,
+            lengths.precision,
+            lengths.confidence,
+            lengths.validation,
+            lengths.payload_digest,
+        ]
+        .into_iter()
+        .try_fold(0_usize, |total, bytes| total.checked_add(bytes))
+        .ok_or(StableFactStorageError::AggregateBudgetExceeded)?;
+        let resident_bytes = std::mem::size_of::<StableFactMetaRow>()
+            .checked_add(std::mem::size_of::<i64>())
+            .and_then(|fixed| fixed.checked_add(dynamic_bytes))
+            .ok_or(StableFactStorageError::AggregateBudgetExceeded)?;
+        self.remaining = self
+            .remaining
+            .checked_sub(resident_bytes)
+            .ok_or(StableFactStorageError::AggregateBudgetExceeded)?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remaining(self) -> usize {
+        self.remaining
+    }
+}
 
 #[derive(Clone)]
 pub(crate) enum StableFactKey {
@@ -631,66 +711,96 @@ impl StableFactKey {
         stable_key: &str,
         scratch: &mut Vec<u8>,
         table: &mut lz4_flex::block::CompressTable,
-    ) -> Self {
+    ) -> Result<Self, StableFactStorageError> {
         let input = stable_key.as_bytes();
+        validate_decoded_stable_key_len(input.len())?;
         let maximum_output = lz4_flex::block::get_maximum_output_size(input.len());
         scratch.resize(maximum_output, 0);
         let compressed_len = lz4_flex::block::compress_into_with_table(input, scratch, table)
             .expect("maximum-size LZ4 scratch buffer accepts compressed stable key");
         let input_len = u32::try_from(input.len())
-            .expect("validated stable keys fit the LZ4 size-prefixed representation");
+            .map_err(|_| StableFactStorageError::DecodedStableKeyTooLarge)?;
         let mut encoded =
             Vec::with_capacity(COMPRESSED_STABLE_KEY_PREFIX.len() + 4 + compressed_len);
         encoded.extend_from_slice(COMPRESSED_STABLE_KEY_PREFIX);
         encoded.extend_from_slice(&input_len.to_le_bytes());
         encoded.extend_from_slice(&scratch[..compressed_len]);
-        Self::Compressed {
+        if encoded.len() > MAX_STABLE_KEY_ENCODED_BYTES {
+            return Err(StableFactStorageError::EncodedStableKeyTooLarge);
+        }
+        Ok(Self::Compressed {
             encoded,
             json_bytes: serialized_string_bytes(stable_key),
-        }
+        })
     }
 
-    #[cfg(test)]
     pub(crate) fn from_storage(encoded: Vec<u8>) -> Result<Self, ()> {
-        let mut remaining = MAX_STABLE_KEY_TOTAL_BYTES;
-        Self::from_storage_with_budget(encoded, &mut remaining)
-    }
-
-    pub(crate) fn from_storage_with_budget(
-        encoded: Vec<u8>,
-        remaining: &mut usize,
-    ) -> Result<Self, ()> {
-        if encoded.len() > MAX_STABLE_KEY_ENCODED_BYTES || encoded.len() > *remaining {
-            return Err(());
-        }
+        let decoded_len = Self::decoded_len_from_storage_prefix(encoded.len(), &encoded)?;
         let Some(compressed) = encoded.strip_prefix(COMPRESSED_STABLE_KEY_PREFIX) else {
             let stable_key = String::from_utf8(encoded).map_err(|_| ())?;
-            if stable_key.len() > MAX_STABLE_KEY_DECODED_BYTES {
-                return Err(());
-            }
-            *remaining = remaining.checked_sub(stable_key.len()).ok_or(())?;
             return Ok(Self::Plain(stable_key));
         };
-        let declared_size = compressed
-            .get(..4)
+        let decoded = lz4_flex::decompress_size_prepended(compressed).map_err(|_| ())?;
+        if decoded.len() != decoded_len {
+            return Err(());
+        }
+        let stable_key = String::from_utf8(decoded).map_err(|_| ())?;
+        Ok(Self::Plain(stable_key))
+    }
+
+    pub(crate) fn decoded_len_from_storage_prefix(
+        encoded_len: usize,
+        prefix: &[u8],
+    ) -> Result<usize, ()> {
+        if encoded_len == 0 || encoded_len > MAX_STABLE_KEY_ENCODED_BYTES {
+            return Err(());
+        }
+        if !prefix.starts_with(COMPRESSED_STABLE_KEY_PREFIX) {
+            if encoded_len > MAX_STABLE_KEY_DECODED_BYTES {
+                return Err(());
+            }
+            return Ok(encoded_len);
+        }
+        let declared_size = prefix
+            .get(COMPRESSED_STABLE_KEY_PREFIX.len()..COMPRESSED_STABLE_KEY_PREFIX.len() + 4)
             .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
             .map(u32::from_le_bytes)
             .and_then(|size| usize::try_from(size).ok())
             .ok_or(())?;
-        if declared_size == 0 || declared_size > MAX_STABLE_KEY_DECODED_BYTES {
-            return Err(());
-        }
-        let resident_bytes = encoded.len().checked_add(declared_size).ok_or(())?;
-        if resident_bytes > *remaining {
-            return Err(());
-        }
-        let decoded = lz4_flex::decompress_size_prepended(compressed).map_err(|_| ())?;
-        if decoded.len() != declared_size {
-            return Err(());
-        }
-        let stable_key = String::from_utf8(decoded).map_err(|_| ())?;
-        *remaining = remaining.checked_sub(resident_bytes).ok_or(())?;
-        Ok(Self::Plain(stable_key))
+        validate_decoded_stable_key_len(declared_size).map_err(|_| ())?;
+        Ok(declared_size)
+    }
+
+    pub(crate) fn storage_lengths(
+        &self,
+        row: &StableFactMetaRow,
+    ) -> Result<StableFactRowStorageLengths, StableFactStorageError> {
+        let (encoded_stable_key, decoded_stable_key) = match self {
+            Self::Plain(stable_key) => {
+                validate_decoded_stable_key_len(stable_key.len())?;
+                let encoded = Self::compressed(stable_key).storage_bytes().into_owned();
+                if encoded.len() > MAX_STABLE_KEY_ENCODED_BYTES {
+                    return Err(StableFactStorageError::EncodedStableKeyTooLarge);
+                }
+                (encoded.len(), stable_key.len())
+            }
+            Self::Compressed { encoded, .. } => {
+                let decoded = Self::decoded_len_from_storage_prefix(encoded.len(), encoded)
+                    .map_err(|_| StableFactStorageError::InvalidStableKeyEncoding)?;
+                (encoded.len(), decoded)
+            }
+        };
+        Ok(StableFactRowStorageLengths {
+            family: row.family.label().len(),
+            encoded_stable_key,
+            decoded_stable_key,
+            producer_id: row.producer_id.len(),
+            layer_id: row.layer_id.len(),
+            precision: row.precision.label().len(),
+            confidence: row.confidence.label().len(),
+            validation: row.validation.label().len(),
+            payload_digest: row.payload_digest.len(),
+        })
     }
 
     pub(crate) fn decoded(&self) -> Cow<'_, str> {
@@ -739,6 +849,16 @@ impl StableFactKey {
             }
         }
     }
+}
+
+fn validate_decoded_stable_key_len(len: usize) -> Result<(), StableFactStorageError> {
+    if len == 0 {
+        return Err(StableFactStorageError::EmptyStableKey);
+    }
+    if len > MAX_STABLE_KEY_DECODED_BYTES {
+        return Err(StableFactStorageError::DecodedStableKeyTooLarge);
+    }
+    Ok(())
 }
 
 fn serialized_string_bytes(value: &str) -> u64 {
@@ -1116,8 +1236,10 @@ impl FactMetaStore {
     #[cfg(test)]
     pub(crate) fn into_compact_stable_rows(
         self,
-    ) -> Result<(Vec<StableFactMetaRow>, Digest), StableFactMetaConflict> {
-        Ok(self.prepare_compact_stable_rows()?.finish())
+    ) -> Result<(Vec<StableFactMetaRow>, Digest), CompactStableRowsError> {
+        self.prepare_compact_stable_rows()?
+            .finish()
+            .map_err(Into::into)
     }
 
     pub(crate) fn prepare_compact_stable_rows(
@@ -1200,17 +1322,25 @@ impl FinalizedCanonicalFactRows {
 
 impl PreparedCompactStableRows {
     #[cfg(test)]
-    pub(crate) fn finish(self) -> (Vec<StableFactMetaRow>, Digest) {
+    pub(crate) fn finish(self) -> Result<(Vec<StableFactMetaRow>, Digest), StableFactStorageError> {
         self.finish_parts()
     }
 
-    pub(in crate::analysis_kernel) fn finish_validated(self) -> FinalizedCanonicalFactRows {
-        let (rows, digest) = self.finish_parts();
-        FinalizedCanonicalFactRows { rows, digest }
+    pub(in crate::analysis_kernel) fn finish_validated(
+        self,
+    ) -> Result<FinalizedCanonicalFactRows, StableFactStorageError> {
+        let (rows, digest) = self.finish_parts()?;
+        Ok(FinalizedCanonicalFactRows { rows, digest })
     }
 
-    fn finish_parts(mut self) -> (Vec<StableFactMetaRow>, Digest) {
-        let row_fingerprints = self
+    fn finish_parts(mut self) -> Result<(Vec<StableFactMetaRow>, Digest), StableFactStorageError> {
+        for row in &self.rows {
+            let StableFactKey::Plain(stable_key) = &row.stable_key else {
+                return Err(StableFactStorageError::InvalidStableKeyEncoding);
+            };
+            validate_decoded_stable_key_len(stable_key.len())?;
+        }
+        let compressed = self
             .rows
             .par_iter_mut()
             .map_init(
@@ -1237,19 +1367,44 @@ impl PreparedCompactStableRows {
                         stable_key,
                         compression_scratch,
                         compression_table,
-                    );
+                    )?;
                     row.stable_key = compressed;
-                    fingerprint
+                    Ok(fingerprint)
                 },
             )
-            .collect();
+            .collect::<Result<Vec<_>, StableFactStorageError>>()?;
+        let mut budget = StableFactRowBudget::new();
+        for row in &self.rows {
+            budget.charge(row.stable_key.storage_lengths(row)?)?;
+        }
         let digest = Digest::from_unordered_same_kind_fingerprints(
             DigestKind::FactMetadata,
             "fact_metadata_rows",
             DigestKind::FactMetadata,
-            row_fingerprints,
+            compressed,
         );
-        (self.rows, digest)
+        Ok((self.rows, digest))
+    }
+}
+
+#[cfg(test)]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum CompactStableRowsError {
+    Conflict(StableFactMetaConflict),
+    Storage(StableFactStorageError),
+}
+
+#[cfg(test)]
+impl From<StableFactMetaConflict> for CompactStableRowsError {
+    fn from(error: StableFactMetaConflict) -> Self {
+        Self::Conflict(error)
+    }
+}
+
+#[cfg(test)]
+impl From<StableFactStorageError> for CompactStableRowsError {
+    fn from(error: StableFactStorageError) -> Self {
+        Self::Storage(error)
     }
 }
 
@@ -1583,7 +1738,8 @@ mod tests {
             .clone()
             .prepare_compact_stable_rows()
             .expect("prepared compact stable rows")
-            .finish();
+            .finish()
+            .expect("staged rows fit the storage budget");
         let (consumed, consumed_digest) = store
             .into_compact_stable_rows()
             .expect("consumed compact stable rows");
@@ -1635,7 +1791,6 @@ mod tests {
             .map(|index| char::from(b' ' + (index % 95) as u8))
             .collect::<String>();
         let cases = [
-            String::new(),
             "x".to_string(),
             "quote:\" slash:\\ newline:\n control:\u{1f}".to_string(),
             "repeated/segment/".repeat(256),
@@ -1648,11 +1803,15 @@ mod tests {
         for stable_key in cases {
             assert_eq!(
                 StableFactKey::compressed_with_scratch(&stable_key, &mut scratch, &mut table,),
-                StableFactKey::compressed(&stable_key),
+                Ok(StableFactKey::compressed(&stable_key)),
                 "stable key length {}",
                 stable_key.len()
             );
         }
+        assert_eq!(
+            StableFactKey::compressed_with_scratch("", &mut scratch, &mut table),
+            Err(StableFactStorageError::EmptyStableKey)
+        );
     }
 
     #[test]
@@ -1707,16 +1866,79 @@ mod tests {
         let encoded = StableFactKey::compressed(&stable_key)
             .storage_bytes()
             .into_owned();
-        let resident_bytes = encoded.len() + stable_key.len();
-        let mut remaining = resident_bytes * 3;
-
-        for _ in 0..3 {
-            StableFactKey::from_storage_with_budget(encoded.clone(), &mut remaining)
-                .expect("row stays within the aggregate budget");
+        let row = StableFactMetaRow {
+            family: FactFamily::Import,
+            stable_key: StableFactKey::from_storage(encoded).expect("encoded key"),
+            producer_id: Cow::Borrowed("polint.test"),
+            layer_id: Cow::Borrowed("polint.test"),
+            precision: FactPrecision::Syntax,
+            confidence: FactConfidence::High,
+            validation: ValidationStatus::NativeTrusted,
+            payload_digest: "payload".to_string(),
+        };
+        let lengths = StableFactKey::compressed(&stable_key)
+            .storage_lengths(&row)
+            .expect("valid storage lengths");
+        let mut budget = StableFactRowBudget::new();
+        let mut charged = 0;
+        while budget.charge(lengths).is_ok() {
+            charged += 1;
         }
 
-        assert_eq!(remaining, 0);
-        assert!(StableFactKey::from_storage_with_budget(encoded, &mut remaining).is_err());
+        assert!(charged > 0);
+        assert!(budget.remaining() < MAX_STABLE_KEY_TOTAL_BYTES);
+    }
+
+    #[test]
+    fn compact_finalization_rejects_keys_outside_reader_limits() {
+        let mut empty = FactMetaStore::default();
+        empty.insert(
+            FactRef::new(FactFamily::Import, 1),
+            test_meta("", "payload"),
+        );
+        assert_eq!(
+            empty
+                .prepare_compact_stable_rows()
+                .expect("empty key has no conflict")
+                .finish(),
+            Err(StableFactStorageError::EmptyStableKey)
+        );
+
+        let oversized = "x".repeat(MAX_STABLE_KEY_DECODED_BYTES + 1);
+        let mut decoded_limit = FactMetaStore::default();
+        decoded_limit.insert(
+            FactRef::new(FactFamily::Import, 1),
+            test_meta(&oversized, "payload"),
+        );
+        assert_eq!(
+            decoded_limit
+                .prepare_compact_stable_rows()
+                .expect("oversized key has no conflict")
+                .finish(),
+            Err(StableFactStorageError::DecodedStableKeyTooLarge)
+        );
+
+        let mut state = 0x9e37_79b9_u32;
+        let incompressible_boundary = (0..MAX_STABLE_KEY_DECODED_BYTES)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                char::from(b' ' + u8::try_from(state % 95).expect("printable byte"))
+            })
+            .collect::<String>();
+        let mut encoded_limit = FactMetaStore::default();
+        encoded_limit.insert(
+            FactRef::new(FactFamily::Import, 1),
+            test_meta(&incompressible_boundary, "payload"),
+        );
+        assert_eq!(
+            encoded_limit
+                .prepare_compact_stable_rows()
+                .expect("boundary key has no conflict")
+                .finish(),
+            Err(StableFactStorageError::EncodedStableKeyTooLarge)
+        );
     }
 
     #[test]
@@ -1763,7 +1985,10 @@ mod tests {
         let consumed_conflict = store
             .into_compact_stable_rows()
             .expect_err("consumed rows preserve the conflict");
-        assert_eq!(consumed_conflict, conflict);
+        assert_eq!(
+            consumed_conflict,
+            CompactStableRowsError::Conflict(conflict)
+        );
     }
 
     #[test]
