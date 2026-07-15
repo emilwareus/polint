@@ -842,6 +842,60 @@ impl CanonicalRunIdentities {
         })
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "projection validation keeps every persisted semantic family explicit"
+    )]
+    pub(in crate::analysis_kernel) fn from_recomputed_families(
+        workspace: WorkspaceIdentity,
+        full_config: ConfigIdentity,
+        input_snapshot: Digest,
+        provider_manifest: Digest,
+        provider_output: Digest,
+        layer: Digest,
+        summary: Digest,
+        query: Digest,
+        fact: Digest,
+        dependency: Digest,
+        validation: Digest,
+    ) -> Result<Self, ValidatedRunMetadataError> {
+        let run = RunIdentity::new(
+            &workspace,
+            &full_config,
+            &input_snapshot,
+            &provider_manifest,
+        )
+        .map_err(|error| ValidatedRunMetadataError::new(error.to_string()))?;
+        let generation = GenerationIdentity::new(
+            &run,
+            &[
+                provider_output.clone(),
+                layer.clone(),
+                summary.clone(),
+                query.clone(),
+                fact.clone(),
+                dependency.clone(),
+                validation.clone(),
+            ],
+        )
+        .map_err(|error| ValidatedRunMetadataError::new(error.to_string()))?;
+        Ok(Self {
+            workspace,
+            full_config,
+            input_snapshot,
+            provider_manifest,
+            provider_output,
+            layer,
+            summary,
+            query,
+            fact,
+            dependency,
+            validation,
+            run,
+            generation,
+        })
+    }
+
     pub(in crate::analysis_kernel) fn workspace(&self) -> &WorkspaceIdentity {
         &self.workspace
     }
@@ -900,9 +954,7 @@ fn run_identity_for(
     provider_manifests: &[CanonicalProviderManifest],
 ) -> Result<(Digest, RunIdentity), ValidatedRunMetadataError> {
     let input_snapshot_digest = input_snapshot.semantic_digest();
-    let provider_manifest = Digest::from_unordered(
-        DigestKind::ProviderManifest,
-        "provider_manifest_rows",
+    let provider_manifest = provider_manifest_rows_digest(
         provider_manifests
             .iter()
             .map(|row| row.manifest_digest.clone())
@@ -916,6 +968,10 @@ fn run_identity_for(
     )
     .map_err(|error| ValidatedRunMetadataError::new(error.to_string()))?;
     Ok((provider_manifest, run))
+}
+
+pub(in crate::analysis_kernel) fn provider_manifest_rows_digest(rows: Vec<Digest>) -> Digest {
+    Digest::from_unordered(DigestKind::ProviderManifest, "provider_manifest_rows", rows)
 }
 
 fn run_manifest_key_for(
@@ -1155,21 +1211,49 @@ fn require_strictly_sorted<T: Ord>(
 }
 
 fn provider_manifest_row_digest(row: &CanonicalProviderManifest) -> Digest {
+    provider_manifest_digest_from_fields(
+        &row.provider_id,
+        &row.provider_version,
+        &row.provider_kind,
+        &row.language_scope,
+        &row.cache_policy,
+        &row.precision_ceiling,
+        &row.schema_versions,
+        &row.inputs,
+        &row.outputs,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "provider manifest identity keeps every durable field explicit"
+)]
+pub(in crate::analysis_kernel) fn provider_manifest_digest_from_fields(
+    provider_id: &str,
+    provider_version: &str,
+    provider_kind: &str,
+    language_scope: &str,
+    cache_policy: &str,
+    precision_ceiling: &str,
+    schema_versions: &[String],
+    inputs: &[String],
+    outputs: &[String],
+) -> Digest {
     let mut parts = vec![
-        format!("provider_id={}", row.provider_id),
-        format!("provider_version={}", row.provider_version),
-        format!("provider_kind={}", row.provider_kind),
-        format!("language_scope={}", row.language_scope),
-        format!("cache_policy={}", row.cache_policy),
-        format!("precision_ceiling={}", row.precision_ceiling),
+        format!("provider_id={provider_id}"),
+        format!("provider_version={provider_version}"),
+        format!("provider_kind={provider_kind}"),
+        format!("language_scope={language_scope}"),
+        format!("cache_policy={cache_policy}"),
+        format!("precision_ceiling={precision_ceiling}"),
     ];
     parts.extend(
-        row.schema_versions
+        schema_versions
             .iter()
             .map(|schema| format!("schema_version={schema}")),
     );
-    parts.extend(row.inputs.iter().map(|input| format!("input={input}")));
-    parts.extend(row.outputs.iter().map(|output| format!("output={output}")));
+    parts.extend(inputs.iter().map(|input| format!("input={input}")));
+    parts.extend(outputs.iter().map(|output| format!("output={output}")));
     let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
     Digest::from_parts(DigestKind::ProviderManifest, "provider_manifest", &refs)
 }
@@ -1383,7 +1467,7 @@ fn run_boundary_edges(
     edges
 }
 
-fn serialized_rows_digest<T: Serialize + Sync>(
+pub(in crate::analysis_kernel) fn serialized_rows_digest<T: Serialize + Sync>(
     kind: DigestKind,
     label: &'static str,
     rows: &[T],
@@ -1399,7 +1483,7 @@ fn serialized_rows_digest<T: Serialize + Sync>(
     Digest::from_unordered(kind, label, row_digests)
 }
 
-fn dependency_rows_digest(rows: &[DependencyEdge]) -> Digest {
+pub(in crate::analysis_kernel) fn dependency_rows_digest(rows: &[DependencyEdge]) -> Digest {
     const LABEL: &str = "dependency_rows";
 
     let mut encoded_from_nodes = Vec::<String>::new();
@@ -1464,7 +1548,7 @@ fn same_dependency_endpoint(left: &CacheNode, right: &CacheNode) -> bool {
     }
 }
 
-fn fact_rows_digest(rows: &[StableFactMetaRow]) -> Digest {
+pub(in crate::analysis_kernel) fn fact_rows_digest(rows: &[StableFactMetaRow]) -> Digest {
     let row_digests = rows
         .iter()
         .map(|row| {

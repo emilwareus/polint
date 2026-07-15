@@ -15,12 +15,18 @@ use serde::Serialize;
 
 use crate::analysis_kernel::StableFactMetaRow;
 use crate::analysis_kernel::incremental::{
-    CacheNode, ConfigIdentity, DependencyKind, DiagnosticKey, Digest, DigestKind,
-    GenerationIdentity, INPUT_SNAPSHOT_SCHEMA_VERSION, InputComponent, InputComponentStatus,
-    InputDependencyKey, LayerKey, PrecisionTier, ProviderValidationStatus, QueryKey, RunIdentity,
-    RunManifestKey, ShapeKind, SummaryKey, ValidatedRunMetadata, WorkspaceIdentity,
+    CacheNode, CanonicalRunIdentities, ConfigIdentity, DependencyIndex, DependencyKind,
+    DiagnosticKey, Digest, DigestKind, GenerationIdentity, INPUT_SNAPSHOT_SCHEMA_VERSION,
+    InputComponent, InputComponentStatus, InputDependencyKey, LayerKey, PrecisionTier,
+    ProviderValidationStatus, QueryKey, RunIdentity, RunManifestKey, ShapeKind, SummaryKey,
+    ValidatedRunMetadata, WorkspaceIdentity, dependency_rows_digest, fact_rows_digest,
+    input_snapshot_digest_row, input_snapshot_rows_digest, input_snapshot_semantic_row,
+    input_snapshot_semantic_row_builder, provider_manifest_digest_from_fields,
+    provider_manifest_rows_digest, serialized_rows_digest,
 };
-use crate::analysis_kernel::validation::{ValidationEventKind, ValidationEventStatus};
+use crate::analysis_kernel::validation::{
+    ValidationEvent, ValidationEventKind, ValidationEventStatus,
+};
 use crate::analysis_plan::CapabilitySetupStatus;
 use crate::core::CapabilitySupportStatus;
 
@@ -238,6 +244,24 @@ pub(super) struct StoreIdentityRow {
     pub(super) validation: Digest,
     pub(super) run: RunIdentity,
     pub(super) generation: GenerationIdentity,
+}
+
+impl StoreIdentityRow {
+    pub(super) fn matches_canonical(&self, identities: &CanonicalRunIdentities) -> bool {
+        self.workspace == *identities.workspace()
+            && self.full_config == *identities.full_config()
+            && self.input_snapshot == *identities.input_snapshot()
+            && self.provider_manifest == *identities.provider_manifest()
+            && self.provider_output == *identities.provider_output()
+            && self.layer == *identities.layer()
+            && self.summary == *identities.summary()
+            && self.query == *identities.query()
+            && self.fact == *identities.fact()
+            && self.dependency == *identities.dependency()
+            && self.validation == *identities.validation()
+            && self.run == *identities.run()
+            && self.generation == *identities.generation()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -543,6 +567,37 @@ pub(super) struct StoreGenerationStats {
     pub(super) semantic_logical_bytes: u64,
 }
 
+#[derive(Serialize)]
+struct PersistedProviderOutputIdentity<'a> {
+    provider_id: &'a str,
+    provider_version: &'a str,
+    schema_version: &'a str,
+    output_digest: &'a Digest,
+    precision: PrecisionTier,
+    validation: ProviderValidationStatus,
+    dependency_inputs: &'a [Digest],
+    layer_count: usize,
+}
+
+#[derive(Serialize)]
+struct PersistedLayerIdentity<'a> {
+    key: &'a LayerKey,
+    output_digest: &'a Digest,
+    payload_digest: &'a Digest,
+    precision: PrecisionTier,
+    validation: ProviderValidationStatus,
+    edge_count: usize,
+    warning_codes: &'a [String],
+}
+
+#[derive(Serialize)]
+struct PersistedQueryIdentity<'a> {
+    query_key: &'a QueryKey,
+    result_digest: &'a Digest,
+    precision: PrecisionTier,
+    provenance: &'a str,
+}
+
 impl StoreCommitPlan {
     pub(super) fn from_validated_run(
         validated: &ValidatedRunMetadata,
@@ -641,6 +696,356 @@ impl StoreSemanticPlan {
         .fold(0_u64, |total, count| {
             total.saturating_add(u64::try_from(count).unwrap_or(u64::MAX))
         })
+    }
+
+    pub(super) fn recomputed_identities(
+        &self,
+        dependency_index: &DependencyIndex,
+    ) -> Result<CanonicalRunIdentities, StorePlanError> {
+        let input_snapshot = self.recomputed_input_snapshot_digest();
+        let mut manifest_digests = Vec::with_capacity(self.provider_manifests.len());
+        for manifest in &self.provider_manifests {
+            let mut schemas = self
+                .provider_manifest_schemas
+                .iter()
+                .filter(|row| row.provider_id == manifest.provider_id)
+                .map(|row| row.schema_version.clone())
+                .collect::<Vec<_>>();
+            let mut inputs = self
+                .provider_manifest_inputs
+                .iter()
+                .filter(|row| row.provider_id == manifest.provider_id)
+                .map(|row| row.input.clone())
+                .collect::<Vec<_>>();
+            let mut outputs = self
+                .provider_manifest_outputs
+                .iter()
+                .filter(|row| row.provider_id == manifest.provider_id)
+                .map(|row| row.output.clone())
+                .collect::<Vec<_>>();
+            schemas.sort_unstable();
+            inputs.sort_unstable();
+            outputs.sort_unstable();
+            let digest = provider_manifest_digest_from_fields(
+                &manifest.provider_id,
+                &manifest.provider_version,
+                &manifest.provider_kind,
+                &manifest.language_scope,
+                &manifest.cache_policy,
+                &manifest.precision_ceiling,
+                &schemas,
+                &inputs,
+                &outputs,
+            );
+            if digest != manifest.manifest_digest {
+                return Err(StorePlanError::IdentityMismatch {
+                    family: "provider manifest",
+                });
+            }
+            manifest_digests.push(digest);
+        }
+        let provider_manifest = provider_manifest_rows_digest(manifest_digests);
+
+        let provider_dependency_rows = self
+            .provider_generations
+            .iter()
+            .map(|provider| {
+                let mut dependencies = self
+                    .provider_dependencies
+                    .iter()
+                    .filter(|row| {
+                        row.provider_id == provider.provider_id
+                            && row.provider_version == provider.provider_version
+                            && row.schema_version == provider.schema_version
+                            && row.output_digest == provider.output_digest
+                    })
+                    .map(|row| row.dependency.clone())
+                    .collect::<Vec<_>>();
+                dependencies.sort();
+                let precision = PrecisionTier::parse_label(&provider.precision).map_err(|_| {
+                    StorePlanError::InvalidStatus {
+                        family: "provider precision",
+                        value: provider.precision.clone(),
+                    }
+                })?;
+                let validation = ProviderValidationStatus::parse_label(&provider.validation)
+                    .map_err(|_| StorePlanError::InvalidStatus {
+                        family: "provider validation",
+                        value: provider.validation.clone(),
+                    })?;
+                let layer_count = usize::try_from(provider.layer_count).map_err(|_| {
+                    StorePlanError::CountMismatch {
+                        family: "provider layer",
+                        expected: provider.layer_count,
+                        actual: u64::MAX,
+                    }
+                })?;
+                Ok((provider, dependencies, precision, validation, layer_count))
+            })
+            .collect::<Result<Vec<_>, StorePlanError>>()?;
+        let provider_output_rows = provider_dependency_rows
+            .iter()
+            .map(
+                |(provider, dependencies, precision, validation, layer_count)| {
+                    PersistedProviderOutputIdentity {
+                        provider_id: &provider.provider_id,
+                        provider_version: &provider.provider_version,
+                        schema_version: &provider.schema_version,
+                        output_digest: &provider.output_digest,
+                        precision: *precision,
+                        validation: *validation,
+                        dependency_inputs: dependencies,
+                        layer_count: *layer_count,
+                    }
+                },
+            )
+            .collect::<Vec<_>>();
+        let provider_output = serialized_rows_digest(
+            DigestKind::ProviderOutput,
+            "provider_output_rows",
+            &provider_output_rows,
+        );
+
+        let layer_warning_rows =
+            self.layers
+                .iter()
+                .enumerate()
+                .map(|(ordinal, layer)| {
+                    let ordinal = row_count(ordinal);
+                    let mut warnings = self
+                        .layer_warnings
+                        .iter()
+                        .filter(|row| row.layer_ordinal == ordinal)
+                        .map(|row| row.warning_code.clone())
+                        .collect::<Vec<_>>();
+                    warnings.sort();
+                    let precision = PrecisionTier::parse_label(&layer.precision).map_err(|_| {
+                        StorePlanError::InvalidStatus {
+                            family: "layer precision",
+                            value: layer.precision.clone(),
+                        }
+                    })?;
+                    let validation = ProviderValidationStatus::parse_label(&layer.validation)
+                        .map_err(|_| StorePlanError::InvalidStatus {
+                            family: "layer validation",
+                            value: layer.validation.clone(),
+                        })?;
+                    let edge_count = usize::try_from(layer.edge_count).map_err(|_| {
+                        StorePlanError::CountMismatch {
+                            family: "layer edge",
+                            expected: layer.edge_count,
+                            actual: u64::MAX,
+                        }
+                    })?;
+                    Ok((layer, warnings, precision, validation, edge_count))
+                })
+                .collect::<Result<Vec<_>, StorePlanError>>()?;
+        let layer_rows = layer_warning_rows
+            .iter()
+            .map(
+                |(layer, warnings, precision, validation, edge_count)| PersistedLayerIdentity {
+                    key: &layer.key,
+                    output_digest: &layer.output_digest,
+                    payload_digest: &layer.payload_digest,
+                    precision: *precision,
+                    validation: *validation,
+                    edge_count: *edge_count,
+                    warning_codes: warnings,
+                },
+            )
+            .collect::<Vec<_>>();
+        let layer = serialized_rows_digest(DigestKind::Layer, "layer_rows", &layer_rows);
+        let summary_keys = self
+            .summaries
+            .iter()
+            .map(|row| &row.key)
+            .collect::<Vec<_>>();
+        let summary = serialized_rows_digest(DigestKind::Summary, "summary_rows", &summary_keys);
+        let query_rows = self
+            .queries
+            .iter()
+            .map(|row| {
+                let precision = PrecisionTier::parse_label(&row.precision).map_err(|_| {
+                    StorePlanError::InvalidStatus {
+                        family: "query precision",
+                        value: row.precision.clone(),
+                    }
+                })?;
+                Ok(PersistedQueryIdentity {
+                    query_key: &row.key,
+                    result_digest: &row.result_digest,
+                    precision,
+                    provenance: &row.provenance,
+                })
+            })
+            .collect::<Result<Vec<_>, StorePlanError>>()?;
+        let query = serialized_rows_digest(DigestKind::Query, "query_rows", &query_rows);
+        let fact = fact_rows_digest(&self.facts);
+        let dependency = dependency_rows_digest(dependency_index.canonical_edges());
+        let validation_events = self
+            .validation_events
+            .iter()
+            .map(|row| {
+                let kind = ValidationEventKind::parse_label(&row.kind).map_err(|_| {
+                    StorePlanError::InvalidStatus {
+                        family: "validation event kind",
+                        value: row.kind.clone(),
+                    }
+                })?;
+                let status = ValidationEventStatus::parse_label(&row.status).map_err(|_| {
+                    StorePlanError::InvalidStatus {
+                        family: "validation event status",
+                        value: row.status.clone(),
+                    }
+                })?;
+                Ok(ValidationEvent {
+                    kind,
+                    status,
+                    issue_count: row.issue_count,
+                    digest: row.digest.clone(),
+                })
+            })
+            .collect::<Result<Vec<_>, StorePlanError>>()?;
+        let validation = serialized_rows_digest(
+            DigestKind::ValidationEvent,
+            "validation_rows",
+            &validation_events,
+        );
+        CanonicalRunIdentities::from_recomputed_families(
+            self.input_snapshot.workspace.clone(),
+            self.input_snapshot.full_config.clone(),
+            input_snapshot,
+            provider_manifest,
+            provider_output,
+            layer,
+            summary,
+            query,
+            fact,
+            dependency,
+            validation,
+        )
+        .map_err(|_| StorePlanError::IdentityMismatch {
+            family: "generation",
+        })
+    }
+
+    fn recomputed_input_snapshot_digest(&self) -> Digest {
+        input_snapshot_rows_digest(self.recomputed_input_snapshot_rows())
+    }
+
+    fn recomputed_input_snapshot_rows(&self) -> Vec<Digest> {
+        let mut rows = vec![input_snapshot_semantic_row(
+            "schema",
+            [("version", self.input_snapshot.schema_version.as_str())],
+        )];
+        rows.push(input_snapshot_digest_row(
+            "workspace_identity",
+            self.input_snapshot.workspace.digest(),
+        ));
+        rows.push(input_snapshot_digest_row(
+            "config_identity",
+            self.input_snapshot.full_config.digest(),
+        ));
+        rows.push(input_snapshot_digest_row(
+            "analysis_requirements_identity",
+            &self.input_snapshot.analysis_requirements_digest,
+        ));
+        for file in &self.files {
+            let size_bytes = file.size_bytes.to_string();
+            let mut row = input_snapshot_semantic_row_builder("file");
+            row.labeled_part("relative_path", &file.relative_path);
+            row.labeled_part("language", &file.language);
+            row.labeled_part("source_digest_kind", file.source_digest.kind.label());
+            row.labeled_part("source_digest_value", &file.source_digest.value);
+            row.labeled_part("size_bytes", &size_bytes);
+            rows.push(row.finish());
+        }
+        for component in &self.input_components {
+            let mut row = input_snapshot_semantic_row_builder(component.group.snapshot_row_kind());
+            row.labeled_part("name", &component.name);
+            row.labeled_part("status", &component.status);
+            row.labeled_part("digest_kind", component.digest.kind.label());
+            row.labeled_part("digest_value", &component.digest.value);
+            rows.push(row.finish());
+        }
+        for provider in &self.provider_schemas {
+            let mut row = input_snapshot_semantic_row_builder("provider_schema");
+            row.labeled_part("provider_id", &provider.provider_id);
+            let mut versions = self
+                .provider_schema_versions
+                .iter()
+                .filter(|version| version.provider_id == provider.provider_id)
+                .map(|version| version.schema_version.as_str())
+                .collect::<Vec<_>>();
+            versions.sort_unstable();
+            for version in versions {
+                row.labeled_part("schema_version", version);
+            }
+            row.labeled_part("language_scope", &provider.language_scope);
+            row.labeled_part("cache_policy", &provider.cache_policy);
+            row.labeled_part("precision_ceiling", &provider.precision_ceiling);
+            row.labeled_part(
+                "manifest_digest_kind",
+                provider.manifest_digest.kind.label(),
+            );
+            row.labeled_part("manifest_digest_value", &provider.manifest_digest.value);
+            rows.push(row.finish());
+        }
+        for setting in &self.analysis_settings {
+            let mut row = input_snapshot_semantic_row_builder("analysis_setting");
+            row.labeled_part("provider_id", &setting.scope);
+            row.labeled_part("digest_kind", setting.digest.kind.label());
+            row.labeled_part("digest_value", &setting.digest.value);
+            rows.push(row.finish());
+        }
+        for capability in &self.capabilities {
+            let mut row = input_snapshot_semantic_row_builder("requested_capability");
+            row.labeled_part("capability", &capability.capability);
+            row.labeled_part("language", capability.language.as_deref().unwrap_or("none"));
+            let support_status = match capability.support_status.as_str() {
+                "Supported" => "supported",
+                "Unsupported" => "unsupported",
+                "SetupMissing" => "setup_missing",
+                label => label,
+            };
+            row.labeled_part("support_status", support_status);
+            row.labeled_part("setup_status", &capability.setup_status);
+            row.labeled_part(
+                "policy_query_version",
+                capability.policy_query_version.as_deref().unwrap_or("none"),
+            );
+            let mut requesters = self
+                .capability_requesters
+                .iter()
+                .filter(|requester| {
+                    requester.capability == capability.capability
+                        && requester.language == capability.language
+                })
+                .map(|requester| requester.rule_id.as_str())
+                .collect::<Vec<_>>();
+            requesters.sort_unstable();
+            for requester in requesters {
+                row.labeled_part("requesting_rule_id", requester);
+            }
+            row.labeled_part(
+                "rule_behavior_digest_kind",
+                capability.rule_behavior_digest.kind.label(),
+            );
+            row.labeled_part(
+                "rule_behavior_digest_value",
+                &capability.rule_behavior_digest.value,
+            );
+            row.labeled_part(
+                "analysis_dependency_digest_kind",
+                capability.analysis_dependency_digest.kind.label(),
+            );
+            row.labeled_part(
+                "analysis_dependency_digest_value",
+                &capability.analysis_dependency_digest.value,
+            );
+            rows.push(row.finish());
+        }
+        rows
     }
 
     fn from_validated(validated: &ValidatedRunMetadata) -> Self {
@@ -2032,6 +2437,20 @@ impl StoreGenerationStats {
             .saturating_add(stats.dependency_logical_bytes)
             .saturating_add(stats.validation_logical_bytes);
         stats
+    }
+}
+
+impl StoreInputGroup {
+    fn snapshot_row_kind(self) -> &'static str {
+        match self {
+            Self::Config => "config",
+            Self::GoLifecycle => "go_lifecycle",
+            Self::TsJsLifecycle => "ts_js_lifecycle",
+            Self::Rule => "rule",
+            Self::Model => "model",
+            Self::Extension => "extension",
+            Self::ToolInvocation => "tool",
+        }
     }
 }
 

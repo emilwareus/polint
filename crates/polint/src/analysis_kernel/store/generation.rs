@@ -3063,6 +3063,13 @@ fn read_generation_projection(
     if dependency_index.schema_version != plan.semantic.dependency_schema {
         return Err(ProjectionError::InvalidMetadata);
     }
+    let recomputed = plan
+        .semantic
+        .recomputed_identities(&dependency_index)
+        .map_err(|_| ProjectionError::InvalidMetadata)?;
+    if !plan.semantic.identities.matches_canonical(&recomputed) {
+        return Err(ProjectionError::InvalidMetadata);
+    }
     Ok(ActiveCompleteGeneration {
         plan,
         dependency_index,

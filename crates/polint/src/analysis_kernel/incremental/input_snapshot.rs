@@ -317,6 +317,10 @@ impl InputSnapshot {
     }
 
     pub(crate) fn semantic_digest(&self) -> Digest {
+        semantic_rows_digest(self.semantic_rows())
+    }
+
+    fn semantic_rows(&self) -> Vec<Digest> {
         let mut rows = vec![semantic_row(
             "schema",
             [("version", self.schema_version.as_str())],
@@ -422,7 +426,7 @@ impl InputSnapshot {
             );
             rows.push(row.finish());
         }
-        Digest::from_unordered(DigestKind::InputSnapshot, "semantic_rows", rows)
+        rows
     }
 }
 
@@ -1028,13 +1032,13 @@ fn config_component(loaded: &LoadedConfig, config_digest: Digest) -> InputCompon
     )
 }
 
-fn semantic_row_builder(row_kind: &str) -> super::DigestBuilder {
+pub(in crate::analysis_kernel) fn semantic_row_builder(row_kind: &str) -> super::DigestBuilder {
     let mut row = Digest::builder(DigestKind::InputSnapshot, "semantic_row");
     row.labeled_part("row_kind", row_kind);
     row
 }
 
-fn semantic_row<'a>(
+pub(in crate::analysis_kernel) fn semantic_row<'a>(
     row_kind: &str,
     fields: impl IntoIterator<Item = (&'a str, &'a str)>,
 ) -> Digest {
@@ -1045,7 +1049,7 @@ fn semantic_row<'a>(
     row.finish()
 }
 
-fn digest_semantic_row(row_kind: &str, digest: &Digest) -> Digest {
+pub(in crate::analysis_kernel) fn digest_semantic_row(row_kind: &str, digest: &Digest) -> Digest {
     semantic_row(
         row_kind,
         [
@@ -1053,6 +1057,10 @@ fn digest_semantic_row(row_kind: &str, digest: &Digest) -> Digest {
             ("digest_value", digest.value.as_str()),
         ],
     )
+}
+
+pub(in crate::analysis_kernel) fn semantic_rows_digest(rows: Vec<Digest>) -> Digest {
+    Digest::from_unordered(DigestKind::InputSnapshot, "semantic_rows", rows)
 }
 
 fn push_component_rows(rows: &mut Vec<Digest>, row_kind: &str, components: &[InputComponent]) {

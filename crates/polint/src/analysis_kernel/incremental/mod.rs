@@ -110,6 +110,11 @@ pub(crate) use input_snapshot::{
     InputComponent, InputComponentStatus, InputSnapshot, InputSnapshotIdentitySources,
     ProviderSchemaSnapshot, TsJsLifecycleSnapshot,
 };
+pub(in crate::analysis_kernel) use input_snapshot::{
+    digest_semantic_row as input_snapshot_digest_row, semantic_row as input_snapshot_semantic_row,
+    semantic_row_builder as input_snapshot_semantic_row_builder,
+    semantic_rows_digest as input_snapshot_rows_digest,
+};
 #[cfg_attr(
     test,
     allow(
@@ -181,7 +186,8 @@ pub(crate) use run_report::provider_output_from_manifest;
 )]
 pub(in crate::analysis_kernel) use run_report::{
     CanonicalProviderManifest, CanonicalProviderOutput, CanonicalQueryRow, CanonicalRunIdentities,
-    ValidatedRunMetadata, ValidatedRunMetadataError,
+    ValidatedRunMetadata, ValidatedRunMetadataError, dependency_rows_digest, fact_rows_digest,
+    provider_manifest_digest_from_fields, provider_manifest_rows_digest, serialized_rows_digest,
 };
 pub(crate) use run_report::{
     KernelRunReport, provider_output_digest_from_manifest,

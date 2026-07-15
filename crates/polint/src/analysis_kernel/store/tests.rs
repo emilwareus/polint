@@ -2122,9 +2122,114 @@ mod active_complete_reader {
             (
                 "input-scalar",
                 "UPDATE input_files
-                 SET source_digest_value = source_digest_value || '.tampered'
+                 SET source_digest_value =
+                     substr(source_digest_value, 1, length(source_digest_value) - 1) ||
+                     CASE substr(source_digest_value, -1) WHEN '0' THEN '1' ELSE '0' END
                  WHERE generation_id = (
                      SELECT active_generation_id FROM store_manifest WHERE id = 1
+                 );",
+            ),
+            (
+                "provider-manifest",
+                "UPDATE provider_manifests
+                 SET provider_version =
+                     CASE substr(provider_version, 1, 1) WHEN 'x' THEN 'y' ELSE 'x' END ||
+                     substr(provider_version, 2)
+                 WHERE generation_id = (
+                     SELECT active_generation_id FROM store_manifest WHERE id = 1
+                 ) AND provider_id = (
+                     SELECT provider_id FROM provider_manifests
+                     WHERE generation_id = (
+                         SELECT active_generation_id FROM store_manifest WHERE id = 1
+                     ) ORDER BY provider_id LIMIT 1
+                 );",
+            ),
+            (
+                "provider-output",
+                "UPDATE provider_generations
+                 SET output_digest_value =
+                     substr(output_digest_value, 1, length(output_digest_value) - 1) ||
+                     CASE substr(output_digest_value, -1) WHEN '0' THEN '1' ELSE '0' END
+                 WHERE generation_id = (
+                     SELECT active_generation_id FROM store_manifest WHERE id = 1
+                 ) AND id = (
+                     SELECT id FROM provider_generations
+                     WHERE generation_id = (
+                         SELECT active_generation_id FROM store_manifest WHERE id = 1
+                     ) ORDER BY id LIMIT 1
+                 );",
+            ),
+            (
+                "layer",
+                "UPDATE layers
+                 SET output_digest_value =
+                     substr(output_digest_value, 1, length(output_digest_value) - 1) ||
+                     CASE substr(output_digest_value, -1) WHEN '0' THEN '1' ELSE '0' END
+                 WHERE generation_id = (
+                     SELECT active_generation_id FROM store_manifest WHERE id = 1
+                 ) AND id = (
+                     SELECT id FROM layers
+                     WHERE generation_id = (
+                         SELECT active_generation_id FROM store_manifest WHERE id = 1
+                     ) ORDER BY id LIMIT 1
+                 );",
+            ),
+            (
+                "query",
+                "UPDATE queries
+                 SET result_digest_value =
+                     substr(result_digest_value, 1, length(result_digest_value) - 1) ||
+                     CASE substr(result_digest_value, -1) WHEN '0' THEN '1' ELSE '0' END
+                 WHERE generation_id = (
+                     SELECT active_generation_id FROM store_manifest WHERE id = 1
+                 ) AND id = (
+                     SELECT id FROM queries
+                     WHERE generation_id = (
+                         SELECT active_generation_id FROM store_manifest WHERE id = 1
+                     ) ORDER BY id LIMIT 1
+                 );",
+            ),
+            (
+                "fact",
+                "UPDATE fact_metadata
+                 SET payload_digest =
+                     substr(payload_digest, 1, length(payload_digest) - 1) ||
+                     CASE substr(payload_digest, -1) WHEN '0' THEN '1' ELSE '0' END
+                 WHERE generation_id = (
+                     SELECT active_generation_id FROM store_manifest WHERE id = 1
+                 ) AND ordinal = (
+                     SELECT ordinal FROM fact_metadata
+                     WHERE generation_id = (
+                         SELECT active_generation_id FROM store_manifest WHERE id = 1
+                     ) ORDER BY ordinal LIMIT 1
+                 );",
+            ),
+            (
+                "dependency",
+                "UPDATE dependency_edges
+                 SET required_shape = 'unknown'
+                 WHERE generation_id = (
+                     SELECT active_generation_id FROM store_manifest WHERE id = 1
+                 ) AND ordinal = (
+                     SELECT ordinal FROM dependency_edges
+                     WHERE generation_id = (
+                         SELECT active_generation_id FROM store_manifest WHERE id = 1
+                     ) AND required_shape = 'content' ORDER BY ordinal LIMIT 1
+                 );",
+            ),
+            (
+                "validation",
+                "UPDATE validation_events
+                 SET digest_value =
+                     substr(digest_value, 1, length(digest_value) - 1) ||
+                     CASE substr(digest_value, -1) WHEN '0' THEN '1' ELSE '0' END
+                 WHERE generation_id = (
+                     SELECT active_generation_id FROM store_manifest WHERE id = 1
+                 ) AND event_kind = (
+                     SELECT event_kind FROM validation_events
+                     WHERE generation_id = (
+                         SELECT active_generation_id FROM store_manifest WHERE id = 1
+                     ) ORDER BY event_kind LIMIT 1
                  );",
             ),
             (
