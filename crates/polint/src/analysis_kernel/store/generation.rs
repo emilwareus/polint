@@ -29,14 +29,14 @@ use super::commit_plan::{
     GENERATION_STORAGE_ROW_OVERHEAD_BYTES, StoreAnalysisSettingRow, StoreCapabilityRequesterRow,
     StoreCapabilityRow, StoreCommitPlan, StoreDependencyEdgeRow, StoreDiagnosticRequestedViewRow,
     StoreDiagnosticRow, StoreFactRow, StoreFileRow, StoreGenerationStats, StoreIdentityRow,
-    StoreInputComponentRow, StoreInputDetailRow, StoreInputSnapshotRow, StoreLayerDependencyRow,
-    StoreLayerExtensionRow, StoreLayerInputRow, StoreLayerRow, StoreLayerWarningRow, StoreNodeRef,
-    StoreProviderDependencyRow, StoreProviderGenerationRow, StoreProviderManifestInputRow,
-    StoreProviderManifestOutputRow, StoreProviderManifestRow, StoreProviderManifestSchemaRow,
-    StoreProviderSchemaRow, StoreProviderSchemaVersionRow, StoreQueryInputRow, StoreQueryLayerRow,
-    StoreQueryRow, StoreRunManifestRow, StoreSemanticPlan, StoreSummaryDependencyRow,
-    StoreSummaryRow, StoreTelemetryRow, StoreValidationEventRow, ValidatedStoreCommitPlan,
-    generation_storage_limits,
+    StoreInputComponentRow, StoreInputDetailRow, StoreInputGroup, StoreInputSnapshotRow,
+    StoreLayerDependencyRow, StoreLayerExtensionRow, StoreLayerInputRow, StoreLayerRow,
+    StoreLayerWarningRow, StoreNodeRef, StoreProviderDependencyRow, StoreProviderGenerationRow,
+    StoreProviderManifestInputRow, StoreProviderManifestOutputRow, StoreProviderManifestRow,
+    StoreProviderManifestSchemaRow, StoreProviderSchemaRow, StoreProviderSchemaVersionRow,
+    StoreQueryInputRow, StoreQueryLayerRow, StoreQueryRow, StoreRunManifestRow, StoreSemanticPlan,
+    StoreSummaryDependencyRow, StoreSummaryRow, StoreTelemetryRow, StoreValidationEventRow,
+    ValidatedStoreCommitPlan, generation_storage_limits,
 };
 use super::connection::{self, ConnectionError, ReadOnlyConnection, WriterConnection};
 use super::schema::{
@@ -92,6 +92,8 @@ pub(super) struct CommitControl {
     publication_interlock: Option<&'static ReservationInterlock>,
     #[cfg(test)]
     provider_child_tamper: Option<ProviderChildTamper>,
+    #[cfg(test)]
+    projection_scalar_tamper: Option<ProjectionScalarTamper>,
 }
 
 #[cfg(test)]
@@ -99,6 +101,12 @@ pub(super) struct CommitControl {
 pub(super) enum ProviderChildTamper {
     Missing,
     Mismatched,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+pub(super) enum ProjectionScalarTamper {
+    InputSourceDigest,
 }
 
 #[cfg(test)]
@@ -126,6 +134,7 @@ impl CommitControl {
             reservation_interlock: None,
             publication_interlock: None,
             provider_child_tamper: None,
+            projection_scalar_tamper: None,
         }
     }
 
@@ -138,6 +147,7 @@ impl CommitControl {
             reservation_interlock: Some(interlock),
             publication_interlock: None,
             provider_child_tamper: None,
+            projection_scalar_tamper: None,
         }
     }
 
@@ -150,6 +160,7 @@ impl CommitControl {
             reservation_interlock: None,
             publication_interlock: Some(interlock),
             provider_child_tamper: None,
+            projection_scalar_tamper: None,
         }
     }
 
@@ -160,6 +171,18 @@ impl CommitControl {
             reservation_interlock: None,
             publication_interlock: None,
             provider_child_tamper: Some(tamper),
+            projection_scalar_tamper: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) const fn with_projection_scalar_tamper(tamper: ProjectionScalarTamper) -> Self {
+        Self {
+            fail_after: None,
+            reservation_interlock: None,
+            publication_interlock: None,
+            provider_child_tamper: None,
+            projection_scalar_tamper: Some(tamper),
         }
     }
 }
@@ -712,6 +735,13 @@ fn publish_generation(
         })?;
     }
 
+    #[cfg(test)]
+    if let Some(tamper) = control.projection_scalar_tamper {
+        tamper_projection_scalar(&transaction, reservation.handle, tamper).map_err(|error| {
+            publication_projection_error(error, GenerationFailureStage::Statistics)
+        })?;
+    }
+
     if validate_written_generation(
         &transaction,
         reservation,
@@ -871,6 +901,14 @@ fn validate_written_generation(
     if has_invalid_declared_child_counts(transaction, reservation.handle)?
         || read_stats(transaction, reservation.handle)? != *stats
         || read_validation_events(transaction, reservation.handle)? != expected_validation_events
+    {
+        return Err(ProjectionError::InvalidMetadata);
+    }
+    let decoded = read_generation_projection(transaction, reservation.handle)?;
+    if decoded.plan.semantic.identities != reservation.identities
+        || decoded.plan.semantic.dependency_schema != header.dependency_schema
+        || decoded.plan.semantic.stats != *stats
+        || decoded.plan.semantic.validation_events != expected_validation_events
     {
         return Err(ProjectionError::InvalidMetadata);
     }
@@ -1762,6 +1800,32 @@ fn tamper_provider_child(
              SET schema_version = schema_version || '.mismatch'
              WHERE generation_id = ?1 AND provider_id = ?2 AND schema_version = ?3",
             params![generation_id, child.0, child.1],
+        )?,
+    };
+    if changed == 1 {
+        Ok(())
+    } else {
+        Err(ProjectionError::InvalidMetadata)
+    }
+}
+
+#[cfg(test)]
+fn tamper_projection_scalar(
+    transaction: &Transaction<'_>,
+    generation_id: i64,
+    tamper: ProjectionScalarTamper,
+) -> Result<(), ProjectionError> {
+    let changed = match tamper {
+        ProjectionScalarTamper::InputSourceDigest => transaction.execute(
+            "UPDATE input_files
+             SET source_digest_value =
+                 substr(source_digest_value, 1, length(source_digest_value) - 1) ||
+                 CASE substr(source_digest_value, -1) WHEN '0' THEN '1' ELSE '0' END
+             WHERE generation_id = ?1 AND relative_path = (
+                 SELECT relative_path FROM input_files
+                 WHERE generation_id = ?1 ORDER BY relative_path LIMIT 1
+             )",
+            [generation_id],
         )?,
     };
     if changed == 1 {
@@ -3723,7 +3787,7 @@ fn read_input_details(
     connection: &Connection,
     generation_id: i64,
 ) -> Result<Vec<StoreInputDetailRow>, ProjectionError> {
-    let mut rows = query_rows(
+    let rows = query_rows(
         connection,
         "SELECT component_group, component_name, component_digest_kind,
                 component_digest_value, detail
@@ -3743,8 +3807,14 @@ fn read_input_details(
             })
         },
     )?;
-    rows.sort();
-    Ok(rows)
+    let mut by_parent = BTreeMap::<(StoreInputGroup, String), Vec<StoreInputDetailRow>>::new();
+    for row in rows {
+        by_parent
+            .entry((row.group, row.component_name.clone()))
+            .or_default()
+            .push(row);
+    }
+    Ok(by_parent.into_values().flatten().collect())
 }
 
 fn read_analysis_settings(
@@ -4618,9 +4688,7 @@ fn read_facts(
     {
         return Err(ProjectionError::InvalidMetadata);
     }
-    let mut rows = rows.drain(..).map(|(_, row)| row).collect::<Vec<_>>();
-    rows.sort();
-    Ok(rows)
+    Ok(rows.drain(..).map(|(_, row)| row).collect())
 }
 
 fn preflight_fact_rows(connection: &Connection, generation_id: i64) -> Result<(), ProjectionError> {
@@ -4796,9 +4864,13 @@ fn read_diagnostics(
     )?;
     let raw_requested_views = query_rows(
         connection,
-        "SELECT diagnostic_id, digest_kind, digest_value
-         FROM diagnostic_requested_view_digests WHERE generation_id = ?1
-         ORDER BY diagnostic_id, ordinal",
+        "SELECT child.diagnostic_id, child.digest_kind, child.digest_value
+         FROM diagnostic_requested_view_digests AS child
+         JOIN diagnostic_nodes AS diagnostic
+           ON diagnostic.generation_id = child.generation_id
+          AND diagnostic.id = child.diagnostic_id
+         WHERE child.generation_id = ?1
+         ORDER BY diagnostic.semantic_ordinal, child.ordinal",
         generation_id,
         |row| {
             Ok((
@@ -4819,6 +4891,12 @@ fn read_diagnostics(
         let semantic_ordinal =
             u64::try_from(ordinal).map_err(|_| ProjectionError::InvalidMetadata)?;
         let requested_view_digests = requested_by_handle.remove(&raw.handle).unwrap_or_default();
+        if requested_view_digests
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+        {
+            return Err(ProjectionError::InvalidMetadata);
+        }
         if raw.requested_view_count
             != u64::try_from(requested_view_digests.len()).unwrap_or(u64::MAX)
         {
@@ -4872,7 +4950,6 @@ fn read_diagnostics(
     if !requested_by_handle.is_empty() {
         return Err(ProjectionError::InvalidMetadata);
     }
-    requested_views.sort();
     Ok((diagnostics, requested_views, handles))
 }
 

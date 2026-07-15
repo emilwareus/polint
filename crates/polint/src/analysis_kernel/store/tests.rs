@@ -2346,6 +2346,60 @@ mod generation_lifecycle {
     }
 
     #[test]
+    fn scalar_tampered_pending_generation_never_completes_or_displaces_active_truth() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let repository = temp.path().join("repo");
+        let active_plan = generation_plan_fixture(&repository, "scalar-active");
+        let candidate = generation_plan_fixture(&repository, "scalar-candidate");
+        let config = generation_store_config(temp.path());
+        assert_eq!(
+            generation::commit_generation(&config, &active_plan),
+            StoreStatus::Ready
+        );
+        let database = Connection::open(config.path()).expect("open store");
+        let original_active = active_generation(&database);
+
+        assert_eq!(
+            generation::commit_generation_with_control(
+                &config,
+                &candidate,
+                generation::CommitControl::with_projection_scalar_tamper(
+                    generation::ProjectionScalarTamper::InputSourceDigest,
+                ),
+            ),
+            StoreStatus::Skipped(StoreSkipReason::CommitFailed)
+        );
+
+        let (generation_id, status) = generation_attempt(&database, &candidate, 0);
+        assert_eq!(status, schema::GenerationStatus::Failed.label());
+        assert_eq!(
+            generation::payload_row_count_for_test(&config, generation_id)
+                .expect("count rolled-back candidate payload"),
+            0
+        );
+        let (reason, stage): (String, String) = database
+            .query_row(
+                "SELECT reason_code, stage_code FROM generation_failure_events
+                 WHERE generation_id = ?1",
+                [generation_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read scalar-validation audit");
+        assert_eq!(
+            reason,
+            schema::GenerationFailureReason::PostWriteValidationFailed.label()
+        );
+        assert_eq!(stage, schema::GenerationFailureStage::Statistics.label());
+        assert_eq!(active_generation(&database), original_active);
+
+        let active =
+            generation::read_active_complete(&config, &active_plan.semantic.identities.workspace)
+                .expect("read active generation")
+                .expect("prior active generation remains ready");
+        assert_eq!(active.plan, active_plan);
+    }
+
+    #[test]
     fn busy_audit_leaves_exact_pending_attempt_untouched() {
         let temp = tempfile::tempdir().expect("temp directory");
         let plan = generation_plan_fixture(&temp.path().join("repo"), "audit-busy");
@@ -2558,6 +2612,195 @@ mod active_complete_reader {
     use rusqlite::Connection;
 
     use super::*;
+
+    fn validated_with_two_requested_views(root: &Path, label: &str) -> ValidatedRunMetadata {
+        let base = generation_validated_fixture(root, label);
+        let diagnostic = crate::analysis_kernel::incremental::DiagnosticKey::new(
+            "test/two-requested-views",
+            "1",
+            Digest::from_parts(DigestKind::RuleCode, "diagnostic_rule", &["code"]),
+            Digest::from_parts(DigestKind::RuleOptions, "diagnostic_rule", &["options"]),
+            vec![
+                Digest::from_parts(DigestKind::ProviderOutput, "requested_view", &["second"]),
+                Digest::from_parts(DigestKind::ProviderOutput, "requested_view", &["first"]),
+            ],
+            Digest::from_parts(DigestKind::Evidence, "diagnostic_rule", &["evidence"]),
+        );
+        base.with_dependency_fixture(vec![diagnostic], Vec::new())
+            .expect("diagnostic fixture has canonical requested views")
+    }
+
+    fn assert_identical_generation_rejects_ordinal_swap(
+        config: &StoreConfig,
+        validated: ValidatedRunMetadata,
+    ) {
+        let workspace = validated.identities().workspace().clone();
+        assert_eq!(
+            generation::read_active_complete(config, &workspace),
+            Err(StoreStatus::RebuildNeeded(
+                StoreRebuildReason::InvalidMetadata
+            ))
+        );
+        let outcome = SemanticStore::commit_validated_run(config, validated);
+        assert_eq!(
+            outcome.status,
+            StoreStatus::RebuildNeeded(StoreRebuildReason::InvalidMetadata)
+        );
+        assert_eq!(outcome.statistics, None);
+    }
+
+    #[test]
+    fn global_fact_ordinal_swap_fails_typed_active_and_identical_validation() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let validated = generation_validated_fixture(&temp.path().join("repo"), "fact-swap");
+        let config = generation_store_config(temp.path());
+        assert_eq!(
+            SemanticStore::commit_validated_run(&config, validated.clone()).status,
+            StoreStatus::Ready
+        );
+        let database = Connection::open(config.path()).expect("open store");
+        let generation_id = active_generation_id(&database);
+        let fact_count: i64 = database
+            .query_row(
+                "SELECT count(*) FROM fact_metadata WHERE generation_id = ?1",
+                [generation_id],
+                |row| row.get(0),
+            )
+            .expect("count facts");
+        assert!(fact_count >= 2, "fixture must contain two facts");
+        assert_eq!(
+            database
+                .execute(
+                    "UPDATE fact_metadata SET ordinal = ordinal + 1000000
+                     WHERE generation_id = ?1 AND ordinal IN (0, 1)",
+                    [generation_id],
+                )
+                .expect("move fact ordinals"),
+            2
+        );
+        assert_eq!(
+            database
+                .execute(
+                    "UPDATE fact_metadata
+                     SET ordinal = CASE ordinal WHEN 1000000 THEN 1 WHEN 1000001 THEN 0 END
+                     WHERE generation_id = ?1 AND ordinal IN (1000000, 1000001)",
+                    [generation_id],
+                )
+                .expect("swap fact ordinals"),
+            2
+        );
+        assert!(generation::generation_ordinals_are_valid_for_test(
+            &database,
+            generation_id
+        ));
+        drop(database);
+
+        assert_identical_generation_rejects_ordinal_swap(&config, validated);
+    }
+
+    #[test]
+    fn input_detail_ordinal_swap_fails_typed_active_and_identical_validation() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let validated = generation_validated_fixture(&temp.path().join("repo"), "detail-swap");
+        let config = generation_store_config(temp.path());
+        assert_eq!(
+            SemanticStore::commit_validated_run(&config, validated.clone()).status,
+            StoreStatus::Ready
+        );
+        let database = Connection::open(config.path()).expect("open store");
+        let generation_id = active_generation_id(&database);
+        let (component_group, component_name): (String, String) = database
+            .query_row(
+                "SELECT component_group, component_name FROM input_component_details
+                 WHERE generation_id = ?1
+                 GROUP BY component_group, component_name HAVING count(*) >= 2
+                 ORDER BY component_group, component_name LIMIT 1",
+                [generation_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("find input component with two details");
+        assert_eq!(
+            database
+                .execute(
+                    "UPDATE input_component_details SET ordinal = ordinal + 1000000
+                     WHERE generation_id = ?1 AND component_group = ?2
+                       AND component_name = ?3 AND ordinal IN (0, 1)",
+                    rusqlite::params![generation_id, component_group, component_name],
+                )
+                .expect("move input detail ordinals"),
+            2
+        );
+        assert_eq!(
+            database
+                .execute(
+                    "UPDATE input_component_details
+                     SET ordinal = CASE ordinal WHEN 1000000 THEN 1 WHEN 1000001 THEN 0 END
+                     WHERE generation_id = ?1 AND component_group = ?2
+                       AND component_name = ?3 AND ordinal IN (1000000, 1000001)",
+                    rusqlite::params![generation_id, component_group, component_name],
+                )
+                .expect("swap input detail ordinals"),
+            2
+        );
+        assert!(generation::generation_ordinals_are_valid_for_test(
+            &database,
+            generation_id
+        ));
+        drop(database);
+
+        assert_identical_generation_rejects_ordinal_swap(&config, validated);
+    }
+
+    #[test]
+    fn diagnostic_child_ordinal_swap_fails_typed_active_and_identical_validation() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let validated =
+            validated_with_two_requested_views(&temp.path().join("repo"), "diagnostic-view-swap");
+        let config = generation_store_config(temp.path());
+        assert_eq!(
+            SemanticStore::commit_validated_run(&config, validated.clone()).status,
+            StoreStatus::Ready
+        );
+        let database = Connection::open(config.path()).expect("open store");
+        let generation_id = active_generation_id(&database);
+        let diagnostic_id: i64 = database
+            .query_row(
+                "SELECT diagnostic_id FROM diagnostic_requested_view_digests
+                 WHERE generation_id = ?1 GROUP BY diagnostic_id HAVING count(*) = 2",
+                [generation_id],
+                |row| row.get(0),
+            )
+            .expect("find diagnostic with two requested views");
+        assert_eq!(
+            database
+                .execute(
+                    "UPDATE diagnostic_requested_view_digests
+                     SET ordinal = ordinal + 1000000
+                     WHERE generation_id = ?1 AND diagnostic_id = ?2",
+                    rusqlite::params![generation_id, diagnostic_id],
+                )
+                .expect("move diagnostic child ordinals"),
+            2
+        );
+        assert_eq!(
+            database
+                .execute(
+                    "UPDATE diagnostic_requested_view_digests
+                     SET ordinal = CASE ordinal WHEN 1000000 THEN 1 WHEN 1000001 THEN 0 END
+                     WHERE generation_id = ?1 AND diagnostic_id = ?2",
+                    rusqlite::params![generation_id, diagnostic_id],
+                )
+                .expect("swap diagnostic child ordinals"),
+            2
+        );
+        assert!(generation::generation_ordinals_are_valid_for_test(
+            &database,
+            generation_id
+        ));
+        drop(database);
+
+        assert_identical_generation_rejects_ordinal_swap(&config, validated);
+    }
 
     #[test]
     fn full_typed_projection_round_trips_queries_edges_and_attempt_isolation() {
