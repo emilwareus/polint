@@ -181,4 +181,3 @@ At minimum include paired invalidate/preserve cases for source file, package/pro
 - `eval::bench::runner::tests::semantic_store::isolated_modes_report_real_store_bytes_and_equal_diagnostics_digest`.
 - Dedicated serialized ignored gate `eval::bench::gate::tests::semantic_store_boundary::real_store_enabled_measurement_passes_locked_boundary`; keep the locked +20% RSS, +25% cold-time, 16 MiB RSS floor, 50 ms cold floor, and diagnostics parity.
 - `make lint` and `cargo test --workspace --all-features --locked`; no new public flag/config/SDK export, no `ALLOWED_PRELUDE` change, and no generated-skill vocabulary drift.
-
