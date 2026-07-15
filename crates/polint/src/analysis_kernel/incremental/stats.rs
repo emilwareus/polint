@@ -129,6 +129,17 @@ impl ProviderOutputDependency {
         }
     }
 
+    pub(crate) fn is_present(&self) -> bool {
+        self.status == InputComponentStatus::Present
+    }
+
+    pub(crate) fn is_available_or_absent(&self) -> bool {
+        matches!(
+            self.status,
+            InputComponentStatus::Present | InputComponentStatus::Absent
+        )
+    }
+
     #[cfg(test)]
     pub(crate) fn present(output_digest: Digest) -> Self {
         Self {
@@ -419,6 +430,11 @@ mod tests {
         );
         assert_eq!(failed.status, InputComponentStatus::Unsupported);
         assert_ne!(failed.output_digest, present_digest);
+        assert!(present.is_present());
+        assert!(!absent.is_present());
+        assert!(present.is_available_or_absent());
+        assert!(absent.is_available_or_absent());
+        assert!(!failed.is_available_or_absent());
     }
 
     #[test]

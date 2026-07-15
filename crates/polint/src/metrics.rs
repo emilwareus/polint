@@ -1102,6 +1102,11 @@ mod tests {
                 crate::analysis_kernel::incremental::ProviderExecutionOutcome::Skipped,
                 None,
             ),
+            ProviderOutputDependency::from_execution(
+                "polint.unknown_upstream",
+                crate::analysis_kernel::incremental::ProviderExecutionOutcome::Failed,
+                None,
+            ),
         ];
         let syntax_outputs = syntax_dependencies
             .iter()
@@ -1144,6 +1149,11 @@ mod tests {
             input.kind == crate::analysis_kernel::incremental::InputDependencyKind::UpstreamLayer
                 && input.stable_key.starts_with("polint.ts.syntax/")
                 && input.status == InputComponentStatus::Absent
+        }));
+        assert!(typed_inputs.iter().any(|input| {
+            input.kind == crate::analysis_kernel::incremental::InputDependencyKind::UpstreamLayer
+                && input.stable_key.starts_with("polint.unknown_upstream/")
+                && input.status == InputComponentStatus::Unsupported
         }));
         assert!(typed_inputs.iter().any(|input| {
             input.kind == crate::analysis_kernel::incremental::InputDependencyKind::AnalysisSetting

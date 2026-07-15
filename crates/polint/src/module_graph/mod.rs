@@ -325,8 +325,8 @@ pub(crate) fn module_topology_layer_dependency_edges(
     db: &AnalysisDb,
     key: &LayerKey,
     manifest: &ProviderManifest,
-    module_graph_output_digest: Digest,
-    symbol_graph_output_digest: Digest,
+    module_graph_output: &ProviderOutputDependency,
+    symbol_graph_output: &ProviderOutputDependency,
     analysis_settings_digest: Digest,
     go_lifecycle_components: &[InputComponent],
     ts_js_lifecycle_components: &[InputComponent],
@@ -472,8 +472,8 @@ pub(crate) fn module_topology_layer_dependency_edges(
         upstream_layer_dependency(
             LayerKind::ModuleGraph,
             "polint.module_graph",
-            module_graph_output_digest,
-            InputComponentStatus::Present,
+            module_graph_output.output_digest.clone(),
+            module_graph_output.status,
         ),
         DependencyKind::UpstreamLayer,
         ShapeKind::Output,
@@ -483,8 +483,8 @@ pub(crate) fn module_topology_layer_dependency_edges(
         upstream_layer_dependency(
             LayerKind::SymbolGraph,
             "polint.symbol_graph",
-            symbol_graph_output_digest,
-            InputComponentStatus::Present,
+            symbol_graph_output.output_digest.clone(),
+            symbol_graph_output.status,
         ),
         DependencyKind::UpstreamLayer,
         ShapeKind::Output,
@@ -714,8 +714,8 @@ pub(crate) fn derive_module_topology_with_cache_stats(
     cache: &Cache,
     input_snapshot: &InputSnapshot,
     manifest: &ProviderManifest,
-    module_graph_output_digest: Digest,
-    symbol_graph_output_digest: Digest,
+    module_graph_output: ProviderOutputDependency,
+    symbol_graph_output: ProviderOutputDependency,
 ) -> ModuleTopologyDerivation {
     if db.imports().is_empty() {
         db.replace_import_to_package_facts(Vec::new());
@@ -753,8 +753,8 @@ pub(crate) fn derive_module_topology_with_cache_stats(
         analysis_settings_digest.clone(),
         go_lifecycle_digest,
         ts_js_lifecycle_digest,
-        module_graph_output_digest.clone(),
-        symbol_graph_output_digest.clone(),
+        module_graph_output.output_digest.clone(),
+        symbol_graph_output.output_digest.clone(),
     );
     let store = cache.layer_cache_store();
     let mut cache_stats = CacheStats::default();
@@ -800,8 +800,8 @@ pub(crate) fn derive_module_topology_with_cache_stats(
                 db,
                 &layer_key,
                 manifest,
-                module_graph_output_digest,
-                symbol_graph_output_digest,
+                &module_graph_output,
+                &symbol_graph_output,
                 analysis_settings_digest,
                 &input_snapshot.go_lifecycle.components,
                 &input_snapshot.ts_js_lifecycle.components,
@@ -3186,6 +3186,11 @@ mod tests {
                 crate::analysis_kernel::incremental::ProviderExecutionOutcome::Skipped,
                 None,
             ),
+            ProviderOutputDependency::from_execution(
+                "polint.unknown_upstream",
+                crate::analysis_kernel::incremental::ProviderExecutionOutcome::Failed,
+                None,
+            ),
         ];
 
         let edges = super::module_graph_layer_dependency_edges(
@@ -3278,6 +3283,12 @@ mod tests {
                 && input.stable_key.starts_with("polint.ts.syntax/")
                 && input.digest.kind == DigestKind::DependencyLayer
                 && input.status == InputComponentStatus::Absent
+        }));
+        assert!(typed_inputs.iter().any(|input| {
+            input.kind == InputDependencyKind::UpstreamLayer
+                && input.stable_key.starts_with("polint.unknown_upstream/")
+                && input.digest.kind == DigestKind::DependencyLayer
+                && input.status == InputComponentStatus::Unsupported
         }));
     }
 
@@ -5575,7 +5586,10 @@ mod module_topology_layer_cache {
         module_topology_layer_dependency_edges, module_topology_layer_key,
         module_topology_layer_payload, write_module_topology_layer_payload,
     };
-    use crate::analysis_kernel::incremental::{CacheStats, Digest, DigestKind, InputSnapshot};
+    use crate::analysis_kernel::incremental::{
+        CacheNode, CacheStats, Digest, DigestKind, InputComponentStatus, InputDependencyKind,
+        InputSnapshot, ProviderExecutionOutcome, ProviderOutputDependency,
+    };
     use crate::analysis_plan::AnalysisPlan;
     use crate::cache::Cache;
     use crate::config::load_config;
@@ -5601,6 +5615,10 @@ mod module_topology_layer_cache {
             .iter()
             .find(|manifest| manifest.id == "polint.module_topology")
             .expect("module topology provider manifest exists")
+    }
+
+    fn provider_output(digest: Digest) -> ProviderOutputDependency {
+        ProviderOutputDependency::present(digest)
     }
 
     fn module_topology_input_snapshot(
@@ -5812,8 +5830,16 @@ mod module_topology_layer_cache {
             &cache,
             &snapshot,
             module_topology_manifest(),
-            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["empty"]),
-            Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["empty"]),
+            provider_output(Digest::from_parts(
+                DigestKind::ProviderOutput,
+                "module_graph",
+                &["empty"],
+            )),
+            provider_output(Digest::from_parts(
+                DigestKind::ProviderOutput,
+                "symbol_graph",
+                &["empty"],
+            )),
         );
 
         assert_eq!(db.import_to_package_edges(), &[]);
@@ -5834,8 +5860,16 @@ mod module_topology_layer_cache {
             &cache,
             &first_snapshot,
             module_topology_manifest(),
-            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
-            Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
+            provider_output(Digest::from_parts(
+                DigestKind::ProviderOutput,
+                "module_graph",
+                &["base"],
+            )),
+            provider_output(Digest::from_parts(
+                DigestKind::ProviderOutput,
+                "symbol_graph",
+                &["base"],
+            )),
         );
         let first_keys = first
             .import_to_package_edges()
@@ -5850,8 +5884,16 @@ mod module_topology_layer_cache {
             &cache,
             &second_snapshot,
             module_topology_manifest(),
-            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
-            Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]),
+            provider_output(Digest::from_parts(
+                DigestKind::ProviderOutput,
+                "module_graph",
+                &["base"],
+            )),
+            provider_output(Digest::from_parts(
+                DigestKind::ProviderOutput,
+                "symbol_graph",
+                &["base"],
+            )),
         );
 
         assert_eq!(first_result.cache_stats.misses, 1);
@@ -5865,6 +5907,76 @@ mod module_topology_layer_cache {
                 .collect::<Vec<_>>(),
             first_keys
         );
+    }
+
+    #[test]
+    fn module_topology_dependencies_preserve_upstream_execution_status() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
+        let db = db_with_import_to_package_inputs();
+        let snapshot = module_topology_input_snapshot(&loaded, &db, &plan);
+        let module_output = ProviderOutputDependency::from_execution(
+            "polint.module_graph",
+            ProviderExecutionOutcome::Failed,
+            None,
+        );
+        let symbol_output = ProviderOutputDependency::from_execution(
+            "polint.symbol_graph",
+            ProviderExecutionOutcome::Skipped,
+            None,
+        );
+        let analysis_settings_digest = snapshot
+            .analysis_settings_digest(crate::cache::keys::AnalysisSettingsScope::ModuleTopology)
+            .clone();
+        let key = module_topology_layer_key(
+            &db,
+            module_topology_manifest(),
+            analysis_settings_digest.clone(),
+            lifecycle_component_digest(
+                DigestKind::GoLifecycle,
+                "module_topology_go_lifecycle",
+                &snapshot.go_lifecycle.components,
+            ),
+            lifecycle_component_digest(
+                DigestKind::TsJsLifecycle,
+                "module_topology_ts_js_lifecycle",
+                &snapshot.ts_js_lifecycle.components,
+            ),
+            module_output.output_digest.clone(),
+            symbol_output.output_digest.clone(),
+        );
+        let dependencies = module_topology_layer_dependency_edges(
+            &db,
+            &key,
+            module_topology_manifest(),
+            &module_output,
+            &symbol_output,
+            analysis_settings_digest,
+            &snapshot.go_lifecycle.components,
+            &snapshot.ts_js_lifecycle.components,
+            super::provider_manifest_dependency_digest(&snapshot, module_topology_manifest()),
+        );
+
+        let upstream = dependencies
+            .iter()
+            .filter_map(|edge| match &edge.to {
+                CacheNode::DependencyInput(input)
+                    if input.kind == InputDependencyKind::UpstreamLayer =>
+                {
+                    Some(input)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(upstream.iter().any(|input| {
+            input.stable_key.starts_with("polint.module_graph/")
+                && input.status == InputComponentStatus::Unsupported
+        }));
+        assert!(upstream.iter().any(|input| {
+            input.stable_key.starts_with("polint.symbol_graph/")
+                && input.status == InputComponentStatus::Absent
+        }));
     }
 
     #[test]
@@ -5884,8 +5996,8 @@ mod module_topology_layer_cache {
             &cache,
             &snapshot,
             module_topology_manifest(),
-            module_digest.clone(),
-            symbol_digest.clone(),
+            provider_output(module_digest.clone()),
+            provider_output(symbol_digest.clone()),
         );
         let mut payload = module_topology_layer_payload(&first, &derivation);
         let mut duplicate = payload.import_to_package_edges[0].clone();
@@ -5919,8 +6031,8 @@ mod module_topology_layer_cache {
             &first,
             &key,
             module_topology_manifest(),
-            module_digest.clone(),
-            symbol_digest.clone(),
+            &provider_output(module_digest.clone()),
+            &provider_output(symbol_digest.clone()),
             analysis_settings_digest,
             &snapshot.go_lifecycle.components,
             &snapshot.ts_js_lifecycle.components,
@@ -5949,8 +6061,8 @@ mod module_topology_layer_cache {
             &cache,
             &second_snapshot,
             module_topology_manifest(),
-            module_digest,
-            symbol_digest,
+            provider_output(module_digest),
+            provider_output(symbol_digest),
         );
 
         assert_eq!(second_result.cache_stats.invalid_evicted_reads, 1);

@@ -115,7 +115,7 @@ pub(crate) fn derive_requested_symbols_with_cache_stats(
     cache: &Cache,
     input_snapshot: &InputSnapshot,
     manifest: &ProviderManifest,
-    module_graph_output_digest: Digest,
+    module_graph_output: ProviderOutputDependency,
     upstream_syntax_outputs: Vec<ProviderOutputDependency>,
 ) -> SymbolGraphDerivation {
     if !plan.requests_any_capability(SYMBOL_GRAPH_CAPABILITIES) {
@@ -145,7 +145,7 @@ pub(crate) fn derive_requested_symbols_with_cache_stats(
         analysis_settings_digest.clone(),
         go_lifecycle_digest,
         ts_js_lifecycle_digest,
-        module_graph_output_digest.clone(),
+        module_graph_output.output_digest.clone(),
         upstream_syntax_output_digests,
     );
     let store = cache.layer_cache_store();
@@ -193,7 +193,7 @@ pub(crate) fn derive_requested_symbols_with_cache_stats(
                 db,
                 &layer_key,
                 manifest,
-                &module_graph_output_digest,
+                &module_graph_output,
                 &upstream_syntax_outputs,
                 analysis_settings_digest,
                 &input_snapshot.go_lifecycle.components,
@@ -311,7 +311,7 @@ fn symbol_graph_layer_dependency_edges(
     db: &AnalysisDb,
     key: &LayerKey,
     manifest: &ProviderManifest,
-    module_graph_output_digest: &Digest,
+    module_graph_output: &ProviderOutputDependency,
     upstream_syntax_outputs: &[ProviderOutputDependency],
     analysis_settings_digest: Digest,
     go_lifecycle_components: &[InputComponent],
@@ -437,8 +437,8 @@ fn symbol_graph_layer_dependency_edges(
         upstream_layer_dependency(
             LayerKind::ModuleGraph,
             "polint.module_graph",
-            module_graph_output_digest.clone(),
-            InputComponentStatus::Present,
+            module_graph_output.output_digest.clone(),
+            module_graph_output.status,
         ),
         DependencyKind::UpstreamLayer,
         ShapeKind::Output,
@@ -1387,7 +1387,7 @@ mod symbol_graph_derivation {
             cache,
             &snapshot,
             symbol_graph_manifest(),
-            module_graph_output_digest,
+            ProviderOutputDependency::present(module_graph_output_digest),
             syntax_outputs,
         )
     }
@@ -1790,7 +1790,7 @@ export function answer() {{
             "symbol_graph_ts_js_lifecycle",
             &snapshot.ts_js_lifecycle.components,
         );
-        let (module_graph_output, syntax_output_digests) = upstream_digests("typed");
+        let (_module_graph_output, syntax_output_digests) = upstream_digests("typed");
         let syntax_dependencies = vec![
             ProviderOutputDependency::present(syntax_output_digests[0].clone()),
             ProviderOutputDependency::from_execution(
@@ -1798,25 +1798,35 @@ export function answer() {{
                 crate::analysis_kernel::incremental::ProviderExecutionOutcome::Skipped,
                 None,
             ),
+            ProviderOutputDependency::from_execution(
+                "polint.unknown_upstream",
+                crate::analysis_kernel::incremental::ProviderExecutionOutcome::Failed,
+                None,
+            ),
         ];
         let syntax_outputs = syntax_dependencies
             .iter()
             .map(|output| output.output_digest.clone())
             .collect::<Vec<_>>();
+        let module_graph_dependency = ProviderOutputDependency::from_execution(
+            "polint.module_graph",
+            crate::analysis_kernel::incremental::ProviderExecutionOutcome::Failed,
+            None,
+        );
         let key = super::symbol_graph_layer_key(
             &db,
             symbol_graph_manifest(),
             analysis_settings.clone(),
             go_lifecycle,
             ts_js_lifecycle,
-            module_graph_output.clone(),
+            module_graph_dependency.output_digest.clone(),
             syntax_outputs,
         );
         let edges = super::symbol_graph_layer_dependency_edges(
             &db,
             &key,
             symbol_graph_manifest(),
-            &module_graph_output,
+            &module_graph_dependency,
             &syntax_dependencies,
             analysis_settings,
             &snapshot.go_lifecycle.components,
@@ -1852,6 +1862,12 @@ export function answer() {{
         }));
         assert!(typed_inputs.iter().any(|input| {
             input.kind == InputDependencyKind::UpstreamLayer
+                && input.stable_key.starts_with("polint.module_graph/")
+                && input.digest.kind == DigestKind::DependencyLayer
+                && input.status == InputComponentStatus::Unsupported
+        }));
+        assert!(typed_inputs.iter().any(|input| {
+            input.kind == InputDependencyKind::UpstreamLayer
                 && input.stable_key.starts_with("polint.go.syntax/")
                 && input.digest.kind == DigestKind::DependencyLayer
                 && input.status == InputComponentStatus::Present
@@ -1861,6 +1877,12 @@ export function answer() {{
                 && input.stable_key.starts_with("polint.ts.syntax/")
                 && input.digest.kind == DigestKind::DependencyLayer
                 && input.status == InputComponentStatus::Absent
+        }));
+        assert!(typed_inputs.iter().any(|input| {
+            input.kind == InputDependencyKind::UpstreamLayer
+                && input.stable_key.starts_with("polint.unknown_upstream/")
+                && input.digest.kind == DigestKind::DependencyLayer
+                && input.status == InputComponentStatus::Unsupported
         }));
         for component in snapshot
             .go_lifecycle
@@ -2253,7 +2275,11 @@ export function answer() {
             &cache,
             &snapshot,
             manifest(),
-            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]),
+            ProviderOutputDependency::present(Digest::from_parts(
+                DigestKind::ProviderOutput,
+                "module_graph",
+                &["base"],
+            )),
             vec![ProviderOutputDependency::present(Digest::from_parts(
                 DigestKind::ProviderOutput,
                 "ts_syntax",
