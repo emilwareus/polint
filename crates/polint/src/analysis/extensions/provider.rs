@@ -11,7 +11,9 @@ use super::sinks::{
 use super::store::{AcceptedExtensionFact, ExtensionActivationRow, ExtensionOutput};
 use super::validate::{ExtensionValidationInput, validate_extension_output};
 use crate::analysis_kernel::ProviderManifest;
-use crate::analysis_kernel::incremental::{CacheStats, Digest, DigestKind, InputSnapshot};
+use crate::analysis_kernel::incremental::{
+    CacheStats, Digest, DigestKind, InputSnapshot, input_component_identity_rows,
+};
 use crate::core::AnalysisDb;
 use crate::diagnostics::{Diagnostic, Severity, TextRange};
 
@@ -199,12 +201,10 @@ fn extension_output_digest(
         format!("provider_id={}", manifest.id),
         format!("schema={}", manifest.primary_schema_label()),
     ];
-    parts.extend(input_snapshot.extensions.iter().map(|component| {
-        format!(
-            "extension_input={}:{}:{:?}",
-            component.name, component.digest, component.status
-        )
-    }));
+    parts.extend(input_component_identity_rows(
+        "extension_input",
+        &input_snapshot.extensions,
+    ));
     for row in db.extension_activations() {
         let provider_id = row.provider_id.as_deref().unwrap_or("<handshake>");
         parts.push(format!(

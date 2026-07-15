@@ -131,6 +131,25 @@ pub(crate) struct InputComponent {
     pub(crate) detail: Vec<String>,
 }
 
+pub(crate) fn input_component_identity_rows(
+    prefix: &str,
+    components: &[InputComponent],
+) -> Vec<String> {
+    let mut rows = components
+        .iter()
+        .map(|component| {
+            format!(
+                "{prefix}:name={}:status={}:digest={}",
+                component.name,
+                component.status.label(),
+                component.digest
+            )
+        })
+        .collect::<Vec<_>>();
+    rows.sort();
+    rows
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ProviderSchemaSnapshot {
     pub(crate) provider_id: String,
@@ -1891,6 +1910,34 @@ mod input_component_status_codec {
 
         assert!(InputComponentStatus::parse_label("setup-missing").is_err());
         assert!(serde_json::from_str::<InputComponentStatus>("\"setup-missing\"").is_err());
+    }
+
+    #[test]
+    fn component_identity_rows_pin_every_status_label_without_debug_names() {
+        let cases = [
+            (InputComponentStatus::Present, "present"),
+            (InputComponentStatus::Absent, "absent"),
+            (InputComponentStatus::Unsupported, "unsupported"),
+            (InputComponentStatus::SetupMissing, "setup_missing"),
+        ];
+
+        for (status, label) in cases {
+            let digest = Digest::absent(DigestKind::Config, "component");
+            let component = InputComponent {
+                name: "go.lifecycle".to_string(),
+                status,
+                digest: digest.clone(),
+                detail: Vec::new(),
+            };
+            let rows = input_component_identity_rows("input", &[component]);
+
+            assert_eq!(
+                rows,
+                vec![format!(
+                    "input:name=go.lifecycle:status={label}:digest={digest}"
+                )]
+            );
+        }
     }
 }
 

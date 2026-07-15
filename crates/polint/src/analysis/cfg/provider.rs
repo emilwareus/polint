@@ -13,8 +13,8 @@ use crate::analysis::cfg::lower_ts::lower_ts_cfg;
 use crate::analysis::cfg::store::CfgOutput;
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
-    CacheStats, Digest, DigestBuilder, DigestKind, InputComponent, InputComponentStatus,
-    InputSnapshot,
+    CacheStats, Digest, DigestBuilder, DigestKind, InputComponent, InputSnapshot,
+    input_component_identity_rows,
 };
 use crate::cache::keys::AnalysisSettingsScope;
 use crate::core::AnalysisDb;
@@ -453,33 +453,8 @@ fn append_component_digest_parts(
     prefix: &str,
     components: &[InputComponent],
 ) {
-    let mut components = components.iter().collect::<Vec<_>>();
-    components.sort_by(|left, right| {
-        (
-            left.name.as_str(),
-            component_status_rank(left.status),
-            &left.digest,
-        )
-            .cmp(&(
-                right.name.as_str(),
-                component_status_rank(right.status),
-                &right.digest,
-            ))
-    });
-    for component in components {
-        digest.part(prefix);
-        digest.part(&component.name);
-        digest.debug_part(component.status);
-        digest.part(&component.digest.to_string());
-    }
-}
-
-fn component_status_rank(status: InputComponentStatus) -> u8 {
-    match status {
-        InputComponentStatus::Present => 0,
-        InputComponentStatus::Absent => 1,
-        InputComponentStatus::Unsupported => 2,
-        InputComponentStatus::SetupMissing => 3,
+    for row in input_component_identity_rows(prefix, components) {
+        digest.part(&row);
     }
 }
 

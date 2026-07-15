@@ -13,7 +13,7 @@ use crate::analysis::semantic_graph::cache_key::semantic_graph_provider_paramete
 use crate::analysis::semantic_graph::store::{SEMANTIC_GRAPH_PROVIDER_ID, SemanticGraphOutput};
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
-    CacheStats, Digest, DigestKind, InputComponent, InputSnapshot,
+    CacheStats, Digest, DigestKind, InputComponent, InputSnapshot, input_component_identity_rows,
 };
 use crate::config::LoadedConfig;
 use crate::core::AnalysisDb;
@@ -504,12 +504,7 @@ fn ts_object_model_output_digest_from_db(db: &AnalysisDb) -> String {
 }
 
 fn extend_component_parts(parts: &mut Vec<String>, prefix: &str, components: &[InputComponent]) {
-    parts.extend(components.iter().map(|component| {
-        format!(
-            "{prefix}:{}:{:?}:{}",
-            component.name, component.status, component.digest
-        )
-    }));
+    parts.extend(input_component_identity_rows(prefix, components));
 }
 
 fn provider_error_diagnostic(message: String) -> Diagnostic {

@@ -1,4 +1,6 @@
-use crate::analysis_kernel::incremental::{Digest, DigestKind, InputComponent, InputSnapshot};
+use crate::analysis_kernel::incremental::{
+    Digest, DigestKind, InputComponent, InputSnapshot, input_component_identity_rows,
+};
 use crate::cache::keys::AnalysisSettingsScope;
 
 const REQUESTED_CAPABILITIES: &[&str] = &["calls", "control_flow", "dataflow"];
@@ -133,12 +135,7 @@ fn extend_component_parts(parts: &mut Vec<String>, prefix: &str, components: &[I
         parts.push(format!("{prefix}=absent"));
         return;
     }
-    parts.extend(components.iter().map(|component| {
-        format!(
-            "{prefix}:{}:{:?}:{}",
-            component.name, component.status, component.digest
-        )
-    }));
+    parts.extend(input_component_identity_rows(prefix, components));
 }
 
 #[cfg(test)]

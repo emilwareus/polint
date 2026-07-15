@@ -5,7 +5,7 @@ use crate::analysis::cfg::ids::BasicBlockId;
 use crate::analysis::ids::{MirBodyId, MirOpId, PlaceId};
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
-    CacheStats, Digest, DigestKind, InputComponent, InputSnapshot,
+    CacheStats, Digest, DigestKind, InputComponent, InputSnapshot, input_component_identity_rows,
 };
 use crate::cache::keys::AnalysisSettingsScope;
 use crate::core::AnalysisDb;
@@ -240,12 +240,7 @@ fn materialization_label(materialization: DomainMaterialization) -> &'static str
 }
 
 fn extend_component_parts(parts: &mut Vec<String>, prefix: &str, components: &[InputComponent]) {
-    parts.extend(components.iter().map(|component| {
-        format!(
-            "{prefix}:{}:{:?}:{}",
-            component.name, component.status, component.digest
-        )
-    }));
+    parts.extend(input_component_identity_rows(prefix, components));
 }
 
 fn body_stable_key_map(db: &AnalysisDb) -> std::collections::BTreeMap<MirBodyId, String> {

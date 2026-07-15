@@ -6,7 +6,7 @@ use crate::analysis::mir::op::{MirOperationKind, MirValue};
 use crate::analysis::places::{PlaceProjection, PlaceRoot};
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
-    CacheStats, Digest, DigestKind, InputComponent, InputSnapshot,
+    CacheStats, Digest, DigestKind, InputComponent, InputSnapshot, input_component_identity_rows,
 };
 use crate::cache::keys::AnalysisSettingsScope;
 use crate::core::AnalysisDb;
@@ -272,17 +272,7 @@ fn semantic_mir_output_digest(
 }
 
 fn extend_component_parts(parts: &mut Vec<String>, prefix: &str, components: &[InputComponent]) {
-    let mut rows = components
-        .iter()
-        .map(|component| {
-            format!(
-                "{prefix}:{}={:?}:{}",
-                component.name, component.status, component.digest
-            )
-        })
-        .collect::<Vec<_>>();
-    rows.sort();
-    parts.extend(rows);
+    parts.extend(input_component_identity_rows(prefix, components));
 }
 
 fn place_root_fragment(root: &PlaceRoot) -> String {
