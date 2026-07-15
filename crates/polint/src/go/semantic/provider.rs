@@ -320,12 +320,7 @@ fn go_semantic_output_digest(
             .go_lifecycle
             .components
             .iter()
-            .map(|component| {
-                format!(
-                    "go_lifecycle:{}:{:?}:{}",
-                    component.name, component.status, component.digest
-                )
-            }),
+            .map(go_lifecycle_identity_part),
     );
     parts.extend(output.packages.iter().map(|package| {
         format!(
@@ -431,6 +426,17 @@ fn go_semantic_output_digest(
     parts.sort();
     let refs = parts.iter().map(String::as_str).collect::<Vec<_>>();
     Digest::from_parts(DigestKind::ProviderOutput, "go_semantic_output", &refs)
+}
+
+fn go_lifecycle_identity_part(
+    component: &crate::analysis_kernel::incremental::InputComponent,
+) -> String {
+    format!(
+        "go_lifecycle:{}:{}:{}",
+        component.name,
+        component.status.label(),
+        component.digest
+    )
 }
 
 fn option_span_part(span: Option<&Span>) -> String {
@@ -572,12 +578,35 @@ fn default_lifecycle() -> GoAnalysisConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis_kernel::incremental::{Digest, DigestKind, InputSnapshot};
+    use crate::analysis_kernel::incremental::{
+        Digest, DigestKind, InputComponent, InputComponentStatus, InputSnapshot,
+    };
     use crate::analysis_plan::AnalysisPlan;
     use crate::config::load_config;
     use crate::core::{AnalysisDb, Language};
     use crate::go::semantic::protocol::decode_ndjson_str;
     use std::path::PathBuf;
+
+    #[test]
+    fn lifecycle_identity_uses_canonical_lowercase_status_labels() {
+        for status in [
+            InputComponentStatus::Present,
+            InputComponentStatus::Absent,
+            InputComponentStatus::Unsupported,
+            InputComponentStatus::SetupMissing,
+        ] {
+            let component = InputComponent {
+                name: "go.tool_invocation".to_string(),
+                status,
+                digest: Digest::from_parts(DigestKind::ToolInvocation, "test", &[status.label()]),
+                detail: Vec::new(),
+            };
+            let identity = go_lifecycle_identity_part(&component);
+
+            assert!(identity.contains(&format!(":{}:", status.label())));
+            assert!(!identity.contains(&format!(":{status:?}:")));
+        }
+    }
 
     #[test]
     fn output_identity_uses_only_declared_go_semantic_inputs() {
