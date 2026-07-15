@@ -4198,14 +4198,14 @@ fn read_facts(
 fn preflight_fact_rows(connection: &Connection, generation_id: i64) -> Result<(), ProjectionError> {
     let mut statement = connection.prepare(
         "SELECT ordinal, typeof(ordinal),
-                typeof(family), length(family),
+                typeof(family), length(CAST(family AS BLOB)),
                 typeof(stable_key), length(stable_key), substr(stable_key, 1, ?2),
-                typeof(producer_id), length(producer_id),
-                typeof(producer_layer_key), length(producer_layer_key),
-                typeof(precision), length(precision),
-                typeof(confidence), length(confidence),
-                typeof(validation), length(validation),
-                typeof(payload_digest), length(payload_digest)
+                typeof(producer_id), length(CAST(producer_id AS BLOB)),
+                typeof(producer_layer_key), length(CAST(producer_layer_key AS BLOB)),
+                typeof(precision), length(CAST(precision AS BLOB)),
+                typeof(confidence), length(CAST(confidence AS BLOB)),
+                typeof(validation), length(CAST(validation AS BLOB)),
+                typeof(payload_digest), length(CAST(payload_digest AS BLOB))
          FROM fact_metadata WHERE generation_id = ?1
          ORDER BY ordinal",
     )?;

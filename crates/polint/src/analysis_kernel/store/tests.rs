@@ -2182,22 +2182,60 @@ mod active_complete_reader {
             ),
             (
                 "many-short-rows",
-                "WITH RECURSIVE ordinals(value) AS (
-                     VALUES(1000000)
+                "WITH RECURSIVE offsets(value) AS (
+                     VALUES(0)
                      UNION ALL
-                     SELECT value + 1 FROM ordinals WHERE value < 1249999
+                     SELECT value + 1 FROM offsets WHERE value < 249999
+                 ),
+                 active(generation_id) AS (
+                     SELECT active_generation_id FROM store_manifest WHERE id = 1
+                 ),
+                 first_ordinal(value) AS (
+                     SELECT max(fact_metadata.ordinal) + 1
+                     FROM fact_metadata JOIN active USING (generation_id)
                  )
                  INSERT INTO fact_metadata (
                      generation_id, ordinal, family, stable_key, producer_id,
                      producer_layer_key, precision, confidence, validation, payload_digest
                  )
-                 SELECT source.generation_id, ordinals.value, source.family, x'78',
+                 SELECT source.generation_id, first_ordinal.value + offsets.value,
+                        source.family, x'78',
                         source.producer_id, source.producer_layer_key, source.precision,
                         source.confidence, source.validation, source.payload_digest
-                 FROM fact_metadata AS source CROSS JOIN ordinals
-                 WHERE source.generation_id = (
+                 FROM fact_metadata AS source
+                 CROSS JOIN offsets
+                 CROSS JOIN first_ordinal
+                 JOIN active USING (generation_id)
+                 WHERE source.ordinal = 0;",
+            ),
+            (
+                "multibyte-row-overhead",
+                "WITH RECURSIVE offsets(value) AS (
+                     VALUES(0)
+                     UNION ALL
+                     SELECT value + 1 FROM offsets WHERE value < 2499
+                 ),
+                 active(generation_id) AS (
                      SELECT active_generation_id FROM store_manifest WHERE id = 1
-                 ) AND source.ordinal = 0;",
+                 ),
+                 first_ordinal(value) AS (
+                     SELECT max(fact_metadata.ordinal) + 1
+                     FROM fact_metadata JOIN active USING (generation_id)
+                 )
+                 INSERT INTO fact_metadata (
+                     generation_id, ordinal, family, stable_key, producer_id,
+                     producer_layer_key, precision, confidence, validation, payload_digest
+                 )
+                 SELECT source.generation_id, first_ordinal.value + offsets.value,
+                        source.family, x'78',
+                        replace(hex(zeroblob(4096)), '00', char(128512)),
+                        source.producer_layer_key, source.precision,
+                        source.confidence, source.validation, source.payload_digest
+                 FROM fact_metadata AS source
+                 CROSS JOIN offsets
+                 CROSS JOIN first_ordinal
+                 JOIN active USING (generation_id)
+                 WHERE source.ordinal = 0;",
             ),
         ];
 
