@@ -1,12 +1,14 @@
 ---
 phase: 65-generation-manifest-and-metadata-mirroring
-reviewed: 2026-07-15T08:43:47Z
+reviewed: 2026-07-15T11:02:10Z
 depth: deep
-files_reviewed: 71
+files_reviewed: 75
 files_reviewed_list:
   - Cargo.lock
   - Cargo.toml
   - crates/polint/Cargo.toml
+  - crates/polint/src/analysis/adaptation/discovery.rs
+  - crates/polint/src/analysis/adaptation/mod.rs
   - crates/polint/src/analysis/calls/provider.rs
   - crates/polint/src/analysis/calls/validate.rs
   - crates/polint/src/analysis/cfg/provider.rs
@@ -64,6 +66,8 @@ files_reviewed_list:
   - crates/polint/src/eval/observed.rs
   - crates/polint/src/eval/performance.rs
   - crates/polint/src/go/adapter.rs
+  - crates/polint/src/go/semantic/client.rs
+  - crates/polint/src/go/semantic/process.rs
   - crates/polint/src/go/semantic/provider.rs
   - crates/polint/src/go/tests.rs
   - crates/polint/src/metrics.rs
@@ -77,163 +81,202 @@ files_reviewed_list:
   - tests/fixtures/public-surface-leak-probe/Cargo.lock
 findings:
   critical: 0
-  warning: 9
-  info: 1
-  total: 10
+  warning: 14
+  info: 0
+  total: 14
 status: issues_found
 ---
 
-# Phase 65 Deep Code Review Report
+# Phase 65 Deep Code Re-review Report
 
-**Reviewed:** 2026-07-15T08:43:47Z
-**Depth:** deep, split across three independent reviewers
-**Diff:** `origin/main...68b7fdea`
+**Reviewed:** 2026-07-15T11:02:10Z
+**Depth:** deep, three fresh independent post-fix reviewers
+**Fix range:** `2498f996..f4d86091`
+**Full diff:** `origin/main...f4d86091`
 **Status:** issues found
 
 ## Summary
 
-Three read-only reviewers independently traced the store lifecycle, incremental
-identity/dependency graph, and cross-platform/public integration surfaces. The
-syntax-layer dependency omission was independently found by two reviewers. The
-findings below were then checked against the implementation and the Phase 65
-contracts before entering the fix loop. Previously fixed review findings were
-not reopened.
+The first fix pass resolved all ten original findings and passed `make check`,
+but a fresh adversarial review found fourteen novel defects in the fixes and
+their cross-effects. These findings were independently scoped to the post-fix
+tree and were not present in the prior review/fix report.
 
-## Warning Findings
+## Store Trust Boundary
 
-### WR-05: Active-generation validation does not bind persisted rows to stored identities
+### WR-12: Writer can publish stable keys that its own reader rejects
 
-**Files:** `store/generation.rs:380-416,2966-3067`,
-`store/commit_plan.rs:1164-1225,1811-2035`, `store/mod.rs:243-265`,
-`store/tests.rs:2120-2183`
+**Files:** `analysis_kernel/metadata.rs:608-650,1212-1295`,
+`store/commit_plan.rs:2133-2173`, `store/generation.rs:800-829,2253-2290,4102-4148`
 
-`read_generation_projection` decodes every semantic row, but
-`StoreGenerationStats::from_plan` copies family identities from the generation
-header and `validate_stats` compares those copies back to the same header. A
-same-length mutation such as flipping one hex digit in
-`input_files.source_digest_value` preserves counts and logical JSON bytes, so an
-identical rerun can return `Ready` for altered metadata. Recompute canonical
-family, run, and generation identities from the decoded projection and compare
-them to the stored header/stats. Add same-length mutation coverage across every
-semantic row family; each must return `RebuildNeeded(InvalidMetadata)`.
+Fact finalization and plan validation do not enforce the reader's 256 KiB
+encoded/decoded and 32 MiB aggregate budgets. A first run can publish an active
+generation that the next identical run rejects; very large keys can also reach
+the `u32::try_from(...).expect(...)` panic. Make finalization fallible and apply
+one exact symmetric accounting function before reservation and during reads.
+Test incompressible boundary keys and aggregate overflow, proving no first-run
+`Ready` can become an identical-run rebuild.
 
-### PERF-02: Forged stable-key compression prefixes permit repeated 64 MiB allocations
+### PERF-04: Stable-key guards run after SQLite allocation and omit row overhead
 
-**Files:** `analysis_kernel/metadata.rs:607-795`,
-`store/generation.rs:3008-3010,3070-3082,4093-4135`,
-`store/migrations.rs:441-454`
+**Files:** `store/generation.rs:3079-3091,4124-4128`,
+`analysis_kernel/metadata.rs:659-693`, `store/commit_plan.rs:2139-2144`
 
-`StableFactKey::from_storage` trusts the LZ4 size prefix up to 64 MiB, does not
-require the actual decoded length to equal it, and retains the encoded form.
-Later comparisons, hashing, formatting, and serialization decompress again;
-sorting many small forged rows can amplify this into repeated large allocations.
-The plain branch is unbounded too. Enforce small encoded/decoded per-key limits,
-exact size-prefix equality, and a hard total key budget before collecting rows;
-normalize/decode once. Add forged-prefix, oversized plain/encoded, zero-output,
-and many-row amplification tests with controlled failure.
+`row.get::<_, Vec<u8>>` materializes an arbitrary BLOB before the size check.
+The aggregate budget charges only key bytes, so millions of short rows and their
+other strings can exhaust memory; empty keys consume zero budget. Preflight SQL
+storage type/length before materialization, reject empty keys at decode time,
+and enforce a writer-symmetric row/fixed-overhead budget before collection.
+Add oversized `zeroblob` and many-short-row tests with a seam proving early
+rejection.
 
-### WR-06: `StableFactKey` violates the `Eq`/`Ord` contract
+### WR-13: Input child relationships and declared counts are unauthenticated
 
-**Files:** `analysis_kernel/metadata.rs:542-552,602-604,758-787`,
-`store/generation.rs:4112-4135`, `store/commit_plan.rs:1728-1768`
+**Files:** `store/commit_plan.rs:297-329,963-1046,1543-1558`,
+`store/generation.rs:899-974,2968-3055,3218-3365`,
+`store/migrations.rs:131-190`
 
-Compressed/compressed equality compares encoded bytes while ordering and hashing
-use decoded text. Two valid LZ4 encodings of one string can therefore compare
-equal under `Ord` but unequal under `Eq`, and duplicate semantic facts can evade
-validation. Normalize at the storage boundary or define all three traits over
-one decoded representation. Add trait-law coverage using alternate encodings
-and a store projection test that rejects semantic duplicates.
+Same-width tampering of `input_components.detail_count`,
+`requested_capabilities.requester_count`, or a detail's copied component digest
+can still return `Ready`; active reads do not invoke the SQL child-count audit.
+Validate parent existence, copied digest equality, detail counts, capability
+requester counts, and summary dependency counts in the typed plan and active
+SQL audit. Add child reassignment/count tamper regressions.
 
-### WR-07: Syntax-layer dependencies are incomplete and unauthenticated
+## Provider and Dependency Semantics
 
-**Files:** `go/adapter.rs:201-336`, `ts/adapter.rs:233-375`,
-`incremental/layer_cache.rs:695`, `incremental/run_report.rs:1300-1309`
+### WR-14: Cache write warnings are misclassified as provider failures
 
-Go and TS syntax keys include source, settings, lifecycle, parser-toolchain, and
-parameter identities, but both retained manifests store `Vec::new()`
-dependencies. The persisted dependency graph therefore omits the syntax layer
-nodes entirely. Cache-hit validation also checks only dependency sources, not
-exact destinations/kinds/shapes, so a locally modified current-schema manifest
-can replace dependency truth while retaining a valid payload digest. Build one
-canonical expected edge set from the current key/snapshot, use it on write, and
-require exact equality on read. Pass the canonical settings digest directly
-instead of rehashing its textual value. Add real Go/TS round trips plus missing,
-replaced, and unrelated-edge tests.
+**Files:** `go/adapter.rs:190-210,502-508`, `ts/adapter.rs:222-242`,
+`module_graph/mod.rs:823-838,1303-1318`, `symbol_graph/mod.rs:217-232`,
+`metrics.rs:138-153`, `analysis_kernel/mod.rs:1149-1170`
 
-### WR-08: Failed providers can be persisted as `NativeTrusted`
+Valid in-memory facts and complete layer metadata are discarded solely because
+cache persistence fails, changing semantic identities for a telemetry warning.
+Retain `Succeeded`, the output digest, and layer metadata after write failure;
+keep warning/cache counters separate. Restore five-path metadata parity tests
+and compare provider/run/generation identities.
 
-**Files:** `analysis_kernel/mod.rs:1079-1130` and provider result types/callers
+### WR-15: Non-syntax provider failures collapse to absence before downstream execution
 
-Multiple explicit provider failures return `output_digest: None`, but the kernel
-special-cases only data-flow/evidence. Other `None` values are replaced by a
-digest over remaining rows and labeled `NativeTrusted`; several store-rejection
-paths also return `Some` and are trusted. Carry an explicit typed execution
-outcome (`Skipped`, `Succeeded`, `Failed`) from every provider and never infer
-success from `Option<Digest>`. Persist failures as `provider_failed` and keep
-intentional skips distinct. Add injected provider/store failure round trips.
+**Files:** `analysis_kernel/mod.rs:269-942`, `incremental/stats.rs:104-127`,
+`go/semantic/provider.rs:113-136`, `analysis/cfg/provider.rs:53-65`,
+`symbol_graph/mod.rs:439-444`, `module_graph/mod.rs:470-490`
 
-### WR-09: Production input snapshots certify false model and Go-tool inputs
+Only syntax results use `ProviderOutputDependency`; later failures are converted
+with `unwrap_or_else(Digest::absent)` and downstream layers often hardcode
+`Present`. Thread typed digest+execution status through every provider. Hard
+dependents must skip/fail; deliberate degradation must preserve `Unsupported`
+instead of `Absent`/`Present`. Add failed-vs-skipped chains for Go semantic to
+identity/solver, MIR to CFG, and module graph to symbol/topology.
 
-**Files:** `incremental/input_snapshot.rs:308,355,914`,
-`incremental/run_report.rs:902`, `analysis/semantic_graph/provider.rs:188`
+### WR-16: Solver consumes reachability roots without authenticating them
 
-Every production snapshot records `model.files` as absent even though semantic
-graph discovers and hashes `.polint/models/**`. It records
-`go.tool_invocation` as unsupported even though Go semantic invokes and versions
-the frontend/toolchain. Those false rows enter `RunIdentity`, leaving no true
-typed endpoint for later change-set construction. Share model discovery/digest
-construction with the snapshot and finalize a truthful Go tool identity before
-the run identity is sealed. Cover model add/edit/delete and Go tool/version
-changes, including unlinked-sibling reuse.
+**Files:** `analysis_kernel/mod.rs:711-862`, `analysis/solver/provider.rs:90-103`,
+`analysis/solver/go_rta/inputs.rs:193-203`
 
-### WR-10: Missing language syntax providers are recorded as present upstream layers
+The semantic graph correctly stopped folding unconsumed reachability, but the
+solver directly reads `db.reachability_roots()` and receives no reachability or
+exact Go-root-set digest. Construct Go RTA inputs once and fold a canonical
+sorted-root digest into solver identity. Preserve TS-root stability and add a
+Go-root mutation that changes RTA/solver output.
 
-**Files:** `analysis_kernel/mod.rs:251`, `module_graph/mod.rs:2238`,
-`symbol_graph/mod.rs:949`, `metrics.rs:595`
+### PERF-05: Semantic graph still folds four provider outputs it does not consume
 
-The kernel represents a missing Go or TS syntax output with an absent digest,
-but module graph, symbol graph, and metrics always attach
-`InputComponentStatus::Present`. Preserve availability alongside optional
-outputs and write `Absent` for a missing language. Add Go-only and TS-only store
-round trips proving the sibling changes from absent to present when introduced.
+**Files:** `analysis/semantic_graph/provider.rs:100-110,161-174,305-359`,
+`analysis/semantic_graph/build.rs:111-132`
 
-### WR-11: Go semantic durable identity uses Rust `Debug` spelling
+Identity, abstract domains, entrypoints, and module topology are folded into the
+semantic-graph digest despite no corresponding fact reads. Remove each unused
+input until a read exists and add one identity-stability regression per input.
 
-**File:** `go/semantic/provider.rs:318-329`
+### WR-17: Stable input-status codec repair is incomplete
 
-Lifecycle identity material formats `InputComponentStatus` with `{:?}` even
-though the type has a stable `label()` codec. Use structured digest fields with
-the stable label and cover every canonical lowercase status, proving Rust enum
-variant spelling is absent from durable identity material.
+**Files:** `analysis/provider.rs:274-282`, `analysis/cfg/provider.rs:451-473`,
+`analysis/calls/provider.rs:250-256`, `analysis/domains/provider.rs:242-248`,
+`analysis/entrypoints/provider.rs:158-164`,
+`analysis/semantic_graph/provider.rs:506-512`,
+`analysis/types/cache_key.rs:131-141`, `analysis/extensions/provider.rs:202-207`
 
-### PERF-03: Reachability output invalidates semantic graph without being consumed
+These durable/cache identities still use `{:?}` for `InputComponentStatus`.
+Centralize component identity encoding with `status.label()` and pin every
+status for every provider builder; Rust variant spellings must be absent.
 
-**Files:** `analysis/semantic_graph/provider.rs:446-482`,
-`analysis_kernel/mod.rs:799`
+## Runtime Input and Security Boundaries
 
-The semantic-graph manifest and builder do not read reachability facts, yet its
-output digest is folded solely to over-invalidate. A reachability-roots change
-therefore rotates semantic graph and downstream solver/refinement identities
-while their semantic bytes are unchanged. Remove this dependency until the
-provider actually consumes it and add an identity-stability regression.
+### SEC-01: Predictable shared-temp frontend cache can execute a preseeded binary
 
-## Info Finding
+**File:** `go/semantic/process.rs:227-234,483`
 
-### IN-01: `git diff --check` fails on an extra EOF blank line
+The embedded/source frontend cache uses a predictable shared temporary path and
+trusts `.complete` plus any existing fixed-name executable. Another local user
+can preseed a Linux first-run cache and gain execution. Use a private,
+user-owned, no-symlink cache root with restrictive permissions and verify
+content/provenance on every reuse. Add hostile preseed and symlink fixtures with
+an injected cache root.
 
-**File:** `.planning/phases/65-generation-manifest-and-metadata-mirroring/65-PATTERNS.md:184`
+### SEC-02: Sealed tool identity does not bind the executable actually run
 
-Remove the extra blank line before the green-check pass.
+**Files:** `go/semantic/process.rs:73-104`, `go/semantic/client.rs:74`,
+`analysis_kernel/mod.rs:478`
+
+Preparation hashes a path, seals the snapshot, and later reopens the mutable
+path for execution. Replacing bytes between those steps runs different code
+under the old identity. Copy verified bytes into a private immutable
+content-addressed execution path or retain a safe executable handle. Test
+prepare-A/replace-with-B and prove B cannot execute under A's identity.
+
+### WR-18: Behavior-affecting Go environment is outside identity
+
+**Files:** `go/semantic/process.rs:493`, `go/semantic/client.rs:79`,
+`go-sidecar/polint-go-frontend/internal/semantic/emit.go:98-125,1079`,
+`incremental/input_snapshot.rs:1485`
+
+Build and `packages.Load` inherit `GOOS`, `GOARCH`, `GOFLAGS`, `CGO_ENABLED`,
+and related values, but tool identity records only executable/source/toolchain
+and the environment policy only workspace selection. Sanitize semantic
+modifiers at build/execution or encode an explicitly supported normalized set.
+Add isolated-process identity/behavior tests varying target and flags.
+
+### WR-19: Source-mode cache ignores source/toolchain/target provenance
+
+**File:** `go/semantic/process.rs:479-493`
+
+A fixed cached binary returns before the Go 1.25 check, so source edits,
+toolchain changes, target changes, and even a preexisting Go 1.24 build can be
+accepted. Key/stamp the cache by source digest, supported toolchain, host target,
+and normalized build environment; validate toolchain before lookup. Test source
+edits, target/toolchain changes, and a Go 1.24 preseed.
+
+### PERF-06: Adaptation-model discovery budget does not bound traversal memory
+
+**File:** `analysis/adaptation/discovery.rs:72-106`
+
+Each directory is fully collected and every eligible entry enters a pending map
+before the 32-file content cap is checked. Use a deterministic bounded
+walker/top-k queue plus explicit visited-entry/directory ceilings. Test queue and
+retained-path bounds with a large flat fixture.
+
+### SEC-03: Model no-symlink/root check is check-then-open
+
+**Files:** `analysis/adaptation/discovery.rs:110-143`,
+`repo_fs.rs:129-181,438`
+
+Discovery checks symlink metadata, then later canonicalizes and opens through a
+fresh path operation; swapping a file or ancestor for a symlink/reparse point
+can read outside the repository and expose content through parse diagnostics.
+Use an anchored root descriptor with no-follow semantics and validate/read from
+the same handle. Add a deterministic race-hook test swapping an in-repo model
+for an outside symlink between validation and open.
 
 ## Clean Areas
 
-No additional actionable defect was found in reservation/publication atomicity,
-active-pointer CAS, rollback/failure-event isolation, pinned-reader behavior,
-exact schema-object comparison, provider/query stable-key ordering, public API
-visibility, Cargo/MSRV/dependency changes, privacy boundaries, SARIF/CLI output,
-or the locked performance gate itself.
+The first-pass fixes remain correct for normalized key equality, same-length
+family identity recomputation, exact syntax-edge equality, the explicit outcome
+codec itself, syntax availability, and stable Go lifecycle labels. No supported
+SDK/CLI API widening, Cargo/MSRV defect, or planning whitespace issue was found.
 
 ---
 
-_Reviewed: 2026-07-15T08:43:47Z_
-_Review mode: three independent read-only deep passes, merged and validated by the orchestrator_
+_Reviewed: 2026-07-15T11:02:10Z_
+_Review mode: fresh three-domain post-fix deep review_
