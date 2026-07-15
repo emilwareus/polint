@@ -31,6 +31,55 @@ use crate::analysis_kernel::validation::{
 use crate::analysis_plan::CapabilitySetupStatus;
 use crate::core::CapabilitySupportStatus;
 
+pub(super) const MAX_GENERATION_STORAGE_ROWS: u64 = 1_000_000;
+pub(super) const MAX_GENERATION_STORAGE_BYTES: u64 = 512 * 1024 * 1024;
+pub(super) const GENERATION_STORAGE_ROW_OVERHEAD_BYTES: u64 = 256;
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct GenerationStorageLimits {
+    pub(super) rows: u64,
+    pub(super) bytes: u64,
+}
+
+pub(super) fn generation_storage_limits() -> GenerationStorageLimits {
+    #[cfg(test)]
+    if let Some(limits) = TEST_GENERATION_STORAGE_LIMITS.with(std::cell::Cell::get) {
+        return limits;
+    }
+    GenerationStorageLimits {
+        rows: MAX_GENERATION_STORAGE_ROWS,
+        bytes: MAX_GENERATION_STORAGE_BYTES,
+    }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static TEST_GENERATION_STORAGE_LIMITS: std::cell::Cell<Option<GenerationStorageLimits>> =
+        const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+pub(super) struct GenerationStorageLimitsGuard {
+    prior: Option<GenerationStorageLimits>,
+}
+
+#[cfg(test)]
+impl Drop for GenerationStorageLimitsGuard {
+    fn drop(&mut self) {
+        TEST_GENERATION_STORAGE_LIMITS.with(|limits| limits.set(self.prior));
+    }
+}
+
+#[cfg(test)]
+pub(super) fn override_generation_storage_limits_for_test(
+    rows: u64,
+    bytes: u64,
+) -> GenerationStorageLimitsGuard {
+    let replacement = Some(GenerationStorageLimits { rows, bytes });
+    let prior = TEST_GENERATION_STORAGE_LIMITS.with(|limits| limits.replace(replacement));
+    GenerationStorageLimitsGuard { prior }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct StoreCommitPlan {
     pub(super) semantic: StoreSemanticPlan,
@@ -102,6 +151,10 @@ pub(super) enum StorePlanError {
         family: &'static str,
     },
     InvalidFactStorage,
+    StorageBudgetExceeded {
+        rows: u64,
+        bytes: u64,
+    },
 }
 
 impl fmt::Display for StorePlanError {
@@ -190,6 +243,10 @@ impl fmt::Display for StorePlanError {
             Self::InvalidFactStorage => {
                 formatter.write_str("fact metadata exceeds the stable storage budget")
             }
+            Self::StorageBudgetExceeded { rows, bytes } => write!(
+                formatter,
+                "generation storage exceeds the durable budget ({rows} rows, {bytes} bytes)"
+            ),
         }
     }
 }
@@ -641,7 +698,39 @@ impl StoreCommitPlan {
     }
 
     pub(super) fn validate(&self) -> Result<(), StorePlanError> {
-        self.semantic.validate()
+        self.semantic.validate()?;
+        self.validate_storage_budget(&self.semantic.stats)
+    }
+
+    pub(super) fn validate_storage_budget(
+        &self,
+        stats: &StoreGenerationStats,
+    ) -> Result<(), StorePlanError> {
+        let rows = self
+            .semantic
+            .planned_semantic_row_count()
+            .checked_add(row_count(self.telemetry.len()))
+            .and_then(|rows| rows.checked_add(1))
+            .ok_or(StorePlanError::StorageBudgetExceeded {
+                rows: u64::MAX,
+                bytes: u64::MAX,
+            })?;
+        let bytes = stats
+            .semantic_logical_bytes
+            .checked_add(logical_size(&self.telemetry))
+            .and_then(|bytes| {
+                rows.checked_mul(GENERATION_STORAGE_ROW_OVERHEAD_BYTES)
+                    .and_then(|overhead| bytes.checked_add(overhead))
+            })
+            .ok_or(StorePlanError::StorageBudgetExceeded {
+                rows,
+                bytes: u64::MAX,
+            })?;
+        let limits = generation_storage_limits();
+        if rows > limits.rows || bytes > limits.bytes {
+            return Err(StorePlanError::StorageBudgetExceeded { rows, bytes });
+        }
+        Ok(())
     }
 
     pub(super) fn into_validated(self) -> Result<ValidatedStoreCommitPlan, StorePlanError> {

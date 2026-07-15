@@ -26,24 +26,25 @@ use crate::analysis_kernel::metadata::{
 };
 
 use super::commit_plan::{
-    StoreAnalysisSettingRow, StoreCapabilityRequesterRow, StoreCapabilityRow, StoreCommitPlan,
-    StoreDependencyEdgeRow, StoreDiagnosticRequestedViewRow, StoreDiagnosticRow, StoreFactRow,
-    StoreFileRow, StoreGenerationStats, StoreIdentityRow, StoreInputComponentRow,
-    StoreInputDetailRow, StoreInputSnapshotRow, StoreLayerDependencyRow, StoreLayerExtensionRow,
-    StoreLayerInputRow, StoreLayerRow, StoreLayerWarningRow, StoreNodeRef,
+    GENERATION_STORAGE_ROW_OVERHEAD_BYTES, StoreAnalysisSettingRow, StoreCapabilityRequesterRow,
+    StoreCapabilityRow, StoreCommitPlan, StoreDependencyEdgeRow, StoreDiagnosticRequestedViewRow,
+    StoreDiagnosticRow, StoreFactRow, StoreFileRow, StoreGenerationStats, StoreIdentityRow,
+    StoreInputComponentRow, StoreInputDetailRow, StoreInputSnapshotRow, StoreLayerDependencyRow,
+    StoreLayerExtensionRow, StoreLayerInputRow, StoreLayerRow, StoreLayerWarningRow, StoreNodeRef,
     StoreProviderDependencyRow, StoreProviderGenerationRow, StoreProviderManifestInputRow,
     StoreProviderManifestOutputRow, StoreProviderManifestRow, StoreProviderManifestSchemaRow,
     StoreProviderSchemaRow, StoreProviderSchemaVersionRow, StoreQueryInputRow, StoreQueryLayerRow,
     StoreQueryRow, StoreRunManifestRow, StoreSemanticPlan, StoreSummaryDependencyRow,
     StoreSummaryRow, StoreTelemetryRow, StoreValidationEventRow, ValidatedStoreCommitPlan,
+    generation_storage_limits,
 };
 use super::connection::{self, ConnectionError, ReadOnlyConnection, WriterConnection};
 use super::schema::{
     EncodedInputDependency, GenerationFailureEvent, GenerationFailureReason,
-    GenerationFailureStage, GenerationStatus, SchemaCodecError, decode_analysis_settings_scope,
-    decode_cache_node_kind, decode_cache_policy, decode_capability_setup_status,
-    decode_capability_support_status, decode_dependency_kind, decode_digest,
-    decode_fact_confidence, decode_fact_family, decode_fact_precision,
+    GenerationFailureStage, GenerationStatus, REQUIRED_V2_TABLES, SchemaCodecError,
+    decode_analysis_settings_scope, decode_cache_node_kind, decode_cache_policy,
+    decode_capability_setup_status, decode_capability_support_status, decode_dependency_kind,
+    decode_digest, decode_fact_confidence, decode_fact_family, decode_fact_precision,
     decode_input_component_status, decode_input_dependency, decode_input_group, decode_language,
     decode_language_scope, decode_layer_kind, decode_precision_ceiling, decode_precision_tier,
     decode_provider_kind, decode_provider_validation_status, decode_shape_kind,
@@ -267,6 +268,11 @@ fn commit_generation_inner(
         return (StoreStatus::Disabled, None);
     }
     let mut plan = validated_plan.into_inner();
+    let stats =
+        precomputed_stats.unwrap_or_else(|| StoreGenerationStats::from_plan(&plan.semantic));
+    if plan.validate_storage_budget(&stats).is_err() {
+        return (StoreStatus::Skipped(StoreSkipReason::InvalidPlan), None);
+    }
     record_store_io_attempt();
     if let Err(status) = prepare_store_path(config.path()) {
         return (status, None);
@@ -304,13 +310,7 @@ fn commit_generation_inner(
         interlock.release.wait();
     }
 
-    match publish_generation(
-        &mut writer,
-        &mut plan,
-        &reservation,
-        &control,
-        precomputed_stats,
-    ) {
+    match publish_generation(&mut writer, &mut plan, &reservation, &control, Some(stats)) {
         Ok(stats) => (StoreStatus::Ready, Some(stats)),
         Err(error) => {
             if let Some((reason, stage)) = error.audit {
@@ -346,6 +346,7 @@ pub(super) fn match_active_generation(
     let reader = connection::open_read_only(config.path()).map_err(map_connection_error)?;
     let connection = connection::read_connection(&reader);
     connection::validate_schema(connection).map_err(map_connection_error)?;
+    preflight_store_manifest(connection).map_err(map_read_error)?;
     let manifest = read_manifest(connection).map_err(map_read_error)?;
     let workspace = identities.workspace();
     match manifest.workspace.as_ref() {
@@ -365,6 +366,7 @@ pub(super) fn match_active_generation(
     let Some(active_handle) = manifest.active_generation else {
         return Ok(ActiveGenerationMatch::Different);
     };
+    preflight_generation_header_storage(connection, active_handle).map_err(map_read_error)?;
     let header = read_generation_header(connection, active_handle).map_err(map_read_error)?;
     let failure_count: i64 = connection
         .query_row(
@@ -401,6 +403,7 @@ pub(super) fn validate_active_generation_statistics(
     let mut reader = matched.reader;
     let transaction = connection::begin_read(&mut reader).map_err(map_connection_error)?;
     connection::validate_schema(&transaction).map_err(map_connection_error)?;
+    preflight_store_manifest(&transaction).map_err(map_read_error)?;
     let manifest = read_manifest(&transaction).map_err(map_read_error)?;
     if manifest.workspace.as_ref() != Some(matched.expected_identities.workspace()) {
         return Err(StoreStatus::RebuildNeeded(
@@ -410,6 +413,7 @@ pub(super) fn validate_active_generation_statistics(
     if manifest.active_generation != Some(matched.handle) {
         return Err(StoreStatus::Skipped(StoreSkipReason::StaleReservation));
     }
+    preflight_generation_storage(&transaction, matched.handle).map_err(map_read_error)?;
     let header = read_generation_header(&transaction, matched.handle).map_err(map_read_error)?;
     let failure_count: i64 = transaction
         .query_row(
@@ -474,6 +478,7 @@ fn reserve_generation(
     }
 
     let workspace = &plan.semantic.identities.workspace;
+    preflight_store_manifest(&transaction).map_err(map_reservation_projection_error)?;
     let manifest = read_manifest(&transaction).map_err(map_reservation_projection_error)?;
     let prior_active_generation = match manifest {
         ManifestRow {
@@ -846,6 +851,7 @@ fn validate_written_generation(
     expected_validation_events: &[StoreValidationEventRow],
     stats: &StoreGenerationStats,
 ) -> Result<(), ProjectionError> {
+    preflight_generation_storage(transaction, reservation.handle)?;
     let header = read_generation_header(transaction, reservation.handle)?;
     if header.reservation_ordinal != reservation.reservation_ordinal
         || header.identities != reservation.identities
@@ -3020,6 +3026,7 @@ fn read_active_complete_from_connection(
     workspace: &WorkspaceIdentity,
 ) -> Result<Option<ActiveCompleteGeneration>, ProjectionError> {
     connection::validate_schema(connection).map_err(ProjectionError::Connection)?;
+    preflight_store_manifest(connection)?;
     let manifest = read_manifest(connection)?;
     let Some(bound_workspace) = manifest.workspace else {
         return if manifest.active_generation.is_none() {
@@ -3034,6 +3041,7 @@ fn read_active_complete_from_connection(
     let Some(active_handle) = manifest.active_generation else {
         return Ok(None);
     };
+    preflight_generation_storage(connection, active_handle)?;
     let header = read_generation_header(connection, active_handle)?;
     if header.status != GenerationStatus::Complete || &header.identities.workspace != workspace {
         return Err(ProjectionError::InvalidMetadata);
@@ -3047,6 +3055,178 @@ fn read_active_complete_from_connection(
         return Err(ProjectionError::InvalidMetadata);
     }
     read_generation_projection(connection, active_handle).map(Some)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExpectedSqliteStorage {
+    Integer,
+    Text,
+    Blob,
+}
+
+impl ExpectedSqliteStorage {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Integer => "integer",
+            Self::Text => "text",
+            Self::Blob => "blob",
+        }
+    }
+}
+
+#[derive(Debug)]
+struct StorageColumn {
+    name: String,
+    expected: ExpectedSqliteStorage,
+    nullable: bool,
+}
+
+#[derive(Debug, Default)]
+struct GenerationStorageBudget {
+    rows: u64,
+    bytes: u64,
+}
+
+impl GenerationStorageBudget {
+    fn charge_row(&mut self, dynamic_bytes: u64) -> Result<(), ProjectionError> {
+        self.rows = self
+            .rows
+            .checked_add(1)
+            .ok_or(ProjectionError::InvalidMetadata)?;
+        self.bytes = self
+            .bytes
+            .checked_add(GENERATION_STORAGE_ROW_OVERHEAD_BYTES)
+            .and_then(|bytes| bytes.checked_add(dynamic_bytes))
+            .ok_or(ProjectionError::InvalidMetadata)?;
+        let limits = generation_storage_limits();
+        if self.rows > limits.rows || self.bytes > limits.bytes {
+            return Err(ProjectionError::InvalidMetadata);
+        }
+        Ok(())
+    }
+}
+
+fn preflight_store_manifest(connection: &Connection) -> Result<(), ProjectionError> {
+    let mut budget = GenerationStorageBudget::default();
+    preflight_storage_table(connection, "store_manifest", "id", 1, &mut budget)
+}
+
+fn preflight_generation_header_storage(
+    connection: &Connection,
+    generation_id: i64,
+) -> Result<(), ProjectionError> {
+    let mut budget = GenerationStorageBudget::default();
+    preflight_storage_table(connection, "generations", "id", generation_id, &mut budget)
+}
+
+fn preflight_generation_storage(
+    connection: &Connection,
+    generation_id: i64,
+) -> Result<(), ProjectionError> {
+    let mut budget = GenerationStorageBudget::default();
+    for table in REQUIRED_V2_TABLES {
+        if table == "store_manifest" {
+            continue;
+        }
+        let selector = if table == "generations" {
+            "id"
+        } else {
+            "generation_id"
+        };
+        preflight_storage_table(connection, table, selector, generation_id, &mut budget)?;
+    }
+    preflight_fact_rows(connection, generation_id)
+}
+
+fn preflight_storage_table(
+    connection: &Connection,
+    table: &str,
+    selector: &str,
+    selector_value: i64,
+    budget: &mut GenerationStorageBudget,
+) -> Result<(), ProjectionError> {
+    let quoted_table = quote_schema_identifier(table)?;
+    let quoted_selector = quote_schema_identifier(selector)?;
+    let columns = storage_columns(connection, table, &quoted_table)?;
+    if columns.is_empty() {
+        return Err(ProjectionError::InvalidMetadata);
+    }
+    let projection = columns
+        .iter()
+        .map(|column| {
+            let quoted = quote_schema_identifier(&column.name)?;
+            Ok(format!("typeof({quoted}), length(CAST({quoted} AS BLOB))"))
+        })
+        .collect::<Result<Vec<_>, ProjectionError>>()?
+        .join(", ");
+    let sql = format!("SELECT {projection} FROM {quoted_table} WHERE {quoted_selector} = ?1");
+    let mut statement = connection.prepare(&sql)?;
+    let mut rows = statement.query([selector_value])?;
+    while let Some(row) = rows.next()? {
+        let mut dynamic_bytes = 0_u64;
+        for (ordinal, column) in columns.iter().enumerate() {
+            let storage: String = row.get(ordinal * 2)?;
+            let length: Option<i64> = row.get(ordinal * 2 + 1)?;
+            if storage == "null" {
+                if !column.nullable || length.is_some() {
+                    return Err(ProjectionError::InvalidMetadata);
+                }
+                continue;
+            }
+            if storage != column.expected.label() {
+                return Err(ProjectionError::InvalidMetadata);
+            }
+            let length = length.ok_or(ProjectionError::InvalidMetadata)?;
+            let length = u64::try_from(length).map_err(|_| ProjectionError::InvalidMetadata)?;
+            dynamic_bytes = dynamic_bytes
+                .checked_add(length)
+                .ok_or(ProjectionError::InvalidMetadata)?;
+        }
+        budget.charge_row(dynamic_bytes)?;
+    }
+    Ok(())
+}
+
+fn storage_columns(
+    connection: &Connection,
+    table: &str,
+    quoted_table: &str,
+) -> Result<Vec<StorageColumn>, ProjectionError> {
+    let mut statement = connection.prepare(&format!("PRAGMA table_info({quoted_table})"))?;
+    let mut rows = statement.query([])?;
+    let mut columns = Vec::new();
+    while let Some(row) = rows.next()? {
+        let name: String = row.get(1)?;
+        let declared_type: String = row.get(2)?;
+        let not_null: i64 = row.get(3)?;
+        let primary_key: i64 = row.get(5)?;
+        let expected = if table == "fact_metadata" && name == "stable_key" {
+            ExpectedSqliteStorage::Blob
+        } else {
+            match declared_type.as_str() {
+                "INTEGER" => ExpectedSqliteStorage::Integer,
+                "TEXT" => ExpectedSqliteStorage::Text,
+                _ => return Err(ProjectionError::InvalidMetadata),
+            }
+        };
+        columns.push(StorageColumn {
+            name,
+            expected,
+            nullable: not_null == 0 && primary_key == 0,
+        });
+    }
+    Ok(columns)
+}
+
+fn quote_schema_identifier(identifier: &str) -> Result<String, ProjectionError> {
+    if identifier.is_empty()
+        || !identifier
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    {
+        return Err(ProjectionError::InvalidMetadata);
+    }
+    Ok(format!("\"{identifier}\""))
 }
 
 fn read_generation_projection(
@@ -3173,9 +3353,34 @@ fn query_rows<T>(
     let mut rows = statement.query([generation_id])?;
     let mut decoded = Vec::new();
     while let Some(row) = rows.next()? {
+        #[cfg(test)]
+        record_projection_row_decode_materialization_for_test();
         decoded.push(decode(row)?);
     }
     Ok(decoded)
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static PROJECTION_ROW_DECODE_MATERIALIZATIONS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn record_projection_row_decode_materialization_for_test() {
+    PROJECTION_ROW_DECODE_MATERIALIZATIONS.with(|materializations| {
+        materializations.set(materializations.get().saturating_add(1));
+    });
+}
+
+#[cfg(test)]
+pub(super) fn reset_projection_row_decode_materializations_for_test() {
+    PROJECTION_ROW_DECODE_MATERIALIZATIONS.with(|materializations| materializations.set(0));
+}
+
+#[cfg(test)]
+pub(super) fn projection_row_decode_materializations_for_test() -> usize {
+    PROJECTION_ROW_DECODE_MATERIALIZATIONS.with(std::cell::Cell::get)
 }
 
 fn to_dependency_edge(
@@ -4190,7 +4395,6 @@ fn read_facts(
     connection: &Connection,
     generation_id: i64,
 ) -> Result<Vec<StoreFactRow>, ProjectionError> {
-    preflight_fact_rows(connection, generation_id)?;
     let mut rows = query_rows(
         connection,
         "SELECT ordinal, family, stable_key, producer_id, producer_layer_key,

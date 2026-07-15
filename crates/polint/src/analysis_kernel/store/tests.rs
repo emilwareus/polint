@@ -9,6 +9,7 @@ use crate::analysis_kernel::{AnalysisKernel, KernelInput};
 use crate::analysis_plan::AnalysisPlan;
 use crate::cache::Cache;
 use crate::config::load_config;
+use rusqlite::Connection;
 
 struct GenerationFinalizedFixture {
     report: crate::analysis_kernel::incremental::KernelRunReport,
@@ -1153,6 +1154,163 @@ fn identical_generation_validation_rechecks_the_active_pointer_in_its_transactio
         generation::validate_active_generation_statistics(matched),
         Err(StoreStatus::Skipped(StoreSkipReason::StaleReservation))
     );
+}
+
+#[test]
+fn active_preflight_rejects_oversized_non_fact_text_before_row_decode() {
+    let temp = tempfile::tempdir().expect("temporary store root");
+    let validated =
+        generation_validated_fixture(&temp.path().join("repo"), "oversized-provider-metadata");
+    let config = generation_store_config(temp.path());
+    assert_eq!(
+        SemanticStore::commit_validated_run(&config, validated.clone()).status,
+        StoreStatus::Ready
+    );
+    let oversized = "x".repeat(4 * 1024 * 1024);
+    let database = Connection::open(config.path()).expect("open store");
+    let changed = database
+        .execute(
+            "UPDATE provider_manifests SET provider_version = ?1
+             WHERE rowid = (
+                 SELECT rowid FROM provider_manifests
+                 WHERE generation_id = (
+                     SELECT active_generation_id FROM store_manifest WHERE id = 1
+                 ) ORDER BY provider_id LIMIT 1
+             )",
+            [&oversized],
+        )
+        .expect("tamper provider metadata");
+    assert_eq!(changed, 1);
+    let (storage, length): (String, i64) = database
+        .query_row(
+            "SELECT typeof(provider_version), length(CAST(provider_version AS BLOB))
+             FROM provider_manifests
+             WHERE generation_id = (
+                 SELECT active_generation_id FROM store_manifest WHERE id = 1
+             ) ORDER BY provider_id LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("inspect tampered value");
+    assert_eq!(storage, "text");
+    assert_eq!(length, 4 * 1024 * 1024);
+    drop(database);
+
+    let _limits = commit_plan::override_generation_storage_limits_for_test(
+        commit_plan::MAX_GENERATION_STORAGE_ROWS,
+        1024 * 1024,
+    );
+    generation::reset_projection_row_decode_materializations_for_test();
+    let result = generation::read_active_complete(&config, validated.identities().workspace());
+
+    assert_eq!(
+        result,
+        Err(StoreStatus::RebuildNeeded(
+            StoreRebuildReason::InvalidMetadata
+        ))
+    );
+    assert_eq!(
+        generation::projection_row_decode_materializations_for_test(),
+        0
+    );
+}
+
+#[test]
+fn active_preflight_rejects_many_short_non_fact_rows_before_row_decode() {
+    let temp = tempfile::tempdir().expect("temporary store root");
+    let validated = generation_validated_fixture(&temp.path().join("repo"), "many-provider-inputs");
+    let config = generation_store_config(temp.path());
+    assert_eq!(
+        SemanticStore::commit_validated_run(&config, validated.clone()).status,
+        StoreStatus::Ready
+    );
+    let database = Connection::open(config.path()).expect("open store");
+    database
+        .execute_batch(
+            "WITH RECURSIVE sequence(value) AS (
+                 SELECT 1
+                 UNION ALL SELECT value + 1 FROM sequence WHERE value < 2048
+             )
+             INSERT INTO provider_manifest_inputs (generation_id, provider_id, input_name)
+             SELECT parent.generation_id, parent.provider_id,
+                    printf('tampered-input-%06d', sequence.value)
+             FROM (
+                 SELECT generation_id, provider_id FROM provider_manifests
+                 WHERE generation_id = (
+                     SELECT active_generation_id FROM store_manifest WHERE id = 1
+                 ) ORDER BY provider_id LIMIT 1
+             ) AS parent
+             CROSS JOIN sequence;",
+        )
+        .expect("insert many short provider inputs");
+    let inserted: i64 = database
+        .query_row(
+            "SELECT count(*) FROM provider_manifest_inputs
+             WHERE input_name LIKE 'tampered-input-%'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count inserted rows");
+    assert_eq!(inserted, 2048);
+    drop(database);
+
+    let _limits = commit_plan::override_generation_storage_limits_for_test(
+        1_000,
+        commit_plan::MAX_GENERATION_STORAGE_BYTES,
+    );
+    generation::reset_projection_row_decode_materializations_for_test();
+    let result = generation::read_active_complete(&config, validated.identities().workspace());
+
+    assert_eq!(
+        result,
+        Err(StoreStatus::RebuildNeeded(
+            StoreRebuildReason::InvalidMetadata
+        ))
+    );
+    assert_eq!(
+        generation::projection_row_decode_materializations_for_test(),
+        0
+    );
+}
+
+#[test]
+fn writer_applies_the_same_generation_row_budget_before_store_io() {
+    let temp = tempfile::tempdir().expect("temporary store root");
+    let validated = generation_validated_fixture(&temp.path().join("repo"), "writer-row-budget");
+    let config = generation_store_config(temp.path());
+    let _limits = commit_plan::override_generation_storage_limits_for_test(
+        1,
+        commit_plan::MAX_GENERATION_STORAGE_BYTES,
+    );
+
+    let outcome = SemanticStore::commit_validated_run(&config, validated);
+
+    assert_eq!(
+        outcome.status,
+        StoreStatus::Skipped(StoreSkipReason::InvalidPlan)
+    );
+    assert_eq!(outcome.statistics, None);
+    assert!(!config.path().exists());
+}
+
+#[test]
+fn writer_applies_the_same_generation_byte_budget_before_store_io() {
+    let temp = tempfile::tempdir().expect("temporary store root");
+    let validated = generation_validated_fixture(&temp.path().join("repo"), "writer-byte-budget");
+    let config = generation_store_config(temp.path());
+    let _limits = commit_plan::override_generation_storage_limits_for_test(
+        commit_plan::MAX_GENERATION_STORAGE_ROWS,
+        1,
+    );
+
+    let outcome = SemanticStore::commit_validated_run(&config, validated);
+
+    assert_eq!(
+        outcome.status,
+        StoreStatus::Skipped(StoreSkipReason::InvalidPlan)
+    );
+    assert_eq!(outcome.statistics, None);
+    assert!(!config.path().exists());
 }
 
 #[test]
