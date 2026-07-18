@@ -498,6 +498,11 @@ pub(crate) fn run_kernel_for_repo_with_plan_for_test(
     repo_root: &Path,
     plan: &AnalysisPlan,
 ) -> anyhow::Result<crate::analysis_kernel::KernelOutput> {
+    let _go_semantic_scope = if AnalysisKernel::plan_runs_go_semantic_for_test(plan) {
+        acquire_fixture_go_semantic_scope_for_test(repo_root)?
+    } else {
+        None
+    };
     let loaded = load_config(repo_root)?;
     let config_digest = config_hash(&loaded);
     let rule_digest = rule_hash(&[], None, &BTreeMap::new());

@@ -93,10 +93,13 @@ thread_local! {
     > = const { std::cell::RefCell::new(None) };
 }
 #[cfg(test)]
-// An in-flight population occupies both a live staging slot and a reservation
-// until publication. Keep parallel fixture runs within the same conservative
-// accounting bound used by the shared default cache.
-const TEST_GO_SEMANTIC_MAX_CONCURRENCY: usize = GO_DEPENDENCY_MAX_PUBLISHED_SNAPSHOTS.div_ceil(2);
+// Functional fixture budgets measure wall time. Run one default-cache semantic
+// analysis at a time so concurrent Go frontend CPU and I/O contention is not
+// charged to the active fixture; this is also stricter than the shared cache's
+// retention accounting bound.
+const TEST_GO_SEMANTIC_MAX_CONCURRENCY: usize = 1;
+#[cfg(test)]
+const TEST_GO_SEMANTIC_SCOPE_WAIT_TIMEOUT: Duration = Duration::from_secs(45 * 60);
 
 #[cfg(test)]
 #[derive(Debug)]
@@ -144,8 +147,9 @@ pub(crate) struct TestGoSemanticConcurrencyScope {
 #[cfg(test)]
 pub(crate) fn acquire_test_go_semantic_concurrency_scope()
 -> Result<TestGoSemanticConcurrencyScope, GoSemanticProcessError> {
-    let permit =
-        TestGoSemanticConcurrencyPermit::acquire(GoOperationDeadline::after(GO_OPERATION_TIMEOUT))?;
+    let permit = TestGoSemanticConcurrencyPermit::acquire(GoOperationDeadline::after(
+        TEST_GO_SEMANTIC_SCOPE_WAIT_TIMEOUT,
+    ))?;
     let previous = TEST_GO_SEMANTIC_SCOPED_PERMIT.with(|slot| slot.replace(Some(permit)));
     Ok(TestGoSemanticConcurrencyScope {
         previous,

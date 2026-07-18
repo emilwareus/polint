@@ -111,10 +111,11 @@ reported findings:
 - Performance evidence uses same-host paired measurements, absolute RSS
   high-water values, authentic generated scale, and nonzero-boundary checks.
   Zero raw deltas remain informational rather than fabricated measurements.
-- The shared default Go cache is coordinated only in tests that execute the
-  semantic pipeline. Coordination wait happens before fixture runtime timing,
-  nested frontend preparation reuses the same permit, and the dependency lease
-  drops before the shared slot is released.
+- Tests execute one shared-default-cache Go semantic analysis at a time.
+  Coordination wait happens before fixture runtime timing, nested frontend
+  preparation reuses the same permit, direct kernel callers acquire the same
+  outer scope, and the dependency lease drops before the shared slot is
+  released.
 - The refined-call functional fixture now uses a portable 30-second envelope,
   matching its sibling. Strict speed contracts remain in the separate,
   serialized `performance-gate` profile.
@@ -140,6 +141,8 @@ no remaining concrete bug, security issue, or API-boundary finding.
   production behavior test failed.
 - The refined-call regression passed under CI's
   `CARGO_PROFILE_TEST_DEBUG=0` profile after the timing fix.
+- Seven parallel direct-call fixture tests passed with expensive semantic runs
+  serialized outside their measured intervals (7/7 in 286.86 seconds).
 - The default-parallel determinism gate passed twice consecutively: 13 tests
   per run, including both Go fixtures and ten seeded permutations.
 - Focused Go frontend/process, Go RTA, persistent-store, provider-chain,

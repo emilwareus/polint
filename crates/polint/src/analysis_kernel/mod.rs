@@ -540,6 +540,17 @@ impl AnalysisKernel {
         );
 
         let mut db = crate::fs::load_analysis_files_scoped(input.loaded, rule_scope.as_ref())?;
+        #[cfg(test)]
+        let _test_go_semantic_scope = if run_full_refinement_pipeline
+            && db
+                .files()
+                .iter()
+                .any(|file| file.language == crate::core::Language::Go)
+        {
+            Some(crate::go::semantic::process::acquire_test_go_semantic_concurrency_scope()?)
+        } else {
+            None
+        };
         // Source-load summary: the corpus actually read into memory is the dominant
         // memory cost on large repos, so log its size/shape when info tracing is on.
         // Guarded by `enabled!` so it costs nothing in normal (un-instrumented) runs.
