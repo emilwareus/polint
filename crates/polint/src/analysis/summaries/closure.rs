@@ -284,7 +284,7 @@ fn process_recursive_scc(
         iteration += 1;
         let mut any_changed = false;
 
-        // Process members in deterministic order (sorted by stable_key per D-17)
+        // Process members in deterministic order sorted by stable key.
         for &func_id in &scc.members {
             let callee_info = collect_callee_info(db, func_id);
 

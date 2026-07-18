@@ -15,10 +15,23 @@ pub(crate) const BASELINE_SCHEMA_VERSION: &str = "polint-eval-baseline-0";
 /// store-disabled baseline is its own artifact kind with its own shape, so
 /// evolving it must never touch the shared `EvalBaseline` schema constant
 /// (whose `validate()` asserts exact equality).
-pub(crate) const STORE_DISABLED_BASELINE_SCHEMA_VERSION: &str = "polint-store-disabled-baseline-0";
+pub(crate) const STORE_DISABLED_BASELINE_SCHEMA_VERSION: &str = "polint-store-disabled-baseline-1";
+pub(crate) const STORE_DISABLED_BASELINE_RESULT_KIND: &str = "polint_baseline_run";
+/// Canonical POSIX-shell reproduction command. On Windows this is directly
+/// runnable from Git Bash; the baseline policy also documents equivalent
+/// PowerShell environment assignment.
+pub(crate) const STORE_DISABLED_BASELINE_GENERATION_COMMAND: &str = "CARGO_PROFILE_TEST_DEBUG=0 POLINT_WRITE_STORE_DISABLED_BASELINE=1 cargo test -p polint --lib --all-features --locked eval::baseline::tests::regenerate_committed_store_disabled_baselines -- --exact";
+pub(crate) const STORE_DISABLED_BASELINE_LIMITATION: &str = "Numeric measurements are historical and informational unless the complete recorded measurement context exactly matches the comparison environment.";
+const STORE_DISABLED_BASELINE_METRICS: &[&str] = &[
+    "peak_rss_bytes",
+    "peak_rss_delta_bytes",
+    "cold_wall_clock_ms",
+    "warm_wall_clock_ms",
+    "diagnostics_digest",
+];
 
 /// The committed pre-store reference baseline for a `polint check` / `polint
-/// review` run (BENCH-02).
+/// review` run.
 ///
 /// This baseline is the fixed pre-store reference that
 /// `evaluate_regression_budget` compares against: it records the
@@ -27,9 +40,15 @@ pub(crate) const STORE_DISABLED_BASELINE_SCHEMA_VERSION: &str = "polint-store-di
 /// diagnostics-parity marker — the store must not change the diagnostics polint
 /// emits, and this digest is what a later run asserts is unchanged.
 ///
+/// Committed files carry the context needed to reproduce the fixture and
+/// understand a measurement. Their numeric values remain historical and
+/// informational unless every recorded environment/build field exactly matches
+/// the comparison run. Same-host paired controls are the portable blocking
+/// overhead comparison.
+///
 /// This is intentionally a SEPARATE type from [`EvalBaseline`]: its shape is a
-/// hard dependency of Plan 04 and must not drift with the accuracy-oriented
-/// `EvalBaseline`.
+/// dedicated wire contract and must not drift with the accuracy-oriented
+/// [`EvalBaseline`].
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) struct StoreDisabledBaseline {
@@ -38,20 +57,20 @@ pub(crate) struct StoreDisabledBaseline {
     /// rejects a hand-edited `false`.
     pub(crate) store_disabled: bool,
     /// Stable repo/fixture identifier the baseline was measured against — never
-    /// an absolute host path (threat T-63-03-03).
+    /// an absolute host path.
     pub(crate) repo_id: String,
     /// Suite/command context (e.g. the check vs review command marker).
     pub(crate) suite_id: String,
-    /// Real OS peak RSS in bytes (from `getrusage`): the process-wide monotonic
-    /// high-water mark. Reporting/reference only — the regression gate compares
-    /// `peak_rss_delta_bytes`, which is not confounded by the host process's own
-    /// allocations.
+    /// Real OS peak RSS in bytes from the platform process-memory API
+    /// (`getrusage` on Unix and `K32GetProcessMemoryInfo` on Windows): the
+    /// process-wide monotonic high-water mark. Historical artifacts retain it
+    /// as context; portable same-host paired gates compare isolated absolute
+    /// peaks directly.
     pub(crate) peak_rss_bytes: u64,
     /// Run-attributable peak-RSS growth in bytes (the delta above the pre-run
-    /// high-water mark). This is the confound-free metric the regression gate
-    /// compares against. Serde-defaulted so a baseline
-    /// serialized before this field existed still deserializes.
-    #[serde(default)]
+    /// high-water mark). A completed run can legitimately report zero when
+    /// process startup established the high-water mark. The dedicated schema
+    /// requires the field to be present explicitly for historical evidence.
     pub(crate) peak_rss_delta_bytes: u64,
     /// Cold (first-run) wall-clock in milliseconds.
     pub(crate) cold_wall_clock_ms: u64,
@@ -62,11 +81,229 @@ pub(crate) struct StoreDisabledBaseline {
     /// This is the whole-repo CHECK-scoped digest (the FNV hash over the sorted
     /// diagnostics of a `polint check`-equivalent kernel run), for BOTH the check
     /// and review baselines: `polint review` reuses the same check analysis here,
-    /// so its parity marker is the same check digest, not a diff-scoped subset
-    /// (LW-08). A store measurement that computes a digest to feed
+    /// so its parity marker is the same check digest, not a diff-scoped subset.
+    /// A store measurement that computes a digest to feed
     /// `evaluate_regression_budget` MUST therefore supply a check-scoped digest
     /// (or `None`); a review-scoped subset would spuriously fail the parity check.
     pub(crate) diagnostics_digest: String,
+    /// Reproduction and portability context required for committed artifacts.
+    /// In-memory same-host controls do not serialize and leave this unset;
+    /// [`Self::validate`] rejects an unset context on load/write.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) measurement_context: Option<StoreDisabledMeasurementContext>,
+}
+
+/// Complete reproduction context for a committed store-disabled measurement.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) struct StoreDisabledMeasurementContext {
+    pub(crate) fixture_version: String,
+    pub(crate) fixture_digest: String,
+    pub(crate) product_name: String,
+    pub(crate) product_version: String,
+    pub(crate) product_source_revision: String,
+    pub(crate) source_tree_dirty: bool,
+    pub(crate) result_kind: String,
+    pub(crate) generation_command: String,
+    pub(crate) config_path: String,
+    pub(crate) artifact_path: String,
+    pub(crate) build_profile: String,
+    pub(crate) all_features: bool,
+    pub(crate) locked: bool,
+    pub(crate) cargo_profile_test_debug: String,
+    pub(crate) target_os: String,
+    pub(crate) target_arch: String,
+    pub(crate) rustc_version: String,
+    pub(crate) cargo_version: String,
+    pub(crate) metric_names: Vec<String>,
+    pub(crate) limitations: Vec<String>,
+}
+
+#[cfg(test)]
+fn clean_product_source_revision(workspace_root: &Path) -> anyhow::Result<String> {
+    let revision = std::process::Command::new("git")
+        .current_dir(workspace_root)
+        .args(["rev-parse", "HEAD"])
+        .output()?;
+    anyhow::ensure!(
+        revision.status.success(),
+        "git rev-parse HEAD failed: {}",
+        String::from_utf8_lossy(&revision.stderr)
+    );
+    let revision = String::from_utf8(revision.stdout)?.trim().to_string();
+    anyhow::ensure!(
+        !revision.is_empty(),
+        "git rev-parse HEAD returned no identity"
+    );
+
+    let status = std::process::Command::new("git")
+        .current_dir(workspace_root)
+        .args(["status", "--porcelain", "--untracked-files=all"])
+        .output()?;
+    anyhow::ensure!(
+        status.status.success(),
+        "git status failed: {}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    anyhow::ensure!(
+        status.stdout.is_empty(),
+        "commit, stash, or remove tracked and untracked source changes before regenerating baselines"
+    );
+    Ok(revision)
+}
+
+impl StoreDisabledMeasurementContext {
+    fn validate(&self, suite_id: &str) -> anyhow::Result<()> {
+        for (field, value) in [
+            ("fixture_version", self.fixture_version.as_str()),
+            ("fixture_digest", self.fixture_digest.as_str()),
+            ("product_version", self.product_version.as_str()),
+            (
+                "product_source_revision",
+                self.product_source_revision.as_str(),
+            ),
+            ("artifact_path", self.artifact_path.as_str()),
+            ("target_os", self.target_os.as_str()),
+            ("target_arch", self.target_arch.as_str()),
+            ("rustc_version", self.rustc_version.as_str()),
+            ("cargo_version", self.cargo_version.as_str()),
+        ] {
+            anyhow::ensure!(!value.trim().is_empty(), "{field} must not be empty");
+        }
+        anyhow::ensure!(
+            self.fixture_version == "polint-tiny-fixture-1",
+            "fixture_version must be `polint-tiny-fixture-1`"
+        );
+        anyhow::ensure!(
+            self.fixture_digest.len() == 16
+                && self
+                    .fixture_digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit()),
+            "fixture_digest must be a 16-character hexadecimal stable hash"
+        );
+        anyhow::ensure!(
+            self.product_name == "polint",
+            "product_name must be `polint`"
+        );
+        anyhow::ensure!(
+            self.result_kind == STORE_DISABLED_BASELINE_RESULT_KIND,
+            "result_kind must be `{STORE_DISABLED_BASELINE_RESULT_KIND}`"
+        );
+        anyhow::ensure!(
+            self.generation_command == STORE_DISABLED_BASELINE_GENERATION_COMMAND,
+            "generation_command does not match the canonical command"
+        );
+        anyhow::ensure!(
+            self.config_path == "<default-config>",
+            "config_path must identify the fixture's default config"
+        );
+        anyhow::ensure!(self.build_profile == "test", "build_profile must be `test`");
+        anyhow::ensure!(self.all_features, "all_features must be true");
+        anyhow::ensure!(self.locked, "locked must be true");
+        anyhow::ensure!(
+            !self.source_tree_dirty,
+            "source_tree_dirty must be false for a reproducible committed baseline"
+        );
+        anyhow::ensure!(
+            self.cargo_profile_test_debug == "0",
+            "cargo_profile_test_debug must be `0`"
+        );
+        let expected_artifact = match suite_id {
+            "polint-tiny-fixture-check" => {
+                "research/evaluation-harness/baselines/store-disabled-check.json"
+            }
+            "polint-tiny-fixture-review" => {
+                "research/evaluation-harness/baselines/store-disabled-review.json"
+            }
+            _ => anyhow::bail!("unsupported committed store-disabled suite `{suite_id}`"),
+        };
+        anyhow::ensure!(
+            self.artifact_path == expected_artifact,
+            "artifact_path `{}` does not match suite `{suite_id}`",
+            self.artifact_path
+        );
+        let metrics = self
+            .metric_names
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        anyhow::ensure!(
+            metrics.as_slice() == STORE_DISABLED_BASELINE_METRICS,
+            "metric_names must match the committed baseline metric contract"
+        );
+        anyhow::ensure!(
+            self.limitations.len() == 1
+                && self.limitations[0] == STORE_DISABLED_BASELINE_LIMITATION,
+            "limitations must state the numeric portability boundary"
+        );
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn capture(
+        workspace_root: &Path,
+        fixture_version: impl Into<String>,
+        fixture_digest: impl Into<String>,
+        artifact_path: impl Into<String>,
+    ) -> anyhow::Result<Self> {
+        fn command_output(
+            program: &str,
+            args: &[&str],
+            current_dir: Option<&Path>,
+        ) -> anyhow::Result<String> {
+            let mut command = std::process::Command::new(program);
+            command.args(args);
+            if let Some(current_dir) = current_dir {
+                command.current_dir(current_dir);
+            }
+            let output = command.output()?;
+            anyhow::ensure!(
+                output.status.success(),
+                "{program} {args:?} failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let value = String::from_utf8(output.stdout)?.trim().to_string();
+            anyhow::ensure!(!value.is_empty(), "{program} {args:?} returned no identity");
+            Ok(value)
+        }
+
+        anyhow::ensure!(
+            std::env::var("CARGO_PROFILE_TEST_DEBUG").as_deref() == Ok("0"),
+            "regeneration requires CARGO_PROFILE_TEST_DEBUG=0"
+        );
+        anyhow::ensure!(
+            cfg!(feature = "bench"),
+            "regeneration requires --all-features"
+        );
+        let product_source_revision = clean_product_source_revision(workspace_root)?;
+
+        Ok(Self {
+            fixture_version: fixture_version.into(),
+            fixture_digest: fixture_digest.into(),
+            product_name: "polint".to_string(),
+            product_version: env!("CARGO_PKG_VERSION").to_string(),
+            product_source_revision,
+            source_tree_dirty: false,
+            result_kind: STORE_DISABLED_BASELINE_RESULT_KIND.to_string(),
+            generation_command: STORE_DISABLED_BASELINE_GENERATION_COMMAND.to_string(),
+            config_path: "<default-config>".to_string(),
+            artifact_path: artifact_path.into(),
+            build_profile: "test".to_string(),
+            all_features: true,
+            locked: true,
+            cargo_profile_test_debug: "0".to_string(),
+            target_os: std::env::consts::OS.to_string(),
+            target_arch: std::env::consts::ARCH.to_string(),
+            rustc_version: command_output("rustc", &["--version", "--verbose"], None)?,
+            cargo_version: command_output("cargo", &["--version", "--verbose"], None)?,
+            metric_names: STORE_DISABLED_BASELINE_METRICS
+                .iter()
+                .map(|metric| (*metric).to_string())
+                .collect(),
+            limitations: vec![STORE_DISABLED_BASELINE_LIMITATION.to_string()],
+        })
+    }
 }
 
 impl StoreDisabledBaseline {
@@ -88,12 +325,19 @@ impl StoreDisabledBaseline {
             cold_wall_clock_ms: point.cold_wall_clock_ms,
             warm_wall_clock_ms: point.warm_wall_clock_ms,
             diagnostics_digest: diagnostics_digest.into(),
+            measurement_context: None,
         }
+    }
+
+    #[cfg(test)]
+    fn with_measurement_context(mut self, context: StoreDisabledMeasurementContext) -> Self {
+        self.measurement_context = Some(context);
+        self
     }
 
     /// Enforce the store-disabled baseline invariants: its own schema constant,
     /// the pre-store marker, and a non-empty repo/suite/digest. A hand-edited or
-    /// incomplete committed file fails this (threat T-63-03-01).
+    /// incomplete committed file fails this validation.
     pub(crate) fn validate(&self) -> anyhow::Result<()> {
         anyhow::ensure!(
             self.schema_version == STORE_DISABLED_BASELINE_SCHEMA_VERSION,
@@ -113,6 +357,18 @@ impl StoreDisabledBaseline {
             !self.diagnostics_digest.trim().is_empty(),
             "diagnostics_digest (parity marker) must not be empty"
         );
+        anyhow::ensure!(
+            self.peak_rss_bytes != 0,
+            "peak_rss_bytes must contain a successful absolute RSS measurement"
+        );
+        anyhow::ensure!(
+            self.cold_wall_clock_ms != 0,
+            "cold_wall_clock_ms must contain an available cold-run measurement"
+        );
+        self.measurement_context
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("measurement_context must be present"))?
+            .validate(&self.suite_id)?;
         Ok(())
     }
 
@@ -193,15 +449,13 @@ impl EvalBaseline {
 }
 
 /// A store-enabled run may use at most +20% peak RSS versus the store-disabled
-/// baseline. Revisable only with a recorded
-/// decision — a silent edit here fails the default-value test (threat
-/// T-63-04-01).
+/// baseline. Revisable only with a recorded decision — a silent edit here fails
+/// the default-value test.
 pub(crate) const DEFAULT_MAX_PEAK_RSS_RATIO: f64 = 1.20;
 
 /// A store-enabled run may use at most +25% cold wall-clock versus the
-/// store-disabled baseline. Revisable only
-/// with a recorded decision — a silent edit here fails the default-value test
-/// (threat T-63-04-01).
+/// store-disabled baseline. Revisable only with a recorded decision — a silent
+/// edit here fails the default-value test.
 pub(crate) const DEFAULT_MAX_COLD_WALL_CLOCK_RATIO: f64 = 1.25;
 
 fn default_max_peak_rss_ratio() -> f64 {
@@ -568,9 +822,8 @@ mod tests {
 
     #[test]
     fn baseline_thresholds_carry_locked_regression_budgets() {
-        // The locked +20% peak-RSS and +25% cold-wall-clock budgets
-        // (REQUIREMENTS.md Locked release Decisions, D). These are exact:
-        // a silent loosening fails this assertion (threat T-63-04-01).
+        // These locked +20% peak-RSS and +25% cold-wall-clock budgets are exact:
+        // a silent loosening fails this assertion.
         let thresholds = BaselineThresholds::default();
         assert_eq!(thresholds.max_peak_rss_ratio, 1.20);
         assert_eq!(thresholds.max_cold_wall_clock_ratio, 1.25);
@@ -583,7 +836,7 @@ mod tests {
     fn baseline_thresholds_deserialize_without_the_new_ratio_fields() {
         // A thresholds document serialized before the peak-RSS / cold-wall-clock
         // fields existed must still deserialize, defaulting to the locked budgets.
-        let legacy = r#"{
+        let prior_schema = r#"{
             "max_precision_drop": 0.02,
             "max_recall_drop": 0.02,
             "warn_runtime_overhead_ratio": 1.10,
@@ -593,7 +846,7 @@ mod tests {
             "max_cache_miss_delta": 0,
             "max_rejected_fact_delta": 0
         }"#;
-        let thresholds: BaselineThresholds = serde_json::from_str(legacy).unwrap();
+        let thresholds: BaselineThresholds = serde_json::from_str(prior_schema).unwrap();
         assert_eq!(thresholds.max_peak_rss_ratio, 1.20);
         assert_eq!(thresholds.max_cold_wall_clock_ratio, 1.25);
     }
@@ -624,6 +877,74 @@ mod tests {
         }
     }
 
+    fn sample_measurement_context(artifact_path: &str) -> StoreDisabledMeasurementContext {
+        StoreDisabledMeasurementContext {
+            fixture_version: "polint-tiny-fixture-1".to_string(),
+            fixture_digest: "0123456789abcdef".to_string(),
+            product_name: "polint".to_string(),
+            product_version: "0.1.17".to_string(),
+            product_source_revision: "0123456789abcdef".to_string(),
+            source_tree_dirty: false,
+            result_kind: STORE_DISABLED_BASELINE_RESULT_KIND.to_string(),
+            generation_command: STORE_DISABLED_BASELINE_GENERATION_COMMAND.to_string(),
+            config_path: "<default-config>".to_string(),
+            artifact_path: artifact_path.to_string(),
+            build_profile: "test".to_string(),
+            all_features: true,
+            locked: true,
+            cargo_profile_test_debug: "0".to_string(),
+            target_os: "linux".to_string(),
+            target_arch: "x86_64".to_string(),
+            rustc_version: "rustc 1.95.0".to_string(),
+            cargo_version: "cargo 1.95.0".to_string(),
+            metric_names: STORE_DISABLED_BASELINE_METRICS
+                .iter()
+                .map(|metric| (*metric).to_string())
+                .collect(),
+            limitations: vec![STORE_DISABLED_BASELINE_LIMITATION.to_string()],
+        }
+    }
+
+    #[test]
+    fn baseline_provenance_rejects_untracked_source_inputs() {
+        if !std::process::Command::new("git")
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success())
+        {
+            return;
+        }
+
+        let repo = tempfile::tempdir().expect("provenance repository");
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .current_dir(repo.path())
+                .args(args)
+                .output()
+                .expect("git provenance fixture command");
+            assert!(
+                output.status.success(),
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["init", "--quiet"]);
+        git(&["config", "user.email", "t@example.com"]);
+        git(&["config", "user.name", "Test"]);
+        git(&["config", "commit.gpgsign", "false"]);
+        std::fs::write(repo.path().join("tracked.rs"), "fn tracked() {}\n")
+            .expect("write tracked source");
+        git(&["add", "tracked.rs"]);
+        git(&["commit", "--quiet", "-m", "base"]);
+
+        clean_product_source_revision(repo.path()).expect("committed fixture starts clean");
+        std::fs::write(repo.path().join("untracked.rs"), "fn untracked() {}\n")
+            .expect("write untracked source");
+        let error = clean_product_source_revision(repo.path())
+            .expect_err("untracked source must invalidate baseline provenance");
+        assert!(error.to_string().contains("tracked and untracked"));
+    }
+
     #[test]
     fn store_disabled_baseline_round_trips_and_validates() {
         let temp = tempfile::tempdir().unwrap();
@@ -634,7 +955,10 @@ mod tests {
             "polint-tiny-fixture-check",
             &point,
             "abc123digest",
-        );
+        )
+        .with_measurement_context(sample_measurement_context(
+            "research/evaluation-harness/baselines/store-disabled-check.json",
+        ));
 
         baseline.write(&path).unwrap();
         let loaded = StoreDisabledBaseline::load(&path).unwrap();
@@ -659,16 +983,110 @@ mod tests {
     #[test]
     fn store_disabled_baseline_validate_rejects_tampering() {
         let point = sample_curve_point();
+        let valid = StoreDisabledBaseline::from_curve_point(
+            "polint-tiny-fixture",
+            "polint-tiny-fixture-check",
+            &point,
+            "digest",
+        )
+        .with_measurement_context(sample_measurement_context(
+            "research/evaluation-harness/baselines/store-disabled-check.json",
+        ));
+        valid.validate().expect("sample baseline must be valid");
+
         // store_disabled hand-edited to false must fail validation.
-        let mut tampered =
-            StoreDisabledBaseline::from_curve_point("repo", "suite", &point, "digest");
+        let mut tampered = valid.clone();
         tampered.store_disabled = false;
-        assert!(tampered.validate().is_err());
+        assert!(
+            tampered
+                .validate()
+                .expect_err("false store marker must fail")
+                .to_string()
+                .contains("store_disabled must be true")
+        );
 
         // Empty parity digest must fail validation.
-        let mut empty_digest = StoreDisabledBaseline::from_curve_point("repo", "suite", &point, "");
-        empty_digest.store_disabled = true;
-        assert!(empty_digest.validate().is_err());
+        let mut empty_digest = valid;
+        empty_digest.diagnostics_digest.clear();
+        assert!(
+            empty_digest
+                .validate()
+                .expect_err("empty parity digest must fail")
+                .to_string()
+                .contains("diagnostics_digest")
+        );
+
+        let mut wrong_command = StoreDisabledBaseline::from_curve_point(
+            "polint-tiny-fixture",
+            "polint-tiny-fixture-check",
+            &point,
+            "digest",
+        )
+        .with_measurement_context(sample_measurement_context(
+            "research/evaluation-harness/baselines/store-disabled-check.json",
+        ));
+        wrong_command
+            .measurement_context
+            .as_mut()
+            .expect("sample context")
+            .generation_command = "cargo test".to_string();
+        assert!(wrong_command.validate().is_err());
+
+        let mut zero_absolute_rss = StoreDisabledBaseline::from_curve_point(
+            "polint-tiny-fixture",
+            "polint-tiny-fixture-check",
+            &point,
+            "digest",
+        )
+        .with_measurement_context(sample_measurement_context(
+            "research/evaluation-harness/baselines/store-disabled-check.json",
+        ));
+        zero_absolute_rss.peak_rss_bytes = 0;
+        assert!(zero_absolute_rss.validate().is_err());
+
+        let mut zero_delta_rss = StoreDisabledBaseline::from_curve_point(
+            "polint-tiny-fixture",
+            "polint-tiny-fixture-check",
+            &point,
+            "digest",
+        )
+        .with_measurement_context(sample_measurement_context(
+            "research/evaluation-harness/baselines/store-disabled-check.json",
+        ));
+        zero_delta_rss.peak_rss_delta_bytes = 0;
+        assert!(zero_delta_rss.validate().is_ok());
+
+        let mut zero_cold_time = StoreDisabledBaseline::from_curve_point(
+            "polint-tiny-fixture",
+            "polint-tiny-fixture-check",
+            &point,
+            "digest",
+        )
+        .with_measurement_context(sample_measurement_context(
+            "research/evaluation-harness/baselines/store-disabled-check.json",
+        ));
+        zero_cold_time.cold_wall_clock_ms = 0;
+        assert!(zero_cold_time.validate().is_err());
+    }
+
+    #[test]
+    fn store_disabled_baseline_requires_the_rss_delta_field() {
+        let baseline = StoreDisabledBaseline::from_curve_point(
+            "polint-tiny-fixture",
+            "polint-tiny-fixture-check",
+            &sample_curve_point(),
+            "digest",
+        )
+        .with_measurement_context(sample_measurement_context(
+            "research/evaluation-harness/baselines/store-disabled-check.json",
+        ));
+        let mut value = serde_json::to_value(baseline).expect("serialize sample baseline");
+        value
+            .as_object_mut()
+            .expect("baseline serializes as an object")
+            .remove("peak_rss_delta_bytes");
+
+        assert!(serde_json::from_value::<StoreDisabledBaseline>(value).is_err());
     }
 
     #[test]
@@ -688,8 +1106,7 @@ mod tests {
                 !baseline.diagnostics_digest.trim().is_empty(),
                 "committed baseline {name} must carry a non-empty diagnostics_digest"
             );
-            // No absolute host paths may leak into a committed artifact
-            // (threat T-63-03-03).
+            // No absolute host paths may leak into a committed artifact.
             let raw = std::fs::read_to_string(&path).unwrap();
             assert!(
                 !raw.contains("/Users/"),
@@ -705,8 +1122,10 @@ mod tests {
     /// to refresh the committed reference:
     ///
     /// ```text
-    /// POLINT_WRITE_STORE_DISABLED_BASELINE=1 cargo test -p polint --lib \
-    ///   eval::baseline::tests::regenerate_committed_store_disabled_baselines --exact
+    /// CARGO_PROFILE_TEST_DEBUG=0 POLINT_WRITE_STORE_DISABLED_BASELINE=1 \
+    ///   cargo test -p polint --lib --all-features --locked \
+    ///   eval::baseline::tests::regenerate_committed_store_disabled_baselines \
+    ///   -- --exact
     /// ```
     #[test]
     fn regenerate_committed_store_disabled_baselines() {
@@ -714,80 +1133,60 @@ mod tests {
             return;
         }
         use crate::eval::bench::runner::{
+            STORE_DISABLED_FIXTURE_CHECK_SUITE_ID, STORE_DISABLED_FIXTURE_REPO_ID,
+            STORE_DISABLED_FIXTURE_REVIEW_SUITE_ID, STORE_DISABLED_FIXTURE_VERSION,
             diagnostics_digest_for_repo, run_repo_perf_point_isolated,
+            store_disabled_fixture_digest, write_store_disabled_fixture,
         };
-        use std::process::Command;
 
         let temp = tempfile::tempdir().unwrap();
         let dir = temp.path();
-        let git = |args: &[&str]| {
-            let out = Command::new("git")
-                .current_dir(dir)
-                .args(args)
-                .output()
-                .expect("git invocation");
-            assert!(out.status.success(), "git {args:?} failed");
-        };
-        git(&["init", "--quiet"]);
-        git(&["config", "user.email", "t@example.com"]);
-        git(&["config", "user.name", "Test"]);
-        git(&["config", "commit.gpgsign", "false"]);
-        std::fs::create_dir_all(dir.join("src")).unwrap();
-        std::fs::write(
-            dir.join("src/router.go"),
-            "package app\n\nfunc handle() { helper() }\n\nfunc helper() { println(1) }\n",
-        )
-        .unwrap();
-        std::fs::write(
-            dir.join("src/util.ts"),
-            "export function add(a: number, b: number): number {\n  return a + b;\n}\n",
-        )
-        .unwrap();
-        git(&["add", "-A"]);
-        git(&["commit", "--quiet", "-m", "base"]);
-        let base = {
-            let out = Command::new("git")
-                .current_dir(dir)
-                .args(["rev-parse", "HEAD"])
-                .output()
-                .unwrap();
-            String::from_utf8_lossy(&out.stdout).trim().to_string()
-        };
-        std::fs::write(
-            dir.join("src/util.ts"),
-            "export function add(a: number, b: number): number {\n  return a + b + 0;\n}\n",
-        )
-        .unwrap();
-        git(&["add", "-A"]);
-        git(&["commit", "--quiet", "-m", "change"]);
+        let base = write_store_disabled_fixture(dir).expect("write committed fixture");
 
         // The digest run is in-process (it reads diagnostics, not RSS), so its
         // saturation of this process's peak-RSS high-water mark does not matter.
-        // Each perf point, by contrast, is measured in its OWN fresh child so its
-        // `peak_rss_delta_bytes` is run-attributable and order-independent rather
-        // than a shared-process artifact — the review point in particular must
-        // not collapse to allocator jitter just because it ran after check
-        // (HI-01R). A measured run fed to the gate must use the same
-        // `run_repo_perf_point_isolated` isolation.
+        // Each perf point, by contrast, is measured in its own fresh child so
+        // both the absolute high-water mark and raw run delta have an isolated,
+        // order-independent process context. The delta can still legitimately
+        // be zero when child startup established the higher peak.
         let digest = diagnostics_digest_for_repo(dir).unwrap();
         let check_point = run_repo_perf_point_isolated(dir, None).unwrap();
         let review_point = run_repo_perf_point_isolated(dir, Some(&base)).unwrap();
 
-        let out_dir = workspace_root().join("research/evaluation-harness/baselines");
+        let root = workspace_root();
+        let out_dir = root.join("research/evaluation-harness/baselines");
+        let fixture_digest = store_disabled_fixture_digest();
+        let check_artifact = "research/evaluation-harness/baselines/store-disabled-check.json";
+        let review_artifact = "research/evaluation-harness/baselines/store-disabled-review.json";
+        let check_context = StoreDisabledMeasurementContext::capture(
+            &root,
+            STORE_DISABLED_FIXTURE_VERSION,
+            &fixture_digest,
+            check_artifact,
+        )
+        .unwrap();
+        let review_context = StoreDisabledMeasurementContext::capture(
+            &root,
+            STORE_DISABLED_FIXTURE_VERSION,
+            fixture_digest,
+            review_artifact,
+        )
+        .unwrap();
         StoreDisabledBaseline::from_curve_point(
-            "polint-tiny-fixture",
-            "polint-tiny-fixture-check",
+            STORE_DISABLED_FIXTURE_REPO_ID,
+            STORE_DISABLED_FIXTURE_CHECK_SUITE_ID,
             &check_point,
             digest.clone(),
         )
+        .with_measurement_context(check_context)
         .write(&out_dir.join("store-disabled-check.json"))
         .unwrap();
         StoreDisabledBaseline::from_curve_point(
-            "polint-tiny-fixture",
-            "polint-tiny-fixture-review",
+            STORE_DISABLED_FIXTURE_REPO_ID,
+            STORE_DISABLED_FIXTURE_REVIEW_SUITE_ID,
             &review_point,
-            // Intentionally the whole-repo CHECK digest, not a review-scoped one
-            // (LW-08). `diagnostics_digest_for_repo` only runs `run_check_kernel`;
+            // Intentionally the whole-repo CHECK digest, not a review-scoped one.
+            // `diagnostics_digest_for_repo` only runs `run_check_kernel`;
             // no review-scoped digest function exists, and a `polint review`
             // reuses the same check analysis (the diff gate is a cheap
             // reporting-layer filter over the same diagnostics). This baseline
@@ -797,6 +1196,7 @@ mod tests {
             // Fail; the field doc on `diagnostics_digest` records this contract.
             digest,
         )
+        .with_measurement_context(review_context)
         .write(&out_dir.join("store-disabled-review.json"))
         .unwrap();
     }

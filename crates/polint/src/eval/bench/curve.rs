@@ -64,13 +64,13 @@ pub(crate) struct CurvePoint {
     /// Warm (second-run) wall-clock in milliseconds.
     pub(crate) warm_wall_clock_ms: u64,
     /// Real OS peak RSS in bytes (from `getrusage`): the process-wide monotonic
-    /// high-water mark. Reporting only — the regression gate compares
-    /// `peak_rss_delta_bytes`, which is not confounded by allocations made by
-    /// whatever process hosts the measurement.
+    /// high-water mark. Portable same-host paired gates compare this value only
+    /// when each mode runs in an otherwise-identical isolated child.
     pub(crate) peak_rss_bytes: u64,
     /// Run-attributable peak-RSS growth in bytes (the delta above the pre-run
-    /// high-water mark). This is the confound-free metric the regression gate
-    /// compares. Serde-defaulted so a curve serialized before this field existed
+    /// high-water mark). This can legitimately be zero when process startup
+    /// established the higher peak, so paired gates retain it as informational
+    /// evidence. Serde-defaulted so a curve serialized before this field existed
     /// still deserializes.
     #[serde(default)]
     pub(crate) peak_rss_delta_bytes: u64,

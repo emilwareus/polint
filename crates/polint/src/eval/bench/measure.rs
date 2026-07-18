@@ -1,4 +1,4 @@
-//! OS peak-RSS capture and cold/warm wall-clock timing (BENCH-01).
+//! OS peak-RSS capture and cold/warm wall-clock timing.
 //!
 //! Populates the real measurement that `RuntimeStatsSummary.peak_rss_bytes`
 //! (see `crate::eval::performance`) has always declared but never set in
@@ -117,26 +117,53 @@ pub(crate) struct TimedRun {
     /// Peak RSS (bytes) observed immediately after the run completed.
     pub(crate) peak_rss_bytes: u64,
     /// Peak-RSS delta (bytes) versus the high-water mark captured before the run
-    /// started. Because `ru_maxrss` is a monotonic high-water mark, this is the
-    /// additional peak the run itself is responsible for (0 if it never exceeded
-    /// the pre-existing high-water mark).
+    /// started. Because `ru_maxrss` is a monotonic high-water mark, this records
+    /// only growth beyond the pre-existing mark and can be zero even when the run
+    /// itself uses substantial memory.
     pub(crate) peak_rss_delta_bytes: u64,
 }
 
 impl TimedRun {
     /// Execute `run` once, capturing wall-clock elapsed and the peak-RSS delta.
-    pub(crate) fn measure<F: FnMut()>(mut run: F) -> Self {
-        let baseline_peak = peak_rss_bytes();
-        let start = Instant::now();
-        run();
-        let elapsed_ms = start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
-        let peak = peak_rss_bytes();
-        Self {
+    pub(crate) fn measure(run: impl FnOnce()) -> Self {
+        measure_output(run).0
+    }
+
+    /// Combine independently measured cold and warm runs without requiring
+    /// either run's output to stay alive during the other run.
+    pub(crate) fn cold_then_warm(cold: Self, warm: Self) -> ColdWarm {
+        ColdWarm {
+            cold_ms: cold.elapsed_ms,
+            warm_ms: warm.elapsed_ms,
+            peak_rss_bytes: cold.peak_rss_bytes.max(warm.peak_rss_bytes),
+            peak_rss_delta_bytes: cold.peak_rss_delta_bytes.max(warm.peak_rss_delta_bytes),
+        }
+    }
+}
+
+/// Execute one closure and return both its timing and its output.
+///
+/// Keeping the timing primitive generic lets callers inspect or project the
+/// first output and drop it before starting a second measurement. This matters
+/// for peak-RSS measurements: retaining a complete cold analysis database while
+/// measuring a warm run would measure two live databases rather than one run.
+pub(crate) fn measure_output<T>(run: impl FnOnce() -> T) -> (TimedRun, T) {
+    let baseline_peak = peak_rss_bytes();
+    let start = Instant::now();
+    let output = run();
+    // Milliseconds are the public measurement unit. A completed sub-millisecond
+    // run is still a real observation, so quantize it to one instead of using
+    // zero as an ambiguous ratio denominator.
+    let elapsed_ms = (start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64).max(1);
+    let peak = peak_rss_bytes();
+    (
+        TimedRun {
             elapsed_ms,
             peak_rss_bytes: peak,
             peak_rss_delta_bytes: peak.saturating_sub(baseline_peak),
-        }
-    }
+        },
+        output,
+    )
 }
 
 /// Cold-then-warm measurement of a repeatable closure. The closure is executed
@@ -147,31 +174,25 @@ pub(crate) struct ColdWarm {
     pub(crate) cold_ms: u64,
     pub(crate) warm_ms: u64,
     /// Absolute peak RSS (bytes): the process-wide, monotonic high-water mark
-    /// after the warm run. Because it is whole-process (not attributable to this
-    /// run), it is kept for reporting only and MUST NOT be the gated metric.
+    /// after the warm run. Same-host gates may compare this value when each mode
+    /// runs in an otherwise-identical isolated child; measurements made in
+    /// unlike process contexts are not directly comparable.
     pub(crate) peak_rss_bytes: u64,
-    /// Run-attributable peak-RSS growth (bytes): the larger of the two per-run
-    /// deltas above the high-water mark that existed before each run. This is
-    /// the confound-free metric the regression gate compares — the absolute peak
-    /// also reflects allocations made by whatever process hosts the measurement.
+    /// Raw peak-RSS growth (bytes): the larger of the two per-run deltas above
+    /// the high-water mark that existed before each run. This can legitimately
+    /// be zero when process startup established a higher earlier peak, so paired
+    /// same-host gates retain it as evidence rather than switching their blocking
+    /// policy based on whether it happens to be non-zero.
     pub(crate) peak_rss_delta_bytes: u64,
 }
 
 /// Run `run` twice and report cold (first) and warm (second) wall-clock millis,
-/// the absolute overall peak RSS (reporting), and the run-attributable peak-RSS
-/// delta (the gated metric).
+/// the absolute overall peak RSS, and the raw peak-RSS growth beyond each run's
+/// pre-existing process high-water mark.
 pub(crate) fn cold_then_warm<F: FnMut()>(mut run: F) -> ColdWarm {
     let cold = TimedRun::measure(&mut run);
     let warm = TimedRun::measure(&mut run);
-    ColdWarm {
-        cold_ms: cold.elapsed_ms,
-        warm_ms: warm.elapsed_ms,
-        // Absolute mark is monotonic; the warm reading is the overall peak.
-        // Reporting only — not tautological `max()` since the delta below is the
-        // run-attributable value the gate actually compares.
-        peak_rss_bytes: warm.peak_rss_bytes,
-        peak_rss_delta_bytes: warm.peak_rss_delta_bytes.max(cold.peak_rss_delta_bytes),
-    }
+    TimedRun::cold_then_warm(cold, warm)
 }
 
 #[cfg(test)]
@@ -195,6 +216,15 @@ mod tests {
             std::hint::black_box(&v);
         });
         assert!(run.peak_rss_bytes > 0);
+    }
+
+    #[test]
+    fn measure_output_returns_the_closure_value() {
+        let (timing, output) = measure_output(|| String::from("measured"));
+
+        assert_eq!(output, "measured");
+        assert!(timing.elapsed_ms >= 1);
+        assert!(timing.peak_rss_bytes > 0);
     }
 
     #[test]

@@ -47,6 +47,39 @@ pub(crate) fn current_schema_is_valid_for_test(path: &Path) -> bool {
     connection::current_schema_is_valid_for_test(path)
 }
 
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SemanticStoreBoundaryFingerprint {
+    pub(crate) generation_count: u64,
+    pub(crate) input_file_count: u64,
+    pub(crate) input_file_counts_by_language: Vec<(String, u64)>,
+    pub(crate) provider_generation_count: u64,
+    pub(crate) layer_count: u64,
+    pub(crate) summary_count: u64,
+    pub(crate) query_count: u64,
+    pub(crate) fact_count: u64,
+    pub(crate) diagnostic_count: u64,
+    pub(crate) dependency_edge_count: u64,
+    pub(crate) validation_event_count: u64,
+    pub(crate) planned_semantic_row_count: u64,
+    pub(crate) stable_fact_storage_bytes: u64,
+    pub(crate) stable_fact_storage_limit_bytes: u64,
+    pub(crate) fact_logical_bytes: u64,
+    pub(crate) semantic_logical_bytes: u64,
+    pub(crate) function_counts_by_provider: Vec<(String, u64)>,
+    pub(crate) fact_counts_by_family: Vec<(String, u64)>,
+    pub(crate) fact_counts_by_provider: Vec<(String, u64)>,
+    pub(crate) canonical_fact_digest: String,
+    pub(crate) canonical_generation_digest: String,
+}
+
+#[cfg(test)]
+pub(crate) fn boundary_fingerprint_for_test(
+    path: &Path,
+) -> Result<SemanticStoreBoundaryFingerprint, ()> {
+    generation::boundary_fingerprint_for_test(path)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct StoreConfig {
     path: PathBuf,
@@ -248,12 +281,18 @@ impl SemanticStore {
             ) {
                 Ok(generation::ActiveGenerationMatch::Identical(matched)) => {
                     // An identity match has no publication fallback: invalid
-                    // persisted rows return RebuildNeeded. Release the newly
-                    // produced handoff before decoding the complete active
-                    // projection so both validated representations do not
-                    // coexist at peak size.
-                    drop(validated);
-                    return match generation::validate_active_generation_statistics(matched) {
+                    // persisted rows return RebuildNeeded. Normalize the fresh,
+                    // already-validated handoff and compare the durable rows to
+                    // it one family at a time so a second complete projection is
+                    // never materialized.
+                    record_plan_materialization();
+                    let plan =
+                        match commit_plan::StoreCommitPlan::from_owned_validated_run(validated) {
+                            Ok(plan) => plan,
+                            Err(_) => return StoreOutcome::invalid_metadata(),
+                        };
+                    return match generation::validate_active_generation_against_plan(matched, plan)
+                    {
                         Ok(statistics) => StoreOutcome {
                             status: StoreStatus::Ready,
                             statistics: Some(statistics),

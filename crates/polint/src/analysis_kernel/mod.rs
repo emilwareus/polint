@@ -36,7 +36,7 @@ pub(crate) use provider::{
     SchemaVersion,
 };
 #[cfg(test)]
-pub(crate) use store::StoreStatus;
+pub(crate) use store::{SemanticStoreBoundaryFingerprint, StoreStatus};
 
 /// Capabilities that require whole-repo discovery even when the deep semantic
 /// pipeline is skipped. Resolved imports, module graph, symbols, and references
@@ -72,6 +72,327 @@ const FULL_REFINEMENT_PIPELINE_TRIGGER_CAPABILITIES: &[&str] =
 /// Capabilities that need the data-flow and evidence projections. Reachability
 /// and same-function control-flow policies do not consume these facts.
 const DATA_FLOW_PIPELINE_TRIGGER_CAPABILITIES: &[&str] = &["dataflow"];
+const GO_REPOSITORY_CACHE_ROOTS_SETUP_MISSING_REASON: &str =
+    "repository cache roots could not be certified for Go analysis";
+
+/// Direct provider dependencies in runtime execution order. Late fact
+/// validation uses this graph to revoke trust from outputs that were already
+/// derived from a provider whose facts subsequently failed validation.
+/// Absence-tolerant language inputs still appear here: deliberate absence does
+/// not seed revocation, but an executed provider that fails validation must
+/// invalidate every trusted consumer of its output.
+const RUNTIME_PROVIDER_DEPENDENCIES: &[(&str, &[&str])] = &[
+    ("polint.source", &[]),
+    ("polint.go.syntax", &["polint.source"]),
+    ("polint.ts.syntax", &["polint.source"]),
+    (
+        "polint.module_graph",
+        &["polint.go.syntax", "polint.ts.syntax"],
+    ),
+    (
+        "polint.symbol_graph",
+        &[
+            "polint.module_graph",
+            "polint.go.syntax",
+            "polint.ts.syntax",
+        ],
+    ),
+    (
+        "polint.module_topology",
+        &["polint.module_graph", "polint.symbol_graph"],
+    ),
+    (
+        "polint.semantic_mir",
+        &[
+            "polint.module_topology",
+            "polint.symbol_graph",
+            "polint.go.syntax",
+            "polint.ts.syntax",
+        ],
+    ),
+    (
+        "polint.cfg",
+        &[
+            "polint.semantic_mir",
+            "polint.go.syntax",
+            "polint.ts.syntax",
+        ],
+    ),
+    (
+        "polint.calls",
+        &[
+            "polint.semantic_mir",
+            "polint.cfg",
+            "polint.symbol_graph",
+            "polint.module_topology",
+            "polint.go.syntax",
+            "polint.ts.syntax",
+        ],
+    ),
+    ("polint.go.semantic", &["polint.go.syntax"]),
+    ("polint.identity", &["polint.calls", "polint.go.semantic"]),
+    (
+        "polint.abstract_domains",
+        &[
+            "polint.semantic_mir",
+            "polint.cfg",
+            "polint.calls",
+            "polint.symbol_graph",
+            "polint.module_topology",
+            "polint.go.syntax",
+            "polint.ts.syntax",
+        ],
+    ),
+    (
+        "polint.direct_summaries",
+        &[
+            "polint.semantic_mir",
+            "polint.cfg",
+            "polint.calls",
+            "polint.abstract_domains",
+            "polint.symbol_graph",
+            "polint.module_topology",
+            "polint.go.syntax",
+            "polint.ts.syntax",
+        ],
+    ),
+    (
+        "polint.entrypoints",
+        &[
+            "polint.semantic_mir",
+            "polint.cfg",
+            "polint.calls",
+            "polint.symbol_graph",
+            "polint.module_topology",
+            "polint.go.syntax",
+            "polint.ts.syntax",
+        ],
+    ),
+    (
+        "polint.reachability",
+        &[
+            "polint.calls",
+            "polint.entrypoints",
+            "polint.identity",
+            "polint.symbol_graph",
+            "polint.module_topology",
+        ],
+    ),
+    (
+        "polint.extensions",
+        &[
+            "polint.symbol_graph",
+            "polint.entrypoints",
+            "polint.go.syntax",
+            "polint.ts.syntax",
+        ],
+    ),
+    (
+        "polint.type_value_alias",
+        &[
+            "polint.semantic_mir",
+            "polint.cfg",
+            "polint.calls",
+            "polint.abstract_domains",
+            "polint.direct_summaries",
+            "polint.entrypoints",
+            "polint.extensions",
+            "polint.symbol_graph",
+            "polint.module_topology",
+            "polint.go.syntax",
+            "polint.ts.syntax",
+        ],
+    ),
+    (
+        "polint.semantic_graph",
+        &[
+            "polint.calls",
+            "polint.type_value_alias",
+            "polint.symbol_graph",
+            "polint.semantic_mir",
+            "polint.go.semantic",
+            "polint.go.syntax",
+            "polint.ts.syntax",
+        ],
+    ),
+    (
+        "polint.solver",
+        &[
+            "polint.semantic_graph",
+            "polint.type_value_alias",
+            "polint.reachability",
+            "polint.go.semantic",
+        ],
+    ),
+    (
+        "polint.refined_calls",
+        &[
+            "polint.calls",
+            "polint.entrypoints",
+            "polint.direct_summaries",
+            "polint.type_value_alias",
+            "polint.extensions",
+            "polint.solver",
+        ],
+    ),
+    (
+        "polint.data_flow",
+        &[
+            "polint.semantic_mir",
+            "polint.cfg",
+            "polint.calls",
+            "polint.refined_calls",
+            "polint.direct_summaries",
+            "polint.type_value_alias",
+            "polint.entrypoints",
+            "polint.extensions",
+        ],
+    ),
+    (
+        "polint.evidence",
+        &[
+            "polint.semantic_mir",
+            "polint.cfg",
+            "polint.calls",
+            "polint.refined_calls",
+            "polint.direct_summaries",
+            "polint.type_value_alias",
+            "polint.entrypoints",
+            "polint.extensions",
+            "polint.data_flow",
+        ],
+    ),
+    ("polint.metrics", &["polint.go.syntax", "polint.ts.syntax"]),
+];
+
+#[derive(Clone, Copy)]
+enum ValidationProviderScope {
+    Providers(&'static [&'static str]),
+    AllExecuted,
+}
+
+/// Provider outputs directly authenticated by each validation stage. Stages
+/// whose diagnostics do not retain an exact producer identity fail all
+/// executed providers closed; the runtime dependency graph then propagates
+/// provider-specific failures to trusted consumers.
+const VALIDATION_PROVIDER_SCOPES: &[(validation::ValidationEventKind, ValidationProviderScope)] = &[
+    (
+        validation::ValidationEventKind::MissingMetadata,
+        ValidationProviderScope::AllExecuted,
+    ),
+    (
+        validation::ValidationEventKind::StableKeyConflicts,
+        ValidationProviderScope::AllExecuted,
+    ),
+    (
+        validation::ValidationEventKind::References,
+        ValidationProviderScope::AllExecuted,
+    ),
+    (
+        validation::ValidationEventKind::Spans,
+        ValidationProviderScope::AllExecuted,
+    ),
+    (
+        validation::ValidationEventKind::SemanticIndex,
+        ValidationProviderScope::Providers(&["polint.symbol_graph"]),
+    ),
+    (
+        validation::ValidationEventKind::TopologyFacts,
+        ValidationProviderScope::Providers(&["polint.module_graph", "polint.module_topology"]),
+    ),
+    (
+        validation::ValidationEventKind::SemanticMir,
+        ValidationProviderScope::Providers(&["polint.semantic_mir"]),
+    ),
+    (
+        validation::ValidationEventKind::Cfg,
+        ValidationProviderScope::Providers(&["polint.cfg"]),
+    ),
+    (
+        validation::ValidationEventKind::Calls,
+        ValidationProviderScope::Providers(&["polint.calls"]),
+    ),
+    (
+        validation::ValidationEventKind::Identity,
+        ValidationProviderScope::Providers(&["polint.identity"]),
+    ),
+    (
+        validation::ValidationEventKind::AbstractDomains,
+        ValidationProviderScope::Providers(&["polint.abstract_domains"]),
+    ),
+    (
+        validation::ValidationEventKind::Summaries,
+        ValidationProviderScope::Providers(&["polint.direct_summaries"]),
+    ),
+    (
+        validation::ValidationEventKind::Entrypoints,
+        ValidationProviderScope::Providers(&["polint.entrypoints"]),
+    ),
+    (
+        validation::ValidationEventKind::TypeValueAlias,
+        ValidationProviderScope::Providers(&["polint.type_value_alias"]),
+    ),
+    (
+        validation::ValidationEventKind::SemanticGraph,
+        ValidationProviderScope::Providers(&["polint.semantic_graph"]),
+    ),
+    (
+        validation::ValidationEventKind::RefinedCalls,
+        ValidationProviderScope::Providers(&["polint.refined_calls"]),
+    ),
+    (
+        validation::ValidationEventKind::DataFlow,
+        ValidationProviderScope::Providers(&["polint.data_flow"]),
+    ),
+    (
+        validation::ValidationEventKind::MetadataProviders,
+        ValidationProviderScope::AllExecuted,
+    ),
+    (
+        validation::ValidationEventKind::PrecisionCeilings,
+        ValidationProviderScope::AllExecuted,
+    ),
+];
+
+/// Provider outputs whose trust is required by each supported rule capability.
+/// A deliberately skipped provider does not revoke support, but any listed
+/// provider marked failed after execution or validation does.
+const CAPABILITY_PROVIDER_REQUIREMENTS: &[(&str, &[&str])] = &[
+    (
+        "syntax",
+        &["polint.source", "polint.go.syntax", "polint.ts.syntax"],
+    ),
+    ("imports", &["polint.go.syntax", "polint.ts.syntax"]),
+    ("resolved_imports", &["polint.module_graph"]),
+    ("module_graph", &["polint.module_graph"]),
+    ("symbols", &["polint.symbol_graph"]),
+    ("references", &["polint.symbol_graph"]),
+    (
+        "events",
+        &[
+            "polint.go.syntax",
+            "polint.ts.syntax",
+            "polint.calls",
+            "polint.refined_calls",
+        ],
+    ),
+    ("calls", &["polint.calls", "polint.refined_calls"]),
+    (
+        "control_flow",
+        &["polint.cfg", "polint.calls", "polint.refined_calls"],
+    ),
+    ("dataflow", &["polint.data_flow"]),
+    ("go_tests", &["polint.go.syntax"]),
+    ("branch_obligations", &["polint.go.syntax"]),
+    ("file_metrics", &["polint.metrics"]),
+    ("function_metrics", &["polint.metrics"]),
+    ("complexity_metrics", &["polint.metrics"]),
+    ("ts_components", &["polint.ts.syntax"]),
+    ("ts_classes", &["polint.ts.syntax"]),
+    ("string_literals", &["polint.ts.syntax"]),
+    ("jsx_attributes", &["polint.ts.syntax"]),
+    ("changeset", &["polint.source"]),
+];
 
 pub(crate) struct AnalysisKernel;
 
@@ -113,9 +434,52 @@ pub(crate) struct KernelOutput {
     pub(crate) run_report: incremental::KernelRunReport,
 }
 
+#[derive(Debug)]
+enum PreparedGoRepositoryCacheRoots {
+    Certified(Vec<std::path::PathBuf>),
+    SetupMissing,
+}
+
+impl PreparedGoRepositoryCacheRoots {
+    fn as_runtime_source(&self) -> incremental::GoRepositoryCacheRoots<'_> {
+        match self {
+            Self::Certified(roots) => incremental::GoRepositoryCacheRoots::Certified(roots),
+            Self::SetupMissing => incremental::GoRepositoryCacheRoots::SetupMissing {
+                reason: GO_REPOSITORY_CACHE_ROOTS_SETUP_MISSING_REASON,
+            },
+        }
+    }
+}
+
+fn prepare_go_repository_cache_roots(
+    cache: &Cache,
+    repository_root: &std::path::Path,
+    required: bool,
+) -> PreparedGoRepositoryCacheRoots {
+    if !required {
+        return PreparedGoRepositoryCacheRoots::Certified(Vec::new());
+    }
+    match cache.prepare_runtime_write_roots(repository_root) {
+        Ok(roots) => PreparedGoRepositoryCacheRoots::Certified(roots),
+        Err(error) => {
+            tracing::warn!(
+                target: "polint::kernel",
+                error = %error,
+                "repository cache roots could not be stabilized before Go input certification"
+            );
+            PreparedGoRepositoryCacheRoots::SetupMissing
+        }
+    }
+}
+
 impl AnalysisKernel {
     pub(crate) fn provider_manifests() -> &'static [ProviderManifest] {
         provider::provider_manifests()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn plan_runs_go_semantic_for_test(plan: &AnalysisPlan) -> bool {
+        plan.requests_any_capability(FULL_REFINEMENT_PIPELINE_TRIGGER_CAPABILITIES)
     }
 
     fn provider_dependencies_ready(
@@ -220,10 +584,16 @@ impl AnalysisKernel {
             object: input.loaded.config.solver.to_js_object_sub_budget(),
             ..crate::analysis::solver::budget::SolverBudget::default()
         };
+        let repository_cache_roots = prepare_go_repository_cache_roots(
+            input.cache,
+            &input.loaded.root,
+            run_full_refinement_pipeline,
+        );
         let runtime_sources = incremental::InputSnapshotRuntimeSources::prepare(
             input.loaded,
             &db,
             run_full_refinement_pipeline,
+            repository_cache_roots.as_runtime_source(),
             solver_budget.adaptation,
         );
         let input_snapshot =
@@ -1132,7 +1502,6 @@ impl AnalysisKernel {
             data_flow_execution,
             data_flow_output_digest,
         );
-        let data_flow_status = data_flow_dependency_output.status;
         let evidence = if !run_data_flow_pipeline {
             Default::default()
         } else if Self::provider_dependencies_ready(
@@ -1207,12 +1576,8 @@ impl AnalysisKernel {
             &mut provider_outputs,
             &validation_events,
         );
-        let (capability_support, capability_diagnostics) = Self::effective_capability_support(
-            &capability_support,
-            refined_calls_dependency_output.status,
-            data_flow_status,
-            &validation_events,
-        );
+        let (capability_support, capability_diagnostics) =
+            Self::effective_capability_support(&capability_support, &provider_outputs);
         diagnostics.extend(capability_diagnostics);
         db.finish_all_fact_meta_insertions();
         let store_outcome = if input.cache.semantic_store_enabled() {
@@ -1315,6 +1680,13 @@ impl AnalysisKernel {
     #[cfg(test)]
     pub(crate) fn semantic_store_schema_is_current_for_test(path: &std::path::Path) -> bool {
         store::current_schema_is_valid_for_test(path)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn semantic_store_boundary_fingerprint_for_test(
+        path: &std::path::Path,
+    ) -> Result<SemanticStoreBoundaryFingerprint, ()> {
+        store::boundary_fingerprint_for_test(path)
     }
 
     fn provider_output_for(
@@ -1432,40 +1804,31 @@ impl AnalysisKernel {
 
     fn effective_capability_support(
         planned: &CapabilitySupportView,
-        refined_calls_status: incremental::InputComponentStatus,
-        data_flow_status: incremental::InputComponentStatus,
-        validation_events: &[validation::ValidationEvent],
+        provider_outputs: &[incremental::ProviderOutputMeta],
     ) -> (CapabilitySupportView, Vec<Diagnostic>) {
         let mut entries = planned.entries().to_vec();
         let mut diagnostics = Vec::new();
-        let call_validation_failed = Self::fact_validation_failed(
-            validation_events,
-            &[
-                validation::ValidationEventKind::Cfg,
-                validation::ValidationEventKind::Calls,
-                validation::ValidationEventKind::RefinedCalls,
-            ],
-        );
-        let data_flow_validation_failed = Self::fact_validation_failed(
-            validation_events,
-            &[validation::ValidationEventKind::DataFlow],
-        );
+        let failed_providers = provider_outputs
+            .iter()
+            .filter(|output| {
+                output.validation == incremental::ProviderValidationStatus::ProviderFailed
+            })
+            .map(|output| output.provider_id.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
         for entry in &mut entries {
             if entry.status != CapabilitySupportStatus::Supported {
                 continue;
             }
-            let unavailable = match entry.capability.as_str() {
-                "calls" | "control_flow" => Some(
-                    refined_calls_status == incremental::InputComponentStatus::Unsupported
-                        || call_validation_failed,
-                ),
-                "dataflow" => Some(
-                    data_flow_status == incremental::InputComponentStatus::Unsupported
-                        || data_flow_validation_failed,
-                ),
-                _ => None,
-            };
-            if unavailable != Some(true) {
+            let required_providers = CAPABILITY_PROVIDER_REQUIREMENTS
+                .iter()
+                .find(|(capability, _)| *capability == entry.capability.as_str())
+                .map(|(_, required)| *required);
+            let unavailable = required_providers.map_or(!failed_providers.is_empty(), |required| {
+                required
+                    .iter()
+                    .any(|provider_id| failed_providers.contains(provider_id))
+            });
+            if !unavailable {
                 continue;
             }
 
@@ -1483,42 +1846,72 @@ impl AnalysisKernel {
         (CapabilitySupportView::new(entries), diagnostics)
     }
 
-    fn fact_validation_failed(
-        events: &[validation::ValidationEvent],
-        kinds: &[validation::ValidationEventKind],
-    ) -> bool {
-        events.iter().any(|event| {
-            kinds.contains(&event.kind) && event.status == validation::ValidationEventStatus::Failed
-        })
-    }
-
     fn revoke_provider_trust_after_fact_validation(
         provider_outputs: &mut [incremental::ProviderOutputMeta],
         events: &[validation::ValidationEvent],
     ) {
-        const VALIDATION_PROVIDERS: &[(validation::ValidationEventKind, &str)] = &[
-            (validation::ValidationEventKind::Cfg, "polint.cfg"),
-            (validation::ValidationEventKind::Calls, "polint.calls"),
-            (
-                validation::ValidationEventKind::RefinedCalls,
-                "polint.refined_calls",
-            ),
-            (
-                validation::ValidationEventKind::DataFlow,
-                "polint.data_flow",
-            ),
-        ];
+        let executed_outputs = provider_outputs
+            .iter()
+            .filter(|output| output.validation != incremental::ProviderValidationStatus::Skipped)
+            .map(|output| output.provider_id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        let trusted_outputs = provider_outputs
+            .iter()
+            .filter(|output| {
+                output.validation == incremental::ProviderValidationStatus::NativeTrusted
+            })
+            .map(|output| output.provider_id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut failed_providers = provider_outputs
+            .iter()
+            .filter(|output| {
+                output.validation == incremental::ProviderValidationStatus::ProviderFailed
+            })
+            .map(|output| output.provider_id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
 
-        for (kind, provider_id) in VALIDATION_PROVIDERS {
-            if !Self::fact_validation_failed(events, &[*kind]) {
+        for (kind, scope) in VALIDATION_PROVIDER_SCOPES {
+            if !events.iter().any(|event| {
+                event.kind == *kind && event.status == validation::ValidationEventStatus::Failed
+            }) {
                 continue;
             }
-            let Some(output) = provider_outputs
-                .iter_mut()
-                .find(|output| output.provider_id == *provider_id)
-            else {
+            match scope {
+                ValidationProviderScope::Providers(provider_ids) => {
+                    for provider_id in *provider_ids {
+                        if executed_outputs.contains(*provider_id) {
+                            failed_providers.insert((*provider_id).to_string());
+                        }
+                    }
+                }
+                ValidationProviderScope::AllExecuted => {
+                    failed_providers.extend(executed_outputs.iter().cloned());
+                }
+            }
+        }
+
+        loop {
+            let mut changed = false;
+            for (provider_id, dependencies) in RUNTIME_PROVIDER_DEPENDENCIES {
+                if trusted_outputs.contains(*provider_id)
+                    && dependencies
+                        .iter()
+                        .any(|dependency| failed_providers.contains(*dependency))
+                {
+                    changed |= failed_providers.insert((*provider_id).to_string());
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        for output in provider_outputs {
+            if output.validation != incremental::ProviderValidationStatus::NativeTrusted
+                || !failed_providers.contains(&output.provider_id)
+            {
                 continue;
-            };
+            }
             output.validation = incremental::ProviderValidationStatus::ProviderFailed;
             for layer in &mut output.layers {
                 layer.validation = incremental::ProviderValidationStatus::ProviderFailed;
@@ -1822,6 +2215,64 @@ mod tests {
         assert!(output.db.files().is_empty());
         assert!(output.diagnostics.is_empty());
         assert_eq!(&output.capability_support, plan.support_view());
+    }
+
+    #[test]
+    fn cache_root_certification_failure_stops_go_frontend_preparation() {
+        let temp = tempfile::tempdir().expect("temporary repository");
+        std::fs::write(
+            temp.path().join("go.mod"),
+            "module example.test/app\n\ngo 1.25\n",
+        )
+        .expect("write module manifest");
+        let cache_root = temp.path().join("build/polint-cache");
+        let selected_package = cache_root.join("analysis/generated");
+        std::fs::create_dir_all(&selected_package).expect("create earlier active cache root");
+        let selected_source = selected_package.join("cache.go");
+        std::fs::write(&selected_source, "package generated\n")
+            .expect("write selected cache-contained Go source");
+        std::fs::write(cache_root.join("layers"), b"not a directory")
+            .expect("install invalid later cache root");
+
+        let cache = Cache::new(cache_root.join("analysis"), true);
+        let cache_roots = prepare_go_repository_cache_roots(&cache, temp.path(), true);
+        assert!(cache_root.join("analysis").is_dir());
+        assert!(matches!(
+            &cache_roots,
+            PreparedGoRepositoryCacheRoots::SetupMissing
+        ));
+
+        let loaded = load_config(temp.path()).expect("load repository config");
+        let mut db = AnalysisDb::new();
+        let relative_source = selected_source
+            .strip_prefix(temp.path())
+            .expect("cache source is repository-relative")
+            .to_path_buf();
+        db.add_source_file(
+            relative_source.clone(),
+            relative_source.to_string_lossy().into_owned(),
+            Language::Go,
+            "package generated\n".into(),
+            "cache-source-hash".to_string(),
+        );
+        let runtime_sources = incremental::InputSnapshotRuntimeSources::prepare(
+            &loaded,
+            &db,
+            true,
+            cache_roots.as_runtime_source(),
+            crate::analysis::adaptation::budget::AdaptationModelBudget::default(),
+        );
+
+        match runtime_sources.go_semantic_tool {
+            crate::go::semantic::process::GoSemanticToolPreparation::SetupMissing {
+                reason,
+                process_error,
+            } => {
+                assert_eq!(reason, GO_REPOSITORY_CACHE_ROOTS_SETUP_MISSING_REASON);
+                assert!(process_error.is_none());
+            }
+            preparation => panic!("Go frontend preparation must fail closed: {preparation:?}"),
+        }
     }
 
     mod semantic_store {
@@ -2308,7 +2759,7 @@ mod tests {
             let (disabled_json, disabled_exit, disabled_status) = run_mode(StoreMode::Disabled);
             assert_eq!(disabled_status, StoreStatus::Disabled);
 
-            let mut cases = vec![
+            let cases = vec![
                 (StoreMode::Enabled, StoreStatus::Ready),
                 (StoreMode::Complete, StoreStatus::Ready),
                 (
@@ -2339,10 +2790,14 @@ mod tests {
                 (StoreMode::Busy, StoreStatus::BusySkipped),
             ];
             #[cfg(unix)]
-            cases.push((
-                StoreMode::Unsafe,
-                StoreStatus::Skipped(store::StoreSkipReason::UnsafePath),
-            ));
+            let cases = {
+                let mut cases = cases;
+                cases.push((
+                    StoreMode::Unsafe,
+                    StoreStatus::Skipped(store::StoreSkipReason::UnsafePath),
+                ));
+                cases
+            };
 
             for (mode, expected_status) in cases {
                 let (json, exit_code, status) = run_mode(mode);
@@ -2738,13 +3193,10 @@ mod tests {
             ),
         ];
         let plan = AnalysisPlan::from_rules(&rules, None, &std::collections::BTreeMap::new());
+        let provider_outputs = provider_outputs_with_failures(&["polint.refined_calls"]);
 
-        let (support, diagnostics) = AnalysisKernel::effective_capability_support(
-            plan.support_view(),
-            incremental::InputComponentStatus::Unsupported,
-            incremental::InputComponentStatus::Absent,
-            &[],
-        );
+        let (support, diagnostics) =
+            AnalysisKernel::effective_capability_support(plan.support_view(), &provider_outputs);
         let rule_diagnostics = crate::core::run_rules_with_capability_support(
             &AnalysisDb::new(),
             &rules,
@@ -2784,13 +3236,10 @@ mod tests {
             std::sync::Arc::clone(&dataflow_ran),
         )];
         let plan = AnalysisPlan::from_rules(&rules, None, &std::collections::BTreeMap::new());
+        let provider_outputs = provider_outputs_with_failures(&["polint.data_flow"]);
 
-        let (support, diagnostics) = AnalysisKernel::effective_capability_support(
-            plan.support_view(),
-            incremental::InputComponentStatus::Present,
-            incremental::InputComponentStatus::Unsupported,
-            &[],
-        );
+        let (support, diagnostics) =
+            AnalysisKernel::effective_capability_support(plan.support_view(), &provider_outputs);
         let rule_diagnostics = crate::core::run_rules_with_capability_support(
             &AnalysisDb::new(),
             &rules,
@@ -2820,12 +3269,8 @@ mod tests {
         )];
         let plan = AnalysisPlan::from_rules(&rules, None, &std::collections::BTreeMap::new());
 
-        let (support, diagnostics) = AnalysisKernel::effective_capability_support(
-            plan.support_view(),
-            incremental::InputComponentStatus::Absent,
-            incremental::InputComponentStatus::Absent,
-            &[],
-        );
+        let (support, diagnostics) =
+            AnalysisKernel::effective_capability_support(plan.support_view(), &[]);
         let rule_diagnostics = crate::core::run_rules_with_capability_support(
             &AnalysisDb::new(),
             &rules,
@@ -2844,6 +3289,177 @@ mod tests {
         assert_eq!(calls_ran.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
+    fn provider_outputs_with_failures(
+        failed_provider_ids: &[&str],
+    ) -> Vec<incremental::ProviderOutputMeta> {
+        AnalysisKernel::provider_manifests()
+            .iter()
+            .map(|manifest| {
+                let failed = failed_provider_ids.contains(&manifest.id);
+                AnalysisKernel::provider_output_for_outcome(
+                    manifest.id,
+                    incremental::CacheStats::default(),
+                    if failed {
+                        incremental::ProviderExecutionOutcome::Failed
+                    } else {
+                        incremental::ProviderExecutionOutcome::Succeeded
+                    },
+                    (!failed).then(|| {
+                        incremental::Digest::from_parts(
+                            incremental::DigestKind::ProviderOutput,
+                            manifest.id,
+                            &["test-output"],
+                        )
+                    }),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn runtime_provider_dependency_graph_is_complete_and_topological() {
+        let manifest_ids = AnalysisKernel::provider_manifests()
+            .iter()
+            .map(|manifest| manifest.id)
+            .collect::<std::collections::BTreeSet<_>>();
+        let graph_ids = RUNTIME_PROVIDER_DEPENDENCIES
+            .iter()
+            .map(|(provider_id, _)| *provider_id)
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(graph_ids, manifest_ids);
+        assert_eq!(graph_ids.len(), RUNTIME_PROVIDER_DEPENDENCIES.len());
+
+        let mut seen = std::collections::BTreeSet::new();
+        for (provider_id, dependencies) in RUNTIME_PROVIDER_DEPENDENCIES {
+            for dependency in *dependencies {
+                assert!(
+                    seen.contains(dependency),
+                    "runtime provider dependency `{dependency}` must precede `{provider_id}`"
+                );
+            }
+            assert!(
+                seen.insert(*provider_id),
+                "runtime provider `{provider_id}` appears more than once"
+            );
+        }
+    }
+
+    #[test]
+    fn validation_and_capability_trust_maps_reference_known_providers() {
+        let provider_ids = AnalysisKernel::provider_manifests()
+            .iter()
+            .map(|manifest| manifest.id)
+            .collect::<std::collections::BTreeSet<_>>();
+        let mapped_validation_kinds = VALIDATION_PROVIDER_SCOPES
+            .iter()
+            .map(|(kind, _)| *kind)
+            .collect::<std::collections::BTreeSet<_>>();
+        let expected_validation_kinds = validation::ValidationEventKind::ALL
+            .into_iter()
+            .filter(|kind| *kind != validation::ValidationEventKind::GlobalFactValidation)
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(mapped_validation_kinds, expected_validation_kinds);
+        assert_eq!(
+            mapped_validation_kinds.len(),
+            VALIDATION_PROVIDER_SCOPES.len(),
+            "each validation stage must have exactly one trust scope"
+        );
+        for (_, scope) in VALIDATION_PROVIDER_SCOPES {
+            if let ValidationProviderScope::Providers(mapped_provider_ids) = scope {
+                for provider_id in *mapped_provider_ids {
+                    assert!(
+                        provider_ids.contains(provider_id),
+                        "validation trust map references unknown provider `{provider_id}`"
+                    );
+                }
+            }
+        }
+
+        let mut capabilities = std::collections::BTreeSet::new();
+        for (capability, required_provider_ids) in CAPABILITY_PROVIDER_REQUIREMENTS {
+            assert!(
+                capabilities.insert(*capability),
+                "capability `{capability}` appears more than once in the trust map"
+            );
+            for provider_id in *required_provider_ids {
+                assert!(
+                    provider_ids.contains(provider_id),
+                    "capability `{capability}` references unknown provider `{provider_id}`"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn non_cfg_validation_failure_revokes_its_transitive_consumers() {
+        let mut provider_outputs = provider_outputs_with_failures(&[]);
+        let event = validation::ValidationEvent {
+            kind: validation::ValidationEventKind::TypeValueAlias,
+            status: validation::ValidationEventStatus::Failed,
+            issue_count: 1,
+            digest: incremental::Digest::from_parts(
+                incremental::DigestKind::ValidationEvent,
+                "type-value-alias-test",
+                &["failed"],
+            ),
+        };
+
+        AnalysisKernel::revoke_provider_trust_after_fact_validation(
+            &mut provider_outputs,
+            &[event],
+        );
+
+        let failed = provider_outputs
+            .iter()
+            .filter(|provider| {
+                provider.validation == incremental::ProviderValidationStatus::ProviderFailed
+            })
+            .map(|provider| provider.provider_id.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            failed,
+            [
+                "polint.data_flow",
+                "polint.evidence",
+                "polint.refined_calls",
+                "polint.semantic_graph",
+                "polint.solver",
+                "polint.type_value_alias",
+            ]
+            .into_iter()
+            .collect()
+        );
+    }
+
+    #[test]
+    fn cross_family_reference_failure_revokes_every_executed_provider() {
+        let mut provider_outputs = provider_outputs_with_failures(&[]);
+        let event = validation::ValidationEvent {
+            kind: validation::ValidationEventKind::References,
+            status: validation::ValidationEventStatus::Failed,
+            issue_count: 1,
+            digest: incremental::Digest::from_parts(
+                incremental::DigestKind::ValidationEvent,
+                "cross-family-reference-test",
+                &["failed"],
+            ),
+        };
+
+        AnalysisKernel::revoke_provider_trust_after_fact_validation(
+            &mut provider_outputs,
+            &[event],
+        );
+
+        assert!(provider_outputs.iter().all(|provider| {
+            provider.validation == incremental::ProviderValidationStatus::ProviderFailed
+                && provider.layers.iter().all(|layer| {
+                    layer.validation == incremental::ProviderValidationStatus::ProviderFailed
+                })
+        }));
+    }
+
     #[test]
     fn failed_cfg_validation_revokes_capabilities_and_provider_trust_on_cold_and_warm_runs() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -2853,9 +3469,12 @@ mod tests {
         )
         .expect("write source");
         let loaded = load_config(temp.path()).expect("default config loads");
-        let cache = Cache::new(temp.path().join("cache"), true);
+        let cache =
+            Cache::new(temp.path().join("cache"), true).with_semantic_store_enabled_for_test();
+        let store_path = cache.semantic_store_path();
         let calls_ran = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let control_flow_ran = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let dataflow_ran = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let rules = vec![
             capability_probe_rule(
                 "test/needs-calls-after-validation",
@@ -2866,6 +3485,11 @@ mod tests {
                 "test/needs-control-flow-after-validation",
                 Capabilities::new().control_flow(),
                 std::sync::Arc::clone(&control_flow_ran),
+            ),
+            capability_probe_rule(
+                "test/needs-dataflow-after-validation",
+                Capabilities::new().dataflow(),
+                std::sync::Arc::clone(&dataflow_ran),
             ),
         ];
         let plan = AnalysisPlan::from_rules(&rules, None, &std::collections::BTreeMap::new());
@@ -2884,6 +3508,24 @@ mod tests {
         };
         let cold = run();
         let warm = run();
+        let expected_failed_providers = [
+            "polint.abstract_domains",
+            "polint.calls",
+            "polint.cfg",
+            "polint.data_flow",
+            "polint.direct_summaries",
+            "polint.entrypoints",
+            "polint.evidence",
+            "polint.extensions",
+            "polint.identity",
+            "polint.reachability",
+            "polint.refined_calls",
+            "polint.semantic_graph",
+            "polint.solver",
+            "polint.type_value_alias",
+        ]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
 
         for output in [&cold, &warm] {
             let cfg_event = output
@@ -2902,9 +3544,26 @@ mod tests {
                 Some(CapabilitySupportStatus::Unsupported)
             );
             assert_eq!(
-                provider_output(output, "polint.cfg").validation,
-                incremental::ProviderValidationStatus::ProviderFailed
+                output.capability_support.status_for("dataflow"),
+                Some(CapabilitySupportStatus::Unsupported)
             );
+            let failed_providers = output
+                .run_report
+                .provider_outputs
+                .iter()
+                .filter(|provider| {
+                    provider.validation == incremental::ProviderValidationStatus::ProviderFailed
+                })
+                .map(|provider| provider.provider_id.as_str())
+                .collect::<std::collections::BTreeSet<_>>();
+            assert_eq!(failed_providers, expected_failed_providers);
+            for provider in &output.run_report.provider_outputs {
+                if expected_failed_providers.contains(provider.provider_id.as_str()) {
+                    assert!(provider.layers.iter().all(|layer| {
+                        layer.validation == incremental::ProviderValidationStatus::ProviderFailed
+                    }));
+                }
+            }
             assert!(output.diagnostics.iter().any(|diagnostic| {
                 diagnostic.rule_id == "polint/internal"
                     && diagnostic.message.contains("CFG validation failed")
@@ -2915,7 +3574,12 @@ mod tests {
                     .iter()
                     .filter(|diagnostic| diagnostic.rule_id == "polint/capability")
                     .count(),
-                2
+                3
+            );
+            assert_eq!(
+                output.run_report.store_status(),
+                &StoreStatus::Skipped(store::StoreSkipReason::InvalidPlan),
+                "a run with failed authoritative validation must not become a complete generation"
             );
 
             let rule_diagnostics = crate::core::run_rules_with_capability_support(
@@ -2930,8 +3594,16 @@ mod tests {
         }
 
         assert_eq!(
-            provider_output(&cold, "polint.cfg").semantic_projection(),
-            provider_output(&warm, "polint.cfg").semantic_projection()
+            cold.run_report
+                .provider_outputs
+                .iter()
+                .map(incremental::ProviderOutputMeta::semantic_projection)
+                .collect::<Vec<_>>(),
+            warm.run_report
+                .provider_outputs
+                .iter()
+                .map(incremental::ProviderOutputMeta::semantic_projection)
+                .collect::<Vec<_>>()
         );
         assert_eq!(
             cold.run_report.validation_events(),
@@ -2942,6 +3614,12 @@ mod tests {
             control_flow_ran.load(std::sync::atomic::Ordering::SeqCst),
             0
         );
+        assert_eq!(dataflow_ran.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(
+            !store_path.exists(),
+            "failed authoritative validation must not publish a store file"
+        );
+        assert!(AnalysisKernel::semantic_store_boundary_fingerprint_for_test(&store_path).is_err());
     }
 
     fn capability_probe_rule(

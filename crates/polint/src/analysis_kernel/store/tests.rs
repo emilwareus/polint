@@ -1201,6 +1201,7 @@ fn active_preflight_rejects_oversized_non_fact_text_before_row_decode() {
         1024 * 1024,
     );
     generation::reset_projection_row_decode_materializations_for_test();
+    generation::reset_generation_relationship_check_metrics_for_test();
     let result = generation::read_active_complete(&config, validated.identities().workspace());
 
     assert_eq!(
@@ -1211,6 +1212,10 @@ fn active_preflight_rejects_oversized_non_fact_text_before_row_decode() {
     );
     assert_eq!(
         generation::projection_row_decode_materializations_for_test(),
+        0
+    );
+    assert_eq!(
+        generation::generation_relationship_check_metrics_for_test().runs,
         0
     );
 }
@@ -1259,6 +1264,7 @@ fn active_preflight_rejects_many_short_non_fact_rows_before_row_decode() {
         commit_plan::MAX_GENERATION_STORAGE_BYTES,
     );
     generation::reset_projection_row_decode_materializations_for_test();
+    generation::reset_generation_relationship_check_metrics_for_test();
     let result = generation::read_active_complete(&config, validated.identities().workspace());
 
     assert_eq!(
@@ -1271,6 +1277,98 @@ fn active_preflight_rejects_many_short_non_fact_rows_before_row_decode() {
         generation::projection_row_decode_materializations_for_test(),
         0
     );
+    assert_eq!(
+        generation::generation_relationship_check_metrics_for_test().runs,
+        0
+    );
+}
+
+#[test]
+fn identical_validation_work_is_independent_of_large_valid_stale_history() {
+    let temp = tempfile::tempdir().expect("temporary store root");
+    let repository = temp.path().join("repo");
+    let validated = generation_validated_fixture(&repository, "scoped-active-validation");
+    let config = generation_store_config(temp.path());
+    assert_eq!(
+        SemanticStore::commit_validated_run(&config, validated.clone()).status,
+        StoreStatus::Ready
+    );
+
+    generation::reset_generation_relationship_check_metrics_for_test();
+    migrations::reset_full_foreign_key_check_runs_for_test();
+    migrations::reset_full_history_lifecycle_check_runs_for_test();
+    assert_eq!(
+        SemanticStore::commit_validated_run(&config, validated.clone()).status,
+        StoreStatus::Ready
+    );
+    let baseline = generation::generation_relationship_check_metrics_for_test();
+    assert!(baseline.runs > 0);
+    assert_eq!(migrations::full_foreign_key_check_runs_for_test(), 0);
+    assert_eq!(migrations::full_history_lifecycle_check_runs_for_test(), 0);
+
+    let stale_plan = generation_plan_fixture(&repository, "large-stale-history");
+    let stale = generation::reserve_only_for_test(&config, &stale_plan)
+        .expect("reserve stale pending generation");
+    let database = Connection::open(config.path()).expect("open store");
+    database
+        .pragma_update(None, "foreign_keys", true)
+        .expect("enable foreign keys while seeding stale rows");
+    let inserted = database
+        .execute(
+            "WITH RECURSIVE sequence(value) AS (
+                 SELECT 0
+                 UNION ALL SELECT value + 1 FROM sequence WHERE value < 16383
+             )
+             INSERT INTO input_files (
+                 generation_id, relative_path, language,
+                 source_digest_kind, source_digest_value, size_bytes
+             )
+             SELECT ?1, printf('stale/%06d.go', value), 'go',
+                    'source_text', printf('stale-source-%06d', value), 0
+             FROM sequence",
+            [stale.handle()],
+        )
+        .expect("seed stale input rows");
+    assert_eq!(inserted, 16_384);
+    let telemetry_inserted = database
+        .execute(
+            "INSERT INTO generation_telemetry (
+                 generation_id, relative_path, file_mtime_hint_present
+             )
+             SELECT generation_id, relative_path, 0
+             FROM input_files WHERE generation_id = ?1",
+            [stale.handle()],
+        )
+        .expect("seed related stale telemetry rows");
+    assert_eq!(telemetry_inserted, 16_384);
+    let mut foreign_key_check = database
+        .prepare("PRAGMA foreign_key_check")
+        .expect("prepare stale-history integrity check");
+    assert!(
+        !foreign_key_check
+            .exists([])
+            .expect("check seeded foreign keys")
+    );
+    drop(foreign_key_check);
+    drop(database);
+
+    generation::reset_generation_relationship_check_metrics_for_test();
+    migrations::reset_full_foreign_key_check_runs_for_test();
+    migrations::reset_full_history_lifecycle_check_runs_for_test();
+    assert_eq!(
+        SemanticStore::commit_validated_run(&config, validated).status,
+        StoreStatus::Ready
+    );
+    let amplified = generation::generation_relationship_check_metrics_for_test();
+
+    assert_eq!(amplified.runs, baseline.runs);
+    assert_eq!(amplified.fullscan_steps, baseline.fullscan_steps);
+    assert!(
+        amplified.vm_steps <= baseline.vm_steps.saturating_add(64),
+        "stale history must not add generation-validation work: baseline={baseline:?}, amplified={amplified:?}"
+    );
+    assert_eq!(migrations::full_foreign_key_check_runs_for_test(), 0);
+    assert_eq!(migrations::full_history_lifecycle_check_runs_for_test(), 0);
 }
 
 #[test]
@@ -2149,6 +2247,80 @@ mod generation_lifecycle {
             .expect("read generation attempt")
     }
 
+    fn insert_cloned_generation_attempt(
+        database: &Connection,
+        template_id: i64,
+        reservation_ordinal: i64,
+        query_value_suffix: &str,
+        status: &str,
+    ) -> rusqlite::Result<usize> {
+        database.execute(
+            "INSERT INTO generations (
+                 reservation_ordinal,
+                 workspace_kind, workspace_value,
+                 generation_kind, generation_value,
+                 run_kind, run_value,
+                 full_config_kind, full_config_value,
+                 input_snapshot_kind, input_snapshot_value,
+                 provider_manifest_kind, provider_manifest_value,
+                 provider_output_kind, provider_output_value,
+                 layer_kind, layer_value,
+                 summary_kind, summary_value,
+                 query_kind, query_value,
+                 fact_kind, fact_value,
+                 dependency_kind, dependency_value,
+                 validation_kind, validation_value,
+                 dependency_schema, status
+             )
+             SELECT
+                 ?2,
+                 workspace_kind, workspace_value,
+                 generation_kind, generation_value,
+                 run_kind, run_value,
+                 full_config_kind, full_config_value,
+                 input_snapshot_kind, input_snapshot_value,
+                 provider_manifest_kind, provider_manifest_value,
+                 provider_output_kind, provider_output_value,
+                 layer_kind, layer_value,
+                 summary_kind, summary_value,
+                 query_kind, query_value || ?3,
+                 fact_kind, fact_value,
+                 dependency_kind, dependency_value,
+                 validation_kind, validation_value,
+                 dependency_schema, ?4
+             FROM generations WHERE id = ?1",
+            rusqlite::params![template_id, reservation_ordinal, query_value_suffix, status],
+        )
+    }
+
+    fn generation_plan_with_uniform_facts(
+        root: &Path,
+        label: &str,
+        fact_count: usize,
+    ) -> commit_plan::StoreCommitPlan {
+        let fixture = generation_finalized_fixture(root, label);
+        let template = fixture.facts.first().expect("fixture fact template");
+        let facts = (0..fact_count)
+            .map(|ordinal| {
+                let mut row = template.clone();
+                row.stable_key = format!("fact-batch/{ordinal:06}").into();
+                row.payload_digest = format!("fact-batch-payload-{ordinal:06}");
+                row
+            })
+            .collect::<Vec<_>>();
+        let validated = ValidatedRunMetadata::from_finalized_run(
+            &fixture.report.input_snapshot,
+            &fixture.report.provider_outputs,
+            &fixture.report.demand_query_trace,
+            fixture.report.validation_events(),
+            &fixture.manifests,
+            facts,
+        )
+        .expect("uniform fact fixture produces a validated handoff");
+        commit_plan::StoreCommitPlan::from_validated_run(&validated)
+            .expect("uniform fact handoff produces a complete plan")
+    }
+
     #[test]
     fn complete_same_workspace_retry_uses_contiguous_ordinals() {
         let temp = tempfile::tempdir().expect("temp directory");
@@ -2190,6 +2362,192 @@ mod generation_lifecycle {
             .expect("read active generation")
             .expect("active generation exists");
         assert_eq!(active.plan, plan);
+    }
+
+    #[test]
+    fn reservation_history_invariants_reject_gaps_mutation_and_invalid_retries() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let plan = generation_plan_fixture(&temp.path().join("repo"), "retry-invariants");
+        let config = generation_store_config(temp.path());
+        let first = generation::reserve_only_for_test(&config, &plan)
+            .expect("reserve first generation attempt");
+        let database = Connection::open(config.path()).expect("open store");
+
+        assert!(
+            database
+                .execute(
+                    "UPDATE generations SET reservation_ordinal = 2 WHERE id = ?1",
+                    [first.handle()],
+                )
+                .is_err(),
+            "reservation ordinals are immutable"
+        );
+        assert!(
+            database
+                .execute(
+                    "UPDATE generations SET query_value = query_value || '.tampered' WHERE id = ?1",
+                    [first.handle()],
+                )
+                .is_err(),
+            "generation identity columns are immutable"
+        );
+        for rowid_alias in ["rowid", "_rowid_", "oid"] {
+            let mutation = format!(
+                "UPDATE generations SET {rowid_alias} = {rowid_alias} + 1000 WHERE id = ?1"
+            );
+            assert!(
+                database.execute(&mutation, [first.handle()]).is_err(),
+                "generation identity is immutable through SQLite's {rowid_alias} alias"
+            );
+        }
+        assert_eq!(
+            database
+                .execute(
+                    "UPDATE generations SET status = status WHERE id = ?1",
+                    [first.handle()]
+                )
+                .expect("a status-only no-op remains valid"),
+            1
+        );
+        assert!(
+            database
+                .execute(
+                    "UPDATE generations SET status = 'unknown' WHERE id = ?1",
+                    [first.handle()]
+                )
+                .is_err(),
+            "unknown lifecycle states are rejected"
+        );
+        assert!(
+            database
+                .execute("DELETE FROM generations WHERE id = ?1", [first.handle()])
+                .is_err(),
+            "attempt deletion cannot create an ordinal gap"
+        );
+        assert!(
+            insert_cloned_generation_attempt(
+                &database,
+                first.handle(),
+                2,
+                "",
+                schema::GenerationStatus::Pending.label(),
+            )
+            .is_err(),
+            "non-contiguous retry insertion is rejected"
+        );
+        assert!(
+            insert_cloned_generation_attempt(
+                &database,
+                first.handle(),
+                1,
+                ".mismatched",
+                schema::GenerationStatus::Pending.label(),
+            )
+            .is_err(),
+            "retry identity must match the retained generation identity"
+        );
+
+        let second = generation::reserve_only_for_test(&config, &plan)
+            .expect("valid retry remains reservable");
+        assert_eq!(second.reservation_ordinal(), 1);
+    }
+
+    #[test]
+    fn same_identity_attempt_history_uses_one_indexed_latest_header_lookup() {
+        const ATTEMPT_COUNT: i64 = 4096;
+
+        let temp = tempfile::tempdir().expect("temp directory");
+        let plan = generation_plan_fixture(&temp.path().join("repo"), "large-retry-history");
+        let config = generation_store_config(temp.path());
+        let first = generation::reserve_only_for_test(&config, &plan)
+            .expect("reserve first generation attempt");
+        let database = Connection::open(config.path()).expect("open store");
+        let inserted = database
+            .execute(
+                "WITH RECURSIVE sequence(value) AS (
+                     VALUES(1)
+                     UNION ALL
+                     SELECT value + 1 FROM sequence WHERE value + 1 < ?2
+                 )
+                 INSERT INTO generations (
+                     reservation_ordinal,
+                     workspace_kind, workspace_value,
+                     generation_kind, generation_value,
+                     run_kind, run_value,
+                     full_config_kind, full_config_value,
+                     input_snapshot_kind, input_snapshot_value,
+                     provider_manifest_kind, provider_manifest_value,
+                     provider_output_kind, provider_output_value,
+                     layer_kind, layer_value,
+                     summary_kind, summary_value,
+                     query_kind, query_value,
+                     fact_kind, fact_value,
+                     dependency_kind, dependency_value,
+                     validation_kind, validation_value,
+                     dependency_schema, status
+                 )
+                 SELECT
+                     sequence.value,
+                     template.workspace_kind, template.workspace_value,
+                     template.generation_kind, template.generation_value,
+                     template.run_kind, template.run_value,
+                     template.full_config_kind, template.full_config_value,
+                     template.input_snapshot_kind, template.input_snapshot_value,
+                     template.provider_manifest_kind, template.provider_manifest_value,
+                     template.provider_output_kind, template.provider_output_value,
+                     template.layer_kind, template.layer_value,
+                     template.summary_kind, template.summary_value,
+                     template.query_kind, template.query_value,
+                     template.fact_kind, template.fact_value,
+                     template.dependency_kind, template.dependency_value,
+                     template.validation_kind, template.validation_value,
+                     template.dependency_schema, 'pending'
+                 FROM sequence
+                 CROSS JOIN generations AS template
+                 WHERE template.id = ?1
+                 ORDER BY sequence.value",
+                rusqlite::params![first.handle(), ATTEMPT_COUNT],
+            )
+            .expect("seed contiguous same-identity attempts");
+        assert_eq!(inserted, ATTEMPT_COUNT as usize - 1);
+        let failed = database
+            .execute(
+                "UPDATE generations SET status = 'failed'
+                 WHERE generation_value = ?1
+                   AND reservation_ordinal > 0
+                   AND reservation_ordinal % 2 = 0",
+                [plan.semantic.identities.generation.digest().value.as_str()],
+            )
+            .expect("mark alternating attempts failed");
+        assert_eq!(failed, ATTEMPT_COUNT as usize / 2 - 1);
+        let failure_events = database
+            .execute(
+                "INSERT INTO generation_failure_events (
+                     generation_id, ordinal, event_code, reason_code, stage_code
+                 )
+                 SELECT id, 0, 'commit_attempt_failed', 'write_failed', 'providers'
+                 FROM generations
+                 WHERE generation_value = ?1 AND status = 'failed'",
+                [plan.semantic.identities.generation.digest().value.as_str()],
+            )
+            .expect("record failed-attempt lifecycle events");
+        assert_eq!(failure_events, failed);
+        drop(database);
+
+        generation::reset_reservation_history_query_metrics_for_test();
+        let next = generation::reserve_only_for_test(&config, &plan)
+            .expect("reserve after large same-identity history");
+
+        assert_eq!(next.reservation_ordinal(), ATTEMPT_COUNT);
+        assert_eq!(
+            generation::reservation_history_query_metrics_for_test(),
+            generation::ReservationHistoryQueryMetrics {
+                runs: 1,
+                result_rows: 1,
+                header_decodes: 1,
+                fullscan_steps: 0,
+            }
+        );
     }
 
     #[test]
@@ -2290,6 +2648,59 @@ mod generation_lifecycle {
                 .expect("read final active generation")
                 .expect("final active generation exists");
         assert_eq!(active.plan, retry_plan);
+    }
+
+    #[test]
+    fn later_fact_batch_constraint_failure_rolls_back_and_preserves_active_truth() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let repository = temp.path().join("repo");
+        let active_plan = generation_plan_fixture(&repository, "fact-batch-active");
+        let candidate = generation_plan_with_uniform_facts(
+            &repository,
+            "fact-batch-constraint-candidate",
+            1025,
+        );
+        let config = generation_store_config(temp.path());
+        assert_eq!(candidate.semantic.facts.len(), 1025);
+        assert_eq!(
+            generation::commit_generation(&config, &active_plan),
+            StoreStatus::Ready
+        );
+        let database = Connection::open(config.path()).expect("open store");
+        let original_active = active_generation(&database);
+
+        assert_eq!(
+            generation::commit_generation_with_control(
+                &config,
+                &candidate,
+                generation::CommitControl::with_fact_constraint_tamper(1024),
+            ),
+            StoreStatus::Skipped(StoreSkipReason::CommitFailed)
+        );
+
+        let (generation_id, status) = generation_attempt(&database, &candidate, 0);
+        assert_eq!(status, schema::GenerationStatus::Failed.label());
+        assert_eq!(
+            generation::payload_row_count_for_test(&config, generation_id)
+                .expect("count rolled-back candidate payload"),
+            0
+        );
+        let (reason, stage): (String, String) = database
+            .query_row(
+                "SELECT reason_code, stage_code FROM generation_failure_events
+                 WHERE generation_id = ?1",
+                [generation_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read fact-batch failure audit");
+        assert_eq!(reason, schema::GenerationFailureReason::WriteFailed.label());
+        assert_eq!(stage, schema::GenerationFailureStage::FactMetadata.label());
+        assert_eq!(active_generation(&database), original_active);
+        let active =
+            generation::read_active_complete(&config, &active_plan.semantic.identities.workspace)
+                .expect("read active generation")
+                .expect("prior active generation remains ready");
+        assert_eq!(active.plan, active_plan);
     }
 
     #[test]
@@ -2397,6 +2808,126 @@ mod generation_lifecycle {
                 .expect("read active generation")
                 .expect("prior active generation remains ready");
         assert_eq!(active.plan, active_plan);
+    }
+
+    #[test]
+    fn ordinal_tampered_pending_generations_never_complete_or_activate() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let repository = temp.path().join("repo");
+        let active_plan = generation_plan_fixture(&repository, "ordinal-active");
+        let candidate = generation_plan_fixture(&repository, "ordinal-candidate");
+        let config = generation_store_config(temp.path());
+        assert_eq!(
+            generation::commit_generation(&config, &active_plan),
+            StoreStatus::Ready
+        );
+        let database = Connection::open(config.path()).expect("open store");
+        let original_active = active_generation(&database);
+
+        for (reservation_ordinal, tamper) in [
+            generation::ProjectionOrdinalTamper::LayerNonzeroOffset,
+            generation::ProjectionOrdinalTamper::FactSwap,
+            generation::ProjectionOrdinalTamper::LayerInputGap,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(
+                generation::commit_generation_with_control(
+                    &config,
+                    &candidate,
+                    generation::CommitControl::with_projection_ordinal_tamper(tamper),
+                ),
+                StoreStatus::Skipped(StoreSkipReason::CommitFailed)
+            );
+
+            let (generation_id, status) =
+                generation_attempt(&database, &candidate, reservation_ordinal as i64);
+            assert_eq!(status, schema::GenerationStatus::Failed.label());
+            assert_eq!(
+                generation::payload_row_count_for_test(&config, generation_id)
+                    .expect("count rolled-back ordinal-tampered payload"),
+                0
+            );
+            let (reason, stage): (String, String) = database
+                .query_row(
+                    "SELECT reason_code, stage_code FROM generation_failure_events
+                     WHERE generation_id = ?1",
+                    [generation_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .expect("read ordinal-validation audit");
+            assert_eq!(
+                reason,
+                schema::GenerationFailureReason::PostWriteValidationFailed.label(),
+                "ordinal tamper {tamper:?} must reach post-write validation"
+            );
+            assert_eq!(stage, schema::GenerationFailureStage::Statistics.label());
+            assert_eq!(active_generation(&database), original_active);
+        }
+    }
+
+    #[test]
+    fn orphaned_joined_children_never_complete_or_activate() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let repository = temp.path().join("repo");
+        let active_plan = generation_plan_fixture(&repository, "orphan-active");
+        let candidate = generation_plan_fixture(&repository, "orphan-candidate");
+        let config = generation_store_config(temp.path());
+        assert_eq!(
+            generation::commit_generation(&config, &active_plan),
+            StoreStatus::Ready
+        );
+        let database = Connection::open(config.path()).expect("open store");
+        let original_active = active_generation(&database);
+
+        for (reservation_ordinal, tamper) in [
+            generation::ProjectionOrphanTamper::ProviderDependency,
+            generation::ProjectionOrphanTamper::LayerInput,
+            generation::ProjectionOrphanTamper::LayerDependency,
+            generation::ProjectionOrphanTamper::LayerExtension,
+            generation::ProjectionOrphanTamper::LayerWarning,
+            generation::ProjectionOrphanTamper::SummaryDependency,
+            generation::ProjectionOrphanTamper::QueryInput,
+            generation::ProjectionOrphanTamper::QueryLayer,
+            generation::ProjectionOrphanTamper::DiagnosticRequestedView,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(
+                generation::commit_generation_with_control(
+                    &config,
+                    &candidate,
+                    generation::CommitControl::with_projection_orphan_tamper(tamper),
+                ),
+                StoreStatus::Skipped(StoreSkipReason::CommitFailed)
+            );
+
+            let (generation_id, status) =
+                generation_attempt(&database, &candidate, reservation_ordinal as i64);
+            assert_eq!(status, schema::GenerationStatus::Failed.label());
+            assert_eq!(
+                generation::payload_row_count_for_test(&config, generation_id)
+                    .expect("count rolled-back orphaned payload"),
+                0
+            );
+            let (reason, stage): (String, String) = database
+                .query_row(
+                    "SELECT reason_code, stage_code FROM generation_failure_events
+                     WHERE generation_id = ?1",
+                    [generation_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .expect("read foreign-key validation audit");
+            assert_eq!(
+                reason,
+                schema::GenerationFailureReason::PostWriteValidationFailed.label(),
+                "orphan tamper {tamper:?} must reach post-write validation"
+            );
+            assert_eq!(stage, schema::GenerationFailureStage::Statistics.label());
+            assert_eq!(active_generation(&database), original_active);
+        }
     }
 
     #[test]
@@ -3029,6 +3560,9 @@ mod active_complete_reader {
         );
 
         let database = Connection::open(config.path()).expect("open store");
+        database
+            .execute("DROP TRIGGER generation_reservation_identity_immutable", [])
+            .expect("remove identity guard for tamper fixture");
         let changed = database
             .execute(
                 "UPDATE generations SET run_value = run_value || '.tampered'
@@ -3042,7 +3576,7 @@ mod active_complete_reader {
         assert_eq!(
             generation::read_active_complete(&config, &plan.semantic.identities.workspace),
             Err(StoreStatus::RebuildNeeded(
-                StoreRebuildReason::InvalidMetadata
+                StoreRebuildReason::InvalidSchema
             ))
         );
     }
@@ -3666,6 +4200,48 @@ mod recovery {
         assert_eq!(
             connection::read_schema_version(&reader).expect("schema version"),
             migrations::CURRENT_SCHEMA_VERSION
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sqlite_open_allows_symlink_above_the_managed_cache_root() {
+        let temp = tempfile::tempdir().expect("temporary store root");
+        let real_root = temp.path().join("real-root");
+        fs::create_dir_all(real_root.join("cache")).expect("create managed cache root");
+        let root_alias = temp.path().join("root-alias");
+        std::os::unix::fs::symlink(&real_root, &root_alias).expect("symlink root alias");
+        let path = root_alias.join("cache/semantic-store/store.sqlite3");
+        let config = StoreConfig::new(&path, true);
+
+        assert_eq!(
+            initialize_empty_fixture_for_test(&config),
+            StoreStatus::Ready
+        );
+        let reader = connection::open_read_only(&path).expect("open through ancestor alias");
+        assert_eq!(
+            connection::read_schema_version(&reader).expect("schema version"),
+            migrations::CURRENT_SCHEMA_VERSION
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sqlite_open_rejects_target_replaced_after_path_certification() {
+        let temp = tempfile::tempdir().expect("temporary store root");
+        let target_path = store_path(&temp);
+        prepare_store_path(&target_path).expect("certify absent store target");
+
+        let outside = temp.path().join("outside.sqlite3");
+        fs::write(&outside, b"outside target").expect("write outside target");
+        std::os::unix::fs::symlink(&outside, &target_path)
+            .expect("replace certified target with symlink");
+
+        assert!(connection::open_writer(&target_path).is_err());
+        assert!(connection::open_read_only(&target_path).is_err());
+        assert_eq!(
+            fs::read(&outside).expect("read outside target"),
+            b"outside target"
         );
     }
 

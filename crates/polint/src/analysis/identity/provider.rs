@@ -26,12 +26,12 @@ pub(crate) struct IdentityProviderRunOutput {
     pub(crate) output_digest: Option<Digest>,
 }
 
-/// Identity provider entry point (Pattern E).
+/// Identity provider entry point.
 ///
 /// Five-stage pipeline: extract identity records by projecting existing
-/// `analysis::calls` and function facts (no mutation, D-04) -> dedup (D-09) ->
-/// assign dense IDs after sort+dedup -> normalize -> compute output digest over
-/// stable payloads (Pattern F) and replace identity facts.
+/// `analysis::calls` and function facts without mutation -> deduplicate -> assign
+/// dense IDs after sorting -> normalize -> compute an output digest over stable
+/// payloads and replace identity facts.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn derive_identity_with_cache_stats(
     db: &mut AnalysisDb,
@@ -262,7 +262,7 @@ fn language_tag(language: Language) -> Option<LanguageTag> {
     }
 }
 
-/// Output digest over stable payloads, never dense IDs (Pattern F, T-42-02).
+/// Output digest over stable payloads, never dense IDs.
 fn identity_output_digest(
     manifest: &ProviderManifest,
     input_snapshot: &InputSnapshot,

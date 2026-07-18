@@ -106,10 +106,10 @@ pub(crate) use digest::{
     expect(unused_imports, reason = "kept for private internal consumers")
 )]
 pub(crate) use input_snapshot::{
-    AnalysisSettingSource, FileSnapshot, GoLifecycleSnapshot, INPUT_SNAPSHOT_SCHEMA_VERSION,
-    InputComponent, InputComponentStatus, InputSnapshot, InputSnapshotIdentitySources,
-    InputSnapshotRuntimeSources, ProviderSchemaSnapshot, TsJsLifecycleSnapshot,
-    input_component_identity_rows,
+    AnalysisSettingSource, FileSnapshot, GoLifecycleSnapshot, GoRepositoryCacheRoots,
+    INPUT_SNAPSHOT_SCHEMA_VERSION, InputComponent, InputComponentStatus, InputSnapshot,
+    InputSnapshotIdentitySources, InputSnapshotRuntimeSources, ProviderSchemaSnapshot,
+    TsJsLifecycleSnapshot, input_component_identity_rows,
 };
 pub(in crate::analysis_kernel) use input_snapshot::{
     digest_semantic_row as input_snapshot_digest_row, semantic_row as input_snapshot_semantic_row,
@@ -151,6 +151,8 @@ pub(crate) use keys::{
     module_graph_topology_input_digest_rows, module_graph_topology_input_digests,
     semantic_provider_parameter_digest,
 };
+#[cfg(test)]
+pub(crate) use layer_cache::replace_manifest_dependencies_with_irrelevant_source_for_test;
 #[cfg_attr(
     test,
     allow(

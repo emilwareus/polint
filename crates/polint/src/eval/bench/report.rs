@@ -46,11 +46,11 @@ pub(crate) fn write_curve_series(path: &Path, series: &CurveSeries) -> anyhow::R
 /// (the leading fields of the derived `CurvePoint` `Ord`), so the output is
 /// deterministic.
 ///
-/// "Peak RSS (MiB)" is the process-wide absolute high-water mark (reporting
-/// only). "Peak RSS delta (bytes)" is the run-attributable
-/// `peak_rss_delta_bytes` — the metric the regression gate actually fails on
-/// (`gate::evaluate_regression_budget`), rendered in raw bytes so the number a
-/// verdict is computed from is auditable without MiB rounding (LW-09).
+/// "Peak RSS (MiB)" is the process-wide absolute high-water mark used by
+/// isolated same-host paired gates. "Peak RSS delta (bytes)" is the raw
+/// run-attributable `peak_rss_delta_bytes`; it remains visible as informational
+/// evidence and can legitimately be zero when startup established the process
+/// high-water mark.
 pub(crate) fn render_curve_markdown(series: &CurveSeries) -> String {
     let mut sorted = series.clone();
     sorted.sort();
@@ -318,9 +318,9 @@ mod tests {
             );
         }
 
-        // The gated `peak_rss_delta_bytes` (1 MiB in the fixture point) must be
-        // rendered in raw bytes so the number a regression verdict is computed
-        // from is auditable (LW-09).
+        // The raw `peak_rss_delta_bytes` (1 MiB in the fixture point) remains
+        // visible without MiB rounding even though portable paired gates use
+        // isolated absolute peaks.
         assert!(
             markdown.contains(&(1024 * 1024).to_string()),
             "markdown must render the raw peak-RSS delta bytes:\n{markdown}"

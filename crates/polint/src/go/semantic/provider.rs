@@ -268,8 +268,8 @@ fn store_output(
     let output = parts.output.normalized();
     match db.replace_go_semantic_facts(output) {
         // `replace_go_semantic_facts` returns the resilience report: the count of malformed
-        // RTA-signal harvest rows it dropped (FIX 3) and the duplicate STRUCTURAL rows it
-        // collapsed keep-first (FIX-08). Surface a counted diagnostic for each so a systematic
+        // RTA-signal harvest rows it dropped and duplicate STRUCTURAL rows it collapsed
+        // keep-first. Surface a counted diagnostic for each so a systematic
         // frontend regression (e.g. every method_set losing its stable_key, or an emitter
         // double-emitting one structural key) is OBSERVABLE rather than silently
         // under-resolving — or, in the structural case, no longer catastrophically zeroing all
@@ -395,11 +395,10 @@ fn go_semantic_output_digest(
             method_set.methods.join(",")
         )
     }));
-    // FIX 4: the three RTA-signal harvest families (`instantiated_types`, `address_taken`,
-    // `dynamic_dispatch`) change the RTA-resolved derived edges but were NOT folded here, so
-    // a Go edit touching ONLY them changed neither this digest nor the downstream solver
-    // digest — a stale-edge false-cache-hit risk once a persistent cache lands. Fold each
-    // row's content (mirroring `method_sets`); the output is `parts.sort()`-ed below, so
+    // The three RTA-signal harvest families (`instantiated_types`, `address_taken`,
+    // `dynamic_dispatch`) change the RTA-resolved derived edges and therefore must
+    // participate in both this digest and the downstream solver digest. Fold each row's
+    // content (mirroring `method_sets`); the output is `parts.sort()`-ed below, so
     // insertion order does not matter. The instantiated_type FILTER is the RTA discriminant,
     // so its membership must invalidate; the address-taken set drives func-value resolution;
     // the dynamic-dispatch discriminant decides which callees a callsite resolves to.
@@ -510,10 +509,10 @@ fn setup_missing_diagnostic(reason: &str) -> Diagnostic {
     category_diagnostic(category_for_package_error(), reason.to_string())
 }
 
-/// Observable signal that malformed RTA-signal harvest rows were dropped (FIX 3). Routed
+/// Observable signal that malformed RTA-signal harvest rows were dropped. Routed
 /// through the same diagnostic channel the provider uses for setup/diagnostic messages so
 /// a systematic frontend regression surfaces loudly instead of being swallowed into
-/// repo-wide under-resolution. NOT fatal (the row-resilience contract, FINDING B) — just
+/// repo-wide under-resolution. This is not fatal under the row-resilience contract, only
 /// visible.
 fn dropped_harvest_rows_diagnostic(dropped: usize) -> Diagnostic {
     category_diagnostic(
@@ -526,7 +525,7 @@ fn dropped_harvest_rows_diagnostic(dropped: usize) -> Diagnostic {
 }
 
 /// Observable signal that duplicate STRUCTURAL rows (packages/functions/method_sets) were
-/// collapsed keep-first (FIX-08). A SINGLE duplicate structural stable key used to make
+/// collapsed keep-first. A SINGLE duplicate structural stable key used to make
 /// `validate_unique` reject the whole output, leaving the DB with ZERO Go facts and driving
 /// RTA to zero edges repo-wide (recurring 3×); the store now collapses the duplicate and
 /// surfaces this counted diagnostic so the emitter regression is loud instead of catastrophic.
@@ -728,9 +727,9 @@ mod tests {
 
     #[test]
     fn provider_surfaces_a_diagnostic_when_invalid_harvest_rows_are_dropped() {
-        // FIX 3 (LOW): dropping invalid RTA-signal harvest rows must be OBSERVABLE. The
+        // Dropping invalid RTA-signal harvest rows must be OBSERVABLE. The
         // sidecar emits one discriminant-less dynamic_dispatch row (no interface_type, no
-        // method, no signature); the store drops it (row-resilience, FINDING B) but the
+        // method, no signature); the store drops it under row resilience, but the
         // provider must surface a counted diagnostic so a systematic frontend regression is
         // visible rather than silently under-resolving repo-wide.
         let temp = tempfile::tempdir().expect("tempdir");
@@ -818,7 +817,7 @@ mod tests {
 
     #[test]
     fn provider_surfaces_a_diagnostic_when_duplicate_structural_rows_are_collapsed() {
-        // FIX-08 (CATASTROPHIC, recurring 3×): a SINGLE duplicate stable key in a structural
+        // A SINGLE duplicate stable key in a structural
         // family (here two byte-identical `function` rows) used to make `validate_unique` →
         // Err → the provider stored ZERO Go facts → RTA derived zero edges repo-wide. The
         // store now collapses the duplicate keep-first BEFORE validation, so the valid facts
@@ -1052,11 +1051,11 @@ mod tests {
         )
     }
 
-    /// FIX 4 part 1: the three RTA-signal harvest families
+    /// The three RTA-signal harvest families
     /// (`instantiated_types` / `address_taken` / `dynamic_dispatch`) must each be FOLDED into
     /// `go_semantic_output_digest`. A Go edit that changes ONLY one of them changes the
     /// RTA-resolved edges, so the go.semantic output digest MUST change too (otherwise a
-    /// persistent cache could serve stale RTA edges, WR-06). Before the fix only `method_sets`
+    /// persistent cache could serve stale RTA edges). Without these inputs, only `method_sets`
     /// was folded, so each of these mutations left the digest unchanged.
     #[test]
     fn rta_harvest_families_participate_in_go_semantic_output_digest() {

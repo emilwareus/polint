@@ -683,7 +683,6 @@ impl StableFactRowBudget {
         Ok(())
     }
 
-    #[cfg(test)]
     pub(crate) fn remaining(self) -> usize {
         self.remaining
     }
@@ -1312,11 +1311,37 @@ pub(crate) struct PreparedCompactStableRows {
 pub(in crate::analysis_kernel) struct FinalizedCanonicalFactRows {
     rows: Vec<StableFactMetaRow>,
     digest: Digest,
+    storage_proof: CanonicalFactStorageProof,
 }
 
 impl FinalizedCanonicalFactRows {
-    pub(in crate::analysis_kernel) fn into_parts(self) -> (Vec<StableFactMetaRow>, Digest) {
-        (self.rows, self.digest)
+    pub(in crate::analysis_kernel) fn into_parts(
+        self,
+    ) -> (Vec<StableFactMetaRow>, Digest, CanonicalFactStorageProof) {
+        (self.rows, self.digest, self.storage_proof)
+    }
+
+    #[cfg(test)]
+    pub(in crate::analysis_kernel) fn from_canonical_rows_for_test(
+        rows: Vec<StableFactMetaRow>,
+    ) -> Result<Self, StableFactStorageError> {
+        PreparedCompactStableRows { rows }.finish_validated()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::analysis_kernel) struct CanonicalFactStorageProof {
+    row_count: usize,
+    fact_digest: Digest,
+}
+
+impl CanonicalFactStorageProof {
+    pub(in crate::analysis_kernel) fn matches(
+        &self,
+        rows: &[StableFactMetaRow],
+        fact_digest: &Digest,
+    ) -> bool {
+        self.row_count == rows.len() && self.fact_digest == *fact_digest
     }
 }
 
@@ -1330,16 +1355,18 @@ impl PreparedCompactStableRows {
         self,
     ) -> Result<FinalizedCanonicalFactRows, StableFactStorageError> {
         let (rows, digest) = self.finish_parts()?;
-        Ok(FinalizedCanonicalFactRows { rows, digest })
+        let storage_proof = CanonicalFactStorageProof {
+            row_count: rows.len(),
+            fact_digest: digest.clone(),
+        };
+        Ok(FinalizedCanonicalFactRows {
+            rows,
+            digest,
+            storage_proof,
+        })
     }
 
     fn finish_parts(mut self) -> Result<(Vec<StableFactMetaRow>, Digest), StableFactStorageError> {
-        for row in &self.rows {
-            let StableFactKey::Plain(stable_key) = &row.stable_key else {
-                return Err(StableFactStorageError::InvalidStableKeyEncoding);
-            };
-            validate_decoded_stable_key_len(stable_key.len())?;
-        }
         let compressed = self
             .rows
             .par_iter_mut()
@@ -1347,7 +1374,7 @@ impl PreparedCompactStableRows {
                 || (Vec::new(), lz4_flex::block::CompressTable::default()),
                 |(compression_scratch, compression_table), row| {
                     let StableFactKey::Plain(stable_key) = &row.stable_key else {
-                        unreachable!("newly materialized fact rows retain plain stable keys")
+                        return Err(StableFactStorageError::InvalidStableKeyEncoding);
                     };
                     let fingerprint = Digest::fingerprint_from_parts(
                         DigestKind::FactMetadata,

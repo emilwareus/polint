@@ -1031,6 +1031,7 @@ dependencies = [
  "tracing-subscriber",
  "tree-sitter",
  "tree-sitter-go",
+ "windows-sys",
 ]
 
 [[package]]

@@ -38,17 +38,34 @@ Local generated reports belong under ignored output directories such as
 `target/polint-eval/`. Commit only the normalized summary needed for regression
 gates or benchmark tables.
 
-## Phase 54 Closeout Note
+## Store-Disabled Performance Artifacts
 
-The final BENCH-01 audit is recorded at
-`.planning/phases/54-benchmark-promotion-gate-extension/54-AUDIT.md`.
+`store-disabled-check.json` and `store-disabled-review.json` use the
+`polint-store-disabled-baseline-1` schema. In addition to the measured metrics,
+each artifact records the fixture version and digest, product version and source
+revision, result kind, generation command, profile/features/lockfile settings,
+target OS and architecture, Rust and Cargo identity, artifact path, metric
+names, and portability limitations. Regeneration rejects tracked or untracked
+workspace changes so the recorded clean-source claim is meaningful; ignored
+build outputs remain ignored.
 
-Local promotion verification passed for precision-floor enforcement, F0.5/F1
-reporting, per-language deltas, false-positive trap flooding, the polyglot
-canary, public-surface leak gate, determinism, clippy, rustfmt, and whitespace
-checks.
+Regenerate both artifacts from a clean committed tree with a POSIX shell (or
+Git Bash on Windows):
 
-External Go x/tools RTA and Jelly corpus final recall values are marked
-limited/skipped in that audit because benchmark clones and generated full-corpus
-outputs are not committed under this policy. Do not use the local Phase 54 audit
-alone to claim a measured recall lift against those full external suites.
+```console
+CARGO_PROFILE_TEST_DEBUG=0 POLINT_WRITE_STORE_DISABLED_BASELINE=1 cargo test -p polint --lib --all-features --locked eval::baseline::tests::regenerate_committed_store_disabled_baselines -- --exact
+```
+
+The equivalent PowerShell invocation is:
+
+```powershell
+$env:CARGO_PROFILE_TEST_DEBUG = "0"
+$env:POLINT_WRITE_STORE_DISABLED_BASELINE = "1"
+cargo test -p polint --lib --all-features --locked eval::baseline::tests::regenerate_committed_store_disabled_baselines -- --exact
+```
+
+The committed numeric values are historical evidence and are informational
+unless the complete recorded measurement context exactly matches the comparison
+environment. Portable blocking performance checks use fresh store-disabled and
+store-enabled controls on the same host. Normal tests still validate the
+committed artifact schema and its fixture/version/digest contract.

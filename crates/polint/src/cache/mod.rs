@@ -133,6 +133,69 @@ impl Cache {
         &self.root
     }
 
+    fn managed_root(&self) -> &Path {
+        if self.root.file_name().and_then(|name| name.to_str()) == Some("analysis") {
+            self.root.parent().unwrap_or(&self.root)
+        } else {
+            &self.root
+        }
+    }
+
+    pub(crate) fn prepare_runtime_write_roots(
+        &self,
+        repository_root: &Path,
+    ) -> Result<Vec<PathBuf>> {
+        if (!self.enabled && !self.semantic_store_enabled)
+            || self.managed_root().as_os_str().is_empty()
+        {
+            return Ok(Vec::new());
+        }
+
+        let repository_root_input = repository_root;
+        let repository_root = repository_root_input.canonicalize().with_context(|| {
+            format!(
+                "failed to resolve repository root {} before cache preparation",
+                repository_root_input.display()
+            )
+        })?;
+        let _managed_root = prepare_cache_directory(
+            repository_root_input,
+            repository_root.as_path(),
+            self.managed_root(),
+        )?;
+
+        let mut roots = Vec::new();
+        if self.enabled {
+            let analysis_root = prepare_cache_directory(
+                repository_root_input,
+                repository_root.as_path(),
+                &self.root,
+            )?;
+            if analysis_root == repository_root {
+                anyhow::bail!(
+                    "analysis cache directory must not be the repository root {}",
+                    repository_root.display()
+                );
+            }
+            roots.push(analysis_root);
+            roots.push(prepare_cache_directory(
+                repository_root_input,
+                repository_root.as_path(),
+                &self.layer_cache_dir(),
+            )?);
+        }
+        if self.semantic_store_enabled {
+            roots.push(prepare_cache_directory(
+                repository_root_input,
+                repository_root.as_path(),
+                &self.semantic_store_dir(),
+            )?);
+        }
+        roots.sort();
+        roots.dedup();
+        Ok(roots)
+    }
+
     pub(crate) fn semantic_store_path(&self) -> PathBuf {
         self.semantic_store_dir().join("store.sqlite3")
     }
@@ -330,6 +393,39 @@ impl Cache {
         let relative_path = path.strip_prefix(repo_root).ok()?;
         crate::repo_fs::normalize_repo_relative_input(relative_path)
     }
+}
+
+fn prepare_cache_directory(
+    repository_root_input: &Path,
+    repository_root: &Path,
+    path: &Path,
+) -> Result<PathBuf> {
+    let prepared = if let Ok(relative) = path.strip_prefix(repository_root_input) {
+        crate::repo_fs::ensure_repo_dir(repository_root_input, relative).with_context(|| {
+            format!(
+                "failed to prepare repository cache directory {}",
+                path.display()
+            )
+        })?
+    } else {
+        crate::repo_fs::create_dir_all_no_symlink(path)
+            .with_context(|| format!("failed to prepare cache directory {}", path.display()))?;
+        path.to_path_buf()
+    };
+    let prepared = prepared.canonicalize().with_context(|| {
+        format!(
+            "failed to resolve prepared cache directory {}",
+            prepared.display()
+        )
+    })?;
+    if path.starts_with(repository_root_input) && !prepared.starts_with(repository_root) {
+        anyhow::bail!(
+            "repository cache directory {} escaped repository root {}",
+            prepared.display(),
+            repository_root.display()
+        );
+    }
+    Ok(prepared)
 }
 
 enum CacheFileAccess {
@@ -903,6 +999,90 @@ mod tests {
         assert!(!cache.root().exists());
         assert!(!temp.path().join(".polint/cache").exists());
         assert!(!cache.is_enabled());
+    }
+
+    #[test]
+    fn runtime_write_roots_track_only_active_cache_directories() {
+        let temp = tempfile::tempdir().unwrap();
+        let layout_root = temp.path().join("cache");
+
+        assert!(
+            Cache::new("", false)
+                .prepare_runtime_write_roots(temp.path())
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            Cache::default_for_repo(temp.path(), false)
+                .prepare_runtime_write_roots(temp.path())
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            Cache::new(layout_root.join("analysis"), true)
+                .prepare_runtime_write_roots(temp.path())
+                .unwrap(),
+            vec![
+                layout_root.join("analysis").canonicalize().unwrap(),
+                layout_root.join("layers").canonicalize().unwrap(),
+            ]
+        );
+
+        let repository_layout_cache = Cache::new(temp.path().join("analysis"), true)
+            .prepare_runtime_write_roots(temp.path())
+            .unwrap();
+        assert_eq!(
+            repository_layout_cache,
+            vec![
+                temp.path().join("analysis").canonicalize().unwrap(),
+                temp.path().join("layers").canonicalize().unwrap(),
+            ]
+        );
+
+        let semantic_only = Cache::default_for_repo(temp.path(), false)
+            .with_semantic_store_enabled_for_test()
+            .prepare_runtime_write_roots(temp.path())
+            .unwrap();
+        assert_eq!(
+            semantic_only,
+            vec![
+                temp.path()
+                    .join(".polint/cache/semantic-store")
+                    .canonicalize()
+                    .unwrap()
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_write_roots_canonicalize_a_repository_symlink_alias() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let repository = temp.path().join("repository");
+        let alias = temp.path().join("alias");
+        fs::create_dir(&repository).unwrap();
+        symlink(&repository, &alias).unwrap();
+        let layout_root = alias.join(".polint/cache");
+
+        let roots = Cache::new(layout_root.join("analysis"), true)
+            .prepare_runtime_write_roots(&alias)
+            .unwrap();
+
+        assert_eq!(
+            roots,
+            vec![
+                repository
+                    .join(".polint/cache/analysis")
+                    .canonicalize()
+                    .unwrap(),
+                repository
+                    .join(".polint/cache/layers")
+                    .canonicalize()
+                    .unwrap(),
+            ]
+        );
     }
 
     #[test]

@@ -1,8 +1,8 @@
 //! Private repo-local adaptation model substrate.
 //!
-//! The public SDK does not expose this module. It loads, validates,
-//! sort, budget, and digest source-evident model facts before later plans lower
-//! accepted facts to semantic-graph `ModelEdge` constraints.
+//! The public SDK does not expose this module. It loads, validates, sorts,
+//! budgets, and digests source-evident model facts before lowering accepted
+//! facts to semantic-graph `ModelEdge` constraints.
 
 pub(crate) mod budget;
 pub(crate) mod cache_key;

@@ -1,6 +1,6 @@
 #![allow(
     dead_code,
-    reason = "Extension layer cache keys are consumed by cache persistence and eval fixtures after the initial constructor lands."
+    reason = "Extension layer cache keys are consumed by cache persistence and internal evaluation fixtures."
 )]
 
 use crate::analysis_kernel::ProviderManifest;

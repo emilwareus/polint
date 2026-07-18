@@ -4,6 +4,35 @@ use std::path::{Component, Path, PathBuf};
 
 use thiserror::Error;
 
+#[cfg(not(any(
+    windows,
+    target_os = "android",
+    target_os = "freebsd",
+    target_os = "ios",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "netbsd",
+    target_os = "openbsd"
+)))]
+#[path = "repo_fs/anchored_fallback.rs"]
+mod anchored;
+#[cfg(any(
+    target_os = "android",
+    target_os = "freebsd",
+    target_os = "ios",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "netbsd",
+    target_os = "openbsd"
+))]
+#[path = "repo_fs/anchored_unix.rs"]
+mod anchored;
+#[cfg(windows)]
+#[path = "repo_fs/anchored_windows.rs"]
+mod anchored;
+
+pub(crate) use anchored::{RepoDirectory, RepoDirectoryEntry, RepoDirectoryEntryKind, RepoFile};
+
 pub(crate) const TOPOLOGY_MANIFEST_MAX_BYTES: u64 = 1_048_576;
 pub(crate) const TOPOLOGY_LOCKFILE_MAX_BYTES: u64 = 16 * 1_048_576;
 
@@ -29,7 +58,18 @@ pub(crate) enum RepoFileReadError {
     InvalidUtf8,
     #[error("read failed")]
     Read,
-    #[cfg(not(unix))]
+    #[error("filesystem resources exhausted")]
+    ResourceExhausted,
+    #[cfg(not(any(
+        windows,
+        target_os = "android",
+        target_os = "freebsd",
+        target_os = "ios",
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    )))]
     #[error("secure anchored file reads are unavailable on this platform")]
     SecureOpenUnavailable,
     #[error("create directory failed")]
@@ -56,7 +96,17 @@ impl RepoFileReadError {
             }
             Self::InvalidUtf8 => "invalid utf-8",
             Self::Read => "read failed",
-            #[cfg(not(unix))]
+            Self::ResourceExhausted => "filesystem resources exhausted",
+            #[cfg(not(any(
+                windows,
+                target_os = "android",
+                target_os = "freebsd",
+                target_os = "ios",
+                target_os = "linux",
+                target_os = "macos",
+                target_os = "netbsd",
+                target_os = "openbsd"
+            )))]
             Self::SecureOpenUnavailable => "secure anchored file reads unavailable",
             Self::CreateDir => "directory creation failed",
             Self::Write => "write failed",
@@ -66,6 +116,37 @@ impl RepoFileReadError {
 
     pub(crate) fn is_not_found(&self) -> bool {
         matches!(self, Self::NotFound)
+    }
+
+    pub(crate) fn is_resource_exhausted(&self) -> bool {
+        matches!(self, Self::ResourceExhausted)
+    }
+
+    pub(crate) fn is_secure_open_unavailable(&self) -> bool {
+        #[cfg(not(any(
+            windows,
+            target_os = "android",
+            target_os = "freebsd",
+            target_os = "ios",
+            target_os = "linux",
+            target_os = "macos",
+            target_os = "netbsd",
+            target_os = "openbsd"
+        )))]
+        {
+            return matches!(self, Self::SecureOpenUnavailable);
+        }
+        #[cfg(any(
+            windows,
+            target_os = "android",
+            target_os = "freebsd",
+            target_os = "ios",
+            target_os = "linux",
+            target_os = "macos",
+            target_os = "netbsd",
+            target_os = "openbsd"
+        ))]
+        false
     }
 }
 
@@ -216,6 +297,7 @@ pub(crate) fn read_repo_file_to_string_with_limit(
     String::from_utf8(bytes).map_err(|_| RepoFileReadError::InvalidUtf8)
 }
 
+#[cfg(test)]
 pub(crate) fn read_repo_file_anchored_to_string_with_limit(
     root: &Path,
     relative_path: impl AsRef<Path>,
@@ -225,107 +307,25 @@ pub(crate) fn read_repo_file_anchored_to_string_with_limit(
     String::from_utf8(bytes).map_err(|_| RepoFileReadError::InvalidUtf8)
 }
 
-#[cfg(unix)]
+#[cfg(test)]
 fn read_repo_file_anchored_with_limit(
     root: &Path,
     relative_path: impl AsRef<Path>,
     max_bytes: u64,
 ) -> Result<Vec<u8>, RepoFileReadError> {
-    use std::ffi::CString;
-    use std::os::fd::{AsRawFd, OwnedFd};
-    use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::fs::OpenOptionsExt;
-
     let relative_path =
         normalize_repo_relative_input(relative_path).ok_or(RepoFileReadError::AbsolutePath)?;
-    let components = relative_path
-        .components()
-        .map(|component| match component {
-            Component::Normal(segment) => Ok(segment),
-            _ => Err(RepoFileReadError::AbsolutePath),
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    if components.is_empty() {
+    let Some(file_name) = relative_path.file_name() else {
         return Err(RepoFileReadError::NotFile);
-    }
-
-    let root_dir = fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW)
-        .open(root)
-        .map_err(map_anchored_open_error)?;
-    if !root_dir
-        .metadata()
-        .map_err(|_| RepoFileReadError::Metadata)?
-        .is_dir()
-    {
-        return Err(RepoFileReadError::RootUnavailable);
-    }
-
-    let mut directory: OwnedFd = root_dir.into();
-    for (index, component) in components.iter().enumerate() {
-        let name = CString::new(component.as_bytes()).map_err(|_| RepoFileReadError::Metadata)?;
-        let is_file = index + 1 == components.len();
-        let mut flags = libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK;
-        if !is_file {
-            flags |= libc::O_DIRECTORY;
-        }
-        let opened = openat_no_follow(directory.as_raw_fd(), &name, flags)
-            .map_err(map_anchored_open_error)?;
-        if is_file {
-            let file = fs::File::from(opened);
-            let metadata = file.metadata().map_err(|_| RepoFileReadError::Metadata)?;
-            if !metadata.is_file() {
-                return Err(RepoFileReadError::NotFile);
-            }
-            return read_open_file_with_limit(file, metadata.len(), max_bytes);
-        }
-        directory = opened;
-    }
-
-    Err(RepoFileReadError::NotFile)
-}
-
-#[cfg(unix)]
-#[allow(unsafe_code)]
-fn openat_no_follow(
-    directory: std::os::fd::RawFd,
-    name: &std::ffi::CStr,
-    flags: libc::c_int,
-) -> std::io::Result<std::os::fd::OwnedFd> {
-    use std::os::fd::FromRawFd;
-
-    // SAFETY: `directory` is a live directory descriptor, `name` is NUL-terminated,
-    // and ownership of a successful descriptor is transferred exactly once.
-    let descriptor = unsafe { libc::openat(directory, name.as_ptr(), flags) };
-    if descriptor < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    // SAFETY: `openat` returned a new owned descriptor on success.
-    Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(descriptor) })
-}
-
-#[cfg(unix)]
-fn map_anchored_open_error(error: std::io::Error) -> RepoFileReadError {
-    match error.raw_os_error() {
-        Some(libc::ENOENT) => RepoFileReadError::NotFound,
-        Some(libc::ELOOP) => RepoFileReadError::EscapesRepo,
-        Some(libc::ENOTDIR) => RepoFileReadError::NotDirectory,
-        _ => RepoFileReadError::Read,
-    }
-}
-
-#[cfg(not(unix))]
-fn read_repo_file_anchored_with_limit(
-    _root: &Path,
-    _relative_path: impl AsRef<Path>,
-    _max_bytes: u64,
-) -> Result<Vec<u8>, RepoFileReadError> {
-    Err(RepoFileReadError::SecureOpenUnavailable)
+    };
+    let parent = relative_path.parent().unwrap_or_else(|| Path::new("."));
+    RepoDirectory::open(root, parent)?
+        .open_file(file_name)?
+        .read_with_limit(max_bytes)
 }
 
 fn read_open_file_with_limit(
-    mut file: fs::File,
+    file: &mut fs::File,
     file_len: u64,
     max_bytes: u64,
 ) -> Result<Vec<u8>, RepoFileReadError> {
@@ -333,14 +333,40 @@ fn read_open_file_with_limit(
         return Err(RepoFileReadError::TooLarge { max_bytes });
     }
     let mut bytes = Vec::new();
-    std::io::Read::by_ref(&mut file)
+    std::io::Read::by_ref(file)
         .take(max_bytes.saturating_add(1))
         .read_to_end(&mut bytes)
-        .map_err(|_| RepoFileReadError::Read)?;
+        .map_err(map_repo_file_read_error)?;
     if bytes.len() as u64 > max_bytes {
         return Err(RepoFileReadError::TooLarge { max_bytes });
     }
     Ok(bytes)
+}
+
+fn map_repo_file_read_error(error: std::io::Error) -> RepoFileReadError {
+    if error.kind() == std::io::ErrorKind::OutOfMemory {
+        return RepoFileReadError::ResourceExhausted;
+    }
+    #[cfg(unix)]
+    if matches!(
+        error.raw_os_error(),
+        Some(libc::EMFILE) | Some(libc::ENFILE) | Some(libc::ENOMEM)
+    ) {
+        return RepoFileReadError::ResourceExhausted;
+    }
+    #[cfg(windows)]
+    if matches!(
+        error.raw_os_error().map(|code| code as u32),
+        Some(windows_sys::Win32::Foundation::ERROR_TOO_MANY_OPEN_FILES)
+            | Some(windows_sys::Win32::Foundation::ERROR_NOT_ENOUGH_MEMORY)
+            | Some(windows_sys::Win32::Foundation::ERROR_OUTOFMEMORY)
+            | Some(windows_sys::Win32::Foundation::ERROR_NO_SYSTEM_RESOURCES)
+            | Some(windows_sys::Win32::Foundation::ERROR_WORKING_SET_QUOTA)
+            | Some(windows_sys::Win32::Foundation::ERROR_NOT_ENOUGH_QUOTA)
+    ) {
+        return RepoFileReadError::ResourceExhausted;
+    }
+    RepoFileReadError::Read
 }
 
 pub(crate) fn repo_relative_existing_path(root: &Path, path: &Path) -> Option<String> {
@@ -618,6 +644,113 @@ pub(crate) fn normalize_repo_relative_path(root: &Path, path: &Path) -> Option<S
 mod tests {
     use super::*;
 
+    #[cfg(any(
+        windows,
+        target_os = "android",
+        target_os = "freebsd",
+        target_os = "ios",
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    #[test]
+    fn anchored_read_supports_regular_files_and_enforces_the_limit() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(temp.path().join("nested")).expect("nested directory");
+        std::fs::write(temp.path().join("nested/model.toml"), "schema = 1\n").expect("write model");
+
+        assert_eq!(
+            read_repo_file_anchored_to_string_with_limit(temp.path(), "nested/model.toml", 1_024,)
+                .expect("anchored read"),
+            "schema = 1\n"
+        );
+        assert!(matches!(
+            read_repo_file_anchored_to_string_with_limit(temp.path(), "nested/model.toml", 2),
+            Err(RepoFileReadError::TooLarge { max_bytes: 2 })
+        ));
+    }
+
+    #[cfg(any(
+        windows,
+        target_os = "android",
+        target_os = "freebsd",
+        target_os = "ios",
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    #[test]
+    fn pinned_directory_enumeration_can_be_repeated() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(temp.path().join("a.toml"), "a = 1\n").expect("write a");
+        std::fs::write(temp.path().join("b.toml"), "b = 1\n").expect("write b");
+        let directory = RepoDirectory::open(temp.path(), Path::new(".")).expect("open directory");
+
+        let collect_names = || {
+            let mut names = Vec::new();
+            directory
+                .visit_entries(|entry| {
+                    names.push(entry.name);
+                    true
+                })
+                .expect("enumerate directory");
+            names.sort();
+            names
+        };
+
+        assert_eq!(collect_names(), collect_names());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn empty_pinned_directory_enumeration_can_be_repeated() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let directory = RepoDirectory::open(temp.path(), Path::new(".")).expect("open directory");
+
+        for _ in 0..2 {
+            let mut names = Vec::new();
+            directory
+                .visit_entries(|entry| {
+                    names.push(entry.name);
+                    true
+                })
+                .expect("enumerate empty directory");
+            assert!(names.is_empty());
+        }
+    }
+
+    #[cfg(any(
+        target_os = "android",
+        target_os = "freebsd",
+        target_os = "ios",
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    #[test]
+    fn anchored_enumeration_classifies_socket_without_opening_it_as_content() {
+        use std::os::unix::net::UnixListener;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _socket = UnixListener::bind(temp.path().join("service.sock")).expect("bind socket");
+        let directory = RepoDirectory::open(temp.path(), Path::new(".")).expect("open directory");
+        let mut saw_socket = false;
+
+        directory
+            .visit_entries(|entry| {
+                if entry.name == "service.sock" {
+                    saw_socket = matches!(entry.kind, Ok(RepoDirectoryEntryKind::Other));
+                }
+                true
+            })
+            .expect("enumerate directory");
+
+        assert!(saw_socket);
+    }
+
     #[test]
     fn read_repo_file_with_limit_rejects_oversized_files() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -633,11 +766,138 @@ mod tests {
     }
 
     #[test]
+    fn read_resource_exhaustion_is_not_downgraded_to_a_per_file_error() {
+        assert!(matches!(
+            map_repo_file_read_error(std::io::Error::from(std::io::ErrorKind::OutOfMemory)),
+            RepoFileReadError::ResourceExhausted
+        ));
+        #[cfg(unix)]
+        assert!(matches!(
+            map_repo_file_read_error(std::io::Error::from_raw_os_error(libc::ENOMEM)),
+            RepoFileReadError::ResourceExhausted
+        ));
+        assert!(matches!(
+            map_repo_file_read_error(std::io::Error::other("ordinary read failure")),
+            RepoFileReadError::Read
+        ));
+    }
+
+    #[test]
     fn read_repo_file_rejects_absolute_inputs() {
         let temp = tempfile::tempdir().expect("tempdir");
         let error = read_repo_file(temp.path(), temp.path().join("package.json")).unwrap_err();
 
         assert!(matches!(error, RepoFileReadError::AbsolutePath));
+    }
+
+    #[cfg(any(
+        target_os = "android",
+        target_os = "freebsd",
+        target_os = "ios",
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    #[test]
+    fn anchored_read_rejects_root_intermediate_and_file_symlinks() {
+        let outside = tempfile::tempdir().expect("outside");
+        std::fs::create_dir_all(outside.path().join("nested")).expect("outside nested");
+        std::fs::write(outside.path().join("nested/model.toml"), "secret = true\n")
+            .expect("outside model");
+
+        let container = tempfile::tempdir().expect("container");
+        let root_link = container.path().join("root-link");
+        std::os::unix::fs::symlink(outside.path(), &root_link).expect("root symlink");
+        assert!(matches!(
+            read_repo_file_anchored_to_string_with_limit(&root_link, "nested/model.toml", 1_024,),
+            Err(RepoFileReadError::EscapesRepo)
+        ));
+
+        let intermediate_repo = tempfile::tempdir().expect("intermediate repo");
+        std::os::unix::fs::symlink(
+            outside.path().join("nested"),
+            intermediate_repo.path().join("nested"),
+        )
+        .expect("intermediate symlink");
+        assert!(matches!(
+            read_repo_file_anchored_to_string_with_limit(
+                intermediate_repo.path(),
+                "nested/model.toml",
+                1_024,
+            ),
+            Err(RepoFileReadError::EscapesRepo)
+        ));
+
+        let file_repo = tempfile::tempdir().expect("file repo");
+        std::os::unix::fs::symlink(
+            outside.path().join("nested/model.toml"),
+            file_repo.path().join("model.toml"),
+        )
+        .expect("file symlink");
+        assert!(matches!(
+            read_repo_file_anchored_to_string_with_limit(file_repo.path(), "model.toml", 1_024),
+            Err(RepoFileReadError::EscapesRepo)
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn anchored_read_rejects_root_intermediate_and_file_reparse_points() {
+        use std::os::windows::fs::symlink_file;
+        use std::process::Command;
+
+        fn junction(target: &Path, link: &Path) {
+            let status = Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .status()
+                .expect("run mklink");
+            assert!(status.success(), "junction creation failed");
+        }
+
+        let outside = tempfile::tempdir().expect("outside");
+        std::fs::create_dir_all(outside.path().join("nested")).expect("outside nested");
+        std::fs::write(outside.path().join("nested/model.toml"), "secret = true\n")
+            .expect("outside model");
+
+        let container = tempfile::tempdir().expect("container");
+        let root_link = container.path().join("root-link");
+        junction(outside.path(), &root_link);
+        assert!(matches!(
+            read_repo_file_anchored_to_string_with_limit(&root_link, "nested/model.toml", 1_024,),
+            Err(RepoFileReadError::EscapesRepo)
+        ));
+
+        let intermediate_repo = tempfile::tempdir().expect("intermediate repo");
+        junction(
+            &outside.path().join("nested"),
+            &intermediate_repo.path().join("nested"),
+        );
+        assert!(matches!(
+            read_repo_file_anchored_to_string_with_limit(
+                intermediate_repo.path(),
+                "nested/model.toml",
+                1_024,
+            ),
+            Err(RepoFileReadError::EscapesRepo)
+        ));
+
+        let file_repo = tempfile::tempdir().expect("file repo");
+        if let Err(error) = symlink_file(
+            outside.path().join("nested/model.toml"),
+            file_repo.path().join("model.toml"),
+        ) {
+            if error.raw_os_error() == Some(1_314) {
+                return;
+            }
+            panic!("file symlink: {error}");
+        }
+        assert!(matches!(
+            read_repo_file_anchored_to_string_with_limit(file_repo.path(), "model.toml", 1_024),
+            Err(RepoFileReadError::EscapesRepo)
+        ));
     }
 
     #[cfg(unix)]

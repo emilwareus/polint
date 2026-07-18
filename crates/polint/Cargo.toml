@@ -49,6 +49,22 @@ tree-sitter-go.workspace = true
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
 
+# Windows-only filesystem certification, DACL sealing, and process containment.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Wdk_Foundation",
+    "Wdk_Storage_FileSystem",
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_IO",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+] }
+
 [lib]
 path = "src/lib.rs"
 
@@ -63,12 +79,11 @@ predicates.workspace = true
 proptest.workspace = true
 tempfile.workspace = true
 
-# polint owns its lint table (instead of `[lints] workspace = true`) so that the
-# single audited `getrusage` FFI in src/eval/bench/measure.rs can opt in via a
-# per-item `#[allow(unsafe_code)]`. Every workspace lint is mirrored verbatim;
-# ONLY `unsafe_code` is downgraded `forbid` -> `deny`, so unsafe stays denied
-# crate-wide and any use must carry an explicit, greppable allow. See
-# 63-01-SUMMARY.md "Deviations from Plan".
+# polint owns its lint table (instead of `[lints] workspace = true`) so audited
+# operating-system FFI boundaries can opt in with a per-item
+# `#[allow(unsafe_code)]`. Every workspace lint is mirrored verbatim; only
+# `unsafe_code` is downgraded from `forbid` to `deny`, so unsafe stays denied
+# crate-wide and every use must carry an explicit, greppable allow.
 [lints.rust]
 unsafe_code = "deny"
 unreachable_pub = "deny"

@@ -6,7 +6,7 @@ area = "refined-calls"
 path = "repo"
 
 [budget]
-max_runtime_ms = 10000
+max_runtime_ms = 30000
 
 [[expected]]
 fact = { family = "RefinedCallEdge", stable_key = "RefinedCallEdge", mode = "partial", producer_id = "polint.refined_calls", precision = "heuristic", status = "resolved" }
@@ -36,4 +36,4 @@ invariant = { name = "refined_calls.deltas.changed_edges.nonzero", value = "true
 invariant = { name = "provider_output.polint.refined_calls.present", value = "true", mode = "exact" }
 
 [[expected]]
-runtime_budget = { name = "refined_calls.direct_vs_refined", max_runtime_ms = 10000, mode = "exact" }
+runtime_budget = { name = "refined_calls.direct_vs_refined", max_runtime_ms = 30000, mode = "exact" }

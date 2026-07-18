@@ -70,6 +70,7 @@ jobs:
   test-linux:
     name: ubuntu-latest — full workspace tests
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
 
@@ -93,15 +94,31 @@ jobs:
       - name: cargo test
         run: cargo test --workspace --all-features --locked
 
-      - name: semantic-store regression gate (serialized)
+      - name: input-snapshot runtime gate (serialized)
         run: >-
           cargo test -p polint --lib --all-features --locked
-          eval::bench::gate::tests::semantic_store_boundary::real_store_enabled_measurement_passes_locked_boundary
+          --profile performance-gate
+          eval::fixtures::eval_native_fixture_runner_tests::eval_input_snapshot_fixture_meets_five_second_budget
+          -- --exact --ignored --test-threads=1 --nocapture
+
+      - name: semantic-store supported-boundary authenticity smoke (serialized)
+        run: >-
+          cargo test -p polint --lib --all-features --locked
+          --profile performance-gate
+          eval::bench::gate::tests::semantic_store_boundary::supported_boundary_authenticity_smoke_passes_paired_budget
+          -- --exact --ignored --test-threads=1 --nocapture
+
+      - name: semantic-store generated scale gate (serialized, Linux only)
+        run: >-
+          cargo test -p polint --lib --all-features --locked
+          --profile performance-gate
+          eval::bench::gate::tests::semantic_store_boundary::generated_scale_store_enabled_measurement_passes_paired_budget
           -- --exact --ignored --test-threads=1 --nocapture
 
   test-platform:
     name: ${{ matrix.os }} — platform library tests
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -123,12 +140,22 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: cargo test
+        env:
+          POLINT_REQUIRE_WINDOWS_CASE_SENSITIVE_TEST: ${{ runner.os == 'Windows' && '1' || '0' }}
         run: cargo test -p polint --lib --all-features --locked
 
-      - name: semantic-store regression gate (serialized)
+      - name: input-snapshot runtime gate (serialized)
         run: >-
           cargo test -p polint --lib --all-features --locked
-          eval::bench::gate::tests::semantic_store_boundary::real_store_enabled_measurement_passes_locked_boundary
+          --profile performance-gate
+          eval::fixtures::eval_native_fixture_runner_tests::eval_input_snapshot_fixture_meets_five_second_budget
+          -- --exact --ignored --test-threads=1 --nocapture
+
+      - name: semantic-store supported-boundary authenticity smoke (serialized)
+        run: >-
+          cargo test -p polint --lib --all-features --locked
+          --profile performance-gate
+          eval::bench::gate::tests::semantic_store_boundary::supported_boundary_authenticity_smoke_passes_paired_budget
           -- --exact --ignored --test-threads=1 --nocapture
 
   leak-gate:

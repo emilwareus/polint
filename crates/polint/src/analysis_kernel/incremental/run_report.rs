@@ -25,7 +25,7 @@ use super::{
 };
 #[cfg(test)]
 use crate::analysis::summaries::provider::SccClosureDebugSnapshot;
-use crate::analysis_kernel::metadata::FinalizedCanonicalFactRows;
+use crate::analysis_kernel::metadata::{CanonicalFactStorageProof, FinalizedCanonicalFactRows};
 use crate::analysis_kernel::store::StoreOutcome;
 #[cfg(test)]
 use crate::analysis_kernel::store::StoreStatus;
@@ -60,6 +60,7 @@ pub(in crate::analysis_kernel) struct ValidatedRunMetadata {
     declared_dependency_edges: Vec<DependencyEdge>,
     dependency_index: DependencyIndex,
     fact_rows: Vec<StableFactMetaRow>,
+    fact_storage_proof: Option<CanonicalFactStorageProof>,
     validation_events: Vec<ValidationEvent>,
     identities: CanonicalRunIdentities,
 }
@@ -77,6 +78,47 @@ pub(in crate::analysis_kernel) struct PreparedValidatedRunMetadata {
     dependency_digest: Digest,
     canonical_dependency_proof: CanonicalDependencyIndexProof,
     validation_events: Vec<ValidationEvent>,
+    prepared_run_identity: Option<PreparedRunIdentity>,
+}
+
+struct PreparedRunIdentity {
+    workspace: WorkspaceIdentity,
+    full_config: ConfigIdentity,
+    input_snapshot: Digest,
+    provider_manifest: Digest,
+    provider_output: Digest,
+    layer: Digest,
+    summary: Digest,
+    query: Digest,
+    validation: Digest,
+    run: RunIdentity,
+    counts: CanonicalRunFamilyCounts,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CanonicalRunFamilyCounts {
+    input_files: usize,
+    provider_manifests: usize,
+    provider_outputs: usize,
+    layers: usize,
+    summaries: usize,
+    queries: usize,
+    facts: usize,
+    diagnostics: usize,
+    dependencies: usize,
+    validation_events: usize,
+}
+
+struct CanonicalRunProof {
+    identities: CanonicalRunIdentities,
+    counts: CanonicalRunFamilyCounts,
+}
+
+#[cfg(test)]
+impl PreparedValidatedRunMetadata {
+    fn revoke_canonical_run_proof_for_test(&mut self) {
+        self.prepared_run_identity = None;
+    }
 }
 
 struct CanonicalDependencyIndexProof {
@@ -247,7 +289,7 @@ impl ValidatedRunMetadata {
             manifests,
             true,
         )?;
-        Self::finish_canonical_finalized_parts(prepared, fact_rows, None, true)
+        Self::finish_canonical_finalized_parts(prepared, fact_rows, None, None, true)
     }
 
     pub(in crate::analysis_kernel) fn prepare_finalized_canonical_run(
@@ -271,8 +313,14 @@ impl ValidatedRunMetadata {
         prepared: PreparedValidatedRunMetadata,
         finalized_facts: FinalizedCanonicalFactRows,
     ) -> Result<Self, ValidatedRunMetadataError> {
-        let (fact_rows, fact_digest) = finalized_facts.into_parts();
-        Self::finish_canonical_finalized_parts(prepared, fact_rows, Some(fact_digest), false)
+        let (fact_rows, fact_digest, fact_storage_proof) = finalized_facts.into_parts();
+        Self::finish_canonical_finalized_parts(
+            prepared,
+            fact_rows,
+            Some(fact_digest),
+            Some(fact_storage_proof),
+            false,
+        )
     }
 
     fn prepare_canonical_finalized_parts(
@@ -306,7 +354,23 @@ impl ValidatedRunMetadata {
         let diagnostic_keys = Vec::new();
         let declared_dependency_edges = Vec::new();
         let validation_events = canonical_validation_events(validation_event_rows.to_vec())?;
-        let run_manifest_key = run_manifest_key_for(input_snapshot, &provider_manifests)?;
+        let (run_manifest_key, prepared_run_identity) = if verify_reconstruction {
+            (
+                run_manifest_key_for(input_snapshot, &provider_manifests)?,
+                None,
+            )
+        } else {
+            let prepared = PreparedRunIdentity::from_semantic_rows(
+                input_snapshot,
+                &provider_manifests,
+                &provider_outputs,
+                &summary_keys,
+                &query_rows,
+                diagnostic_keys.len(),
+                &validation_events,
+            )?;
+            (prepared.run_manifest_key(), Some(prepared))
+        };
         let dependency_index = dependency_index_for(
             input_snapshot,
             &provider_outputs,
@@ -334,6 +398,7 @@ impl ValidatedRunMetadata {
             dependency_digest,
             canonical_dependency_proof,
             validation_events,
+            prepared_run_identity,
         })
     }
 
@@ -341,6 +406,7 @@ impl ValidatedRunMetadata {
         prepared: PreparedValidatedRunMetadata,
         fact_rows: Vec<StableFactMetaRow>,
         fact_digest: Option<Digest>,
+        fact_storage_proof: Option<CanonicalFactStorageProof>,
         verify_reconstruction: bool,
     ) -> Result<Self, ValidatedRunMetadataError> {
         let PreparedValidatedRunMetadata {
@@ -356,19 +422,51 @@ impl ValidatedRunMetadata {
             dependency_digest,
             canonical_dependency_proof,
             validation_events,
+            prepared_run_identity,
         } = prepared;
-        let identities = CanonicalRunIdentities::from_semantic_rows(
-            &input_snapshot,
-            &provider_manifests,
-            &provider_outputs,
-            &summary_keys,
-            &query_rows,
-            &fact_rows,
-            fact_digest.as_ref(),
-            &dependency_index,
-            Some(&dependency_digest),
-            &validation_events,
-        )?;
+        let (identities, canonical_run_proof) = if verify_reconstruction {
+            (
+                CanonicalRunIdentities::from_semantic_rows(
+                    &input_snapshot,
+                    &provider_manifests,
+                    &provider_outputs,
+                    &summary_keys,
+                    &query_rows,
+                    &fact_rows,
+                    fact_digest.as_ref(),
+                    &dependency_index,
+                    Some(&dependency_digest),
+                    &validation_events,
+                )?,
+                None,
+            )
+        } else {
+            let fact_digest = fact_digest.as_ref().ok_or_else(|| {
+                ValidatedRunMetadataError::new(
+                    "optimized validated-run handoff is missing its canonical fact digest",
+                )
+            })?;
+            let prepared_run_identity = prepared_run_identity.ok_or_else(|| {
+                ValidatedRunMetadataError::new(
+                    "optimized validated-run handoff is missing its canonical run proof",
+                )
+            })?;
+            let (identities, proof) = prepared_run_identity.finish(
+                fact_digest.clone(),
+                fact_rows.len(),
+                dependency_digest.clone(),
+                dependency_index.canonical_edges().len(),
+            )?;
+            (identities, Some(proof))
+        };
+        if let Some(proof) = &fact_storage_proof {
+            validate_canonical_fact_storage_proof(
+                &fact_rows,
+                &provider_manifests,
+                identities.fact(),
+                proof,
+            )?;
+        }
 
         let metadata = Self {
             input_snapshot,
@@ -381,6 +479,7 @@ impl ValidatedRunMetadata {
             declared_dependency_edges,
             dependency_index,
             fact_rows,
+            fact_storage_proof,
             validation_events,
             identities,
         };
@@ -396,6 +495,11 @@ impl ValidatedRunMetadata {
                 fact_digest,
                 &dependency_digest,
                 &canonical_dependency_proof,
+                canonical_run_proof.ok_or_else(|| {
+                    ValidatedRunMetadataError::new(
+                        "optimized validated-run handoff lost its canonical run proof",
+                    )
+                })?,
             )?;
         }
         Ok(metadata)
@@ -447,12 +551,19 @@ impl ValidatedRunMetadata {
         &self.fact_rows
     }
 
-    pub(in crate::analysis_kernel) fn take_fact_rows(&mut self) -> Vec<StableFactMetaRow> {
-        std::mem::take(&mut self.fact_rows)
+    pub(in crate::analysis_kernel) fn take_fact_rows_with_storage_proof(
+        &mut self,
+    ) -> (Vec<StableFactMetaRow>, Option<CanonicalFactStorageProof>) {
+        let proof = self
+            .fact_storage_proof
+            .take()
+            .filter(|proof| proof.matches(&self.fact_rows, self.identities.fact()));
+        (std::mem::take(&mut self.fact_rows), proof)
     }
 
     #[cfg(test)]
     pub(crate) fn corrupt_first_fact_stable_key_for_store_test(&mut self) {
+        self.fact_storage_proof = None;
         self.fact_rows
             .first_mut()
             .expect("store fixture has fact metadata")
@@ -461,6 +572,7 @@ impl ValidatedRunMetadata {
 
     #[cfg(test)]
     pub(crate) fn corrupt_first_fact_producer_for_store_test(&mut self) {
+        self.fact_storage_proof = None;
         self.fact_rows
             .first_mut()
             .expect("store fixture has fact metadata")
@@ -487,7 +599,7 @@ impl ValidatedRunMetadata {
     pub(in crate::analysis_kernel) fn validate_integrity(
         &self,
     ) -> Result<(), ValidatedRunMetadataError> {
-        self.validate_integrity_inner(None, None, false, None)
+        self.validate_integrity_inner(None, None, false, None, None)
     }
 
     fn validate_integrity_with_canonical_proofs(
@@ -495,6 +607,7 @@ impl ValidatedRunMetadata {
         fact_digest: &Digest,
         dependency_digest: &Digest,
         dependency_proof: &CanonicalDependencyIndexProof,
+        canonical_run_proof: CanonicalRunProof,
     ) -> Result<(), ValidatedRunMetadataError> {
         if fact_digest.kind != DigestKind::FactMetadata
             || dependency_digest.kind != DigestKind::Dependency
@@ -508,6 +621,7 @@ impl ValidatedRunMetadata {
             Some(dependency_digest),
             true,
             Some(dependency_proof),
+            Some(canonical_run_proof),
         )
     }
 
@@ -517,6 +631,7 @@ impl ValidatedRunMetadata {
         dependency_digest: Option<&Digest>,
         fact_rows_are_canonical: bool,
         canonical_dependency_proof: Option<&CanonicalDependencyIndexProof>,
+        canonical_run_proof: Option<CanonicalRunProof>,
     ) -> Result<(), ValidatedRunMetadataError> {
         if self.input_snapshot.schema_version != INPUT_SNAPSHOT_SCHEMA_VERSION {
             return Err(ValidatedRunMetadataError::new(
@@ -563,9 +678,14 @@ impl ValidatedRunMetadata {
             ));
         }
 
-        let expected_run_manifest_key =
-            run_manifest_key_for(&self.input_snapshot, &self.provider_manifests)?;
-        if self.run_manifest_key != expected_run_manifest_key {
+        let run_manifest_matches = if let Some(proof) = canonical_run_proof.as_ref() {
+            self.run_manifest_key.run == proof.identities.run
+                && self.run_manifest_key.full_config == proof.identities.full_config
+        } else {
+            self.run_manifest_key
+                == run_manifest_key_for(&self.input_snapshot, &self.provider_manifests)?
+        };
+        if !run_manifest_matches {
             return Err(ValidatedRunMetadataError::new(
                 "validated-run manifest key does not match canonical run identity",
             ));
@@ -592,22 +712,36 @@ impl ValidatedRunMetadata {
             ));
         }
 
-        let expected_identities = CanonicalRunIdentities::from_semantic_rows(
-            &self.input_snapshot,
-            &self.provider_manifests,
-            &self.provider_outputs,
-            &self.summary_keys,
-            &self.query_rows,
-            &self.fact_rows,
-            fact_digest,
-            &self.dependency_index,
-            dependency_digest,
-            &self.validation_events,
-        )?;
-        if self.identities != expected_identities {
-            return Err(ValidatedRunMetadataError::new(
-                "validated-run identities do not match their canonical semantic rows",
-            ));
+        if let Some(proof) = canonical_run_proof {
+            let fact_digest = fact_digest.ok_or_else(|| {
+                ValidatedRunMetadataError::new(
+                    "canonical run proof is missing its fact-family digest",
+                )
+            })?;
+            let dependency_digest = dependency_digest.ok_or_else(|| {
+                ValidatedRunMetadataError::new(
+                    "canonical run proof is missing its dependency-family digest",
+                )
+            })?;
+            proof.verify(self, fact_digest, dependency_digest)?;
+        } else {
+            let expected_identities = CanonicalRunIdentities::from_semantic_rows(
+                &self.input_snapshot,
+                &self.provider_manifests,
+                &self.provider_outputs,
+                &self.summary_keys,
+                &self.query_rows,
+                &self.fact_rows,
+                fact_digest,
+                &self.dependency_index,
+                dependency_digest,
+                &self.validation_events,
+            )?;
+            if self.identities != expected_identities {
+                return Err(ValidatedRunMetadataError::new(
+                    "validated-run identities do not match their canonical semantic rows",
+                ));
+            }
         }
         Ok(())
     }
@@ -744,21 +878,14 @@ impl CanonicalQueryRow {
     }
 }
 
-impl CanonicalRunIdentities {
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "generation identity construction keeps every semantic family explicit"
-    )]
+impl PreparedRunIdentity {
     fn from_semantic_rows(
         input_snapshot: &InputSnapshot,
         provider_manifests: &[CanonicalProviderManifest],
         provider_outputs: &[CanonicalProviderOutput],
         summary_keys: &[SummaryKey],
         query_rows: &[CanonicalQueryRow],
-        fact_rows: &[StableFactMetaRow],
-        fact_digest: Option<&Digest>,
-        dependency_index: &DependencyIndex,
-        dependency_digest: Option<&Digest>,
+        diagnostic_count: usize,
         validation_events: &[ValidationEvent],
     ) -> Result<Self, ValidatedRunMetadataError> {
         let input_snapshot_digest = input_snapshot.semantic_digest();
@@ -794,36 +921,21 @@ impl CanonicalRunIdentities {
                 warning_codes: &layer.warning_codes,
             })
             .collect::<Vec<_>>();
-        // Each normalized family contributes once: provider rows retain layer
-        // cardinality, layer rows retain edge cardinality, and concrete edges
-        // belong to the dependency aggregate composed into generation identity.
         let layer = serialized_rows_digest(DigestKind::Layer, "layer_rows", &layer_rows);
         let summary = serialized_rows_digest(DigestKind::Summary, "summary_rows", summary_keys);
         let query = serialized_rows_digest(DigestKind::Query, "query_rows", query_rows);
-        let fact = fact_digest
-            .cloned()
-            .unwrap_or_else(|| fact_rows_digest(fact_rows));
-        let dependency = dependency_digest
-            .cloned()
-            .unwrap_or_else(|| dependency_rows_digest(dependency_index.canonical_edges()));
         let validation = serialized_rows_digest(
             DigestKind::ValidationEvent,
             "validation_rows",
             validation_events,
         );
-        let generation = GenerationIdentity::new(
-            &run,
-            &[
-                provider_output.clone(),
-                layer.clone(),
-                summary.clone(),
-                query.clone(),
-                fact.clone(),
-                dependency.clone(),
-                validation.clone(),
-            ],
-        )
-        .map_err(|error| ValidatedRunMetadataError::new(error.to_string()))?;
+        let layers = provider_outputs
+            .iter()
+            .try_fold(0_usize, |count, provider| {
+                count.checked_add(provider.layers.len()).ok_or_else(|| {
+                    ValidatedRunMetadataError::new("validated-run layer count overflowed")
+                })
+            })?;
 
         Ok(Self {
             workspace: input_snapshot.workspace_identity.clone(),
@@ -834,12 +946,183 @@ impl CanonicalRunIdentities {
             layer,
             summary,
             query,
-            fact,
-            dependency,
             validation,
             run,
-            generation,
+            counts: CanonicalRunFamilyCounts {
+                input_files: input_snapshot.files.len(),
+                provider_manifests: provider_manifests.len(),
+                provider_outputs: provider_outputs.len(),
+                layers,
+                summaries: summary_keys.len(),
+                queries: query_rows.len(),
+                facts: 0,
+                diagnostics: diagnostic_count,
+                dependencies: 0,
+                validation_events: validation_events.len(),
+            },
         })
+    }
+
+    fn run_manifest_key(&self) -> RunManifestKey {
+        RunManifestKey::new(self.run.clone(), self.full_config.clone())
+    }
+
+    fn finish(
+        mut self,
+        fact: Digest,
+        fact_count: usize,
+        dependency: Digest,
+        dependency_count: usize,
+    ) -> Result<(CanonicalRunIdentities, CanonicalRunProof), ValidatedRunMetadataError> {
+        if fact.kind != DigestKind::FactMetadata || dependency.kind != DigestKind::Dependency {
+            return Err(ValidatedRunMetadataError::new(
+                "prepared run identity received a wrong-purpose canonical digest",
+            ));
+        }
+        self.counts.facts = fact_count;
+        self.counts.dependencies = dependency_count;
+        let generation = GenerationIdentity::new(
+            &self.run,
+            &[
+                self.provider_output.clone(),
+                self.layer.clone(),
+                self.summary.clone(),
+                self.query.clone(),
+                fact.clone(),
+                dependency.clone(),
+                self.validation.clone(),
+            ],
+        )
+        .map_err(|error| ValidatedRunMetadataError::new(error.to_string()))?;
+        let identities = CanonicalRunIdentities {
+            workspace: self.workspace,
+            full_config: self.full_config,
+            input_snapshot: self.input_snapshot,
+            provider_manifest: self.provider_manifest,
+            provider_output: self.provider_output,
+            layer: self.layer,
+            summary: self.summary,
+            query: self.query,
+            fact,
+            dependency,
+            validation: self.validation,
+            run: self.run,
+            generation,
+        };
+        let proof = CanonicalRunProof {
+            identities: identities.clone(),
+            counts: self.counts,
+        };
+        Ok((identities, proof))
+    }
+}
+
+impl CanonicalRunProof {
+    fn verify(
+        self,
+        metadata: &ValidatedRunMetadata,
+        fact_digest: &Digest,
+        dependency_digest: &Digest,
+    ) -> Result<(), ValidatedRunMetadataError> {
+        let identities = &self.identities;
+        let expected_kinds = [
+            (&identities.input_snapshot, DigestKind::InputSnapshot),
+            (&identities.provider_manifest, DigestKind::ProviderManifest),
+            (&identities.provider_output, DigestKind::ProviderOutput),
+            (&identities.layer, DigestKind::Layer),
+            (&identities.summary, DigestKind::Summary),
+            (&identities.query, DigestKind::Query),
+            (&identities.fact, DigestKind::FactMetadata),
+            (&identities.dependency, DigestKind::Dependency),
+            (&identities.validation, DigestKind::ValidationEvent),
+        ];
+        let kinds_and_values_are_bound = identities.workspace.digest().kind
+            == DigestKind::Workspace
+            && identities.full_config.digest().kind == DigestKind::Config
+            && identities.run.digest().kind == DigestKind::Run
+            && identities.generation.digest().kind == DigestKind::Generation
+            && !identities.workspace.digest().value.is_empty()
+            && !identities.full_config.digest().value.is_empty()
+            && !identities.run.digest().value.is_empty()
+            && !identities.generation.digest().value.is_empty()
+            && expected_kinds
+                .iter()
+                .all(|(digest, kind)| digest.kind == *kind && !digest.value.is_empty());
+        let layer_count = metadata
+            .provider_outputs
+            .iter()
+            .try_fold(0_usize, |count, provider| {
+                count.checked_add(provider.layers.len())
+            })
+            .ok_or_else(|| {
+                ValidatedRunMetadataError::new("canonical run proof layer count overflowed")
+            })?;
+        let actual_counts = CanonicalRunFamilyCounts {
+            input_files: metadata.input_snapshot.files.len(),
+            provider_manifests: metadata.provider_manifests.len(),
+            provider_outputs: metadata.provider_outputs.len(),
+            layers: layer_count,
+            summaries: metadata.summary_keys.len(),
+            queries: metadata.query_rows.len(),
+            facts: metadata.fact_rows.len(),
+            diagnostics: metadata.diagnostic_keys.len(),
+            dependencies: metadata.dependency_index.canonical_edges().len(),
+            validation_events: metadata.validation_events.len(),
+        };
+        if !kinds_and_values_are_bound
+            || metadata.identities != self.identities
+            || fact_digest != &self.identities.fact
+            || dependency_digest != &self.identities.dependency
+            || actual_counts != self.counts
+        {
+            return Err(ValidatedRunMetadataError::new(
+                "canonical run proof does not match its identities and semantic family bindings",
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl CanonicalRunIdentities {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "generation identity construction keeps every semantic family explicit"
+    )]
+    fn from_semantic_rows(
+        input_snapshot: &InputSnapshot,
+        provider_manifests: &[CanonicalProviderManifest],
+        provider_outputs: &[CanonicalProviderOutput],
+        summary_keys: &[SummaryKey],
+        query_rows: &[CanonicalQueryRow],
+        fact_rows: &[StableFactMetaRow],
+        fact_digest: Option<&Digest>,
+        dependency_index: &DependencyIndex,
+        dependency_digest: Option<&Digest>,
+        validation_events: &[ValidationEvent],
+    ) -> Result<Self, ValidatedRunMetadataError> {
+        let fact = fact_digest
+            .cloned()
+            .unwrap_or_else(|| fact_rows_digest(fact_rows));
+        let dependency = dependency_digest
+            .cloned()
+            .unwrap_or_else(|| dependency_rows_digest(dependency_index.canonical_edges()));
+        let prepared = PreparedRunIdentity::from_semantic_rows(
+            input_snapshot,
+            provider_manifests,
+            provider_outputs,
+            summary_keys,
+            query_rows,
+            0,
+            validation_events,
+        )?;
+        prepared
+            .finish(
+                fact,
+                fact_rows.len(),
+                dependency,
+                dependency_index.canonical_edges().len(),
+            )
+            .map(|(identities, _proof)| identities)
     }
 
     #[expect(
@@ -1295,6 +1578,35 @@ fn validate_canonical_fact_rows(
         if pair[0] >= pair[1] {
             return Err(ValidatedRunMetadataError::new(
                 "validated-run fact metadata rows are not canonical",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_canonical_fact_storage_proof(
+    rows: &[StableFactMetaRow],
+    provider_manifests: &[CanonicalProviderManifest],
+    fact_digest: &Digest,
+    proof: &CanonicalFactStorageProof,
+) -> Result<(), ValidatedRunMetadataError> {
+    if !proof.matches(rows, fact_digest) {
+        return Err(ValidatedRunMetadataError::new(
+            "canonical fact-storage proof does not match its owned rows and digest",
+        ));
+    }
+    let provider_ids = provider_manifests
+        .iter()
+        .map(|manifest| manifest.provider_id.as_str())
+        .collect::<BTreeSet<_>>();
+    for row in rows {
+        if row.stable_key.is_empty()
+            || row.payload_digest.is_empty()
+            || !provider_ids.contains(row.producer_id.as_ref())
+            || !provider_ids.contains(row.layer_id.as_ref())
+        {
+            return Err(ValidatedRunMetadataError::new(
+                "canonical fact-storage proof contains invalid provider or payload metadata",
             ));
         }
     }
@@ -1824,6 +2136,29 @@ mod tests {
         )
     }
 
+    fn canonical_run_proof_for(metadata: &ValidatedRunMetadata) -> CanonicalRunProof {
+        let prepared = PreparedRunIdentity::from_semantic_rows(
+            &metadata.input_snapshot,
+            &metadata.provider_manifests,
+            &metadata.provider_outputs,
+            &metadata.summary_keys,
+            &metadata.query_rows,
+            metadata.diagnostic_keys.len(),
+            &metadata.validation_events,
+        )
+        .expect("fixture semantic families prepare a run identity");
+        let (identities, proof) = prepared
+            .finish(
+                metadata.identities.fact.clone(),
+                metadata.fact_rows.len(),
+                metadata.identities.dependency.clone(),
+                metadata.dependency_index.canonical_edges().len(),
+            )
+            .expect("fixture family digests finish a run identity");
+        assert_eq!(identities, metadata.identities);
+        proof
+    }
+
     fn query_trace_entry(label: &str, cache_status: DemandCacheStatus) -> DemandQueryTraceEntry {
         let dependency = InputDependencyKey::analysis_setting(
             format!("polint.{label}"),
@@ -2257,6 +2592,132 @@ mod tests {
         let wrong_count =
             DependencyIndex::from_edges_for_persistence(query_dependency_edges(&query));
         assert!(!proof.matches(&wrong_count, Some(&digest)));
+    }
+
+    #[test]
+    fn optimized_prepared_run_matches_reconstructive_identity_and_projection() {
+        let (report, fact_rows) = finalized_run_fixture();
+        let report = report_with_query_rows(report);
+        let manifests = AnalysisKernel::provider_manifests();
+        let reconstructive =
+            validated_run_from_report(&report, manifests, fact_rows.clone()).unwrap();
+        let prepared = ValidatedRunMetadata::prepare_finalized_canonical_run(
+            &report.input_snapshot,
+            &report.provider_outputs,
+            &report.demand_query_trace,
+            &report.validation_events,
+            manifests,
+        )
+        .unwrap();
+        let canonical_rows = canonical_fact_rows(fact_rows).unwrap();
+        let finalized = crate::analysis_kernel::metadata::FinalizedCanonicalFactRows::from_canonical_rows_for_test(
+            canonical_rows,
+        )
+        .unwrap();
+        let optimized =
+            ValidatedRunMetadata::finish_prepared_canonical_run(prepared, finalized).unwrap();
+
+        assert_eq!(optimized.identities, reconstructive.identities);
+        assert_eq!(optimized.input_snapshot, reconstructive.input_snapshot);
+        assert_eq!(
+            optimized.provider_manifests,
+            reconstructive.provider_manifests
+        );
+        assert_eq!(optimized.provider_outputs, reconstructive.provider_outputs);
+        assert_eq!(optimized.query_rows, reconstructive.query_rows);
+        assert_eq!(
+            optimized.dependency_index.schema_version,
+            reconstructive.dependency_index.schema_version
+        );
+        assert_eq!(
+            optimized.dependency_index.canonical_edges(),
+            reconstructive.dependency_index.canonical_edges()
+        );
+        assert_eq!(optimized.fact_rows, reconstructive.fact_rows);
+    }
+
+    #[test]
+    fn canonical_run_proof_rejects_family_count_tamper() {
+        let (report, fact_rows) = finalized_run_fixture();
+        let report = report_with_query_rows(report);
+        let mut metadata =
+            validated_run_from_report(&report, AnalysisKernel::provider_manifests(), fact_rows)
+                .unwrap();
+        let proof = canonical_run_proof_for(&metadata);
+        let fact_digest = metadata.identities.fact.clone();
+        let dependency_digest = metadata.identities.dependency.clone();
+        metadata.query_rows.pop().expect("fixture has query rows");
+
+        assert!(
+            proof
+                .verify(&metadata, &fact_digest, &dependency_digest)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn canonical_run_proof_rejects_identity_value_tamper() {
+        let (report, fact_rows) = finalized_run_fixture();
+        let mut metadata =
+            validated_run_from_report(&report, AnalysisKernel::provider_manifests(), fact_rows)
+                .unwrap();
+        let proof = canonical_run_proof_for(&metadata);
+        let fact_digest = metadata.identities.fact.clone();
+        let dependency_digest = metadata.identities.dependency.clone();
+        metadata.identities.query = Digest::from_parts(DigestKind::Query, "tampered", &["query"]);
+
+        assert!(
+            proof
+                .verify(&metadata, &fact_digest, &dependency_digest)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn canonical_run_proof_rejects_wrong_purpose_identity_kind() {
+        let (report, fact_rows) = finalized_run_fixture();
+        let metadata =
+            validated_run_from_report(&report, AnalysisKernel::provider_manifests(), fact_rows)
+                .unwrap();
+        let mut proof = canonical_run_proof_for(&metadata);
+        proof.identities.query.kind = DigestKind::FactMetadata;
+        let mut tampered = metadata;
+        tampered.identities.query.kind = DigestKind::FactMetadata;
+        let fact_digest = tampered.identities.fact.clone();
+        let dependency_digest = tampered.identities.dependency.clone();
+
+        assert!(
+            proof
+                .verify(&tampered, &fact_digest, &dependency_digest)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn revoked_prepared_run_proof_rejects_optimized_finish() {
+        let (report, fact_rows) = finalized_run_fixture();
+        let mut prepared = ValidatedRunMetadata::prepare_finalized_canonical_run(
+            &report.input_snapshot,
+            &report.provider_outputs,
+            &report.demand_query_trace,
+            &report.validation_events,
+            AnalysisKernel::provider_manifests(),
+        )
+        .unwrap();
+        prepared.revoke_canonical_run_proof_for_test();
+        let canonical_rows = canonical_fact_rows(fact_rows).unwrap();
+        let finalized = crate::analysis_kernel::metadata::FinalizedCanonicalFactRows::from_canonical_rows_for_test(
+            canonical_rows,
+        )
+        .unwrap();
+
+        let error = ValidatedRunMetadata::finish_prepared_canonical_run(prepared, finalized)
+            .expect_err("revoked proof must reject optimized finish");
+        assert!(
+            error
+                .to_string()
+                .contains("missing its canonical run proof")
+        );
     }
 
     #[test]

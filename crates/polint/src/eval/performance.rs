@@ -32,7 +32,7 @@ impl EvalPerformanceReport {
                 parameter_digest: entry.query_key.parameter_digest.value.clone(),
                 cache_status: entry.cache_status.label().to_string(),
                 result_digest: entry.result_digest.value.clone(),
-                precision_tier: format!("{:?}", entry.precision_tier),
+                precision_tier: entry.precision_tier.label().to_string(),
                 compute_duration_micros: Some(entry.compute_duration_micros),
             })
             .collect::<Vec<_>>();
@@ -228,7 +228,7 @@ mod tests {
         assert_eq!(performance.demand_queries[0].query_kind, "call_graph");
         assert_eq!(performance.demand_queries[0].query_version, "1");
         assert_eq!(performance.demand_queries[0].cache_status, "computed");
-        assert_eq!(performance.demand_queries[0].precision_tier, "SetupAware");
+        assert_eq!(performance.demand_queries[0].precision_tier, "setup_aware");
         assert_eq!(
             performance.demand_queries[0].compute_duration_micros,
             Some(123)

@@ -57,12 +57,12 @@ struct SweepTarget {
 /// a sweep measures many points (each repo at baseline + each review ref) and
 /// `peak_rss_bytes` is a process-global, monotonic high-water mark: measuring
 /// multiple points in one process saturates that mark on the first point, so the
-/// LW-09 "Peak RSS delta (bytes)" column would collapse the 2nd+ points to
-/// allocator jitter (the HI-01R confound). Isolating every point gives each its
-/// own unsaturated baseline, so the sweep's delta column is order-independent and
-/// uses the SAME methodology as the committed gate baselines the report frames it
-/// against. (Wall-clock columns were never affected — each run times its own
-/// closure — this only fixes the RSS figures.)
+/// "Peak RSS delta (bytes)" column for later points would inherit earlier runs'
+/// memory peaks. Isolating every point gives each its own process context, so the
+/// sweep's RSS columns are order-independent and use the same methodology as the
+/// committed baseline artifacts. A raw delta may still be zero when process
+/// startup established the higher peak. Wall-clock columns are unaffected because
+/// each run times its own closure.
 ///
 /// [`run_repo_perf_point`]: crate::eval::bench::runner::run_repo_perf_point
 pub(crate) fn run_benchmark_sweep(output_dir: &Path) -> anyhow::Result<CurveSeries> {

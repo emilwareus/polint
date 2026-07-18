@@ -5,11 +5,19 @@ use std::sync::OnceLock;
 #[cfg(test)]
 use rusqlite::TransactionBehavior;
 use rusqlite::{Connection, ErrorCode, Transaction};
+#[cfg(test)]
+use std::cell::Cell;
 use thiserror::Error;
 
 use super::schema::REQUIRED_V2_TABLES;
 
 pub(super) const CURRENT_SCHEMA_VERSION: i32 = 2;
+
+#[cfg(test)]
+thread_local! {
+    static FULL_FOREIGN_KEY_CHECK_RUNS: Cell<u64> = const { Cell::new(0) };
+    static FULL_HISTORY_LIFECYCLE_CHECK_RUNS: Cell<u64> = const { Cell::new(0) };
+}
 
 const BOOTSTRAP_TABLE: &str = "_polint_schema_migrations";
 const MIGRATIONS: &[Migration] = &[
@@ -727,6 +735,131 @@ BEGIN
     SELECT RAISE(ABORT, 'generation reservations must start pending');
 END;
 
+CREATE TRIGGER generation_reservations_are_contiguous
+BEFORE INSERT ON generations
+WHEN NEW.reservation_ordinal IS NOT COALESCE((
+    SELECT max(prior.reservation_ordinal) + 1
+    FROM generations AS prior
+    WHERE prior.workspace_kind = NEW.workspace_kind
+      AND prior.workspace_value = NEW.workspace_value
+      AND prior.generation_kind = NEW.generation_kind
+      AND prior.generation_value = NEW.generation_value
+), 0)
+BEGIN
+    SELECT RAISE(ABORT, 'generation reservation ordinal is not contiguous');
+END;
+
+CREATE TRIGGER generation_retry_identity_consistent
+BEFORE INSERT ON generations
+WHEN EXISTS (
+    SELECT 1
+    FROM generations AS prior
+    WHERE prior.workspace_kind = NEW.workspace_kind
+      AND prior.workspace_value = NEW.workspace_value
+      AND prior.generation_kind = NEW.generation_kind
+      AND prior.generation_value = NEW.generation_value
+)
+ AND NOT EXISTS (
+    SELECT 1
+    FROM (
+        SELECT
+            run_kind, run_value,
+            full_config_kind, full_config_value,
+            input_snapshot_kind, input_snapshot_value,
+            provider_manifest_kind, provider_manifest_value,
+            provider_output_kind, provider_output_value,
+            layer_kind, layer_value,
+            summary_kind, summary_value,
+            query_kind, query_value,
+            fact_kind, fact_value,
+            dependency_kind, dependency_value,
+            validation_kind, validation_value,
+            dependency_schema
+        FROM generations AS prior
+        WHERE prior.workspace_kind = NEW.workspace_kind
+          AND prior.workspace_value = NEW.workspace_value
+          AND prior.generation_kind = NEW.generation_kind
+          AND prior.generation_value = NEW.generation_value
+        ORDER BY prior.reservation_ordinal DESC
+        LIMIT 1
+    ) AS prior
+    WHERE prior.run_kind IS NEW.run_kind
+      AND prior.run_value IS NEW.run_value
+      AND prior.full_config_kind IS NEW.full_config_kind
+      AND prior.full_config_value IS NEW.full_config_value
+      AND prior.input_snapshot_kind IS NEW.input_snapshot_kind
+      AND prior.input_snapshot_value IS NEW.input_snapshot_value
+      AND prior.provider_manifest_kind IS NEW.provider_manifest_kind
+      AND prior.provider_manifest_value IS NEW.provider_manifest_value
+      AND prior.provider_output_kind IS NEW.provider_output_kind
+      AND prior.provider_output_value IS NEW.provider_output_value
+      AND prior.layer_kind IS NEW.layer_kind
+      AND prior.layer_value IS NEW.layer_value
+      AND prior.summary_kind IS NEW.summary_kind
+      AND prior.summary_value IS NEW.summary_value
+      AND prior.query_kind IS NEW.query_kind
+      AND prior.query_value IS NEW.query_value
+      AND prior.fact_kind IS NEW.fact_kind
+      AND prior.fact_value IS NEW.fact_value
+      AND prior.dependency_kind IS NEW.dependency_kind
+      AND prior.dependency_value IS NEW.dependency_value
+      AND prior.validation_kind IS NEW.validation_kind
+      AND prior.validation_value IS NEW.validation_value
+      AND prior.dependency_schema IS NEW.dependency_schema
+)
+BEGIN
+    SELECT RAISE(ABORT, 'generation retry identity is inconsistent');
+END;
+
+CREATE TRIGGER generation_reservation_identity_immutable
+BEFORE UPDATE ON generations
+WHEN OLD.id IS NOT NEW.id
+  OR OLD.reservation_ordinal IS NOT NEW.reservation_ordinal
+  OR OLD.workspace_kind IS NOT NEW.workspace_kind
+  OR OLD.workspace_value IS NOT NEW.workspace_value
+  OR OLD.generation_kind IS NOT NEW.generation_kind
+  OR OLD.generation_value IS NOT NEW.generation_value
+  OR OLD.run_kind IS NOT NEW.run_kind
+  OR OLD.run_value IS NOT NEW.run_value
+  OR OLD.full_config_kind IS NOT NEW.full_config_kind
+  OR OLD.full_config_value IS NOT NEW.full_config_value
+  OR OLD.input_snapshot_kind IS NOT NEW.input_snapshot_kind
+  OR OLD.input_snapshot_value IS NOT NEW.input_snapshot_value
+  OR OLD.provider_manifest_kind IS NOT NEW.provider_manifest_kind
+  OR OLD.provider_manifest_value IS NOT NEW.provider_manifest_value
+  OR OLD.provider_output_kind IS NOT NEW.provider_output_kind
+  OR OLD.provider_output_value IS NOT NEW.provider_output_value
+  OR OLD.layer_kind IS NOT NEW.layer_kind
+  OR OLD.layer_value IS NOT NEW.layer_value
+  OR OLD.summary_kind IS NOT NEW.summary_kind
+  OR OLD.summary_value IS NOT NEW.summary_value
+  OR OLD.query_kind IS NOT NEW.query_kind
+  OR OLD.query_value IS NOT NEW.query_value
+  OR OLD.fact_kind IS NOT NEW.fact_kind
+  OR OLD.fact_value IS NOT NEW.fact_value
+  OR OLD.dependency_kind IS NOT NEW.dependency_kind
+  OR OLD.dependency_value IS NOT NEW.dependency_value
+  OR OLD.validation_kind IS NOT NEW.validation_kind
+  OR OLD.validation_value IS NOT NEW.validation_value
+  OR OLD.dependency_schema IS NOT NEW.dependency_schema
+BEGIN
+    SELECT RAISE(ABORT, 'generation reservation identity is immutable');
+END;
+
+CREATE TRIGGER generation_status_transitions_are_terminal
+BEFORE UPDATE OF status ON generations
+WHEN OLD.status IS NOT NEW.status
+ AND NOT (OLD.status = 'pending' AND NEW.status IN ('complete', 'failed'))
+BEGIN
+    SELECT RAISE(ABORT, 'generation status transition is invalid');
+END;
+
+CREATE TRIGGER generation_reservations_cannot_be_deleted
+BEFORE DELETE ON generations
+BEGIN
+    SELECT RAISE(ABORT, 'generation reservations cannot be deleted');
+END;
+
 CREATE TRIGGER store_manifest_workspace_immutable
 BEFORE UPDATE OF workspace_kind, workspace_value ON store_manifest
 WHEN OLD.workspace_kind IS NOT NULL
@@ -860,7 +993,7 @@ pub(super) fn apply_migrations_in_transaction(
     }
 
     if found == CURRENT_SCHEMA_VERSION {
-        validate_current_schema(transaction)?;
+        validate_current_schema_shape(transaction)?;
         return Ok(MigrationStatus::Current);
     }
 
@@ -881,7 +1014,20 @@ pub(super) fn apply_migrations_in_transaction(
     })
 }
 
+#[cfg(test)]
 pub(super) fn preflight_schema(connection: &Connection) -> Result<(), MigrationError> {
+    preflight_schema_shape(connection)?;
+    if schema_version(connection)? == CURRENT_SCHEMA_VERSION {
+        validate_manifest_lifecycle(connection, CURRENT_SCHEMA_VERSION)?;
+        validate_current_foreign_keys(connection)?;
+    }
+    Ok(())
+}
+
+/// Authenticates the exact schema contract without scanning persisted rows.
+/// Generation hot paths follow this with a bounded, generation-scoped data
+/// preflight and relationship audit.
+pub(super) fn preflight_schema_shape(connection: &Connection) -> Result<(), MigrationError> {
     let found = schema_version(connection)?;
     if found > CURRENT_SCHEMA_VERSION {
         return Err(MigrationError::FutureSchema {
@@ -893,7 +1039,7 @@ pub(super) fn preflight_schema(connection: &Connection) -> Result<(), MigrationE
         validate_bootstrap_marker(connection, found)?;
     }
     if found == CURRENT_SCHEMA_VERSION {
-        validate_current_schema(connection)?;
+        validate_current_schema_shape(connection)?;
     }
     Ok(())
 }
@@ -957,6 +1103,12 @@ fn validate_bootstrap_marker(
 }
 
 fn validate_current_schema(connection: &Connection) -> Result<(), MigrationError> {
+    validate_current_schema_shape(connection)?;
+    validate_manifest_lifecycle(connection, CURRENT_SCHEMA_VERSION)?;
+    validate_current_foreign_keys(connection)
+}
+
+fn validate_current_schema_shape(connection: &Connection) -> Result<(), MigrationError> {
     let version = schema_version(connection)?;
     if version != CURRENT_SCHEMA_VERSION {
         return Err(MigrationError::InvalidSchema { version });
@@ -999,6 +1151,11 @@ fn validate_current_schema(connection: &Connection) -> Result<(), MigrationError
     for trigger in [
         "generations_require_bound_workspace",
         "generations_start_pending",
+        "generation_reservations_are_contiguous",
+        "generation_retry_identity_consistent",
+        "generation_reservation_identity_immutable",
+        "generation_status_transitions_are_terminal",
+        "generation_reservations_cannot_be_deleted",
         "store_manifest_workspace_immutable",
         "store_manifest_active_must_be_complete",
         "store_manifest_active_cannot_be_cleared",
@@ -1021,8 +1178,14 @@ fn validate_current_schema(connection: &Connection) -> Result<(), MigrationError
 
     validate_required_columns(connection, version)?;
     validate_forbidden_schema_names(connection, version)?;
-    validate_manifest_lifecycle(connection, version)?;
 
+    Ok(())
+}
+
+fn validate_current_foreign_keys(connection: &Connection) -> Result<(), MigrationError> {
+    let version = schema_version(connection)?;
+    #[cfg(test)]
+    FULL_FOREIGN_KEY_CHECK_RUNS.set(FULL_FOREIGN_KEY_CHECK_RUNS.get().saturating_add(1));
     let mut statement = connection
         .prepare("PRAGMA foreign_key_check")
         .map_err(|error| classify_invariant_error(error, version))?;
@@ -1034,6 +1197,26 @@ fn validate_current_schema(connection: &Connection) -> Result<(), MigrationError
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+pub(super) fn reset_full_foreign_key_check_runs_for_test() {
+    FULL_FOREIGN_KEY_CHECK_RUNS.set(0);
+}
+
+#[cfg(test)]
+pub(super) fn full_foreign_key_check_runs_for_test() -> u64 {
+    FULL_FOREIGN_KEY_CHECK_RUNS.get()
+}
+
+#[cfg(test)]
+pub(super) fn reset_full_history_lifecycle_check_runs_for_test() {
+    FULL_HISTORY_LIFECYCLE_CHECK_RUNS.set(0);
+}
+
+#[cfg(test)]
+pub(super) fn full_history_lifecycle_check_runs_for_test() -> u64 {
+    FULL_HISTORY_LIFECYCLE_CHECK_RUNS.get()
 }
 
 fn validate_exact_schema_objects(
@@ -1379,6 +1562,9 @@ fn validate_manifest_lifecycle(
     connection: &Connection,
     version: i32,
 ) -> Result<(), MigrationError> {
+    #[cfg(test)]
+    FULL_HISTORY_LIFECYCLE_CHECK_RUNS
+        .set(FULL_HISTORY_LIFECYCLE_CHECK_RUNS.get().saturating_add(1));
     let manifest_count: i64 = connection
         .query_row(
             "SELECT count(*) FROM store_manifest WHERE id = 1",
@@ -2052,7 +2238,7 @@ mod tests {
         apply_migrations(&mut connection).expect("migration succeeds");
         bind_workspace(&connection, "workspace-a");
 
-        reserve_generation(&connection, 90, 8, "workspace-a", "repeatable-generation");
+        reserve_generation(&connection, 90, 0, "workspace-a", "repeatable-generation");
         connection
             .execute(
                 "UPDATE generations SET status = 'complete' WHERE id = 90",
@@ -2067,7 +2253,7 @@ mod tests {
             .expect("activate selected generation");
 
         reserve_generation(&connection, 999, 1, "workspace-a", "repeatable-generation");
-        reserve_generation(&connection, 2, 0, "workspace-a", "repeatable-generation");
+        reserve_generation(&connection, 2, 2, "workspace-a", "repeatable-generation");
         validate_current_schema(&connection).expect("active lifecycle remains valid");
 
         let active: i64 = connection

@@ -1129,6 +1129,35 @@ fn evict_file(path: &Path) {
 }
 
 #[cfg(test)]
+pub(crate) fn replace_manifest_dependencies_with_irrelevant_source_for_test(path: &Path) {
+    let raw = fs::read(path).expect("read layer cache manifest");
+    let mut manifest =
+        serde_json::from_slice::<LayerCacheManifest>(&raw).expect("decode layer cache manifest");
+    manifest.dependencies = vec![DependencyEdge {
+        from: relative_manifest_dependency_source(),
+        to: CacheNode::DependencyInput(
+            InputDependencyKey::source_file(
+                "unrelated/forged-input.rs",
+                Digest::from_parts(
+                    DigestKind::SourceText,
+                    "irrelevant_layer_dependency",
+                    &["unrelated/forged-input.rs"],
+                ),
+                InputComponentStatus::Present,
+            )
+            .expect("test dependency uses a source-text digest"),
+        ),
+        kind: DependencyKind::Input,
+        required_shape: ShapeKind::Content,
+    }];
+    fs::write(
+        path,
+        serde_json::to_vec(&manifest).expect("encode tampered layer cache manifest"),
+    )
+    .expect("write tampered layer cache manifest");
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::analysis_kernel::incremental::{

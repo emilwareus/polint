@@ -829,10 +829,10 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
         // adaptation model files, and the private TS object-model rows refreshed
         // inside the semantic-graph provider. The producer/current-row digest of
         // each is folded into the provider output digest in
-        // `semantic_graph::provider::semantic_graph_output_digest` (D-17).
+        // `semantic_graph::provider::semantic_graph_output_digest`.
         //
-        // SC3 inputs with NO producer yet are intentionally ABSENT until their
-        // producer lands (not silently dropped): CFG / summaries. When
+        // Inputs with no producer yet are intentionally absent rather than silently
+        // dropped: CFG and summaries. When
         // the projection begins reading a new family, add it here AND fold its
         // producer digest in the same change.
         inputs: &[
@@ -873,13 +873,13 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
     },
     ProviderManifest {
         // polint.solver runs AFTER polint.semantic_graph and BEFORE
-        // polint.refined_calls (D-13). It consumes the unified
+        // polint.refined_calls. It consumes the unified
         // semantic-graph constraint vocabulary (`semantic_constraints`) and emits
         // derived edges with provenance. Its output digest folds the consumed
         // upstream provider digests (`polint.semantic_graph`, `polint.type_value_alias`,
-        // and `polint.go.semantic`) plus the SolverBudget (D-15); those digest-only
+        // and `polint.go.semantic`) plus the SolverBudget; those digest-only
         // dependencies are not declared here as direct fact reads. The provider
-        // auto-enrolls in the determinism gate (D-14).
+        // auto-enrolls in the determinism gate.
         id: "polint.solver",
         kind: ProviderKind::WholeRepoDerived,
         inputs: &[

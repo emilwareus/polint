@@ -30,9 +30,9 @@ pub(crate) struct SemanticGraphProviderRunOutput {
     pub(crate) output_digest: Option<Digest>,
 }
 
-/// `polint.semantic_graph` provider entry point (D-16/D-17).
+/// `polint.semantic_graph` provider entry point.
 ///
-/// 8-stage pipeline mirroring `polint.reachability` (S5):
+/// Eight-stage pipeline mirroring `polint.reachability`:
 /// 1. refresh the private TS object-model store from TS/JS source files,
 /// 2. project a real-but-minimal graph from existing facts via `build_semantic_graph`
 ///    (the build itself is read-only, mutating no upstream family),
@@ -47,7 +47,7 @@ pub(crate) struct SemanticGraphProviderRunOutput {
 /// 8. surface the store error as an evidence-bearing diagnostic.
 ///
 /// The digest folds in every consumed upstream provider output digest plus the
-/// provider/schema/parameter digests (D-17), so any upstream change or algorithm bump
+/// provider/schema/parameter digests, so any upstream change or algorithm bump
 /// deterministically invalidates the semantic-graph cache.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn derive_semantic_graph_with_cache_stats(
@@ -275,14 +275,14 @@ fn adaptation_model_diagnostic(
     .with_evidence(evidence_key, evidence_value.into())
 }
 
-/// Output digest over stable KEYS, never dense IDs (D-17).
+/// Output digest over stable KEYS, never dense IDs.
 ///
 /// Every node/edge/constraint contribution is composed from content-derived stable
 /// keys, NOT the run-local dense `SemanticNodeId`/`SemanticEdgeId` handles: a node's
 /// stable key encodes its kind + referenced identity; an edge's stable key already
 /// encodes both endpoints by their stable keys; a constraint contributes its stable
 /// key plus the stable keys of the nodes it references (resolved through the
-/// post-normalize node table). This honors the D-17 "never dense IDs" contract — the
+/// post-normalize node table). This preserves the "never dense IDs" contract: the
 /// digest is invariant under any future change to dense-ID numbering that preserves
 /// stable keys.
 ///
@@ -688,6 +688,16 @@ mod tests {
         );
     }
 
+    #[cfg(any(
+        windows,
+        target_os = "android",
+        target_os = "freebsd",
+        target_os = "ios",
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
     #[test]
     fn provider_loads_repo_local_adaptation_models_into_model_constraints() {
         let temp = tempdir().expect("tempdir");
@@ -727,6 +737,16 @@ evidence = ["cmd/app/main.go:1"]
         );
     }
 
+    #[cfg(any(
+        windows,
+        target_os = "android",
+        target_os = "freebsd",
+        target_os = "ios",
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
     #[test]
     fn adaptation_model_discovery_stops_at_model_file_budget() {
         let temp = tempdir().expect("tempdir");
@@ -791,8 +811,8 @@ evidence = ["cmd/app/main.go:1"]
     #[test]
     fn upstream_digest_change_invalidates_output_digest() {
         // Two runs over the SAME db facts but with a different upstream calls digest
-        // must produce different output digests (D-17: every consumed provider output
-        // digest is folded in).
+        // must produce different output digests because every consumed provider output
+        // digest is folded in.
         let temp = tempdir().expect("tempdir");
         let loaded = loaded_config(temp.path());
         let snapshot = snapshot_from_loaded(&AnalysisDb::new(), &loaded);

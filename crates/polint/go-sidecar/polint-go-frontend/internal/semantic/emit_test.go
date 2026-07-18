@@ -3,8 +3,36 @@ package semantic
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
+
+func TestMain(m *testing.M) {
+	stateRoot, err := os.MkdirTemp("", "polint-go-semantic-test-state-")
+	if err != nil {
+		panic(err)
+	}
+	buildCache := filepath.Join(stateRoot, "build-cache")
+	goPath := filepath.Join(stateRoot, "gopath")
+	if err := os.MkdirAll(buildCache, 0o700); err != nil {
+		panic(err)
+	}
+	if err := os.MkdirAll(goPath, 0o700); err != nil {
+		panic(err)
+	}
+	if err := os.Setenv("GOCACHE", buildCache); err != nil {
+		panic(err)
+	}
+	if err := os.Setenv("GOPATH", goPath); err != nil {
+		panic(err)
+	}
+	if err := os.Setenv("GOENV", "off"); err != nil {
+		panic(err)
+	}
+	code := m.Run()
+	_ = os.RemoveAll(stateRoot)
+	os.Exit(code)
+}
 
 func TestValidatePackagePatternsRejectsFlags(t *testing.T) {
 	_, err := validatePackagePatterns([]string{"-json"})
@@ -159,7 +187,7 @@ func main() {
 }
 
 func TestEmitHarvestsRTASignalsInsideClosureBodies(t *testing.T) {
-	// Regression for WR-01: the concrete type Dog is converted to an interface
+	// The concrete type Dog is converted to an interface
 	// (*ssa.MakeInterface) ONLY inside the closure passed to run(...). Its method
 	// Notify is invoked dynamically ONLY inside that same closure. The harvest must
 	// walk fn.AnonFuncs (closures live in parent.AnonFuncs, not pkg.Members), or these
@@ -197,7 +225,7 @@ func main() {
 }
 
 func TestEmitAddressTakenExcludesStaticCallees(t *testing.T) {
-	// FINDING 2: a statically-called function is NOT address-taken. For a *ssa.Call /
+	// A statically-called function is NOT address-taken. For a *ssa.Call /
 	// Go / Defer the callee is the first operand, so the address-taken operand loop must
 	// EXCLUDE the static-callee operand — otherwise `defer cleanup()`, `go worker()`, and
 	// a plain `helper()` call would each spuriously mark their callee address-taken and
@@ -238,7 +266,7 @@ func main() {
 }
 
 func TestEmitMethodSetKeyedByInstantiatedGenericType(t *testing.T) {
-	// FINDING A: a method on a GENERIC type satisfying an interface, dispatched via the
+	// A method on a GENERIC type satisfying an interface, dispatched via the
 	// interface, must resolve to the INSTANTIATED type's method. x/tools records the
 	// instantiated named type Box[int] in the SSA runtime-type set with a real method
 	// value (Box[int]).Speak, while the syntactic declaration is Box[T any]. emitMethodSets
@@ -281,14 +309,14 @@ func main() {
 }
 
 func TestEmitDeduplicatesMethodSetForSamePackageGenericAlias(t *testing.T) {
-	// FIX-07 (review #4): a SAME-PACKAGE type alias to a GENERIC INSTANTIATION
+	// A SAME-PACKAGE type alias to a GENERIC INSTANTIATION
 	// (`type IntBox = Box[int]`) is harvested by TWO independent method_set emitters that
 	// produce the IDENTICAL canonical stable_key when `Box[int]` is reachable both ways:
 	//   - emitInstantiatedMethodSets sees the reachable RuntimeTypes() instantiation Box[int]
 	//     (from the DIRECT `Box[int]{...}` conversion below) and emits a method_set keyed
 	//     `stableKey(pkg,"method_set","...Box[int]")`.
-	//   - emitMethodSets walks package scope, finds the alias TypeName IntBox, and (since
-	//     FIX-05) canonicalizes it through types.Unalias to the SAME underlying `...Box[int]`,
+	//   - emitMethodSets walks package scope, finds the alias TypeName IntBox, and
+	//     canonicalizes it through types.Unalias to the SAME underlying `...Box[int]`,
 	//     emitting a method_set with the IDENTICAL stable_key.
 	// They use SEPARATE per-function `seen` maps, so BOTH rows survive — a duplicate
 	// non-empty stable_key. Downstream `validate_unique("method_set", ...)` then rejects the
@@ -345,7 +373,7 @@ func main() {
 }
 
 func TestEmitCanonicalizesTypeAliasToUnderlyingForDispatch(t *testing.T) {
-	// FIX 3: a value of a type ALIAS converted to an interface must dispatch to the
+	// A value of a type ALIAS converted to an interface must dispatch to the
 	// underlying type's method. For `type AliasDog = Dog; var s Speaker = AliasDog{}`,
 	// go/types reports the MakeInterface operand and the alias's package-scope TypeName
 	// keyed by the alias spelling (`...AliasDog`), but the concrete method's receiver is
@@ -429,7 +457,7 @@ func main() {
 }
 
 func TestEmitBuiltinCallsEmitNoDynamicDispatch(t *testing.T) {
-	// FINDING 4: a builtin call (`append`, `len`, `recover`, ...) has a nil
+	// A builtin call (`append`, `len`, `recover`, ...) has a nil
 	// StaticCallee() because its callee is a *ssa.Builtin, not an *ssa.Function. It must
 	// NOT be classified unresolved_dynamic and must NOT emit a func-value dynamic_dispatch
 	// row — a builtin is not a func value, and a fabricated func_value dispatch on it would
@@ -504,6 +532,55 @@ func TestEmitCreatesSyntheticGoWorkWhenRootGoWorkIsMissing(t *testing.T) {
 	assertPackagePath(t, rows, "example.test/money")
 }
 
+func TestCheckedInGoWorkWithEscapingUseIsRejected(t *testing.T) {
+	root := writeGoWorkspaceFixture(t, false)
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "go.mod"), []byte("module example.test/outside\n\ngo 1.24\n"), 0o644); err != nil {
+		t.Fatalf("write outside go.mod: %v", err)
+	}
+	relativeOutside, err := filepath.Rel(root, outside)
+	if err != nil {
+		t.Fatalf("relativize outside module: %v", err)
+	}
+	work := "go 1.24\n\nuse (\n\t./services/app\n\t./libs/money\n\t" + filepath.ToSlash(relativeOutside) + "\n)\n"
+	workPath := filepath.Join(root, "go.work")
+	if err := os.WriteFile(workPath, []byte(work), 0o644); err != nil {
+		t.Fatalf("write hostile go.work: %v", err)
+	}
+
+	if goWorkCoversModuleRoots(root, workPath, []string{"services/app", "libs/money"}) {
+		t.Fatal("workspace with an escaping use entry must be rejected")
+	}
+	selected, cleanup, err := workspaceEnv(root, []string{"services/app", "libs/money"})
+	if err != nil {
+		t.Fatalf("select safe workspace: %v", err)
+	}
+	defer cleanup()
+	if selected == workPath {
+		t.Fatal("unsafe checked-in workspace must not be selected for package loading")
+	}
+}
+
+func TestGoWorkWithSymlinkedModuleManifestIsRejected(t *testing.T) {
+	root := writeGoWorkspaceFixture(t, true)
+	outside := t.TempDir()
+	outsideManifest := filepath.Join(outside, "go.mod")
+	if err := os.WriteFile(outsideManifest, []byte("module example.test/outside\n\ngo 1.24\n"), 0o644); err != nil {
+		t.Fatalf("write outside go.mod: %v", err)
+	}
+	moduleManifest := filepath.Join(root, "services", "app", "go.mod")
+	if err := os.Remove(moduleManifest); err != nil {
+		t.Fatalf("remove module go.mod: %v", err)
+	}
+	if err := os.Symlink(outsideManifest, moduleManifest); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	if goWorkCoversModuleRoots(root, filepath.Join(root, "go.work"), []string{"services/app", "libs/money"}) {
+		t.Fatal("workspace with a symlinked module go.mod must be rejected")
+	}
+}
+
 func TestEmitSpansUseAstRangesForFunctionsAndCallsites(t *testing.T) {
 	root := writeFixture(t, map[string]string{
 		"go.mod": "module example.test/fixture\n\ngo 1.24\n",
@@ -545,6 +622,30 @@ func TestSetEnvReplacesExistingValue(t *testing.T) {
 	}
 	if len(values) != 1 || values[0] != "GOWORK=/tmp/go.work" {
 		t.Fatalf("expected replacement GOWORK, got %#v from env %#v", values, env)
+	}
+}
+
+func TestCertifiedGoEnvironmentExcludesUnlistedAmbientValues(t *testing.T) {
+	source := map[string]string{
+		"PATH":                  "/certified/bin",
+		"GOPROXY":               "https://proxy.example.invalid",
+		"GONOSUMDB":             "",
+		"HTTPS_PROXY":           "https://network.example.invalid",
+		"HOME":                  "/ambient/home",
+		"AWS_SECRET_ACCESS_KEY": "must-not-pass",
+	}
+	env := certifiedGoEnvironmentFrom(func(key string) (string, bool) {
+		value, ok := source[key]
+		return value, ok
+	})
+	want := []string{
+		"PATH=/certified/bin",
+		"GOPROXY=https://proxy.example.invalid",
+		"GONOSUMDB=",
+		"HTTPS_PROXY=https://network.example.invalid",
+	}
+	if !slices.Equal(env, want) {
+		t.Fatalf("expected only certified environment values, got %#v", env)
 	}
 }
 

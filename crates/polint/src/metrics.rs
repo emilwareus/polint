@@ -73,11 +73,19 @@ pub(crate) fn derive_requested_metrics_with_cache_stats(
         analysis_settings_digest.clone(),
         upstream_syntax_output_digests,
     );
+    let dependencies = metrics_layer_dependency_edges(
+        db,
+        &layer_key,
+        manifest,
+        &upstream_syntax_outputs,
+        analysis_settings_digest,
+        provider_manifest_dependency_digest(input_snapshot, manifest),
+    );
     let store = cache.layer_cache_store();
     let mut cache_stats = CacheStats::default();
     let read = store
         .read_json_validated::<MetricsLayerPayload, _>(&layer_key, |payload, manifest| {
-            validate_metrics_layer_payload(payload, manifest)
+            validate_metrics_layer_payload(payload, manifest, &dependencies)
         });
 
     match read.status {
@@ -114,14 +122,6 @@ pub(crate) fn derive_requested_metrics_with_cache_stats(
             cache_stats.record_recompute();
             let mut derivation = derive_requested_metrics_uncached(db, plan);
             let payload = metrics_layer_payload(db);
-            let dependencies = metrics_layer_dependency_edges(
-                db,
-                &layer_key,
-                manifest,
-                &upstream_syntax_outputs,
-                analysis_settings_digest,
-                provider_manifest_dependency_digest(input_snapshot, manifest),
-            );
             let manifest = match metrics_layer_manifest(layer_key, &payload, dependencies) {
                 Ok(manifest) => manifest,
                 Err(error) => {
@@ -442,9 +442,11 @@ fn restore_metrics_layer_payload(db: &mut AnalysisDb, payload: &MetricsLayerPayl
 fn validate_metrics_layer_payload(
     payload: &MetricsLayerPayload,
     manifest: &LayerCacheManifest,
+    expected_dependencies: &[DependencyEdge],
 ) -> bool {
     payload.schema == METRICS_LAYER_SCHEMA
         && manifest.output_digest == metrics_output_digest_for_payload(payload, Some(&manifest.key))
+        && manifest.has_exact_dependencies(expected_dependencies)
 }
 
 fn write_metrics_layer_payload(
@@ -709,7 +711,10 @@ fn saturating_u32(value: usize) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis_kernel::incremental::{Digest, DigestKind, InputSnapshot};
+    use crate::analysis_kernel::incremental::{
+        Digest, DigestKind, InputSnapshot,
+        replace_manifest_dependencies_with_irrelevant_source_for_test,
+    };
     use crate::analysis_kernel::{
         FactConfidence, FactFamily, FactPrecision, FactRef, ValidationStatus,
     };
@@ -1272,6 +1277,41 @@ mod tests {
 
             assert_eq!(second.cache_stats.invalid_evicted_reads, 1);
             assert_eq!(second.cache_stats.recomputes, 1);
+        }
+
+        #[test]
+        fn metrics_layer_rejects_forged_nonempty_dependencies() {
+            let temp = tempfile::tempdir().expect("tempdir");
+            let loaded = load_config(temp.path()).expect("default config loads");
+            let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
+            let plan = requested_metrics_plan();
+            let source = "export function handler() {\n  return 1;\n}\n";
+            let mut first_db = fixture_db(temp.path(), "handler", source);
+            let first = derive_metrics_with_cache(
+                &mut first_db,
+                &loaded,
+                &cache,
+                &plan,
+                "config",
+                "stable",
+            );
+            let manifest = first_layer_file(temp.path().join("cache").as_path(), "manifests");
+            replace_manifest_dependencies_with_irrelevant_source_for_test(&manifest);
+            let mut second_db = fixture_db(temp.path(), "handler", source);
+
+            let second = derive_metrics_with_cache(
+                &mut second_db,
+                &loaded,
+                &cache,
+                &plan,
+                "config",
+                "stable",
+            );
+
+            assert_eq!(second.cache_stats.invalid_evicted_reads, 1);
+            assert_eq!(second.cache_stats.recomputes, 1);
+            assert_eq!(second.cache_stats.writes, 1);
+            assert_eq!(second.layers, first.layers);
         }
 
         #[test]

@@ -396,6 +396,11 @@ pub(crate) fn observe_kernel_fixture_repo_with_plan_for_test(
     cache_enabled: bool,
     plan: &AnalysisPlan,
 ) -> anyhow::Result<Vec<ObservedItem>> {
+    let _go_semantic_scope = if AnalysisKernel::plan_runs_go_semantic_for_test(plan) {
+        acquire_fixture_go_semantic_scope_for_test(repo_root)?
+    } else {
+        None
+    };
     let started = Instant::now();
     let loaded = load_config(repo_root)?;
     let config_digest = config_hash(&loaded);
@@ -436,6 +441,42 @@ pub(crate) fn observe_kernel_fixture_repo_with_plan_for_test(
     observed.sort_by_key(observed_sort_key);
 
     Ok(observed)
+}
+
+#[cfg(test)]
+pub(crate) fn acquire_fixture_go_semantic_scope_for_test(
+    repo_root: &Path,
+) -> anyhow::Result<Option<crate::go::semantic::process::TestGoSemanticConcurrencyScope>> {
+    let walker = ignore::WalkBuilder::new(repo_root)
+        .hidden(false)
+        .ignore(false)
+        .git_ignore(false)
+        .git_exclude(false)
+        .parents(false)
+        .follow_links(false)
+        .build();
+    for entry in walker {
+        let entry = entry.with_context(|| {
+            format!(
+                "inspect fixture repo for Go semantic inputs: {}",
+                repo_root.display()
+            )
+        })?;
+        if entry
+            .file_type()
+            .is_some_and(|file_type| file_type.is_file())
+            && entry
+                .path()
+                .extension()
+                .and_then(|extension| extension.to_str())
+                == Some("go")
+        {
+            return crate::go::semantic::process::acquire_test_go_semantic_concurrency_scope()
+                .map(Some)
+                .context("coordinate shared Go semantic fixture cache");
+        }
+    }
+    Ok(None)
 }
 
 /// Runs the analysis kernel on a repo directory and returns the raw
@@ -693,9 +734,9 @@ fn layer_key_invariants(run_report: &KernelRunReport) -> Vec<ObservedItem> {
 #[cfg(test)]
 fn identity_invariants(db: &crate::core::AnalysisDb) -> Vec<ObservedItem> {
     // Surfaces the deduplicated identity record set so the dedup snapshot fixture
-    // can assert the maximum collapse multiplicity deterministically (D-10,
-    // D-11). The dedup determinism contract itself is proven by the co-located
-    // tests in analysis::identity::dedup.
+    // can assert the maximum collapse multiplicity deterministically. The dedup
+    // determinism contract itself is proven by the co-located tests in
+    // analysis::identity::dedup.
     let records = db.identity_records();
     let max_multiplicity = records
         .iter()
@@ -713,15 +754,15 @@ fn identity_invariants(db: &crate::core::AnalysisDb) -> Vec<ObservedItem> {
 }
 
 /// Surfaces the closed `IdentityCategory` counter map computed from the live
-/// analysis facts (Plan 42-03, D-15) as deterministic observed invariants so the
+/// analysis facts as deterministic observed invariants so the
 /// categorized-failures fixture can assert each counter directly.
 ///
 /// Native fixtures carry no benchmark oracle, so `wrong_identity` (which requires
-/// oracle span overlap, D-16) never fires here — the empty oracle-span set is
+/// oracle span overlap) never fires here — the empty oracle-span set is
 /// passed through `categorized_failures_from_db` and the wrong-identity pass is
 /// skipped. The fixture exercises the four naturally-emitted categories; the
 /// fifth-category wiring is proven by the `drive_record_category_model_missing`
-/// unit test (BLOCKER #4).
+/// unit test.
 #[cfg(test)]
 fn identity_categorized_failure_invariants(db: &crate::core::AnalysisDb) -> Vec<ObservedItem> {
     let section =
@@ -754,10 +795,10 @@ fn identity_categorized_failure_invariants(db: &crate::core::AnalysisDb) -> Vec<
 }
 
 /// Renders every identity record through the single-source-of-truth renderers
-/// (D-05) and surfaces deterministic render invariants:
+/// and surfaces deterministic render invariants:
 ///
 /// - `identity.render.jelly.no_absolute_path` proves the Jelly renderer emits
-///   only workspace-relative forward-slash paths (T-42-02-02);
+///   only workspace-relative forward-slash paths;
 /// - `identity.render.jelly.rendered_count` proves the renderer ran over the
 ///   live identity record set so the CRLF / oracle-coverage fixtures assert an
 ///   actually-observed value rather than a phantom.
@@ -774,8 +815,8 @@ fn identity_render_invariants(db: &crate::core::AnalysisDb) -> Vec<ObservedItem>
     let mut rendered_count = 0u32;
     let mut all_workspace_relative = true;
     for record in db.identity_records() {
-        // Both renderers participate so the leak gate (Plan 04) and downstream
-        // consumers see them exercised end-to-end on real records. The Go
+        // Both renderers participate so path-leak checks and downstream consumers
+        // see them exercised end-to-end on real records. The Go
         // RelString output is asserted (not discarded) so a renderer regression
         // that produced an empty name would fail here rather than pass silently.
         let go_rel = go_relstring::render(record);
@@ -1671,7 +1712,7 @@ mod public_boundary_no_leak {
     }
 
     #[test]
-    fn public_check_json_does_not_expose_phase33_internal_markers() {
+    fn public_check_json_does_not_expose_internal_markers() {
         let rendered = crate::diagnostics::render(
             crate::diagnostics::OutputFormat::Json,
             &[],
@@ -1689,7 +1730,7 @@ mod public_boundary_no_leak {
     }
 
     #[test]
-    fn public_sdk_runner_cli_docs_and_readme_do_not_expose_phase33_internal_markers() {
+    fn public_sdk_runner_cli_docs_and_readme_do_not_expose_internal_markers() {
         let root = repo_root();
         let crate_root = root.join("crates/polint");
         let mut sources = Vec::new();
@@ -3626,7 +3667,7 @@ path = "repo"
         (temp, observed)
     }
 
-    mod observed_phase23_cache_counter_invariants {
+    mod observed_cache_counter_invariants {
         use std::collections::BTreeMap;
 
         use super::*;
@@ -3790,7 +3831,7 @@ path = "repo"
         }
 
         #[test]
-        fn provider_and_layer_key_invariants_emit_required_phase23_rows() {
+        fn provider_and_layer_key_invariants_emit_required_rows() {
             let (_temp, observed) = observed_for_mixed_fixture();
             let invariants = invariant_values(&observed);
 

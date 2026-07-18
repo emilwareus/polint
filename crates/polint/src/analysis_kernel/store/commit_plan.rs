@@ -24,7 +24,7 @@ use crate::analysis_kernel::incremental::{
     input_snapshot_semantic_row_builder, provider_manifest_digest_from_fields,
     provider_manifest_rows_digest, serialized_rows_digest,
 };
-use crate::analysis_kernel::metadata::StableFactRowBudget;
+use crate::analysis_kernel::metadata::{CanonicalFactStorageProof, StableFactRowBudget};
 use crate::analysis_kernel::validation::{
     ValidationEvent, ValidationEventKind, ValidationEventStatus,
 };
@@ -671,7 +671,7 @@ impl StoreCommitPlan {
             })?;
 
         let telemetry = telemetry_rows(validated);
-        let semantic = StoreSemanticPlan::from_validated(validated);
+        let semantic = StoreSemanticPlan::from_validated(validated)?;
         let plan = Self {
             semantic,
             telemetry,
@@ -684,16 +684,20 @@ impl StoreCommitPlan {
         mut validated: ValidatedRunMetadata,
     ) -> Result<ValidatedStoreCommitPlan, StorePlanError> {
         let telemetry = telemetry_rows(&validated);
-        let facts = validated.take_fact_rows();
+        let (facts, fact_storage_proof) = validated.take_fact_rows_with_storage_proof();
         let dependency_index = validated.take_dependency_index();
         let semantic =
-            StoreSemanticPlan::from_validated_parts(&validated, facts, Some(dependency_index));
+            StoreSemanticPlan::from_validated_parts(&validated, facts, Some(dependency_index))?;
         let plan = Self {
             semantic,
             telemetry,
         };
-        plan.semantic
-            .validate_without_stats_with_canonical_fact_proof()?;
+        if let Some(proof) = &fact_storage_proof {
+            plan.semantic
+                .validate_without_stats_with_canonical_fact_proof(proof)?;
+        } else {
+            plan.semantic.validate_without_stats()?;
+        }
         Ok(ValidatedStoreCommitPlan(plan))
     }
 
@@ -1142,7 +1146,7 @@ impl StoreSemanticPlan {
         rows
     }
 
-    fn from_validated(validated: &ValidatedRunMetadata) -> Self {
+    fn from_validated(validated: &ValidatedRunMetadata) -> Result<Self, StorePlanError> {
         Self::from_validated_parts(validated, validated.fact_rows().to_vec(), None)
     }
 
@@ -1150,7 +1154,7 @@ impl StoreSemanticPlan {
         validated: &ValidatedRunMetadata,
         fact_rows: Vec<StableFactMetaRow>,
         owned_dependency_index: Option<crate::analysis_kernel::incremental::DependencyIndex>,
-    ) -> Self {
+    ) -> Result<Self, StorePlanError> {
         let defer_stats = owned_dependency_index.is_some();
         let source_identities = validated.identities();
         let identities = StoreIdentityRow {
@@ -1543,25 +1547,27 @@ impl StoreSemanticPlan {
         );
         let dependency_edges = source_dependency_edges
             .into_iter()
-            .map(|edge| StoreDependencyEdgeRow {
-                from: store_node_ref_owned(
-                    edge.from,
-                    &layer_ordinals,
-                    &query_ordinals,
-                    &summary_ordinals,
-                    &diagnostic_ordinals,
-                ),
-                to: store_node_ref_owned(
-                    edge.to,
-                    &layer_ordinals,
-                    &query_ordinals,
-                    &summary_ordinals,
-                    &diagnostic_ordinals,
-                ),
-                kind: edge.kind,
-                required_shape: edge.required_shape,
+            .map(|edge| {
+                Ok(StoreDependencyEdgeRow {
+                    from: store_node_ref_owned(
+                        edge.from,
+                        &layer_ordinals,
+                        &query_ordinals,
+                        &summary_ordinals,
+                        &diagnostic_ordinals,
+                    )?,
+                    to: store_node_ref_owned(
+                        edge.to,
+                        &layer_ordinals,
+                        &query_ordinals,
+                        &summary_ordinals,
+                        &diagnostic_ordinals,
+                    )?,
+                    kind: edge.kind,
+                    required_shape: edge.required_shape,
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, StorePlanError>>()?;
         drop(layer_ordinals);
         drop(query_ordinals);
         drop(summary_ordinals);
@@ -1618,7 +1624,7 @@ impl StoreSemanticPlan {
         if !defer_stats {
             plan.stats = StoreGenerationStats::from_plan(&plan);
         }
-        plan
+        Ok(plan)
     }
 
     fn validate(&self) -> Result<(), StorePlanError> {
@@ -1627,16 +1633,19 @@ impl StoreSemanticPlan {
     }
 
     fn validate_without_stats(&self) -> Result<(), StorePlanError> {
-        self.validate_without_stats_inner(false)
+        self.validate_without_stats_inner(None)
     }
 
-    fn validate_without_stats_with_canonical_fact_proof(&self) -> Result<(), StorePlanError> {
-        self.validate_without_stats_inner(true)
+    fn validate_without_stats_with_canonical_fact_proof(
+        &self,
+        proof: &CanonicalFactStorageProof,
+    ) -> Result<(), StorePlanError> {
+        self.validate_without_stats_inner(Some(proof))
     }
 
     fn validate_without_stats_inner(
         &self,
-        fact_rows_are_canonical: bool,
+        fact_storage_proof: Option<&CanonicalFactStorageProof>,
     ) -> Result<(), StorePlanError> {
         self.validate_schemas()?;
         self.validate_identity_copies()?;
@@ -1649,8 +1658,8 @@ impl StoreSemanticPlan {
         self.validate_query_declarations()?;
         self.validate_result_boundaries()?;
         self.validate_dependency_endpoints()?;
-        self.validate_facts()?;
-        self.validate_canonical_order(fact_rows_are_canonical)
+        self.validate_facts(fact_storage_proof)?;
+        self.validate_canonical_order(fact_storage_proof.is_some())
     }
 
     fn validate_schemas(&self) -> Result<(), StorePlanError> {
@@ -2320,7 +2329,15 @@ impl StoreSemanticPlan {
         Ok(())
     }
 
-    fn validate_facts(&self) -> Result<(), StorePlanError> {
+    fn validate_facts(
+        &self,
+        fact_storage_proof: Option<&CanonicalFactStorageProof>,
+    ) -> Result<(), StorePlanError> {
+        match fact_storage_proof {
+            Some(proof) if proof.matches(&self.facts, &self.identities.fact) => return Ok(()),
+            Some(_) => return Err(StorePlanError::InvalidFactStorage),
+            None => {}
+        }
         let provider_ids = self
             .provider_manifests
             .iter()
@@ -2658,31 +2675,26 @@ fn store_node_ref_owned(
     queries: &BTreeMap<&QueryKey, u64>,
     summaries: &BTreeMap<&SummaryKey, u64>,
     diagnostics: &BTreeMap<&DiagnosticKey, u64>,
-) -> StoreNodeRef {
-    match node {
+) -> Result<StoreNodeRef, StorePlanError> {
+    let missing = |family| StorePlanError::InvalidHandoff {
+        message: format!("validated dependency {family} endpoint is not retained"),
+    };
+    Ok(match node {
         CacheNode::DependencyInput(input) => StoreNodeRef::DependencyInput(input),
         CacheNode::RunManifest(_) => StoreNodeRef::RunManifest,
-        CacheNode::Layer(key) => StoreNodeRef::Layer(
-            *layers
-                .get(key.as_ref())
-                .expect("validated dependency layer endpoint is retained"),
-        ),
-        CacheNode::Query(key) => StoreNodeRef::Query(
-            *queries
-                .get(key.as_ref())
-                .expect("validated dependency query endpoint is retained"),
-        ),
-        CacheNode::Summary(key) => StoreNodeRef::Summary(
-            *summaries
-                .get(&key)
-                .expect("validated dependency summary endpoint is retained"),
-        ),
-        CacheNode::Diagnostic(key) => StoreNodeRef::Diagnostic(
-            *diagnostics
-                .get(&key)
-                .expect("validated dependency diagnostic endpoint is retained"),
-        ),
-    }
+        CacheNode::Layer(key) => {
+            StoreNodeRef::Layer(*layers.get(key.as_ref()).ok_or_else(|| missing("layer"))?)
+        }
+        CacheNode::Query(key) => {
+            StoreNodeRef::Query(*queries.get(key.as_ref()).ok_or_else(|| missing("query"))?)
+        }
+        CacheNode::Summary(key) => {
+            StoreNodeRef::Summary(*summaries.get(&key).ok_or_else(|| missing("summary"))?)
+        }
+        CacheNode::Diagnostic(key) => {
+            StoreNodeRef::Diagnostic(*diagnostics.get(&key).ok_or_else(|| missing("diagnostic"))?)
+        }
+    })
 }
 
 fn append_input_components(

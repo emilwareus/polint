@@ -756,11 +756,24 @@ pub(crate) fn derive_module_topology_with_cache_stats(
         module_graph_output.output_digest.clone(),
         symbol_graph_output.output_digest.clone(),
     );
+    let dependencies = module_topology_layer_dependency_edges(
+        db,
+        &layer_key,
+        manifest,
+        &module_graph_output,
+        &symbol_graph_output,
+        analysis_settings_digest,
+        &input_snapshot.go_lifecycle.components,
+        &input_snapshot.ts_js_lifecycle.components,
+        provider_manifest_dependency_digest(input_snapshot, manifest),
+    );
     let store = cache.layer_cache_store();
     let mut cache_stats = CacheStats::default();
     let read = store.read_json_validated::<ModuleTopologyLayerPayload, _>(
         &layer_key,
-        validate_module_topology_layer_payload,
+        |payload, manifest| {
+            validate_module_topology_layer_payload(payload, manifest, &dependencies)
+        },
     );
 
     match read.status {
@@ -796,17 +809,6 @@ pub(crate) fn derive_module_topology_with_cache_stats(
             cache_stats.record_recompute();
             let mut derivation = derive_module_topology_uncached(db);
             let payload = module_topology_layer_payload(db, &derivation);
-            let dependencies = module_topology_layer_dependency_edges(
-                db,
-                &layer_key,
-                manifest,
-                &module_graph_output,
-                &symbol_graph_output,
-                analysis_settings_digest,
-                &input_snapshot.go_lifecycle.components,
-                &input_snapshot.ts_js_lifecycle.components,
-                provider_manifest_dependency_digest(input_snapshot, manifest),
-            );
             let manifest = match module_topology_layer_manifest(layer_key, &payload, dependencies) {
                 Ok(manifest) => manifest,
                 Err(error) => {
@@ -1234,11 +1236,22 @@ pub(crate) fn derive_requested_module_graph_with_cache_stats(
         ts_js_lifecycle_digest,
         upstream_syntax_output_digests,
     );
+    let dependencies = module_graph_layer_dependency_edges(
+        loaded.root.as_path(),
+        db,
+        &layer_key,
+        manifest,
+        &upstream_syntax_outputs,
+        analysis_settings_digest,
+        &input_snapshot.go_lifecycle.components,
+        &input_snapshot.ts_js_lifecycle.components,
+        provider_manifest_dependency_digest(input_snapshot, manifest),
+    );
     let store = cache.layer_cache_store();
     let mut cache_stats = CacheStats::default();
     let read = store
         .read_json_validated::<ModuleGraphLayerPayload, _>(&layer_key, |payload, manifest| {
-            validate_module_graph_layer_payload(payload, manifest)
+            validate_module_graph_layer_payload(payload, manifest, &dependencies)
         });
 
     match read.status {
@@ -1274,17 +1287,6 @@ pub(crate) fn derive_requested_module_graph_with_cache_stats(
             cache_stats.record_recompute();
             let mut derivation = derive_requested_module_graph_uncached(db, loaded, plan);
             let payload = module_graph_layer_payload(db, &derivation);
-            let dependencies = module_graph_layer_dependency_edges(
-                loaded.root.as_path(),
-                db,
-                &layer_key,
-                manifest,
-                &upstream_syntax_outputs,
-                analysis_settings_digest,
-                &input_snapshot.go_lifecycle.components,
-                &input_snapshot.ts_js_lifecycle.components,
-                provider_manifest_dependency_digest(input_snapshot, manifest),
-            );
             let manifest = match module_graph_layer_manifest(layer_key, &payload, dependencies) {
                 Ok(manifest) => manifest,
                 Err(error) => {
@@ -1559,21 +1561,25 @@ fn restore_module_topology_layer_payload(
 fn validate_module_graph_layer_payload(
     payload: &ModuleGraphLayerPayload,
     manifest: &LayerCacheManifest,
+    expected_dependencies: &[DependencyEdge],
 ) -> bool {
     payload.schema == MODULE_GRAPH_LAYER_SCHEMA
         && topology_payload_stable_keys_are_unique(payload)
         && manifest.output_digest
             == module_graph_output_digest_for_payload(payload, Some(&manifest.key))
+        && manifest.has_exact_dependencies(expected_dependencies)
 }
 
 pub(crate) fn validate_module_topology_layer_payload(
     payload: &ModuleTopologyLayerPayload,
     manifest: &LayerCacheManifest,
+    expected_dependencies: &[DependencyEdge],
 ) -> bool {
     payload.schema == MODULE_TOPOLOGY_LAYER_SCHEMA
         && import_to_package_payload_stable_keys_are_unique(&payload.import_to_package_edges)
         && manifest.output_digest
             == module_topology_output_digest_for_payload(payload, Some(&manifest.key))
+        && manifest.has_exact_dependencies(expected_dependencies)
 }
 
 fn import_to_package_payload_stable_keys_are_unique(rows: &[ImportToPackageFact]) -> bool {
@@ -2457,6 +2463,7 @@ mod tests {
     use crate::analysis_kernel::incremental::{
         CacheNode, DependencyKind, Digest, DigestKind, InputComponentStatus, InputDependencyKind,
         InputSnapshot, LayerKey, ProviderOutputDependency, ShapeKind,
+        replace_manifest_dependencies_with_irrelevant_source_for_test,
     };
     use crate::analysis_kernel::{
         FactConfidence, FactFamily, FactPrecision, FactRef, ValidationStatus,
@@ -3130,6 +3137,43 @@ mod tests {
         assert_eq!(second_result.cache_stats.invalid_evicted_reads, 1);
         assert_eq!(second_result.cache_stats.recomputes, 1);
         assert_eq!(second_result.cache_stats.writes, 1);
+    }
+
+    #[test]
+    fn module_graph_layer_cache_rejects_forged_nonempty_dependencies() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cache_root = temp.path().join("cache");
+        let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["resolved_imports"]);
+        let mut first = AnalysisDb::new();
+        let app = add_file(
+            &mut first,
+            temp.path(),
+            "src/app.ts",
+            "import missing from './missing';\n",
+        );
+        push_ts_import(&mut first, app, "./missing", 0);
+        let loaded = loaded_config_for(temp.path());
+        let first_result =
+            derive_module_graph_with_cache(&mut first, &loaded, &cache, &plan, "config");
+        let manifest = first_layer_file(&cache_root, "manifests");
+        replace_manifest_dependencies_with_irrelevant_source_for_test(&manifest);
+
+        let mut second = AnalysisDb::new();
+        let app = add_file(
+            &mut second,
+            temp.path(),
+            "src/app.ts",
+            "import missing from './missing';\n",
+        );
+        push_ts_import(&mut second, app, "./missing", 0);
+        let second_result =
+            derive_module_graph_with_cache(&mut second, &loaded, &cache, &plan, "config");
+
+        assert_eq!(second_result.cache_stats.invalid_evicted_reads, 1);
+        assert_eq!(second_result.cache_stats.recomputes, 1);
+        assert_eq!(second_result.cache_stats.writes, 1);
+        assert_eq!(second_result.layers, first_result.layers);
     }
 
     #[test]
@@ -5589,6 +5633,7 @@ mod module_topology_layer_cache {
     use crate::analysis_kernel::incremental::{
         CacheNode, CacheStats, Digest, DigestKind, InputComponentStatus, InputDependencyKind,
         InputSnapshot, ProviderExecutionOutcome, ProviderOutputDependency,
+        replace_manifest_dependencies_with_irrelevant_source_for_test,
     };
     use crate::analysis_plan::AnalysisPlan;
     use crate::cache::Cache;
@@ -5907,6 +5952,51 @@ mod module_topology_layer_cache {
                 .collect::<Vec<_>>(),
             first_keys
         );
+    }
+
+    #[test]
+    fn module_topology_layer_cache_rejects_forged_nonempty_dependencies() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
+        let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
+        let module_digest =
+            Digest::from_parts(DigestKind::ProviderOutput, "module_graph", &["base"]);
+        let symbol_digest =
+            Digest::from_parts(DigestKind::ProviderOutput, "symbol_graph", &["base"]);
+        let mut first = db_with_import_to_package_inputs();
+        let first_snapshot = module_topology_input_snapshot(&loaded, &first, &plan);
+        let first_result = derive_module_topology_with_cache_stats(
+            &mut first,
+            &cache,
+            &first_snapshot,
+            module_topology_manifest(),
+            provider_output(module_digest.clone()),
+            provider_output(symbol_digest.clone()),
+        );
+        let manifest = std::fs::read_dir(temp.path().join("cache/layers/manifests"))
+            .expect("read layer manifests")
+            .next()
+            .expect("layer manifest entry")
+            .expect("read layer manifest entry")
+            .path();
+        replace_manifest_dependencies_with_irrelevant_source_for_test(&manifest);
+
+        let mut second = db_with_import_to_package_inputs();
+        let second_snapshot = module_topology_input_snapshot(&loaded, &second, &plan);
+        let second_result = derive_module_topology_with_cache_stats(
+            &mut second,
+            &cache,
+            &second_snapshot,
+            module_topology_manifest(),
+            provider_output(module_digest),
+            provider_output(symbol_digest),
+        );
+
+        assert_eq!(second_result.cache_stats.invalid_evicted_reads, 1);
+        assert_eq!(second_result.cache_stats.recomputes, 1);
+        assert_eq!(second_result.cache_stats.writes, 1);
+        assert_eq!(second_result.layers, first_result.layers);
     }
 
     #[test]

@@ -88,6 +88,8 @@ redundant_clone = "warn"
 needless_collect = "warn"
 large_enum_variant = "warn"
 
+# Keep the SQLite-backed test suite practical without changing the code
+# generation settings for the workspace's own crates.
 [profile.test.package.fnv]
 opt-level = 3
 
@@ -99,3 +101,8 @@ opt-level = 3
 
 [profile.test.package.rusqlite]
 opt-level = 3
+
+# Same-host wall-clock gates use production-like code generation so the paired
+# disabled/enabled comparison measures product overhead rather than debug code.
+[profile.performance-gate]
+inherits = "release"

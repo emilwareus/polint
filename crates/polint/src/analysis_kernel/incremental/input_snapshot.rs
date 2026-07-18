@@ -179,11 +179,18 @@ pub(crate) struct InputSnapshotRuntimeSources {
     pub(crate) go_semantic_tool: GoSemanticToolPreparation,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum GoRepositoryCacheRoots<'a> {
+    Certified(&'a [PathBuf]),
+    SetupMissing { reason: &'static str },
+}
+
 impl InputSnapshotRuntimeSources {
     pub(crate) fn prepare(
         loaded: &LoadedConfig,
         db: &AnalysisDb,
         run_go_semantic: bool,
+        repository_cache_roots: GoRepositoryCacheRoots<'_>,
         adaptation_budget: AdaptationModelBudget,
     ) -> Self {
         Self {
@@ -191,7 +198,12 @@ impl InputSnapshotRuntimeSources {
                 &loaded.root,
                 adaptation_budget.max_model_files,
             ),
-            go_semantic_tool: prepare_go_semantic_tool(loaded, db, run_go_semantic),
+            go_semantic_tool: prepare_go_semantic_tool(
+                loaded,
+                db,
+                run_go_semantic,
+                repository_cache_roots,
+            ),
         }
     }
 }
@@ -273,6 +285,7 @@ impl InputSnapshot {
             loaded,
             db,
             plan.requests_any_capability(&["calls", "control_flow", "dataflow"]),
+            GoRepositoryCacheRoots::Certified(&[]),
             AdaptationModelBudget::default(),
         );
         Self::from_run_inputs_with_plan_and_runtime_sources(
@@ -949,6 +962,7 @@ fn prepare_go_semantic_tool(
     loaded: &LoadedConfig,
     db: &AnalysisDb,
     run_go_semantic: bool,
+    repository_cache_roots: GoRepositoryCacheRoots<'_>,
 ) -> GoSemanticToolPreparation {
     if !run_go_semantic {
         return GoSemanticToolPreparation::not_invoked(
@@ -969,7 +983,13 @@ fn prepare_go_semantic_tool(
     if !config.missing_module_roots(&loaded.root).is_empty() {
         return GoSemanticToolPreparation::setup_missing("missing module roots");
     }
-    GoSemanticToolPreparation::prepare()
+    let repository_cache_roots = match repository_cache_roots {
+        GoRepositoryCacheRoots::Certified(roots) => roots,
+        GoRepositoryCacheRoots::SetupMissing { reason } => {
+            return GoSemanticToolPreparation::setup_missing(reason);
+        }
+    };
+    GoSemanticToolPreparation::prepare(&loaded.root, &config, repository_cache_roots)
 }
 
 fn go_tool_invocation_component(preparation: &GoSemanticToolPreparation) -> InputComponent {
@@ -1030,7 +1050,9 @@ fn adaptation_model_components(inventory: &AdaptationModelInventory) -> Vec<Inpu
             issue.relative_path, issue.evidence_key, issue.evidence_value
         )
     }));
-    let status = if inventory.files.is_empty() {
+    let status = if inventory.is_unsupported() {
+        InputComponentStatus::Unsupported
+    } else if inventory.files.is_empty() {
         InputComponentStatus::SetupMissing
     } else {
         InputComponentStatus::Present
@@ -2435,6 +2457,16 @@ mod source_config_rule_model_extension {
         }));
     }
 
+    #[cfg(any(
+        windows,
+        target_os = "android",
+        target_os = "freebsd",
+        target_os = "ios",
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
     #[test]
     fn model_file_add_edit_and_delete_change_snapshot_identity() {
         let temp = TempDir::new().expect("create temp repo");
@@ -2461,6 +2493,34 @@ mod source_config_rule_model_extension {
         assert_ne!(absent.semantic_digest(), added.semantic_digest());
         assert_ne!(added.semantic_digest(), edited.semantic_digest());
         assert_eq!(absent.semantic_digest(), deleted.semantic_digest());
+    }
+
+    #[cfg(not(any(
+        windows,
+        target_os = "android",
+        target_os = "freebsd",
+        target_os = "ios",
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    )))]
+    #[test]
+    fn present_model_content_is_unsupported_when_anchored_reads_are_unavailable() {
+        let temp = TempDir::new().expect("create temp repo");
+        std::fs::create_dir_all(temp.path().join(".polint/models"))
+            .expect("create model directory");
+        let inventory = AdaptationModelInventory::discover(temp.path(), 32);
+
+        let models = adaptation_model_components(&inventory);
+
+        assert_eq!(models[0].status, InputComponentStatus::Unsupported);
+        assert!(
+            models[0]
+                .detail
+                .iter()
+                .any(|detail| detail.contains("secure anchored file reads unavailable"))
+        );
     }
 
     #[test]

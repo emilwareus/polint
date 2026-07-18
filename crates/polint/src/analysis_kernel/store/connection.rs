@@ -1,12 +1,14 @@
 //! SQLite connection policy and the single-writer lease.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use rusqlite::config::DbConfig;
 use rusqlite::{Connection, ErrorCode, OpenFlags, Transaction, TransactionBehavior};
 
-use super::migrations::{MigrationError, apply_migrations_in_transaction, preflight_schema};
+#[cfg(test)]
+use super::migrations::preflight_schema;
+use super::migrations::{MigrationError, apply_migrations_in_transaction, preflight_schema_shape};
 
 const BUSY_TIMEOUT: Duration = Duration::from_millis(250);
 const SYNCHRONOUS_NORMAL: i64 = 1;
@@ -46,9 +48,12 @@ pub(super) fn open_writer(path: &Path) -> Result<WriterConnection, ConnectionErr
 }
 
 fn open_uninitialized_writer(path: &Path) -> Result<WriterConnection, ConnectionError> {
+    let path = sqlite_open_path(path)?;
     let connection = Connection::open_with_flags(
         path,
-        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
+        OpenFlags::SQLITE_OPEN_READ_WRITE
+            | OpenFlags::SQLITE_OPEN_CREATE
+            | OpenFlags::SQLITE_OPEN_NOFOLLOW,
     )
     .map_err(classify_sqlite_error)?;
     // New metadata stores use larger pages to keep their wide append-heavy
@@ -60,7 +65,7 @@ fn open_uninitialized_writer(path: &Path) -> Result<WriterConnection, Connection
     connection
         .busy_timeout(BUSY_TIMEOUT)
         .map_err(classify_sqlite_error)?;
-    preflight_schema(&connection).map_err(classify_migration_error)?;
+    preflight_schema_shape(&connection).map_err(classify_migration_error)?;
     connection
         .pragma_update(None, "foreign_keys", true)
         .map_err(classify_sqlite_error)?;
@@ -95,8 +100,12 @@ pub(super) fn validate_journal_mode(journal_mode: &str) -> Result<(), Connection
 }
 
 pub(super) fn open_read_only(path: &Path) -> Result<ReadOnlyConnection, ConnectionError> {
-    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .map_err(classify_sqlite_error)?;
+    let path = sqlite_open_path(path)?;
+    let connection = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .map_err(classify_sqlite_error)?;
     connection
         .busy_timeout(BUSY_TIMEOUT)
         .map_err(classify_sqlite_error)?;
@@ -104,6 +113,24 @@ pub(super) fn open_read_only(path: &Path) -> Result<ReadOnlyConnection, Connecti
         .pragma_update(None, "foreign_keys", true)
         .map_err(classify_sqlite_error)?;
     Ok(ReadOnlyConnection { connection })
+}
+
+/// Resolve only the already-certified containing directory before asking
+/// SQLite to open the database. SQLite's Unix `NOFOLLOW` implementation rejects
+/// any symlink component in the supplied path, including platform-managed
+/// ancestors such as macOS's `/var -> private/var`. Passing the canonical
+/// parent preserves those legitimate ancestors while leaving the final database
+/// component unresolved so `NOFOLLOW` still closes the target-swap window.
+fn sqlite_open_path(path: &Path) -> Result<PathBuf, ConnectionError> {
+    let file_name = path.file_name().ok_or(ConnectionError::Policy)?;
+    let parent = path.parent().ok_or(ConnectionError::Policy)?;
+    let parent = if parent.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        parent
+    };
+    let canonical_parent = parent.canonicalize().map_err(|_| ConnectionError::Other)?;
+    Ok(canonical_parent.join(file_name))
 }
 
 pub(super) fn try_writer_lease(
@@ -130,6 +157,26 @@ pub(super) fn begin_immediate(
         .map_err(classify_sqlite_error)
 }
 
+#[cfg(test)]
+pub(super) fn set_writer_foreign_keys_for_test(
+    writer: &WriterConnection,
+    enabled: bool,
+) -> Result<(), ConnectionError> {
+    writer
+        .connection
+        .pragma_update(None, "foreign_keys", enabled)
+        .map_err(classify_sqlite_error)?;
+    let actual: i64 = writer
+        .connection
+        .pragma_query_value(None, "foreign_keys", |row| row.get(0))
+        .map_err(classify_sqlite_error)?;
+    if actual == i64::from(enabled) {
+        Ok(())
+    } else {
+        Err(ConnectionError::Policy)
+    }
+}
+
 pub(super) fn begin_read(
     reader: &mut ReadOnlyConnection,
 ) -> Result<Transaction<'_>, ConnectionError> {
@@ -143,8 +190,8 @@ pub(super) fn read_connection(reader: &ReadOnlyConnection) -> &Connection {
     &reader.connection
 }
 
-pub(super) fn validate_schema(connection: &Connection) -> Result<(), ConnectionError> {
-    preflight_schema(connection).map_err(classify_migration_error)
+pub(super) fn validate_schema_shape(connection: &Connection) -> Result<(), ConnectionError> {
+    preflight_schema_shape(connection).map_err(classify_migration_error)
 }
 
 fn try_initialize_writer(writer: &mut WriterConnection) -> Result<LeaseStatus, ConnectionError> {

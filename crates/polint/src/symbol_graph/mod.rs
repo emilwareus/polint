@@ -148,11 +148,22 @@ pub(crate) fn derive_requested_symbols_with_cache_stats(
         module_graph_output.output_digest.clone(),
         upstream_syntax_output_digests,
     );
+    let dependencies = symbol_graph_layer_dependency_edges(
+        db,
+        &layer_key,
+        manifest,
+        &module_graph_output,
+        &upstream_syntax_outputs,
+        analysis_settings_digest,
+        &input_snapshot.go_lifecycle.components,
+        &input_snapshot.ts_js_lifecycle.components,
+        provider_manifest_dependency_digest(input_snapshot, manifest),
+    );
     let store = cache.layer_cache_store();
     let mut cache_stats = CacheStats::default();
     let read = store
         .read_json_validated::<SymbolGraphLayerPayload, _>(&layer_key, |payload, manifest| {
-            validate_symbol_graph_layer_payload(payload, manifest)
+            validate_symbol_graph_layer_payload(payload, manifest, &dependencies)
         });
 
     match read.status {
@@ -189,17 +200,6 @@ pub(crate) fn derive_requested_symbols_with_cache_stats(
             let (mut derivation, payload) =
                 derive_requested_symbols_uncached_with_payload(db, loaded, plan);
             let payload = payload.unwrap_or_else(|| symbol_graph_layer_payload(db, &derivation));
-            let dependencies = symbol_graph_layer_dependency_edges(
-                db,
-                &layer_key,
-                manifest,
-                &module_graph_output,
-                &upstream_syntax_outputs,
-                analysis_settings_digest,
-                &input_snapshot.go_lifecycle.components,
-                &input_snapshot.ts_js_lifecycle.components,
-                provider_manifest_dependency_digest(input_snapshot, manifest),
-            );
             let (manifest, payload_bytes) =
                 match symbol_graph_layer_manifest(layer_key, &payload, dependencies) {
                     Ok(result) => result,
@@ -595,11 +595,13 @@ fn restore_symbol_graph_layer_payload(db: &mut AnalysisDb, payload: &SymbolGraph
 fn validate_symbol_graph_layer_payload(
     payload: &SymbolGraphLayerPayload,
     manifest: &LayerCacheManifest,
+    expected_dependencies: &[DependencyEdge],
 ) -> bool {
     payload.schema == SYMBOL_GRAPH_LAYER_SCHEMA
         && semantic_payload_rows_are_valid(&payload.semantic_index)
         && manifest.output_digest
             == symbol_graph_output_digest_for_payload(payload, Some(&manifest.key))
+        && manifest.has_exact_dependencies(expected_dependencies)
 }
 
 fn semantic_index_payload(db: &AnalysisDb) -> SemanticIndexOutput {
@@ -1222,6 +1224,7 @@ mod symbol_graph_derivation {
     use crate::analysis_kernel::incremental::{
         CacheNode, DependencyKind, Digest, DigestKind, InputComponentStatus, InputDependencyKind,
         InputSnapshot, ProviderOutputDependency,
+        replace_manifest_dependencies_with_irrelevant_source_for_test,
     };
     use crate::analysis_kernel::{
         FactConfidence, FactFamily, FactPrecision, FactRef, ValidationStatus,
@@ -2002,6 +2005,40 @@ export function answer() {{
         }
 
         #[test]
+        fn symbol_graph_layer_rejects_forged_nonempty_dependencies() {
+            let temp = tempfile::tempdir().expect("tempdir");
+            let loaded = loaded_config_for(temp.path());
+            let cache = Cache::new(temp.path().join("cache").join("analysis"), true);
+            let plan = requested_symbol_plan();
+            let mut first_db = fixture_db(temp.path(), "./target");
+            let first = derive_symbols_with_cache(
+                &mut first_db,
+                &loaded,
+                &cache,
+                &plan,
+                "config",
+                "stable",
+            );
+            let manifest = first_layer_file(temp.path().join("cache").as_path(), "manifests");
+            replace_manifest_dependencies_with_irrelevant_source_for_test(&manifest);
+            let mut second_db = fixture_db(temp.path(), "./target");
+
+            let second = derive_symbols_with_cache(
+                &mut second_db,
+                &loaded,
+                &cache,
+                &plan,
+                "config",
+                "stable",
+            );
+
+            assert_eq!(second.cache_stats.invalid_evicted_reads, 1);
+            assert_eq!(second.cache_stats.recomputes, 1);
+            assert_eq!(second.cache_stats.writes, 1);
+            assert_eq!(second.layers, first.layers);
+        }
+
+        #[test]
         fn symbol_graph_layer_disabled_cache_records_bypass_without_layer_files() {
             let temp = tempfile::tempdir().expect("tempdir");
             let loaded = loaded_config_for(temp.path());
@@ -2359,24 +2396,29 @@ export function answer() {
         let valid_manifest = cache_manifest_for(&valid_payload);
         assert!(validate_symbol_graph_layer_payload(
             &valid_payload,
-            &valid_manifest
+            &valid_manifest,
+            &valid_manifest.dependencies,
         ));
 
         let mut empty_key_payload = valid_payload.clone();
         empty_key_payload.semantic_index.scopes[0]
             .stable_key
             .clear();
+        let empty_key_manifest = cache_manifest_for(&empty_key_payload);
         assert!(!validate_symbol_graph_layer_payload(
             &empty_key_payload,
-            &cache_manifest_for(&empty_key_payload)
+            &empty_key_manifest,
+            &empty_key_manifest.dependencies,
         ));
 
         let mut absolute_path_payload = valid_payload.clone();
         absolute_path_payload.semantic_index.stable_exports[0].module_key =
             Some("/tmp/repo/src/app.ts".to_string());
+        let absolute_path_manifest = cache_manifest_for(&absolute_path_payload);
         assert!(!validate_symbol_graph_layer_payload(
             &absolute_path_payload,
-            &cache_manifest_for(&absolute_path_payload)
+            &absolute_path_manifest,
+            &absolute_path_manifest.dependencies,
         ));
 
         let mut conflict_payload = valid_payload;
@@ -2389,9 +2431,11 @@ export function answer() {
                 "semantic:stable-export:answer",
                 "symbol:other",
             ));
+        let conflict_manifest = cache_manifest_for(&conflict_payload);
         assert!(!validate_symbol_graph_layer_payload(
             &conflict_payload,
-            &cache_manifest_for(&conflict_payload)
+            &conflict_manifest,
+            &conflict_manifest.dependencies,
         ));
     }
 }

@@ -797,7 +797,7 @@ pub struct AnalysisDb {
     extension_facts: Vec<AcceptedExtensionFact>,
     #[allow(
         dead_code,
-        reason = "Rejected extension audit rows are surfaced by the extension provider/debug wiring in the next plan."
+        reason = "Rejected extension audit rows are consumed by extension-provider debug reporting."
     )]
     rejected_extension_facts: Vec<RejectedExtensionFact>,
     adaptation_model_facts: Vec<AcceptedModelFact>,
@@ -814,32 +814,32 @@ pub struct AnalysisDb {
     semantic_constraints: Vec<ConstraintFact>,
     #[allow(
         dead_code,
-        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
+        reason = "TS object-model rows are stored before semantic-graph lowering consumes them."
     )]
     ts_object_allocations: Vec<TsObjectAllocationFact>,
     #[allow(
         dead_code,
-        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
+        reason = "TS object-model rows are stored before semantic-graph lowering consumes them."
     )]
     ts_property_writes: Vec<TsPropertyWriteFact>,
     #[allow(
         dead_code,
-        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
+        reason = "TS object-model rows are stored before semantic-graph lowering consumes them."
     )]
     ts_property_reads: Vec<TsPropertyReadFact>,
     #[allow(
         dead_code,
-        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
+        reason = "TS object-model rows are stored before semantic-graph lowering consumes them."
     )]
     ts_receiver_bindings: Vec<TsReceiverBindingFact>,
     #[allow(
         dead_code,
-        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
+        reason = "TS object-model rows are stored before semantic-graph lowering consumes them."
     )]
     ts_prototype_links: Vec<TsPrototypeLinkFact>,
     #[allow(
         dead_code,
-        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
+        reason = "TS object-model rows are stored before semantic-graph lowering consumes them."
     )]
     ts_object_model_store: Option<TsObjectModelStore>,
     solver_derived_edges: Vec<DerivedEdgeFact>,
@@ -1648,7 +1648,7 @@ impl AnalysisDb {
 
     #[allow(
         dead_code,
-        reason = "Extension fact replacement is wired into the kernel provider in the next plan."
+        reason = "Extension fact replacement is shared by the kernel provider and focused fixtures."
     )]
     pub(crate) fn replace_extension_facts(&mut self, output: ExtensionOutput) {
         let output = output.normalized();
@@ -1689,7 +1689,7 @@ impl AnalysisDb {
 
     #[allow(
         dead_code,
-        reason = "Rejected extension audit rows are surfaced by the extension provider/debug wiring in the next plan."
+        reason = "Rejected extension audit rows are surfaced by extension-provider debug reporting."
     )]
     pub(crate) fn rejected_extension_facts(&self) -> &[RejectedExtensionFact] {
         &self.rejected_extension_facts
@@ -1737,7 +1737,7 @@ impl AnalysisDb {
 
     #[allow(
         dead_code,
-        reason = "Reachability fact replacement is wired into the kernel provider in the next  task (provider/kernel splice)."
+        reason = "Reachability fact replacement is shared by the kernel provider and focused fixtures."
     )]
     pub(crate) fn replace_reachability_facts(
         &mut self,
@@ -1762,13 +1762,13 @@ impl AnalysisDb {
 
     #[allow(
         dead_code,
-        reason = "Reachability marks are populated by the marking traversal in  and read by debug/eval."
+        reason = "Reachability marks are populated by the marking traversal and read by debug/evaluation projections."
     )]
     pub(crate) fn reachability_marks(&self) -> &[CallReachabilityFact] {
         &self.reachability_marks
     }
 
-    /// Stores the normalized semantic-graph nodes/edges/constraints (GRAPH-01),
+    /// Stores the normalized semantic-graph nodes, edges, and constraints,
     /// mirroring [`Self::replace_reachability_facts`]. Construction runs through
     /// [`SemanticGraphStore::from_output`], which normalizes (stable-key sort + dense
     /// ID assignment) and referentially validates every edge endpoint and constraint
@@ -1814,7 +1814,7 @@ impl AnalysisDb {
     /// normalization and rejects duplicate stable keys before stale rows are replaced.
     #[allow(
         dead_code,
-        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
+        reason = "TS object-model rows are stored before semantic-graph lowering consumes them."
     )]
     pub(crate) fn replace_ts_object_model_facts(
         &mut self,
@@ -1832,7 +1832,7 @@ impl AnalysisDb {
 
     #[allow(
         dead_code,
-        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
+        reason = "TS object-model rows are stored before semantic-graph lowering consumes them."
     )]
     pub(crate) fn ts_object_allocations(&self) -> &[TsObjectAllocationFact] {
         &self.ts_object_allocations
@@ -1840,7 +1840,7 @@ impl AnalysisDb {
 
     #[allow(
         dead_code,
-        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
+        reason = "TS object-model rows are stored before semantic-graph lowering consumes them."
     )]
     pub(crate) fn ts_property_writes(&self) -> &[TsPropertyWriteFact] {
         &self.ts_property_writes
@@ -1848,7 +1848,7 @@ impl AnalysisDb {
 
     #[allow(
         dead_code,
-        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
+        reason = "TS object-model rows are stored before semantic-graph lowering consumes them."
     )]
     pub(crate) fn ts_property_reads(&self) -> &[TsPropertyReadFact] {
         &self.ts_property_reads
@@ -1856,7 +1856,7 @@ impl AnalysisDb {
 
     #[allow(
         dead_code,
-        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
+        reason = "TS object-model rows are stored before semantic-graph lowering consumes them."
     )]
     pub(crate) fn ts_receiver_bindings(&self) -> &[TsReceiverBindingFact] {
         &self.ts_receiver_bindings
@@ -1864,7 +1864,7 @@ impl AnalysisDb {
 
     #[allow(
         dead_code,
-        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
+        reason = "TS object-model rows are stored before semantic-graph lowering consumes them."
     )]
     pub(crate) fn ts_prototype_links(&self) -> &[TsPrototypeLinkFact] {
         &self.ts_prototype_links
@@ -1872,17 +1872,17 @@ impl AnalysisDb {
 
     #[allow(
         dead_code,
-        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
+        reason = "TS object-model rows are stored before semantic-graph lowering consumes them."
     )]
     pub(crate) fn ts_object_model_store(&self) -> Option<&TsObjectModelStore> {
         self.ts_object_model_store.as_ref()
     }
 
-    /// Stores the normalized solver-derived edges (GRAPH-03/GRAPH-04), mirroring
+    /// Stores the normalized solver-derived edges, mirroring
     /// [`Self::replace_semantic_graph_facts`]. Construction runs through
     /// [`SolverStore::from_output`], which normalizes (stable-key sort + dense ID
     /// assignment) and referentially validates duplicate stable keys + the precision
-    /// ceiling (D-06) — a malformed row returns [`AnalysisError::InvalidFact`] so the
+    /// ceiling; a malformed row returns [`AnalysisError::InvalidFact`] so the
     /// db is never left holding a malformed solver output.
     pub(crate) fn replace_solver_facts(
         &mut self,
@@ -1895,11 +1895,9 @@ impl AnalysisDb {
         Ok(())
     }
 
-    /// The stored solver-derived edges. Consumed by the provider tests today and by
-    /// the GRAPH-05 refined_calls rework (which projects over solver output);
-    /// no production read exists yet, so the accessor is dead-code in a non-test build
-    /// until that consumer lands (the facts are stored unconditionally so the
-    /// determinism gate observes them).
+    /// The stored solver-derived edges. Consumed by refined-call analysis, internal
+    /// evaluation, and provider tests. The facts are stored unconditionally so the
+    /// determinism gate observes them.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn solver_derived_edges(&self) -> &[DerivedEdgeFact] {
         &self.solver_derived_edges
@@ -1915,10 +1913,10 @@ impl AnalysisDb {
         &self.solver_budget_reasons
     }
 
-    /// Store the Go semantic facts, returning the resilience report (malformed RTA-signal
-    /// harvest rows dropped, FIX 3; plus duplicate structural rows collapsed keep-first,
-    /// FIX-08) so the provider can surface observable diagnostics. All counts are zero on a
-    /// clean frontend run.
+    /// Store the Go semantic facts, returning a resilience report for malformed
+    /// RTA-signal rows that were dropped and duplicate structural rows that were
+    /// collapsed keep-first. The provider surfaces these as observable diagnostics;
+    /// all counts are zero on a clean frontend run.
     pub(crate) fn replace_go_semantic_facts(
         &mut self,
         output: GoSemanticFactsOutput,
@@ -1977,7 +1975,7 @@ impl AnalysisDb {
 
     #[allow(
         dead_code,
-        reason = "Address-taken facts are stored privately for the Plan 2 go_rta dispatch-candidate set (GO-05)."
+        reason = "Address-taken facts are stored privately for the Go RTA dispatch-candidate set."
     )]
     pub(crate) fn go_semantic_address_taken(&self) -> &[GoSemanticAddressTakenFact] {
         &self.go_semantic_address_taken
@@ -1985,7 +1983,7 @@ impl AnalysisDb {
 
     #[allow(
         dead_code,
-        reason = "Instantiated-type facts are stored privately for the Plan 2 go_rta rapid-type filter (GO-05)."
+        reason = "Instantiated-type facts are stored privately for the Go RTA rapid-type filter."
     )]
     pub(crate) fn go_semantic_instantiated_types(&self) -> &[GoSemanticInstantiatedTypeFact] {
         &self.go_semantic_instantiated_types
@@ -1993,7 +1991,7 @@ impl AnalysisDb {
 
     #[allow(
         dead_code,
-        reason = "Dynamic-dispatch detail is stored privately for the Plan 2 go_rta method-set matching (GO-05)."
+        reason = "Dynamic-dispatch detail is stored privately for Go RTA method-set matching."
     )]
     pub(crate) fn go_semantic_dynamic_dispatch(&self) -> &[GoSemanticDynamicDispatchFact] {
         &self.go_semantic_dynamic_dispatch
@@ -2451,7 +2449,7 @@ impl AnalysisDb {
 
     #[allow(
         dead_code,
-        reason = "Extension metadata refresh is reached through extension provider wiring in the next plan."
+        reason = "Extension metadata refresh runs after extension facts are replaced."
     )]
     fn refresh_extension_metadata(&mut self) {
         self.fact_meta.remove_family(FactFamily::ExtensionFact);
@@ -5934,7 +5932,7 @@ fn source_file_metadata(relative_path: &str, language: Language, content_hash: &
 
 #[allow(
     dead_code,
-    reason = "Extension fact metadata is reached through extension provider wiring in the next plan."
+    reason = "Extension fact metadata is derived when extension facts are installed."
 )]
 fn extension_fact_metadata(fact: &AcceptedExtensionFact) -> FactMeta {
     let producer_id = leaked_extension_producer_id(&fact.extension_id, &fact.provider_id);
@@ -5985,7 +5983,7 @@ fn adaptation_model_fact_metadata(fact: &AcceptedModelFact) -> FactMeta {
 
 #[allow(
     dead_code,
-    reason = "Extension producer ids are reached through extension provider wiring in the next plan."
+    reason = "Extension producer IDs are derived when extension facts are installed."
 )]
 fn leaked_extension_producer_id(extension_id: &str, provider_id: &str) -> &'static str {
     Box::leak(format!("polint.extension.{extension_id}.{provider_id}").into_boxed_str())
@@ -5993,7 +5991,7 @@ fn leaked_extension_producer_id(extension_id: &str, provider_id: &str) -> &'stat
 
 #[allow(
     dead_code,
-    reason = "Extension precision mapping is reached through extension provider wiring in the next plan."
+    reason = "Extension precision is mapped when extension facts are installed."
 )]
 fn extension_precision_metadata(precision: ExtensionFactPrecision) -> FactPrecision {
     match precision {
@@ -6006,7 +6004,7 @@ fn extension_precision_metadata(precision: ExtensionFactPrecision) -> FactPrecis
 
 #[allow(
     dead_code,
-    reason = "Extension confidence mapping is reached through extension provider wiring in the next plan."
+    reason = "Extension confidence is mapped when extension facts are installed."
 )]
 fn extension_confidence_metadata(confidence: ExtensionFactConfidence) -> FactConfidence {
     match confidence {
