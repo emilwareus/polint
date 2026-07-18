@@ -15,6 +15,7 @@ use std::sync::{Condvar, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[cfg(not(windows))]
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as ShaDigest, Sha256};
@@ -1589,7 +1590,7 @@ fn containment_setup_deadline_check(deadline: GoOperationDeadline) -> Result<(),
 }
 
 #[cfg(unix)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct ProcessIdentity {
     start_primary: u64,
     start_secondary: u64,
@@ -1707,6 +1708,7 @@ impl ProcessRefreshBudget {
 struct ProcessTreeTracker {
     processes: BTreeMap<libc::pid_t, ProcessIdentity>,
     process_group: libc::pid_t,
+    root_identity: ProcessIdentity,
     owner_sentinel: OwnerSentinelIdentity,
     operation_deadline: Instant,
 }
@@ -1734,6 +1736,7 @@ impl ProcessTreeTracker {
         Ok(Self {
             processes: BTreeMap::from([(root, identity)]),
             process_group: root,
+            root_identity: identity,
             owner_sentinel,
             operation_deadline,
         })
@@ -1904,7 +1907,9 @@ impl ProcessTreeTracker {
 
     fn discover_owner_holders(&mut self, scan: &mut OwnerSentinelScan) -> Result<bool, String> {
         let mut changed = false;
-        for process in processes_holding_owner_sentinel(self.owner_sentinel, scan)? {
+        for process in
+            processes_holding_owner_sentinel(self.owner_sentinel, self.root_identity, scan)?
+        {
             if self.processes.get(&process.pid) == Some(&process.identity) {
                 continue;
             }
@@ -1928,7 +1933,8 @@ impl ProcessTreeTracker {
     ) -> Result<(), String> {
         loop {
             scan.check_deadline()?;
-            let holders = processes_holding_owner_sentinel(self.owner_sentinel, scan)?;
+            let holders =
+                processes_holding_owner_sentinel(self.owner_sentinel, self.root_identity, scan)?;
             if holders.is_empty() {
                 return Ok(());
             }
@@ -1971,9 +1977,16 @@ fn process_matches(process: TrackedProcess) -> Result<bool, String> {
 fn verified_owner_holder_with_scan(
     pid: libc::pid_t,
     sentinel: OwnerSentinelIdentity,
+    containment_root: ProcessIdentity,
     scan: &mut OwnerSentinelScan,
 ) -> Result<Option<TrackedProcess>, String> {
+    #[cfg(not(target_os = "linux"))]
+    let _ = containment_root;
     let Some(identity) = process_identity(pid)? else {
+        return Ok(None);
+    };
+    #[cfg(target_os = "linux")]
+    let Some(identity) = linux_owner_scan_identity(pid, identity, containment_root)? else {
         return Ok(None);
     };
     if !process_holds_owner_sentinel_with_scan(pid, sentinel, scan)? {
@@ -1983,6 +1996,33 @@ fn verified_owner_holder_with_scan(
         return Ok(None);
     }
     Ok(Some(TrackedProcess { pid, identity }))
+}
+
+#[cfg(target_os = "linux")]
+fn linux_owner_scan_identity(
+    pid: libc::pid_t,
+    observed: ProcessIdentity,
+    containment_root: ProcessIdentity,
+) -> Result<Option<ProcessIdentity>, String> {
+    let mut identity = observed;
+    for _ in 0..2 {
+        // The ownership sentinel follows descriptors inherited by the spawned
+        // process tree. A process that started strictly before the root cannot
+        // be its descendant; equality remains included because Linux start
+        // times have clock-tick granularity. Passing the descriptor backward
+        // to an existing daemon is outside this containment contract.
+        if identity >= containment_root {
+            return Ok(Some(identity));
+        }
+        match process_identity(pid)? {
+            None => return Ok(None),
+            Some(confirmed) if confirmed == identity => return Ok(None),
+            Some(replacement) => identity = replacement,
+        }
+    }
+    Err(format!(
+        "process {pid} changed repeatedly while its containment age was verified"
+    ))
 }
 
 #[cfg(unix)]
@@ -2147,6 +2187,7 @@ struct MacVnodeFdInfo {
 #[allow(unsafe_code)]
 fn processes_holding_owner_sentinel(
     sentinel: OwnerSentinelIdentity,
+    containment_root: ProcessIdentity,
     scan: &mut OwnerSentinelScan,
 ) -> Result<Vec<TrackedProcess>, String> {
     let mut pids = vec![0; COMMAND_MAX_SCANNED_PROCESSES];
@@ -2172,7 +2213,9 @@ fn processes_holding_owner_sentinel(
     let mut holders = Vec::new();
     for pid in pids.into_iter().filter(|pid| *pid > 0) {
         scan.check_deadline()?;
-        if let Some(process) = verified_owner_holder_with_scan(pid, sentinel, scan)? {
+        if let Some(process) =
+            verified_owner_holder_with_scan(pid, sentinel, containment_root, scan)?
+        {
             holders.push(process);
             if holders.len() >= COMMAND_MAX_TRACKED_PROCESSES {
                 return Err(format!(
@@ -2428,6 +2471,7 @@ fn child_process_ids(
 #[cfg(target_os = "linux")]
 fn processes_holding_owner_sentinel(
     sentinel: OwnerSentinelIdentity,
+    containment_root: ProcessIdentity,
     scan: &mut OwnerSentinelScan,
 ) -> Result<Vec<TrackedProcess>, String> {
     let own_pid = libc::pid_t::try_from(std::process::id()).unwrap_or_default();
@@ -2457,7 +2501,9 @@ fn processes_holding_owner_sentinel(
         if pid <= 0 || pid == own_pid {
             continue;
         }
-        if let Some(process) = verified_owner_holder_with_scan(pid, sentinel, scan)? {
+        if let Some(process) =
+            verified_owner_holder_with_scan(pid, sentinel, containment_root, scan)?
+        {
             holders.push(process);
             if holders.len() >= COMMAND_MAX_TRACKED_PROCESSES {
                 return Err(format!(
@@ -2680,6 +2726,7 @@ fn child_process_ids(
 #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
 fn processes_holding_owner_sentinel(
     _sentinel: OwnerSentinelIdentity,
+    _containment_root: ProcessIdentity,
     _scan: &mut OwnerSentinelScan,
 ) -> Result<Vec<TrackedProcess>, String> {
     Err(unsupported_process_containment_reason())
@@ -12514,16 +12561,17 @@ fn read_regular_file_no_follow_until(
     deadline: GoOperationDeadline,
 ) -> Result<Vec<u8>, GoSemanticProcessError> {
     validate_local_path_size_until(path, "Go semantic frontend file reading", deadline)?;
-    let path = path.to_path_buf();
+    let certified_path = path.to_path_buf();
     let contents = run_windows_file_io_certification(
         deadline,
         "Go semantic frontend file reading",
         move || {
-            let file = crate::go::semantic::windows::SecureFile::open_regular_no_follow(&path)
-                .map_err(|error| {
+            let file =
+                crate::go::semantic::windows::SecureFile::open_regular_no_follow(&certified_path)
+                    .map_err(|error| {
                     let context = format!(
                         "failed to open Go semantic frontend file `{}` securely: {error}",
-                        path.display()
+                        certified_path.display()
                     );
                     windows_file_io_error(error, context)
                 })?;
@@ -12531,7 +12579,7 @@ fn read_regular_file_no_follow_until(
                 .map_err(|error| {
                     let context = format!(
                         "failed to read Go semantic frontend file `{}` securely: {error}",
-                        path.display()
+                        certified_path.display()
                     );
                     windows_file_io_error(error, context)
                 })
@@ -14658,6 +14706,90 @@ mod tests {
         assert!(
             parse_linux_fdinfo_sentinel_identity(b"pos:\t0\nino:\t9001\n").is_err(),
             "missing mount identity must fail closed"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[allow(unsafe_code)]
+    fn linux_global_sentinel_scan_only_skips_inaccessible_older_processes() {
+        const HELPER_ENV: &str = "POLINT_TEST_NONDUMPABLE_SCAN_HELPER";
+        const READY_ENV: &str = "POLINT_TEST_NONDUMPABLE_SCAN_READY";
+
+        if std::env::var_os(HELPER_ENV).is_some() {
+            let ready = PathBuf::from(std::env::var_os(READY_ENV).expect("helper ready path"));
+            // SAFETY: PR_SET_DUMPABLE accepts scalar arguments and changes only
+            // this disposable helper process.
+            assert_eq!(unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) }, 0);
+            fs::write(ready, b"ready").expect("publish non-dumpable helper readiness");
+            thread::sleep(Duration::from_secs(10));
+            return;
+        }
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let ready = temp.path().join("ready");
+        let test_binary = std::env::current_exe().expect("current test binary");
+        let helper = "go::semantic::process::tests::linux_global_sentinel_scan_only_skips_inaccessible_older_processes";
+        let mut child = Command::new(test_binary)
+            .arg("--exact")
+            .arg(helper)
+            .arg("--nocapture")
+            .env(HELPER_ENV, "1")
+            .env(READY_ENV, &ready)
+            .spawn()
+            .expect("spawn non-dumpable helper");
+        let wait_until = Instant::now() + Duration::from_secs(2);
+        while !ready.exists() && Instant::now() < wait_until {
+            thread::sleep(Duration::from_millis(1));
+        }
+        let pid = libc::pid_t::try_from(child.id()).expect("helper pid");
+        let identity = process_identity(pid)
+            .expect("inspect helper identity")
+            .expect("helper remains live");
+        let sentinel = OwnerSentinelIdentity {
+            device: u64::MAX,
+            inode: u64::MAX,
+        };
+        let mut same_tick_scan = OwnerSentinelScan::new();
+        let same_tick =
+            verified_owner_holder_with_scan(pid, sentinel, identity, &mut same_tick_scan);
+        let later_root = ProcessIdentity {
+            start_primary: identity
+                .start_primary
+                .checked_add(1)
+                .expect("helper start time can advance one tick"),
+            start_secondary: identity.start_secondary,
+        };
+        assert_eq!(
+            linux_owner_scan_identity(pid, identity, identity)
+                .expect("equal-tick identity classification"),
+            Some(identity),
+            "equal-tick processes must remain in the descriptor scan"
+        );
+        assert_eq!(
+            linux_owner_scan_identity(pid, identity, later_root)
+                .expect("strictly older identity classification"),
+            None,
+            "strictly older processes must be excluded before descriptor inspection"
+        );
+        let mut older_scan = OwnerSentinelScan::new();
+        let older = verified_owner_holder_with_scan(pid, sentinel, later_root, &mut older_scan);
+        let _ = child.kill();
+        let _ = child.wait();
+
+        assert!(ready.exists(), "non-dumpable helper did not become ready");
+        match same_tick {
+            Ok(None) => {}
+            Ok(Some(_)) => panic!("the helper cannot hold the synthetic sentinel"),
+            Err(error) => {
+                assert!(error.contains("process"));
+            }
+        }
+        assert!(
+            older
+                .expect("an inaccessible process older than the root is unrelated")
+                .is_none(),
+            "an inaccessible process that predates the root cannot be its descendant"
         );
     }
 
