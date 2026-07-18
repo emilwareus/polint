@@ -16416,10 +16416,7 @@ mod tests {
                         drop(capacity);
                         true
                     }
-                    Err(GoSemanticProcessError::CommandUnavailable(_)) => {
-                        fs::remove_dir_all(&staging).expect("remove rejected candidate");
-                        false
-                    }
+                    Err(GoSemanticProcessError::CommandUnavailable(_)) => false,
                     Err(error) => panic!("unexpected capacity result: {error}"),
                 }
             }));
@@ -16443,6 +16440,16 @@ mod tests {
             })
             .count();
         assert_eq!(published_entries, 1);
+        assert!(
+            remove_directory_tree_with_limits(
+                cache.as_path(),
+                32,
+                4,
+                GoOperationDeadline::after(Duration::from_secs(5)),
+            )
+            .expect("remove the completed private cache fixture")
+        );
+        assert!(!cache.exists());
     }
 
     #[test]
