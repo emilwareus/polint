@@ -116,13 +116,25 @@ jobs:
           -- --exact --ignored --test-threads=1 --nocapture
 
   test-platform:
-    name: ${{ matrix.os }} — platform library tests
+    name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        include:
+          - os: macos-latest
+            name: macos-latest — platform library tests
+            shard: all
+          - os: windows-latest
+            name: windows-latest — platform library tests
+            shard: non-fixtures
+          - os: windows-latest
+            name: windows-latest — platform fixture tests
+            shard: fixtures
+          - os: windows-latest
+            name: windows-latest — composite fixture test
+            shard: composite-fixture
 
     steps:
       - uses: actions/checkout@v6
@@ -139,12 +151,47 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: published-cache concurrency smoke (Windows)
+        if: matrix.shard == 'non-fixtures'
+        run: >-
+          cargo test -p polint --lib --all-features --locked
+          go::semantic::process::tests::published_cache_capacity_serializes_concurrent_publishers
+          -- --exact --test-threads=1 --nocapture
+
       - name: cargo test
+        if: matrix.shard == 'all'
         env:
           POLINT_REQUIRE_WINDOWS_CASE_SENSITIVE_TEST: ${{ runner.os == 'Windows' && '1' || '0' }}
         run: cargo test -p polint --lib --all-features --locked
 
+      - name: cargo test (non-fixture shard)
+        if: matrix.shard == 'non-fixtures'
+        env:
+          POLINT_REQUIRE_WINDOWS_CASE_SENSITIVE_TEST: "1"
+        run: >-
+          cargo test -p polint --lib --all-features --locked
+          -- --skip eval::fixtures::
+
+      - name: cargo test (fixture shard)
+        if: matrix.shard == 'fixtures'
+        env:
+          POLINT_REQUIRE_WINDOWS_CASE_SENSITIVE_TEST: "1"
+        run: >-
+          cargo test -p polint --lib --all-features --locked
+          eval::fixtures::
+          -- --skip eval::fixtures::eval_native_fixture_runner_tests::eval_native_fixture_suite_covers_required_categories
+
+      - name: cargo test (composite fixture shard)
+        if: matrix.shard == 'composite-fixture'
+        env:
+          POLINT_REQUIRE_WINDOWS_CASE_SENSITIVE_TEST: "1"
+        run: >-
+          cargo test -p polint --lib --all-features --locked
+          eval::fixtures::eval_native_fixture_runner_tests::eval_native_fixture_suite_covers_required_categories
+          -- --exact
+
       - name: input-snapshot runtime gate (serialized)
+        if: matrix.shard == 'all' || matrix.shard == 'non-fixtures'
         run: >-
           cargo test -p polint --lib --all-features --locked
           --profile performance-gate
@@ -152,6 +199,7 @@ jobs:
           -- --exact --ignored --test-threads=1 --nocapture
 
       - name: semantic-store supported-boundary authenticity smoke (serialized)
+        if: matrix.shard == 'all' || matrix.shard == 'non-fixtures'
         run: >-
           cargo test -p polint --lib --all-features --locked
           --profile performance-gate

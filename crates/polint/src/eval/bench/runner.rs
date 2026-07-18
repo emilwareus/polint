@@ -532,6 +532,44 @@ const CHILD_SEMANTIC_STORE_ENV: &str = "POLINT_PERF_CHILD_SEMANTIC_STORE";
 /// output.
 const CHILD_POINT_BEGIN: &str = "<<<POLINT_PERF_POINT_BEGIN>>>";
 const CHILD_POINT_END: &str = "<<<POLINT_PERF_POINT_END>>>";
+const EXECUTABLE_BUSY_RETRY_DELAYS: [std::time::Duration; 8] = [
+    std::time::Duration::from_millis(5),
+    std::time::Duration::from_millis(10),
+    std::time::Duration::from_millis(20),
+    std::time::Duration::from_millis(40),
+    std::time::Duration::from_millis(80),
+    std::time::Duration::from_millis(160),
+    std::time::Duration::from_millis(320),
+    std::time::Duration::from_millis(640),
+];
+
+fn output_with_executable_busy_retry(
+    command: &mut std::process::Command,
+) -> std::io::Result<std::process::Output> {
+    output_with_executable_busy_retry_and_wait(command, std::thread::sleep)
+}
+
+fn output_with_executable_busy_retry_and_wait(
+    command: &mut std::process::Command,
+    mut wait: impl FnMut(std::time::Duration),
+) -> std::io::Result<std::process::Output> {
+    let mut retry_delays = EXECUTABLE_BUSY_RETRY_DELAYS.into_iter();
+    loop {
+        match command.output() {
+            Ok(output) => return Ok(output),
+            Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                let Some(delay) = retry_delays.next() else {
+                    return Err(error);
+                };
+                // A concurrent fork can briefly inherit the snapshot's writable
+                // descriptor before `CLOEXEC` closes it. Linux rejects executing
+                // that inode with `ETXTBSY` until the other child reaches `exec`.
+                wait(delay);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
 
 /// Measure a single [`CurvePoint`] for `repo_root` in a dedicated child process
 /// so its peak-memory fields are independent of work previously performed by
@@ -703,8 +741,7 @@ impl IsolatedPerfRunner {
         if store_mode == SemanticStoreBenchMode::Enabled {
             command.env(CHILD_SEMANTIC_STORE_ENV, "enabled");
         }
-        let output = command
-            .output()
+        let output = output_with_executable_busy_retry(&mut command)
             .map_err(|error| anyhow::anyhow!("spawning isolated perf child: {error}"))?;
         if !output.status.success() {
             anyhow::bail!(
@@ -1061,6 +1098,50 @@ mod tests {
             std::fs::read(runner.executable_path()).expect("read executable snapshot"),
             b"original executable"
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn isolated_perf_spawn_retries_a_transient_write_open_executable() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let runner = IsolatedPerfRunner::capture().expect("capture executable fixture");
+        let executable = runner.executable_path();
+        std::fs::set_permissions(executable, std::fs::Permissions::from_mode(0o700))
+            .expect("make executable fixture writable");
+        let writer = std::fs::OpenOptions::new()
+            .write(true)
+            .open(executable)
+            .expect("hold executable fixture open for writing");
+
+        let direct_error = Command::new(executable)
+            .arg("--exact")
+            .arg(CHILD_MEASURE_TEST)
+            .output()
+            .expect_err("Linux must reject a write-open executable");
+        assert_eq!(direct_error.kind(), std::io::ErrorKind::ExecutableFileBusy);
+
+        let mut command = Command::new(executable);
+        command
+            .arg("--exact")
+            .arg(CHILD_MEASURE_TEST)
+            .env_remove(CHILD_REPO_ENV)
+            .env_remove(CHILD_REVIEW_ENV)
+            .env_remove(CHILD_SEMANTIC_STORE_ENV)
+            .env_remove("POLINT_WRITE_STORE_DISABLED_BASELINE");
+        let mut writer = Some(writer);
+        let mut retries = 0;
+        let output = output_with_executable_busy_retry_and_wait(&mut command, |_| {
+            retries += 1;
+            drop(writer.take());
+        })
+        .expect("retry after the write-open executable is released");
+
+        assert!(
+            retries >= 1,
+            "the helper must observe the write-open ETXTBSY failure"
+        );
+        assert!(output.status.success());
     }
 
     #[test]

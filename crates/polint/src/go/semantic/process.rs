@@ -90,13 +90,14 @@ const GO_SEMANTIC_PROCESS_CONTAINMENT_SUPPORTED: bool =
     cfg!(any(windows, target_os = "linux", target_os = "macos"));
 
 #[cfg(test)]
-static TEST_GO_SEMANTIC_CONCURRENCY: OnceLock<(Mutex<usize>, Condvar)> = OnceLock::new();
+static TEST_GO_SEMANTIC_CONCURRENCY: OnceLock<(Mutex<TestGoSemanticConcurrencyState>, Condvar)> =
+    OnceLock::new();
 #[cfg(all(test, target_os = "linux"))]
 static TEST_LINUX_CONTAINMENT_INSPECTION: OnceLock<RwLock<()>> = OnceLock::new();
 #[cfg(test)]
 thread_local! {
     static TEST_GO_SEMANTIC_SCOPED_PERMIT: std::cell::RefCell<
-        Option<Arc<TestGoSemanticConcurrencyPermit>>,
+        Option<TestGoSemanticScopedPermit>,
     > = const { std::cell::RefCell::new(None) };
 }
 #[cfg(test)]
@@ -113,31 +114,101 @@ const TEST_GO_SEMANTIC_SCOPE_WAIT_TIMEOUT: Duration = Duration::from_secs(45 * 6
 struct TestGoSemanticConcurrencyPermit;
 
 #[cfg(test)]
+#[derive(Debug)]
+struct TestGoSemanticScopedPermit {
+    permit: Arc<TestGoSemanticConcurrencyPermit>,
+    scope_count: usize,
+}
+
+#[cfg(test)]
+#[derive(Debug, Default)]
+struct TestGoSemanticConcurrencyState {
+    active: usize,
+    next_waiter: u64,
+    waiters: std::collections::VecDeque<u64>,
+}
+
+#[cfg(test)]
+impl TestGoSemanticConcurrencyState {
+    fn enqueue(&mut self) -> Result<u64, GoSemanticProcessError> {
+        let waiter = self.next_waiter;
+        self.next_waiter = self.next_waiter.checked_add(1).ok_or_else(|| {
+            GoSemanticProcessError::CommandFailed(
+                "test Go semantic concurrency waiter identifiers are exhausted".to_string(),
+            )
+        })?;
+        self.waiters.push_back(waiter);
+        Ok(waiter)
+    }
+
+    fn can_admit(&self, waiter: u64) -> bool {
+        self.active < TEST_GO_SEMANTIC_MAX_CONCURRENCY && self.waiters.front() == Some(&waiter)
+    }
+
+    fn admit(&mut self, waiter: u64) {
+        debug_assert!(self.can_admit(waiter));
+        let admitted = self.waiters.pop_front();
+        debug_assert_eq!(admitted, Some(waiter));
+        self.active += 1;
+    }
+
+    fn cancel(&mut self, waiter: u64) {
+        if let Some(position) = self.waiters.iter().position(|queued| *queued == waiter) {
+            self.waiters.remove(position);
+        }
+    }
+
+    fn release(&mut self) {
+        debug_assert!(self.active > 0);
+        self.active = self.active.saturating_sub(1);
+    }
+}
+
+#[cfg(test)]
 impl TestGoSemanticConcurrencyPermit {
     fn acquire(deadline: GoOperationDeadline) -> Result<Arc<Self>, GoSemanticProcessError> {
-        if let Some(permit) = TEST_GO_SEMANTIC_SCOPED_PERMIT.with(|slot| slot.borrow().clone()) {
+        if let Some(permit) = TEST_GO_SEMANTIC_SCOPED_PERMIT.with(|slot| {
+            slot.borrow()
+                .as_ref()
+                .map(|scoped| Arc::clone(&scoped.permit))
+        }) {
             return Ok(permit);
         }
 
         const LABEL: &str = "test Go semantic concurrency coordination";
-        let (active, available) =
-            TEST_GO_SEMANTIC_CONCURRENCY.get_or_init(|| (Mutex::new(0), Condvar::new()));
-        let mut active = active
+        let (state, available) = TEST_GO_SEMANTIC_CONCURRENCY.get_or_init(|| {
+            (
+                Mutex::new(TestGoSemanticConcurrencyState::default()),
+                Condvar::new(),
+            )
+        });
+        let mut state = state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        while *active >= TEST_GO_SEMANTIC_MAX_CONCURRENCY {
-            let remaining = deadline.remaining(LABEL)?;
+        let waiter = state.enqueue()?;
+        while !state.can_admit(waiter) {
+            let remaining = match deadline.remaining(LABEL) {
+                Ok(remaining) => remaining,
+                Err(error) => {
+                    state.cancel(waiter);
+                    available.notify_all();
+                    return Err(error);
+                }
+            };
             let (next, result) = available
-                .wait_timeout(active, remaining)
+                .wait_timeout(state, remaining)
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            active = next;
-            if result.timed_out() && *active >= TEST_GO_SEMANTIC_MAX_CONCURRENCY {
+            state = next;
+            if result.timed_out() && !state.can_admit(waiter) {
+                state.cancel(waiter);
+                available.notify_all();
                 return Err(GoSemanticProcessError::Timeout(format!(
                     "{LABEL} exceeded its execution deadline"
                 )));
             }
         }
-        *active += 1;
+        state.admit(waiter);
+        available.notify_all();
         Ok(Arc::new(Self))
     }
 }
@@ -147,7 +218,6 @@ impl TestGoSemanticConcurrencyPermit {
 #[cfg(test)]
 #[derive(Debug)]
 pub(crate) struct TestGoSemanticConcurrencyScope {
-    previous: Option<Arc<TestGoSemanticConcurrencyPermit>>,
     _not_send: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 
@@ -157,9 +227,24 @@ pub(crate) fn acquire_test_go_semantic_concurrency_scope()
     let permit = TestGoSemanticConcurrencyPermit::acquire(GoOperationDeadline::after(
         TEST_GO_SEMANTIC_SCOPE_WAIT_TIMEOUT,
     ))?;
-    let previous = TEST_GO_SEMANTIC_SCOPED_PERMIT.with(|slot| slot.replace(Some(permit)));
+    TEST_GO_SEMANTIC_SCOPED_PERMIT.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if let Some(scoped) = slot.as_mut() {
+            debug_assert!(Arc::ptr_eq(&scoped.permit, &permit));
+            scoped.scope_count = scoped.scope_count.checked_add(1).ok_or_else(|| {
+                GoSemanticProcessError::CommandFailed(
+                    "test Go semantic concurrency scope nesting is exhausted".to_string(),
+                )
+            })?;
+        } else {
+            *slot = Some(TestGoSemanticScopedPermit {
+                permit,
+                scope_count: 1,
+            });
+        }
+        Ok::<(), GoSemanticProcessError>(())
+    })?;
     Ok(TestGoSemanticConcurrencyScope {
-        previous,
         _not_send: std::marker::PhantomData,
     })
 }
@@ -167,10 +252,19 @@ pub(crate) fn acquire_test_go_semantic_concurrency_scope()
 #[cfg(test)]
 impl Drop for TestGoSemanticConcurrencyScope {
     fn drop(&mut self) {
-        let previous = self.previous.take();
         TEST_GO_SEMANTIC_SCOPED_PERMIT.with(|slot| {
-            let current = slot.replace(previous);
-            debug_assert!(current.is_some(), "test Go semantic scope lost its permit");
+            let mut slot = slot.borrow_mut();
+            let remove = if let Some(scoped) = slot.as_mut() {
+                debug_assert!(scoped.scope_count > 0);
+                scoped.scope_count = scoped.scope_count.saturating_sub(1);
+                scoped.scope_count == 0
+            } else {
+                debug_assert!(false, "test Go semantic scope lost its permit");
+                false
+            };
+            if remove {
+                slot.take();
+            }
         });
     }
 }
@@ -178,14 +272,14 @@ impl Drop for TestGoSemanticConcurrencyScope {
 #[cfg(test)]
 impl Drop for TestGoSemanticConcurrencyPermit {
     fn drop(&mut self) {
-        let Some((active, available)) = TEST_GO_SEMANTIC_CONCURRENCY.get() else {
+        let Some((state, available)) = TEST_GO_SEMANTIC_CONCURRENCY.get() else {
             return;
         };
-        let mut active = active
+        let mut state = state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *active = active.saturating_sub(1);
-        available.notify_one();
+        state.release();
+        available.notify_all();
     }
 }
 
@@ -13993,6 +14087,46 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_go_semantic_concurrency_queue_is_fifo_and_cancellation_safe() {
+        let mut state = TestGoSemanticConcurrencyState::default();
+        let first = state.enqueue().expect("enqueue first waiter");
+        let second = state.enqueue().expect("enqueue second waiter");
+        let third = state.enqueue().expect("enqueue third waiter");
+
+        assert!(state.can_admit(first));
+        assert!(!state.can_admit(second));
+        state.admit(first);
+        assert!(!state.can_admit(second));
+
+        state.release();
+        assert!(state.can_admit(second));
+        state.cancel(second);
+        assert!(state.can_admit(third));
+        state.admit(third);
+        state.release();
+
+        assert_eq!(state.active, 0);
+        assert!(state.waiters.is_empty());
+    }
+
+    #[test]
+    fn test_go_semantic_concurrency_scopes_allow_out_of_order_drop() {
+        let outer = acquire_test_go_semantic_concurrency_scope().expect("acquire outer scope");
+        let inner = acquire_test_go_semantic_concurrency_scope().expect("acquire inner scope");
+
+        drop(outer);
+        let reused =
+            TestGoSemanticConcurrencyPermit::acquire(GoOperationDeadline::after(Duration::ZERO))
+                .expect("the remaining inner scope keeps the thread-local permit reusable");
+        drop(reused);
+        drop(inner);
+
+        TEST_GO_SEMANTIC_SCOPED_PERMIT.with(|slot| {
+            assert!(slot.borrow().is_none());
+        });
+    }
+
     #[cfg(any(unix, windows))]
     #[test]
     fn oversized_local_certification_path_is_rejected_before_ownership_clone() {
@@ -14693,28 +14827,25 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let pid_file = temp.path().join("setsid-descendant.pid");
         let test_binary = std::env::current_exe().expect("current test binary");
-        let helper_test = "go::semantic::process::tests::bounded_runner_setsid_pipe_holder_helper";
-        let mut command = Command::new("sh");
+        let helper_test =
+            "go::semantic::process::tests::bounded_runner_setsid_parent_pipe_holder_helper";
+        let mut command = Command::new(test_binary);
         command
-            .env("POLINT_TEST_BINARY", test_binary)
-            .env("POLINT_TEST_HELPER", helper_test)
-            .env("POLINT_TEST_PID_FILE", &pid_file)
-            .arg("-c")
-            .arg(
-                "\"$POLINT_TEST_BINARY\" --exact \"$POLINT_TEST_HELPER\" --nocapture & \
-                 while [ ! -s \"$POLINT_TEST_PID_FILE\" ]; do :; done; exit 0",
-            );
+            .env("POLINT_TEST_SETSID_PID_FILE", &pid_file)
+            .arg("--exact")
+            .arg(helper_test)
+            .arg("--nocapture");
         let started = Instant::now();
 
         let error = run_bounded_command(
             command,
-            BoundedCommandLimits::new(Duration::from_millis(150), 16 * 1024, 16 * 1024),
+            BoundedCommandLimits::new(Duration::from_secs(2), 16 * 1024, 16 * 1024),
             "setsid pipe-retaining probe",
         )
         .expect_err("an escaped pipe holder must keep the deadline active");
 
         assert!(matches!(error, GoSemanticProcessError::Timeout(_)));
-        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(started.elapsed() < Duration::from_secs(5));
         let pid = fs::read_to_string(pid_file)
             .expect("setsid helper must report its pid")
             .trim()
@@ -14725,9 +14856,33 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[allow(
+        clippy::zombie_processes,
+        reason = "the bounded runner must observe and clean the escaped descendant after this helper exits"
+    )]
+    fn bounded_runner_setsid_parent_pipe_holder_helper() {
+        let Some(pid_file) = std::env::var_os("POLINT_TEST_SETSID_PID_FILE") else {
+            return;
+        };
+        let test_binary = std::env::current_exe().expect("current test binary");
+        let helper_test = "go::semantic::process::tests::bounded_runner_setsid_pipe_holder_helper";
+        let _child = Command::new(test_binary)
+            .env("POLINT_TEST_SETSID_PID_FILE", &pid_file)
+            .arg("--exact")
+            .arg(helper_test)
+            .arg("--nocapture")
+            .spawn()
+            .expect("spawn setsid pipe holder");
+        while !Path::new(&pid_file).exists() {
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
     #[allow(unsafe_code)]
     fn bounded_runner_setsid_pipe_holder_helper() {
-        let Some(pid_file) = std::env::var_os("POLINT_TEST_PID_FILE") else {
+        let Some(pid_file) = std::env::var_os("POLINT_TEST_SETSID_PID_FILE") else {
             return;
         };
         let session = unsafe { libc::setsid() };
@@ -14737,7 +14892,11 @@ mod tests {
             std::io::Error::last_os_error()
         );
         thread::sleep(Duration::from_millis(25));
-        fs::write(pid_file, std::process::id().to_string()).expect("write helper pid");
+        let mut pending_pid_file = PathBuf::from(&pid_file);
+        pending_pid_file.set_extension("pending");
+        fs::write(&pending_pid_file, std::process::id().to_string())
+            .expect("write pending helper pid");
+        fs::rename(pending_pid_file, pid_file).expect("publish helper pid");
         thread::sleep(Duration::from_secs(10));
     }
 
