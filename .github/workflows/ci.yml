@@ -87,6 +87,8 @@ jobs:
             tools/polint-go-symbols/go.sum
             crates/polint/go-sidecar/polint-go-symbols/go.sum
 
+      - uses: ./.github/actions/prefetch-embedded-go-analyzers
+
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
@@ -147,6 +149,8 @@ jobs:
             tools/polint-go-symbols/go.sum
             crates/polint/go-sidecar/polint-go-symbols/go.sum
 
+      - uses: ./.github/actions/prefetch-embedded-go-analyzers
+
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
@@ -156,6 +160,16 @@ jobs:
         run: >-
           cargo test -p polint --lib --all-features --locked
           go::semantic::process::tests::published_cache_capacity_serializes_concurrent_publishers
+          -- --exact --test-threads=1 --nocapture
+
+      - name: embedded Go frontend local-proxy smoke (Windows)
+        if: matrix.shard == 'non-fixtures'
+        env:
+          GOPROXY: "off"
+          GOSUMDB: "off"
+        run: >-
+          cargo test -p polint --lib --all-features --locked
+          go::semantic::process::tests::embedded_frontend_runs_semantic_analysis_without_repository_writes
           -- --exact --test-threads=1 --nocapture
 
       - name: cargo test
@@ -171,6 +185,7 @@ jobs:
         run: >-
           cargo test -p polint --lib --all-features --locked
           -- --skip eval::fixtures::
+          --skip go::semantic::process::tests::embedded_frontend_runs_semantic_analysis_without_repository_writes
 
       - name: cargo test (fixture shard)
         if: matrix.shard == 'fixtures'
@@ -254,6 +269,8 @@ jobs:
             tools/polint-go-symbols/go.sum
             crates/polint/go-sidecar/polint-go-symbols/go.sum
 
+      - uses: ./.github/actions/prefetch-embedded-go-analyzers
+
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
@@ -283,6 +300,8 @@ jobs:
             crates/polint/go-sidecar/polint-go-frontend/go.sum
             tools/polint-go-symbols/go.sum
             crates/polint/go-sidecar/polint-go-symbols/go.sum
+
+      - uses: ./.github/actions/prefetch-embedded-go-analyzers
 
       - uses: dtolnay/rust-toolchain@stable
 

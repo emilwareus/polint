@@ -1,0 +1,27 @@
+name: Prefetch embedded Go analyzer dependencies
+description: Populate the ambient Go module cache used as the sealed frontend build proxy.
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        GOFLAGS: "-mod=readonly"
+        GOWORK: "off"
+      run: |
+        modules=(
+          crates/polint/go-sidecar/polint-go-frontend
+          crates/polint/go-sidecar/polint-go-symbols
+        )
+        for module in "${modules[@]}"; do
+          for attempt in 1 2 3; do
+            if go -C "$module" mod download; then
+              break
+            fi
+            if [[ "$attempt" == 3 ]]; then
+              exit 1
+            fi
+            sleep "$((attempt * 5))"
+          done
+        done
+        printf 'GOMODCACHE=%s\n' "$(go env GOMODCACHE)" >> "$GITHUB_ENV"

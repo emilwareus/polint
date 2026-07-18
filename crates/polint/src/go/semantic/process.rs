@@ -27,7 +27,7 @@ use crate::go::semantic::protocol::GO_SEMANTIC_SCHEMA;
 
 pub(crate) const GO_SEMANTIC_FRONTEND_ENV: &str = "POLINT_GO_FRONTEND";
 const GO_FRONTEND_CACHE_VERSION: &str = "v1";
-const GO_ENVIRONMENT_POLICY: &str = "sealed-dependency-snapshot-v5";
+const GO_ENVIRONMENT_POLICY: &str = "sealed-dependency-snapshot-v6";
 const GO_FRONTEND_MAX_SOURCE_FILES: usize = 512;
 const GO_FRONTEND_MAX_SOURCE_BYTES: usize = 32 * 1_048_576;
 const GO_FRONTEND_MAX_SOURCE_ENTRIES: usize = 4_096;
@@ -7317,7 +7317,7 @@ fn populate_dependency_snapshot(
         .env("GOPROXY", &proxy.value)
         .env("GOVCS", "off")
         .env("GOAUTH", "off")
-        .env("GONOPROXY", "")
+        .env("GONOPROXY", "none")
         .env(
             "GOFLAGS",
             if workspace.path().is_some() {
@@ -7622,6 +7622,14 @@ struct DependencyPopulationProxy {
     local_root: Option<PathBuf>,
 }
 
+impl DependencyPopulationProxy {
+    fn into_frontend_build_inputs(self, source_dir: &Path) -> (OsString, Vec<PathBuf>) {
+        let mut local_trees = vec![source_dir.to_path_buf()];
+        local_trees.extend(self.local_root);
+        (self.value, local_trees)
+    }
+}
+
 fn dependency_population_proxy(
     toolchain: &PreparedGoToolchain,
     offline: bool,
@@ -7641,6 +7649,13 @@ fn dependency_population_proxy(
         .and_then(|value| value.to_str())
         .filter(|value| !value.is_empty() && *value != "off");
     let local_root = certified_ambient_module_download_cache(deadline)?;
+    compose_dependency_population_proxy(configured, local_root)
+}
+
+fn compose_dependency_population_proxy(
+    configured: Option<&str>,
+    local_root: Option<PathBuf>,
+) -> Result<DependencyPopulationProxy, GoSemanticProcessError> {
     let local = local_root.as_deref().map(file_proxy_url).transpose()?;
     let value = match (local, configured) {
         (Some(local), Some(configured)) => format!("{local}|{configured}"),
@@ -9543,6 +9558,7 @@ impl PreparedGoSemanticFrontend {
                     toolchain,
                     analysis,
                     repository_cache_roots,
+                    offline,
                     deadline,
                 )
             }
@@ -9552,6 +9568,7 @@ impl PreparedGoSemanticFrontend {
                 toolchain,
                 analysis,
                 repository_cache_roots,
+                offline,
                 deadline,
             ),
         }?;
@@ -9575,6 +9592,7 @@ impl PreparedGoSemanticFrontend {
         toolchain: PreparedGoToolchain,
         analysis: Option<(&Path, &GoAnalysisConfig)>,
         repository_cache_roots: &[PathBuf],
+        offline: bool,
         deadline: GoOperationDeadline,
     ) -> Result<Self, GoSemanticProcessError> {
         ensure_go_toolchain_supported(&toolchain.version)?;
@@ -9592,6 +9610,7 @@ impl PreparedGoSemanticFrontend {
             &source_dir,
             &provenance,
             &toolchain,
+            offline,
             deadline,
         )?;
         let bytes = read_regular_file_no_follow_until(&built, deadline)?;
@@ -11989,6 +12008,7 @@ fn ensure_frontend_binary(
         source_dir,
         provenance,
         toolchain,
+        false,
         GoOperationDeadline::after(GO_OPERATION_TIMEOUT),
     )
 }
@@ -11998,6 +12018,7 @@ fn ensure_frontend_binary_until(
     source_dir: &Path,
     provenance: &FrontendBuildProvenance,
     toolchain: &PreparedGoToolchain,
+    offline: bool,
     deadline: GoOperationDeadline,
 ) -> Result<PathBuf, GoSemanticProcessError> {
     deadline.check("Go semantic frontend build preparation")?;
@@ -12008,6 +12029,8 @@ fn ensure_frontend_binary_until(
         return verify_cached_build_until(&destination, provenance, deadline);
     }
 
+    let proxy = dependency_population_proxy(toolchain, offline, deadline)?;
+    let (proxy_value, local_trees) = proxy.into_frontend_build_inputs(source_dir);
     let mut staging = StagingDirectory::create_until(&builds_root, ".build-", deadline)?;
     let binary = staging.path().join(frontend_binary_name());
     let mut command = Command::new(&toolchain.executable);
@@ -12019,12 +12042,14 @@ fn ensure_frontend_binary_until(
         .arg(&binary)
         .arg(".")
         .current_dir(source_dir)
+        .env("GOFLAGS", "-mod=readonly")
+        .env("GONOPROXY", "none")
+        .env("GOPROXY", &proxy_value)
         .env("GOWORK", "off");
-    let source_tree = source_dir.to_path_buf();
     let output = run_prepared_go_command_with_local_trees_until(
         toolchain,
         command,
-        std::slice::from_ref(&source_tree),
+        &local_trees,
         BoundedCommandLimits::new(
             GO_BUILD_TIMEOUT,
             GO_BUILD_STDOUT_BYTES,
@@ -14606,6 +14631,8 @@ mod tests {
         };
         let before = snapshot_repository_tree(&root);
         let cache = test_cache_root(&temp);
+        let _semantic_scope = acquire_test_go_semantic_concurrency_scope()
+            .expect("acquire embedded Windows semantic frontend test scope");
 
         let prepared = PreparedGoSemanticFrontend::prepare_with_cache_root_for_analysis(
             &cache,
@@ -15683,6 +15710,54 @@ mod tests {
 
         assert!(matches!(error, GoSemanticProcessError::Timeout(_)));
         assert!(fs::symlink_metadata(candidate).is_ok());
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn online_frontend_build_prefers_certified_ambient_proxy() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp.path().join("source");
+        let download = temp.path().join("ambient/pkg/mod/cache/download");
+        fs::create_dir(&source).expect("create source directory");
+        fs::create_dir_all(&download).expect("create ambient download cache");
+        let certified = certify_ambient_module_download_cache_candidate(
+            download,
+            GoOperationDeadline::after(Duration::from_secs(5)),
+        )
+        .expect("certify ambient download cache")
+        .expect("retain ambient download cache");
+        let local_url = file_proxy_url(&certified).expect("format local proxy URL");
+        let proxy = compose_dependency_population_proxy(
+            Some("https://proxy.example"),
+            Some(certified.clone()),
+        )
+        .expect("compose frontend build proxy");
+
+        let (value, local_trees) = proxy.into_frontend_build_inputs(&source);
+
+        assert_eq!(
+            value,
+            OsString::from(format!("{local_url}|https://proxy.example"))
+        );
+        assert_eq!(local_trees, vec![source, certified]);
+    }
+
+    #[test]
+    fn offline_frontend_build_excludes_ambient_proxy() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp.path().join("source");
+        let toolchain = prepared_toolchain_for_test("go1.25.0");
+        let proxy = dependency_population_proxy(
+            &toolchain,
+            true,
+            GoOperationDeadline::after(Duration::ZERO),
+        )
+        .expect("select strict offline frontend build proxy");
+
+        let (value, local_trees) = proxy.into_frontend_build_inputs(&source);
+
+        assert_eq!(value, OsString::from("off"));
+        assert_eq!(local_trees, vec![source]);
     }
 
     #[cfg(unix)]
