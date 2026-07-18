@@ -1,11 +1,41 @@
 {
-  "schema_version": "polint-store-disabled-baseline-0",
+  "schema_version": "polint-store-disabled-baseline-1",
   "store_disabled": true,
   "repo_id": "polint-tiny-fixture",
   "suite_id": "polint-tiny-fixture-review",
-  "peak_rss_bytes": 46530560,
-  "peak_rss_delta_bytes": 37027840,
-  "cold_wall_clock_ms": 25,
-  "warm_wall_clock_ms": 22,
-  "diagnostics_digest": "28cac8a32a5bb2a9"
+  "peak_rss_bytes": 44105728,
+  "peak_rss_delta_bytes": 35094528,
+  "cold_wall_clock_ms": 16,
+  "warm_wall_clock_ms": 12,
+  "diagnostics_digest": "642111ab7496dfd0",
+  "measurement_context": {
+    "fixture_version": "polint-tiny-fixture-1",
+    "fixture_digest": "57762bbf162eb760",
+    "product_name": "polint",
+    "product_version": "0.1.17",
+    "product_source_revision": "555350a7fd53df80d3973b285df70eeddc486d5a",
+    "source_tree_dirty": false,
+    "result_kind": "polint_baseline_run",
+    "generation_command": "CARGO_PROFILE_TEST_DEBUG=0 POLINT_WRITE_STORE_DISABLED_BASELINE=1 cargo test -p polint --lib --all-features --locked eval::baseline::tests::regenerate_committed_store_disabled_baselines -- --exact",
+    "config_path": "<default-config>",
+    "artifact_path": "research/evaluation-harness/baselines/store-disabled-review.json",
+    "build_profile": "test",
+    "all_features": true,
+    "locked": true,
+    "cargo_profile_test_debug": "0",
+    "target_os": "macos",
+    "target_arch": "aarch64",
+    "rustc_version": "rustc 1.95.0 (59807616e 2026-04-14)\nbinary: rustc\ncommit-hash: 59807616e1fa2540724bfbac14d7976d7e4a3860\ncommit-date: 2026-04-14\nhost: aarch64-apple-darwin\nrelease: 1.95.0\nLLVM version: 22.1.2",
+    "cargo_version": "cargo 1.95.0 (f2d3ce0bd 2026-03-21)\nrelease: 1.95.0\ncommit-hash: f2d3ce0bd7f24a49f8f72d9000448f8838c4e850\ncommit-date: 2026-03-21\nhost: aarch64-apple-darwin\nlibgit2: 1.9.2 (sys:0.20.4 vendored)\nlibcurl: 8.7.1 (sys:0.4.83+curl-8.15.0 system ssl:(SecureTransport) LibreSSL/3.3.6)\nssl: OpenSSL 3.5.4 30 Sep 2025\nos: Mac OS 26.5.1 [64-bit]",
+    "metric_names": [
+      "peak_rss_bytes",
+      "peak_rss_delta_bytes",
+      "cold_wall_clock_ms",
+      "warm_wall_clock_ms",
+      "diagnostics_digest"
+    ],
+    "limitations": [
+      "Numeric measurements are historical and informational unless the complete recorded measurement context exactly matches the comparison environment."
+    ]
+  }
 }
