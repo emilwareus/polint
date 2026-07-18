@@ -81,7 +81,7 @@ type EmittedAliases = BTreeMap<String, AliasId>;
 struct TsSemanticEmissions {
     imports: EmittedSemanticImports,
     exports: EmittedExports,
-    stable_exports: BTreeSet<(String, String)>,
+    stable_exports: BTreeSet<String>,
     aliases: EmittedAliases,
 }
 
@@ -897,7 +897,7 @@ fn add_export_row(
             stable_key: stable_key.clone(),
             status,
         });
-        emissions.exports.insert(stable_key.clone(), export);
+        emissions.exports.insert(stable_key, export);
         export
     };
     if status == SemanticStatus::Resolved
@@ -906,12 +906,8 @@ fn add_export_row(
             ExportKind::Named | ExportKind::Default | ExportKind::Namespace
         )
         && let Some(symbol_stable_key) = symbol_stable_key
-        && emissions
-            .stable_exports
-            .insert((stable_key, symbol_stable_key.clone()))
     {
-        add_stable_export_identity(
-            builder,
+        let identity = stable_export_identity(
             file,
             export,
             &export_name,
@@ -919,6 +915,9 @@ fn add_export_row(
             symbol_stable_key,
             status,
         );
+        if emissions.stable_exports.insert(identity.stable_key.clone()) {
+            builder.add_stable_export(identity);
+        }
     }
     export
 }
@@ -1009,16 +1008,15 @@ fn add_import_lookup_rows(
     );
 }
 
-fn add_stable_export_identity(
-    builder: &mut SemanticIndexBuilder,
+fn stable_export_identity(
     file: &SourceFile,
     export: ExportId,
     export_name: &str,
     namespace: SymbolNamespace,
     symbol_stable_key: String,
     status: SemanticStatus,
-) -> StableExportId {
-    builder.add_stable_export(StableExportIdentity {
+) -> StableExportIdentity {
+    let mut identity = StableExportIdentity {
         id: StableExportId(0),
         export,
         language: file.language,
@@ -1030,7 +1028,9 @@ fn add_stable_export_identity(
         generated_discriminator: Some("native".to_string()),
         stable_key: String::new(),
         status,
-    })
+    };
+    identity.stable_key = identity.computed_stable_key();
+    identity
 }
 
 fn ts_semantic_import_stable_key(
@@ -3404,9 +3404,12 @@ export { sharedValue as Shared };
             r#"
 const left = 1;
 const right = 2;
+const defaultValue = 3;
 export { left as shared, right as shared };
 export { first as shared } from "./first";
 export { second as shared } from "./second";
+export { defaultValue as default };
+export default defaultValue;
 "#,
         );
         let exports = output
@@ -3439,6 +3442,26 @@ export { second as shared } from "./second";
                 .filter(|fact| fact.export_name == "shared")
                 .count(),
             2
+        );
+        assert_eq!(
+            output
+                .semantic
+                .exports
+                .iter()
+                .filter(|fact| fact.export_name == "default")
+                .count(),
+            2,
+            "named and default export kinds remain distinct"
+        );
+        assert_eq!(
+            output
+                .semantic
+                .stable_exports
+                .iter()
+                .filter(|fact| fact.export_name == "default")
+                .count(),
+            1,
+            "the persisted stable-export identity is kind-independent"
         );
         assert_eq!(alias_targets.len(), 2);
         assert!(output.diagnostics.iter().all(|diagnostic| {
