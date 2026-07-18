@@ -5712,9 +5712,12 @@ fn main() -> ExitCode {
         r#"export const token = "ok";
 "#,
     );
+    write_file(&root.join("src/setup.ts"), "export {};\n");
     write_file(
         &root.join("src/component.ts"),
         r#"import { token as importedToken } from "./tokens";
+import "./setup";
+import "./setup";
 
 export interface MergeMe {
   first: string;

@@ -67,11 +67,39 @@ struct ImportAlias {
     namespace: SymbolNamespace,
 }
 
+#[derive(Debug, Clone)]
+struct ExportSymbolIdentity {
+    stable_key: String,
+    namespace: SymbolNamespace,
+}
+
+type EmittedExports = BTreeMap<(String, Option<String>, Option<String>), ExportId>;
+type EmittedSemanticImports = BTreeMap<(String, Option<ScopeId>), SemanticImportId>;
+type EmittedAliases = BTreeMap<String, AliasId>;
+
+#[derive(Debug, Default)]
+struct TsSemanticEmissions {
+    imports: EmittedSemanticImports,
+    exports: EmittedExports,
+    aliases: EmittedAliases,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ImportAliasTarget {
     Named(String),
     Default,
     Namespace,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ReExportTarget<'a> {
+    Named {
+        module: &'a str,
+        imported_name: &'a str,
+    },
+    Module {
+        module: &'a str,
+    },
 }
 
 pub(crate) fn derive_ts_symbols(
@@ -291,8 +319,7 @@ fn derive_ts_semantic_index(
 ) -> SemanticIndexOutput {
     let mut builder = SemanticIndexBuilder::new();
     let mut ids_by_stable_key = BTreeMap::<String, ScopeId>::new();
-    let export_symbol_stable_keys =
-        export_symbol_stable_keys(file, source, program, scoping, nodes);
+    let export_symbol_identities = export_symbol_identities(file, source, program, scoping, nodes);
 
     for scope_id in scoping.scope_descendants_from_root() {
         let node_id = scoping.get_node_id(scope_id);
@@ -375,7 +402,8 @@ fn derive_ts_semantic_index(
         source,
         program,
         module_scope_id,
-        &export_symbol_stable_keys,
+        scoping,
+        &export_symbol_identities,
     );
     if requests_references {
         add_ts_semantic_resolution_rows(&mut builder, file, source, scoping, nodes);
@@ -384,26 +412,33 @@ fn derive_ts_semantic_index(
     builder.finish()
 }
 
-fn export_symbol_stable_keys(
+fn export_symbol_identities(
     file: &SourceFile,
     source: &str,
     program: &Program<'_>,
     scoping: &Scoping,
     nodes: &AstNodes<'_>,
-) -> BTreeMap<String, String> {
+) -> BTreeMap<(OxcSymbolId, String), ExportSymbolIdentity> {
     let export_names = collect_export_names(program, scoping);
     let parameter_symbols = collect_parameter_symbols(nodes);
-    let mut keys = BTreeMap::new();
+    let mut identities = BTreeMap::new();
 
     for (oxc_symbol, export_names) in export_names {
-        let key =
+        let stable_key =
             ts_symbol_stable_key(file, source, scoping, nodes, oxc_symbol, &parameter_symbols);
+        let namespace = symbol_namespace(scoping.symbol_flags(oxc_symbol));
         for export_name in export_names {
-            keys.insert(export_name, key.clone());
+            identities.insert(
+                (oxc_symbol, export_name),
+                ExportSymbolIdentity {
+                    stable_key: stable_key.clone(),
+                    namespace,
+                },
+            );
         }
     }
 
-    keys
+    identities
 }
 
 fn ts_symbol_stable_key(
@@ -452,51 +487,103 @@ fn add_ts_semantic_import_export_rows(
     source: &str,
     program: &Program<'_>,
     module_scope: Option<ScopeId>,
-    export_symbol_stable_keys: &BTreeMap<String, String>,
+    scoping: &Scoping,
+    export_symbol_identities: &BTreeMap<(OxcSymbolId, String), ExportSymbolIdentity>,
 ) {
+    let mut emissions = TsSemanticEmissions::default();
     for statement in &program.body {
         match statement {
             Statement::ImportDeclaration(import) => {
-                add_import_declaration_rows(builder, file, module_scope, import);
+                add_import_declaration_rows(builder, &mut emissions, file, module_scope, import);
             }
             Statement::ExportNamedDeclaration(export) => {
                 add_export_named_rows(
                     builder,
                     file,
                     module_scope,
-                    export_symbol_stable_keys,
+                    scoping,
+                    export_symbol_identities,
+                    &mut emissions,
                     export,
                 );
             }
             Statement::ExportDefaultDeclaration(export) => {
+                let identity =
+                    default_export_symbol(&export.declaration, scoping).and_then(|symbol| {
+                        export_symbol_identities.get(&(symbol, "default".to_string()))
+                    });
                 add_export_row(
                     builder,
+                    &mut emissions,
                     file,
                     module_scope,
                     "default".to_string(),
-                    SymbolNamespace::Value,
+                    identity
+                        .map(|identity| identity.namespace)
+                        .unwrap_or(SymbolNamespace::Value),
                     ExportKind::Default,
-                    export_symbol_stable_keys.get("default").cloned(),
+                    None,
+                    identity.map(|identity| identity.stable_key.clone()),
                     SemanticStatus::Resolved,
                 );
-                collect_commonjs_from_export_default(builder, file, source, module_scope, export);
+                collect_commonjs_from_export_default(
+                    builder,
+                    &mut emissions,
+                    file,
+                    source,
+                    module_scope,
+                    export,
+                );
             }
             Statement::ExportAllDeclaration(export) => {
+                let export_name = export
+                    .exported
+                    .as_ref()
+                    .map(module_export_name_text)
+                    .unwrap_or_else(|| module_export_source_name(export.source.value.as_str()));
+                let is_type = matches!(export.export_kind, ImportOrExportKind::Type);
+                let (namespace, kind, alias_kind) = if export.exported.is_some() {
+                    (
+                        if is_type {
+                            SymbolNamespace::Type
+                        } else {
+                            SymbolNamespace::Namespace
+                        },
+                        ExportKind::Namespace,
+                        if is_type { "type" } else { "namespace" },
+                    )
+                } else {
+                    (
+                        if is_type {
+                            SymbolNamespace::Type
+                        } else {
+                            SymbolNamespace::Module
+                        },
+                        ExportKind::StarReexport,
+                        if is_type { "type-star" } else { "star" },
+                    )
+                };
+                let target_stable_key = ts_reexport_target_stable_key(ReExportTarget::Module {
+                    module: export.source.value.as_str(),
+                });
                 add_export_row(
                     builder,
+                    &mut emissions,
                     file,
                     module_scope,
-                    module_export_source_name(export.source.value.as_str()),
-                    SymbolNamespace::Module,
-                    ExportKind::StarReexport,
+                    export_name.clone(),
+                    namespace,
+                    kind,
+                    Some(target_stable_key.clone()),
                     None,
                     SemanticStatus::Unresolved,
                 );
                 add_alias_row(
                     builder,
+                    &mut emissions,
                     file,
-                    "export:*".to_string(),
-                    vec![format!("module:{}", export.source.value.as_str())],
+                    format!("reexport:{alias_kind}:{export_name}"),
+                    vec![target_stable_key],
                     AliasKind::ReExport,
                     SemanticStatus::Unresolved,
                 );
@@ -504,6 +591,7 @@ fn add_ts_semantic_import_export_rows(
             Statement::ExpressionStatement(statement) => {
                 collect_commonjs_from_expression(
                     builder,
+                    &mut emissions,
                     file,
                     source,
                     module_scope,
@@ -513,7 +601,14 @@ fn add_ts_semantic_import_export_rows(
             Statement::VariableDeclaration(variable) => {
                 for declarator in &variable.declarations {
                     if let Some(init) = &declarator.init {
-                        collect_commonjs_from_expression(builder, file, source, module_scope, init);
+                        collect_commonjs_from_expression(
+                            builder,
+                            &mut emissions,
+                            file,
+                            source,
+                            module_scope,
+                            init,
+                        );
                     }
                 }
             }
@@ -524,6 +619,7 @@ fn add_ts_semantic_import_export_rows(
 
 fn add_import_declaration_rows(
     builder: &mut SemanticIndexBuilder,
+    emissions: &mut TsSemanticEmissions,
     file: &SourceFile,
     module_scope: Option<ScopeId>,
     import: &oxc_ast::ast::ImportDeclaration<'_>,
@@ -533,6 +629,7 @@ fn add_import_declaration_rows(
     let Some(specifiers) = &import.specifiers else {
         add_import_row(
             builder,
+            emissions,
             file,
             module_scope,
             import_path,
@@ -551,6 +648,7 @@ fn add_import_declaration_rows(
                 let local_name = default.local.name.to_string();
                 add_import_row(
                     builder,
+                    emissions,
                     file,
                     module_scope,
                     import_path.clone(),
@@ -566,6 +664,7 @@ fn add_import_declaration_rows(
                 let local_name = namespace.local.name.to_string();
                 add_import_row(
                     builder,
+                    emissions,
                     file,
                     module_scope,
                     import_path.clone(),
@@ -583,6 +682,7 @@ fn add_import_declaration_rows(
                 let local_name = named.local.name.to_string();
                 add_import_row(
                     builder,
+                    emissions,
                     file,
                     module_scope,
                     import_path.clone(),
@@ -602,6 +702,7 @@ fn add_import_declaration_rows(
                 );
                 add_alias_row(
                     builder,
+                    emissions,
                     file,
                     format!("import:{local_name}"),
                     Vec::new(),
@@ -622,30 +723,47 @@ fn add_export_named_rows(
     builder: &mut SemanticIndexBuilder,
     file: &SourceFile,
     module_scope: Option<ScopeId>,
-    export_symbol_stable_keys: &BTreeMap<String, String>,
+    scoping: &Scoping,
+    export_symbol_identities: &BTreeMap<(OxcSymbolId, String), ExportSymbolIdentity>,
+    emissions: &mut TsSemanticEmissions,
     export: &oxc_ast::ast::ExportNamedDeclaration<'_>,
 ) {
     if let Some(source) = &export.source {
         for specifier in &export.specifiers {
+            let is_type = matches!(export.export_kind, ImportOrExportKind::Type)
+                || matches!(specifier.export_kind, ImportOrExportKind::Type);
+            let namespace = if is_type {
+                SymbolNamespace::Type
+            } else {
+                SymbolNamespace::Value
+            };
+            let export_name = module_export_name_text(&specifier.exported);
+            let imported_name = module_export_name_text(&specifier.local);
+            let target_stable_key = ts_reexport_target_stable_key(ReExportTarget::Named {
+                module: source.value.as_str(),
+                imported_name: &imported_name,
+            });
             add_export_row(
                 builder,
+                emissions,
                 file,
                 module_scope,
-                module_export_name_text(&specifier.exported),
-                SymbolNamespace::Module,
-                ExportKind::Namespace,
+                export_name.clone(),
+                namespace,
+                ExportKind::ReExport,
+                Some(target_stable_key.clone()),
                 None,
                 SemanticStatus::Unresolved,
             );
             add_alias_row(
                 builder,
+                emissions,
                 file,
-                format!("reexport:{}", module_export_name_text(&specifier.exported)),
-                vec![format!(
-                    "{}:{}",
-                    source.value.as_str(),
-                    module_export_name_text(&specifier.local)
-                )],
+                format!(
+                    "reexport:{}:{export_name}",
+                    if is_type { "type" } else { "value" }
+                ),
+                vec![target_stable_key],
                 AliasKind::ReExport,
                 SemanticStatus::Unresolved,
             );
@@ -656,29 +774,47 @@ fn add_export_named_rows(
     if let Some(declaration) = &export.declaration {
         let mut declarations = Vec::new();
         collect_declaration_symbols(declaration, &mut declarations);
-        for (_, name) in declarations {
+        for (symbol, name) in declarations {
+            let identity = export_symbol_identities.get(&(symbol, name.clone()));
             add_export_row(
                 builder,
+                emissions,
                 file,
                 module_scope,
                 name.clone(),
-                SymbolNamespace::Value,
+                identity
+                    .map(|identity| identity.namespace)
+                    .unwrap_or_else(|| symbol_namespace(scoping.symbol_flags(symbol))),
                 ExportKind::Named,
-                export_symbol_stable_keys.get(&name).cloned(),
+                None,
+                identity.map(|identity| identity.stable_key.clone()),
                 SemanticStatus::Resolved,
             );
         }
     }
     for specifier in &export.specifiers {
         let export_name = module_export_name_text(&specifier.exported);
+        let identity = module_export_name_symbol(&specifier.local, scoping)
+            .and_then(|symbol| export_symbol_identities.get(&(symbol, export_name.clone())));
+        let namespace = if matches!(export.export_kind, ImportOrExportKind::Type)
+            || matches!(specifier.export_kind, ImportOrExportKind::Type)
+        {
+            SymbolNamespace::Type
+        } else {
+            identity
+                .map(|identity| identity.namespace)
+                .unwrap_or(SymbolNamespace::Value)
+        };
         add_export_row(
             builder,
+            emissions,
             file,
             module_scope,
             export_name.clone(),
-            SymbolNamespace::Value,
+            namespace,
             ExportKind::Named,
-            export_symbol_stable_keys.get(&export_name).cloned(),
+            None,
+            identity.map(|identity| identity.stable_key.clone()),
             SemanticStatus::Resolved,
         );
     }
@@ -690,6 +826,7 @@ fn add_export_named_rows(
 )]
 fn add_import_row(
     builder: &mut SemanticIndexBuilder,
+    emissions: &mut TsSemanticEmissions,
     file: &SourceFile,
     scope: Option<ScopeId>,
     import_path: String,
@@ -708,7 +845,11 @@ fn add_import_row(
         kind,
         status,
     );
-    builder.add_semantic_import(SemanticImportFact {
+    let emission_key = (stable_key.clone(), scope);
+    if let Some(existing) = emissions.imports.get(&emission_key) {
+        return *existing;
+    }
+    let import = builder.add_semantic_import(SemanticImportFact {
         id: SemanticImportId(0),
         language: file.language,
         file: Some(file.id),
@@ -722,7 +863,9 @@ fn add_import_row(
         kind,
         stable_key,
         status,
-    })
+    });
+    emissions.imports.insert(emission_key, import);
+    import
 }
 
 #[expect(
@@ -731,15 +874,25 @@ fn add_import_row(
 )]
 fn add_export_row(
     builder: &mut SemanticIndexBuilder,
+    emissions: &mut TsSemanticEmissions,
     file: &SourceFile,
     scope: Option<ScopeId>,
     export_name: String,
     namespace: SymbolNamespace,
     kind: ExportKind,
+    emission_target_key: Option<String>,
     symbol_stable_key: Option<String>,
     status: SemanticStatus,
 ) -> ExportId {
     let stable_key = ts_export_stable_key(file, &export_name, namespace, kind, status);
+    let emission_key = (
+        stable_key.clone(),
+        emission_target_key,
+        symbol_stable_key.clone(),
+    );
+    if let Some(existing) = emissions.exports.get(&emission_key) {
+        return *existing;
+    }
     let export = builder.add_export_identity(ExportFact {
         id: ExportId(0),
         language: file.language,
@@ -754,6 +907,7 @@ fn add_export_row(
         stable_key,
         status,
     });
+    emissions.exports.insert(emission_key, export);
     if status == SemanticStatus::Resolved
         && matches!(
             kind,
@@ -776,6 +930,7 @@ fn add_export_row(
 
 fn add_alias_row(
     builder: &mut SemanticIndexBuilder,
+    emissions: &mut TsSemanticEmissions,
     file: &SourceFile,
     source_symbol_stable_key: String,
     target_symbol_stable_keys: Vec<String>,
@@ -789,7 +944,11 @@ fn add_alias_row(
         kind,
         status,
     );
-    builder.add_alias(AliasFact {
+    if let Some(existing) = emissions.aliases.get(&stable_key) {
+        return *existing;
+    }
+    let emission_key = stable_key.clone();
+    let alias = builder.add_alias(AliasFact {
         id: AliasId(0),
         language: file.language,
         file: Some(file.id),
@@ -800,7 +959,9 @@ fn add_alias_row(
         kind,
         stable_key,
         status,
-    })
+    });
+    emissions.aliases.insert(emission_key, alias);
+    alias
 }
 
 fn add_resolution_row(
@@ -924,6 +1085,29 @@ fn ts_export_stable_key(
     )
 }
 
+fn ts_reexport_target_stable_key(target: ReExportTarget<'_>) -> String {
+    match target {
+        ReExportTarget::Named {
+            module,
+            imported_name,
+        } => stable_key_from_parts(
+            FactFamily::Export,
+            &[
+                ("target_kind", "named".to_string()),
+                ("module", module.to_string()),
+                ("imported_name", imported_name.to_string()),
+            ],
+        ),
+        ReExportTarget::Module { module } => stable_key_from_parts(
+            FactFamily::Export,
+            &[
+                ("target_kind", "module".to_string()),
+                ("module", module.to_string()),
+            ],
+        ),
+    }
+}
+
 fn ts_alias_stable_key(
     file: &SourceFile,
     source_symbol_stable_key: &str,
@@ -972,18 +1156,20 @@ fn ts_resolution_stable_key(
 
 fn collect_commonjs_from_export_default(
     builder: &mut SemanticIndexBuilder,
+    emissions: &mut TsSemanticEmissions,
     file: &SourceFile,
     source: &str,
     module_scope: Option<ScopeId>,
     export: &oxc_ast::ast::ExportDefaultDeclaration<'_>,
 ) {
     if let ExportDefaultDeclarationKind::CallExpression(call) = &export.declaration {
-        collect_commonjs_from_call(builder, file, source, module_scope, call);
+        collect_commonjs_from_call(builder, emissions, file, source, module_scope, call);
     }
 }
 
 fn collect_commonjs_from_expression(
     builder: &mut SemanticIndexBuilder,
+    emissions: &mut TsSemanticEmissions,
     file: &SourceFile,
     source: &str,
     module_scope: Option<ScopeId>,
@@ -991,11 +1177,12 @@ fn collect_commonjs_from_expression(
 ) {
     match expression {
         Expression::CallExpression(call) => {
-            collect_commonjs_from_call(builder, file, source, module_scope, call);
+            collect_commonjs_from_call(builder, emissions, file, source, module_scope, call);
             for argument in &call.arguments {
                 if let Some(expression) = argument.as_expression() {
                     collect_commonjs_from_expression(
                         builder,
+                        emissions,
                         file,
                         source,
                         module_scope,
@@ -1014,6 +1201,7 @@ fn collect_commonjs_from_expression(
             };
             add_import_row(
                 builder,
+                emissions,
                 file,
                 module_scope,
                 import_path,
@@ -1028,17 +1216,20 @@ fn collect_commonjs_from_expression(
             if let Some(kind) = commonjs_export_kind(&assignment.left) {
                 add_export_row(
                     builder,
+                    emissions,
                     file,
                     module_scope,
                     commonjs_export_name(&assignment.left),
                     SymbolNamespace::Value,
                     kind,
                     None,
+                    None,
                     SemanticStatus::Unsupported,
                 );
             }
             collect_commonjs_from_expression(
                 builder,
+                emissions,
                 file,
                 source,
                 module_scope,
@@ -1048,6 +1239,7 @@ fn collect_commonjs_from_expression(
         Expression::AwaitExpression(expression) => {
             collect_commonjs_from_expression(
                 builder,
+                emissions,
                 file,
                 source,
                 module_scope,
@@ -1057,6 +1249,7 @@ fn collect_commonjs_from_expression(
         Expression::ParenthesizedExpression(expression) => {
             collect_commonjs_from_expression(
                 builder,
+                emissions,
                 file,
                 source,
                 module_scope,
@@ -1066,6 +1259,7 @@ fn collect_commonjs_from_expression(
         Expression::TSAsExpression(expression) => {
             collect_commonjs_from_expression(
                 builder,
+                emissions,
                 file,
                 source,
                 module_scope,
@@ -1075,6 +1269,7 @@ fn collect_commonjs_from_expression(
         Expression::TSSatisfiesExpression(expression) => {
             collect_commonjs_from_expression(
                 builder,
+                emissions,
                 file,
                 source,
                 module_scope,
@@ -1084,6 +1279,7 @@ fn collect_commonjs_from_expression(
         Expression::TSNonNullExpression(expression) => {
             collect_commonjs_from_expression(
                 builder,
+                emissions,
                 file,
                 source,
                 module_scope,
@@ -1093,6 +1289,7 @@ fn collect_commonjs_from_expression(
         Expression::TSTypeAssertion(expression) => {
             collect_commonjs_from_expression(
                 builder,
+                emissions,
                 file,
                 source,
                 module_scope,
@@ -1107,6 +1304,7 @@ fn collect_commonjs_from_expression(
 
 fn collect_commonjs_from_call(
     builder: &mut SemanticIndexBuilder,
+    emissions: &mut TsSemanticEmissions,
     file: &SourceFile,
     _source: &str,
     module_scope: Option<ScopeId>,
@@ -1124,6 +1322,7 @@ fn collect_commonjs_from_call(
     };
     add_import_row(
         builder,
+        emissions,
         file,
         module_scope,
         import_path,
@@ -2779,8 +2978,10 @@ function outer(value: number) {
 
 #[cfg(test)]
 mod semantic_imports_exports {
-    use super::{derive_ts_semantic_index, parse_source_type};
-    use crate::core::{FileId, Language, SourceFile};
+    use super::{
+        ReExportTarget, derive_ts_semantic_index, parse_source_type, ts_reexport_target_stable_key,
+    };
+    use crate::core::{FileId, Language, SourceFile, SymbolNamespace};
     use crate::symbol_graph::semantic::{ExportKind, SemanticImportKind, SemanticStatus};
     use oxc_allocator::Allocator;
     use oxc_parser::Parser;
@@ -2853,6 +3054,51 @@ import "./setup-b";
     }
 
     #[test]
+    fn repeated_import_expressions_emit_one_semantic_identity_each() {
+        let output = derive(
+            r#"
+import "./setup";
+import "./setup";
+const first = require("pkg");
+const second = require("pkg");
+const lazyFirst = import("./chunk");
+const lazySecond = import("./chunk");
+"#,
+        );
+        let keys = output
+            .semantic_imports
+            .iter()
+            .map(|fact| fact.stable_key.as_str())
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(keys.len(), output.semantic_imports.len());
+        assert_eq!(
+            output
+                .semantic_imports
+                .iter()
+                .filter(|fact| fact.import_path == "./setup")
+                .count(),
+            1
+        );
+        assert_eq!(
+            output
+                .semantic_imports
+                .iter()
+                .filter(|fact| fact.import_path == "pkg")
+                .count(),
+            1
+        );
+        assert_eq!(
+            output
+                .semantic_imports
+                .iter()
+                .filter(|fact| fact.import_path == "./chunk")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn emits_export_rows_for_named_default_star_reexport_and_reexport_specifiers() {
         let output = derive(
             r#"
@@ -2872,7 +3118,7 @@ export { named as reexported } from "./mod";
         assert!(kinds.contains(&ExportKind::Named));
         assert!(kinds.contains(&ExportKind::Default));
         assert!(kinds.contains(&ExportKind::StarReexport));
-        assert!(kinds.contains(&ExportKind::Namespace));
+        assert!(kinds.contains(&ExportKind::ReExport));
         assert!(
             output
                 .aliases
@@ -2882,9 +3128,280 @@ export { named as reexported } from "./mod";
     }
 
     #[test]
+    fn declaration_merging_emits_one_type_export_identity() {
+        let output = derive(
+            r#"
+export interface MergeMe {
+    first: string;
+}
+
+export interface MergeMe {
+    second: string;
+}
+
+export const value = 1;
+"#,
+        );
+        let exports = output
+            .exports
+            .iter()
+            .filter(|fact| fact.export_name == "MergeMe")
+            .collect::<Vec<_>>();
+        let stable_exports = output
+            .stable_exports
+            .iter()
+            .filter(|fact| fact.export_name == "MergeMe")
+            .collect::<Vec<_>>();
+
+        assert_eq!(exports.len(), 1);
+        assert_eq!(stable_exports.len(), 1);
+        assert_eq!(exports[0].namespace, SymbolNamespace::Type);
+        assert_eq!(stable_exports[0].namespace, SymbolNamespace::Type);
+        assert_eq!(stable_exports[0].export, exports[0].id);
+        assert!(output.exports.iter().any(|fact| {
+            fact.export_name == "value" && fact.namespace == SymbolNamespace::Value
+        }));
+        assert_eq!(
+            output
+                .exports
+                .iter()
+                .map(|fact| fact.stable_key.as_str())
+                .collect::<BTreeSet<_>>()
+                .len(),
+            output.exports.len()
+        );
+        assert_eq!(
+            output
+                .stable_exports
+                .iter()
+                .map(|fact| fact.stable_key.as_str())
+                .collect::<BTreeSet<_>>()
+                .len(),
+            output.stable_exports.len()
+        );
+    }
+
+    #[test]
+    fn default_interface_export_uses_type_namespace() {
+        let output = derive(
+            r#"
+export default interface DefaultShape {
+    value: string;
+}
+"#,
+        );
+        let export = output
+            .exports
+            .iter()
+            .find(|fact| fact.export_name == "default")
+            .expect("default export exists");
+        let stable_export = output
+            .stable_exports
+            .iter()
+            .find(|fact| fact.export_name == "default")
+            .expect("default stable export exists");
+
+        assert_eq!(export.namespace, SymbolNamespace::Type);
+        assert_eq!(stable_export.namespace, SymbolNamespace::Type);
+        assert_eq!(stable_export.export, export.id);
+    }
+
+    #[test]
+    fn source_type_reexports_use_type_namespace() {
+        let output = derive(
+            r#"
+export type { Foo as TypeFoo } from "./types";
+export { type Bar as TypeBar } from "./types";
+"#,
+        );
+        let reexports = output
+            .exports
+            .iter()
+            .filter(|fact| matches!(fact.export_name.as_str(), "TypeFoo" | "TypeBar"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(reexports.len(), 2);
+        assert!(reexports.iter().all(|fact| {
+            fact.namespace == SymbolNamespace::Type && fact.kind == ExportKind::ReExport
+        }));
+    }
+
+    #[test]
+    fn classifies_source_reexport_forms_without_stable_targets() {
+        let output = derive(
+            r#"
+export { value as renamed } from "./value";
+export type { Shape as RenamedShape } from "./types";
+export * from "./star";
+export type * from "./type-star";
+export * as namespaceExport from "./namespace";
+"#,
+        );
+        let expected = [
+            ("renamed", SymbolNamespace::Value, ExportKind::ReExport),
+            ("RenamedShape", SymbolNamespace::Type, ExportKind::ReExport),
+            (
+                "* from ./star",
+                SymbolNamespace::Module,
+                ExportKind::StarReexport,
+            ),
+            (
+                "* from ./type-star",
+                SymbolNamespace::Type,
+                ExportKind::StarReexport,
+            ),
+            (
+                "namespaceExport",
+                SymbolNamespace::Namespace,
+                ExportKind::Namespace,
+            ),
+        ];
+
+        for (name, namespace, kind) in expected {
+            let export = output
+                .exports
+                .iter()
+                .find(|fact| fact.export_name == name)
+                .unwrap_or_else(|| panic!("missing export `{name}` in {output:#?}"));
+            assert_eq!(export.namespace, namespace);
+            assert_eq!(export.kind, kind);
+            assert_eq!(export.status, SemanticStatus::Unresolved);
+        }
+        let alias_targets = output
+            .aliases
+            .iter()
+            .flat_map(|alias| alias.target_symbol_stable_keys.iter().cloned())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            alias_targets,
+            BTreeSet::from([
+                ts_reexport_target_stable_key(ReExportTarget::Named {
+                    module: "./types",
+                    imported_name: "Shape",
+                }),
+                ts_reexport_target_stable_key(ReExportTarget::Named {
+                    module: "./value",
+                    imported_name: "value",
+                }),
+                ts_reexport_target_stable_key(ReExportTarget::Module {
+                    module: "./namespace",
+                }),
+                ts_reexport_target_stable_key(ReExportTarget::Module { module: "./star" }),
+                ts_reexport_target_stable_key(ReExportTarget::Module {
+                    module: "./type-star",
+                }),
+            ])
+        );
+        assert!(
+            output
+                .aliases
+                .iter()
+                .all(|alias| alias.kind == crate::symbol_graph::semantic::AliasKind::ReExport)
+        );
+        assert_eq!(
+            output
+                .exports
+                .iter()
+                .map(|fact| fact.stable_key.as_str())
+                .collect::<BTreeSet<_>>()
+                .len(),
+            output.exports.len()
+        );
+        assert!(output.stable_exports.is_empty());
+    }
+
+    #[test]
+    fn distinct_export_targets_with_one_name_are_not_collapsed() {
+        let output = derive(
+            r#"
+const left = 1;
+const right = 2;
+export { left as shared, right as shared };
+"#,
+        );
+        let exports = output
+            .exports
+            .iter()
+            .filter(|fact| fact.export_name == "shared")
+            .collect::<Vec<_>>();
+        let stable_exports = output
+            .stable_exports
+            .iter()
+            .filter(|fact| fact.export_name == "shared")
+            .collect::<Vec<_>>();
+
+        assert_eq!(exports.len(), 2);
+        assert_eq!(exports[0].stable_key, exports[1].stable_key);
+        assert_ne!(exports[0].id, exports[1].id);
+        assert_eq!(stable_exports.len(), 2);
+        assert_ne!(
+            stable_exports[0].symbol_stable_key,
+            stable_exports[1].symbol_stable_key
+        );
+    }
+
+    #[test]
+    fn remote_export_emission_only_coalesces_exact_targets() {
+        let output = derive(
+            r#"
+export { first as shared } from "./first";
+export { second as shared } from "./second";
+export { repeated as repeatedName } from "./same";
+export { repeated as repeatedName } from "./same";
+"#,
+        );
+        let conflicting = output
+            .exports
+            .iter()
+            .filter(|fact| fact.export_name == "shared")
+            .collect::<Vec<_>>();
+        let repeated = output
+            .exports
+            .iter()
+            .filter(|fact| fact.export_name == "repeatedName")
+            .count();
+
+        assert_eq!(conflicting.len(), 2);
+        assert_eq!(conflicting[0].stable_key, conflicting[1].stable_key);
+        assert_eq!(repeated, 1);
+    }
+
+    #[test]
+    fn canonical_reexport_targets_separate_named_and_module_vocabularies() {
+        let output = derive(
+            r#"
+export { path as namedTarget } from "module";
+export { path as namedTarget } from "module";
+export * from "path";
+export * from "path";
+"#,
+        );
+        let named_target = ts_reexport_target_stable_key(ReExportTarget::Named {
+            module: "module",
+            imported_name: "path",
+        });
+        let module_target =
+            ts_reexport_target_stable_key(ReExportTarget::Module { module: "path" });
+        let emitted_targets = output
+            .aliases
+            .iter()
+            .flat_map(|alias| alias.target_symbol_stable_keys.iter().cloned())
+            .collect::<BTreeSet<_>>();
+
+        assert_ne!(named_target, module_target);
+        assert_eq!(
+            emitted_targets,
+            BTreeSet::from([named_target, module_target])
+        );
+        assert_eq!(output.aliases.len(), 2);
+        assert_eq!(output.exports.len(), 2);
+    }
+
+    #[test]
     fn star_reexport_alias_stable_keys_include_reexport_target() {
         let output = derive(
             r#"
+export * from "./a";
 export * from "./a";
 export * from "./b";
 "#,
@@ -2892,11 +3409,17 @@ export * from "./b";
         let reexport_keys = output
             .aliases
             .iter()
-            .filter(|alias| alias.source_symbol_stable_key == "export:*")
+            .filter(|alias| alias.source_symbol_stable_key.starts_with("reexport:star:"))
             .map(|alias| alias.stable_key.as_str())
             .collect::<BTreeSet<_>>();
+        let star_exports = output
+            .exports
+            .iter()
+            .filter(|export| export.kind == ExportKind::StarReexport)
+            .count();
 
         assert_eq!(reexport_keys.len(), 2);
+        assert_eq!(star_exports, 2);
     }
 
     #[test]
