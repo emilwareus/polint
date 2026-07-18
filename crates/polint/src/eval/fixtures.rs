@@ -2002,7 +2002,7 @@ mod eval_native_fixture_runner_tests {
 
     #[test]
     #[ignore = "timing-sensitive: run as an exact serialized performance gate"]
-    fn eval_input_snapshot_fixture_meets_five_second_budget() {
+    fn eval_input_snapshot_fixture_meets_runtime_budget() {
         let run = run_native_fixture_for_test(&cache_input_snapshots_fixture_dir()).unwrap();
         let rendered = to_deterministic_json_pretty(&run);
 

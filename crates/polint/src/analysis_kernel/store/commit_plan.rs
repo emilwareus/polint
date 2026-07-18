@@ -8,7 +8,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::path::Path;
 
 use rayon::prelude::*;
 use serde::Serialize;
@@ -30,6 +29,8 @@ use crate::analysis_kernel::validation::{
 };
 use crate::analysis_plan::CapabilitySetupStatus;
 use crate::core::CapabilitySupportStatus;
+
+use super::schema::validate_relative_path;
 
 pub(super) const MAX_GENERATION_STORAGE_ROWS: u64 = 1_000_000;
 pub(super) const MAX_GENERATION_STORAGE_BYTES: u64 = 512 * 1024 * 1024;
@@ -1737,7 +1738,7 @@ impl StoreSemanticPlan {
 
     fn validate_paths(&self) -> Result<(), StorePlanError> {
         for file in &self.files {
-            if Path::new(&file.relative_path).is_absolute()
+            if validate_relative_path(&file.relative_path).is_err()
                 || file
                     .relative_path
                     .as_bytes()
@@ -3817,6 +3818,33 @@ mod tests {
             message: "fixture".to_string(),
         };
         assert!(handoff_error.to_string().contains("validated-run handoff"));
+    }
+
+    #[test]
+    fn store_plan_rejects_non_canonical_file_paths() {
+        let baseline = plan_fixture();
+        for invalid in [
+            "",
+            "/private/leak.go",
+            "../escape.go",
+            "src/../escape.go",
+            "src/./escape.go",
+            r"src\escape.go",
+            r"\rooted.go",
+            r"\\server\share\escape.go",
+            "C:relative.go",
+            "C:/absolute.go",
+        ] {
+            let mut candidate = baseline.clone();
+            candidate.semantic.files[0].relative_path = invalid.to_string();
+            assert!(
+                matches!(
+                    candidate.validate(),
+                    Err(StorePlanError::AbsolutePath { .. })
+                ),
+                "accepted non-canonical store path `{invalid}`"
+            );
+        }
     }
 
     #[test]

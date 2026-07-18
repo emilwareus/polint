@@ -70,6 +70,8 @@ const GO_DEPENDENCY_MAX_PUBLISHED_MODULE_BYTES: u64 = GO_DEPENDENCY_MAX_BYTES * 
 const GO_DEPENDENCY_MAX_PUBLISHED_AGE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 const GO_DEPENDENCY_MAX_LIFECYCLE_ENTRIES: usize = 1_024;
 const GO_DEPENDENCY_STAGE_MARKER_GRACE: Duration = Duration::from_secs(30);
+const GO_DEPENDENCY_CAPACITY_RETRY_INITIAL: Duration = Duration::from_millis(25);
+const GO_DEPENDENCY_CAPACITY_RETRY_MAX: Duration = Duration::from_millis(250);
 const GO_DEPENDENCY_MANIFEST_MAX_BYTES: u64 = 4 * 1024 * 1024;
 const GO_DEPENDENCY_COMMAND_STDOUT_BYTES: usize = 16 * 1024 * 1024;
 const GO_DEPENDENCY_COMMAND_STDERR_BYTES: usize = 1024 * 1024;
@@ -3409,7 +3411,7 @@ impl DependencySnapshotReservation {
         let reservations = ensure_private_subdirectory(&control, Path::new("reservations"))?;
         let reservation = tempfile::Builder::new()
             .prefix(&format!(".reservation-{request_key}-"))
-            .tempfile_in(&reservations)
+            .make_in(&reservations, create_dependency_reservation_file)
             .map_err(|error| {
                 GoSemanticProcessError::CommandFailed(format!(
                     "failed to reserve Go dependency snapshot capacity: {error}"
@@ -3519,6 +3521,30 @@ fn open_dependency_lock_file(path: &Path) -> Result<fs::File, GoSemanticProcessE
 }
 
 #[cfg(unix)]
+fn create_dependency_reservation_file(path: &Path) -> std::io::Result<fs::File> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+        .open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file()
+        || metadata.uid() != effective_user_id()
+        || metadata.permissions().mode() & 0o777 != 0o600
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "dependency reservation is not an owner-only regular file",
+        ));
+    }
+    Ok(file)
+}
+
+#[cfg(unix)]
 fn open_existing_dependency_lock_file(path: &Path) -> std::io::Result<fs::File> {
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 
@@ -3551,6 +3577,11 @@ fn open_dependency_lock_file(path: &Path) -> Result<fs::File, GoSemanticProcessE
 }
 
 #[cfg(windows)]
+fn create_dependency_reservation_file(path: &Path) -> std::io::Result<fs::File> {
+    crate::go::semantic::windows::create_private_lock_file(path)
+}
+
+#[cfg(windows)]
 fn open_existing_dependency_lock_file(path: &Path) -> std::io::Result<fs::File> {
     crate::go::semantic::windows::open_existing_private_lock_file(path)
 }
@@ -3559,6 +3590,14 @@ fn open_existing_dependency_lock_file(path: &Path) -> std::io::Result<fs::File> 
 fn open_dependency_lock_file(_path: &Path) -> Result<fs::File, GoSemanticProcessError> {
     Err(GoSemanticProcessError::CommandUnavailable(
         "Go dependency snapshot locking is unavailable on this platform.".to_string(),
+    ))
+}
+
+#[cfg(all(not(unix), not(windows)))]
+fn create_dependency_reservation_file(_path: &Path) -> std::io::Result<fs::File> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "private Go dependency reservation creation is unavailable on this platform",
     ))
 }
 
@@ -3645,39 +3684,60 @@ fn acquire_or_reserve_dependency_snapshot_until(
     deadline: GoOperationDeadline,
 ) -> Result<(Arc<DependencySnapshotLease>, DependencySnapshotAvailability), GoSemanticProcessError>
 {
-    let _lifecycle = dependency_lifecycle_lock_until(snapshots_root, deadline)?;
-    let destination = snapshots_root.join(request_key);
-    match fs::symlink_metadata(&destination) {
-        Ok(_) => {
-            let lease = DependencySnapshotLease::acquire(snapshots_root, request_key, deadline)?;
-            return Ok((lease, DependencySnapshotAvailability::Existing));
+    let mut cleaned_staging = false;
+    let mut retry_interval = GO_DEPENDENCY_CAPACITY_RETRY_INITIAL;
+    loop {
+        let lifecycle = dependency_lifecycle_lock_until(snapshots_root, deadline)?;
+        let destination = snapshots_root.join(request_key);
+        match fs::symlink_metadata(&destination) {
+            Ok(_) => {
+                let lease =
+                    DependencySnapshotLease::acquire(snapshots_root, request_key, deadline)?;
+                return Ok((lease, DependencySnapshotAvailability::Existing));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(GoSemanticProcessError::CommandFailed(format!(
+                    "failed to inspect Go dependency snapshot destination `{}`: {error}",
+                    destination.display()
+                )));
+            }
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(GoSemanticProcessError::CommandFailed(format!(
-                "failed to inspect Go dependency snapshot destination `{}`: {error}",
-                destination.display()
-            )));
+        let active_reservations =
+            cleanup_and_count_dependency_reservations_until(snapshots_root, deadline)?;
+        if !cleaned_staging {
+            cleanup_and_count_orphaned_dependency_staging_until(
+                snapshots_root,
+                current_staging,
+                deadline,
+            )?;
+            cleaned_staging = true;
         }
+        // A liveness-marked stage exists before its request key is known and
+        // before admission. Reservations, rather than those waiting stages,
+        // are the single capacity accounting source for active populations.
+        let capacity_available = enforce_dependency_snapshot_retention_until(
+            snapshots_root,
+            Some(request_key),
+            active_reservations.saturating_add(1),
+            deadline,
+        )?;
+        if !capacity_available {
+            // Finalization also needs the lifecycle lock. Release it before
+            // waiting so an active analysis can publish or retire its slot,
+            // then recheck both the destination and capacity under a new lock.
+            drop(lifecycle);
+            let remaining = deadline.remaining("Go dependency snapshot capacity wait")?;
+            thread::sleep(retry_interval.min(remaining));
+            retry_interval = retry_interval
+                .saturating_mul(2)
+                .min(GO_DEPENDENCY_CAPACITY_RETRY_MAX);
+            continue;
+        }
+        let reservation = DependencySnapshotReservation::create(snapshots_root, request_key)?;
+        let lease = DependencySnapshotLease::acquire(snapshots_root, request_key, deadline)?;
+        return Ok((lease, DependencySnapshotAvailability::Reserved(reservation)));
     }
-    let active_reservations =
-        cleanup_and_count_dependency_reservations_until(snapshots_root, deadline)?;
-    let retired_snapshots = cleanup_and_count_orphaned_dependency_staging_until(
-        snapshots_root,
-        current_staging,
-        deadline,
-    )?;
-    enforce_dependency_snapshot_retention_until(
-        snapshots_root,
-        Some(request_key),
-        active_reservations
-            .saturating_add(retired_snapshots)
-            .saturating_add(1),
-        deadline,
-    )?;
-    let reservation = DependencySnapshotReservation::create(snapshots_root, request_key)?;
-    let lease = DependencySnapshotLease::acquire(snapshots_root, request_key, deadline)?;
-    Ok((lease, DependencySnapshotAvailability::Reserved(reservation)))
 }
 
 fn finalize_dependency_snapshot_until(
@@ -3955,7 +4015,7 @@ fn enforce_dependency_snapshot_retention_until(
     keep_key: Option<&str>,
     reserved_slots: usize,
     deadline: GoOperationDeadline,
-) -> Result<(), GoSemanticProcessError> {
+) -> Result<bool, GoSemanticProcessError> {
     let mut retained = collect_retained_dependency_snapshots_until(snapshots_root, deadline)?;
     retained.sort_by(|left, right| {
         left.last_used
@@ -3992,12 +4052,9 @@ fn enforce_dependency_snapshot_retention_until(
     if retained_count.saturating_add(reserved_slots) > GO_DEPENDENCY_MAX_PUBLISHED_SNAPSHOTS
         || retained_bytes.saturating_add(reserved_bytes) > GO_DEPENDENCY_MAX_PUBLISHED_MODULE_BYTES
     {
-        return Err(GoSemanticProcessError::CommandUnavailable(
-            "Go dependency snapshot retention is full while older snapshots are in use; retry after active analyses finish."
-                .to_string(),
-        ));
+        return Ok(false);
     }
-    Ok(())
+    Ok(true)
 }
 
 fn retire_dependency_snapshot_until(
@@ -15258,12 +15315,25 @@ mod tests {
         format!("'{}'", value.replace('\'', "'\\''"))
     }
 
+    #[cfg(unix)]
     #[test]
     fn command_for_path_accepts_source_directory() {
         let temp = tempfile::tempdir().expect("temp dir");
         fs::write(temp.path().join("go.mod"), "module test\n").expect("write go.mod");
         let command = command_for_path(temp.path().to_path_buf()).expect("source dir accepted");
         assert!(matches!(command, GoSemanticCommand::SourceDir(_)));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn command_for_path_rejects_source_directory_on_windows() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        fs::write(temp.path().join("go.mod"), "module test\n").expect("write go.mod");
+
+        assert!(matches!(
+            command_for_path(temp.path().to_path_buf()),
+            Err(GoSemanticProcessError::CommandUnavailable(_))
+        ));
     }
 
     #[test]
@@ -15293,6 +15363,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn source_dir_digest_changes_when_go_source_changes() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -15315,6 +15386,17 @@ mod tests {
             .expect("digest source dir again");
 
         assert_ne!(first, second);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn source_dir_digest_is_unavailable_on_windows() {
+        let temp = tempfile::tempdir().expect("tempdir");
+
+        assert!(matches!(
+            frontend_digest(&GoSemanticCommand::SourceDir(temp.path().to_path_buf())),
+            Err(GoSemanticProcessError::CommandUnavailable(_))
+        ));
     }
 
     #[test]
@@ -16595,6 +16677,14 @@ mod tests {
             .expect("reservation has a path")
             .clone();
         assert!(reservation_path.is_file());
+        let deadline = GoOperationDeadline::after(Duration::from_secs(5));
+        let active = {
+            let _lifecycle =
+                dependency_lifecycle_lock_until(&snapshots, deadline).expect("lock lifecycle");
+            cleanup_and_count_dependency_reservations_until(&snapshots, deadline)
+                .expect("count active reservation")
+        };
+        assert_eq!(active, 1);
 
         reservation.release().expect("release reservation");
 
@@ -16803,6 +16893,121 @@ mod tests {
         )
         .expect("repair after population lease release");
         assert!(!destination.exists());
+    }
+
+    #[test]
+    fn dependency_snapshot_capacity_waits_until_deadline_for_active_leases() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let cache = test_cache_root(&temp);
+        ensure_private_cache_root(&cache).expect("create private cache root");
+        let snapshots = ensure_private_subdirectory(&cache, Path::new("dependency-snapshots"))
+            .expect("create dependency snapshots root");
+        let staging = ensure_private_subdirectory(&snapshots, Path::new("staging"))
+            .expect("create staging root");
+        let current_staging = staging.join("current-population");
+        let deadline = GoOperationDeadline::after(Duration::from_secs(5));
+        let mut active_leases = Vec::new();
+        for index in 0..GO_DEPENDENCY_MAX_PUBLISHED_SNAPSHOTS {
+            let key = format!("{:02x}{}", index + 1, "0".repeat(62));
+            ensure_private_subdirectory(&snapshots, Path::new(&key))
+                .expect("create retained dependency snapshot");
+            active_leases.push(
+                DependencySnapshotLease::acquire(&snapshots, &key, deadline)
+                    .expect("hold retained snapshot lease"),
+            );
+        }
+
+        let request_key = "f".repeat(64);
+        let error = acquire_or_reserve_dependency_snapshot_until(
+            &snapshots,
+            &request_key,
+            &current_staging,
+            GoOperationDeadline::after(Duration::from_millis(75)),
+        )
+        .expect_err("leased snapshots must keep capacity unavailable");
+        assert!(
+            matches!(error, GoSemanticProcessError::Timeout(_)),
+            "capacity wait must remain bounded by the caller deadline: {error}"
+        );
+
+        let orphan = ensure_private_subdirectory(&staging, Path::new(".dependency-orphan"))
+            .expect("create observable orphan stage");
+        write_new_private_mutable_file(&orphan.join(".liveness"), b"")
+            .expect("create unlocked orphan liveness marker");
+        let waiter_snapshots = snapshots.clone();
+        let waiter_key = request_key;
+        let waiter_staging = current_staging;
+        let (result_tx, result_rx) = mpsc::channel();
+        let waiter = thread::spawn(move || {
+            let result = acquire_or_reserve_dependency_snapshot_until(
+                &waiter_snapshots,
+                &waiter_key,
+                &waiter_staging,
+                GoOperationDeadline::after(Duration::from_secs(5)),
+            );
+            result_tx.send(result).expect("report capacity result");
+        });
+        let observation_deadline = Instant::now() + Duration::from_secs(2);
+        while orphan.exists() && Instant::now() < observation_deadline {
+            thread::sleep(COMMAND_MONITOR_INTERVAL);
+        }
+        assert!(
+            !orphan.exists(),
+            "capacity waiter must complete its initial lifecycle scan"
+        );
+        let lifecycle = dependency_lifecycle_lock_until(
+            &snapshots,
+            GoOperationDeadline::after(Duration::from_secs(2)),
+        )
+        .expect("observe waiter between capacity scans");
+        assert!(
+            matches!(result_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+            "capacity waiter must remain blocked while every snapshot is leased"
+        );
+
+        drop(active_leases.pop());
+        drop(lifecycle);
+        let (_lease, availability) = result_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("capacity waiter reports after lease release")
+            .expect("reserve released dependency capacity");
+        assert!(matches!(
+            availability,
+            DependencySnapshotAvailability::Reserved(_)
+        ));
+        waiter.join().expect("join capacity waiter");
+    }
+
+    #[test]
+    fn pre_admission_dependency_stages_do_not_deadlock_capacity() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let cache = test_cache_root(&temp);
+        ensure_private_cache_root(&cache).expect("create private cache root");
+        let snapshots = ensure_private_subdirectory(&cache, Path::new("dependency-snapshots"))
+            .expect("create dependency snapshots root");
+        let staging = ensure_private_subdirectory(&snapshots, Path::new("staging"))
+            .expect("create staging root");
+        let deadline = GoOperationDeadline::after(Duration::from_secs(5));
+        let stages = (0..=GO_DEPENDENCY_MAX_PUBLISHED_SNAPSHOTS)
+            .map(|_| {
+                StagingDirectory::create_dependency_until(&staging, ".dependency-", deadline)
+                    .expect("create live pre-admission stage")
+            })
+            .collect::<Vec<_>>();
+
+        let request_key = "e".repeat(64);
+        let (_lease, availability) = acquire_or_reserve_dependency_snapshot_until(
+            &snapshots,
+            &request_key,
+            stages[0].path(),
+            deadline,
+        )
+        .expect("one waiting stage must win admission");
+
+        assert!(matches!(
+            availability,
+            DependencySnapshotAvailability::Reserved(_)
+        ));
     }
 
     #[test]

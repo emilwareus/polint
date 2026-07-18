@@ -59,7 +59,7 @@ impl RepoDirectory {
     }
 
     pub(crate) fn visit_entries(
-        &self,
+        &mut self,
         _visitor: impl FnMut(RepoDirectoryEntry) -> bool,
     ) -> Result<(), RepoFileReadError> {
         Err(RepoFileReadError::SecureOpenUnavailable)

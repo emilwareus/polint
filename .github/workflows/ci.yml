@@ -98,7 +98,7 @@ jobs:
         run: >-
           cargo test -p polint --lib --all-features --locked
           --profile performance-gate
-          eval::fixtures::eval_native_fixture_runner_tests::eval_input_snapshot_fixture_meets_five_second_budget
+          eval::fixtures::eval_native_fixture_runner_tests::eval_input_snapshot_fixture_meets_runtime_budget
           -- --exact --ignored --test-threads=1 --nocapture
 
       - name: semantic-store supported-boundary authenticity smoke (serialized)
@@ -148,7 +148,7 @@ jobs:
         run: >-
           cargo test -p polint --lib --all-features --locked
           --profile performance-gate
-          eval::fixtures::eval_native_fixture_runner_tests::eval_input_snapshot_fixture_meets_five_second_budget
+          eval::fixtures::eval_native_fixture_runner_tests::eval_input_snapshot_fixture_meets_runtime_budget
           -- --exact --ignored --test-threads=1 --nocapture
 
       - name: semantic-store supported-boundary authenticity smoke (serialized)

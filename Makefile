@@ -13,7 +13,7 @@ test:
 # Wall-clock budgets run without contention from the parallel workspace suite.
 eval-runtime:
 	$(CARGO) test -p polint --lib --all-features --locked --profile performance-gate \
-		eval::fixtures::eval_native_fixture_runner_tests::eval_input_snapshot_fixture_meets_five_second_budget \
+		eval::fixtures::eval_native_fixture_runner_tests::eval_input_snapshot_fixture_meets_runtime_budget \
 		-- --exact --ignored --test-threads=1 --nocapture
 
 eval-semantic-store:

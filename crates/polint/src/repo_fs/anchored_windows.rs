@@ -25,7 +25,7 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO, FILE_LIST_DIRECTORY,
     FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
     FileAttributeTagInfo, FileIdInfo, GetFileInformationByHandleEx, GetFinalPathNameByHandleW,
-    OPEN_EXISTING, ReOpenFile, SYNCHRONIZE, VOLUME_NAME_GUID,
+    OPEN_EXISTING, SYNCHRONIZE, VOLUME_NAME_GUID,
 };
 use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 
@@ -141,28 +141,17 @@ impl RepoDirectory {
     }
 
     pub(crate) fn visit_entries(
-        &self,
+        &mut self,
         mut visitor: impl FnMut(RepoDirectoryEntry) -> bool,
     ) -> Result<(), RepoFileReadError> {
         self.verify()?;
-        let enumeration_file = reopen_directory(raw_handle(&self.file))?;
-        let enumeration_state = inspect_handle(&enumeration_file)?;
-        if enumeration_state.attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
-            || !enumeration_state.is_directory
-            || enumeration_state.identity != self.identity
-            || !enumeration_state
-                .final_path
-                .is_within(&self.root.final_path)
-        {
-            return Err(RepoFileReadError::EscapesRepo);
-        }
         let mut storage = vec![0_u64; DIRECTORY_QUERY_BUFFER_BYTES / size_of::<u64>()];
         let mut restart_scan = true;
         loop {
             storage.fill(0);
             let mut io_status = IO_STATUS_BLOCK::default();
             let status = query_next_directory_entry(
-                raw_handle(&enumeration_file),
+                raw_handle(&self.file),
                 &mut io_status,
                 &mut storage,
                 restart_scan,
@@ -180,6 +169,9 @@ impl RepoDirectory {
                 return Err(map_ntstatus(status));
             }
             self.verify()?;
+            if io_status.Information == 0 {
+                return Err(RepoFileReadError::Read);
+            }
             let name = parse_directory_entry_name(&storage, io_status.Information)?;
             if is_dot_entry(&name) {
                 continue;
@@ -352,25 +344,6 @@ fn is_dot_entry(name: &[u16]) -> bool {
 
 fn raw_handle(file: &fs::File) -> HANDLE {
     file.as_raw_handle() as HANDLE
-}
-
-#[allow(unsafe_code)]
-fn reopen_directory(directory: HANDLE) -> Result<fs::File, RepoFileReadError> {
-    // SAFETY: `directory` is a live verified handle. A successful independent
-    // enumeration handle is transferred exactly once into `File` below.
-    let handle = unsafe {
-        ReOpenFile(
-            directory,
-            FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
-        )
-    };
-    if handle == INVALID_HANDLE_VALUE {
-        return Err(map_read_error(std::io::Error::last_os_error()));
-    }
-    // SAFETY: `ReOpenFile` returned a new owned handle on success.
-    Ok(unsafe { fs::File::from_raw_handle(handle) })
 }
 
 #[allow(unsafe_code)]
@@ -732,7 +705,8 @@ mod tests {
         }
         fs::write(temp.path().join("Rules.toml"), "name = 'upper'\n").expect("write upper");
         fs::write(temp.path().join("rules.toml"), "name = 'lower'\n").expect("write lower");
-        let directory = RepoDirectory::open(temp.path(), Path::new(".")).expect("open directory");
+        let mut directory =
+            RepoDirectory::open(temp.path(), Path::new(".")).expect("open directory");
         let mut contents = BTreeMap::new();
 
         directory

@@ -81,7 +81,7 @@ impl RepoDirectory {
     }
 
     pub(crate) fn visit_entries(
-        &self,
+        &mut self,
         mut visitor: impl FnMut(RepoDirectoryEntry) -> bool,
     ) -> Result<(), RepoFileReadError> {
         let descriptor = open_directory_for_enumeration(self.file.as_raw_fd())?;

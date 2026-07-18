@@ -686,9 +686,10 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         std::fs::write(temp.path().join("a.toml"), "a = 1\n").expect("write a");
         std::fs::write(temp.path().join("b.toml"), "b = 1\n").expect("write b");
-        let directory = RepoDirectory::open(temp.path(), Path::new(".")).expect("open directory");
+        let mut directory =
+            RepoDirectory::open(temp.path(), Path::new(".")).expect("open directory");
 
-        let collect_names = || {
+        let mut collect_names = || {
             let mut names = Vec::new();
             directory
                 .visit_entries(|entry| {
@@ -707,7 +708,8 @@ mod tests {
     #[test]
     fn empty_pinned_directory_enumeration_can_be_repeated() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let directory = RepoDirectory::open(temp.path(), Path::new(".")).expect("open directory");
+        let mut directory =
+            RepoDirectory::open(temp.path(), Path::new(".")).expect("open directory");
 
         for _ in 0..2 {
             let mut names = Vec::new();
@@ -719,6 +721,56 @@ mod tests {
                 .expect("enumerate empty directory");
             assert!(names.is_empty());
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pinned_child_directory_enumeration_can_be_repeated() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir(temp.path().join("nested")).expect("create nested directory");
+        std::fs::write(temp.path().join("nested/a.toml"), "a = 1\n").expect("write child");
+        let mut directory =
+            RepoDirectory::open(temp.path(), Path::new("nested")).expect("open child directory");
+
+        for _ in 0..2 {
+            let mut names = Vec::new();
+            directory
+                .visit_entries(|entry| {
+                    names.push(entry.name);
+                    true
+                })
+                .expect("enumerate child directory");
+            assert_eq!(names, [std::ffi::OsString::from("a.toml")]);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn early_stop_does_not_truncate_the_next_pinned_directory_scan() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(temp.path().join("a.toml"), "a = 1\n").expect("write a");
+        std::fs::write(temp.path().join("b.toml"), "b = 1\n").expect("write b");
+        let mut directory =
+            RepoDirectory::open(temp.path(), Path::new(".")).expect("open directory");
+
+        directory
+            .visit_entries(|_| false)
+            .expect("stop the first scan early");
+        let mut names = Vec::new();
+        directory
+            .visit_entries(|entry| {
+                names.push(entry.name);
+                true
+            })
+            .expect("restart a complete scan");
+        names.sort();
+        assert_eq!(
+            names,
+            [
+                std::ffi::OsString::from("a.toml"),
+                std::ffi::OsString::from("b.toml")
+            ]
+        );
     }
 
     #[cfg(any(
@@ -736,7 +788,8 @@ mod tests {
 
         let temp = tempfile::tempdir().expect("tempdir");
         let _socket = UnixListener::bind(temp.path().join("service.sock")).expect("bind socket");
-        let directory = RepoDirectory::open(temp.path(), Path::new(".")).expect("open directory");
+        let mut directory =
+            RepoDirectory::open(temp.path(), Path::new(".")).expect("open directory");
         let mut saw_socket = false;
 
         directory

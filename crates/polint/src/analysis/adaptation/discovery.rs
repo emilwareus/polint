@@ -159,7 +159,7 @@ impl AdaptationModelInventory {
             peak_pending_entries = pending.len();
             'walk: while let Some((relative_path, entry)) = pending.pop_first() {
                 let entry_depth = entry.depth;
-                let directory = match entry.kind {
+                let mut directory = match entry.kind {
                     DiscoveryEntryKind::File(file) => {
                         if selected_files.len() >= max_model_files {
                             budget_exceeded_at = Some(relative_path);
@@ -1027,7 +1027,7 @@ mod tests {
 
         let repo = tempfile::tempdir().expect("repo");
         let outside = tempfile::tempdir().expect("outside");
-        let model_root = repo.path().join(ADAPTATION_MODEL_DIR);
+        let model_root = repo.path().join(".polint").join("models");
         fs::create_dir_all(&model_root).expect("model directory");
         fs::write(model_root.join("rules.toml"), "schema = 1\n").expect("write model");
         fs::write(outside.path().join("secret-name.toml"), "secret = true\n")
@@ -1041,13 +1041,18 @@ mod tests {
             &mut |relative_path| {
                 if !replaced && relative_path == ADAPTATION_MODEL_DIR {
                     fs::rename(&model_root, &pinned_location).expect("move pinned directory");
-                    let status = Command::new("cmd")
+                    let output = Command::new("cmd")
                         .args(["/C", "mklink", "/J"])
                         .arg(&model_root)
                         .arg(outside.path())
-                        .status()
+                        .output()
                         .expect("run mklink");
-                    assert!(status.success(), "junction creation failed");
+                    assert!(
+                        output.status.success(),
+                        "junction creation failed: stdout={} stderr={}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    );
                     replaced = true;
                 }
                 Ok(())

@@ -33,7 +33,8 @@ use windows_sys::Win32::Security::{
     InitializeAcl, InitializeSecurityDescriptor, IsValidSid, OBJECT_INHERIT_ACE,
     OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
     SE_DACL_PROTECTED, SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR, SetSecurityDescriptorControl,
-    SetSecurityDescriptorDacl, SetSecurityDescriptorOwner, TOKEN_QUERY, TOKEN_USER, TokenUser,
+    SetSecurityDescriptorDacl, SetSecurityDescriptorOwner, TOKEN_OWNER, TOKEN_QUERY, TOKEN_USER,
+    TokenOwner, TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CREATE_NEW, CreateDirectoryW, CreateFileW, FILE_ALL_ACCESS, FILE_ATTRIBUTE_NORMAL,
@@ -43,8 +44,8 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_STANDARD_INFO, FILE_WRITE_ATTRIBUTES,
     FileAttributeTagInfo, FileBasicInfo, FileIdInfo, FileStandardInfo, GetDriveTypeW,
     GetFileInformationByHandleEx, GetFinalPathNameByHandleW, GetVolumeInformationW,
-    GetVolumePathNameW, OPEN_EXISTING, READ_CONTROL, SetFileInformationByHandle, VOLUME_NAME_GUID,
-    WRITE_DAC,
+    GetVolumePathNameW, OPEN_ALWAYS, OPEN_EXISTING, READ_CONTROL, SetFileInformationByHandle,
+    VOLUME_NAME_GUID, WRITE_DAC, WRITE_OWNER,
 };
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
@@ -1298,6 +1299,7 @@ pub(super) fn create_private_file(path: &Path, bytes: &[u8], sealed: bool) -> io
                 | GENERIC_WRITE
                 | READ_CONTROL
                 | WRITE_DAC
+                | WRITE_OWNER
                 | FILE_READ_ATTRIBUTES
                 | FILE_WRITE_ATTRIBUTES,
             0,
@@ -1325,16 +1327,55 @@ pub(super) fn create_private_file(path: &Path, bytes: &[u8], sealed: bool) -> io
     verify_private_path(path, false, sealed)
 }
 
+/// Creates a new owner-only regular file suitable for an OS file lock.
+pub(super) fn create_private_lock_file(path: &Path) -> io::Result<File> {
+    open_private_lock_file_with_disposition(path, CREATE_NEW)
+}
+
 /// Opens or creates an owner-only regular file suitable for an OS file lock.
 pub(super) fn open_private_lock_file(path: &Path) -> io::Result<File> {
-    match std::fs::symlink_metadata(path) {
-        Ok(_) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            let _ = create_private_file(path, b"", false);
-        }
-        Err(error) => return Err(error),
+    open_private_lock_file_with_disposition(path, OPEN_ALWAYS)
+}
+
+#[allow(
+    unsafe_code,
+    reason = "CreateFileW atomically creates or opens a non-inheritable private lock handle"
+)]
+fn open_private_lock_file_with_disposition(path: &Path, disposition: u32) -> io::Result<File> {
+    require_private_creation_parent(path)?;
+    let path_wide = wide_path(path)?;
+    let mut security = PrivateSecurityDescriptor::new(false, false)?;
+    let attributes = security.attributes()?;
+    // SAFETY: the path is NUL-terminated and the security descriptor remains
+    // live for the call. The caller-selected disposition performs creation or
+    // collision handling in this single kernel operation.
+    let raw = unsafe {
+        CreateFileW(
+            path_wide.as_ptr(),
+            GENERIC_READ
+                | GENERIC_WRITE
+                | READ_CONTROL
+                | FILE_READ_ATTRIBUTES
+                | FILE_WRITE_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            &raw const attributes,
+            disposition,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+            std::ptr::null_mut(),
+        )
+    };
+    if raw == INVALID_HANDLE_VALUE {
+        return Err(last_error());
     }
-    open_existing_private_lock_file(path)
+    // SAFETY: CreateFileW returned a fresh uniquely-owned handle.
+    let handle = unsafe { OwnedHandle::from_raw_handle(raw.cast()) };
+    let identity = handle_identity(handle.as_raw_handle().cast())?;
+    reject_reparse_identity(path, identity)?;
+    if identity.directory {
+        return Err(invalid_data(path, "expected a regular lock file"));
+    }
+    verify_private_handle(handle.as_raw_handle().cast(), false, false)?;
+    Ok(file_from_handle(handle))
 }
 
 pub(super) fn open_existing_private_lock_file(path: &Path) -> io::Result<File> {
@@ -1528,13 +1569,14 @@ fn set_private_path_access(path: &Path, directory: bool, sealed: bool) -> io::Re
         } else {
             0
         };
-    // A sealed DACL deliberately omits FILE_WRITE_ATTRIBUTES. Open the
-    // replacement-blocking control handle using rights that the owner retains,
-    // then request attribute-write access only through a same-object handle
-    // when an actual file transition needs it.
+    // A sealed DACL deliberately omits FILE_WRITE_ATTRIBUTES and WRITE_OWNER.
+    // Open the replacement-blocking control handle with rights every owner
+    // retains, then obtain the extra transition rights only when the token's
+    // default owner must be normalized or a mutable file must be sealed.
+    let control_access = FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC;
     let handle = open_existing_path(
         path,
-        FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC,
+        control_access,
         FILE_SHARE_READ | FILE_SHARE_WRITE,
         flags,
     )?;
@@ -1546,11 +1588,42 @@ fn set_private_path_access(path: &Path, directory: bool, sealed: bool) -> io::Re
             "the entry type changed while changing its DACL",
         ));
     }
+    let normalize_owner =
+        current_token_owner_requires_normalization(handle.as_raw_handle().cast())?;
+    let handle = if normalize_owner {
+        let owner_access = control_access
+            | WRITE_OWNER
+            | if !directory && sealed {
+                FILE_WRITE_ATTRIBUTES
+            } else {
+                0
+            };
+        let owner_handle = open_existing_path(
+            path,
+            owner_access,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            flags,
+        )?;
+        let owner_identity = handle_identity(owner_handle.as_raw_handle().cast())?;
+        reject_reparse_identity(path, owner_identity)?;
+        if !identity.names_same_object(owner_identity) {
+            return Err(invalid_data(
+                path,
+                "the entry identity changed while normalizing its owner",
+            ));
+        }
+        owner_handle
+    } else {
+        handle
+    };
     if directory {
         return set_handle_private_access(handle.as_raw_handle().cast(), directory, sealed);
     }
 
     if sealed {
+        if normalize_owner {
+            return set_handle_private_access(handle.as_raw_handle().cast(), false, true);
+        }
         if verify_private_handle(handle.as_raw_handle().cast(), false, true).is_ok() {
             return Ok(());
         }
@@ -1604,19 +1677,29 @@ fn require_private_creation_parent(path: &Path) -> io::Result<()> {
     require_local_fixed_volume(parent)
 }
 
-struct CurrentUserSid {
+struct CurrentTokenSid {
     _storage: Vec<usize>,
     sid: PSID,
 }
 
-impl CurrentUserSid {
-    fn load() -> io::Result<Self> {
-        current_user_sid()
+impl CurrentTokenSid {
+    fn user() -> io::Result<Self> {
+        current_token_sid(CurrentTokenSidKind::User)
+    }
+
+    fn default_owner() -> io::Result<Self> {
+        current_token_sid(CurrentTokenSidKind::DefaultOwner)
     }
 }
 
+#[derive(Clone, Copy)]
+enum CurrentTokenSidKind {
+    User,
+    DefaultOwner,
+}
+
 struct PrivateSecurityDescriptor {
-    _owner: CurrentUserSid,
+    _owner: CurrentTokenSid,
     _acl: Vec<u32>,
     descriptor: Box<SECURITY_DESCRIPTOR>,
 }
@@ -1663,7 +1746,7 @@ impl Drop for LocalSecurityDescriptor {
     unsafe_code,
     reason = "token APIs fill an aligned owned buffer whose embedded SID remains live"
 )]
-fn current_user_sid() -> io::Result<CurrentUserSid> {
+fn current_token_sid(kind: CurrentTokenSidKind) -> io::Result<CurrentTokenSid> {
     let mut token: HANDLE = std::ptr::null_mut();
     // SAFETY: the current-process pseudo-handle is always valid and `token` is
     // a writable output for a fresh non-inheritable handle.
@@ -1673,11 +1756,19 @@ fn current_user_sid() -> io::Result<CurrentUserSid> {
     // SAFETY: OpenProcessToken returned a fresh uniquely-owned handle.
     let token = unsafe { OwnedHandle::from_raw_handle(token.cast()) };
     let mut required = 0_u32;
+    let information_class = match kind {
+        CurrentTokenSidKind::User => TokenUser,
+        CurrentTokenSidKind::DefaultOwner => TokenOwner,
+    };
+    let label = match kind {
+        CurrentTokenSidKind::User => "user",
+        CurrentTokenSidKind::DefaultOwner => "default-owner",
+    };
     // SAFETY: a null buffer with length zero is the documented sizing query.
     if unsafe {
         GetTokenInformation(
             token.as_raw_handle().cast(),
-            TokenUser,
+            information_class,
             std::ptr::null_mut(),
             0,
             &raw mut required,
@@ -1686,7 +1777,7 @@ fn current_user_sid() -> io::Result<CurrentUserSid> {
     {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "Windows unexpectedly accepted an empty token-user buffer",
+            format!("Windows unexpectedly accepted an empty token-{label} buffer"),
         ));
     }
     let sizing_error = last_error();
@@ -1696,7 +1787,7 @@ fn current_user_sid() -> io::Result<CurrentUserSid> {
     let required_usize = usize::try_from(required).map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
-            "token-user buffer is too large",
+            format!("token-{label} buffer is too large"),
         )
     })?;
     let words = required_usize
@@ -1705,7 +1796,7 @@ fn current_user_sid() -> io::Result<CurrentUserSid> {
         .ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "token-user buffer is too large",
+                format!("token-{label} buffer is too large"),
             )
         })?;
     let mut storage = vec![0_usize; words];
@@ -1714,7 +1805,7 @@ fn current_user_sid() -> io::Result<CurrentUserSid> {
     if unsafe {
         GetTokenInformation(
             token.as_raw_handle().cast(),
-            TokenUser,
+            information_class,
             storage.as_mut_ptr().cast(),
             required,
             &raw mut required,
@@ -1723,16 +1814,21 @@ fn current_user_sid() -> io::Result<CurrentUserSid> {
     {
         return Err(last_error());
     }
-    // SAFETY: the successful TokenUser query initialized a TOKEN_USER at the
-    // beginning of the aligned buffer.
-    let sid = unsafe { (*(storage.as_ptr().cast::<TOKEN_USER>())).User.Sid };
+    // SAFETY: the successful query initialized the selected token-information
+    // structure at the beginning of the aligned buffer.
+    let sid = unsafe {
+        match kind {
+            CurrentTokenSidKind::User => (*(storage.as_ptr().cast::<TOKEN_USER>())).User.Sid,
+            CurrentTokenSidKind::DefaultOwner => (*(storage.as_ptr().cast::<TOKEN_OWNER>())).Owner,
+        }
+    };
     if sid.is_null() || unsafe { IsValidSid(sid) } == 0 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "Windows returned an invalid current-user SID",
+            format!("Windows returned an invalid current token {label} SID"),
         ));
     }
-    Ok(CurrentUserSid {
+    Ok(CurrentTokenSid {
         _storage: storage,
         sid,
     })
@@ -1746,7 +1842,7 @@ fn build_private_security_descriptor(
     directory: bool,
     sealed: bool,
 ) -> io::Result<PrivateSecurityDescriptor> {
-    let owner = CurrentUserSid::load()?;
+    let owner = CurrentTokenSid::user()?;
     // SAFETY: `owner.sid` is valid for the lifetime of `owner`.
     let sid_length = unsafe { GetLengthSid(owner.sid) };
     if sid_length == 0 {
@@ -1815,7 +1911,7 @@ fn private_access_mask(sealed: bool) -> u32 {
     reason = "security APIs inspect a kernel-validated descriptor returned for a live handle"
 )]
 fn private_handle_access(handle: HANDLE, directory: bool) -> io::Result<WindowsPrivateAccess> {
-    let current_user = CurrentUserSid::load()?;
+    let current_user = CurrentTokenSid::user()?;
     let mut owner: PSID = std::ptr::null_mut();
     let mut dacl: *mut ACL = std::ptr::null_mut();
     let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
@@ -1966,19 +2062,33 @@ fn set_handle_private_access(handle: HANDLE, directory: bool, sealed: bool) -> i
     reason = "SetSecurityInfo replaces the DACL on one live replacement-blocking handle"
 )]
 fn set_handle_private_dacl(handle: HANDLE, directory: bool, sealed: bool) -> io::Result<()> {
-    // Refuse to rewrite another owner's DACL even if the caller somehow has
-    // WRITE_DAC through a broader inherited entry.
-    verify_current_user_owner(handle)?;
+    // Refuse to rewrite another principal's entry even if the caller somehow
+    // has control rights through a broader inherited entry. Fresh filesystem
+    // objects may initially use the token's default owner, so normalize that
+    // owner to TokenUser as part of the same protected-DACL transition.
+    let normalize_owner = current_token_owner_requires_normalization(handle)?;
     let security = PrivateSecurityDescriptor::new(directory, sealed)?;
     let acl = security._acl.as_ptr().cast::<ACL>();
-    // SAFETY: the handle remains live and the initialized ACL remains owned by
-    // `security` for the full call.
+    let owner = if normalize_owner {
+        security._owner.sid
+    } else {
+        std::ptr::null_mut()
+    };
+    let security_information = DACL_SECURITY_INFORMATION
+        | PROTECTED_DACL_SECURITY_INFORMATION
+        | if normalize_owner {
+            OWNER_SECURITY_INFORMATION
+        } else {
+            0
+        };
+    // SAFETY: the handle remains live and the initialized owner SID and ACL
+    // remain owned by `security` for the full call.
     let status = unsafe {
         SetSecurityInfo(
             handle,
             SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-            std::ptr::null_mut(),
+            security_information,
+            owner,
             std::ptr::null_mut(),
             acl,
             std::ptr::null(),
@@ -1994,8 +2104,8 @@ fn set_handle_private_dacl(handle: HANDLE, directory: bool, sealed: bool) -> io:
     unsafe_code,
     reason = "GetSecurityInfo returns an owned descriptor used only for an owner SID comparison"
 )]
-fn verify_current_user_owner(handle: HANDLE) -> io::Result<()> {
-    let current_user = CurrentUserSid::load()?;
+fn current_token_owner_requires_normalization(handle: HANDLE) -> io::Result<bool> {
+    let current_user = CurrentTokenSid::user()?;
     let mut owner: PSID = std::ptr::null_mut();
     let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
     // SAFETY: outputs are writable and the handle remains live.
@@ -2015,17 +2125,25 @@ fn verify_current_user_owner(handle: HANDLE) -> io::Result<()> {
         return Err(io::Error::from_raw_os_error(status as i32));
     }
     let descriptor = LocalSecurityDescriptor(descriptor);
-    if descriptor.0.is_null()
-        || owner.is_null()
-        // SAFETY: both owner SIDs remain live for this comparison.
-        || unsafe { EqualSid(owner, current_user.sid) } == 0
-    {
+    if descriptor.0.is_null() || owner.is_null() {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "refusing to change a Windows entry not owned by the current user",
         ));
     }
-    Ok(())
+    // SAFETY: both SIDs remain live for this comparison.
+    if unsafe { EqualSid(owner, current_user.sid) } != 0 {
+        return Ok(false);
+    }
+    let default_owner = CurrentTokenSid::default_owner()?;
+    // SAFETY: both SIDs remain live for this comparison.
+    if unsafe { EqualSid(owner, default_owner.sid) } != 0 {
+        return Ok(true);
+    }
+    Err(io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        "refusing to change a Windows entry not owned by the current token",
+    ))
 }
 
 #[allow(
@@ -2933,7 +3051,7 @@ mod tests {
     fn install_empty_dacl(path: &Path) -> OwnedHandle {
         let handle = open_existing_path(
             path,
-            FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC,
+            FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC | WRITE_OWNER,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             FILE_FLAG_OPEN_REPARSE_POINT,
         )
@@ -3482,6 +3600,31 @@ mod tests {
         drop(guard);
         fs::remove_file(&file).expect("remove reopened file");
         fs::remove_dir(&private).expect("remove reopened directory");
+    }
+
+    #[test]
+    fn ordinary_directory_owner_is_normalized_before_private_use() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let ordinary = temp.path().join("ordinary");
+        fs::create_dir(&ordinary).expect("create ordinary directory");
+
+        make_private_path_writable(&ordinary, true).expect("normalize inherited owner and access");
+        verify_private_path(&ordinary, true, false)
+            .expect("ordinary directory becomes current-user private");
+    }
+
+    #[test]
+    fn ordinary_file_owner_is_normalized_when_sealed() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let ordinary = temp.path().join("ordinary");
+        fs::write(&ordinary, b"payload").expect("create ordinary file");
+
+        seal_private_path(&ordinary, false).expect("normalize and seal ordinary file");
+        verify_private_path(&ordinary, false, true)
+            .expect("ordinary file becomes current-user private and sealed");
+        make_private_path_writable(&ordinary, false).expect("reopen normalized file");
+        verify_private_path(&ordinary, false, false)
+            .expect("normalized file becomes writable private");
     }
 
     #[test]
