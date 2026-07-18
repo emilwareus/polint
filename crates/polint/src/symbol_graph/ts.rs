@@ -73,7 +73,7 @@ struct ExportSymbolIdentity {
     namespace: SymbolNamespace,
 }
 
-type EmittedExports = BTreeMap<(String, Option<String>, Option<String>), ExportId>;
+type EmittedExports = BTreeMap<String, ExportId>;
 type EmittedSemanticImports = BTreeMap<(String, Option<ScopeId>), SemanticImportId>;
 type EmittedAliases = BTreeMap<String, AliasId>;
 
@@ -81,6 +81,7 @@ type EmittedAliases = BTreeMap<String, AliasId>;
 struct TsSemanticEmissions {
     imports: EmittedSemanticImports,
     exports: EmittedExports,
+    stable_exports: BTreeSet<(String, String)>,
     aliases: EmittedAliases,
 }
 
@@ -522,7 +523,6 @@ fn add_ts_semantic_import_export_rows(
                         .map(|identity| identity.namespace)
                         .unwrap_or(SymbolNamespace::Value),
                     ExportKind::Default,
-                    None,
                     identity.map(|identity| identity.stable_key.clone()),
                     SemanticStatus::Resolved,
                 );
@@ -574,7 +574,6 @@ fn add_ts_semantic_import_export_rows(
                     export_name.clone(),
                     namespace,
                     kind,
-                    Some(target_stable_key.clone()),
                     None,
                     SemanticStatus::Unresolved,
                 );
@@ -751,7 +750,6 @@ fn add_export_named_rows(
                 export_name.clone(),
                 namespace,
                 ExportKind::ReExport,
-                Some(target_stable_key.clone()),
                 None,
                 SemanticStatus::Unresolved,
             );
@@ -786,7 +784,6 @@ fn add_export_named_rows(
                     .map(|identity| identity.namespace)
                     .unwrap_or_else(|| symbol_namespace(scoping.symbol_flags(symbol))),
                 ExportKind::Named,
-                None,
                 identity.map(|identity| identity.stable_key.clone()),
                 SemanticStatus::Resolved,
             );
@@ -813,7 +810,6 @@ fn add_export_named_rows(
             export_name.clone(),
             namespace,
             ExportKind::Named,
-            None,
             identity.map(|identity| identity.stable_key.clone()),
             SemanticStatus::Resolved,
         );
@@ -880,40 +876,39 @@ fn add_export_row(
     export_name: String,
     namespace: SymbolNamespace,
     kind: ExportKind,
-    emission_target_key: Option<String>,
     symbol_stable_key: Option<String>,
     status: SemanticStatus,
 ) -> ExportId {
     let stable_key = ts_export_stable_key(file, &export_name, namespace, kind, status);
-    let emission_key = (
-        stable_key.clone(),
-        emission_target_key,
-        symbol_stable_key.clone(),
-    );
-    if let Some(existing) = emissions.exports.get(&emission_key) {
-        return *existing;
-    }
-    let export = builder.add_export_identity(ExportFact {
-        id: ExportId(0),
-        language: file.language,
-        file: Some(file.id),
-        package: None,
-        module: None,
-        scope,
-        symbol: None,
-        export_name: export_name.clone(),
-        namespace,
-        kind,
-        stable_key,
-        status,
-    });
-    emissions.exports.insert(emission_key, export);
+    let export = if let Some(existing) = emissions.exports.get(&stable_key) {
+        *existing
+    } else {
+        let export = builder.add_export_identity(ExportFact {
+            id: ExportId(0),
+            language: file.language,
+            file: Some(file.id),
+            package: None,
+            module: None,
+            scope,
+            symbol: None,
+            export_name: export_name.clone(),
+            namespace,
+            kind,
+            stable_key: stable_key.clone(),
+            status,
+        });
+        emissions.exports.insert(stable_key.clone(), export);
+        export
+    };
     if status == SemanticStatus::Resolved
         && matches!(
             kind,
             ExportKind::Named | ExportKind::Default | ExportKind::Namespace
         )
         && let Some(symbol_stable_key) = symbol_stable_key
+        && emissions
+            .stable_exports
+            .insert((stable_key, symbol_stable_key.clone()))
     {
         add_stable_export_identity(
             builder,
@@ -1222,7 +1217,6 @@ fn collect_commonjs_from_expression(
                     commonjs_export_name(&assignment.left),
                     SymbolNamespace::Value,
                     kind,
-                    None,
                     None,
                     SemanticStatus::Unsupported,
                 );
@@ -2979,10 +2973,15 @@ function outer(value: number) {
 #[cfg(test)]
 mod semantic_imports_exports {
     use super::{
-        ReExportTarget, derive_ts_semantic_index, parse_source_type, ts_reexport_target_stable_key,
+        ReExportTarget, derive_ts_file_symbols, derive_ts_semantic_index, parse_source_type,
+        ts_reexport_target_stable_key,
     };
-    use crate::core::{FileId, Language, SourceFile, SymbolNamespace};
-    use crate::symbol_graph::semantic::{ExportKind, SemanticImportKind, SemanticStatus};
+    use crate::analysis_kernel::{AnalysisKernel, validation::validate_fact_metadata};
+    use crate::core::{AnalysisDb, FileId, Language, SourceFile, SymbolNamespace};
+    use crate::symbol_graph::semantic::{
+        ExportKind, SemanticImportKind, SemanticIndexOutput, SemanticStatus,
+    };
+    use crate::symbol_graph::{LanguageSymbolOutput, model::SymbolGraphBuilder};
     use oxc_allocator::Allocator;
     use oxc_parser::Parser;
     use oxc_semantic::SemanticBuilder;
@@ -3010,6 +3009,48 @@ mod semantic_imports_exports {
             semantic.nodes(),
             false,
         )
+    }
+
+    fn derive_and_install(
+        source: &str,
+    ) -> (
+        LanguageSymbolOutput,
+        crate::analysis_kernel::validation::FactValidationReport,
+    ) {
+        let mut db = AnalysisDb::new();
+        let file_id = db.add_file(
+            PathBuf::from("src/imports.ts"),
+            "src/imports.ts".to_string(),
+            source.to_string(),
+        );
+        let file = db.file(file_id).expect("fixture file exists").clone();
+        let mut builder = SymbolGraphBuilder::new();
+        let mut output = LanguageSymbolOutput::default();
+
+        derive_ts_file_symbols(&mut builder, &mut output, &file, false);
+        let symbols = builder.finish();
+        db.replace_symbol_graph_facts(symbols.symbols, symbols.definitions, symbols.references);
+        let SemanticIndexOutput {
+            scopes,
+            semantic_imports,
+            exports,
+            aliases,
+            resolutions,
+            generated_symbols,
+            stable_exports,
+        } = output.semantic.clone();
+        db.replace_semantic_index_facts(
+            scopes,
+            semantic_imports,
+            exports,
+            aliases,
+            resolutions,
+            generated_symbols,
+            stable_exports,
+        );
+        let validation = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+
+        (output, validation)
     }
 
     #[test]
@@ -3311,59 +3352,106 @@ export * as namespaceExport from "./namespace";
     }
 
     #[test]
-    fn distinct_export_targets_with_one_name_are_not_collapsed() {
-        let output = derive(
+    fn type_and_value_exports_with_one_name_keep_distinct_stable_keys() {
+        let (output, validation) = derive_and_install(
             r#"
-const left = 1;
-const right = 2;
-export { left as shared, right as shared };
+interface SharedType {
+    value: string;
+}
+const sharedValue = 1;
+export type { SharedType as Shared };
+export { sharedValue as Shared };
 "#,
         );
+        assert!(
+            output.diagnostics.is_empty(),
+            "valid type/value declaration pairing must parse cleanly: {:#?}",
+            output.diagnostics
+        );
+        assert!(validation.diagnostics.is_empty());
         let exports = output
+            .semantic
             .exports
             .iter()
-            .filter(|fact| fact.export_name == "shared")
+            .filter(|fact| fact.export_name == "Shared")
             .collect::<Vec<_>>();
-        let stable_exports = output
-            .stable_exports
-            .iter()
-            .filter(|fact| fact.export_name == "shared")
-            .collect::<Vec<_>>();
-
         assert_eq!(exports.len(), 2);
-        assert_eq!(exports[0].stable_key, exports[1].stable_key);
-        assert_ne!(exports[0].id, exports[1].id);
-        assert_eq!(stable_exports.len(), 2);
-        assert_ne!(
-            stable_exports[0].symbol_stable_key,
-            stable_exports[1].symbol_stable_key
+        assert_ne!(exports[0].stable_key, exports[1].stable_key);
+        assert!(
+            exports
+                .iter()
+                .any(|fact| fact.namespace == SymbolNamespace::Type)
+        );
+        assert!(
+            exports
+                .iter()
+                .any(|fact| fact.namespace == SymbolNamespace::Value)
+        );
+        assert_eq!(
+            output
+                .semantic
+                .stable_exports
+                .iter()
+                .filter(|fact| fact.export_name == "Shared")
+                .count(),
+            2
         );
     }
 
     #[test]
-    fn remote_export_emission_only_coalesces_exact_targets() {
-        let output = derive(
+    fn duplicate_export_targets_install_without_metadata_conflicts() {
+        let (output, validation) = derive_and_install(
             r#"
+const left = 1;
+const right = 2;
+export { left as shared, right as shared };
 export { first as shared } from "./first";
 export { second as shared } from "./second";
-export { repeated as repeatedName } from "./same";
-export { repeated as repeatedName } from "./same";
 "#,
         );
-        let conflicting = output
+        let exports = output
+            .semantic
             .exports
             .iter()
             .filter(|fact| fact.export_name == "shared")
             .collect::<Vec<_>>();
-        let repeated = output
-            .exports
+        let alias_targets = output
+            .semantic
+            .aliases
             .iter()
-            .filter(|fact| fact.export_name == "repeatedName")
-            .count();
+            .flat_map(|alias| alias.target_symbol_stable_keys.iter().cloned())
+            .collect::<BTreeSet<_>>();
 
-        assert_eq!(conflicting.len(), 2);
-        assert_eq!(conflicting[0].stable_key, conflicting[1].stable_key);
-        assert_eq!(repeated, 1);
+        assert_eq!(exports.len(), 2, "local and re-export kinds stay distinct");
+        assert_eq!(
+            exports
+                .iter()
+                .map(|fact| fact.stable_key.as_str())
+                .collect::<BTreeSet<_>>()
+                .len(),
+            exports.len()
+        );
+        assert_eq!(
+            output
+                .semantic
+                .stable_exports
+                .iter()
+                .filter(|fact| fact.export_name == "shared")
+                .count(),
+            2
+        );
+        assert_eq!(alias_targets.len(), 2);
+        assert!(output.diagnostics.iter().all(|diagnostic| {
+            !matches!(
+                diagnostic.rule_id.as_str(),
+                "polint/internal" | "polint/capability"
+            )
+        }));
+        assert!(
+            validation.diagnostics.is_empty(),
+            "recovered semantic facts must remain valid: {:#?}",
+            validation.diagnostics
+        );
     }
 
     #[test]
@@ -3371,8 +3459,6 @@ export { repeated as repeatedName } from "./same";
         let output = derive(
             r#"
 export { path as namedTarget } from "module";
-export { path as namedTarget } from "module";
-export * from "path";
 export * from "path";
 "#,
         );
