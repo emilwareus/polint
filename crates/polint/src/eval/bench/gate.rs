@@ -1629,7 +1629,9 @@ mod tests {
         const REPRESENTATIVE_PLANNED_ROWS: u64 = 14_687;
         const REPRESENTATIVE_STABLE_FACT_STORAGE_BYTES: u64 = 24_720_824;
         const REPRESENTATIVE_FACT_LOGICAL_BYTES: u64 = 18_713_396;
-        const REPRESENTATIVE_SEMANTIC_LOGICAL_BYTES: u64 = 19_944_043;
+        const REPRESENTATIVE_SEMANTIC_LOGICAL_BYTES_WITHOUT_VARIABLE_GO_TOOL_DETAILS: u64 =
+            19_943_943;
+        const REPRESENTATIVE_GO_TOOL_DETAIL_OCCURRENCES: u64 = 2;
         const REPRESENTATIVE_FACT_DIGEST: &str = "fact_metadata:8236cc13a46afdf5";
         const REPRESENTATIVE_DIAGNOSTICS_DIGEST: &str = "cbf29ce484222325";
         const REPRESENTATIVE_GIT_ATTRIBUTES: &str = "* text eol=lf\n";
@@ -1782,6 +1784,54 @@ mod tests {
                 .map(|file| go_scale_source(file).len() + ts_scale_source(file).len())
                 .map(|bytes| u64::try_from(bytes).expect("fixture source length fits u64"))
                 .sum()
+        }
+
+        fn representative_semantic_logical_bytes(
+            toolchain_version_detail: &str,
+            host_target_detail: &str,
+        ) -> u64 {
+            let variable_tool_detail_bytes = toolchain_version_detail
+                .len()
+                .checked_add(host_target_detail.len())
+                .and_then(|bytes| u64::try_from(bytes).ok())
+                .expect("variable Go tool identity length fits u64");
+            REPRESENTATIVE_SEMANTIC_LOGICAL_BYTES_WITHOUT_VARIABLE_GO_TOOL_DETAILS
+                + REPRESENTATIVE_GO_TOOL_DETAIL_OCCURRENCES * variable_tool_detail_bytes
+        }
+
+        #[test]
+        fn semantic_logical_bytes_account_for_variable_go_tool_identity_width() {
+            for (toolchain_version_detail, host_target_detail, expected) in [
+                (
+                    "toolchain_version=go1.25.12",
+                    "host_target=linux/amd64",
+                    19_944_043,
+                ),
+                (
+                    "toolchain_version=go1.25.12",
+                    "host_target=darwin/arm64",
+                    19_944_045,
+                ),
+                (
+                    "toolchain_version=go1.25.12",
+                    "host_target=windows/amd64",
+                    19_944_047,
+                ),
+                (
+                    "toolchain_version=go1.26.2",
+                    "host_target=darwin/arm64",
+                    19_944_043,
+                ),
+            ] {
+                assert_eq!(
+                    representative_semantic_logical_bytes(
+                        toolchain_version_detail,
+                        host_target_detail,
+                    ),
+                    expected,
+                    "unexpected semantic-byte contract for {toolchain_version_detail} {host_target_detail}"
+                );
+            }
         }
 
         #[test]
@@ -2245,7 +2295,10 @@ mod tests {
                 );
                 assert_eq!(
                     sample.fingerprint.semantic_logical_bytes,
-                    REPRESENTATIVE_SEMANTIC_LOGICAL_BYTES,
+                    representative_semantic_logical_bytes(
+                        &sample.fingerprint.go_toolchain_version_detail,
+                        &sample.fingerprint.go_host_target_detail,
+                    ),
                     "semantic logical bytes drifted: {sample:#?}"
                 );
                 assert_count_vector(

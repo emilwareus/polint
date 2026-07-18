@@ -68,6 +68,8 @@ pub(crate) struct SemanticStoreBoundaryFingerprint {
     pub(crate) stable_fact_storage_limit_bytes: u64,
     pub(crate) fact_logical_bytes: u64,
     pub(crate) semantic_logical_bytes: u64,
+    pub(crate) go_toolchain_version_detail: String,
+    pub(crate) go_host_target_detail: String,
     pub(crate) function_counts_by_provider: Vec<(String, u64)>,
     pub(crate) fact_counts_by_family: Vec<(String, u64)>,
     pub(crate) fact_counts_by_provider: Vec<(String, u64)>,

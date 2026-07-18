@@ -690,6 +690,10 @@ fn boundary_fingerprint(path: &Path) -> Result<SemanticStoreBoundaryFingerprint,
         "SELECT producer_id, count(*) FROM fact_metadata WHERE generation_id = ?1 GROUP BY producer_id ORDER BY producer_id",
         generation_id,
     )?;
+    let go_toolchain_version_detail =
+        duplicated_go_tool_identity_detail(&semantic.input_details, "toolchain_version=")?;
+    let go_host_target_detail =
+        duplicated_go_tool_identity_detail(&semantic.input_details, "host_target=")?;
 
     Ok(SemanticStoreBoundaryFingerprint {
         generation_count,
@@ -711,12 +715,41 @@ fn boundary_fingerprint(path: &Path) -> Result<SemanticStoreBoundaryFingerprint,
         stable_fact_storage_limit_bytes,
         fact_logical_bytes: stats.fact_logical_bytes,
         semantic_logical_bytes: stats.semantic_logical_bytes,
+        go_toolchain_version_detail,
+        go_host_target_detail,
         function_counts_by_provider,
         fact_counts_by_family,
         fact_counts_by_provider,
         canonical_fact_digest: stats.fact_digest.to_string(),
         canonical_generation_digest: semantic.identities.generation.digest().to_string(),
     })
+}
+
+#[cfg(test)]
+fn duplicated_go_tool_identity_detail(
+    input_details: &[StoreInputDetailRow],
+    prefix: &str,
+) -> Result<String, ProjectionError> {
+    let matching = input_details
+        .iter()
+        .filter(|row| row.component_name == "go.tool_invocation")
+        .filter(|row| row.detail.starts_with(prefix))
+        .collect::<Vec<_>>();
+    let Some(detail) = matching.first().map(|row| row.detail.clone()) else {
+        return Err(ProjectionError::InvalidMetadata);
+    };
+    if matching.len() != 2
+        || matching.iter().any(|row| row.detail != detail)
+        || !matching
+            .iter()
+            .any(|row| row.group == StoreInputGroup::GoLifecycle)
+        || !matching
+            .iter()
+            .any(|row| row.group == StoreInputGroup::ToolInvocation)
+    {
+        return Err(ProjectionError::InvalidMetadata);
+    }
+    Ok(detail)
 }
 
 #[cfg(test)]
