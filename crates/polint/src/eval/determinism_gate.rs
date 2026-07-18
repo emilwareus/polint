@@ -47,12 +47,13 @@ use std::path::Path;
 
 use crate::analysis::reachability::debug::metadata_debug_json_for_test as reachability_debug_json;
 use crate::analysis_kernel::AnalysisKernel;
+use crate::analysis_kernel::incremental::ProviderValidationStatus;
 use crate::eval::fixtures::{
     NativeFixture, evaluation_run_for_fixture_with_observed_for_test, load_native_fixture,
 };
-use crate::eval::model::ObservedItem;
 use crate::eval::observed::{
-    copy_fixture_repo_for_test, observe_kernel_fixture_repo_for_test, run_kernel_for_repo_for_test,
+    KernelFixtureObservation, copy_fixture_repo_for_test,
+    observe_kernel_fixture_repo_with_report_for_test, run_kernel_for_repo_for_test,
 };
 use crate::eval::report::to_deterministic_json_pretty;
 
@@ -127,12 +128,38 @@ fn manifest_provider_ids() -> Vec<&'static str> {
 
 /// Observes a fixture once (the kernel itself is deterministic) and returns the
 /// canonical observed rows plus the normalized JSON of the canonical run.
-fn observe_canonical(fixture: &NativeFixture, repo_root: &Path) -> (Vec<ObservedItem>, String) {
-    let observed = observe_kernel_fixture_repo_for_test(fixture, repo_root, true)
+fn observe_canonical(
+    fixture: &NativeFixture,
+    repo_root: &Path,
+) -> (KernelFixtureObservation, String) {
+    let observation = observe_kernel_fixture_repo_with_report_for_test(fixture, repo_root, true)
         .expect("kernel observation succeeds");
-    let run = evaluation_run_for_fixture_with_observed_for_test(fixture, observed.clone());
+    let run =
+        evaluation_run_for_fixture_with_observed_for_test(fixture, observation.observed.clone());
     let json = to_deterministic_json_pretty(&run);
-    (observed, json)
+    (observation, json)
+}
+
+fn fixture_contains_go_source(repo_root: &Path) -> bool {
+    let walker = ignore::WalkBuilder::new(repo_root)
+        .hidden(false)
+        .ignore(false)
+        .git_ignore(false)
+        .git_exclude(false)
+        .parents(false)
+        .follow_links(false)
+        .build();
+    for entry in walker {
+        let entry = entry.expect("determinism fixture traversal succeeds");
+        if entry
+            .file_type()
+            .is_some_and(|file_type| file_type.is_file())
+            && entry.path().extension().and_then(|value| value.to_str()) == Some("go")
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// The core D-20/D-21 assertion for one fixture: under 10 distinct seeded
@@ -142,7 +169,35 @@ fn assert_n10_byte_identical(fixture_dir: &Path) -> String {
     let fixture = load_native_fixture(fixture_dir).expect("fixture loads");
     let temp = copy_fixture_repo_for_test(&fixture).expect("copy fixture repo");
 
-    let (canonical_observed, canonical_json) = observe_canonical(&fixture, temp.path());
+    let (canonical, canonical_json) = observe_canonical(&fixture, temp.path());
+    let provider_failures = canonical
+        .run_report
+        .provider_outputs
+        .iter()
+        .filter(|output| output.validation == ProviderValidationStatus::ProviderFailed)
+        .collect::<Vec<_>>();
+    assert!(
+        provider_failures.is_empty(),
+        "determinism fixtures require successful providers, got {provider_failures:#?}; \
+         diagnostics: {:#?}",
+        canonical.diagnostics
+    );
+    if fixture_contains_go_source(&fixture.repo_dir) {
+        let go_provider = canonical
+            .run_report
+            .provider_outputs
+            .iter()
+            .find(|output| output.provider_id == "polint.go.semantic");
+        assert!(
+            go_provider.is_some_and(|output| {
+                output.validation == ProviderValidationStatus::NativeTrusted
+            }),
+            "Go determinism fixtures require a trusted semantic provider, got \
+             {go_provider:#?}; diagnostics: {:#?}",
+            canonical.diagnostics
+        );
+    }
+    let canonical_observed = canonical.observed;
 
     let seeds = permutation_seeds();
     for (run_index, &seed) in seeds.iter().enumerate() {
@@ -188,7 +243,9 @@ fn assert_reachability_marking_exercised(fixture_dir: &Path, label: &str) {
     let total_roots = debug["counts"]["total_roots"].as_u64().unwrap_or(0);
     assert!(
         total_roots >= 1,
-        "{label}: fixture must produce >= 1 reachability root, got {total_roots}: {debug:#}"
+        "{label}: fixture must produce >= 1 reachability root, got {total_roots}: {debug:#}; \
+         diagnostics: {:#?}",
+        output.diagnostics
     );
 
     let total_call_sites = output.db.call_sites().len();

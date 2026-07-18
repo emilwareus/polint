@@ -8,6 +8,8 @@ use std::io::Read;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
+#[cfg(all(test, target_os = "linux"))]
+use std::sync::RwLock;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 #[cfg(test)]
@@ -87,6 +89,8 @@ const GO_SEMANTIC_PROCESS_CONTAINMENT_SUPPORTED: bool =
 
 #[cfg(test)]
 static TEST_GO_SEMANTIC_CONCURRENCY: OnceLock<(Mutex<usize>, Condvar)> = OnceLock::new();
+#[cfg(all(test, target_os = "linux"))]
+static TEST_LINUX_CONTAINMENT_INSPECTION: OnceLock<RwLock<()>> = OnceLock::new();
 #[cfg(test)]
 thread_local! {
     static TEST_GO_SEMANTIC_SCOPED_PERMIT: std::cell::RefCell<
@@ -378,6 +382,8 @@ fn run_bounded_command_until(
     deadline: GoOperationDeadline,
     label: &str,
 ) -> Result<BoundedCommandOutput, GoSemanticProcessError> {
+    #[cfg(all(test, target_os = "linux"))]
+    let (_containment_inspection, deadline) = acquire_test_linux_containment_inspection(deadline);
     require_go_semantic_process_containment()?;
     deadline.check(label)?;
     let stderr_redaction = command_stderr_redaction_policy(&command);
@@ -581,6 +587,26 @@ fn run_bounded_command_until(
             return finish_bounded_command_error(error, child, containment, Some(readers));
         }
     }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+fn acquire_test_linux_containment_inspection(
+    deadline: GoOperationDeadline,
+) -> (std::sync::RwLockReadGuard<'static, ()>, GoOperationDeadline) {
+    let wait_started = Instant::now();
+    let was_expired = wait_started >= deadline.end;
+    let guard = TEST_LINUX_CONTAINMENT_INSPECTION
+        .get_or_init(|| RwLock::new(()))
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if was_expired {
+        return (guard, deadline);
+    }
+    let waited = wait_started.elapsed();
+    let adjusted = GoOperationDeadline {
+        end: deadline.end.checked_add(waited).unwrap_or(deadline.end),
+    };
+    (guard, adjusted)
 }
 
 fn bounded_reader_setup_error(
@@ -1709,6 +1735,7 @@ struct ProcessTreeTracker {
     processes: BTreeMap<libc::pid_t, ProcessIdentity>,
     process_group: libc::pid_t,
     root_identity: ProcessIdentity,
+    owner_scan_baseline: BTreeMap<libc::pid_t, ProcessIdentity>,
     owner_sentinel: OwnerSentinelIdentity,
     operation_deadline: Instant,
 }
@@ -1733,10 +1760,15 @@ impl ProcessTreeTracker {
             .ok_or_else(|| {
                 format!("contained process {root} changed while ownership was verified")
             })?;
+        // The root is still blocked in pre-exec, so an unchanged process that
+        // already exists here cannot be one of its descendants. Remember those
+        // identities to avoid probing unrelated descriptors during cleanup.
+        let owner_scan_baseline = capture_owner_scan_baseline(root, operation_deadline);
         Ok(Self {
             processes: BTreeMap::from([(root, identity)]),
             process_group: root,
             root_identity: identity,
+            owner_scan_baseline,
             owner_sentinel,
             operation_deadline,
         })
@@ -1907,9 +1939,12 @@ impl ProcessTreeTracker {
 
     fn discover_owner_holders(&mut self, scan: &mut OwnerSentinelScan) -> Result<bool, String> {
         let mut changed = false;
-        for process in
-            processes_holding_owner_sentinel(self.owner_sentinel, self.root_identity, scan)?
-        {
+        for process in processes_holding_owner_sentinel(
+            self.owner_sentinel,
+            self.root_identity,
+            &self.owner_scan_baseline,
+            scan,
+        )? {
             if self.processes.get(&process.pid) == Some(&process.identity) {
                 continue;
             }
@@ -1933,8 +1968,12 @@ impl ProcessTreeTracker {
     ) -> Result<(), String> {
         loop {
             scan.check_deadline()?;
-            let holders =
-                processes_holding_owner_sentinel(self.owner_sentinel, self.root_identity, scan)?;
+            let holders = processes_holding_owner_sentinel(
+                self.owner_sentinel,
+                self.root_identity,
+                &self.owner_scan_baseline,
+                scan,
+            )?;
             if holders.is_empty() {
                 return Ok(());
             }
@@ -1978,15 +2017,18 @@ fn verified_owner_holder_with_scan(
     pid: libc::pid_t,
     sentinel: OwnerSentinelIdentity,
     containment_root: ProcessIdentity,
+    owner_scan_baseline: &BTreeMap<libc::pid_t, ProcessIdentity>,
     scan: &mut OwnerSentinelScan,
 ) -> Result<Option<TrackedProcess>, String> {
     #[cfg(not(target_os = "linux"))]
-    let _ = containment_root;
+    let _ = (containment_root, owner_scan_baseline);
     let Some(identity) = process_identity(pid)? else {
         return Ok(None);
     };
     #[cfg(target_os = "linux")]
-    let Some(identity) = linux_owner_scan_identity(pid, identity, containment_root)? else {
+    let Some(identity) =
+        linux_owner_scan_identity(pid, identity, containment_root, owner_scan_baseline)?
+    else {
         return Ok(None);
     };
     if !process_holds_owner_sentinel_with_scan(pid, sentinel, scan)? {
@@ -2003,14 +2045,23 @@ fn linux_owner_scan_identity(
     pid: libc::pid_t,
     observed: ProcessIdentity,
     containment_root: ProcessIdentity,
+    owner_scan_baseline: &BTreeMap<libc::pid_t, ProcessIdentity>,
 ) -> Result<Option<ProcessIdentity>, String> {
     let mut identity = observed;
-    for _ in 0..2 {
+    for _ in 0..3 {
+        if owner_scan_baseline.get(&pid) == Some(&identity) {
+            match process_identity(pid)? {
+                None => return Ok(None),
+                Some(confirmed) if confirmed == identity => return Ok(None),
+                Some(replacement) => identity = replacement,
+            }
+        }
         // The ownership sentinel follows descriptors inherited by the spawned
-        // process tree. A process that started strictly before the root cannot
-        // be its descendant; equality remains included because Linux start
-        // times have clock-tick granularity. Passing the descriptor backward
-        // to an existing daemon is outside this containment contract.
+        // process tree. An unchanged baseline identity or a process that
+        // started strictly before the root cannot be its descendant; equality
+        // remains included because Linux start times have clock-tick
+        // granularity. Passing the descriptor backward to an existing daemon
+        // is outside this containment contract.
         if identity >= containment_root {
             return Ok(Some(identity));
         }
@@ -2023,6 +2074,57 @@ fn linux_owner_scan_identity(
     Err(format!(
         "process {pid} changed repeatedly while its containment age was verified"
     ))
+}
+
+#[cfg(target_os = "linux")]
+fn capture_owner_scan_baseline(
+    root: libc::pid_t,
+    operation_deadline: Instant,
+) -> BTreeMap<libc::pid_t, ProcessIdentity> {
+    let mut baseline = BTreeMap::new();
+    let own_pid = libc::pid_t::try_from(std::process::id()).unwrap_or_default();
+    let now = Instant::now();
+    let snapshot_deadline = std::cmp::min(
+        operation_deadline,
+        now.checked_add(COMMAND_OWNER_SCAN_TIMEOUT).unwrap_or(now),
+    );
+    let Ok(entries) = fs::read_dir("/proc") else {
+        return baseline;
+    };
+    let mut process_count = 0_usize;
+    for entry in entries {
+        if Instant::now() >= snapshot_deadline || process_count >= COMMAND_MAX_SCANNED_PROCESSES {
+            break;
+        }
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|value| value.parse::<libc::pid_t>().ok())
+        else {
+            continue;
+        };
+        process_count = process_count.saturating_add(1);
+        if pid <= 0 || pid == root || pid == own_pid {
+            continue;
+        }
+        // A partial baseline only reduces an optimization: identities that
+        // cannot be sampled remain subject to the normal fail-closed scan.
+        if let Ok(Some(identity)) = process_identity(pid) {
+            baseline.insert(pid, identity);
+        }
+    }
+    baseline
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn capture_owner_scan_baseline(
+    _root: libc::pid_t,
+    _operation_deadline: Instant,
+) -> BTreeMap<libc::pid_t, ProcessIdentity> {
+    BTreeMap::new()
 }
 
 #[cfg(unix)]
@@ -2188,6 +2290,7 @@ struct MacVnodeFdInfo {
 fn processes_holding_owner_sentinel(
     sentinel: OwnerSentinelIdentity,
     containment_root: ProcessIdentity,
+    owner_scan_baseline: &BTreeMap<libc::pid_t, ProcessIdentity>,
     scan: &mut OwnerSentinelScan,
 ) -> Result<Vec<TrackedProcess>, String> {
     let mut pids = vec![0; COMMAND_MAX_SCANNED_PROCESSES];
@@ -2213,9 +2316,13 @@ fn processes_holding_owner_sentinel(
     let mut holders = Vec::new();
     for pid in pids.into_iter().filter(|pid| *pid > 0) {
         scan.check_deadline()?;
-        if let Some(process) =
-            verified_owner_holder_with_scan(pid, sentinel, containment_root, scan)?
-        {
+        if let Some(process) = verified_owner_holder_with_scan(
+            pid,
+            sentinel,
+            containment_root,
+            owner_scan_baseline,
+            scan,
+        )? {
             holders.push(process);
             if holders.len() >= COMMAND_MAX_TRACKED_PROCESSES {
                 return Err(format!(
@@ -2472,6 +2579,7 @@ fn child_process_ids(
 fn processes_holding_owner_sentinel(
     sentinel: OwnerSentinelIdentity,
     containment_root: ProcessIdentity,
+    owner_scan_baseline: &BTreeMap<libc::pid_t, ProcessIdentity>,
     scan: &mut OwnerSentinelScan,
 ) -> Result<Vec<TrackedProcess>, String> {
     let own_pid = libc::pid_t::try_from(std::process::id()).unwrap_or_default();
@@ -2501,9 +2609,13 @@ fn processes_holding_owner_sentinel(
         if pid <= 0 || pid == own_pid {
             continue;
         }
-        if let Some(process) =
-            verified_owner_holder_with_scan(pid, sentinel, containment_root, scan)?
-        {
+        if let Some(process) = verified_owner_holder_with_scan(
+            pid,
+            sentinel,
+            containment_root,
+            owner_scan_baseline,
+            scan,
+        )? {
             holders.push(process);
             if holders.len() >= COMMAND_MAX_TRACKED_PROCESSES {
                 return Err(format!(
@@ -2727,6 +2839,7 @@ fn child_process_ids(
 fn processes_holding_owner_sentinel(
     _sentinel: OwnerSentinelIdentity,
     _containment_root: ProcessIdentity,
+    _owner_scan_baseline: &BTreeMap<libc::pid_t, ProcessIdentity>,
     _scan: &mut OwnerSentinelScan,
 ) -> Result<Vec<TrackedProcess>, String> {
     Err(unsupported_process_containment_reason())
@@ -13793,6 +13906,28 @@ fn parse_go_version_numbers(version: &str) -> Option<(u32, u32)> {
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "linux")]
+    struct ChildCleanupGuard(Child);
+
+    #[cfg(target_os = "linux")]
+    impl ChildCleanupGuard {
+        fn new(child: Child) -> Self {
+            Self(child)
+        }
+
+        fn id(&self) -> u32 {
+            self.0.id()
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    impl Drop for ChildCleanupGuard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
     #[test]
     fn process_containment_support_matches_the_compile_time_platform_contract() {
         assert_eq!(
@@ -14712,7 +14847,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     #[allow(unsafe_code)]
-    fn linux_global_sentinel_scan_only_skips_inaccessible_older_processes() {
+    fn linux_global_sentinel_scan_skips_proven_unrelated_processes() {
         const HELPER_ENV: &str = "POLINT_TEST_NONDUMPABLE_SCAN_HELPER";
         const READY_ENV: &str = "POLINT_TEST_NONDUMPABLE_SCAN_READY";
 
@@ -14726,18 +14861,24 @@ mod tests {
             return;
         }
 
+        let _exclusive_containment_inspection = TEST_LINUX_CONTAINMENT_INSPECTION
+            .get_or_init(|| RwLock::new(()))
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let temp = tempfile::tempdir().expect("tempdir");
         let ready = temp.path().join("ready");
         let test_binary = std::env::current_exe().expect("current test binary");
-        let helper = "go::semantic::process::tests::linux_global_sentinel_scan_only_skips_inaccessible_older_processes";
-        let mut child = Command::new(test_binary)
-            .arg("--exact")
-            .arg(helper)
-            .arg("--nocapture")
-            .env(HELPER_ENV, "1")
-            .env(READY_ENV, &ready)
-            .spawn()
-            .expect("spawn non-dumpable helper");
+        let helper = "go::semantic::process::tests::linux_global_sentinel_scan_skips_proven_unrelated_processes";
+        let child = ChildCleanupGuard::new(
+            Command::new(test_binary)
+                .arg("--exact")
+                .arg(helper)
+                .arg("--nocapture")
+                .env(HELPER_ENV, "1")
+                .env(READY_ENV, &ready)
+                .spawn()
+                .expect("spawn non-dumpable helper"),
+        );
         let wait_until = Instant::now() + Duration::from_secs(2);
         while !ready.exists() && Instant::now() < wait_until {
             thread::sleep(Duration::from_millis(1));
@@ -14750,9 +14891,15 @@ mod tests {
             device: u64::MAX,
             inode: u64::MAX,
         };
+        let empty_baseline = BTreeMap::new();
         let mut same_tick_scan = OwnerSentinelScan::new();
-        let same_tick =
-            verified_owner_holder_with_scan(pid, sentinel, identity, &mut same_tick_scan);
+        let same_tick = verified_owner_holder_with_scan(
+            pid,
+            sentinel,
+            identity,
+            &empty_baseline,
+            &mut same_tick_scan,
+        );
         let later_root = ProcessIdentity {
             start_primary: identity
                 .start_primary
@@ -14761,22 +14908,56 @@ mod tests {
             start_secondary: identity.start_secondary,
         };
         assert_eq!(
-            linux_owner_scan_identity(pid, identity, identity)
+            linux_owner_scan_identity(pid, identity, identity, &empty_baseline)
                 .expect("equal-tick identity classification"),
             Some(identity),
             "equal-tick processes must remain in the descriptor scan"
         );
         assert_eq!(
-            linux_owner_scan_identity(pid, identity, later_root)
+            linux_owner_scan_identity(pid, identity, later_root, &empty_baseline)
                 .expect("strictly older identity classification"),
             None,
             "strictly older processes must be excluded before descriptor inspection"
         );
+        let baseline = capture_owner_scan_baseline(
+            -1,
+            Instant::now()
+                .checked_add(COMMAND_OWNER_SCAN_TIMEOUT)
+                .expect("baseline deadline"),
+        );
+        assert_eq!(
+            baseline.get(&pid),
+            Some(&identity),
+            "the pre-release snapshot must retain the helper identity"
+        );
+        assert_eq!(
+            linux_owner_scan_identity(pid, identity, identity, &baseline)
+                .expect("unchanged baseline identity classification"),
+            None,
+            "an unchanged process observed before root release must be excluded"
+        );
+        let replacement = ProcessIdentity {
+            start_primary: identity.start_primary.saturating_add(1),
+            start_secondary: identity.start_secondary,
+        };
+        let stale_baseline = BTreeMap::from([(pid, replacement)]);
+        assert_eq!(
+            linux_owner_scan_identity(pid, identity, identity, &stale_baseline)
+                .expect("replaced baseline identity classification"),
+            Some(identity),
+            "a PID whose identity differs from the baseline must remain in the scan"
+        );
+        let mut baseline_scan = OwnerSentinelScan::new();
+        let baseline_holder =
+            verified_owner_holder_with_scan(pid, sentinel, identity, &baseline, &mut baseline_scan);
         let mut older_scan = OwnerSentinelScan::new();
-        let older = verified_owner_holder_with_scan(pid, sentinel, later_root, &mut older_scan);
-        let _ = child.kill();
-        let _ = child.wait();
-
+        let older = verified_owner_holder_with_scan(
+            pid,
+            sentinel,
+            later_root,
+            &empty_baseline,
+            &mut older_scan,
+        );
         assert!(ready.exists(), "non-dumpable helper did not become ready");
         match same_tick {
             Ok(None) => {}
@@ -14785,6 +14966,12 @@ mod tests {
                 assert!(error.contains("process"));
             }
         }
+        assert!(
+            baseline_holder
+                .expect("an unchanged baseline process is provably unrelated")
+                .is_none(),
+            "baseline exclusion must happen before inaccessible descriptor inspection"
+        );
         assert!(
             older
                 .expect("an inaccessible process older than the root is unrelated")

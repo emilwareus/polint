@@ -29,6 +29,8 @@ use crate::config::load_config;
 #[cfg(test)]
 use crate::core::AnalysisDb;
 #[cfg(test)]
+use crate::diagnostics::Diagnostic;
+#[cfg(test)]
 use crate::eval::fixtures::NativeFixture;
 #[cfg(test)]
 use crate::eval::model::{
@@ -52,6 +54,13 @@ pub(crate) struct ObservedCallGraphEdge {
     pub(crate) provenance: String,
     pub(crate) precision: String,
     pub(crate) status: ObservedStatus,
+}
+
+#[cfg(test)]
+pub(crate) struct KernelFixtureObservation {
+    pub(crate) observed: Vec<ObservedItem>,
+    pub(crate) diagnostics: Vec<Diagnostic>,
+    pub(crate) run_report: KernelRunReport,
 }
 
 #[cfg(test)]
@@ -386,7 +395,20 @@ pub(crate) fn observe_kernel_fixture_repo_for_test(
     cache_enabled: bool,
 ) -> anyhow::Result<Vec<ObservedItem>> {
     let plan = AnalysisPlan::full_pipeline_for_test();
-    observe_kernel_fixture_repo_with_plan_for_test(fixture, repo_root, cache_enabled, &plan)
+    Ok(
+        observe_kernel_fixture_repo_detailed_for_test(fixture, repo_root, cache_enabled, &plan)?
+            .observed,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn observe_kernel_fixture_repo_with_report_for_test(
+    fixture: &NativeFixture,
+    repo_root: &Path,
+    cache_enabled: bool,
+) -> anyhow::Result<KernelFixtureObservation> {
+    let plan = AnalysisPlan::full_pipeline_for_test();
+    observe_kernel_fixture_repo_detailed_for_test(fixture, repo_root, cache_enabled, &plan)
 }
 
 #[cfg(test)]
@@ -396,6 +418,19 @@ pub(crate) fn observe_kernel_fixture_repo_with_plan_for_test(
     cache_enabled: bool,
     plan: &AnalysisPlan,
 ) -> anyhow::Result<Vec<ObservedItem>> {
+    Ok(
+        observe_kernel_fixture_repo_detailed_for_test(fixture, repo_root, cache_enabled, plan)?
+            .observed,
+    )
+}
+
+#[cfg(test)]
+fn observe_kernel_fixture_repo_detailed_for_test(
+    fixture: &NativeFixture,
+    repo_root: &Path,
+    cache_enabled: bool,
+    plan: &AnalysisPlan,
+) -> anyhow::Result<KernelFixtureObservation> {
     let _go_semantic_scope = if AnalysisKernel::plan_runs_go_semantic_for_test(plan) {
         acquire_fixture_go_semantic_scope_for_test(repo_root)?
     } else {
@@ -440,7 +475,11 @@ pub(crate) fn observe_kernel_fixture_repo_with_plan_for_test(
     }
     observed.sort_by_key(observed_sort_key);
 
-    Ok(observed)
+    Ok(KernelFixtureObservation {
+        observed,
+        diagnostics: output.diagnostics,
+        run_report: output.run_report,
+    })
 }
 
 #[cfg(test)]
