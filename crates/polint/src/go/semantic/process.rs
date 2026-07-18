@@ -14638,7 +14638,7 @@ mod tests {
             &cache,
             Some((&root, &config)),
             &[],
-            GoOperationDeadline::after(Duration::from_secs(90)),
+            GoOperationDeadline::after(GO_OPERATION_TIMEOUT),
         )
         .expect("prepare the embedded Windows semantic frontend");
         let embedded_digest = embedded_frontend_hash();
