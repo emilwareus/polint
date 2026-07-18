@@ -391,13 +391,13 @@ pub(crate) fn evaluate_supported_semantic_store_boundary(
 
     use crate::analysis_kernel::AnalysisKernel;
     use crate::eval::bench::runner::{
-        SemanticStoreBenchMode, diagnostics_digest_for_repo_with_store_mode,
-        run_repo_perf_measurement_isolated_with_store_mode,
+        IsolatedPerfRunner, SemanticStoreBenchMode, diagnostics_digest_for_repo_with_store_mode,
     };
 
     let mut samples = Vec::with_capacity(2);
     let mut expected_diagnostics_digest = None;
     let mut expected_provider_evidence = None;
+    let isolated_runner = IsolatedPerfRunner::capture()?;
 
     // Each mode gets its own clean clone and the same one-run, store-disabled
     // cache priming. This keeps layer/tool inputs equivalent without letting a
@@ -461,24 +461,24 @@ pub(crate) fn evaluate_supported_semantic_store_boundary(
             }
 
             let (disabled, enabled) = if enabled_first {
-                let enabled = run_repo_perf_measurement_isolated_with_store_mode(
+                let enabled = isolated_runner.run_measurement(
                     &enabled_root,
                     None,
                     SemanticStoreBenchMode::Enabled,
                 )?;
-                let disabled = run_repo_perf_measurement_isolated_with_store_mode(
+                let disabled = isolated_runner.run_measurement(
                     &disabled_root,
                     None,
                     SemanticStoreBenchMode::Disabled,
                 )?;
                 (disabled, enabled)
             } else {
-                let disabled = run_repo_perf_measurement_isolated_with_store_mode(
+                let disabled = isolated_runner.run_measurement(
                     &disabled_root,
                     None,
                     SemanticStoreBenchMode::Disabled,
                 )?;
-                let enabled = run_repo_perf_measurement_isolated_with_store_mode(
+                let enabled = isolated_runner.run_measurement(
                     &enabled_root,
                     None,
                     SemanticStoreBenchMode::Enabled,
@@ -558,11 +558,11 @@ fn evaluate_semantic_store_scale_boundary(
 
     use crate::analysis_kernel::AnalysisKernel;
     use crate::eval::bench::runner::{
-        SemanticStoreBenchMode, diagnostics_digest_for_repo_with_store_mode,
-        run_repo_perf_measurement_isolated_with_store_mode,
+        IsolatedPerfRunner, SemanticStoreBenchMode, diagnostics_digest_for_repo_with_store_mode,
     };
 
     (|| -> anyhow::Result<SemanticStoreScaleReport> {
+        let isolated_runner = IsolatedPerfRunner::capture()?;
         let pair = tempfile::tempdir()?;
         let disabled_root = pair.path().join("disabled");
         let enabled_root = pair.path().join("enabled");
@@ -600,12 +600,12 @@ fn evaluate_semantic_store_scale_boundary(
         // path look artificially cheaper than its disabled control. Both runs
         // use their isolated absolute process peaks for the blocking RSS check;
         // their raw within-run high-water growth remains in the returned points.
-        let enabled = run_repo_perf_measurement_isolated_with_store_mode(
+        let enabled = isolated_runner.run_measurement(
             &enabled_root,
             None,
             SemanticStoreBenchMode::Enabled,
         )?;
-        let disabled = run_repo_perf_measurement_isolated_with_store_mode(
+        let disabled = isolated_runner.run_measurement(
             &disabled_root,
             None,
             SemanticStoreBenchMode::Disabled,
@@ -1617,6 +1617,8 @@ mod tests {
         }
 
         const REPRESENTATIVE_PROVIDER_GENERATIONS: u64 = 23;
+        const REPRESENTATIVE_REQUESTED_CAPABILITIES: u64 = 8;
+        const REPRESENTATIVE_CAPABILITY_REQUESTERS: u64 = 8;
         const REPRESENTATIVE_LAYERS: u64 = 6;
         const REPRESENTATIVE_SUMMARIES: u64 = 0;
         const REPRESENTATIVE_QUERIES: u64 = 30;
@@ -1624,10 +1626,10 @@ mod tests {
         const REPRESENTATIVE_DIAGNOSTICS: u64 = 0;
         const REPRESENTATIVE_DEPENDENCY_EDGES: u64 = 578;
         const REPRESENTATIVE_VALIDATION_EVENTS: u64 = 20;
-        const REPRESENTATIVE_PLANNED_ROWS: u64 = 14_695;
+        const REPRESENTATIVE_PLANNED_ROWS: u64 = 14_687;
         const REPRESENTATIVE_STABLE_FACT_STORAGE_BYTES: u64 = 24_720_824;
         const REPRESENTATIVE_FACT_LOGICAL_BYTES: u64 = 18_713_396;
-        const REPRESENTATIVE_SEMANTIC_LOGICAL_BYTES: u64 = 19_945_711;
+        const REPRESENTATIVE_SEMANTIC_LOGICAL_BYTES: u64 = 19_944_043;
         const REPRESENTATIVE_FACT_DIGEST: &str = "fact_metadata:8236cc13a46afdf5";
         const REPRESENTATIVE_DIAGNOSTICS_DIGEST: &str = "cbf29ce484222325";
         const REPRESENTATIVE_GIT_ATTRIBUTES: &str = "* text eol=lf\n";
@@ -2174,6 +2176,16 @@ mod tests {
                     &sample.fingerprint.input_file_counts_by_language,
                     REPRESENTATIVE_INPUT_FILE_COUNTS_BY_LANGUAGE,
                     "published input-language counts",
+                );
+                assert_eq!(
+                    sample.fingerprint.requested_capability_count,
+                    REPRESENTATIVE_REQUESTED_CAPABILITIES,
+                    "published requested-capability count drifted: {sample:#?}"
+                );
+                assert_eq!(
+                    sample.fingerprint.capability_requester_count,
+                    REPRESENTATIVE_CAPABILITY_REQUESTERS,
+                    "published capability-requester count drifted: {sample:#?}"
                 );
                 assert_eq!(
                     sample.fingerprint.provider_generation_count,

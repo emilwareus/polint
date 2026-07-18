@@ -21,7 +21,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::eval::bench::curve::{CurvePoint, CurveSeries};
-use crate::eval::bench::runner::run_repo_perf_point_isolated;
+use crate::eval::bench::runner::{IsolatedPerfRunner, SemanticStoreBenchMode};
 use crate::eval::suite::SuiteManifest;
 
 /// File names of the committed CI scale manifests the sweep iterates.
@@ -52,7 +52,7 @@ struct SweepTarget {
 /// failed), so this is runnable without the large clones present — in that case
 /// the returned series is empty but the two artifacts are still written.
 ///
-/// Each curve point is measured through [`run_repo_perf_point_isolated`] (a
+/// Each curve point is measured through [`IsolatedPerfRunner::run_point`] (a
 /// dedicated child process), not the in-process [`run_repo_perf_point`], because
 /// a sweep measures many points (each repo at baseline + each review ref) and
 /// `peak_rss_bytes` is a process-global, monotonic high-water mark: measuring
@@ -67,8 +67,15 @@ struct SweepTarget {
 /// [`run_repo_perf_point`]: crate::eval::bench::runner::run_repo_perf_point
 pub(crate) fn run_benchmark_sweep(output_dir: &Path) -> anyhow::Result<CurveSeries> {
     let targets = committed_sweep_targets()?;
+    let mut isolated_runner = None;
     run_sweep_with(&targets, output_dir, |root, review_ref| {
-        run_repo_perf_point_isolated(root, review_ref)
+        if isolated_runner.is_none() {
+            isolated_runner = Some(IsolatedPerfRunner::capture()?);
+        }
+        isolated_runner
+            .as_ref()
+            .expect("perf runner is initialized before measurement")
+            .run_point(root, review_ref, SemanticStoreBenchMode::Disabled)
     })
 }
 
@@ -311,8 +318,9 @@ mod tests {
             review_refs: vec!["HEAD~1".to_string()],
         }];
         let output = tempdir().unwrap();
+        let isolated_runner = IsolatedPerfRunner::capture().unwrap();
         let series = run_sweep_with(&targets, output.path(), |root, review_ref| {
-            run_repo_perf_point_isolated(root, review_ref)
+            isolated_runner.run_point(root, review_ref, SemanticStoreBenchMode::Disabled)
         })
         .unwrap();
 

@@ -551,15 +551,17 @@ const CHILD_POINT_END: &str = "<<<POLINT_PERF_POINT_END>>>";
 /// when libtest startup established a higher earlier peak. Same-host paired
 /// gates therefore compare `peak_rss_bytes` from identical isolated children;
 /// the raw delta remains useful evidence and committed references can still use
-/// it when their measurement contexts match. The child is this same test binary
-/// re-invoked (`current_exe`) filtered to
+/// it when their measurement contexts match. The child is a private snapshot
+/// of this test binary filtered to
 /// [`tests::perf_child_measure_entry`], which records a [`PerfMeasurement`] and
 /// prints it as JSON between [`CHILD_POINT_BEGIN`]/[`CHILD_POINT_END`] on
-/// stdout, then exits. This wrapper returns only its [`CurvePoint`];
+/// stdout, then exits. Capturing the executable once lets a multi-sample gate
+/// reuse identical code even if another Cargo process replaces `current_exe`
+/// while the parent test is still running. This wrapper returns only its [`CurvePoint`];
 /// [`run_repo_perf_measurement_isolated_with_store_mode`] retains the child
 /// evidence as well.
 ///
-/// The committed store-disabled baselines are regenerated through THIS path; a
+/// The committed store-disabled baselines are regenerated through this runner; a
 /// measured run fed to `evaluate_regression_budget` MUST use the same
 /// isolation for its raw peak-RSS delta to remain comparable.
 pub(crate) fn run_repo_perf_point_isolated(
@@ -589,49 +591,144 @@ pub(crate) fn run_repo_perf_measurement_isolated_with_store_mode(
     review_ref: Option<&str>,
     store_mode: SemanticStoreBenchMode,
 ) -> anyhow::Result<PerfMeasurement> {
-    require_repo_local_perf_cache()?;
-    let exe = std::env::current_exe().map_err(|error| {
-        anyhow::anyhow!("locating test binary for isolated perf child: {error}")
-    })?;
-    let mut command = std::process::Command::new(&exe);
-    command
-        .arg("--exact")
-        .arg(CHILD_MEASURE_TEST)
-        .arg("--nocapture")
-        .arg("--test-threads=1")
-        .env(CHILD_REPO_ENV, repo_root)
-        // Never let the child inherit the regenerator switch (it would re-enter
-        // regeneration and recurse) or a stale review ref from an outer spawn.
-        .env_remove("POLINT_WRITE_STORE_DISABLED_BASELINE")
-        .env_remove(CHILD_REVIEW_ENV)
-        .env_remove(CHILD_SEMANTIC_STORE_ENV);
-    if let Some(reference) = review_ref {
-        command.env(CHILD_REVIEW_ENV, reference);
-    }
-    if store_mode == SemanticStoreBenchMode::Enabled {
-        command.env(CHILD_SEMANTIC_STORE_ENV, "enabled");
-    }
-    let output = command
-        .output()
-        .map_err(|error| anyhow::anyhow!("spawning isolated perf child: {error}"))?;
-    if !output.status.success() {
-        anyhow::bail!(
-            "isolated perf child exited with {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let json = stdout
-        .split_once(CHILD_POINT_BEGIN)
-        .and_then(|(_, rest)| rest.split_once(CHILD_POINT_END))
-        .map(|(json, _)| json.trim())
-        .ok_or_else(|| {
-            anyhow::anyhow!("isolated perf child emitted no measurement; stdout: {stdout}")
+    IsolatedPerfRunner::capture()?.run_measurement(repo_root, review_ref, store_mode)
+}
+
+pub(crate) struct IsolatedPerfRunner {
+    executable: tempfile::TempPath,
+}
+
+impl IsolatedPerfRunner {
+    pub(crate) fn capture() -> anyhow::Result<Self> {
+        let executable = std::env::current_exe().map_err(|error| {
+            anyhow::anyhow!("locating test binary for isolated perf child: {error}")
         })?;
-    let measurement: PerfMeasurement = serde_json::from_str(json)
-        .map_err(|error| anyhow::anyhow!("parsing isolated perf child measurement: {error}"))?;
-    Ok(measurement)
+        Self::capture_from(&executable)
+    }
+
+    fn capture_from(executable: &Path) -> anyhow::Result<Self> {
+        let parent = executable.parent().ok_or_else(|| {
+            anyhow::anyhow!(
+                "isolated perf child executable has no parent: {}",
+                executable.display()
+            )
+        })?;
+        let mut source_file = std::fs::File::open(executable).map_err(|error| {
+            anyhow::anyhow!(
+                "opening isolated perf child executable {}: {error}",
+                executable.display()
+            )
+        })?;
+        let source = source_file.metadata().map_err(|error| {
+            anyhow::anyhow!(
+                "reading isolated perf child executable {}: {error}",
+                executable.display()
+            )
+        })?;
+        anyhow::ensure!(
+            source.is_file(),
+            "isolated perf child executable is not a regular file: {}",
+            executable.display()
+        );
+        let mut snapshot = tempfile::Builder::new()
+            .prefix(".polint-perf-child-")
+            .suffix(std::env::consts::EXE_SUFFIX)
+            .tempfile_in(parent)
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "creating isolated perf child snapshot beside {}: {error}",
+                    executable.display()
+                )
+            })?;
+        let copied = std::io::copy(&mut source_file, snapshot.as_file_mut()).map_err(|error| {
+            anyhow::anyhow!(
+                "snapshotting isolated perf child executable {}: {error}",
+                executable.display()
+            )
+        })?;
+        anyhow::ensure!(
+            copied == source.len(),
+            "isolated perf child executable changed while snapshotting: expected {} bytes, copied {copied}",
+            source.len()
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            snapshot
+                .as_file()
+                .set_permissions(std::fs::Permissions::from_mode(0o500))
+                .map_err(|error| {
+                    anyhow::anyhow!("setting isolated perf child executable permissions: {error}")
+                })?;
+        }
+        Ok(Self {
+            executable: snapshot.into_temp_path(),
+        })
+    }
+
+    pub(crate) fn run_point(
+        &self,
+        repo_root: &Path,
+        review_ref: Option<&str>,
+        store_mode: SemanticStoreBenchMode,
+    ) -> anyhow::Result<CurvePoint> {
+        Ok(self
+            .run_measurement(repo_root, review_ref, store_mode)?
+            .point)
+    }
+
+    pub(crate) fn run_measurement(
+        &self,
+        repo_root: &Path,
+        review_ref: Option<&str>,
+        store_mode: SemanticStoreBenchMode,
+    ) -> anyhow::Result<PerfMeasurement> {
+        require_repo_local_perf_cache()?;
+        let mut command = std::process::Command::new(self.executable.as_os_str());
+        command
+            .arg("--exact")
+            .arg(CHILD_MEASURE_TEST)
+            .arg("--nocapture")
+            .arg("--test-threads=1")
+            .env(CHILD_REPO_ENV, repo_root)
+            // Never let the child inherit the regenerator switch (it would re-enter
+            // regeneration and recurse) or a stale review ref from an outer spawn.
+            .env_remove("POLINT_WRITE_STORE_DISABLED_BASELINE")
+            .env_remove(CHILD_REVIEW_ENV)
+            .env_remove(CHILD_SEMANTIC_STORE_ENV);
+        if let Some(reference) = review_ref {
+            command.env(CHILD_REVIEW_ENV, reference);
+        }
+        if store_mode == SemanticStoreBenchMode::Enabled {
+            command.env(CHILD_SEMANTIC_STORE_ENV, "enabled");
+        }
+        let output = command
+            .output()
+            .map_err(|error| anyhow::anyhow!("spawning isolated perf child: {error}"))?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "isolated perf child exited with {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let json = stdout
+            .split_once(CHILD_POINT_BEGIN)
+            .and_then(|(_, rest)| rest.split_once(CHILD_POINT_END))
+            .map(|(json, _)| json.trim())
+            .ok_or_else(|| {
+                anyhow::anyhow!("isolated perf child emitted no measurement; stdout: {stdout}")
+            })?;
+        serde_json::from_str(json)
+            .map_err(|error| anyhow::anyhow!("parsing isolated perf child measurement: {error}"))
+    }
+
+    #[cfg(test)]
+    fn executable_path(&self) -> &Path {
+        self.executable.as_ref()
+    }
 }
 
 /// Deterministic digest of the diagnostics a store-disabled (== current)
@@ -949,6 +1046,24 @@ mod tests {
     }
 
     #[test]
+    fn isolated_perf_runner_keeps_an_immutable_executable_snapshot() {
+        let root = tempdir().expect("snapshot root");
+        let source = root
+            .path()
+            .join(format!("source{}", std::env::consts::EXE_SUFFIX));
+        std::fs::write(&source, b"original executable").expect("write source executable");
+
+        let runner = IsolatedPerfRunner::capture_from(&source).expect("capture executable");
+        std::fs::write(&source, b"replacement executable").expect("replace source executable");
+
+        assert_ne!(runner.executable_path(), source);
+        assert_eq!(
+            std::fs::read(runner.executable_path()).expect("read executable snapshot"),
+            b"original executable"
+        );
+    }
+
+    #[test]
     fn dir_size_treats_only_an_absent_root_as_zero() {
         let root = tempdir().expect("size root");
         let absent = root.path().join("absent");
@@ -1161,14 +1276,13 @@ mod tests {
 
         #[test]
         fn isolated_modes_report_real_store_bytes_and_equal_diagnostics_digest() {
+            let isolated_runner =
+                IsolatedPerfRunner::capture().expect("capture isolated test executable");
             let disabled_repo = tempdir().expect("disabled repo");
             write_tiny_repo(disabled_repo.path());
-            let disabled = run_repo_perf_point_isolated_with_store_mode(
-                disabled_repo.path(),
-                None,
-                SemanticStoreBenchMode::Disabled,
-            )
-            .expect("disabled isolated measurement");
+            let disabled = isolated_runner
+                .run_point(disabled_repo.path(), None, SemanticStoreBenchMode::Disabled)
+                .expect("disabled isolated measurement");
             let disabled_store_path =
                 crate::cache::CacheLayout::for_repo(disabled_repo.path()).semantic_store_path();
 
@@ -1177,12 +1291,9 @@ mod tests {
 
             let enabled_repo = tempdir().expect("enabled repo");
             write_tiny_repo(enabled_repo.path());
-            let enabled = run_repo_perf_point_isolated_with_store_mode(
-                enabled_repo.path(),
-                None,
-                SemanticStoreBenchMode::Enabled,
-            )
-            .expect("enabled isolated measurement");
+            let enabled = isolated_runner
+                .run_point(enabled_repo.path(), None, SemanticStoreBenchMode::Enabled)
+                .expect("enabled isolated measurement");
             let enabled_store_path =
                 crate::cache::CacheLayout::for_repo(enabled_repo.path()).semantic_store_path();
 

@@ -1133,9 +1133,9 @@ mod tests {
             return;
         }
         use crate::eval::bench::runner::{
-            STORE_DISABLED_FIXTURE_CHECK_SUITE_ID, STORE_DISABLED_FIXTURE_REPO_ID,
-            STORE_DISABLED_FIXTURE_REVIEW_SUITE_ID, STORE_DISABLED_FIXTURE_VERSION,
-            diagnostics_digest_for_repo, run_repo_perf_point_isolated,
+            IsolatedPerfRunner, STORE_DISABLED_FIXTURE_CHECK_SUITE_ID,
+            STORE_DISABLED_FIXTURE_REPO_ID, STORE_DISABLED_FIXTURE_REVIEW_SUITE_ID,
+            STORE_DISABLED_FIXTURE_VERSION, SemanticStoreBenchMode, diagnostics_digest_for_repo,
             store_disabled_fixture_digest, write_store_disabled_fixture,
         };
 
@@ -1150,8 +1150,13 @@ mod tests {
         // order-independent process context. The delta can still legitimately
         // be zero when child startup established the higher peak.
         let digest = diagnostics_digest_for_repo(dir).unwrap();
-        let check_point = run_repo_perf_point_isolated(dir, None).unwrap();
-        let review_point = run_repo_perf_point_isolated(dir, Some(&base)).unwrap();
+        let isolated_runner = IsolatedPerfRunner::capture().unwrap();
+        let check_point = isolated_runner
+            .run_point(dir, None, SemanticStoreBenchMode::Disabled)
+            .unwrap();
+        let review_point = isolated_runner
+            .run_point(dir, Some(&base), SemanticStoreBenchMode::Disabled)
+            .unwrap();
 
         let root = workspace_root();
         let out_dir = root.join("research/evaluation-harness/baselines");

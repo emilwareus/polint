@@ -53,6 +53,8 @@ pub(crate) struct SemanticStoreBoundaryFingerprint {
     pub(crate) generation_count: u64,
     pub(crate) input_file_count: u64,
     pub(crate) input_file_counts_by_language: Vec<(String, u64)>,
+    pub(crate) requested_capability_count: u64,
+    pub(crate) capability_requester_count: u64,
     pub(crate) provider_generation_count: u64,
     pub(crate) layer_count: u64,
     pub(crate) summary_count: u64,
