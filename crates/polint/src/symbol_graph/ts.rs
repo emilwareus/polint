@@ -3478,6 +3478,108 @@ export default defaultValue;
     }
 
     #[test]
+    fn multi_file_semantic_ids_preserve_scope_and_export_ownership() {
+        let mut db = AnalysisDb::new();
+        let files = [
+            (
+                "src/a.ts",
+                r#"
+import { beta } from "./b";
+export const alpha = beta;
+"#,
+            ),
+            (
+                "src/b.ts",
+                r#"
+export const beta = 2;
+"#,
+            ),
+        ]
+        .into_iter()
+        .map(|(path, source)| {
+            let id = db.add_file(PathBuf::from(path), path.to_string(), source.to_string());
+            db.file(id).expect("fixture file exists").clone()
+        })
+        .collect::<Vec<_>>();
+        let mut symbol_builder = SymbolGraphBuilder::new();
+        let mut output = LanguageSymbolOutput::default();
+        for file in &files {
+            derive_ts_file_symbols(&mut symbol_builder, &mut output, file, false);
+        }
+        assert!(
+            output.diagnostics.is_empty(),
+            "multi-file fixture must parse cleanly: {:#?}",
+            output.diagnostics
+        );
+
+        let symbols = symbol_builder.finish();
+        db.replace_symbol_graph_facts(symbols.symbols, symbols.definitions, symbols.references);
+        let SemanticIndexOutput {
+            scopes,
+            semantic_imports,
+            exports,
+            aliases,
+            resolutions,
+            generated_symbols,
+            stable_exports,
+        } = output.semantic;
+        db.replace_semantic_index_facts(
+            scopes,
+            semantic_imports,
+            exports,
+            aliases,
+            resolutions,
+            generated_symbols,
+            stable_exports,
+        );
+
+        let validation = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        assert!(
+            validation.diagnostics.is_empty(),
+            "multi-file semantic facts must remain valid: {:#?}",
+            validation.diagnostics
+        );
+        assert_eq!(db.exports().len(), 2);
+        assert_eq!(db.stable_exports().len(), 2);
+
+        for import in db.semantic_imports() {
+            let scope = import
+                .scope
+                .and_then(|id| db.scopes().iter().find(|scope| scope.id == id))
+                .expect("scoped import retains its module scope");
+            assert_eq!(scope.file, import.file);
+        }
+        for export in db.exports() {
+            let scope = export
+                .scope
+                .and_then(|id| db.scopes().iter().find(|scope| scope.id == id))
+                .expect("scoped export retains its module scope");
+            assert_eq!(scope.file, export.file);
+        }
+        for stable_export in db.stable_exports() {
+            let export = db
+                .exports()
+                .iter()
+                .find(|export| export.id == stable_export.export)
+                .expect("stable export retains its export row");
+            let module_key = stable_export
+                .module_key
+                .as_deref()
+                .expect("TypeScript stable export retains its source file key");
+            let file = db
+                .files()
+                .iter()
+                .find(|file| file.relative_path == module_key)
+                .expect("stable export source file exists");
+
+            assert_eq!(export.file, Some(file.id));
+            assert_eq!(export.export_name, stable_export.export_name);
+            assert_eq!(export.namespace, stable_export.namespace);
+            assert_eq!(export.language, stable_export.language);
+        }
+    }
+
+    #[test]
     fn canonical_reexport_targets_separate_named_and_module_vocabularies() {
         let output = derive(
             r#"

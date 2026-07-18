@@ -372,7 +372,49 @@ impl SemanticIndexBuilder {
 }
 
 impl SemanticIndexOutput {
-    pub(crate) fn extend(&mut self, other: Self) {
+    pub(crate) fn extend(&mut self, mut other: Self) {
+        let scope_offset = self.scopes.len();
+        let semantic_import_offset = self.semantic_imports.len();
+        let export_offset = self.exports.len();
+        let alias_offset = self.aliases.len();
+        let resolution_offset = self.resolutions.len();
+        let generated_symbol_offset = self.generated_symbols.len();
+        let stable_export_offset = self.stable_exports.len();
+
+        for scope in &mut other.scopes {
+            scope.id = ScopeId(rebase_local_id(scope.id.0, scope_offset));
+            scope.parent = scope
+                .parent
+                .map(|parent| ScopeId(rebase_local_id(parent.0, scope_offset)));
+        }
+        for import in &mut other.semantic_imports {
+            import.id = SemanticImportId(rebase_local_id(import.id.0, semantic_import_offset));
+            import.scope = import
+                .scope
+                .map(|scope| ScopeId(rebase_local_id(scope.0, scope_offset)));
+        }
+        for export in &mut other.exports {
+            export.id = ExportId(rebase_local_id(export.id.0, export_offset));
+            export.scope = export
+                .scope
+                .map(|scope| ScopeId(rebase_local_id(scope.0, scope_offset)));
+        }
+        for alias in &mut other.aliases {
+            alias.id = AliasId(rebase_local_id(alias.id.0, alias_offset));
+        }
+        for resolution in &mut other.resolutions {
+            resolution.id = ResolutionId(rebase_local_id(resolution.id.0, resolution_offset));
+        }
+        for generated in &mut other.generated_symbols {
+            generated.id =
+                GeneratedSymbolId(rebase_local_id(generated.id.0, generated_symbol_offset));
+        }
+        for stable_export in &mut other.stable_exports {
+            stable_export.id =
+                StableExportId(rebase_local_id(stable_export.id.0, stable_export_offset));
+            stable_export.export = ExportId(rebase_local_id(stable_export.export.0, export_offset));
+        }
+
         self.scopes.extend(other.scopes);
         self.semantic_imports.extend(other.semantic_imports);
         self.exports.extend(other.exports);
@@ -381,6 +423,12 @@ impl SemanticIndexOutput {
         self.generated_symbols.extend(other.generated_symbols);
         self.stable_exports.extend(other.stable_exports);
     }
+}
+
+fn rebase_local_id(id: u64, offset: usize) -> u64 {
+    let offset = u64::try_from(offset).expect("semantic index row count fits in u64");
+    id.checked_add(offset)
+        .expect("semantic index ID space is not exhausted")
 }
 
 pub(crate) fn alias_reexport_closure(
@@ -1270,6 +1318,132 @@ mod tests {
                 .map(|scope| scope.stable_key.as_str())
                 .collect::<Vec<_>>(),
             vec!["a-scope", "z-scope"]
+        );
+    }
+
+    #[test]
+    fn semantic_index_extend_rebases_local_relationship_ids() {
+        fn file_output(file: FileId, prefix: &str) -> SemanticIndexOutput {
+            let mut builder = SemanticIndexBuilder::new();
+            let root = builder.add_scope(ScopeFact {
+                id: ScopeId(0),
+                language: Language::TypeScript,
+                file: Some(file),
+                package: None,
+                module: None,
+                parent: None,
+                scope_path: vec![format!("src/{prefix}.ts")],
+                kind: ScopeKind::Module,
+                stable_key: format!("scope:{prefix}:root"),
+                status: SemanticStatus::Resolved,
+            });
+            let child = builder.add_scope(ScopeFact {
+                id: ScopeId(0),
+                language: Language::TypeScript,
+                file: Some(file),
+                package: None,
+                module: None,
+                parent: Some(root),
+                scope_path: vec![format!("src/{prefix}.ts"), "block".to_string()],
+                kind: ScopeKind::Block,
+                stable_key: format!("scope:{prefix}:child"),
+                status: SemanticStatus::Resolved,
+            });
+            builder.add_semantic_import(SemanticImportFact {
+                id: SemanticImportId(0),
+                language: Language::TypeScript,
+                file: Some(file),
+                package: None,
+                module: None,
+                scope: Some(root),
+                import_path: format!("./{prefix}-dependency"),
+                local_name: Some("dependency".to_string()),
+                imported_name: Some("dependency".to_string()),
+                namespace: SymbolNamespace::Value,
+                kind: SemanticImportKind::StaticNamed,
+                stable_key: format!("import:{prefix}"),
+                status: SemanticStatus::Resolved,
+            });
+            let export = builder.add_export_identity(ExportFact {
+                id: ExportId(0),
+                language: Language::TypeScript,
+                file: Some(file),
+                package: None,
+                module: None,
+                scope: Some(child),
+                symbol: None,
+                export_name: prefix.to_string(),
+                namespace: SymbolNamespace::Value,
+                kind: ExportKind::Named,
+                stable_key: format!("export:{prefix}"),
+                status: SemanticStatus::Resolved,
+            });
+            builder.add_stable_export(StableExportIdentity {
+                id: StableExportId(0),
+                export,
+                language: Language::TypeScript,
+                package_key: None,
+                module_key: Some(format!("src/{prefix}.ts")),
+                export_name: prefix.to_string(),
+                namespace: SymbolNamespace::Value,
+                symbol_stable_key: format!("symbol:{prefix}"),
+                generated_discriminator: None,
+                stable_key: format!("stable-export:{prefix}"),
+                status: SemanticStatus::Resolved,
+            });
+            builder.finish()
+        }
+
+        let mut combined = file_output(FileId(0), "first");
+        combined.extend(file_output(FileId(1), "second"));
+
+        let root = combined
+            .scopes
+            .iter()
+            .find(|scope| scope.stable_key == "scope:second:root")
+            .expect("second root scope exists");
+        let child = combined
+            .scopes
+            .iter()
+            .find(|scope| scope.stable_key == "scope:second:child")
+            .expect("second child scope exists");
+        let import = combined
+            .semantic_imports
+            .iter()
+            .find(|import| import.stable_key == "import:second")
+            .expect("second import exists");
+        let export = combined
+            .exports
+            .iter()
+            .find(|export| export.stable_key == "export:second")
+            .expect("second export exists");
+        let stable_export = combined
+            .stable_exports
+            .iter()
+            .find(|export| export.stable_key == "stable-export:second")
+            .expect("second stable export exists");
+
+        assert_eq!(child.parent, Some(root.id));
+        assert_eq!(import.scope, Some(root.id));
+        assert_eq!(export.scope, Some(child.id));
+        assert_eq!(stable_export.export, export.id);
+        assert_eq!(
+            combined
+                .scopes
+                .iter()
+                .map(|scope| scope.id)
+                .collect::<BTreeSet<_>>()
+                .len(),
+            combined.scopes.len()
+        );
+        assert_eq!(
+            combined
+                .exports
+                .iter()
+                .map(|export| export.id)
+                .collect::<BTreeSet<_>>()
+                .len(),
+            combined.exports.len()
         );
     }
 

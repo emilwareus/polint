@@ -2400,6 +2400,15 @@ export function answer() {
             &valid_manifest.dependencies,
         ));
 
+        let mut legacy_schema_payload = valid_payload.clone();
+        legacy_schema_payload.schema = "symbol-graph-facts-2".to_string();
+        let legacy_schema_manifest = cache_manifest_for(&legacy_schema_payload);
+        assert!(!validate_symbol_graph_layer_payload(
+            &legacy_schema_payload,
+            &legacy_schema_manifest,
+            &legacy_schema_manifest.dependencies,
+        ));
+
         let mut empty_key_payload = valid_payload.clone();
         empty_key_payload.semantic_index.scopes[0]
             .stable_key

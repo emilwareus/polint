@@ -13,7 +13,7 @@ use crate::symbol_graph::stable_id::{
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub(crate) const SYMBOL_GRAPH_LAYER_SCHEMA: &str = "symbol-graph-facts-2";
+pub(crate) const SYMBOL_GRAPH_LAYER_SCHEMA: &str = "symbol-graph-facts-3";
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SymbolGraphOutput {
