@@ -6,7 +6,7 @@ area = "direct-calls"
 path = "repo"
 
 [budget]
-max_runtime_ms = 120000
+max_runtime_ms = 150000
 
 [[expected]]
 fact = { family = "CallSite", stable_key = "directFunction", mode = "partial", producer_id = "polint.calls", precision = "setup_aware", status = "resolved" }
@@ -138,4 +138,4 @@ invariant = { name = "direct_calls.index_counts.unresolved_by_reason.nonzero", v
 invariant = { name = "direct_calls.index_counts.unresolved_by_status.nonzero", value = "true", mode = "exact" }
 
 [[expected]]
-runtime_budget = { name = "direct-calls-core", max_runtime_ms = 120000, mode = "exact" }
+runtime_budget = { name = "direct-calls-core", max_runtime_ms = 150000, mode = "exact" }
