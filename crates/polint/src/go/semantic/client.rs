@@ -5,7 +5,7 @@ use crate::go::lifecycle::GoAnalysisConfig;
 use crate::go::semantic::diagnostics::GO_SIDECAR_TIMEOUT;
 use crate::go::semantic::process::{
     BoundedCommandLimits, GoOperationDeadline, GoSemanticProcessError, PreparedGoSemanticFrontend,
-    run_bounded_command,
+    go_command_working_directory, run_bounded_command,
 };
 #[cfg(all(test, any(windows, target_os = "linux", target_os = "macos")))]
 use crate::go::semantic::protocol::decode_ndjson;
@@ -87,10 +87,12 @@ impl GoSemanticClient {
         config: &GoAnalysisConfig,
         frontend: &PreparedGoSemanticFrontend,
     ) -> Result<GoSemanticClientRun, GoSemanticClientError> {
-        let root = frontend
+        let certified_root = frontend
             .certified_analysis_root()
             .unwrap_or(self.root.as_path());
-        let mut command = frontend.command(root);
+        let command_root = go_command_working_directory(certified_root)?;
+        let root = command_root.as_path();
+        let mut command = frontend.command(root)?;
         append_request_args(&mut command, root, config);
         let (stdout, deadline) = run_prepared_with_timeout(command, self.timeout, frontend)?;
         let output = match decode_ndjson_until(&stdout, deadline) {

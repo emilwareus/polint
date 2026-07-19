@@ -754,7 +754,7 @@ fn run_bounded_command_with_local_trees_until(
         deadline,
         "Go command working-directory certification",
     )?;
-    command.current_dir(&current_dir);
+    command.current_dir(go_command_working_directory(&current_dir)?);
 
     run_bounded_command_until(command, limits, deadline, label)
 }
@@ -4620,9 +4620,16 @@ struct LocalDependencyPathSeal {
 fn configure_dependency_execution_environment(
     command: &mut Command,
     snapshot: &GoDependencySnapshot,
-) {
+) -> Result<(), GoSemanticProcessError> {
+    let module_cache_root = go_command_path(&snapshot.module_cache_root)?;
+    let workspace_path = snapshot
+        .workspace_path
+        .as_deref()
+        .map(go_command_path)
+        .transpose()?
+        .unwrap_or_else(|| PathBuf::from("off"));
     command
-        .env("GOMODCACHE", &snapshot.module_cache_root)
+        .env("GOMODCACHE", module_cache_root)
         .env("GOPROXY", "off")
         .env("GOSUMDB", "off")
         .env("GOVCS", "off")
@@ -4631,13 +4638,8 @@ fn configure_dependency_execution_environment(
         .env("GONOPROXY", "")
         .env("GONOSUMDB", "*")
         .env("GOFLAGS", "-mod=readonly");
-    command.env(
-        "POLINT_GO_WORKSPACE",
-        snapshot
-            .workspace_path
-            .as_deref()
-            .unwrap_or_else(|| Path::new("off")),
-    );
+    command.env("POLINT_GO_WORKSPACE", workspace_path);
+    Ok(())
 }
 
 fn prepare_dependency_snapshot(
@@ -6729,7 +6731,7 @@ fn synthetic_private_go_workspace(
     let mut workspace = format!("go {version}\n\nuse (\n");
     for module in uses {
         workspace.push('\t');
-        workspace.push_str(&quote_go_workspace_path(&module));
+        workspace.push_str(&quote_go_workspace_path(&module)?);
         workspace.push('\n');
     }
     workspace.push_str(")\n");
@@ -6942,7 +6944,7 @@ fn normalize_private_go_workspace(
     normalized.push_str("\nuse (\n");
     for module in &expected_uses {
         normalized.push('\t');
-        normalized.push_str(&quote_go_workspace_path(module));
+        normalized.push_str(&quote_go_workspace_path(module)?);
         normalized.push('\n');
     }
     normalized.push_str(")\n");
@@ -6951,7 +6953,7 @@ fn normalize_private_go_workspace(
         normalized.push_str(old);
         normalized.push_str(" => ");
         if Path::new(new).is_absolute() {
-            normalized.push_str(&quote_go_workspace_path(Path::new(new)));
+            normalized.push_str(&quote_go_workspace_path(Path::new(new))?);
         } else {
             normalized.push_str(new);
         }
@@ -7319,9 +7321,49 @@ fn parse_workspace_auxiliary_directives(
     Ok(result)
 }
 
-fn quote_go_workspace_path(path: &Path) -> String {
-    serde_json::to_string(&path.to_string_lossy().replace('\\', "/"))
-        .expect("serializing a path string cannot fail")
+fn quote_go_workspace_path(path: &Path) -> Result<String, GoSemanticProcessError> {
+    let command_path = go_command_path(path)?;
+    let text = command_path.to_str().ok_or_else(|| {
+        GoSemanticProcessError::CommandUnavailable(format!(
+            "local Go workspace path `{}` is not representable as Unicode.",
+            path.display()
+        ))
+    })?;
+    serde_json::to_string(text).map_err(|error| {
+        GoSemanticProcessError::CommandFailed(format!(
+            "failed to encode a local Go workspace path: {error}"
+        ))
+    })
+}
+
+#[cfg(not(windows))]
+pub(super) fn go_command_path(path: &Path) -> Result<PathBuf, GoSemanticProcessError> {
+    Ok(path.to_path_buf())
+}
+
+#[cfg(windows)]
+pub(super) fn go_command_path(path: &Path) -> Result<PathBuf, GoSemanticProcessError> {
+    crate::go::semantic::windows::go_command_path(path).map_err(|error| {
+        GoSemanticProcessError::CommandUnavailable(format!(
+            "local path `{}` is not representable at the Go command boundary: {error}",
+            path.display()
+        ))
+    })
+}
+
+#[cfg(not(windows))]
+pub(super) fn go_command_working_directory(path: &Path) -> Result<PathBuf, GoSemanticProcessError> {
+    Ok(path.to_path_buf())
+}
+
+#[cfg(windows)]
+pub(super) fn go_command_working_directory(path: &Path) -> Result<PathBuf, GoSemanticProcessError> {
+    crate::go::semantic::windows::go_command_working_directory(path).map_err(|error| {
+        GoSemanticProcessError::CommandUnavailable(format!(
+            "local path `{}` is not usable as a Go command working directory: {error}",
+            path.display()
+        ))
+    })
 }
 
 fn go_module_spec(module: &GoWorkEditModule) -> String {
@@ -8616,9 +8658,12 @@ fn capture_local_dependency_inputs_inner(
     // beneath dot-prefixed cache paths cannot bypass local-volume checks.
     require_local_scan_roots_with_exclusions(analysis_roots, &repository_cache_roots, deadline)?;
     require_local_scan_roots_with_exclusions(&repository_cache_roots, &[], deadline)?;
+    let command_root = go_command_working_directory(&root)?;
     let workspace_value = workspace_path
-        .map(Path::as_os_str)
-        .unwrap_or_else(|| std::ffi::OsStr::new("off"));
+        .map(go_command_path)
+        .transpose()?
+        .unwrap_or_else(|| PathBuf::from("off"));
+    let module_cache_value = go_command_path(module_cache)?;
     // Full workspace-graph commands can fetch a version that a local `use`
     // module shadows. Follow the analyzer's package graph so only source that
     // can participate in this configured analysis enters the sealed snapshot.
@@ -8646,9 +8691,9 @@ fn capture_local_dependency_inputs_inner(
         .arg(
             "-json=ImportPath,Dir,Module,GoFiles,CgoFiles,IgnoredGoFiles,InvalidGoFiles,CFiles,CXXFiles,MFiles,HFiles,FFiles,SFiles,SwigFiles,SwigCXXFiles,SysoFiles,TestGoFiles,XTestGoFiles,IgnoredOtherFiles,EmbedFiles,TestEmbedFiles,XTestEmbedFiles",
         )
-        .current_dir(&root)
+        .current_dir(command_root)
         .env("GOWORK", workspace_value)
-        .env("GOMODCACHE", module_cache)
+        .env("GOMODCACHE", module_cache_value)
         .env("GOPROXY", proxy)
         .env("GOVCS", "off")
         .env("GOAUTH", "off")
@@ -10108,12 +10153,13 @@ impl PreparedGoSemanticFrontend {
         })
     }
 
-    pub(crate) fn command(&self, root: &Path) -> Command {
+    pub(crate) fn command(&self, root: &Path) -> Result<Command, GoSemanticProcessError> {
+        let command_root = go_command_working_directory(root)?;
         let mut command = Command::new(&self.executable);
-        command.current_dir(root);
+        command.current_dir(command_root);
         configure_go_environment(&mut command, &self.toolchain);
-        configure_dependency_execution_environment(&mut command, &self.dependency_snapshot);
-        command
+        configure_dependency_execution_environment(&mut command, &self.dependency_snapshot)?;
+        Ok(command)
     }
 
     pub(crate) fn run_command(
@@ -10260,7 +10306,11 @@ impl PreparedGoSemanticFrontend {
             dependency_snapshot: Arc::new(GoDependencySnapshot {
                 snapshots_root: PathBuf::from("/test/dependency-snapshots"),
                 snapshot_root: PathBuf::from("/test/dependency-snapshots/snapshot"),
-                module_cache_root: PathBuf::from("/test/module-cache"),
+                module_cache_root: PathBuf::from(if cfg!(windows) {
+                    r"C:\test\module-cache"
+                } else {
+                    "/test/module-cache"
+                }),
                 workspace_path: None,
                 workspace_digest: security_digest_bytes(b"polint-go-private-workspace-off-v1"),
                 workspace_closure: None,
@@ -14947,6 +14997,30 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn ambiguous_windows_working_directory_prevents_command_spawn() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path().join("ambiguous.");
+        crate::go::semantic::windows::create_private_directory(&root)
+            .expect("create exact verbatim-only directory");
+        let marker = temp.path().join("spawned");
+        let mut command = windows_local_tree_marker_command(&marker);
+        command.current_dir(&root);
+
+        let error = run_bounded_command_with_local_trees_until(
+            command,
+            std::slice::from_ref(&root),
+            BoundedCommandLimits::new(Duration::from_secs(5), 1024, 1024),
+            GoOperationDeadline::after(Duration::from_secs(5)),
+            "ambiguous Windows working-directory probe",
+        )
+        .expect_err("Win32-ambiguous working directory must fail before spawn");
+
+        assert!(error.to_string().contains("working directory"));
+        assert!(!marker.exists(), "the rejected command must never execute");
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn analysis_root_reparse_failure_prevents_command_spawn() {
         let temp = tempfile::tempdir().expect("temporary directory");
         let root = temp.path().join("analysis-root");
@@ -15058,6 +15132,18 @@ mod tests {
             toolchain_content_digest: toolchain.closure.content_digest,
             host_target: toolchain.host_target,
             environment_policy: GO_ENVIRONMENT_POLICY,
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn private_go_workspace_uses_go_compatible_windows_paths() {
+        for path in [r"\\?\C:\repo\app", r"C:\repo\app"] {
+            let encoded =
+                quote_go_workspace_path(Path::new(path)).expect("encode safe workspace path");
+            let decoded: String = serde_json::from_str(&encoded).expect("decode workspace path");
+            assert_eq!(decoded, r"C:\repo\app");
+            assert!(!decoded.contains('/'));
         }
     }
 
@@ -16286,6 +16372,7 @@ mod tests {
 
         let output = prepared
             .command(temp.path())
+            .expect("construct prepared frontend command")
             .output()
             .expect("run sealed frontend");
 
@@ -17405,7 +17492,9 @@ mod tests {
     #[test]
     fn prepared_command_uses_only_the_sealed_dependency_snapshot() {
         let frontend = PreparedGoSemanticFrontend::for_test("frontend", None, Some("go1.25.0"));
-        let command = frontend.command(Path::new("."));
+        let command = frontend
+            .command(&std::env::current_dir().expect("current directory"))
+            .expect("construct prepared frontend command");
         let environment = command
             .get_envs()
             .map(|(name, value)| {
@@ -17418,11 +17507,65 @@ mod tests {
 
         assert_eq!(
             environment.get("GOMODCACHE"),
-            Some(&Some("/test/module-cache".to_string()))
+            Some(&Some(
+                if cfg!(windows) {
+                    r"C:\test\module-cache"
+                } else {
+                    "/test/module-cache"
+                }
+                .to_string()
+            ))
         );
         assert_eq!(environment.get("GOPROXY"), Some(&Some("off".to_string())));
         assert_eq!(environment.get("GOSUMDB"), Some(&Some("off".to_string())));
         assert_eq!(environment.get("GOVCS"), Some(&Some("off".to_string())));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn prepared_command_normalizes_every_windows_snapshot_path_for_go() {
+        let mut frontend = PreparedGoSemanticFrontend::for_test("frontend", None, Some("go1.25.0"));
+        {
+            let snapshot = Arc::make_mut(&mut frontend.dependency_snapshot);
+            snapshot.module_cache_root = PathBuf::from(r"\\?\C:\polint-cache\modules");
+            snapshot.workspace_path = Some(PathBuf::from(r"\\?\C:\polint-cache\workspace\go.work"));
+        }
+
+        let command = frontend
+            .command(Path::new(r"\\?\C:\repo"))
+            .expect("construct Windows Go command");
+        let environment = command
+            .get_envs()
+            .map(|(name, value)| {
+                (
+                    name.to_string_lossy().into_owned(),
+                    value.map(|value| value.to_string_lossy().into_owned()),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        assert_eq!(command.get_current_dir(), Some(Path::new(r"C:\repo")));
+        assert_eq!(
+            environment.get("GOMODCACHE"),
+            Some(&Some(r"C:\polint-cache\modules".to_string()))
+        );
+        assert_eq!(
+            environment.get("POLINT_GO_WORKSPACE"),
+            Some(&Some(r"C:\polint-cache\workspace\go.work".to_string()))
+        );
+        assert!(
+            frontend
+                .dependency_snapshot
+                .module_cache_root
+                .starts_with(r"\\?\C:\")
+        );
+        assert!(
+            frontend
+                .dependency_snapshot
+                .workspace_path
+                .as_deref()
+                .is_some_and(|path| path.starts_with(r"\\?\C:\"))
+        );
     }
 
     #[test]
@@ -19201,6 +19344,7 @@ mod tests {
 
         let output = prepared_a
             .command(temp.path())
+            .expect("construct prepared frontend command")
             .output()
             .expect("run prepared frontend");
 

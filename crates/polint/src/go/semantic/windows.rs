@@ -5,9 +5,10 @@
 //! process and filesystem orchestration code.
 
 use std::cell::Cell;
+use std::ffi::OsString;
 use std::fs::{File, Metadata};
 use std::io::{self, Read, Write};
-use std::os::windows::ffi::OsStrExt;
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::os::windows::fs::MetadataExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::os::windows::process::CommandExt;
@@ -77,6 +78,7 @@ const LOCAL_TREE_MAX_FRONTIER_PATH_UNITS: usize = 32 * 1_048_576;
 const LOCAL_TREE_MAX_SCOPED_PATHS: usize = LOCAL_TREE_MAX_ENTRIES + 1;
 const LOCAL_TREE_MAX_SCOPED_PATH_UNITS: usize = 64 * 1_048_576;
 const FINAL_PATH_BUFFER_UNITS: usize = 32_768;
+const MAX_WINDOWS_COMMAND_CWD_UNITS: usize = 260;
 
 thread_local! {
     /// Set only on a worker whose real thread handle is owned by the caller.
@@ -607,6 +609,160 @@ pub(super) fn require_local_fixed_volume(path: &Path) -> io::Result<()> {
 /// once that ancestor is known so reparse points are rejected.
 pub(super) fn require_local_creation_volume(path: &Path) -> io::Result<PathBuf> {
     preflight_local_drive(path)
+}
+
+/// Converts an already-certified local path to the spelling Win32 exposes to
+/// child processes without changing its component semantics.
+pub(super) fn go_command_path(path: &Path) -> io::Result<PathBuf> {
+    use std::path::{Component, Prefix};
+
+    validate_windows_path_units(path)?;
+    if path.to_str().is_none() {
+        return Err(invalid_data(
+            path,
+            "Go command paths must contain valid Unicode",
+        ));
+    }
+    let mut components = path.components();
+    let prefix = match components.next() {
+        Some(Component::Prefix(prefix)) => prefix,
+        _ => {
+            return Err(invalid_data(
+                path,
+                "Go command paths must use an absolute local drive path",
+            ));
+        }
+    };
+    let strip_verbatim_prefix = match prefix.kind() {
+        Prefix::Disk(_) => false,
+        Prefix::VerbatimDisk(_) => true,
+        Prefix::UNC(_, _)
+        | Prefix::VerbatimUNC(_, _)
+        | Prefix::DeviceNS(_)
+        | Prefix::Verbatim(_) => {
+            return Err(invalid_data(
+                path,
+                "Go command paths must use a local drive prefix",
+            ));
+        }
+    };
+    if !matches!(components.next(), Some(Component::RootDir)) {
+        return Err(invalid_data(path, "Go command paths must be absolute"));
+    }
+    for component in components {
+        let Component::Normal(name) = component else {
+            return Err(invalid_data(
+                path,
+                "Go command paths must not contain relative components",
+            ));
+        };
+        validate_go_command_component(path, name)?;
+    }
+
+    let mut units = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    if strip_verbatim_prefix {
+        let prefix = [
+            u16::from(b'\\'),
+            u16::from(b'\\'),
+            u16::from(b'?'),
+            u16::from(b'\\'),
+        ];
+        units = units
+            .strip_prefix(&prefix)
+            .ok_or_else(|| invalid_data(path, "invalid verbatim local drive prefix"))?
+            .to_vec();
+    }
+    for unit in &mut units {
+        if *unit == u16::from(b'/') {
+            *unit = u16::from(b'\\');
+        }
+    }
+    Ok(PathBuf::from(OsString::from_wide(&units)))
+}
+
+pub(super) fn go_command_working_directory(path: &Path) -> io::Result<PathBuf> {
+    let command_path = go_command_path(path)?;
+    let units = command_path.as_os_str().encode_wide().collect::<Vec<_>>();
+    let terminator_units = if units.last() == Some(&u16::from(b'\\')) {
+        1
+    } else {
+        2
+    };
+    if units.len().saturating_add(terminator_units) > MAX_WINDOWS_COMMAND_CWD_UNITS {
+        return Err(invalid_data(
+            path,
+            "Go command working directory exceeds the Win32 process limit",
+        ));
+    }
+    Ok(command_path)
+}
+
+fn validate_go_command_component(path: &Path, component: &std::ffi::OsStr) -> io::Result<()> {
+    let units = component.encode_wide().collect::<Vec<_>>();
+    if units.is_empty()
+        || units
+            .last()
+            .is_some_and(|unit| [u16::from(b'.'), u16::from(b' ')].contains(unit))
+        || units.iter().copied().any(is_invalid_go_command_unit)
+        || is_reserved_dos_component(&units)
+    {
+        return Err(invalid_data(
+            path,
+            "a path component changes meaning at the Win32 command boundary",
+        ));
+    }
+    Ok(())
+}
+
+fn is_invalid_go_command_unit(unit: u16) -> bool {
+    unit < 0x20
+        || matches!(
+            unit,
+            0x22 | 0x2A | 0x2F | 0x3A | 0x3C | 0x3E | 0x3F | 0x5C | 0x7C
+        )
+}
+
+fn is_reserved_dos_component(component: &[u16]) -> bool {
+    let basename_end = component
+        .iter()
+        .position(|unit| *unit == u16::from(b'.'))
+        .unwrap_or(component.len());
+    let basename = &component[..basename_end];
+    let basename_end = basename
+        .iter()
+        .rposition(|unit| *unit != u16::from(b' '))
+        .map_or(0, |index| index.saturating_add(1));
+    let basename = &basename[..basename_end];
+    if ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "CLOCK$"]
+        .iter()
+        .any(|reserved| utf16_eq_ascii_ignore_case(basename, reserved.as_bytes()))
+    {
+        return true;
+    }
+    if basename.len() != 4 {
+        return false;
+    }
+    let device = &basename[..3];
+    let numbered_device =
+        utf16_eq_ascii_ignore_case(device, b"COM") || utf16_eq_ascii_ignore_case(device, b"LPT");
+    numbered_device
+        && matches!(
+            basename[3],
+            value if (u16::from(b'1')..=u16::from(b'9')).contains(&value)
+                || matches!(value, 0x00B9 | 0x00B2 | 0x00B3)
+        )
+}
+
+fn utf16_eq_ascii_ignore_case(units: &[u16], ascii: &[u8]) -> bool {
+    units.len() == ascii.len()
+        && units.iter().zip(ascii).all(|(unit, byte)| {
+            let upper = if (u16::from(b'a')..=u16::from(b'z')).contains(unit) {
+                *unit - u16::from(b'a') + u16::from(b'A')
+            } else {
+                *unit
+            };
+            upper == u16::from(byte.to_ascii_uppercase())
+        })
 }
 
 fn preflight_local_drive(path: &Path) -> io::Result<PathBuf> {
@@ -3021,6 +3177,84 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn go_command_paths_use_unambiguous_dos_spelling() {
+        for path in [
+            r"\\?\C:\repo\app",
+            r"C:\repo\app",
+            r"C:/repo/app",
+            r"C:\repo\a b\café\a.b",
+        ] {
+            let converted = go_command_path(Path::new(path)).expect("safe Go command path");
+            assert!(!converted.to_string_lossy().starts_with(r"\\?\"));
+            assert!(!converted.to_string_lossy().contains('/'));
+        }
+        assert_eq!(
+            go_command_path(Path::new(r"\\?\C:\repo\app")).expect("verbatim drive path"),
+            Path::new(r"C:\repo\app")
+        );
+    }
+
+    #[test]
+    fn go_command_paths_reject_win32_namespace_ambiguity() {
+        for path in [
+            r"repo\app",
+            r"\\server\share\app",
+            r"\\?\UNC\server\share\app",
+            r"\\.\C:\repo\app",
+            r"C:\repo\trailing.",
+            "C:\\repo\\trailing ",
+            r"C:\repo\NUL.txt",
+            r"C:\repo\conin$.log",
+            r"C:\repo\COM1",
+            r"C:\repo\lpt².log",
+            r"C:\repo\bad<name",
+            "C:\\repo\\control\u{0001}name",
+        ] {
+            assert!(
+                go_command_path(Path::new(path)).is_err(),
+                "unsafe path was accepted: {path:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn go_command_paths_reject_lossy_unicode_and_overlong_working_directories() {
+        fn path_with_units(units: usize, trailing_separator: bool) -> PathBuf {
+            let prefix = r"C:\segment\";
+            let separator_units = usize::from(trailing_separator);
+            let suffix_units = units
+                .checked_sub(prefix.encode_utf16().count() + separator_units)
+                .expect("requested path length covers its prefix");
+            let mut path = format!("{prefix}{}", "a".repeat(suffix_units));
+            if trailing_separator {
+                path.push('\\');
+            }
+            assert_eq!(path.encode_utf16().count(), units);
+            PathBuf::from(path)
+        }
+
+        let mut non_unicode = r"C:\repo\".encode_utf16().collect::<Vec<_>>();
+        non_unicode.push(0xD800);
+        let non_unicode = PathBuf::from(OsString::from_wide(&non_unicode));
+        assert!(go_command_path(&non_unicode).is_err());
+
+        for (units, trailing_separator, accepted) in [
+            (258, false, true),
+            (259, false, false),
+            (259, true, true),
+            (260, true, false),
+        ] {
+            let path = path_with_units(units, trailing_separator);
+            assert!(go_command_path(&path).is_ok());
+            assert_eq!(
+                go_command_working_directory(&path).is_ok(),
+                accepted,
+                "unexpected {units}-unit cwd result with trailing separator={trailing_separator}"
+            );
+        }
+    }
 
     fn create_directory_reparse(link: &Path, target: &Path) {
         const ERROR_PRIVILEGE_NOT_HELD: i32 = 1314;
