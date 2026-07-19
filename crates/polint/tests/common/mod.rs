@@ -4,6 +4,7 @@ use assert_cmd::Command;
 use std::borrow::Cow;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 pub(crate) fn write_file(path: &Path, contents: &str) {
     if let Some(parent) = path.parent() {
@@ -181,6 +182,38 @@ pub(crate) fn polint_cmd() -> Command {
     command.env("POLINT_RULES_TARGET_DIR", shared_rules_target_dir());
     command.env("POLINT_RULES_PROFILE", "dev");
     command
+}
+
+pub(crate) fn polint_help(args: &[&str]) -> String {
+    static TOP_LEVEL: OnceLock<String> = OnceLock::new();
+    static CHECK: OnceLock<String> = OnceLock::new();
+    static INSPECT: OnceLock<String> = OnceLock::new();
+    static INSPECT_RULE: OnceLock<String> = OnceLock::new();
+    static TEST: OnceLock<String> = OnceLock::new();
+    static CACHE: OnceLock<String> = OnceLock::new();
+    static CACHE_STATUS: OnceLock<String> = OnceLock::new();
+
+    let cache = match args {
+        ["--help"] => &TOP_LEVEL,
+        ["check", "--help"] => &CHECK,
+        ["inspect", "--help"] => &INSPECT,
+        ["inspect", "rule", "--help"] => &INSPECT_RULE,
+        ["test", "--help"] => &TEST,
+        ["cache", "--help"] => &CACHE,
+        ["cache", "status", "--help"] => &CACHE_STATUS,
+        _ => panic!("unsupported cached polint help command: {args:?}"),
+    };
+
+    cache
+        .get_or_init(|| {
+            stdout_string(
+                polint_cmd()
+                    .args(args.iter().copied())
+                    .assert()
+                    .success(),
+            )
+        })
+        .clone()
 }
 
 pub(crate) fn example_rule_cmd(example: &str) -> Command {
