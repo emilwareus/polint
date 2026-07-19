@@ -493,17 +493,7 @@ exclude = []
 
 #[test]
 fn explain_json_reports_rule_capability_plan() {
-    let temp = tempfile::tempdir().unwrap();
-    polint_cmd()
-        .current_dir(temp.path())
-        .arg("init")
-        .assert()
-        .success();
-    polint_cmd()
-        .current_dir(temp.path())
-        .args(["new-rule", "ts", "no-raw-colors"])
-        .assert()
-        .success();
+    let temp = fixture_workspace();
     point_generated_rule_pack_at_local_polint(temp.path());
 
     let first = stdout_string(
@@ -641,17 +631,7 @@ fn generated_skills_describe_phase41_public_surface() {
 
 #[test]
 fn phase41_public_json_contracts_are_stable() {
-    let temp = tempfile::tempdir().unwrap();
-    polint_cmd()
-        .current_dir(temp.path())
-        .arg("init")
-        .assert()
-        .success();
-    polint_cmd()
-        .current_dir(temp.path())
-        .args(["new-rule", "ts", "no-raw-colors"])
-        .assert()
-        .success();
+    let temp = fixture_workspace();
     point_generated_rule_pack_at_local_polint(temp.path());
 
     let commands: Vec<Vec<&str>> = vec![
@@ -718,17 +698,7 @@ fn phase41_public_json_contracts_are_stable() {
 
 #[test]
 fn inspect_rule_json_matches_schema_v1() {
-    let temp = tempfile::tempdir().unwrap();
-    polint_cmd()
-        .current_dir(temp.path())
-        .arg("init")
-        .assert()
-        .success();
-    polint_cmd()
-        .current_dir(temp.path())
-        .args(["new-rule", "ts", "no-raw-colors"])
-        .assert()
-        .success();
+    let temp = fixture_workspace();
     point_generated_rule_pack_at_local_polint(temp.path());
 
     let value = stdout_json(
@@ -748,17 +718,7 @@ fn inspect_rule_json_matches_schema_v1() {
 
 #[test]
 fn polint_test_json_matches_schema_v1() {
-    let temp = tempfile::tempdir().unwrap();
-    polint_cmd()
-        .current_dir(temp.path())
-        .arg("init")
-        .assert()
-        .success();
-    polint_cmd()
-        .current_dir(temp.path())
-        .args(["new-rule", "ts", "no-raw-colors"])
-        .assert()
-        .success();
+    let temp = fixture_workspace();
     point_generated_rule_pack_at_local_polint(temp.path());
 
     let value = stdout_json(

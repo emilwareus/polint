@@ -216,6 +216,60 @@ pub(crate) fn polint_help(args: &[&str]) -> String {
         .clone()
 }
 
+pub(crate) fn shared_fixture_root() -> &'static Path {
+    static SHARED_FIXTURE: OnceLock<tempfile::TempDir> = OnceLock::new();
+
+    SHARED_FIXTURE
+        .get_or_init(|| {
+            let fixture = tempfile::tempdir().expect("create shared CLI fixture");
+            polint_cmd()
+                .current_dir(fixture.path())
+                .arg("init")
+                .assert()
+                .success();
+            polint_cmd()
+                .current_dir(fixture.path())
+                .args(["new-rule", "ts", "no-raw-colors"])
+                .assert()
+                .success();
+            fixture
+        })
+        .path()
+}
+
+pub(crate) fn fixture_workspace() -> tempfile::TempDir {
+    let workspace = tempfile::tempdir().expect("create CLI fixture workspace");
+    copy_dir_contents(shared_fixture_root(), workspace.path());
+    workspace
+}
+
+fn copy_dir_contents(source: &Path, destination: &Path) {
+    for entry in fs::read_dir(source)
+        .unwrap_or_else(|error| panic!("read shared fixture {}: {error}", source.display()))
+    {
+        let entry = entry.expect("read shared fixture entry");
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        if source_path.is_dir() {
+            fs::create_dir_all(&destination_path).unwrap_or_else(|error| {
+                panic!(
+                    "create fixture directory {}: {error}",
+                    destination_path.display()
+                )
+            });
+            copy_dir_contents(&source_path, &destination_path);
+        } else {
+            fs::copy(&source_path, &destination_path).unwrap_or_else(|error| {
+                panic!(
+                    "copy fixture file {} to {}: {error}",
+                    source_path.display(),
+                    destination_path.display()
+                )
+            });
+        }
+    }
+}
+
 fn example_rule_cmd(package: &'static str) -> Command {
     static EXAMPLE_RULES_BUILT: OnceLock<()> = OnceLock::new();
 
