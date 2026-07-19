@@ -2586,7 +2586,15 @@ fn process_identity(pid: libc::pid_t) -> Result<Option<ProcessIdentity>, String>
     else {
         return Ok(None);
     };
-    let value = std::str::from_utf8(&bytes)
+    parse_linux_process_stat_identity(pid, &bytes)
+}
+
+#[cfg(target_os = "linux")]
+fn parse_linux_process_stat_identity(
+    pid: libc::pid_t,
+    bytes: &[u8],
+) -> Result<Option<ProcessIdentity>, String> {
+    let value = std::str::from_utf8(bytes)
         .map_err(|error| format!("contained process {pid} stat was not UTF-8: {error}"))?;
     let fields = value
         .rsplit_once(") ")
@@ -2594,6 +2602,31 @@ fn process_identity(pid: libc::pid_t) -> Result<Option<ProcessIdentity>, String>
         .1
         .split_whitespace()
         .collect::<Vec<_>>();
+    let state = fields
+        .first()
+        .ok_or_else(|| format!("contained process {pid} stat omitted its state"))?;
+    // A terminal single-thread task has released its descriptors, but procfs
+    // can retain the task entry until its parent reaps it and deny `fdinfo`
+    // access during that interval. A zombie thread-group leader can still
+    // have live sibling threads sharing its file table, so keep that case in
+    // the fail-closed descriptor scan.
+    let terminal = match *state {
+        "X" | "x" => true,
+        "Z" => {
+            fields
+                .get(17)
+                .ok_or_else(|| format!("contained process {pid} stat omitted its thread count"))?
+                .parse::<u64>()
+                .map_err(|error| {
+                    format!("contained process {pid} thread count was invalid: {error}")
+                })?
+                <= 1
+        }
+        _ => false,
+    };
+    if terminal {
+        return Ok(None);
+    }
     let start = fields
         .get(19)
         .ok_or_else(|| format!("contained process {pid} stat omitted its start time"))?
@@ -15807,6 +15840,44 @@ mod tests {
         )
         .expect_err("denied procfs access must fail containment closed");
         assert!(denied.contains("failed to read process metadata"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_process_identity_treats_terminal_tasks_as_absent() {
+        let stat = |state: &str, threads: u64| {
+            format!(
+                "123 (helper with ) marker) {state} 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 {threads} 18 42"
+            )
+        };
+
+        for state in ["X", "x"] {
+            assert_eq!(
+                parse_linux_process_stat_identity(123, stat(state, 2).as_bytes())
+                    .expect("parse terminal process state"),
+                None
+            );
+        }
+        assert_eq!(
+            parse_linux_process_stat_identity(123, stat("Z", 1).as_bytes())
+                .expect("parse single-thread zombie state"),
+            None
+        );
+        let identity = Some(ProcessIdentity {
+            start_primary: 42,
+            start_secondary: 0,
+        });
+        assert_eq!(
+            parse_linux_process_stat_identity(123, stat("Z", 2).as_bytes())
+                .expect("parse multi-thread zombie leader"),
+            identity,
+            "live sibling threads must keep descriptor inspection fail-closed"
+        );
+        assert_eq!(
+            parse_linux_process_stat_identity(123, stat("S", 1).as_bytes())
+                .expect("parse live process state"),
+            identity
+        );
     }
 
     #[cfg(target_os = "linux")]
