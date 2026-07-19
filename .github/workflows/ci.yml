@@ -97,7 +97,6 @@ jobs:
         include:
           - name: ubuntu — lib + example tests
             test-args: -p polint --lib --all-features --locked
-            semantic-gate: "true"
           - name: ubuntu — integration tests
             test-args: -p polint --test '*' --all-features --locked
 
@@ -124,12 +123,6 @@ jobs:
       - name: cargo test
         run: cargo test ${{ matrix.test-args }}
 
-      - name: semantic-store regression gate (serialized)
-        if: matrix.semantic-gate == 'true'
-        run: >-
-          cargo test -p polint --lib --all-features --locked
-          eval::bench::gate::tests::semantic_store_boundary::real_store_enabled_measurement_passes_locked_boundary
-          -- --exact --ignored --test-threads=1 --nocapture
 
   test-platform:
     name: "${{ matrix.os }} — lib tests"
@@ -157,11 +150,6 @@ jobs:
       - name: cargo test (lib)
         run: cargo test -p polint --lib --all-features --locked
 
-      - name: semantic-store regression gate (serialized)
-        run: >-
-          cargo test -p polint --lib --all-features --locked
-          eval::bench::gate::tests::semantic_store_boundary::real_store_enabled_measurement_passes_locked_boundary
-          -- --exact --ignored --test-threads=1 --nocapture
 
   # ── Quality gates consolidated ─────────────────────────────────────────────
 
@@ -196,6 +184,12 @@ jobs:
 
       - name: determinism gate (N=10 seeded permutations)
         run: cargo test -p polint --lib eval::determinism_gate --locked
+
+      - name: semantic-store regression gate (serialized)
+        run: >-
+          cargo test -p polint --lib --all-features --locked
+          eval::bench::gate::tests::semantic_store_boundary::real_store_enabled_measurement_passes_locked_boundary
+          -- --exact --ignored --test-threads=1 --nocapture
 
   # ── Artifact / smoke tests ─────────────────────────────────────────────────
 
