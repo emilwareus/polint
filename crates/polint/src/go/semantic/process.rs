@@ -27,7 +27,7 @@ use crate::go::semantic::protocol::GO_SEMANTIC_SCHEMA;
 
 pub(crate) const GO_SEMANTIC_FRONTEND_ENV: &str = "POLINT_GO_FRONTEND";
 const GO_FRONTEND_CACHE_VERSION: &str = "v1";
-const GO_ENVIRONMENT_POLICY: &str = "sealed-dependency-snapshot-v6";
+const GO_ENVIRONMENT_POLICY: &str = "sealed-dependency-snapshot-v7";
 const GO_FRONTEND_MAX_SOURCE_FILES: usize = 512;
 const GO_FRONTEND_MAX_SOURCE_BYTES: usize = 32 * 1_048_576;
 const GO_FRONTEND_MAX_SOURCE_ENTRIES: usize = 4_096;
@@ -51,7 +51,10 @@ const GO_FRONTEND_STALE_STAGING_AGE: std::time::Duration =
     std::time::Duration::from_secs(24 * 60 * 60);
 const GO_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 const GO_BUILD_TIMEOUT: Duration = Duration::from_secs(120);
+#[cfg(not(windows))]
 const GO_OPERATION_TIMEOUT: Duration = Duration::from_secs(150);
+#[cfg(windows)]
+const GO_OPERATION_TIMEOUT: Duration = Duration::from_secs(300);
 const GO_PROBE_STDOUT_BYTES: usize = 64 * 1024;
 const GO_PROBE_STDERR_BYTES: usize = 256 * 1024;
 const GO_BUILD_STDOUT_BYTES: usize = 256 * 1024;
@@ -59,7 +62,9 @@ const GO_BUILD_STDERR_BYTES: usize = 1024 * 1024;
 const GO_TOOLCHAIN_MAX_CLOSURE_ENTRIES: usize = 100_000;
 const GO_TOOLCHAIN_MAX_CLOSURE_BYTES: u64 = 1024 * 1024 * 1024;
 const GO_DEPENDENCY_MAX_ENTRIES: usize = 100_000;
+const GO_DEPENDENCY_SOURCE_MAX_ENUMERATED_ENTRIES: usize = 1_000_000;
 const GO_DEPENDENCY_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const GO_DEPENDENCY_SOURCE_MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
 const GO_LOCAL_DEPENDENCY_MAX_DEPTH: usize = 256;
 const GO_LOCAL_DEPENDENCY_MAX_PATH_STATE_UNITS: usize = 64 * 1_048_576;
 const GO_LOCAL_REPOSITORY_CACHE_PATH_UNITS: usize = 16 * 1_048_576;
@@ -4662,7 +4667,7 @@ fn prepare_dependency_snapshot(
     let module_cache = staging.path().join("modules");
     create_private_directory(&module_cache)?;
 
-    let (private_workspace, request_key, initial_manifest_digest) = if let Some((root, config)) =
+    let (private_workspace, request_key, initial_population_inputs) = if let Some((root, config)) =
         analysis
     {
         require_local_existing_path_until(
@@ -4671,16 +4676,32 @@ fn prepare_dependency_snapshot(
             "Go dependency analysis-root certification",
         )?;
         let workspace = private_go_workspace(staging.path(), toolchain, root, config, deadline)?;
+        workspace.verify_replacement_manifest_inputs(root, deadline)?;
         let manifest_digest =
             dependency_manifest_digest(root, config, workspace.analysis_roots(), deadline)?;
+        let source_digest = dependency_population_source_digest(
+            root,
+            workspace.analysis_roots(),
+            repository_cache_roots,
+            deadline,
+        )?;
         let request_key = dependency_snapshot_request_key(
             toolchain,
             root,
+            config,
             &workspace,
             &manifest_digest,
+            &source_digest,
             deadline,
         )?;
-        (Some(workspace), request_key, Some(manifest_digest))
+        (
+            Some(workspace),
+            request_key,
+            Some(DependencyPopulationInputs {
+                manifest_digest,
+                source_digest,
+            }),
+        )
     } else {
         (None, empty_dependency_snapshot_request_key(toolchain), None)
     };
@@ -4702,6 +4723,7 @@ fn prepare_dependency_snapshot(
     let mut lease = Some(initial_lease);
     let mut availability = initial_availability;
     let mut repaired_corrupt_snapshot = false;
+    let mut populated_local_inputs = None;
 
     let verified = loop {
         match availability {
@@ -4745,19 +4767,24 @@ fn prepare_dependency_snapshot(
                 }
             }
             DependencySnapshotAvailability::Reserved(reservation) => {
-                let prepared_workspace = match (analysis, private_workspace.as_ref()) {
-                    (Some((root, config)), Some(workspace)) => Some(populate_dependency_snapshot(
-                        &module_cache,
-                        toolchain,
-                        root,
-                        config,
-                        workspace,
-                        initial_manifest_digest
-                            .as_deref()
-                            .expect("analysis dependency request has a manifest digest"),
-                        deadline,
-                    )?),
-                    (None, None) => None,
+                let prepared_workspace = match (
+                    analysis,
+                    private_workspace.as_ref(),
+                    initial_population_inputs.as_ref(),
+                ) {
+                    (Some((root, config)), Some(workspace), Some(population_inputs)) => {
+                        Some(populate_dependency_snapshot(
+                            &module_cache,
+                            toolchain,
+                            root,
+                            config,
+                            workspace,
+                            repository_cache_roots,
+                            population_inputs,
+                            deadline,
+                        )?)
+                    }
+                    (None, None, None) => None,
                     _ => {
                         return Err(GoSemanticProcessError::CommandFailed(
                             "Go dependency request workspace state is inconsistent.".to_string(),
@@ -4808,6 +4835,7 @@ fn prepare_dependency_snapshot(
                                 .to_string(),
                         ));
                     }
+                    populated_local_inputs = Some(workspace.local_inputs);
                 }
                 if published_ours {
                     break VerifiedDependencySnapshotPayload {
@@ -4850,9 +4878,11 @@ fn prepare_dependency_snapshot(
             capture_dependency_closure(directory, deadline)
         })
         .transpose()?;
-    let local_inputs = analysis
-        .map(|(root, config)| {
-            capture_local_dependency_inputs(
+    let local_inputs = match (analysis, populated_local_inputs, private_workspace.as_ref()) {
+        (Some(_), Some(inputs), Some(_)) => Some(inputs),
+        (Some((root, config)), None, Some(workspace)) => {
+            workspace.verify_replacement_manifest_inputs(root, deadline)?;
+            let inputs = capture_local_dependency_inputs(
                 &module_cache_root,
                 workspace_path.as_deref(),
                 toolchain,
@@ -4860,11 +4890,20 @@ fn prepare_dependency_snapshot(
                 config,
                 repository_cache_roots,
                 &analysis_roots,
+                GoPackageListingMode::Verify,
                 deadline,
-            )
-        })
-        .transpose()?
-        .map(Arc::new);
+            )?;
+            workspace.verify_replacement_manifest_inputs(root, deadline)?;
+            Some(inputs)
+        }
+        (None, None, None) => None,
+        _ => {
+            return Err(GoSemanticProcessError::CommandFailed(
+                "Go dependency request local-input state is inconsistent.".to_string(),
+            ));
+        }
+    }
+    .map(Arc::new);
     let local_dependencies_digest = local_inputs.as_ref().map_or_else(
         || security_digest_bytes(b"polint-go-local-inputs-empty-v1"),
         |inputs| inputs.digest.clone(),
@@ -6066,6 +6105,20 @@ fn require_local_dependency_tree_mounts(
     )
 }
 
+#[cfg(windows)]
+fn require_local_dependency_tree_mounts(
+    path: &Path,
+    deadline: GoOperationDeadline,
+) -> Result<(), GoSemanticProcessError> {
+    deadline.check("Go semantic local tree certification")?;
+    crate::go::semantic::windows::require_local_fixed_volume(path).map_err(|error| {
+        GoSemanticProcessError::CommandUnavailable(format!(
+            "Go semantic analysis requires a local filesystem boundary: {error}"
+        ))
+    })?;
+    deadline.check("Go semantic local tree certification")
+}
+
 fn require_local_scan_roots_with_exclusions(
     roots: &[PathBuf],
     exclusions: &[PathBuf],
@@ -6437,22 +6490,34 @@ fn require_local_creation_root_until(
 }
 
 struct PrivateGoWorkspace {
-    value: OsString,
     path: Option<PathBuf>,
+    main_modules: Vec<PathBuf>,
+    replacement_manifest_digest: String,
     analysis_roots: Vec<PathBuf>,
 }
 
 impl PrivateGoWorkspace {
-    fn value(&self) -> &std::ffi::OsStr {
-        &self.value
-    }
-
     fn path(&self) -> Option<&Path> {
         self.path.as_deref()
     }
 
     fn analysis_roots(&self) -> &[PathBuf] {
         &self.analysis_roots
+    }
+
+    fn verify_replacement_manifest_inputs(
+        &self,
+        root: &Path,
+        deadline: GoOperationDeadline,
+    ) -> Result<(), GoSemanticProcessError> {
+        let observed = main_module_replacement_manifest_digest(root, &self.main_modules, deadline)?;
+        if observed != self.replacement_manifest_digest {
+            return Err(GoSemanticProcessError::CommandFailed(
+                "Go module replacement inputs changed while the private workspace was prepared."
+                    .to_string(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -6517,7 +6582,6 @@ fn private_go_workspace(
     }
     deadline.check("private Go workspace preparation")?;
     write_new_private_mutable_file(&path, &bytes)?;
-    let value = path.as_os_str().to_os_string();
     let mut normalized =
         normalize_private_go_workspace(toolchain, root, &selected_path, &path, deadline)?;
     if selected_path == checked_in_path {
@@ -6552,20 +6616,20 @@ fn private_go_workspace(
                 normalize_private_go_workspace(toolchain, root, &selected_path, &path, deadline)?;
         }
     }
-    normalized
-        .analysis_roots
-        .extend(module_local_replacement_roots(
-            toolchain,
-            root,
-            &normalized.main_modules,
-            &workspace_directory,
-            deadline,
-        )?);
+    let replacements = module_local_replacement_roots(
+        toolchain,
+        root,
+        &normalized.main_modules,
+        &workspace_directory,
+        deadline,
+    )?;
+    normalized.analysis_roots.extend(replacements.roots);
     normalized.analysis_roots.sort();
     normalized.analysis_roots.dedup();
     Ok(PrivateGoWorkspace {
-        value,
         path: Some(path),
+        main_modules: normalized.main_modules,
+        replacement_manifest_digest: replacements.manifest_digest,
         analysis_roots: normalized.analysis_roots,
     })
 }
@@ -6970,13 +7034,87 @@ fn normalize_private_go_workspace(
     })
 }
 
+struct LocalReplacementRoots {
+    roots: Vec<PathBuf>,
+    manifest_digest: String,
+}
+
+fn read_main_module_manifest(
+    module_root: &Path,
+    deadline: GoOperationDeadline,
+) -> Result<(PathBuf, Vec<u8>), GoSemanticProcessError> {
+    const LABEL: &str = "private Go module manifest parsing";
+
+    let go_mod = module_root.join("go.mod");
+    require_local_existing_path_until(&go_mod, deadline, LABEL)?;
+    let metadata = fs::symlink_metadata(&go_mod).map_err(|error| {
+        GoSemanticProcessError::CommandUnavailable(format!(
+            "failed to inspect Go module manifest `{}`: {error}",
+            go_mod.display()
+        ))
+    })?;
+    if metadata_is_link_or_reparse(&metadata) || !metadata.is_file() {
+        return Err(GoSemanticProcessError::CommandUnavailable(format!(
+            "Go module manifest `{}` must be a direct regular file.",
+            go_mod.display()
+        )));
+    }
+    if metadata.len() > GO_DEPENDENCY_MANIFEST_MAX_BYTES {
+        return Err(GoSemanticProcessError::CommandFailed(format!(
+            "Go module manifest `{}` exceeds the {}-byte limit.",
+            go_mod.display(),
+            GO_DEPENDENCY_MANIFEST_MAX_BYTES
+        )));
+    }
+    require_local_existing_path_until(&go_mod, deadline, LABEL)?;
+    let bytes = read_regular_file_no_follow_until(&go_mod, deadline)?;
+    Ok((go_mod, bytes))
+}
+
+fn hash_main_module_manifest(
+    hasher: &mut Sha256,
+    canonical_root: &Path,
+    go_mod: &Path,
+    bytes: &[u8],
+) -> Result<(), GoSemanticProcessError> {
+    let relative = go_mod.strip_prefix(canonical_root).map_err(|_| {
+        GoSemanticProcessError::CommandUnavailable(format!(
+            "Go module manifest `{}` escaped the analysis root.",
+            go_mod.display()
+        ))
+    })?;
+    hash_length_prefixed(hasher, &os_string_bytes(relative.as_os_str()));
+    hash_length_prefixed(hasher, bytes);
+    Ok(())
+}
+
+fn main_module_replacement_manifest_digest(
+    root: &Path,
+    main_modules: &[PathBuf],
+    deadline: GoOperationDeadline,
+) -> Result<String, GoSemanticProcessError> {
+    let canonical_root = fs::canonicalize(root).map_err(|error| {
+        GoSemanticProcessError::CommandFailed(format!(
+            "failed to canonicalize Go analysis root: {error}"
+        ))
+    })?;
+    let mut hasher = Sha256::new();
+    hasher.update(b"polint-go-main-module-replacement-inputs-v1");
+    for module_root in main_modules {
+        deadline.check("Go module replacement input verification")?;
+        let (go_mod, bytes) = read_main_module_manifest(module_root, deadline)?;
+        hash_main_module_manifest(&mut hasher, &canonical_root, &go_mod, &bytes)?;
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
 fn module_local_replacement_roots(
     toolchain: &PreparedGoToolchain,
     root: &Path,
     main_modules: &[PathBuf],
     private_workspace_directory: &Path,
     deadline: GoOperationDeadline,
-) -> Result<Vec<PathBuf>, GoSemanticProcessError> {
+) -> Result<LocalReplacementRoots, GoSemanticProcessError> {
     let canonical_root = fs::canonicalize(root).map_err(|error| {
         GoSemanticProcessError::CommandFailed(format!(
             "failed to canonicalize Go analysis root: {error}"
@@ -6984,98 +7122,88 @@ fn module_local_replacement_roots(
     })?;
     let private_manifests = private_workspace_directory.join("module-manifests");
     create_private_directory(&private_manifests)?;
-    let mut replacement_roots = BTreeSet::new();
+    verify_go_toolchain_binding_until(toolchain, deadline)?;
+    let parsed = (|| {
+        let mut replacement_roots = BTreeSet::new();
+        let mut manifest_hasher = Sha256::new();
+        manifest_hasher.update(b"polint-go-main-module-replacement-inputs-v1");
 
-    for (index, module_root) in main_modules.iter().enumerate() {
-        deadline.check("private Go module manifest parsing")?;
-        let go_mod = module_root.join("go.mod");
-        require_local_existing_path_until(&go_mod, deadline, "private Go module manifest parsing")?;
-        let metadata = fs::symlink_metadata(&go_mod).map_err(|error| {
-            GoSemanticProcessError::CommandUnavailable(format!(
-                "failed to inspect Go module manifest `{}`: {error}",
-                go_mod.display()
-            ))
-        })?;
-        if metadata_is_link_or_reparse(&metadata) || !metadata.is_file() {
-            return Err(GoSemanticProcessError::CommandUnavailable(format!(
-                "Go module manifest `{}` must be a direct regular file.",
-                go_mod.display()
-            )));
-        }
-        if metadata.len() > GO_DEPENDENCY_MANIFEST_MAX_BYTES {
-            return Err(GoSemanticProcessError::CommandFailed(format!(
-                "Go module manifest `{}` exceeds the {}-byte limit.",
-                go_mod.display(),
-                GO_DEPENDENCY_MANIFEST_MAX_BYTES
-            )));
-        }
-        require_local_existing_path_until(&go_mod, deadline, "private Go module manifest parsing")?;
-        let bytes = read_regular_file_no_follow_until(&go_mod, deadline)?;
-        let private_manifest = private_manifests.join(format!("module-{index}.mod"));
-        write_new_private_mutable_file(&private_manifest, &bytes)?;
+        for (index, module_root) in main_modules.iter().enumerate() {
+            deadline.check("private Go module manifest parsing")?;
+            let (go_mod, bytes) = read_main_module_manifest(module_root, deadline)?;
+            hash_main_module_manifest(&mut manifest_hasher, &canonical_root, &go_mod, &bytes)?;
+            let private_manifest = private_manifests.join(format!("module-{index}.mod"));
+            write_new_private_mutable_file(&private_manifest, &bytes)?;
 
-        let mut command = Command::new(&toolchain.executable);
-        configure_go_environment(&mut command, toolchain);
-        command
-            .arg("mod")
-            .arg("edit")
-            .arg("-json")
-            .arg(&private_manifest)
-            .env("GOWORK", "off")
-            .env("GOPROXY", "off")
-            .env("GOSUMDB", "off")
-            .env("GOFLAGS", "");
-        let output = run_prepared_go_command_with_local_trees_until(
-            toolchain,
-            command,
-            std::slice::from_ref(&private_manifests),
-            BoundedCommandLimits::new(
-                GO_OPERATION_TIMEOUT,
-                GO_DEPENDENCY_COMMAND_STDOUT_BYTES,
-                GO_DEPENDENCY_COMMAND_STDERR_BYTES,
-            ),
-            deadline,
-            "private Go module manifest parsing",
-        )?;
-        if !output.status.success() {
-            return Err(GoSemanticProcessError::CommandFailed(format!(
-                "private Go module manifest parsing failed for `{}`: {}",
-                go_mod.display(),
-                String::from_utf8_lossy(&output.stderr).trim()
-            )));
-        }
-        let manifest: GoModEditJson = serde_json::from_slice(&output.stdout).map_err(|error| {
-            GoSemanticProcessError::CommandFailed(format!(
-                "failed to decode parsed Go module manifest `{}`: {error}",
-                go_mod.display()
-            ))
-        })?;
-        fs::remove_file(&private_manifest).map_err(|error| {
-            GoSemanticProcessError::CommandFailed(format!(
-                "failed to remove private Go module manifest scratch file `{}`: {error}",
-                private_manifest.display()
-            ))
-        })?;
-        for replacement in manifest.replace {
-            deadline.check("Go module local replacement certification")?;
-            if replacement.new.version.is_empty() {
-                replacement_roots.insert(certified_workspace_local_path(
-                    module_root,
-                    &replacement.new.path,
-                    &canonical_root,
-                    true,
-                    deadline,
-                )?);
+            let mut command = Command::new(&toolchain.executable);
+            configure_go_environment(&mut command, toolchain);
+            command
+                .arg("mod")
+                .arg("edit")
+                .arg("-json")
+                .arg(&private_manifest)
+                .env("GOWORK", "off")
+                .env("GOPROXY", "off")
+                .env("GOSUMDB", "off")
+                .env("GOFLAGS", "");
+            let output = run_bounded_command_with_local_trees_until(
+                command,
+                std::slice::from_ref(&private_manifests),
+                BoundedCommandLimits::new(
+                    GO_OPERATION_TIMEOUT,
+                    GO_DEPENDENCY_COMMAND_STDOUT_BYTES,
+                    GO_DEPENDENCY_COMMAND_STDERR_BYTES,
+                ),
+                deadline,
+                "private Go module manifest parsing",
+            )?;
+            if !output.status.success() {
+                return Err(GoSemanticProcessError::CommandFailed(format!(
+                    "private Go module manifest parsing failed for `{}`: {}",
+                    go_mod.display(),
+                    String::from_utf8_lossy(&output.stderr).trim()
+                )));
+            }
+            let manifest: GoModEditJson =
+                serde_json::from_slice(&output.stdout).map_err(|error| {
+                    GoSemanticProcessError::CommandFailed(format!(
+                        "failed to decode parsed Go module manifest `{}`: {error}",
+                        go_mod.display()
+                    ))
+                })?;
+            fs::remove_file(&private_manifest).map_err(|error| {
+                GoSemanticProcessError::CommandFailed(format!(
+                    "failed to remove private Go module manifest scratch file `{}`: {error}",
+                    private_manifest.display()
+                ))
+            })?;
+            for replacement in manifest.replace {
+                deadline.check("Go module local replacement certification")?;
+                if replacement.new.version.is_empty() {
+                    replacement_roots.insert(certified_workspace_local_path(
+                        module_root,
+                        &replacement.new.path,
+                        &canonical_root,
+                        true,
+                        deadline,
+                    )?);
+                }
             }
         }
-    }
-    fs::remove_dir(&private_manifests).map_err(|error| {
-        GoSemanticProcessError::CommandFailed(format!(
-            "failed to remove private Go module manifest scratch directory `{}`: {error}",
-            private_manifests.display()
-        ))
-    })?;
-    Ok(replacement_roots.into_iter().collect())
+        fs::remove_dir(&private_manifests).map_err(|error| {
+            GoSemanticProcessError::CommandFailed(format!(
+                "failed to remove private Go module manifest scratch directory `{}`: {error}",
+                private_manifests.display()
+            ))
+        })?;
+        Ok(LocalReplacementRoots {
+            roots: replacement_roots.into_iter().collect(),
+            manifest_digest: format!("{:x}", manifest_hasher.finalize()),
+        })
+    })();
+    let binding = verify_go_toolchain_binding_until(toolchain, deadline);
+    binding?;
+    parsed
 }
 
 fn inspect_private_go_workspace(
@@ -7295,69 +7423,53 @@ fn lexically_normalized_absolute_path(path: &Path) -> Option<PathBuf> {
     Some(normalized)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Dependency population keeps every sealed cache path, analysis input, and absolute deadline explicit."
+)]
 fn populate_dependency_snapshot(
     module_cache: &Path,
     toolchain: &PreparedGoToolchain,
     root: &Path,
     config: &GoAnalysisConfig,
     workspace: &PrivateGoWorkspace,
-    before: &str,
+    repository_cache_roots: &[PathBuf],
+    before: &DependencyPopulationInputs,
     deadline: GoOperationDeadline,
 ) -> Result<PreparedWorkspace, GoSemanticProcessError> {
     let proxy = dependency_population_proxy(toolchain, config.offline, deadline)?;
-    let mut command = Command::new(&toolchain.executable);
-    configure_go_environment(&mut command, toolchain);
-    command
-        .arg("mod")
-        .arg("download")
-        .arg("all")
-        .current_dir(root)
-        .env("GOWORK", workspace.value())
-        .env("GOMODCACHE", module_cache)
-        .env("GOPROXY", &proxy.value)
-        .env("GOVCS", "off")
-        .env("GOAUTH", "off")
-        .env("GONOPROXY", "none")
-        .env(
-            "GOFLAGS",
-            if workspace.path().is_some() {
-                "-mod=mod"
-            } else {
-                "-mod=readonly"
-            },
-        );
-    if config.offline {
-        command.env("GOSUMDB", "off");
-    }
-    let limits = BoundedCommandLimits::new(
-        GO_OPERATION_TIMEOUT,
-        GO_DEPENDENCY_COMMAND_STDOUT_BYTES,
-        GO_DEPENDENCY_COMMAND_STDERR_BYTES,
-    );
-    let recursive_roots = proxy.local_root.into_iter().collect::<Vec<_>>();
-    let manifest_inputs = go_module_manifest_inputs(workspace.analysis_roots(), deadline)?;
-    let output = run_prepared_go_command_with_local_scope_until(
+    workspace.verify_replacement_manifest_inputs(root, deadline)?;
+    let local_inputs = capture_local_dependency_inputs(
+        module_cache,
+        workspace.path(),
         toolchain,
-        command,
-        &manifest_inputs,
-        &recursive_roots,
-        limits,
+        root,
+        config,
+        repository_cache_roots,
+        workspace.analysis_roots(),
+        GoPackageListingMode::Populate(proxy),
         deadline,
-        "Go dependency snapshot population",
     )?;
-    if !output.status.success() {
-        return Err(GoSemanticProcessError::CommandFailed(format!(
-            "Go dependency snapshot population failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-    let after = dependency_manifest_digest(root, config, workspace.analysis_roots(), deadline)?;
-    if before != after {
+    workspace.verify_replacement_manifest_inputs(root, deadline)?;
+    let after = DependencyPopulationInputs {
+        manifest_digest: dependency_manifest_digest(
+            root,
+            config,
+            workspace.analysis_roots(),
+            deadline,
+        )?,
+        source_digest: dependency_population_source_digest(
+            root,
+            workspace.analysis_roots(),
+            repository_cache_roots,
+            deadline,
+        )?,
+    };
+    if before != &after {
         return Err(GoSemanticProcessError::CommandFailed(
-            "Go dependency manifests changed while the private snapshot was populated.".to_string(),
+            "Go dependency inputs changed while the private snapshot was populated.".to_string(),
         ));
     }
-    validate_dependency_module_locations(module_cache, toolchain, root, workspace, deadline)?;
     let path = workspace.path().ok_or_else(|| {
         GoSemanticProcessError::CommandFailed(
             "private Go workspace path is unavailable after dependency population.".to_string(),
@@ -7373,6 +7485,7 @@ fn populate_dependency_snapshot(
     Ok(PreparedWorkspace {
         relative_path: PathBuf::from("workspace/go.work"),
         digest,
+        local_inputs,
     })
 }
 
@@ -7380,6 +7493,13 @@ fn populate_dependency_snapshot(
 struct PreparedWorkspace {
     relative_path: PathBuf,
     digest: String,
+    local_inputs: LocalDependencyInputs,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct DependencyPopulationInputs {
+    manifest_digest: String,
+    source_digest: String,
 }
 
 fn private_workspace_digest(
@@ -7583,8 +7703,10 @@ fn dependency_manifest_digest(
 fn dependency_snapshot_request_key(
     toolchain: &PreparedGoToolchain,
     root: &Path,
+    config: &GoAnalysisConfig,
     workspace: &PrivateGoWorkspace,
     manifest_digest: &str,
+    source_digest: &str,
     deadline: GoOperationDeadline,
 ) -> Result<String, GoSemanticProcessError> {
     let workspace_path = workspace.path().ok_or_else(|| {
@@ -7599,20 +7721,20 @@ fn dependency_snapshot_request_key(
         ))
     })?;
     let mut hasher = Sha256::new();
-    hasher.update(b"polint-go-dependency-request-v1");
+    hasher.update(b"polint-go-dependency-request-v2");
     hash_length_prefixed(&mut hasher, &os_string_bytes(canonical_root.as_os_str()));
     hash_length_prefixed(&mut hasher, manifest_digest.as_bytes());
+    hash_length_prefixed(&mut hasher, source_digest.as_bytes());
     hash_length_prefixed(&mut hasher, workspace_digest.as_bytes());
+    hash_go_analysis_semantic_config(&mut hasher, config);
     hash_length_prefixed(&mut hasher, toolchain.version.as_bytes());
     hash_length_prefixed(&mut hasher, toolchain.executable_digest.as_bytes());
     hash_length_prefixed(&mut hasher, toolchain.closure.content_digest.as_bytes());
     hash_length_prefixed(&mut hasher, GO_ENVIRONMENT_POLICY.as_bytes());
-    // Analysis selection and acquisition policy are deliberately absent from
-    // this reusable payload key. Package patterns, tags, and test selection do
-    // not change `go mod download all`; an online run can therefore populate the
-    // private per-user cache for later analyses, including an offline run.
-    // Checked-in sums anchor public modules. Modules without such an anchor use
-    // the first successfully sealed snapshot written by that trusted owner.
+    // Acquisition policy stays outside the reusable payload key, so an online
+    // run can populate the private per-user cache for the same offline analysis.
+    // Package selection is bound because population follows the package graph
+    // that the semantic frontend will actually load.
     Ok(format!("{:x}", hasher.finalize()))
 }
 
@@ -7620,6 +7742,12 @@ fn dependency_snapshot_request_key(
 struct DependencyPopulationProxy {
     value: OsString,
     local_root: Option<PathBuf>,
+}
+
+#[derive(Debug)]
+enum GoPackageListingMode {
+    Populate(DependencyPopulationProxy),
+    Verify,
 }
 
 impl DependencyPopulationProxy {
@@ -7762,24 +7890,6 @@ fn file_proxy_url(_path: &Path) -> Result<String, GoSemanticProcessError> {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
-struct ListedGoModule {
-    #[serde(default)]
-    path: String,
-    #[serde(default)]
-    main: bool,
-    #[serde(default)]
-    version: String,
-    dir: Option<PathBuf>,
-    go_mod: Option<PathBuf>,
-    #[serde(default)]
-    go_version: String,
-    #[serde(default)]
-    toolchain: String,
-    replace: Option<Box<ListedGoModule>>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "PascalCase")]
 struct ListedGoPackage {
     #[serde(default)]
     import_path: String,
@@ -7828,9 +7938,38 @@ struct ListedGoPackage {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct ListedGoPackageModule {
+    #[serde(default)]
+    path: String,
+    #[serde(default)]
+    main: bool,
+    #[serde(default)]
+    version: String,
     dir: Option<PathBuf>,
     go_mod: Option<PathBuf>,
+    #[serde(default)]
+    go_version: String,
+    #[serde(default)]
+    toolchain: String,
     replace: Option<Box<ListedGoPackageModule>>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct ListedGoPackageModuleStamp {
+    path: String,
+    version: String,
+    go_version: String,
+    toolchain: String,
+    main: bool,
+    replaced: bool,
+    selected_path: String,
+    selected_version: String,
+    location: ListedGoPackageModuleLocation,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum ListedGoPackageModuleLocation {
+    Local(Vec<u8>),
+    SealedCache,
 }
 
 impl ListedGoPackage {
@@ -7859,101 +7998,67 @@ impl ListedGoPackage {
     }
 }
 
-fn validate_dependency_module_locations(
-    module_cache: &Path,
-    toolchain: &PreparedGoToolchain,
+fn certify_listed_package_module(
+    module: &ListedGoPackageModule,
     root: &Path,
-    workspace: &PrivateGoWorkspace,
-    deadline: GoOperationDeadline,
-) -> Result<(), GoSemanticProcessError> {
-    let mut command = Command::new(&toolchain.executable);
-    configure_go_environment(&mut command, toolchain);
-    command
-        .arg("list")
-        .arg("-m")
-        .arg("-json")
-        .arg("all")
-        .current_dir(root)
-        .env("GOWORK", workspace.value())
-        .env("GOMODCACHE", module_cache)
-        .env("GOPROXY", "off")
-        .env("GOSUMDB", "off")
-        .env("GOVCS", "off")
-        .env("GOAUTH", "off")
-        .env("GOFLAGS", "-mod=readonly");
-    let limits = BoundedCommandLimits::new(
-        GO_OPERATION_TIMEOUT,
-        GO_DEPENDENCY_COMMAND_STDOUT_BYTES,
-        GO_DEPENDENCY_COMMAND_STDERR_BYTES,
-    );
-    let manifest_inputs = go_module_manifest_inputs(workspace.analysis_roots(), deadline)?;
-    let output = run_prepared_go_command_with_local_scope_until(
-        toolchain,
-        command,
-        &manifest_inputs,
-        &[],
-        limits,
-        deadline,
-        "Go dependency closure validation",
-    )?;
-    if !output.status.success() {
-        return Err(GoSemanticProcessError::CommandFailed(format!(
-            "Go dependency closure validation failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
+    module_cache: &Path,
+    repository_cache_roots: &[PathBuf],
+    files: &mut BTreeSet<PathBuf>,
+) -> Result<ListedGoPackageModuleStamp, GoSemanticProcessError> {
+    let selected = module.replace.as_deref().unwrap_or(module);
+    if module.path.is_empty() || selected.path.is_empty() {
+        return Err(GoSemanticProcessError::CommandFailed(
+            "Go dependency package graph reported a module without an identity.".to_string(),
+        ));
     }
-    let root = fs::canonicalize(root).map_err(|error| {
+    let selected_directory = selected.dir.as_deref().ok_or_else(|| {
         GoSemanticProcessError::CommandFailed(format!(
-            "failed to canonicalize Go analysis root: {error}"
+            "Go dependency package graph reported module `{}` without a source directory.",
+            module.path
         ))
     })?;
-    let module_cache = fs::canonicalize(module_cache).map_err(|error| {
-        GoSemanticProcessError::CommandFailed(format!(
-            "failed to canonicalize private Go module cache: {error}"
-        ))
-    })?;
-    let modules =
-        serde_json::Deserializer::from_slice(&output.stdout).into_iter::<ListedGoModule>();
-    let mut count = 0_usize;
-    for module in modules {
-        deadline.check("Go dependency closure validation")?;
-        count = count.saturating_add(1);
-        if count > GO_DEPENDENCY_MAX_ENTRIES {
-            return Err(GoSemanticProcessError::CommandFailed(format!(
-                "Go dependency closure contains more than {GO_DEPENDENCY_MAX_ENTRIES} modules."
+    let directory = canonical_dependency_input_path(selected_directory, true)?;
+    let local = module.main || selected.version.is_empty();
+    let location = if local {
+        if !directory.starts_with(root) {
+            return Err(GoSemanticProcessError::CommandUnavailable(format!(
+                "Go dependency graph contains an external local module `{}`.",
+                directory.display()
             )));
         }
-        let module = module.map_err(|error| {
-            GoSemanticProcessError::CommandFailed(format!(
-                "failed to decode Go dependency closure: {error}"
-            ))
-        })?;
-        let selected = module.replace.as_deref().unwrap_or(&module);
-        let Some(directory) = selected.dir.as_deref() else {
-            continue;
-        };
-        let directory = fs::canonicalize(directory).map_err(|error| {
-            GoSemanticProcessError::CommandFailed(format!(
-                "failed to canonicalize Go dependency directory `{}`: {error}",
-                directory.display()
-            ))
-        })?;
-        let local = module.main || selected.version.is_empty();
-        if local {
-            if !directory.starts_with(&root) {
-                return Err(GoSemanticProcessError::CommandUnavailable(format!(
-                    "Go dependency closure contains an external local replacement `{}`.",
-                    directory.display()
-                )));
-            }
-        } else if !directory.starts_with(&module_cache) {
+        reject_repository_cache_overlap(&directory, repository_cache_roots, "local Go module")?;
+        let go_mod = selected
+            .go_mod
+            .clone()
+            .unwrap_or_else(|| directory.join("go.mod"));
+        insert_existing_local_input(&go_mod, root, files)?;
+        insert_existing_local_input(&go_mod.with_file_name("go.sum"), root, files)?;
+        ListedGoPackageModuleLocation::Local(os_string_bytes(
+            directory
+                .strip_prefix(root)
+                .unwrap_or(&directory)
+                .as_os_str(),
+        ))
+    } else {
+        if !directory.starts_with(module_cache) {
             return Err(GoSemanticProcessError::CommandFailed(format!(
                 "versioned Go dependency `{}` escaped the private module snapshot.",
                 directory.display()
             )));
         }
-    }
-    Ok(())
+        ListedGoPackageModuleLocation::SealedCache
+    };
+    Ok(ListedGoPackageModuleStamp {
+        path: module.path.clone(),
+        version: module.version.clone(),
+        go_version: module.go_version.clone(),
+        toolchain: module.toolchain.clone(),
+        main: module.main,
+        replaced: module.replace.is_some(),
+        selected_path: selected.path.clone(),
+        selected_version: selected.version.clone(),
+        location,
+    })
 }
 
 fn go_module_manifest_inputs(
@@ -8000,6 +8105,414 @@ fn go_module_manifest_inputs(
     Ok(manifests)
 }
 
+fn certified_repository_cache_relatives(
+    root: &Path,
+    repository_cache_roots: &[PathBuf],
+    deadline: GoOperationDeadline,
+) -> Result<Vec<PathBuf>, GoSemanticProcessError> {
+    let mut relatives = Vec::new();
+    for cache_root in repository_cache_roots {
+        require_local_creation_root_until(
+            cache_root,
+            deadline,
+            "repository cache-root certification",
+        )?;
+        let Ok(metadata) = fs::symlink_metadata(cache_root) else {
+            continue;
+        };
+        if metadata_is_link_or_reparse(&metadata) || !metadata.is_dir() {
+            continue;
+        }
+        let Ok(cache_root) = fs::canonicalize(cache_root) else {
+            continue;
+        };
+        let Ok(relative) = cache_root.strip_prefix(root) else {
+            continue;
+        };
+        if !relative.as_os_str().is_empty() {
+            relatives.push(relative.to_path_buf());
+        }
+    }
+    relatives.sort();
+    relatives.dedup();
+    Ok(relatives)
+}
+
+fn dependency_population_source_digest(
+    root: &Path,
+    analysis_roots: &[PathBuf],
+    repository_cache_roots: &[PathBuf],
+    deadline: GoOperationDeadline,
+) -> Result<String, GoSemanticProcessError> {
+    const LABEL: &str = "Go dependency population source binding";
+
+    validate_local_path_size_until(root, LABEL, deadline)?;
+    validate_local_path_batch(analysis_roots, LABEL, Some(deadline))?;
+    validate_local_path_batch(repository_cache_roots, LABEL, Some(deadline))?;
+    #[cfg(windows)]
+    {
+        let root = root.to_path_buf();
+        let analysis_roots = analysis_roots.to_vec();
+        let repository_cache_roots = repository_cache_roots.to_vec();
+        return run_windows_file_io_certification(deadline, LABEL, move || {
+            dependency_population_source_digest_inner(
+                &root,
+                &analysis_roots,
+                &repository_cache_roots,
+                deadline,
+            )
+        });
+    }
+    #[cfg(not(windows))]
+    dependency_population_source_digest_inner(
+        root,
+        analysis_roots,
+        repository_cache_roots,
+        deadline,
+    )
+}
+
+fn dependency_population_source_digest_inner(
+    root: &Path,
+    analysis_roots: &[PathBuf],
+    repository_cache_roots: &[PathBuf],
+    deadline: GoOperationDeadline,
+) -> Result<String, GoSemanticProcessError> {
+    const LABEL: &str = "Go dependency population source binding";
+
+    deadline.check(LABEL)?;
+    require_local_existing_path_until(root, deadline, LABEL)?;
+    let root = fs::canonicalize(root).map_err(|error| {
+        GoSemanticProcessError::CommandFailed(format!(
+            "failed to canonicalize Go analysis root for source binding: {error}"
+        ))
+    })?;
+    let repository_cache_relatives =
+        certified_repository_cache_relatives(&root, repository_cache_roots, deadline)?;
+    let repository_cache_roots = repository_cache_relatives
+        .iter()
+        .map(|relative| root.join(relative))
+        .collect::<Vec<_>>();
+    let mut certified_analysis_roots = Vec::new();
+    certified_analysis_roots
+        .try_reserve_exact(analysis_roots.len())
+        .map_err(|error| {
+            GoSemanticProcessError::CommandFailed(format!(
+                "failed to allocate bounded Go dependency source-root state: {error}"
+            ))
+        })?;
+    for analysis_root in analysis_roots {
+        deadline.check(LABEL)?;
+        let analysis_root = canonical_dependency_input_path(analysis_root, true)?;
+        if !analysis_root.starts_with(&root) {
+            return Err(GoSemanticProcessError::CommandUnavailable(format!(
+                "Go dependency source root `{}` escaped `{}`.",
+                analysis_root.display(),
+                root.display()
+            )));
+        }
+        reject_repository_cache_overlap(
+            &analysis_root,
+            &repository_cache_roots,
+            "Go dependency source root",
+        )?;
+        certified_analysis_roots.push(analysis_root);
+    }
+    certified_analysis_roots.sort();
+    certified_analysis_roots.dedup();
+    let scan_roots = collapse_nested_local_roots(&certified_analysis_roots, deadline)?;
+    for scan_root in &scan_roots {
+        require_local_dependency_tree_mounts(scan_root, deadline)?;
+    }
+
+    // Package patterns may explicitly select directories that Go wildcard
+    // expansion normally ignores, and repo-local replacements can live outside
+    // configured module roots. Bind every local Go source and module/workspace
+    // manifest that could alter the package graph; repository caches are the
+    // only traversal exclusions.
+    let mut frontier = scan_roots
+        .into_iter()
+        .map(Path::to_path_buf)
+        .collect::<Vec<_>>();
+    let mut files = BTreeSet::new();
+    let mut entry_count = 0_usize;
+    let mut retained_path_units = 0_usize;
+    for scan_root in &frontier {
+        retain_dependency_population_path(
+            scan_root,
+            &mut entry_count,
+            &mut retained_path_units,
+            deadline,
+        )?;
+    }
+    let mut enumerated_count = 0_usize;
+    while let Some(directory) = frontier.pop() {
+        deadline.check(LABEL)?;
+        if repository_cache_roots
+            .iter()
+            .any(|cache_root| directory.starts_with(cache_root))
+        {
+            continue;
+        }
+        let depth = directory
+            .strip_prefix(&root)
+            .map(|relative| relative.components().count())
+            .unwrap_or(GO_LOCAL_DEPENDENCY_MAX_DEPTH.saturating_add(1));
+        if depth > GO_LOCAL_DEPENDENCY_MAX_DEPTH {
+            return Err(GoSemanticProcessError::CommandFailed(format!(
+                "Go dependency population source depth exceeds {GO_LOCAL_DEPENDENCY_MAX_DEPTH}."
+            )));
+        }
+        let entries = fs::read_dir(&directory).map_err(|error| {
+            GoSemanticProcessError::CommandFailed(format!(
+                "failed to enumerate Go dependency source directory `{}`: {error}",
+                directory.display()
+            ))
+        })?;
+        for entry in entries {
+            deadline.check(LABEL)?;
+            enumerated_count = enumerated_count.checked_add(1).ok_or_else(|| {
+                GoSemanticProcessError::CommandFailed(
+                    "Go dependency source enumeration accounting overflowed.".to_string(),
+                )
+            })?;
+            if enumerated_count > GO_DEPENDENCY_SOURCE_MAX_ENUMERATED_ENTRIES {
+                return Err(GoSemanticProcessError::CommandFailed(format!(
+                    "Go dependency source enumeration contains more than {GO_DEPENDENCY_SOURCE_MAX_ENUMERATED_ENTRIES} entries."
+                )));
+            }
+            let entry = entry.map_err(|error| {
+                GoSemanticProcessError::CommandFailed(format!(
+                    "failed to enumerate a Go dependency source entry under `{}`: {error}",
+                    directory.display()
+                ))
+            })?;
+            let path = entry.path();
+            if repository_cache_roots
+                .iter()
+                .any(|cache_root| path.starts_with(cache_root))
+            {
+                continue;
+            }
+            let metadata = fs::symlink_metadata(&path).map_err(|error| {
+                GoSemanticProcessError::CommandFailed(format!(
+                    "failed to inspect Go dependency source entry `{}`: {error}",
+                    path.display()
+                ))
+            })?;
+            if metadata_is_link_or_reparse(&metadata) {
+                continue;
+            }
+            if metadata.is_dir() {
+                retain_dependency_population_path(
+                    &path,
+                    &mut entry_count,
+                    &mut retained_path_units,
+                    deadline,
+                )?;
+                frontier.push(path);
+            } else if metadata.is_file() && is_dependency_population_input(&path) {
+                retain_dependency_population_path(
+                    &path,
+                    &mut entry_count,
+                    &mut retained_path_units,
+                    deadline,
+                )?;
+                files.insert(path);
+            }
+        }
+    }
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"polint-go-dependency-package-inputs-v1");
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter_go::LANGUAGE.into())
+        .map_err(|error| {
+            GoSemanticProcessError::CommandFailed(format!(
+                "failed to initialize Go dependency source parser: {error}"
+            ))
+        })?;
+    let mut byte_count = 0_u64;
+    for path in files {
+        deadline.check(LABEL)?;
+        let metadata = fs::symlink_metadata(&path).map_err(|error| {
+            GoSemanticProcessError::CommandFailed(format!(
+                "failed to inspect Go dependency source `{}`: {error}",
+                path.display()
+            ))
+        })?;
+        if metadata_is_link_or_reparse(&metadata) || !metadata.is_file() {
+            return Err(GoSemanticProcessError::CommandUnavailable(format!(
+                "Go dependency source `{}` must remain a direct regular file.",
+                path.display()
+            )));
+        }
+        byte_count = byte_count.checked_add(metadata.len()).ok_or_else(|| {
+            GoSemanticProcessError::CommandFailed(
+                "Go dependency source byte accounting overflowed.".to_string(),
+            )
+        })?;
+        if byte_count > GO_DEPENDENCY_MAX_BYTES {
+            return Err(GoSemanticProcessError::CommandFailed(format!(
+                "Go dependency source graph exceeds the {GO_DEPENDENCY_MAX_BYTES}-byte limit."
+            )));
+        }
+        let relative = path.strip_prefix(&root).map_err(|_| {
+            GoSemanticProcessError::CommandFailed(format!(
+                "Go dependency source `{}` escaped its analysis root.",
+                path.display()
+            ))
+        })?;
+        hash_length_prefixed(&mut hasher, &os_string_bytes(relative.as_os_str()));
+        if path.extension().and_then(|extension| extension.to_str()) == Some("go") {
+            if metadata.len() > GO_DEPENDENCY_SOURCE_MAX_FILE_BYTES {
+                return Err(GoSemanticProcessError::CommandFailed(format!(
+                    "Go dependency source `{}` exceeds the {GO_DEPENDENCY_SOURCE_MAX_FILE_BYTES}-byte per-file limit.",
+                    path.display()
+                )));
+            }
+            let bytes = read_regular_file_no_follow_until(&path, deadline)?;
+            hash_go_dependency_source_signature(&mut hasher, &mut parser, &bytes, deadline)?;
+        } else {
+            let bytes = read_regular_file_no_follow_until(&path, deadline)?;
+            hasher.update(b"manifest");
+            hash_length_prefixed(&mut hasher, &bytes);
+        }
+    }
+    deadline.check(LABEL)?;
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn retain_dependency_population_path(
+    path: &Path,
+    entry_count: &mut usize,
+    retained_path_units: &mut usize,
+    deadline: GoOperationDeadline,
+) -> Result<(), GoSemanticProcessError> {
+    const LABEL: &str = "Go dependency population source binding";
+
+    validate_local_path_size_until(path, LABEL, deadline)?;
+    *entry_count = entry_count.checked_add(1).ok_or_else(|| {
+        GoSemanticProcessError::CommandFailed(
+            "Go dependency source entry accounting overflowed.".to_string(),
+        )
+    })?;
+    if *entry_count > GO_DEPENDENCY_MAX_ENTRIES {
+        return Err(GoSemanticProcessError::CommandFailed(format!(
+            "Go dependency source graph contains more than {GO_DEPENDENCY_MAX_ENTRIES} directories and package-driving files."
+        )));
+    }
+    *retained_path_units = retained_path_units
+        .checked_add(local_path_storage_units(path))
+        .ok_or_else(|| {
+            GoSemanticProcessError::CommandFailed(
+                "Go dependency source path-state accounting overflowed.".to_string(),
+            )
+        })?;
+    if *retained_path_units > GO_LOCAL_DEPENDENCY_MAX_PATH_STATE_UNITS {
+        return Err(GoSemanticProcessError::CommandFailed(format!(
+            "Go dependency source path state exceeds {GO_LOCAL_DEPENDENCY_MAX_PATH_STATE_UNITS} storage units."
+        )));
+    }
+    Ok(())
+}
+
+fn hash_go_dependency_source_signature(
+    hasher: &mut Sha256,
+    parser: &mut tree_sitter::Parser,
+    source: &[u8],
+    deadline: GoOperationDeadline,
+) -> Result<(), GoSemanticProcessError> {
+    hasher.update(b"go-source-dependency-signature-v1");
+    let mut progress = |_state: &tree_sitter::ParseState| {
+        if Instant::now() >= deadline.end {
+            std::ops::ControlFlow::Break(())
+        } else {
+            std::ops::ControlFlow::Continue(())
+        }
+    };
+    let options = tree_sitter::ParseOptions::new().progress_callback(&mut progress);
+    let mut read = |offset: usize, _point: tree_sitter::Point| &source[offset..];
+    let tree = parser
+        .parse_with_options(&mut read, None, Some(options))
+        .ok_or_else(|| {
+            if Instant::now() >= deadline.end {
+                GoSemanticProcessError::Timeout(
+                    "Go dependency source parsing exceeded its operation deadline.".to_string(),
+                )
+            } else {
+                GoSemanticProcessError::CommandFailed(
+                    "tree-sitter returned no Go dependency source parse tree.".to_string(),
+                )
+            }
+        })?;
+    deadline.check("Go dependency source parsing")?;
+    let root = tree.root_node();
+    if root.has_error() {
+        hasher.update(b"unparsed-source");
+        hash_length_prefixed(hasher, source);
+        return Ok(());
+    }
+    let package = (0..root.named_child_count())
+        .filter_map(|index| root.named_child(index as u32))
+        .find(|node| node.kind() == "package_clause");
+    let Some(package) = package else {
+        hasher.update(b"unparsed-source");
+        hash_length_prefixed(hasher, source);
+        return Ok(());
+    };
+
+    let prefix = source[..package.start_byte()]
+        .strip_prefix(b"\xef\xbb\xbf")
+        .unwrap_or(&source[..package.start_byte()]);
+    for line in prefix.split(|byte| *byte == b'\n') {
+        let start = line
+            .iter()
+            .position(|byte| !byte.is_ascii_whitespace())
+            .unwrap_or(line.len());
+        let end = line
+            .iter()
+            .rposition(|byte| !byte.is_ascii_whitespace())
+            .map_or(start, |index| index.saturating_add(1));
+        let line = &line[start..end];
+        if line.starts_with(b"//go:build") || line.starts_with(b"// +build") {
+            hasher.update(b"build-constraint");
+            hash_length_prefixed(hasher, line);
+        }
+    }
+    hasher.update(b"package-clause");
+    hash_length_prefixed(
+        hasher,
+        source
+            .get(package.start_byte()..package.end_byte())
+            .unwrap_or_default(),
+    );
+    for index in 0..root.named_child_count() {
+        let Some(node) = root.named_child(index as u32) else {
+            continue;
+        };
+        if node.kind() != "import_declaration" {
+            continue;
+        }
+        hasher.update(b"import-declaration");
+        hash_length_prefixed(
+            hasher,
+            source
+                .get(node.start_byte()..node.end_byte())
+                .unwrap_or_default(),
+        );
+    }
+    Ok(())
+}
+
+fn is_dependency_population_input(path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some("go.mod" | "go.sum" | "go.work" | "go.work.sum")
+    ) || path.extension().and_then(|extension| extension.to_str()) == Some("go")
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "Local dependency certification keeps every trust root, selected scope, and absolute deadline explicit."
@@ -8012,6 +8525,7 @@ fn capture_local_dependency_inputs(
     config: &GoAnalysisConfig,
     repository_cache_roots: &[PathBuf],
     analysis_roots: &[PathBuf],
+    listing_mode: GoPackageListingMode,
     deadline: GoOperationDeadline,
 ) -> Result<LocalDependencyInputs, GoSemanticProcessError> {
     const LABEL: &str = "local Go dependency input certification";
@@ -8041,6 +8555,7 @@ fn capture_local_dependency_inputs(
                 &config,
                 &repository_cache_roots,
                 &analysis_roots,
+                listing_mode,
                 deadline,
             )
         })
@@ -8054,6 +8569,7 @@ fn capture_local_dependency_inputs(
         config,
         repository_cache_roots,
         analysis_roots,
+        listing_mode,
         deadline,
     )
 }
@@ -8070,6 +8586,7 @@ fn capture_local_dependency_inputs_inner(
     config: &GoAnalysisConfig,
     repository_cache_roots: &[PathBuf],
     analysis_roots: &[PathBuf],
+    listing_mode: GoPackageListingMode,
     deadline: GoOperationDeadline,
 ) -> Result<LocalDependencyInputs, GoSemanticProcessError> {
     deadline.check("local Go dependency input certification")?;
@@ -8079,31 +8596,8 @@ fn capture_local_dependency_inputs_inner(
             "failed to canonicalize Go analysis root: {error}"
         ))
     })?;
-    let mut repository_cache_relatives = Vec::new();
-    for cache_root in repository_cache_roots {
-        require_local_creation_root_until(
-            cache_root,
-            deadline,
-            "repository cache-root certification",
-        )?;
-        let Ok(metadata) = fs::symlink_metadata(cache_root) else {
-            continue;
-        };
-        if metadata_is_link_or_reparse(&metadata) || !metadata.is_dir() {
-            continue;
-        }
-        let Ok(cache_root) = fs::canonicalize(cache_root) else {
-            continue;
-        };
-        let Ok(relative) = cache_root.strip_prefix(&root) else {
-            continue;
-        };
-        if !relative.as_os_str().is_empty() {
-            repository_cache_relatives.push(relative.to_path_buf());
-        }
-    }
-    repository_cache_relatives.sort();
-    repository_cache_relatives.dedup();
+    let repository_cache_relatives =
+        certified_repository_cache_relatives(&root, repository_cache_roots, deadline)?;
     let repository_cache_roots = repository_cache_relatives
         .iter()
         .map(|relative| root.join(relative))
@@ -8125,41 +8619,25 @@ fn capture_local_dependency_inputs_inner(
     let workspace_value = workspace_path
         .map(Path::as_os_str)
         .unwrap_or_else(|| std::ffi::OsStr::new("off"));
-    let mut module_command = Command::new(&toolchain.executable);
-    configure_go_environment(&mut module_command, toolchain);
-    module_command
-        .arg("list")
-        .arg("-m")
-        .arg("-json")
-        .arg("all")
-        .current_dir(&root)
-        .env("GOWORK", workspace_value)
-        .env("GOMODCACHE", module_cache)
-        .env("GOPROXY", "off")
-        .env("GOSUMDB", "off")
-        .env("GOVCS", "off")
-        .env("GOAUTH", "off")
-        .env("GOFLAGS", "-mod=readonly");
-    let manifest_inputs = go_module_manifest_inputs(analysis_roots, deadline)?;
-    let module_output = run_prepared_go_command_with_local_scope_until(
-        toolchain,
-        module_command,
-        &manifest_inputs,
-        &[],
-        BoundedCommandLimits::new(
-            GO_OPERATION_TIMEOUT,
-            GO_DEPENDENCY_COMMAND_STDOUT_BYTES,
-            GO_DEPENDENCY_COMMAND_STDERR_BYTES,
+    // Full workspace-graph commands can fetch a version that a local `use`
+    // module shadows. Follow the analyzer's package graph so only source that
+    // can participate in this configured analysis enters the sealed snapshot.
+    let (proxy, recursive_roots, goflags, sumdb_off, label) = match listing_mode {
+        GoPackageListingMode::Populate(proxy) => (
+            proxy.value,
+            proxy.local_root.into_iter().collect::<Vec<_>>(),
+            "-mod=readonly",
+            config.offline,
+            "Go dependency snapshot package population",
         ),
-        deadline,
-        "local Go dependency module graph listing",
-    )?;
-    if !module_output.status.success() {
-        return Err(GoSemanticProcessError::CommandFailed(format!(
-            "local Go dependency module graph listing failed: {}",
-            String::from_utf8_lossy(&module_output.stderr).trim()
-        )));
-    }
+        GoPackageListingMode::Verify => (
+            OsString::from("off"),
+            Vec::new(),
+            "-mod=readonly",
+            true,
+            "local Go dependency input listing",
+        ),
+    };
     let mut command = Command::new(&toolchain.executable);
     configure_go_environment(&mut command, toolchain);
     command
@@ -8168,15 +8646,17 @@ fn capture_local_dependency_inputs_inner(
         .arg(
             "-json=ImportPath,Dir,Module,GoFiles,CgoFiles,IgnoredGoFiles,InvalidGoFiles,CFiles,CXXFiles,MFiles,HFiles,FFiles,SFiles,SwigFiles,SwigCXXFiles,SysoFiles,TestGoFiles,XTestGoFiles,IgnoredOtherFiles,EmbedFiles,TestEmbedFiles,XTestEmbedFiles",
         )
-        .arg("-e")
         .current_dir(&root)
         .env("GOWORK", workspace_value)
         .env("GOMODCACHE", module_cache)
-        .env("GOPROXY", "off")
-        .env("GOSUMDB", "off")
+        .env("GOPROXY", proxy)
         .env("GOVCS", "off")
         .env("GOAUTH", "off")
-        .env("GOFLAGS", "-mod=readonly");
+        .env("GONOPROXY", "none")
+        .env("GOFLAGS", goflags);
+    if sumdb_off {
+        command.env("GOSUMDB", "off");
+    }
     if config.include_tests {
         command.arg("-test");
     }
@@ -8184,27 +8664,29 @@ fn capture_local_dependency_inputs_inner(
         command.arg(format!("-tags={}", config.build_tags.join(",")));
     }
     command.args(config.rooted_package_patterns());
-    let output = run_prepared_go_command_with_local_trees_until(
+    let manifest_inputs = go_module_manifest_inputs(analysis_roots, deadline)?;
+    let output = run_prepared_go_command_with_local_scope_until(
         toolchain,
         command,
-        &[],
+        &manifest_inputs,
+        &recursive_roots,
         BoundedCommandLimits::new(
             GO_OPERATION_TIMEOUT,
             GO_DEPENDENCY_COMMAND_STDOUT_BYTES,
             GO_DEPENDENCY_COMMAND_STDERR_BYTES,
         ),
         deadline,
-        "local Go dependency input listing",
+        label,
     )?;
     if !output.status.success() {
         return Err(GoSemanticProcessError::CommandFailed(format!(
-            "local Go dependency input listing failed: {}",
+            "{label} failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
 
     let mut hasher = Sha256::new();
-    hasher.update(b"polint-go-local-inputs-v1");
+    hasher.update(b"polint-go-local-inputs-v2");
     hash_go_analysis_semantic_config(&mut hasher, config);
     let module_cache = fs::canonicalize(module_cache).map_err(|error| {
         GoSemanticProcessError::CommandFailed(format!(
@@ -8213,73 +8695,61 @@ fn capture_local_dependency_inputs_inner(
     })?;
     let mut directories = BTreeSet::new();
     let mut files = BTreeSet::new();
-    let modules =
-        serde_json::Deserializer::from_slice(&module_output.stdout).into_iter::<ListedGoModule>();
-    let mut module_count = 0_usize;
-    for module in modules {
+    let mut modules = BTreeMap::new();
+    let listed_packages =
+        serde_json::Deserializer::from_slice(&output.stdout).into_iter::<ListedGoPackage>();
+    for package in listed_packages {
         deadline.check("local Go dependency module graph certification")?;
-        module_count = module_count.saturating_add(1);
-        if module_count > GO_DEPENDENCY_MAX_ENTRIES {
+        let package = package.map_err(|error| {
+            GoSemanticProcessError::CommandFailed(format!(
+                "failed to decode local Go dependency package graph: {error}"
+            ))
+        })?;
+        let Some(module) = package.module.as_ref() else {
+            continue;
+        };
+        let stamp = certify_listed_package_module(
+            module,
+            &root,
+            &module_cache,
+            &repository_cache_roots,
+            &mut files,
+        )?;
+        let key = (stamp.path.clone(), stamp.version.clone());
+        if let Some(existing) = modules.get(&key) {
+            if existing != &stamp {
+                return Err(GoSemanticProcessError::CommandFailed(format!(
+                    "Go dependency package graph reported inconsistent metadata for `{}@{}`.",
+                    stamp.path, stamp.version
+                )));
+            }
+        } else {
+            modules.insert(key, stamp);
+        }
+        if modules.len() > GO_DEPENDENCY_MAX_ENTRIES {
             return Err(GoSemanticProcessError::CommandFailed(format!(
                 "local Go dependency graph contains more than {GO_DEPENDENCY_MAX_ENTRIES} modules."
             )));
         }
-        let module = module.map_err(|error| {
-            GoSemanticProcessError::CommandFailed(format!(
-                "failed to decode local Go dependency module graph: {error}"
-            ))
-        })?;
-        let selected = module.replace.as_deref().unwrap_or(&module);
+    }
+    let module_count = modules.len();
+    for module in modules.into_values() {
         hasher.update(b"module");
         hash_length_prefixed(&mut hasher, module.path.as_bytes());
         hash_length_prefixed(&mut hasher, module.version.as_bytes());
         hash_length_prefixed(&mut hasher, module.go_version.as_bytes());
         hash_length_prefixed(&mut hasher, module.toolchain.as_bytes());
-        hasher.update([u8::from(module.main), u8::from(module.replace.is_some())]);
-        hash_length_prefixed(&mut hasher, selected.path.as_bytes());
-        hash_length_prefixed(&mut hasher, selected.version.as_bytes());
-        if let Some(directory) = selected.dir.as_deref() {
-            let directory = canonical_dependency_input_path(directory, true)?;
-            let local = module.main || selected.version.is_empty();
-            if local {
-                if !directory.starts_with(&root) {
-                    return Err(GoSemanticProcessError::CommandUnavailable(format!(
-                        "Go dependency graph contains an external local module `{}`.",
-                        directory.display()
-                    )));
-                }
-                reject_repository_cache_overlap(
-                    &directory,
-                    &repository_cache_roots,
-                    "local Go module",
-                )?;
+        hasher.update([u8::from(module.main), u8::from(module.replaced)]);
+        hash_length_prefixed(&mut hasher, module.selected_path.as_bytes());
+        hash_length_prefixed(&mut hasher, module.selected_version.as_bytes());
+        match module.location {
+            ListedGoPackageModuleLocation::Local(relative) => {
                 hasher.update(b"local-module");
-                hash_length_prefixed(
-                    &mut hasher,
-                    &os_string_bytes(
-                        directory
-                            .strip_prefix(&root)
-                            .unwrap_or(&directory)
-                            .as_os_str(),
-                    ),
-                );
-                let go_mod = selected
-                    .go_mod
-                    .clone()
-                    .unwrap_or_else(|| directory.join("go.mod"));
-                insert_existing_local_input(&go_mod, &root, &mut files)?;
-                insert_existing_local_input(&go_mod.with_file_name("go.sum"), &root, &mut files)?;
-            } else {
-                if !directory.starts_with(&module_cache) {
-                    return Err(GoSemanticProcessError::CommandFailed(format!(
-                        "versioned Go dependency `{}` escaped the private module snapshot.",
-                        directory.display()
-                    )));
-                }
+                hash_length_prefixed(&mut hasher, &relative);
+            }
+            ListedGoPackageModuleLocation::SealedCache => {
                 hasher.update(b"sealed-module-cache");
             }
-        } else {
-            hasher.update(b"no-module-directory");
         }
     }
     let packages =
@@ -14288,7 +14758,6 @@ mod tests {
         temp.path().join("cache")
     }
 
-    #[cfg(windows)]
     fn snapshot_repository_tree(root: &Path) -> Vec<(PathBuf, Option<Vec<u8>>)> {
         fn visit(root: &Path, directory: &Path, snapshot: &mut Vec<(PathBuf, Option<Vec<u8>>)>) {
             let mut entries = fs::read_dir(directory)
@@ -16549,6 +17018,60 @@ mod tests {
     }
 
     #[test]
+    fn package_selection_is_bound_to_local_semantic_config_identity() {
+        let baseline = GoAnalysisConfig {
+            module_roots: vec![".".to_string()],
+            package_patterns: vec!["./...".to_string()],
+            build_tags: vec!["integration".to_string()],
+            include_tests: true,
+            offline: false,
+            files_without_module_root: Vec::new(),
+        };
+        let digest = |config: &GoAnalysisConfig| {
+            let mut hasher = Sha256::new();
+            hash_go_analysis_semantic_config(&mut hasher, config);
+            format!("{:x}", hasher.finalize())
+        };
+        let baseline_digest = digest(&baseline);
+        let mut packages = baseline.clone();
+        packages.package_patterns = vec!["./cmd/...".to_string()];
+        let mut tags = baseline.clone();
+        tags.build_tags = vec!["production".to_string()];
+        let mut tests = baseline;
+        tests.include_tests = false;
+
+        assert_ne!(baseline_digest, digest(&packages));
+        assert_ne!(baseline_digest, digest(&tags));
+        assert_ne!(baseline_digest, digest(&tests));
+    }
+
+    #[test]
+    fn dependency_source_signature_binds_bom_build_constraints_not_function_bodies() {
+        fn digest(source: &[u8]) -> String {
+            let mut parser = tree_sitter::Parser::new();
+            parser
+                .set_language(&tree_sitter_go::LANGUAGE.into())
+                .expect("initialize Go parser");
+            let mut hasher = Sha256::new();
+            hash_go_dependency_source_signature(
+                &mut hasher,
+                &mut parser,
+                source,
+                GoOperationDeadline::after(Duration::from_secs(1)),
+            )
+            .expect("hash Go dependency signature");
+            format!("{:x}", hasher.finalize())
+        }
+
+        let linux = b"\xef\xbb\xbf//go:build linux\n\npackage selected\nimport _ \"example.test/dependency\"\nfunc Value() int { return 1 }\n";
+        let linux_body_edit = b"\xef\xbb\xbf//go:build linux\n\npackage selected\nimport _ \"example.test/dependency\"\nfunc Value() int { return 2 }\n";
+        let windows = b"\xef\xbb\xbf//go:build windows\n\npackage selected\nimport _ \"example.test/dependency\"\nfunc Value() int { return 1 }\n";
+
+        assert_eq!(digest(linux), digest(linux_body_edit));
+        assert_ne!(digest(linux), digest(windows));
+    }
+
+    #[test]
     fn recursive_local_seal_detects_a_new_nested_package() {
         let temp = tempfile::tempdir().expect("temporary directory");
         let root = temp.path();
@@ -17770,7 +18293,9 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn dependency_snapshot_preserves_synthetic_multi_module_workspace_paths() {
+    fn dependency_snapshot_resolves_synthetic_multi_module_workspace_without_replaces() {
+        let _semantic_scope =
+            acquire_test_go_semantic_concurrency_scope().expect("acquire Go semantic test scope");
         let temp = tempfile::tempdir().expect("tempdir");
         let root = temp.path().join("repo");
         let app = root.join("services/app");
@@ -17779,7 +18304,7 @@ mod tests {
         fs::create_dir_all(&library).expect("create library module");
         fs::write(
             app.join("go.mod"),
-            "module example.test/app\n\ngo 1.25\n\nrequire example.test/library v0.0.0\n\nreplace example.test/library => ../library\n",
+            "module example.test/app\n\ngo 1.25\n\nrequire example.test/library v0.0.0\n",
         )
         .expect("write app go.mod");
         fs::write(
@@ -17823,6 +18348,332 @@ mod tests {
         if cache.exists() {
             make_directory_tree_writable(&cache).expect("reopen cache for cleanup");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dependency_snapshot_uses_workspace_module_for_transitive_local_requirement() {
+        let _semantic_scope =
+            acquire_test_go_semantic_concurrency_scope().expect("acquire Go semantic test scope");
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("repo");
+        let app = root.join("services/app");
+        let library = root.join("services/library");
+        let dependency = root.join("services/dependency");
+        fs::create_dir_all(&app).expect("create app module");
+        fs::create_dir_all(&library).expect("create library module");
+        fs::create_dir_all(&dependency).expect("create local dependency module");
+        fs::write(
+            app.join("go.mod"),
+            "module example.test/app\n\ngo 1.25\n\nrequire example.test/dependency v0.0.0\n\nreplace example.test/dependency => ../dependency\n",
+        )
+        .expect("write app go.mod");
+        fs::write(
+            app.join("app.go"),
+            "package app\nimport _ \"example.test/dependency\"\n",
+        )
+        .expect("write app source");
+        fs::write(
+            dependency.join("go.mod"),
+            "module example.test/dependency\n\ngo 1.25\n\nrequire example.test/library v1.9.9\n",
+        )
+        .expect("write dependency go.mod");
+        fs::write(
+            dependency.join("dependency.go"),
+            "package dependency\nimport _ \"example.test/library\"\n",
+        )
+        .expect("write dependency source");
+        fs::write(
+            library.join("go.mod"),
+            "module example.test/library\n\ngo 1.25\n",
+        )
+        .expect("write library go.mod");
+        fs::write(library.join("library.go"), "package library\n").expect("write library source");
+        let config = GoAnalysisConfig {
+            module_roots: vec!["services/app".to_string(), "services/library".to_string()],
+            package_patterns: vec!["./...".to_string()],
+            build_tags: Vec::new(),
+            include_tests: true,
+            offline: false,
+            files_without_module_root: Vec::new(),
+        };
+        let before = snapshot_repository_tree(&root);
+        let cache = test_cache_root(&temp);
+
+        let prepared = PreparedGoSemanticFrontend::prepare_with_cache_root_for_analysis(
+            &cache,
+            Some((&root, &config)),
+            &[],
+            GoOperationDeadline::after(Duration::from_secs(60)),
+        )
+        .expect("transitive requirements must resolve workspace modules locally");
+
+        assert!(
+            prepared
+                .dependency_snapshot
+                .local_inputs
+                .as_ref()
+                .is_some_and(|inputs| inputs.package_count >= 3)
+        );
+        assert_eq!(snapshot_repository_tree(&root), before);
+        if cache.exists() {
+            make_directory_tree_writable(&cache).expect("reopen cache for cleanup");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dependency_snapshot_key_changes_when_source_imports_change() {
+        let _semantic_scope =
+            acquire_test_go_semantic_concurrency_scope().expect("acquire Go semantic test scope");
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("repo");
+        let app = root.join("services/app");
+        let first_dependency = root.join("services/first");
+        let second_dependency = root.join("services/second");
+        for directory in [&app, &first_dependency, &second_dependency] {
+            fs::create_dir_all(directory).expect("create module directory");
+        }
+        fs::write(
+            app.join("go.mod"),
+            "module example.test/app\n\ngo 1.25\n\nrequire (\n\texample.test/first v0.0.0\n\texample.test/second v0.0.0\n)\n\nreplace example.test/first => ../first\nreplace example.test/second => ../second\n",
+        )
+        .expect("write app go.mod");
+        fs::write(
+            app.join("app.go"),
+            "package app\nimport _ \"example.test/first\"\nfunc Value() int { return 1 }\n",
+        )
+        .expect("write initial app source");
+        fs::write(
+            first_dependency.join("go.mod"),
+            "module example.test/first\n\ngo 1.25\n",
+        )
+        .expect("write first dependency go.mod");
+        fs::write(first_dependency.join("first.go"), "package first\n")
+            .expect("write first dependency source");
+        fs::write(
+            second_dependency.join("go.mod"),
+            "module example.test/second\n\ngo 1.25\n",
+        )
+        .expect("write second dependency go.mod");
+        fs::write(second_dependency.join("second.go"), "package second\n")
+            .expect("write second dependency source");
+        let config = GoAnalysisConfig {
+            module_roots: vec!["services/app".to_string()],
+            package_patterns: vec!["./...".to_string()],
+            build_tags: Vec::new(),
+            include_tests: true,
+            offline: true,
+            files_without_module_root: Vec::new(),
+        };
+        let cache = test_cache_root(&temp);
+        ensure_private_cache_root(&cache).expect("private cache");
+        let deadline = GoOperationDeadline::after(Duration::from_secs(60));
+        let toolchain = prepare_go_toolchain_until(
+            &cache,
+            local_go_toolchain().expect("local Go toolchain"),
+            true,
+            deadline,
+        )
+        .expect("prepare offline Go toolchain");
+
+        let first =
+            prepare_dependency_snapshot(&cache, &toolchain, Some((&root, &config)), &[], deadline)
+                .expect("prepare first package-selected snapshot");
+        fs::write(
+            app.join("app.go"),
+            "package app\nimport _ \"example.test/first\"\nfunc Value() int { return 2 }\n",
+        )
+        .expect("change only a function body");
+        let body_only =
+            prepare_dependency_snapshot(&cache, &toolchain, Some((&root, &config)), &[], deadline)
+                .expect("reuse snapshot after a dependency-neutral source edit");
+        assert_eq!(first.snapshot_root, body_only.snapshot_root);
+        assert_ne!(
+            first.local_dependencies_digest,
+            body_only.local_dependencies_digest
+        );
+        fs::write(
+            app.join("app.go"),
+            "package app\nimport _ \"example.test/second\"\nfunc Value() int { return 2 }\n",
+        )
+        .expect("change source-only import selection");
+        let second =
+            prepare_dependency_snapshot(&cache, &toolchain, Some((&root, &config)), &[], deadline)
+                .expect("prepare source-updated package-selected snapshot");
+
+        assert_ne!(first.snapshot_root, second.snapshot_root);
+        assert_ne!(
+            first.local_dependencies_digest,
+            second.local_dependencies_digest
+        );
+        make_directory_tree_writable(&cache).expect("reopen cache for cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dependency_snapshot_key_changes_when_local_replacement_manifest_changes() {
+        let _semantic_scope =
+            acquire_test_go_semantic_concurrency_scope().expect("acquire Go semantic test scope");
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("repo");
+        let app = root.join("services/app");
+        let dependency = root.join("services/dependency");
+        fs::create_dir_all(&app).expect("create app module");
+        fs::create_dir_all(&dependency).expect("create dependency module");
+        fs::write(
+            app.join("go.mod"),
+            "module example.test/app\n\ngo 1.25\n\nrequire example.test/dependency v0.0.0\n\nreplace example.test/dependency => ../dependency\n",
+        )
+        .expect("write app go.mod");
+        fs::write(
+            app.join("app.go"),
+            "package app\nimport _ \"example.test/dependency\"\n",
+        )
+        .expect("write app source");
+        fs::write(
+            dependency.join("go.mod"),
+            "module example.test/dependency\n\ngo 1.24\n",
+        )
+        .expect("write dependency go.mod");
+        fs::write(dependency.join("dependency.go"), "package dependency\n")
+            .expect("write dependency source");
+        let config = GoAnalysisConfig {
+            module_roots: vec!["services/app".to_string()],
+            package_patterns: vec!["./...".to_string()],
+            build_tags: Vec::new(),
+            include_tests: true,
+            offline: true,
+            files_without_module_root: Vec::new(),
+        };
+        let cache = test_cache_root(&temp);
+        ensure_private_cache_root(&cache).expect("private cache");
+        let deadline = GoOperationDeadline::after(Duration::from_secs(60));
+        let toolchain = prepare_go_toolchain_until(
+            &cache,
+            local_go_toolchain().expect("local Go toolchain"),
+            true,
+            deadline,
+        )
+        .expect("prepare offline Go toolchain");
+
+        let first =
+            prepare_dependency_snapshot(&cache, &toolchain, Some((&root, &config)), &[], deadline)
+                .expect("prepare first local-replacement snapshot");
+        fs::write(
+            dependency.join("go.mod"),
+            "module example.test/dependency\n\ngo 1.25\n",
+        )
+        .expect("change only the replacement manifest");
+        let second =
+            prepare_dependency_snapshot(&cache, &toolchain, Some((&root, &config)), &[], deadline)
+                .expect("prepare manifest-updated local-replacement snapshot");
+
+        assert_ne!(first.snapshot_root, second.snapshot_root);
+        assert_ne!(
+            first.local_dependencies_digest,
+            second.local_dependencies_digest
+        );
+        make_directory_tree_writable(&cache).expect("reopen cache for cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dependency_source_binding_includes_explicitly_selectable_directories() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("repo");
+        fs::create_dir(&root).expect("create repository");
+        let deadline = GoOperationDeadline::after(Duration::from_secs(5));
+        let baseline =
+            dependency_population_source_digest(&root, std::slice::from_ref(&root), &[], deadline)
+                .expect("bind empty repository sources");
+
+        for directory in ["testdata/package", "_hidden/package", ".hidden/package"] {
+            let package = root.join(directory);
+            fs::create_dir_all(&package).expect("create explicitly selectable package");
+            fs::write(package.join("package.go"), "package selected\n")
+                .expect("write explicitly selectable source");
+            let changed = dependency_population_source_digest(
+                &root,
+                std::slice::from_ref(&root),
+                &[],
+                deadline,
+            )
+            .expect("bind explicitly selectable source");
+            assert_ne!(baseline, changed, "source under {directory} must be bound");
+            fs::remove_dir_all(root.join(directory.split('/').next().expect("top directory")))
+                .expect("remove explicitly selectable package");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unavailable_dependency_does_not_publish_an_incomplete_snapshot() {
+        let _semantic_scope =
+            acquire_test_go_semantic_concurrency_scope().expect("acquire Go semantic test scope");
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("repo");
+        fs::create_dir(&root).expect("create repository");
+        fs::write(
+            root.join("go.mod"),
+            "module example.test/app\n\ngo 1.25\n\nrequire example.invalid/missing v1.0.0\n",
+        )
+        .expect("write app go.mod");
+        fs::write(
+            root.join("app.go"),
+            "package app\nimport _ \"example.invalid/missing\"\n",
+        )
+        .expect("write app source");
+        let config = GoAnalysisConfig {
+            module_roots: vec![".".to_string()],
+            package_patterns: vec!["./...".to_string()],
+            build_tags: Vec::new(),
+            include_tests: true,
+            offline: true,
+            files_without_module_root: Vec::new(),
+        };
+        let cache = test_cache_root(&temp);
+        ensure_private_cache_root(&cache).expect("private cache");
+        let deadline = GoOperationDeadline::after(Duration::from_secs(60));
+        let toolchain = prepare_go_toolchain_until(
+            &cache,
+            local_go_toolchain().expect("local Go toolchain"),
+            true,
+            deadline,
+        )
+        .expect("prepare offline Go toolchain");
+
+        for attempt in 1..=2 {
+            let error = prepare_dependency_snapshot(
+                &cache,
+                &toolchain,
+                Some((&root, &config)),
+                &[],
+                deadline,
+            )
+            .expect_err("unavailable dependency must fail snapshot population");
+            assert!(
+                error
+                    .to_string()
+                    .contains("dependency snapshot package population failed"),
+                "unexpected attempt {attempt} error: {error:?}"
+            );
+        }
+
+        let snapshots = cache.join("dependency-snapshots");
+        let published = fs::read_dir(&snapshots)
+            .expect("read dependency snapshots root")
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                name.len() == 64
+                    && name.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    && entry.file_type().is_ok_and(|kind| kind.is_dir())
+            })
+            .count();
+        assert_eq!(published, 0, "failed population must remain unpublished");
+        make_directory_tree_writable(&cache).expect("reopen cache for cleanup");
     }
 
     #[cfg(unix)]
