@@ -66,7 +66,7 @@ fn assert_schema_object_is_closed(value: &serde_json::Value, label: &str) {
 
 #[test]
 fn top_level_help_only_lists_supported_public_commands() {
-    let help = stdout_string(polint_cmd().arg("--help").assert().success());
+    let help = polint_help(&["--help"]);
 
     for command in [
         "init",
@@ -493,17 +493,7 @@ exclude = []
 
 #[test]
 fn explain_json_reports_rule_capability_plan() {
-    let temp = tempfile::tempdir().unwrap();
-    polint_cmd()
-        .current_dir(temp.path())
-        .arg("init")
-        .assert()
-        .success();
-    polint_cmd()
-        .current_dir(temp.path())
-        .args(["new-rule", "ts", "no-raw-colors"])
-        .assert()
-        .success();
+    let temp = fixture_workspace();
     point_generated_rule_pack_at_local_polint(temp.path());
 
     let first = stdout_string(
@@ -569,9 +559,7 @@ exclude = []
             .assert()
             .success(),
     ));
-    surface.push_str(&output_string(
-        polint_cmd().args(["--help"]).assert().success(),
-    ));
+    surface.push_str(&polint_help(&["--help"]));
     surface.push_str(&source_tree_text(
         &repo_root().join("crates/polint/src/sdk"),
     ));
@@ -643,17 +631,7 @@ fn generated_skills_describe_phase41_public_surface() {
 
 #[test]
 fn phase41_public_json_contracts_are_stable() {
-    let temp = tempfile::tempdir().unwrap();
-    polint_cmd()
-        .current_dir(temp.path())
-        .arg("init")
-        .assert()
-        .success();
-    polint_cmd()
-        .current_dir(temp.path())
-        .args(["new-rule", "ts", "no-raw-colors"])
-        .assert()
-        .success();
+    let temp = fixture_workspace();
     point_generated_rule_pack_at_local_polint(temp.path());
 
     let commands: Vec<Vec<&str>> = vec![
@@ -720,17 +698,7 @@ fn phase41_public_json_contracts_are_stable() {
 
 #[test]
 fn inspect_rule_json_matches_schema_v1() {
-    let temp = tempfile::tempdir().unwrap();
-    polint_cmd()
-        .current_dir(temp.path())
-        .arg("init")
-        .assert()
-        .success();
-    polint_cmd()
-        .current_dir(temp.path())
-        .args(["new-rule", "ts", "no-raw-colors"])
-        .assert()
-        .success();
+    let temp = fixture_workspace();
     point_generated_rule_pack_at_local_polint(temp.path());
 
     let value = stdout_json(
@@ -750,17 +718,7 @@ fn inspect_rule_json_matches_schema_v1() {
 
 #[test]
 fn polint_test_json_matches_schema_v1() {
-    let temp = tempfile::tempdir().unwrap();
-    polint_cmd()
-        .current_dir(temp.path())
-        .arg("init")
-        .assert()
-        .success();
-    polint_cmd()
-        .current_dir(temp.path())
-        .args(["new-rule", "ts", "no-raw-colors"])
-        .assert()
-        .success();
+    let temp = fixture_workspace();
     point_generated_rule_pack_at_local_polint(temp.path());
 
     let value = stdout_json(
@@ -1729,7 +1687,7 @@ type Tx struct{}
 
 #[test]
 fn check_help_guides_ai_agents_to_compact_output() {
-    let help = stdout_string(polint_cmd().args(["check", "--help"]).assert().success());
+    let help = polint_help(&["check", "--help"]);
 
     assert!(help.contains("ai-friendly"), "{help}");
     assert!(
@@ -1765,10 +1723,7 @@ exclude = []
                     .success(),
             ),
         ),
-        (
-            "polint check --help",
-            output_string(polint_cmd().args(["check", "--help"]).assert().success()),
-        ),
+        ("polint check --help", polint_help(&["check", "--help"])),
         (
             "polint inspect rule --format json",
             output_string(
@@ -1819,7 +1774,7 @@ exclude = []
             .assert()
             .success(),
     );
-    let help = output_string(polint_cmd().args(["check", "--help"]).assert().success());
+    let help = polint_help(&["check", "--help"]);
     let mut public_sources = String::new();
     for path in [
         repo_root().join("crates/polint/src/lib.rs"),
@@ -1891,7 +1846,7 @@ fn evidence_public_no_leak() {
             .assert()
             .success(),
     );
-    let help = output_string(polint_cmd().args(["check", "--help"]).assert().success());
+    let help = polint_help(&["check", "--help"]);
 
     let public_sources = [
         repo_root().join("crates/polint/src/sdk/mod.rs"),
@@ -3224,19 +3179,18 @@ fn assert_semantic_mir_public_surfaces_are_private() {
     }
 }
 
+fn public_rule_help_outputs() -> [String; 5] {
+    [
+        polint_help(&["--help"]),
+        polint_help(&["check", "--help"]),
+        polint_help(&["inspect", "--help"]),
+        polint_help(&["inspect", "rule", "--help"]),
+        polint_help(&["test", "--help"]),
+    ]
+}
+
 fn assert_semantic_mir_cli_help_is_private() {
-    let help_outputs = [
-        stdout_string(polint_cmd().arg("--help").assert().success()),
-        stdout_string(polint_cmd().args(["check", "--help"]).assert().success()),
-        stdout_string(polint_cmd().args(["inspect", "--help"]).assert().success()),
-        stdout_string(
-            polint_cmd()
-                .args(["inspect", "rule", "--help"])
-                .assert()
-                .success(),
-        ),
-        stdout_string(polint_cmd().args(["test", "--help"]).assert().success()),
-    ];
+    let help_outputs = public_rule_help_outputs();
 
     for help in help_outputs {
         for marker in SEMANTIC_MIR_INTERNAL_PUBLIC_MARKERS {
@@ -3595,18 +3549,7 @@ fn assert_abstract_domains_public_surfaces_are_private() {
 }
 
 fn assert_type_value_alias_cli_help_is_private() {
-    let help_outputs = [
-        stdout_string(polint_cmd().arg("--help").assert().success()),
-        stdout_string(polint_cmd().args(["check", "--help"]).assert().success()),
-        stdout_string(polint_cmd().args(["inspect", "--help"]).assert().success()),
-        stdout_string(
-            polint_cmd()
-                .args(["inspect", "rule", "--help"])
-                .assert()
-                .success(),
-        ),
-        stdout_string(polint_cmd().args(["test", "--help"]).assert().success()),
-    ];
+    let help_outputs = public_rule_help_outputs();
 
     for help in help_outputs {
         for marker in TYPE_VALUE_ALIAS_INTERNAL_PUBLIC_MARKERS {
@@ -3619,18 +3562,7 @@ fn assert_type_value_alias_cli_help_is_private() {
 }
 
 fn assert_abstract_domains_cli_help_is_private() {
-    let help_outputs = [
-        stdout_string(polint_cmd().arg("--help").assert().success()),
-        stdout_string(polint_cmd().args(["check", "--help"]).assert().success()),
-        stdout_string(polint_cmd().args(["inspect", "--help"]).assert().success()),
-        stdout_string(
-            polint_cmd()
-                .args(["inspect", "rule", "--help"])
-                .assert()
-                .success(),
-        ),
-        stdout_string(polint_cmd().args(["test", "--help"]).assert().success()),
-    ];
+    let help_outputs = public_rule_help_outputs();
 
     for help in help_outputs {
         for marker in ABSTRACT_DOMAINS_INTERNAL_PUBLIC_MARKERS {
@@ -3808,18 +3740,7 @@ fn assert_direct_calls_public_surfaces_are_private() {
 }
 
 fn assert_direct_calls_cli_help_is_private() {
-    let help_outputs = [
-        stdout_string(polint_cmd().arg("--help").assert().success()),
-        stdout_string(polint_cmd().args(["check", "--help"]).assert().success()),
-        stdout_string(polint_cmd().args(["inspect", "--help"]).assert().success()),
-        stdout_string(
-            polint_cmd()
-                .args(["inspect", "rule", "--help"])
-                .assert()
-                .success(),
-        ),
-        stdout_string(polint_cmd().args(["test", "--help"]).assert().success()),
-    ];
+    let help_outputs = public_rule_help_outputs();
 
     for help in help_outputs {
         for marker in DIRECT_CALLS_INTERNAL_PUBLIC_MARKERS {
@@ -3869,18 +3790,7 @@ fn assert_cfg_public_surfaces_are_private() {
 }
 
 fn assert_cfg_cli_help_is_private() {
-    let help_outputs = [
-        stdout_string(polint_cmd().arg("--help").assert().success()),
-        stdout_string(polint_cmd().args(["check", "--help"]).assert().success()),
-        stdout_string(polint_cmd().args(["inspect", "--help"]).assert().success()),
-        stdout_string(
-            polint_cmd()
-                .args(["inspect", "rule", "--help"])
-                .assert()
-                .success(),
-        ),
-        stdout_string(polint_cmd().args(["test", "--help"]).assert().success()),
-    ];
+    let help_outputs = public_rule_help_outputs();
 
     for help in help_outputs {
         for marker in CFG_INTERNAL_PUBLIC_MARKERS {
@@ -4514,18 +4424,7 @@ fn assert_module_topology_public_surfaces_are_private() {
 }
 
 fn assert_module_topology_cli_help_is_private() {
-    let help_outputs = [
-        stdout_string(polint_cmd().arg("--help").assert().success()),
-        stdout_string(polint_cmd().args(["check", "--help"]).assert().success()),
-        stdout_string(polint_cmd().args(["inspect", "--help"]).assert().success()),
-        stdout_string(
-            polint_cmd()
-                .args(["inspect", "rule", "--help"])
-                .assert()
-                .success(),
-        ),
-        stdout_string(polint_cmd().args(["test", "--help"]).assert().success()),
-    ];
+    let help_outputs = public_rule_help_outputs();
 
     for help in help_outputs {
         for marker in [
@@ -4938,15 +4837,10 @@ fn assert_layer_cache_public_surfaces_are_private() {
 
 fn assert_layer_cache_cli_help_is_private() {
     let help_outputs = [
-        stdout_string(polint_cmd().arg("--help").assert().success()),
-        stdout_string(polint_cmd().args(["check", "--help"]).assert().success()),
-        stdout_string(polint_cmd().args(["cache", "--help"]).assert().success()),
-        stdout_string(
-            polint_cmd()
-                .args(["cache", "status", "--help"])
-                .assert()
-                .success(),
-        ),
+        polint_help(&["--help"]),
+        polint_help(&["check", "--help"]),
+        polint_help(&["cache", "--help"]),
+        polint_help(&["cache", "status", "--help"]),
     ];
 
     for help in help_outputs {
@@ -11380,18 +11274,7 @@ fn assert_direct_summaries_public_surfaces_are_private() {
 }
 
 fn assert_direct_summaries_cli_help_is_private() {
-    let help_outputs = [
-        stdout_string(polint_cmd().arg("--help").assert().success()),
-        stdout_string(polint_cmd().args(["check", "--help"]).assert().success()),
-        stdout_string(polint_cmd().args(["inspect", "--help"]).assert().success()),
-        stdout_string(
-            polint_cmd()
-                .args(["inspect", "rule", "--help"])
-                .assert()
-                .success(),
-        ),
-        stdout_string(polint_cmd().args(["test", "--help"]).assert().success()),
-    ];
+    let help_outputs = public_rule_help_outputs();
 
     for help in help_outputs {
         for marker in DIRECT_SUMMARIES_INTERNAL_PUBLIC_MARKERS {

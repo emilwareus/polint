@@ -14,33 +14,56 @@ env:
   CARGO_INCREMENTAL: "0"
   CARGO_PROFILE_DEV_DEBUG: "0"
   CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_BUILD_JOBS: "4"
 
 jobs:
+  # ── Fast checks (<1 min each) ─────────────────────────────────────────────
+
   fmt:
     name: rustfmt
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-
       - name: cargo fmt
         run: cargo fmt --all -- --check
+
+  doc:
+    name: rustdoc (-D warnings)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo doc
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --all-features --no-deps --locked
+
+  supply-chain:
+    name: cargo deny (advisories + licenses + bans)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          arguments: --all-features --locked
+
+  # ── Compile checks (~1-3 min each) ────────────────────────────────────────
 
   msrv:
     name: MSRV (1.95) — cargo check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.95
-
+          toolchain: "1.95"
       - uses: Swatinem/rust-cache@v2
-
       - name: cargo check (workspace MSRV)
         run: cargo check --workspace --all-targets --all-features --locked
 
@@ -49,7 +72,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-
       - uses: actions/setup-go@v6
         with:
           go-version: "1.25.x"
@@ -57,19 +79,27 @@ jobs:
             crates/polint/go-sidecar/polint-go-frontend/go.sum
             tools/polint-go-symbols/go.sum
             crates/polint/go-sidecar/polint-go-symbols/go.sum
-
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-
       - uses: Swatinem/rust-cache@v2
-
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
+  # ── Tests split for parallelism ───────────────────────────────────────────
+
   test-linux:
-    name: ubuntu-latest — full workspace tests
+    name: "${{ matrix.name }}"
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ubuntu — lib + example tests
+            test-args: -p polint --lib --all-features --locked
+          - name: ubuntu — integration tests
+            test-args: -p polint --test '*' --all-features --locked
+
     steps:
       - uses: actions/checkout@v6
 
@@ -91,16 +121,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: cargo test
-        run: cargo test --workspace --all-features --locked
+        run: cargo test ${{ matrix.test-args }}
 
-      - name: semantic-store regression gate (serialized)
-        run: >-
-          cargo test -p polint --lib --all-features --locked
-          eval::bench::gate::tests::semantic_store_boundary::real_store_enabled_measurement_passes_locked_boundary
-          -- --exact --ignored --test-threads=1 --nocapture
 
   test-platform:
-    name: ${{ matrix.os }} — platform library tests
+    name: "${{ matrix.os }} — lib tests"
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -122,8 +147,43 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: cargo test
+      - name: cargo test (lib)
         run: cargo test -p polint --lib --all-features --locked
+
+
+  # ── Quality gates consolidated ─────────────────────────────────────────────
+
+  gates:
+    name: "gates (${{ matrix.os }})"
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.x"
+          cache-dependency-path: |
+            crates/polint/go-sidecar/polint-go-frontend/go.sum
+            tools/polint-go-symbols/go.sum
+            crates/polint/go-sidecar/polint-go-symbols/go.sum
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: polyglot Go+TS canary
+        run: cargo test -p polint polyglot --lib --locked
+
+      - name: public-surface leak gate
+        run: cargo test --package polint --test public_surface_leak --locked
+
+      - name: determinism gate (N=10 seeded permutations)
+        run: cargo test -p polint --lib eval::determinism_gate --locked
 
       - name: semantic-store regression gate (serialized)
         run: >-
@@ -131,107 +191,15 @@ jobs:
           eval::bench::gate::tests::semantic_store_boundary::real_store_enabled_measurement_passes_locked_boundary
           -- --exact --ignored --test-threads=1 --nocapture
 
-  leak-gate:
-    # Blocks accidental expansion of the supported public API on Linux and macOS.
-    # Runs on every PR on Linux AND macOS. fail-fast: false means each platform
-    # reports independently — a Linux pass + macOS fail still blocks the PR (no
-    # averaging or skipping either platform). New public types must pass this gate.
-    name: public surface leak gate (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: run public-surface-leak gate
-        run: cargo test --package polint --test public_surface_leak --locked
-
-  determinism-gate:
-    # Blocks provider-order nondeterminism on Linux and macOS.
-    # Runs the N=10 seeded-permutation byte-identity gate on every PR on Linux AND
-    # macOS. fail-fast: false means each platform reports INDEPENDENTLY — a Linux
-    # pass + macOS fail still blocks the PR (no averaging, no skipping either
-    # platform, mirroring the leak-gate contract). New providers auto-enroll via
-    # provider_manifests(), and the determinism fixtures must stay green.
-    # This is a fast-CI (PR-blocking) job, not nightly.
-    name: determinism gate (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-go@v6
-        with:
-          go-version: "1.25.x"
-          cache-dependency-path: |
-            crates/polint/go-sidecar/polint-go-frontend/go.sum
-            tools/polint-go-symbols/go.sum
-            crates/polint/go-sidecar/polint-go-symbols/go.sum
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: run determinism gate (N=10 seeded permutations)
-        run: cargo test -p polint --lib eval::determinism_gate --locked
-
-  promotion-gate:
-    # Combines the polyglot canary with public-surface and determinism checks.
-    # Runs the polyglot Go+TS canary, public-surface leak gate, and determinism
-    # gate together on Linux AND macOS. fail-fast: false keeps platform verdicts
-    # independent: a pass on one platform never hides a failure on the other.
-    name: promotion gate (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-go@v6
-        with:
-          go-version: "1.25.x"
-          cache-dependency-path: |
-            crates/polint/go-sidecar/polint-go-frontend/go.sum
-            tools/polint-go-symbols/go.sum
-            crates/polint/go-sidecar/polint-go-symbols/go.sum
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: run polyglot Go+TS canary
-        run: cargo test -p polint polyglot --lib --locked
-
-      - name: run public-surface-leak gate
-        run: cargo test --package polint --test public_surface_leak --locked
-
-      - name: run determinism gate
-        run: cargo test -p polint --lib eval::determinism_gate --locked
+  # ── Artifact / smoke tests ─────────────────────────────────────────────────
 
   install-smoke:
     name: cargo install smoke (ubuntu)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-
       - uses: dtolnay/rust-toolchain@stable
-
       - uses: Swatinem/rust-cache@v2
-
       - name: cargo install smoke (release install + --version)
         run: cargo test -p polint --test cargo_install_smoke --locked -- --ignored
 
@@ -268,31 +236,3 @@ jobs:
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: examples/ts-design-tokens/polint-results.sarif
-
-  doc:
-    name: rustdoc (-D warnings)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: cargo doc
-        env:
-          RUSTDOCFLAGS: -D warnings
-        run: cargo doc --workspace --all-features --no-deps --locked
-
-  supply-chain:
-    name: cargo deny (advisories + licenses + bans)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: EmbarkStudios/cargo-deny-action@v2
-        with:
-          command: check
-          arguments: --all-features --locked

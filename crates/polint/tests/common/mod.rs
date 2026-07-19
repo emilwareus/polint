@@ -4,6 +4,7 @@ use assert_cmd::Command;
 use std::borrow::Cow;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 pub(crate) fn write_file(path: &Path, contents: &str) {
     if let Some(parent) = path.parent() {
@@ -183,34 +184,131 @@ pub(crate) fn polint_cmd() -> Command {
     command
 }
 
-pub(crate) fn example_rule_cmd(example: &str) -> Command {
-    let manifest = repo_root()
-        .join("examples")
-        .join(example)
-        .join(".polint/rules/Cargo.toml");
-    let manifest_str = manifest
-        .to_str()
-        .unwrap_or_else(|| panic!("manifest path is not valid UTF-8: {}", manifest.display()))
-        .to_string();
-    let mut command = cargo_cmd();
-    command.args(["run", "--quiet", "--manifest-path", &manifest_str, "--"]);
+pub(crate) fn polint_help(args: &[&str]) -> String {
+    static TOP_LEVEL: OnceLock<String> = OnceLock::new();
+    static CHECK: OnceLock<String> = OnceLock::new();
+    static INSPECT: OnceLock<String> = OnceLock::new();
+    static INSPECT_RULE: OnceLock<String> = OnceLock::new();
+    static TEST: OnceLock<String> = OnceLock::new();
+    static CACHE: OnceLock<String> = OnceLock::new();
+    static CACHE_STATUS: OnceLock<String> = OnceLock::new();
+
+    let cache = match args {
+        ["--help"] => &TOP_LEVEL,
+        ["check", "--help"] => &CHECK,
+        ["inspect", "--help"] => &INSPECT,
+        ["inspect", "rule", "--help"] => &INSPECT_RULE,
+        ["test", "--help"] => &TEST,
+        ["cache", "--help"] => &CACHE,
+        ["cache", "status", "--help"] => &CACHE_STATUS,
+        _ => panic!("unsupported cached polint help command: {args:?}"),
+    };
+
+    cache
+        .get_or_init(|| stdout_string(polint_cmd().args(args.iter().copied()).assert().success()))
+        .clone()
+}
+
+pub(crate) fn shared_fixture_root() -> &'static Path {
+    static SHARED_FIXTURE: OnceLock<tempfile::TempDir> = OnceLock::new();
+
+    SHARED_FIXTURE
+        .get_or_init(|| {
+            let fixture = tempfile::tempdir().expect("create shared CLI fixture");
+            polint_cmd()
+                .current_dir(fixture.path())
+                .arg("init")
+                .assert()
+                .success();
+            polint_cmd()
+                .current_dir(fixture.path())
+                .args(["new-rule", "ts", "no-raw-colors"])
+                .assert()
+                .success();
+            fixture
+        })
+        .path()
+}
+
+pub(crate) fn fixture_workspace() -> tempfile::TempDir {
+    let workspace = tempfile::tempdir().expect("create CLI fixture workspace");
+    copy_dir_contents(shared_fixture_root(), workspace.path());
+    workspace
+}
+
+fn copy_dir_contents(source: &Path, destination: &Path) {
+    for entry in fs::read_dir(source)
+        .unwrap_or_else(|error| panic!("read shared fixture {}: {error}", source.display()))
+    {
+        let entry = entry.expect("read shared fixture entry");
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        if source_path.is_dir() {
+            fs::create_dir_all(&destination_path).unwrap_or_else(|error| {
+                panic!(
+                    "create fixture directory {}: {error}",
+                    destination_path.display()
+                )
+            });
+            copy_dir_contents(&source_path, &destination_path);
+        } else {
+            fs::copy(&source_path, &destination_path).unwrap_or_else(|error| {
+                panic!(
+                    "copy fixture file {} to {}: {error}",
+                    source_path.display(),
+                    destination_path.display()
+                )
+            });
+        }
+    }
+}
+
+fn example_rule_cmd(package: &'static str) -> Command {
+    static EXAMPLE_RULES_BUILT: OnceLock<()> = OnceLock::new();
+
+    EXAMPLE_RULES_BUILT.get_or_init(|| {
+        cargo_cmd()
+            .current_dir(repo_root())
+            .args([
+                "build",
+                "--quiet",
+                "--package",
+                "polint-example-ts-design-tokens-rule",
+                "--package",
+                "polint-example-ts-complexity-rule",
+                "--package",
+                "polint-example-go-import-boundaries-rule",
+                "--package",
+                "polint-example-go-branch-obligations-rule",
+            ])
+            .assert()
+            .success();
+    });
+
+    let executable = shared_cargo_target_dir()
+        .join("debug")
+        .join(format!("{package}{}", std::env::consts::EXE_SUFFIX));
+    let mut command = Command::new(executable);
+    command.env("CARGO_TARGET_DIR", shared_cargo_target_dir());
+    command.env("POLINT_RULES_TARGET_DIR", shared_rules_target_dir());
+    command.env("POLINT_RULES_PROFILE", "dev");
     command
 }
 
 pub(crate) fn raw_color_rule_cmd() -> Command {
-    example_rule_cmd("ts-design-tokens")
+    example_rule_cmd("polint-example-ts-design-tokens-rule")
 }
 
 pub(crate) fn ts_complexity_rule_cmd() -> Command {
-    example_rule_cmd("ts-complexity")
+    example_rule_cmd("polint-example-ts-complexity-rule")
 }
 
 pub(crate) fn go_import_boundaries_rule_cmd() -> Command {
-    example_rule_cmd("go-import-boundaries")
+    example_rule_cmd("polint-example-go-import-boundaries-rule")
 }
 
 pub(crate) fn go_branch_obligations_rule_cmd() -> Command {
-    example_rule_cmd("go-branch-obligations")
+    example_rule_cmd("polint-example-go-branch-obligations-rule")
 }
 
 pub(crate) fn write_phase8_raw_color_fixture(root: &Path, severity: &str) {
