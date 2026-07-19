@@ -2321,55 +2321,43 @@ mod eval_native_fixture_runner_tests {
 
     #[test]
     fn eval_native_fixture_suite_covers_required_categories() {
-        let fixture_dirs = collect_native_fixture_dirs(&repo_root().join("tests/eval-fixtures"));
-        let mut passing_by_area = std::collections::BTreeMap::<FixtureArea, Vec<String>>::new();
+        let fixture_root = repo_root().join("tests/eval-fixtures");
+        let fixture_dirs = collect_native_fixture_dirs(&fixture_root);
+        let discovered_fixture_dirs = fixture_dirs
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        let declared_fixture_dirs = NATIVE_FIXTURE_DIRS
+            .iter()
+            .map(|relative_path| fixture_root.join(relative_path))
+            .collect::<std::collections::BTreeSet<_>>();
 
         assert!(
             !fixture_dirs.is_empty(),
             "native fixture suite should contain fixture manifests"
         );
+        assert_eq!(
+            discovered_fixture_dirs, declared_fixture_dirs,
+            "every native fixture directory should have an independently schedulable test"
+        );
+
+        let mut fixtures_by_area = std::collections::BTreeMap::<FixtureArea, Vec<String>>::new();
 
         for fixture_dir in fixture_dirs {
             if cfg!(target_os = "windows") && fixture_requires_runtime_extension(&fixture_dir) {
                 continue;
             }
-            let run = run_fixture_for_suite_coverage(&fixture_dir).unwrap_or_else(|error| {
+            let fixture = load_native_fixture(&fixture_dir).unwrap_or_else(|error| {
                 panic!(
-                    "native fixture should run: {}\n{error:#}",
+                    "native fixture manifest should load: {}\n{error:#}",
                     fixture_dir.display()
                 )
             });
-            let case = run
-                .cases
-                .first()
-                .expect("native fixture run should have a case");
 
-            assert_eq!(
-                run.metrics.false_negatives,
-                0,
-                "fixture should not miss expected rows: {}\n{}",
-                case.case_id,
-                to_deterministic_json_pretty(&run)
-            );
-            assert_eq!(
-                run.metrics.forbidden_hits,
-                0,
-                "fixture should not hit forbidden rows: {}\n{}",
-                case.case_id,
-                to_deterministic_json_pretty(&run)
-            );
-            assert_eq!(
-                run.metrics.runtime_budget_failed,
-                0,
-                "fixture should stay inside runtime budget: {}\n{}",
-                case.case_id,
-                to_deterministic_json_pretty(&run)
-            );
-
-            passing_by_area
-                .entry(case.area)
+            fixtures_by_area
+                .entry(fixture.manifest.area)
                 .or_default()
-                .push(case.case_id.clone());
+                .push(fixture.manifest.case_id);
         }
 
         for required_area in [
@@ -2382,10 +2370,115 @@ mod eval_native_fixture_runner_tests {
             FixtureArea::Evidence,
         ] {
             assert!(
-                passing_by_area.contains_key(&required_area),
-                "native fixture suite must include a passing {required_area:?} fixture; found {passing_by_area:#?}"
+                fixtures_by_area.contains_key(&required_area),
+                "native fixture suite must include a {required_area:?} fixture; found {fixtures_by_area:#?}"
             );
         }
+    }
+
+    fn assert_native_fixture_passes(fixture_dir: &Path) {
+        if cfg!(target_os = "windows") && fixture_requires_runtime_extension(fixture_dir) {
+            return;
+        }
+
+        let run = run_fixture_for_suite_coverage(fixture_dir).unwrap_or_else(|error| {
+            panic!(
+                "native fixture should run: {}\n{error:#}",
+                fixture_dir.display()
+            )
+        });
+        let case = run
+            .cases
+            .first()
+            .expect("native fixture run should have a case");
+        let rendered = to_deterministic_json_pretty(&run);
+
+        assert_eq!(
+            run.metrics.false_negatives, 0,
+            "fixture should not miss expected rows: {}\n{rendered}",
+            case.case_id
+        );
+        assert_eq!(
+            run.metrics.forbidden_hits, 0,
+            "fixture should not hit forbidden rows: {}\n{rendered}",
+            case.case_id
+        );
+        assert_eq!(
+            run.metrics.runtime_budget_failed, 0,
+            "fixture should stay inside runtime budget: {}\n{rendered}",
+            case.case_id
+        );
+    }
+
+    macro_rules! native_fixture_tests {
+        ($($test_name:ident => $relative_path:literal),+ $(,)?) => {
+            const NATIVE_FIXTURE_DIRS: &[&str] = &[$($relative_path),+];
+
+            $(
+                #[test]
+                fn $test_name() {
+                    assert_native_fixture_passes(
+                        &repo_root().join("tests/eval-fixtures").join($relative_path),
+                    );
+                }
+            )+
+        };
+    }
+
+    native_fixture_tests! {
+        eval_native_fixture_abstract_domains_core_passes => "abstract-domains/core",
+        eval_native_fixture_cache_current_determinism_passes => "cache/current-determinism",
+        eval_native_fixture_cache_input_snapshots_passes => "cache/input-snapshots",
+        eval_native_fixture_cache_layer_cache_passes => "cache/layer-cache",
+        eval_native_fixture_cfg_core_passes => "cfg-core",
+        eval_native_fixture_data_flow_core_passes => "data-flow/core",
+        eval_native_fixture_determinism_go_reachable_passes => "determinism/go_reachable",
+        eval_native_fixture_determinism_go_rta_passes => "determinism/go_rta",
+        eval_native_fixture_determinism_ts_object_model_passes => "determinism/ts_object_model",
+        eval_native_fixture_determinism_ts_reachable_passes => "determinism/ts_reachable",
+        eval_native_fixture_determinism_ts_tokens_passes => "determinism/ts_tokens",
+        eval_native_fixture_direct_calls_core_passes => "direct-calls/core",
+        eval_native_fixture_direct_summaries_core_passes => "direct-summaries/core",
+        eval_native_fixture_direct_summaries_scc_closure_passes => "direct-summaries/scc-closure",
+        eval_native_fixture_evidence_passes => "evidence",
+        eval_native_fixture_extension_adaptation_delta_passes => "extension/adaptation-delta",
+        eval_native_fixture_extension_real_sink_passes => "extension/real-sink",
+        eval_native_fixture_extension_rejection_delta_passes => "extension/rejection-delta",
+        eval_native_fixture_framework_entrypoints_mixed_go_ts_passes => "framework-entrypoints/mixed-go-ts",
+        eval_native_fixture_go_rta_address_taken_passes => "go-rta/address-taken",
+        eval_native_fixture_go_rta_alias_dispatch_passes => "go-rta/alias-dispatch",
+        eval_native_fixture_go_rta_alias_generic_dispatch_passes => "go-rta/alias-generic-dispatch",
+        eval_native_fixture_go_rta_generic_dispatch_passes => "go-rta/generic-dispatch",
+        eval_native_fixture_go_rta_interface_dispatch_passes => "go-rta/interface-dispatch",
+        eval_native_fixture_go_rta_iteration_cap_passes => "go-rta/iteration-cap",
+        eval_native_fixture_go_rta_static_reachability_passes => "go-rta/static-reachability",
+        eval_native_fixture_identity_categorized_failures_passes => "identity/categorized_failures",
+        eval_native_fixture_identity_crlf_normalization_passes => "identity/crlf_normalization",
+        eval_native_fixture_identity_dedup_passes => "identity/dedup",
+        eval_native_fixture_identity_jelly_oracle_coverage_passes => "identity/jelly_oracle_coverage",
+        eval_native_fixture_jelly_ts_inventory_spans_passes => "jelly/ts-inventory-spans",
+        eval_native_fixture_kernel_provider_order_passes => "kernel/provider-order",
+        eval_native_fixture_module_topology_core_passes => "module-topology/core",
+        eval_native_fixture_polyglot_canary_go_ts_passes => "polyglot-canary/go-ts",
+        eval_native_fixture_promotion_cfg_call_flow_evidence_passes => "promotion/cfg-call-flow-evidence",
+        eval_native_fixture_provenance_cycle_detection_passes => "provenance/cycle-detection",
+        eval_native_fixture_provenance_metadata_passes => "provenance/metadata",
+        eval_native_fixture_refined_calls_direct_vs_refined_passes => "refined-calls/direct-vs-refined",
+        eval_native_fixture_refined_calls_extension_model_passes => "refined-calls/extension-model",
+        eval_native_fixture_semantic_graph_go_graph_passes => "semantic-graph/go_graph",
+        eval_native_fixture_semantic_graph_go_semantic_passes => "semantic-graph/go_semantic",
+        eval_native_fixture_semantic_graph_ts_direct_bindings_passes => "semantic-graph/ts_direct_bindings",
+        eval_native_fixture_semantic_graph_ts_graph_passes => "semantic-graph/ts_graph",
+        eval_native_fixture_semantic_index_core_passes => "semantic-index/core",
+        eval_native_fixture_semantic_mir_core_passes => "semantic-mir/core",
+        eval_native_fixture_ts_object_model_budget_passes => "ts-object-model/budget",
+        eval_native_fixture_ts_object_model_object_literal_passes => "ts-object-model/object-literal",
+        eval_native_fixture_ts_object_model_prototype_this_passes => "ts-object-model/prototype-this",
+        eval_native_fixture_ts_tokens_alias_parameter_return_passes => "ts-tokens/alias-parameter-return",
+        eval_native_fixture_ts_tokens_token_explosion_passes => "ts-tokens/token-explosion",
+        eval_native_fixture_type_value_alias_extension_precision_passes => "type-value-alias/extension-precision",
+        eval_native_fixture_type_value_alias_go_core_passes => "type-value-alias/go-core",
+        eval_native_fixture_type_value_alias_ts_js_core_passes => "type-value-alias/ts-js-core",
     }
 
     fn expected_identity(item: &ExpectedItem) -> String {
