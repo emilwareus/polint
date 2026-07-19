@@ -15,11 +15,13 @@ Parallelized native eval fixture coverage and removed redundant framework-entryp
 - Preserved the Windows skip for fixtures that require runtime extensions.
 - Reduced the framework-entrypoints fixture helper from cold, warm, and no-cache analysis to one no-cache analysis because its manifest does not assert cache determinism.
 - Removed the duplicate standalone framework-entrypoints execution while retaining its repository-path assertion in shared fixture validation.
+- Added a thread-safe immutable result cache for the direct-calls core fixture, allowing five tests to share one cold/warm/no-cache evaluation.
 
 ## Bottleneck audit
 
-- The supplied CI profiling data named only the 53-fixture loop and framework-entrypoints fixture above 30 seconds; both are addressed.
-- A source scan found one other test that loops over two refined-call fixtures. It was not named as a CI hotspot and is small enough to leave unchanged without speculative optimization.
+- The supplied CI profiling data named the 53-fixture loop and framework-entrypoints fixture above 30 seconds; both are addressed.
+- The first PR CI run exposed five direct-calls fixture tests above 60 seconds. Those tests now share one immutable evaluation instead of independently repeating it.
+- A source scan found one other test that loops over two refined-call fixtures. It completed without a long-test warning in CI and is left unchanged.
 - Existing dedicated cache, CFG, direct-call, domain, and summary fixtures continue to own cold/warm/no-cache determinism coverage.
 
 ## Static verification
@@ -27,9 +29,11 @@ Parallelized native eval fixture coverage and removed redundant framework-entryp
 - `rustfmt --edition 2024 crates/polint/src/eval/fixtures.rs` completed before each code commit.
 - The generated test declaration count is 53, matching the 53 checked-in `expected.polint-eval.toml` manifests.
 - `git diff --check` passed after each edit and for the full branch diff.
+- The first GitHub Actions run passed all jobs and reduced Ubuntu lib-test execution from 10m57s to 8m22s before the direct-calls result-reuse follow-up.
 - No local build, typecheck, or test command was run, per the OOM constraint. GitHub Actions is the validation authority.
 
 ## Commits
 
 - `bafb6820` — parallelize native eval fixture coverage
 - `768f90da` — avoid redundant framework fixture passes
+- `71ef10ae` — reuse direct calls fixture evaluation
