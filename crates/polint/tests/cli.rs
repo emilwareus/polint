@@ -1723,10 +1723,7 @@ exclude = []
                     .success(),
             ),
         ),
-        (
-            "polint check --help",
-            polint_help(&["check", "--help"]),
-        ),
+        ("polint check --help", polint_help(&["check", "--help"])),
         (
             "polint inspect rule --format json",
             output_string(

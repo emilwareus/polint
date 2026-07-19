@@ -205,14 +205,7 @@ pub(crate) fn polint_help(args: &[&str]) -> String {
     };
 
     cache
-        .get_or_init(|| {
-            stdout_string(
-                polint_cmd()
-                    .args(args.iter().copied())
-                    .assert()
-                    .success(),
-            )
-        })
+        .get_or_init(|| stdout_string(polint_cmd().args(args.iter().copied()).assert().success()))
         .clone()
 }
 
