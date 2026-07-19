@@ -1733,6 +1733,8 @@ struct TrackedProcess {
 #[cfg(unix)]
 struct OwnerSentinelScan {
     deadline: Instant,
+    #[cfg(target_os = "linux")]
+    tasks: usize,
     descriptors: usize,
 }
 
@@ -1741,6 +1743,8 @@ impl OwnerSentinelScan {
     fn until(deadline: Instant) -> Self {
         Self {
             deadline,
+            #[cfg(target_os = "linux")]
+            tasks: 0,
             descriptors: 0,
         }
     }
@@ -1771,6 +1775,21 @@ impl OwnerSentinelScan {
         if self.descriptors > COMMAND_MAX_SCANNED_DESCRIPTORS {
             return Err(format!(
                 "ownership-sentinel enumeration exceeded the {COMMAND_MAX_SCANNED_DESCRIPTORS}-descriptor scan limit"
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn account_tasks(&mut self, count: usize) -> Result<(), String> {
+        self.check_deadline()?;
+        self.tasks = self
+            .tasks
+            .checked_add(count)
+            .ok_or_else(|| "ownership-sentinel task count overflowed".to_string())?;
+        if self.tasks > COMMAND_MAX_SCANNED_PROCESSES {
+            return Err(format!(
+                "ownership-sentinel enumeration exceeded the {COMMAND_MAX_SCANNED_PROCESSES}-task scan limit"
             ));
         }
         Ok(())
@@ -2132,7 +2151,7 @@ fn verified_owner_holder_with_scan(
     else {
         return Ok(None);
     };
-    if !process_holds_owner_sentinel_with_scan(pid, sentinel, scan)? {
+    if !process_holds_owner_sentinel_with_scan(pid, identity, sentinel, scan)? {
         return Ok(None);
     }
     if process_identity(pid)? != Some(identity) {
@@ -2458,14 +2477,18 @@ fn process_holds_owner_sentinel(
     pid: libc::pid_t,
     sentinel: OwnerSentinelIdentity,
 ) -> Result<bool, String> {
+    let Some(identity) = process_identity(pid)? else {
+        return Ok(false);
+    };
     let mut scan = OwnerSentinelScan::new();
-    process_holds_owner_sentinel_with_scan(pid, sentinel, &mut scan)
+    process_holds_owner_sentinel_with_scan(pid, identity, sentinel, &mut scan)
 }
 
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 fn process_holds_owner_sentinel_with_scan(
     pid: libc::pid_t,
+    _expected_identity: ProcessIdentity,
     sentinel: OwnerSentinelIdentity,
     scan: &mut OwnerSentinelScan,
 ) -> Result<bool, String> {
@@ -2579,6 +2602,40 @@ fn mac_descriptor_holds_owner_sentinel(
 
 #[cfg(target_os = "linux")]
 fn process_identity(pid: libc::pid_t) -> Result<Option<ProcessIdentity>, String> {
+    Ok(
+        linux_group_observation(pid)?.and_then(|observation| match observation {
+            LinuxGroupObservation::Terminal => None,
+            LinuxGroupObservation::Live(identity)
+            | LinuxGroupObservation::ZombieLeaderWithSiblings(identity) => Some(identity),
+        }),
+    )
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LinuxGroupObservation {
+    Terminal,
+    Live(ProcessIdentity),
+    ZombieLeaderWithSiblings(ProcessIdentity),
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LinuxTaskObservation {
+    Terminal,
+    Live(ProcessIdentity),
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LinuxStatFields {
+    state: u8,
+    thread_count: u64,
+    identity: ProcessIdentity,
+}
+
+#[cfg(target_os = "linux")]
+fn linux_group_observation(pid: libc::pid_t) -> Result<Option<LinuxGroupObservation>, String> {
     let Some(bytes) = read_proc_file_bounded(
         &Path::new("/proc").join(pid.to_string()).join("stat"),
         16 * 1024,
@@ -2586,56 +2643,83 @@ fn process_identity(pid: libc::pid_t) -> Result<Option<ProcessIdentity>, String>
     else {
         return Ok(None);
     };
-    parse_linux_process_stat_identity(pid, &bytes)
+    parse_linux_group_observation(pid, &bytes).map(Some)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", test))]
 fn parse_linux_process_stat_identity(
     pid: libc::pid_t,
     bytes: &[u8],
 ) -> Result<Option<ProcessIdentity>, String> {
+    Ok(match parse_linux_group_observation(pid, bytes)? {
+        LinuxGroupObservation::Terminal => None,
+        LinuxGroupObservation::Live(identity)
+        | LinuxGroupObservation::ZombieLeaderWithSiblings(identity) => Some(identity),
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn parse_linux_group_observation(
+    pid: libc::pid_t,
+    bytes: &[u8],
+) -> Result<LinuxGroupObservation, String> {
+    let fields = parse_linux_stat_fields(&format!("contained process {pid}"), bytes)?;
+    Ok(match fields.state {
+        b'X' | b'x' => LinuxGroupObservation::Terminal,
+        b'Z' if fields.thread_count <= 1 => LinuxGroupObservation::Terminal,
+        b'Z' => LinuxGroupObservation::ZombieLeaderWithSiblings(fields.identity),
+        _ => LinuxGroupObservation::Live(fields.identity),
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn parse_linux_task_observation(
+    pid: libc::pid_t,
+    task_id: libc::pid_t,
+    bytes: &[u8],
+) -> Result<LinuxTaskObservation, String> {
+    let fields = parse_linux_stat_fields(&format!("process {pid} task {task_id}"), bytes)?;
+    Ok(match fields.state {
+        b'X' | b'x' | b'Z' => LinuxTaskObservation::Terminal,
+        _ => LinuxTaskObservation::Live(fields.identity),
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn parse_linux_stat_fields(label: &str, bytes: &[u8]) -> Result<LinuxStatFields, String> {
     let value = std::str::from_utf8(bytes)
-        .map_err(|error| format!("contained process {pid} stat was not UTF-8: {error}"))?;
+        .map_err(|error| format!("{label} stat was not UTF-8: {error}"))?;
     let fields = value
         .rsplit_once(") ")
-        .ok_or_else(|| format!("contained process {pid} stat was malformed"))?
+        .ok_or_else(|| format!("{label} stat was malformed"))?
         .1
         .split_whitespace()
         .collect::<Vec<_>>();
     let state = fields
         .first()
-        .ok_or_else(|| format!("contained process {pid} stat omitted its state"))?;
-    // A terminal single-thread task has released its descriptors, but procfs
-    // can retain the task entry until its parent reaps it and deny `fdinfo`
-    // access during that interval. A zombie thread-group leader can still
-    // have live sibling threads sharing its file table, so keep that case in
-    // the fail-closed descriptor scan.
-    let terminal = match *state {
-        "X" | "x" => true,
-        "Z" => {
-            fields
-                .get(17)
-                .ok_or_else(|| format!("contained process {pid} stat omitted its thread count"))?
-                .parse::<u64>()
-                .map_err(|error| {
-                    format!("contained process {pid} thread count was invalid: {error}")
-                })?
-                <= 1
-        }
-        _ => false,
+        .ok_or_else(|| format!("{label} stat omitted its state"))?
+        .as_bytes();
+    let [state] = state else {
+        return Err(format!("{label} stat had an invalid state"));
     };
-    if terminal {
-        return Ok(None);
-    }
+    let thread_count = fields
+        .get(17)
+        .ok_or_else(|| format!("{label} stat omitted its thread count"))?
+        .parse::<u64>()
+        .map_err(|error| format!("{label} thread count was invalid: {error}"))?;
     let start = fields
         .get(19)
-        .ok_or_else(|| format!("contained process {pid} stat omitted its start time"))?
+        .ok_or_else(|| format!("{label} stat omitted its start time"))?
         .parse::<u64>()
-        .map_err(|error| format!("contained process {pid} start time was invalid: {error}"))?;
-    Ok(Some(ProcessIdentity {
-        start_primary: start,
-        start_secondary: 0,
-    }))
+        .map_err(|error| format!("{label} start time was invalid: {error}"))?;
+    Ok(LinuxStatFields {
+        state: *state,
+        thread_count,
+        identity: ProcessIdentity {
+            start_primary: start,
+            start_secondary: 0,
+        },
+    })
 }
 
 #[cfg(target_os = "linux")]
@@ -2792,29 +2876,311 @@ fn process_holds_owner_sentinel(
     pid: libc::pid_t,
     sentinel: OwnerSentinelIdentity,
 ) -> Result<bool, String> {
+    let Some(identity) = process_identity(pid)? else {
+        return Ok(false);
+    };
     let mut scan = OwnerSentinelScan::new();
-    process_holds_owner_sentinel_with_scan(pid, sentinel, &mut scan)
+    process_holds_owner_sentinel_with_scan(pid, identity, sentinel, &mut scan)
 }
 
 #[cfg(target_os = "linux")]
 fn process_holds_owner_sentinel_with_scan(
     pid: libc::pid_t,
+    expected_identity: ProcessIdentity,
     sentinel: OwnerSentinelIdentity,
     scan: &mut OwnerSentinelScan,
 ) -> Result<bool, String> {
-    let mut descriptors =
-        match fs::read_dir(Path::new("/proc").join(pid.to_string()).join("fdinfo")) {
-            Ok(descriptors) => descriptors,
-            Err(error) if proc_entry_vanished(&error) => {
-                return Ok(false);
+    let mut distinct_descriptors = BTreeSet::new();
+    let mut unstable_snapshots = 0_u8;
+    loop {
+        let Some(before) = linux_live_task_snapshot(pid, expected_identity, scan)? else {
+            return Ok(false);
+        };
+        let mut found = false;
+        for (&task_id, &task_identity) in &before.tasks {
+            if linux_task_holds_owner_sentinel(
+                pid,
+                task_id,
+                task_identity,
+                expected_identity,
+                sentinel,
+                scan,
+                &mut distinct_descriptors,
+            )? {
+                found = true;
+                break;
             }
+        }
+        let Some(after) = linux_live_task_snapshot(pid, expected_identity, scan)? else {
+            return Ok(false);
+        };
+        if before != after {
+            if matches!(
+                before.group,
+                LinuxGroupObservation::ZombieLeaderWithSiblings(_)
+            ) || matches!(
+                after.group,
+                LinuxGroupObservation::ZombieLeaderWithSiblings(_)
+            ) {
+                scan.check_deadline()?;
+                thread::park_timeout(COMMAND_MONITOR_INTERVAL);
+            } else {
+                unstable_snapshots = unstable_snapshots.saturating_add(1);
+                if unstable_snapshots >= 3 {
+                    return Err(format!(
+                        "process {pid} changed threads repeatedly during ownership-sentinel inspection"
+                    ));
+                }
+            }
+            continue;
+        }
+        if found {
+            return Ok(true);
+        }
+        match after.group {
+            LinuxGroupObservation::Live(_) => return Ok(false),
+            LinuxGroupObservation::ZombieLeaderWithSiblings(_) => {
+                unstable_snapshots = 0;
+                let uncertainty = format!(
+                    "cannot prove ownership-sentinel absence for process {pid}: its thread-group leader exited while sibling threads remained"
+                );
+                if let Err(deadline_error) = scan.check_deadline() {
+                    return Err(format!("{uncertainty}; {deadline_error}"));
+                }
+                thread::park_timeout(COMMAND_MONITOR_INTERVAL);
+            }
+            LinuxGroupObservation::Terminal => return Ok(false),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, PartialEq, Eq)]
+struct LinuxTaskSnapshot {
+    group: LinuxGroupObservation,
+    tasks: BTreeMap<libc::pid_t, ProcessIdentity>,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+enum LinuxTaskSnapshotAttempt {
+    Terminal,
+    Ready(LinuxTaskSnapshot),
+    RetryZombieLeader,
+}
+
+#[cfg(target_os = "linux")]
+fn linux_live_task_snapshot(
+    pid: libc::pid_t,
+    expected_identity: ProcessIdentity,
+    scan: &mut OwnerSentinelScan,
+) -> Result<Option<LinuxTaskSnapshot>, String> {
+    poll_linux_task_snapshot(scan, |scan| {
+        linux_live_task_snapshot_once(pid, expected_identity, scan)
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn poll_linux_task_snapshot(
+    scan: &mut OwnerSentinelScan,
+    mut attempt: impl FnMut(&mut OwnerSentinelScan) -> Result<LinuxTaskSnapshotAttempt, String>,
+) -> Result<Option<LinuxTaskSnapshot>, String> {
+    loop {
+        match attempt(scan)? {
+            LinuxTaskSnapshotAttempt::Terminal => return Ok(None),
+            LinuxTaskSnapshotAttempt::Ready(snapshot) => return Ok(Some(snapshot)),
+            LinuxTaskSnapshotAttempt::RetryZombieLeader => {
+                scan.check_deadline()?;
+                thread::park_timeout(COMMAND_MONITOR_INTERVAL);
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_live_task_snapshot_once(
+    pid: libc::pid_t,
+    expected_identity: ProcessIdentity,
+    scan: &mut OwnerSentinelScan,
+) -> Result<LinuxTaskSnapshotAttempt, String> {
+    scan.check_deadline()?;
+    let Some(group) = linux_group_observation(pid)? else {
+        return Ok(LinuxTaskSnapshotAttempt::Terminal);
+    };
+    scan.check_deadline()?;
+    let observed_identity = match group {
+        LinuxGroupObservation::Terminal => return Ok(LinuxTaskSnapshotAttempt::Terminal),
+        LinuxGroupObservation::Live(identity)
+        | LinuxGroupObservation::ZombieLeaderWithSiblings(identity) => identity,
+    };
+    if observed_identity != expected_identity {
+        return Err(format!(
+            "process {pid} changed identity during ownership-sentinel inspection"
+        ));
+    }
+
+    let tasks_path = Path::new("/proc").join(pid.to_string()).join("task");
+    let mut entries = match fs::read_dir(&tasks_path) {
+        Ok(entries) => entries,
+        Err(error) => {
+            return linux_task_snapshot_error_after_group_check(
+                pid,
+                expected_identity,
+                scan,
+                format!("failed to enumerate threads for process {pid}: {error}"),
+            );
+        }
+    };
+    scan.check_deadline()?;
+    let mut tasks = BTreeMap::new();
+    let mut task_count = 0_usize;
+    loop {
+        scan.check_deadline()?;
+        let entry = entries.next();
+        scan.check_deadline()?;
+        let Some(entry) = entry else {
+            break;
+        };
+        let entry = match entry {
+            Ok(entry) => entry,
             Err(error) => {
-                return Err(format!(
-                    "failed to enumerate descriptors for process {pid}: {error}"
-                ));
+                return linux_task_snapshot_error_after_group_check(
+                    pid,
+                    expected_identity,
+                    scan,
+                    format!("failed to enumerate a thread for process {pid}: {error}"),
+                );
             }
         };
-    let mut descriptor_count = 0_usize;
+        let Some(task_id) = entry
+            .file_name()
+            .to_str()
+            .and_then(|value| value.parse::<libc::pid_t>().ok())
+        else {
+            continue;
+        };
+        task_count = task_count.saturating_add(1);
+        if task_count > COMMAND_MAX_TRACKED_PROCESSES {
+            return Err(format!(
+                "contained process {pid} exceeded the {COMMAND_MAX_TRACKED_PROCESSES}-thread ownership scan limit"
+            ));
+        }
+        scan.account_tasks(1)?;
+        let observation = match linux_task_observation(pid, task_id) {
+            Ok(observation) => observation,
+            Err(error) => {
+                return linux_task_snapshot_error_after_group_check(
+                    pid,
+                    expected_identity,
+                    scan,
+                    format!("failed to inspect process {pid} task {task_id}: {error}"),
+                );
+            }
+        };
+        scan.check_deadline()?;
+        if let Some(LinuxTaskObservation::Live(identity)) = observation {
+            tasks.insert(task_id, identity);
+        }
+    }
+    if tasks.is_empty() {
+        return linux_task_snapshot_error_after_group_check(
+            pid,
+            expected_identity,
+            scan,
+            format!("process {pid} had no inspectable live threads"),
+        );
+    }
+    Ok(LinuxTaskSnapshotAttempt::Ready(LinuxTaskSnapshot {
+        group,
+        tasks,
+    }))
+}
+
+#[cfg(target_os = "linux")]
+fn linux_task_snapshot_error_after_group_check(
+    pid: libc::pid_t,
+    expected_identity: ProcessIdentity,
+    scan: &OwnerSentinelScan,
+    error: String,
+) -> Result<LinuxTaskSnapshotAttempt, String> {
+    let observation = linux_group_observation(pid);
+    scan.check_deadline()?;
+    classify_linux_task_snapshot_error(pid, expected_identity, error, observation)
+}
+
+#[cfg(target_os = "linux")]
+fn classify_linux_task_snapshot_error(
+    pid: libc::pid_t,
+    expected_identity: ProcessIdentity,
+    error: String,
+    observation: Result<Option<LinuxGroupObservation>, String>,
+) -> Result<LinuxTaskSnapshotAttempt, String> {
+    match observation {
+        Ok(None | Some(LinuxGroupObservation::Terminal)) => Ok(LinuxTaskSnapshotAttempt::Terminal),
+        Ok(Some(LinuxGroupObservation::ZombieLeaderWithSiblings(identity)))
+            if identity == expected_identity =>
+        {
+            Ok(LinuxTaskSnapshotAttempt::RetryZombieLeader)
+        }
+        Ok(Some(LinuxGroupObservation::Live(identity))) if identity == expected_identity => {
+            Err(error)
+        }
+        Ok(Some(_)) => Err(format!(
+            "{error}; process {pid} changed identity during ownership-sentinel inspection"
+        )),
+        Err(identity_error) => Err(format!(
+            "{error}; failed to revalidate process {pid} after the thread scan error: {identity_error}"
+        )),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_task_observation(
+    pid: libc::pid_t,
+    task_id: libc::pid_t,
+) -> Result<Option<LinuxTaskObservation>, String> {
+    let path = Path::new("/proc")
+        .join(pid.to_string())
+        .join("task")
+        .join(task_id.to_string())
+        .join("stat");
+    let Some(bytes) = read_proc_file_bounded(&path, 16 * 1024)? else {
+        return Ok(None);
+    };
+    parse_linux_task_observation(pid, task_id, &bytes).map(Some)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_task_holds_owner_sentinel(
+    pid: libc::pid_t,
+    task_id: libc::pid_t,
+    expected_task_identity: ProcessIdentity,
+    expected_group_identity: ProcessIdentity,
+    sentinel: OwnerSentinelIdentity,
+    scan: &mut OwnerSentinelScan,
+    distinct_descriptors: &mut BTreeSet<libc::c_int>,
+) -> Result<bool, String> {
+    let fdinfo_path = Path::new("/proc")
+        .join(pid.to_string())
+        .join("task")
+        .join(task_id.to_string())
+        .join("fdinfo");
+    let mut descriptors = match fs::read_dir(&fdinfo_path) {
+        Ok(descriptors) => descriptors,
+        Err(error) => {
+            return task_descriptor_scan_error_after_identity_check(
+                pid,
+                task_id,
+                expected_task_identity,
+                expected_group_identity,
+                scan,
+                format!(
+                    "failed to enumerate descriptors for process {pid} task {task_id}: {error}"
+                ),
+            );
+        }
+    };
+    scan.check_deadline()?;
     loop {
         scan.check_deadline()?;
         let descriptor = descriptors.next();
@@ -2824,11 +3190,17 @@ fn process_holds_owner_sentinel_with_scan(
         };
         let descriptor = match descriptor {
             Ok(descriptor) => descriptor,
-            Err(error) if proc_entry_vanished(&error) => return Ok(false),
             Err(error) => {
-                return Err(format!(
-                    "failed to enumerate descriptors for process {pid}: {error}"
-                ));
+                return task_descriptor_scan_error_after_identity_check(
+                    pid,
+                    task_id,
+                    expected_task_identity,
+                    expected_group_identity,
+                    scan,
+                    format!(
+                        "failed to enumerate a descriptor for process {pid} task {task_id}: {error}"
+                    ),
+                );
             }
         };
         let Some(descriptor) = descriptor
@@ -2838,18 +3210,95 @@ fn process_holds_owner_sentinel_with_scan(
         else {
             continue;
         };
-        descriptor_count = descriptor_count.saturating_add(1);
-        if descriptor_count > COMMAND_MAX_PROCESS_DESCRIPTORS {
+        distinct_descriptors.insert(descriptor);
+        if distinct_descriptors.len() > COMMAND_MAX_PROCESS_DESCRIPTORS {
             return Err(format!(
                 "contained process {pid} exceeded the {COMMAND_MAX_PROCESS_DESCRIPTORS}-descriptor ownership scan limit"
             ));
         }
         scan.account_descriptors(1)?;
-        if linux_descriptor_sentinel_identity(pid, descriptor)? == Some(sentinel) {
-            return Ok(true);
+        let descriptor_identity = linux_task_descriptor_sentinel_identity(pid, task_id, descriptor);
+        scan.check_deadline()?;
+        match descriptor_identity {
+            Ok(Some(identity)) if identity == sentinel => return Ok(true),
+            Ok(_) => {}
+            Err(error) => {
+                return task_descriptor_scan_error_after_identity_check(
+                    pid,
+                    task_id,
+                    expected_task_identity,
+                    expected_group_identity,
+                    scan,
+                    error,
+                );
+            }
         }
     }
-    Ok(false)
+    let observation = linux_task_observation(pid, task_id);
+    scan.check_deadline()?;
+    match observation {
+        Ok(None | Some(LinuxTaskObservation::Terminal)) => Ok(false),
+        Ok(Some(LinuxTaskObservation::Live(identity))) if identity == expected_task_identity => {
+            Ok(false)
+        }
+        Ok(Some(LinuxTaskObservation::Live(_))) => Err(format!(
+            "process {pid} task {task_id} changed identity during descriptor inspection"
+        )),
+        Err(error) => Err(format!(
+            "failed to revalidate process {pid} task {task_id} after descriptor inspection: {error}"
+        )),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn task_descriptor_scan_error_after_identity_check(
+    pid: libc::pid_t,
+    task_id: libc::pid_t,
+    expected_task_identity: ProcessIdentity,
+    expected_group_identity: ProcessIdentity,
+    scan: &OwnerSentinelScan,
+    error: String,
+) -> Result<bool, String> {
+    let observation = linux_task_observation(pid, task_id);
+    scan.check_deadline()?;
+    match observation {
+        Ok(None | Some(LinuxTaskObservation::Terminal)) => {
+            resolve_terminal_task_scan_error(pid, expected_group_identity, scan, error)
+        }
+        Ok(Some(LinuxTaskObservation::Live(identity))) if identity == expected_task_identity => {
+            Err(error)
+        }
+        Ok(Some(LinuxTaskObservation::Live(_))) => Err(format!(
+            "{error}; process {pid} task {task_id} changed identity during descriptor inspection"
+        )),
+        Err(state_error) => Err(format!(
+            "{error}; failed to revalidate process {pid} task {task_id} after the descriptor scan error: {state_error}"
+        )),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn resolve_terminal_task_scan_error(
+    pid: libc::pid_t,
+    expected_group_identity: ProcessIdentity,
+    scan: &OwnerSentinelScan,
+    error: String,
+) -> Result<bool, String> {
+    let observation = linux_group_observation(pid);
+    scan.check_deadline()?;
+    match observation {
+        Ok(None | Some(LinuxGroupObservation::Terminal)) => Ok(false),
+        Ok(Some(
+            LinuxGroupObservation::Live(identity)
+            | LinuxGroupObservation::ZombieLeaderWithSiblings(identity),
+        )) if identity == expected_group_identity => Ok(false),
+        Ok(Some(_)) => Err(format!(
+            "{error}; process {pid} changed identity during descriptor inspection"
+        )),
+        Err(identity_error) => Err(format!(
+            "{error}; failed to revalidate process {pid} after the descriptor scan error: {identity_error}"
+        )),
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -2862,6 +3311,27 @@ fn linux_descriptor_sentinel_identity(
     }
     let path = Path::new("/proc")
         .join(pid.to_string())
+        .join("fdinfo")
+        .join(descriptor.to_string());
+    let Some(bytes) = read_proc_file_bounded(&path, 4 * 1024)? else {
+        return Ok(None);
+    };
+    parse_linux_fdinfo_sentinel_identity(&bytes).map(Some)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_task_descriptor_sentinel_identity(
+    pid: libc::pid_t,
+    task_id: libc::pid_t,
+    descriptor: libc::c_int,
+) -> Result<Option<OwnerSentinelIdentity>, String> {
+    if descriptor < 0 {
+        return Ok(None);
+    }
+    let path = Path::new("/proc")
+        .join(pid.to_string())
+        .join("task")
+        .join(task_id.to_string())
         .join("fdinfo")
         .join(descriptor.to_string());
     let Some(bytes) = read_proc_file_bounded(&path, 4 * 1024)? else {
@@ -3008,6 +3478,7 @@ fn process_holds_owner_sentinel(
 #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
 fn process_holds_owner_sentinel_with_scan(
     _pid: libc::pid_t,
+    _expected_identity: ProcessIdentity,
     _sentinel: OwnerSentinelIdentity,
     scan: &mut OwnerSentinelScan,
 ) -> Result<bool, String> {
@@ -14657,6 +15128,23 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    #[allow(unsafe_code)]
+    extern "C" fn exit_linux_test_thread(_signal: libc::c_int) {
+        // SAFETY: SYS_exit terminates only the task receiving the signal. The
+        // disposable helper deliberately leaves a sibling task alive.
+        unsafe {
+            libc::syscall(libc::SYS_exit, 0);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn publish_linux_test_readiness(path: &Path, payload: &str) {
+        let pending = path.with_extension("pending");
+        fs::write(&pending, payload).expect("stage helper readiness");
+        fs::rename(pending, path).expect("publish helper readiness atomically");
+    }
+
     #[test]
     fn process_containment_support_matches_the_compile_time_platform_contract() {
         assert_eq!(
@@ -15651,6 +16139,228 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[allow(unsafe_code)]
+    fn linux_owner_sentinel_scan_checks_each_thread_file_table() {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::fs::MetadataExt;
+
+        const HELPER_ENV: &str = "POLINT_TEST_UNSHARED_FD_TABLE_HELPER";
+        const SENTINEL_ENV: &str = "POLINT_TEST_UNSHARED_FD_TABLE_SENTINEL";
+        const READY_ENV: &str = "POLINT_TEST_UNSHARED_FD_TABLE_READY";
+
+        if std::env::var_os(HELPER_ENV).is_some() {
+            // SAFETY: CLONE_FILES affects only this disposable helper thread's
+            // descriptor table and takes no pointer arguments.
+            assert_eq!(unsafe { libc::unshare(libc::CLONE_FILES) }, 0);
+            let sentinel_path =
+                PathBuf::from(std::env::var_os(SENTINEL_ENV).expect("helper sentinel path"));
+            let ready_path = PathBuf::from(std::env::var_os(READY_ENV).expect("helper ready path"));
+            let sentinel = fs::File::open(sentinel_path).expect("open worker-only sentinel");
+            // SAFETY: SYS_gettid takes no arguments and returns the current
+            // kernel task identifier.
+            let task_id = unsafe { libc::syscall(libc::SYS_gettid) };
+            publish_linux_test_readiness(
+                &ready_path,
+                &format!("{task_id}:{}", sentinel.as_raw_fd()),
+            );
+            thread::sleep(Duration::from_secs(10));
+            return;
+        }
+
+        let _exclusive_containment_inspection = TEST_LINUX_CONTAINMENT_INSPECTION
+            .get_or_init(|| RwLock::new(()))
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let temp = tempfile::tempdir().expect("tempdir");
+        let sentinel_path = temp.path().join("sentinel");
+        let ready_path = temp.path().join("ready");
+        let sentinel_file = fs::File::create(&sentinel_path).expect("create sentinel");
+        let metadata = sentinel_file.metadata().expect("sentinel metadata");
+        let reported = OwnerSentinelIdentity {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        };
+        let own_pid = libc::pid_t::try_from(std::process::id()).expect("current pid");
+        let sentinel =
+            resolve_owner_sentinel_identity(own_pid, sentinel_file.as_raw_fd(), reported)
+                .expect("resolve sentinel identity");
+        drop(sentinel_file);
+
+        let test_binary = std::env::current_exe().expect("current test binary");
+        let helper =
+            "go::semantic::process::tests::linux_owner_sentinel_scan_checks_each_thread_file_table";
+        let child = ChildCleanupGuard::new(
+            Command::new(test_binary)
+                .arg("--exact")
+                .arg(helper)
+                .arg("--nocapture")
+                .env(HELPER_ENV, "1")
+                .env(SENTINEL_ENV, &sentinel_path)
+                .env(READY_ENV, &ready_path)
+                .spawn()
+                .expect("spawn unshared descriptor-table helper"),
+        );
+        let wait_until = Instant::now() + Duration::from_secs(2);
+        while !ready_path.exists() && Instant::now() < wait_until {
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            ready_path.exists(),
+            "worker-only sentinel helper was not ready"
+        );
+        let pid = libc::pid_t::try_from(child.id()).expect("helper pid");
+        let ready = fs::read_to_string(&ready_path).expect("read worker readiness");
+        let (task_id, descriptor) = ready.split_once(':').expect("worker task and descriptor");
+        let task_id = task_id.parse::<libc::pid_t>().expect("worker task id");
+        let descriptor = descriptor
+            .parse::<libc::c_int>()
+            .expect("worker sentinel descriptor");
+        assert_ne!(
+            task_id, pid,
+            "the private file table must belong to a worker"
+        );
+        assert_eq!(
+            linux_task_descriptor_sentinel_identity(pid, task_id, descriptor)
+                .expect("inspect the worker-only descriptor directly"),
+            Some(sentinel)
+        );
+        assert_ne!(
+            linux_descriptor_sentinel_identity(pid, descriptor)
+                .expect("inspect the leader descriptor table"),
+            Some(sentinel),
+            "the sentinel must not be visible through the leader's file table"
+        );
+
+        assert!(
+            process_holds_owner_sentinel(pid, sentinel)
+                .expect("scan every helper thread descriptor table"),
+            "the owner scan must find a sentinel held only by a nonleader thread"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[allow(unsafe_code)]
+    fn linux_owner_sentinel_scan_never_clears_a_zombie_leader_with_live_sibling() {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::fs::MetadataExt;
+
+        const HELPER_ENV: &str = "POLINT_TEST_ZOMBIE_LEADER_HELPER";
+        const SENTINEL_ENV: &str = "POLINT_TEST_ZOMBIE_LEADER_SENTINEL";
+        const READY_ENV: &str = "POLINT_TEST_ZOMBIE_LEADER_READY";
+
+        if std::env::var_os(HELPER_ENV).is_some() {
+            let mut action = unsafe { std::mem::zeroed::<libc::sigaction>() };
+            action.sa_sigaction = exit_linux_test_thread as *const () as usize;
+            // SAFETY: action is initialized above, its handler has the required
+            // C ABI, and the signal mask pointer is valid for this call.
+            assert_eq!(unsafe { libc::sigemptyset(&mut action.sa_mask) }, 0);
+            // SAFETY: the action pointer remains valid for the duration of the
+            // call and installs a process-wide disposition in this helper.
+            assert_eq!(
+                unsafe { libc::sigaction(libc::SIGUSR2, &action, std::ptr::null_mut()) },
+                0
+            );
+            let sentinel_path =
+                PathBuf::from(std::env::var_os(SENTINEL_ENV).expect("helper sentinel path"));
+            let ready_path = PathBuf::from(std::env::var_os(READY_ENV).expect("helper ready path"));
+            let sentinel = fs::File::open(sentinel_path).expect("open sibling sentinel");
+            // SAFETY: SYS_gettid takes no arguments and returns the current
+            // kernel task identifier.
+            let task_id = unsafe { libc::syscall(libc::SYS_gettid) };
+            publish_linux_test_readiness(
+                &ready_path,
+                &format!("{task_id}:{}", sentinel.as_raw_fd()),
+            );
+            thread::sleep(Duration::from_secs(10));
+            return;
+        }
+
+        let _exclusive_containment_inspection = TEST_LINUX_CONTAINMENT_INSPECTION
+            .get_or_init(|| RwLock::new(()))
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let temp = tempfile::tempdir().expect("tempdir");
+        let sentinel_path = temp.path().join("sentinel");
+        let ready_path = temp.path().join("ready");
+        let sentinel_file = fs::File::create(&sentinel_path).expect("create sentinel");
+        let metadata = sentinel_file.metadata().expect("sentinel metadata");
+        let reported = OwnerSentinelIdentity {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        };
+        let own_pid = libc::pid_t::try_from(std::process::id()).expect("current pid");
+        let sentinel =
+            resolve_owner_sentinel_identity(own_pid, sentinel_file.as_raw_fd(), reported)
+                .expect("resolve sentinel identity");
+        drop(sentinel_file);
+
+        let test_binary = std::env::current_exe().expect("current test binary");
+        let helper = "go::semantic::process::tests::linux_owner_sentinel_scan_never_clears_a_zombie_leader_with_live_sibling";
+        let child = ChildCleanupGuard::new(
+            Command::new(test_binary)
+                .arg("--exact")
+                .arg(helper)
+                .arg("--nocapture")
+                .env(HELPER_ENV, "1")
+                .env(SENTINEL_ENV, &sentinel_path)
+                .env(READY_ENV, &ready_path)
+                .spawn()
+                .expect("spawn zombie-leader helper"),
+        );
+        let wait_until = Instant::now() + Duration::from_secs(2);
+        while !ready_path.exists() && Instant::now() < wait_until {
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert!(ready_path.exists(), "zombie-leader helper was not ready");
+        let pid = libc::pid_t::try_from(child.id()).expect("helper pid");
+        let ready = fs::read_to_string(&ready_path).expect("read sibling readiness");
+        let (task_id, descriptor) = ready.split_once(':').expect("sibling task and descriptor");
+        let task_id = task_id.parse::<libc::pid_t>().expect("sibling task id");
+        let descriptor = descriptor
+            .parse::<libc::c_int>()
+            .expect("sibling sentinel descriptor");
+        assert_ne!(task_id, pid, "the helper must retain a sibling task");
+        let expected_identity = process_identity(pid)
+            .expect("inspect helper identity")
+            .expect("helper remains live");
+
+        // SAFETY: tgkill receives scalar identifiers and targets SIGUSR2 at
+        // the helper's thread-group leader specifically.
+        assert_eq!(
+            unsafe { libc::syscall(libc::SYS_tgkill, pid, pid, libc::SIGUSR2) },
+            0
+        );
+        let wait_until = Instant::now() + Duration::from_secs(2);
+        loop {
+            if linux_group_observation(pid).expect("inspect helper leader state")
+                == Some(LinuxGroupObservation::ZombieLeaderWithSiblings(
+                    expected_identity,
+                ))
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < wait_until,
+                "helper leader did not become a zombie with a live sibling"
+            );
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(
+            linux_descriptor_sentinel_identity(task_id, descriptor)
+                .expect("inspect the live sibling descriptor directly"),
+            Some(sentinel)
+        );
+
+        let scan = process_holds_owner_sentinel(pid, sentinel);
+        assert!(
+            !matches!(scan, Ok(false)),
+            "a zombie leader with a live sentinel-holding sibling must stay fail-closed: {scan:?}"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn linux_fdinfo_identity_uses_mount_and_inode_without_following_the_descriptor() {
@@ -15878,6 +16588,104 @@ mod tests {
                 .expect("parse live process state"),
             identity
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_task_identity_treats_terminal_tasks_as_absent() {
+        let stat = |state: &str| {
+            format!(
+                "456 (worker with ) marker) {state} 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 2 18 42"
+            )
+        };
+        for state in ["X", "x", "Z"] {
+            assert_eq!(
+                parse_linux_task_observation(123, 456, stat(state).as_bytes())
+                    .expect("parse terminal task state"),
+                LinuxTaskObservation::Terminal
+            );
+        }
+        let identity = ProcessIdentity {
+            start_primary: 42,
+            start_secondary: 0,
+        };
+        assert_eq!(
+            parse_linux_task_observation(123, 456, stat("S").as_bytes())
+                .expect("parse live task state"),
+            LinuxTaskObservation::Live(identity)
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_zombie_task_snapshot_polling_converges_without_weakening_live_errors() {
+        let identity = ProcessIdentity {
+            start_primary: 42,
+            start_secondary: 0,
+        };
+        let mut attempts = std::collections::VecDeque::from([
+            LinuxTaskSnapshotAttempt::RetryZombieLeader,
+            LinuxTaskSnapshotAttempt::RetryZombieLeader,
+            LinuxTaskSnapshotAttempt::Terminal,
+        ]);
+        let mut scan = OwnerSentinelScan::new();
+        let snapshot = poll_linux_task_snapshot(&mut scan, |_| {
+            attempts
+                .pop_front()
+                .ok_or_else(|| "snapshot attempt sequence was exhausted".to_string())
+        })
+        .expect("a terminal transition must end zombie-leader polling");
+        assert!(snapshot.is_none());
+        assert!(attempts.is_empty());
+
+        let original = "task directory access denied".to_string();
+        let mut live_attempts = 0_u8;
+        let mut scan = OwnerSentinelScan::new();
+        let error = poll_linux_task_snapshot(&mut scan, |_| {
+            live_attempts = live_attempts.saturating_add(1);
+            classify_linux_task_snapshot_error(
+                123,
+                identity,
+                original.clone(),
+                Ok(Some(LinuxGroupObservation::Live(identity))),
+            )
+        })
+        .expect_err("live-process access errors must remain fail-closed");
+        assert_eq!(error, original);
+        assert_eq!(live_attempts, 1);
+
+        assert!(matches!(
+            classify_linux_task_snapshot_error(
+                123,
+                identity,
+                "zombie task directory unavailable".to_string(),
+                Ok(Some(LinuxGroupObservation::ZombieLeaderWithSiblings(
+                    identity,
+                ))),
+            ),
+            Ok(LinuxTaskSnapshotAttempt::RetryZombieLeader)
+        ));
+        let replacement = ProcessIdentity {
+            start_primary: 43,
+            start_secondary: 0,
+        };
+        let error = classify_linux_task_snapshot_error(
+            123,
+            identity,
+            "zombie task directory unavailable".to_string(),
+            Ok(Some(LinuxGroupObservation::ZombieLeaderWithSiblings(
+                replacement,
+            ))),
+        )
+        .expect_err("a reused process identity must not inherit the zombie retry");
+        assert!(error.contains("changed identity"));
+
+        let mut expired = OwnerSentinelScan::until(Instant::now());
+        let error = poll_linux_task_snapshot(&mut expired, |_| {
+            Ok(LinuxTaskSnapshotAttempt::RetryZombieLeader)
+        })
+        .expect_err("persistent zombie uncertainty must respect the scan deadline");
+        assert!(error.contains("deadline"));
     }
 
     #[cfg(target_os = "linux")]
