@@ -45,7 +45,7 @@ See: `.planning/PROJECT.md` (updated 2026-07-10)
 Phase: 65
 Plan: Not started
 Status: Ready for discussion
-Last activity: 2026-07-19 - Completed quick task 260719-rld: Optimize polint integration test suite speed by reducing cli.rs subprocess invocations without building or running tests
+Last activity: 2026-07-19 - Completed quick task 260719-t2i: Parallelize eval fixture coverage tests and inspect remaining serial test bottlenecks without running tests locally
 
 ### Active Milestone Phase Progress
 
@@ -59,6 +59,7 @@ Add `public surface leak gate (ubuntu-latest)` AND `public surface leak gate (ma
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260719-t2i | Parallelize eval fixture coverage tests and inspect remaining serial test bottlenecks without running tests locally | 2026-07-19 | 768f90da | [260719-t2i-parallelize-eval-fixture-coverage-tests-](./quick/260719-t2i-parallelize-eval-fixture-coverage-tests-/) |
 | 260719-rld | Optimize polint integration test suite speed by reducing cli.rs subprocess invocations without building or running tests | 2026-07-19 | 4650d753 | [260719-rld-optimize-polint-integration-test-suite-s](./quick/260719-rld-optimize-polint-integration-test-suite-s/) |
 | 260707-jpy | Fix cargo-deny RustSec advisory for crossbeam-epoch | 2026-07-07 | working tree | [260707-jpy-fix-cargo-deny-rustsec-advisory-for-cros](./quick/260707-jpy-fix-cargo-deny-rustsec-advisory-for-cros/) |
 | 260707-static-analysis-20-vision | Clarify Static Analysis 2.0 product vision and defer remote registry while preserving registry-ready seams | 2026-07-07 | ec9872b5 | [260707-static-analysis-20-product-vision](./quick/260707-static-analysis-20-product-vision/) |
