@@ -951,7 +951,7 @@ fn map_package_file(
     } else {
         absolute_dir.join(entry)
     };
-    let relative_path = paths::normalize_repo_relative_path(root, &absolute_path)?;
+    let relative_path = paths::repo_relative_existing_path(root, &absolute_path)?;
     file_ids.get(&relative_path).copied()
 }
 
@@ -1508,7 +1508,9 @@ mod dependency_topology {
 
 #[cfg(test)]
 mod tests {
-    use super::{GoCommandOutput, GoPackageIndex, resolve_go_import, seed_go_module_nodes};
+    use super::{
+        GoCommandOutput, GoPackageIndex, map_package_file, resolve_go_import, seed_go_module_nodes,
+    };
     use crate::analysis_plan::AnalysisPlan;
     use crate::config::load_config;
     use crate::core::{
@@ -1666,6 +1668,30 @@ mod tests {
             .expect("package metadata exists");
 
         assert_eq!(package.files().collect::<Vec<_>>(), vec![source, test]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn module_graph_go_metadata_maps_canonical_files_beneath_symlinked_root() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let canonical_root = temp.path().join("canonical");
+        let aliased_root = temp.path().join("aliased");
+        std::fs::create_dir_all(canonical_root.join("internal/worker"))
+            .expect("create canonical fixture");
+        std::os::unix::fs::symlink(&canonical_root, &aliased_root).expect("create root alias");
+        let canonical_file = canonical_root.join("internal/worker/worker.go");
+        std::fs::write(&canonical_file, "package worker\n").expect("write Go fixture");
+        let file = FileId(7);
+        let file_ids = BTreeMap::from([("internal/worker/worker.go".to_string(), file)]);
+
+        let mapped = map_package_file(
+            &aliased_root,
+            &canonical_root.join("internal/worker"),
+            Path::new("worker.go"),
+            &file_ids,
+        );
+
+        assert_eq!(mapped, Some(file));
     }
 
     #[test]

@@ -1622,17 +1622,17 @@ mod tests {
         const REPRESENTATIVE_LAYERS: u64 = 6;
         const REPRESENTATIVE_SUMMARIES: u64 = 0;
         const REPRESENTATIVE_QUERIES: u64 = 30;
-        const REPRESENTATIVE_FACTS: u64 = 12_843;
+        const REPRESENTATIVE_FACTS: u64 = 12_855;
         const REPRESENTATIVE_DIAGNOSTICS: u64 = 0;
-        const REPRESENTATIVE_DEPENDENCY_EDGES: u64 = 578;
+        const REPRESENTATIVE_DEPENDENCY_EDGES: u64 = 588;
         const REPRESENTATIVE_VALIDATION_EVENTS: u64 = 20;
-        const REPRESENTATIVE_PLANNED_ROWS: u64 = 14_687;
-        const REPRESENTATIVE_STABLE_FACT_STORAGE_BYTES: u64 = 24_720_824;
-        const REPRESENTATIVE_FACT_LOGICAL_BYTES: u64 = 18_713_396;
+        const REPRESENTATIVE_PLANNED_ROWS: u64 = 14_719;
+        const REPRESENTATIVE_STABLE_FACT_STORAGE_BYTES: u64 = 24_718_839;
+        const REPRESENTATIVE_FACT_LOGICAL_BYTES: u64 = 18_713_356;
         const REPRESENTATIVE_SEMANTIC_LOGICAL_BYTES_WITHOUT_VARIABLE_GO_TOOL_DETAILS: u64 =
-            19_943_943;
+            20_013_093;
         const REPRESENTATIVE_GO_TOOL_DETAIL_OCCURRENCES: u64 = 2;
-        const REPRESENTATIVE_FACT_DIGEST: &str = "fact_metadata:8236cc13a46afdf5";
+        const REPRESENTATIVE_FACT_DIGEST: &str = "fact_metadata:bc522aa91a2cb813";
         const REPRESENTATIVE_DIAGNOSTICS_DIGEST: &str = "cbf29ce484222325";
         const REPRESENTATIVE_GIT_ATTRIBUTES: &str = "* text eol=lf\n";
         const MIN_STABLE_FACT_STORAGE_BYTES: u64 = 23 * 1024 * 1024;
@@ -1675,7 +1675,7 @@ mod tests {
             ("MirBody", 30),
             ("MirOperation", 170),
             ("ModuleEdge", 48),
-            ("ModuleNode", 40),
+            ("ModuleNode", 32),
             ("NarrowedType", 30),
             ("Package", 10),
             ("Place", 160),
@@ -1683,7 +1683,7 @@ mod tests {
             ("PointsToSet", 40),
             ("Reference", 337),
             ("RefinedCallEdge", 82),
-            ("RepoTopologyOverlay", 28),
+            ("RepoTopologyOverlay", 38),
             ("Resolution", 375),
             ("ResolvedImport", 18),
             ("Scope", 100),
@@ -1697,7 +1697,7 @@ mod tests {
             ("SummaryMemory", 30),
             ("SummaryTito", 30),
             ("Symbol", 99),
-            ("TopologyPackage", 1),
+            ("TopologyPackage", 11),
             ("Type", 190),
             ("Value", 140),
             ("WorkspaceRoot", 2),
@@ -1711,7 +1711,7 @@ mod tests {
             ("polint.evidence", 1_090),
             ("polint.go.syntax", 49),
             ("polint.metrics", 60),
-            ("polint.module_graph", 157),
+            ("polint.module_graph", 169),
             ("polint.module_topology", 18),
             ("polint.refined_calls", 82),
             ("polint.semantic_mir", 360),
@@ -1805,22 +1805,22 @@ mod tests {
                 (
                     "toolchain_version=go1.25.12",
                     "host_target=linux/amd64",
-                    19_944_043,
+                    20_013_193,
                 ),
                 (
                     "toolchain_version=go1.25.12",
                     "host_target=darwin/arm64",
-                    19_944_045,
+                    20_013_195,
                 ),
                 (
                     "toolchain_version=go1.25.12",
                     "host_target=windows/amd64",
-                    19_944_047,
+                    20_013_197,
                 ),
                 (
                     "toolchain_version=go1.26.2",
                     "host_target=darwin/arm64",
-                    19_944_043,
+                    20_013_193,
                 ),
             ] {
                 assert_eq!(

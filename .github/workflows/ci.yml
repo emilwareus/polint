@@ -158,9 +158,9 @@ jobs:
             fixture_count: 4
             timeout: 90
           - os: windows-latest
-            name: windows-latest — composite fixture test
-            shard: composite-fixture
-            timeout: 120
+            name: windows-latest — fixture manifest + residual coverage
+            shard: fixture-coverage
+            timeout: 20
 
     steps:
       - uses: actions/checkout@v6
@@ -222,16 +222,27 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $composite = "eval::fixtures::eval_native_fixture_runner_tests::eval_native_fixture_suite_covers_required_categories"
+          $fixtureCoverage = "eval::fixtures::eval_native_fixture_runner_tests::eval_native_fixture_suite_declares_categories_and_covers_residuals"
           $listed = & cargo test -p polint --lib --all-features --locked "eval::fixtures::" -- --list --format terse
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-          $tests = @(
+          $allTests = @(
             $listed | ForEach-Object {
               if ($_ -match '^(eval::fixtures::.+): test$') {
-                $name = $Matches[1]
-                if ($name -ne $composite) { $name }
+                $Matches[1]
               }
-            } | Sort-Object
+            }
+          )
+          foreach ($excluded in @($composite, $fixtureCoverage)) {
+            $found = @($allTests | Where-Object { $_ -eq $excluded })
+            if ($found.Count -ne 1) {
+              throw "expected exactly one excluded fixture test named '$excluded'; found $($found.Count)"
+            }
+          }
+          $tests = @(
+            $allTests |
+              Where-Object { $_ -ne $composite -and $_ -ne $fixtureCoverage } |
+              Sort-Object
           )
           $shardIndex = [int]$env:POLINT_WINDOWS_FIXTURE_SHARD_INDEX
           $shardCount = [int]$env:POLINT_WINDOWS_FIXTURE_SHARD_COUNT
@@ -255,17 +266,17 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
 
-      - name: cargo test (composite fixture shard)
-        if: matrix.shard == 'composite-fixture'
+      - name: cargo test (fixture manifest + residual coverage)
+        if: matrix.shard == 'fixture-coverage'
         env:
           POLINT_REQUIRE_WINDOWS_CASE_SENSITIVE_TEST: "1"
         run: >-
           cargo test -p polint --lib --all-features --locked
-          eval::fixtures::eval_native_fixture_runner_tests::eval_native_fixture_suite_covers_required_categories
+          eval::fixtures::eval_native_fixture_runner_tests::eval_native_fixture_suite_declares_categories_and_covers_residuals
           -- --exact
 
       - name: input-snapshot runtime gate (serialized)
-        if: matrix.shard == 'all' || matrix.shard == 'non-fixtures'
+        if: matrix.shard == 'all'
         run: >-
           cargo test -p polint --lib --all-features --locked
           --profile performance-gate
