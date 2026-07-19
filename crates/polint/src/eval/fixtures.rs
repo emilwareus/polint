@@ -574,6 +574,21 @@ pub(crate) fn run_direct_calls_core_fixture_for_test(
 }
 
 #[cfg(test)]
+fn cached_direct_calls_core_fixture_for_test(
+    fixture_dir: &Path,
+) -> anyhow::Result<&'static crate::eval::report::EvaluationRun> {
+    static RUN: std::sync::OnceLock<Result<crate::eval::report::EvaluationRun, String>> =
+        std::sync::OnceLock::new();
+
+    match RUN.get_or_init(|| {
+        run_direct_calls_core_fixture_for_test(fixture_dir).map_err(|error| format!("{error:#}"))
+    }) {
+        Ok(run) => Ok(run),
+        Err(error) => Err(anyhow::anyhow!("{error}")),
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn run_abstract_domains_core_fixture_for_test(
     fixture_dir: &Path,
 ) -> anyhow::Result<crate::eval::report::EvaluationRun> {
@@ -2571,7 +2586,7 @@ mod eval_native_fixture_runner_tests {
         } else if fixture.manifest.area == FixtureArea::DirectCalls
             && fixture.manifest.case_id == "direct-calls-core"
         {
-            run_direct_calls_core_fixture_for_test(fixture_dir)
+            Ok((*cached_direct_calls_core_fixture_for_test(fixture_dir)?).clone())
         } else if fixture.manifest.area == FixtureArea::AbstractDomains
             && fixture.manifest.case_id == "abstract-domains-core"
         {
@@ -3232,9 +3247,9 @@ mod direct_calls_core {
 
     #[test]
     fn eval_direct_calls_core_fixture_passes() {
-        let run = run_direct_calls_core_fixture_for_test(&fixture_dir()).unwrap();
+        let run = cached_direct_calls_core_fixture_for_test(&fixture_dir()).unwrap();
         let case = run.cases.first().expect("direct calls core case");
-        let rendered = to_deterministic_json_pretty(&run);
+        let rendered = to_deterministic_json_pretty(run);
 
         assert_eq!(case.case_id, "direct-calls-core");
         assert_eq!(case.area, FixtureArea::DirectCalls);
@@ -3347,7 +3362,7 @@ mod direct_calls_core {
 
     #[test]
     fn eval_direct_calls_core_observes_supported_language_feature_contract() {
-        let run = run_direct_calls_core_fixture_for_test(&fixture_dir()).unwrap();
+        let run = cached_direct_calls_core_fixture_for_test(&fixture_dir()).unwrap();
         let case = run.cases.first().expect("direct calls core case");
 
         for feature in SUPPORTED_DIRECT_CALL_FEATURES {
@@ -3392,7 +3407,7 @@ mod direct_calls_core {
 
     #[test]
     fn eval_direct_calls_core_observes_required_families_and_determinism() {
-        let run = run_direct_calls_core_fixture_for_test(&fixture_dir()).unwrap();
+        let run = cached_direct_calls_core_fixture_for_test(&fixture_dir()).unwrap();
         let case = run.cases.first().expect("direct calls core case");
 
         for family in crate::eval::model::CALL_FACT_FAMILIES {
@@ -3416,7 +3431,7 @@ mod direct_calls_core {
 
     #[test]
     fn eval_direct_calls_core_observes_counts_and_indexes() {
-        let run = run_direct_calls_core_fixture_for_test(&fixture_dir()).unwrap();
+        let run = cached_direct_calls_core_fixture_for_test(&fixture_dir()).unwrap();
         let case = run.cases.first().expect("direct calls core case");
 
         for required in REQUIRED_COUNT_INVARIANTS
