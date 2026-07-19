@@ -74,7 +74,12 @@ Excluded from the first implementation:
 
 ## Status
 
-Decision locked for the next planning pass:
+The storage technology decision remains locked, but the first Phase 65 delivery
+attempt was abandoned as an oversized implementation. Restart work must follow
+the bounded slices and review disposition rules in the restart documents rather
+than the original all-at-once sequencing.
+
+Retained decisions:
 
 - primary local store: SQLite/rusqlite bundled;
 - graph backend: typed adjacency/evidence tables plus bounded Rust/SQL queries;
@@ -84,6 +89,9 @@ Decision locked for the next planning pass:
 
 See:
 
+- [RESTART-PLAN.md](RESTART-PLAN.md)
+- [IDENTITY-READINESS.md](IDENTITY-READINESS.md)
+- [REVIEW-FINDINGS-TRIAGE.md](REVIEW-FINDINGS-TRIAGE.md)
 - [FINAL-REPORT.md](FINAL-REPORT.md)
 - [RECOMMENDED_IMPLEMENTATION.md](RECOMMENDED_IMPLEMENTATION.md)
 - [RESEARCH-ANALYSIS.md](RESEARCH-ANALYSIS.md)
