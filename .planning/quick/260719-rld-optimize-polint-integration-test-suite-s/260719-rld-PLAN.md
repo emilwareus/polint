@@ -1,6 +1,6 @@
 ---
 quick_id: 260719-rld
-status: in_progress
+status: complete
 description: Optimize polint integration test suite speed by reducing cli.rs subprocess invocations without building or running tests
 ---
 
@@ -27,4 +27,3 @@ Reduce integration-test process overhead while preserving the existing CLI asser
 **Verify:** Inspect manifests, binary names, target paths, platform executable suffix handling, and the diff. Do not build or run tests locally; push for CI validation.
 
 **Done:** The 16 example-rule invocations execute prebuilt binaries after at most four setup builds.
-
