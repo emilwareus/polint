@@ -52,9 +52,9 @@ const GO_FRONTEND_STALE_STAGING_AGE: std::time::Duration =
 const GO_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 const GO_BUILD_TIMEOUT: Duration = Duration::from_secs(120);
 #[cfg(not(windows))]
-const GO_OPERATION_TIMEOUT: Duration = Duration::from_secs(150);
+pub(crate) const GO_OPERATION_TIMEOUT: Duration = Duration::from_secs(150);
 #[cfg(windows)]
-const GO_OPERATION_TIMEOUT: Duration = Duration::from_secs(300);
+pub(crate) const GO_OPERATION_TIMEOUT: Duration = Duration::from_secs(300);
 const GO_PROBE_STDOUT_BYTES: usize = 64 * 1024;
 const GO_PROBE_STDERR_BYTES: usize = 256 * 1024;
 const GO_BUILD_STDOUT_BYTES: usize = 256 * 1024;
@@ -15202,12 +15202,9 @@ mod tests {
             Some(embedded_digest.as_str())
         );
 
-        let result = crate::go::semantic::client::GoSemanticClient::with_timeout(
-            root.clone(),
-            Duration::from_secs(30),
-        )
-        .run_prepared(&config, &prepared)
-        .expect("run real semantic analysis through the embedded frontend");
+        let result = crate::go::semantic::client::GoSemanticClient::new(root.clone())
+            .run_prepared(&config, &prepared)
+            .expect("run real semantic analysis through the embedded frontend");
 
         assert!(
             result

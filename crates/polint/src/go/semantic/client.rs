@@ -4,8 +4,8 @@ use std::time::{Duration, Instant};
 use crate::go::lifecycle::GoAnalysisConfig;
 use crate::go::semantic::diagnostics::GO_SIDECAR_TIMEOUT;
 use crate::go::semantic::process::{
-    BoundedCommandLimits, GoOperationDeadline, GoSemanticProcessError, PreparedGoSemanticFrontend,
-    go_command_working_directory, run_bounded_command,
+    BoundedCommandLimits, GO_OPERATION_TIMEOUT, GoOperationDeadline, GoSemanticProcessError,
+    PreparedGoSemanticFrontend, go_command_working_directory, run_bounded_command,
 };
 #[cfg(all(test, any(windows, target_os = "linux", target_os = "macos")))]
 use crate::go::semantic::protocol::decode_ndjson;
@@ -60,7 +60,7 @@ impl GoSemanticClient {
     pub(crate) fn new(root: PathBuf) -> Self {
         Self {
             root,
-            timeout: Duration::from_secs(30),
+            timeout: GO_OPERATION_TIMEOUT,
         }
     }
 
@@ -196,6 +196,21 @@ mod tests {
     use std::time::Instant;
 
     static FAKE_STDOUT_FILE_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn default_client_uses_the_bounded_operation_timeout() {
+        let client = GoSemanticClient::new(PathBuf::from("fixture"));
+
+        assert_eq!(client.timeout, GO_OPERATION_TIMEOUT);
+    }
+
+    #[test]
+    fn explicit_client_timeout_is_preserved() {
+        let timeout = Duration::from_millis(25);
+        let client = GoSemanticClient::with_timeout(PathBuf::from("fixture"), timeout);
+
+        assert_eq!(client.timeout, timeout);
+    }
 
     #[test]
     fn timeout_error_uses_go_sidecar_timeout_category() {

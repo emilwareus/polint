@@ -120,7 +120,7 @@ jobs:
   test-platform:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: ${{ matrix.timeout }}
     strategy:
       fail-fast: false
       matrix:
@@ -128,15 +128,39 @@ jobs:
           - os: macos-latest
             name: macos-latest — platform library tests
             shard: all
+            timeout: 60
           - os: windows-latest
             name: windows-latest — platform library tests
             shard: non-fixtures
+            timeout: 60
           - os: windows-latest
-            name: windows-latest — platform fixture tests
+            name: windows-latest — platform fixture tests (1/4)
             shard: fixtures
+            fixture_index: 0
+            fixture_count: 4
+            timeout: 90
+          - os: windows-latest
+            name: windows-latest — platform fixture tests (2/4)
+            shard: fixtures
+            fixture_index: 1
+            fixture_count: 4
+            timeout: 90
+          - os: windows-latest
+            name: windows-latest — platform fixture tests (3/4)
+            shard: fixtures
+            fixture_index: 2
+            fixture_count: 4
+            timeout: 90
+          - os: windows-latest
+            name: windows-latest — platform fixture tests (4/4)
+            shard: fixtures
+            fixture_index: 3
+            fixture_count: 4
+            timeout: 90
           - os: windows-latest
             name: windows-latest — composite fixture test
             shard: composite-fixture
+            timeout: 120
 
     steps:
       - uses: actions/checkout@v6
@@ -189,12 +213,47 @@ jobs:
 
       - name: cargo test (fixture shard)
         if: matrix.shard == 'fixtures'
+        shell: pwsh
         env:
+          CARGO_TERM_COLOR: never
           POLINT_REQUIRE_WINDOWS_CASE_SENSITIVE_TEST: "1"
-        run: >-
-          cargo test -p polint --lib --all-features --locked
-          eval::fixtures::
-          -- --skip eval::fixtures::eval_native_fixture_runner_tests::eval_native_fixture_suite_covers_required_categories
+          POLINT_WINDOWS_FIXTURE_SHARD_INDEX: ${{ matrix.fixture_index }}
+          POLINT_WINDOWS_FIXTURE_SHARD_COUNT: ${{ matrix.fixture_count }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $composite = "eval::fixtures::eval_native_fixture_runner_tests::eval_native_fixture_suite_covers_required_categories"
+          $listed = & cargo test -p polint --lib --all-features --locked "eval::fixtures::" -- --list --format terse
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $tests = @(
+            $listed | ForEach-Object {
+              if ($_ -match '^(eval::fixtures::.+): test$') {
+                $name = $Matches[1]
+                if ($name -ne $composite) { $name }
+              }
+            } | Sort-Object
+          )
+          $shardIndex = [int]$env:POLINT_WINDOWS_FIXTURE_SHARD_INDEX
+          $shardCount = [int]$env:POLINT_WINDOWS_FIXTURE_SHARD_COUNT
+          if ($shardCount -lt 1 -or $shardIndex -lt 0 -or $shardIndex -ge $shardCount) {
+            throw "invalid Windows fixture shard $shardIndex/$shardCount"
+          }
+
+          $selected = @()
+          for ($index = 0; $index -lt $tests.Count; $index++) {
+            if (($index % $shardCount) -eq $shardIndex) {
+              $selected += $tests[$index]
+            }
+          }
+          if ($selected.Count -eq 0) {
+            throw "Windows fixture shard $shardIndex/$shardCount selected no tests"
+          }
+
+          Write-Host "Running $($selected.Count) of $($tests.Count) Windows fixture tests"
+          foreach ($test in $selected) {
+            & cargo test -p polint --lib --all-features --locked $test -- --exact --test-threads=1
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
 
       - name: cargo test (composite fixture shard)
         if: matrix.shard == 'composite-fixture'
