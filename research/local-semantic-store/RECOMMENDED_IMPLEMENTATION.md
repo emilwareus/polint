@@ -251,17 +251,34 @@ envelopes and SDK views are public once promoted.
 
 ## Sequencing
 
-1. Add the store facade and SQLite connection/migration skeleton.
-2. Persist store manifest, input snapshots, provider generations, and layer
-   entries without changing analysis behavior.
-3. Persist semantic index facts: files, symbols, references, imports,
-   resolutions, and fact metadata.
-4. Add xref queries for definitions/references/used-by internally.
-5. Persist direct call/refined call edge indexes.
-6. Persist summary manifests and payload digests.
-7. Add bounded graph query internals and fixtures.
-8. Add hidden/unstable `polint graph` experiments only after result envelopes
-   and precision/status behavior are ready.
-9. Add Tantivy lexical search as a side index.
-10. Add sqlite-vec experiments only after embeddings have a lockfile and
-    deterministic invalidation story.
+The original sequencing grouped too many identity and metadata families into
+one delivery step. Use the bounded restart slices in
+[RESTART-PLAN.md](RESTART-PLAN.md): readiness audit, minimal generation state
+machine, minimal run manifest, provider-outcome prerequisite, then one provider
+family at a time.
+
+Only after those slices converge should implementation continue with:
+
+1. additional provider metadata families, each behind an exact readiness audit;
+2. semantic index facts such as files, symbols, references, imports, and
+   resolutions;
+3. internal definition/reference/used-by queries;
+4. direct and refined call indexes;
+5. summary manifests and payload digests;
+6. bounded graph queries;
+7. hidden graph CLI experiments;
+8. lexical search;
+9. optional vector-search experiments.
+
+## Delivery constraints
+
+- One PR owns one storage invariant or one prerequisite subsystem.
+- Missing canonical identity is a stop-and-split signal, not permission to
+  refactor every producer in the current PR.
+- The first implementation of a metadata family covers one provider only.
+- Findings outside the changed contract are triaged into independent work.
+- Required PR CI must remain at or below a five-minute critical path.
+- Exhaustive performance, crash, scale, and platform matrices run outside the
+  required fast PR path.
+- Crossing 3 implementation tasks, 15 product/test files, or 2,500 handwritten
+  added lines requires an explicit human split decision.

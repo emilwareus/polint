@@ -84,9 +84,34 @@ Confidence: medium.
 
 ## D9. Existing Kernel Reuse
 
-Decision: the semantic store must reuse provider manifests, `InputSnapshot`,
-layer/query/summary keys, fact metadata, and validation gates.
+Decision: the semantic store should reuse provider manifests, `InputSnapshot`,
+layer/query/summary keys, fact metadata, and validation gates only after each
+contract passes an explicit persistence-readiness audit.
 
 Rationale: a parallel cache or graph ID system would fork the engine.
+
+Confidence: medium. The first implementation attempt proved that several
+existing contracts were incomplete, over-broad, or not canonically encoded.
+
+## D10. Delivery Unit
+
+Decision: implement the semantic store as a sequence of small independently
+mergeable PRs, beginning with a readiness audit and a minimal generation state
+machine.
+
+Rationale: the abandoned Phase 65 implementation combined nineteen plans and
+expanded beyond 85,000 added lines. Correct architecture is not reviewable when
+all prerequisites and transitive hardening are bundled together.
+
+Confidence: high.
+
+## D11. Conservative Non-Reuse
+
+Decision: when a provider's complete behavior-affecting identity is not ready,
+omit that provider from durable reuse or mark it non-reusable instead of
+expanding the current store PR to certify additional runtimes and environments.
+
+Rationale: false reuse is unsafe, but fixing every producer and toolchain in one
+store change recreates the failed scope pattern.
 
 Confidence: high.
