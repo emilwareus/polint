@@ -216,34 +216,52 @@ pub(crate) fn polint_help(args: &[&str]) -> String {
         .clone()
 }
 
-pub(crate) fn example_rule_cmd(example: &str) -> Command {
-    let manifest = repo_root()
-        .join("examples")
-        .join(example)
-        .join(".polint/rules/Cargo.toml");
-    let manifest_str = manifest
-        .to_str()
-        .unwrap_or_else(|| panic!("manifest path is not valid UTF-8: {}", manifest.display()))
-        .to_string();
-    let mut command = cargo_cmd();
-    command.args(["run", "--quiet", "--manifest-path", &manifest_str, "--"]);
+fn example_rule_cmd(package: &'static str) -> Command {
+    static EXAMPLE_RULES_BUILT: OnceLock<()> = OnceLock::new();
+
+    EXAMPLE_RULES_BUILT.get_or_init(|| {
+        cargo_cmd()
+            .current_dir(repo_root())
+            .args([
+                "build",
+                "--quiet",
+                "--package",
+                "polint-example-ts-design-tokens-rule",
+                "--package",
+                "polint-example-ts-complexity-rule",
+                "--package",
+                "polint-example-go-import-boundaries-rule",
+                "--package",
+                "polint-example-go-branch-obligations-rule",
+            ])
+            .assert()
+            .success();
+    });
+
+    let executable = shared_cargo_target_dir()
+        .join("debug")
+        .join(format!("{package}{}", std::env::consts::EXE_SUFFIX));
+    let mut command = Command::new(executable);
+    command.env("CARGO_TARGET_DIR", shared_cargo_target_dir());
+    command.env("POLINT_RULES_TARGET_DIR", shared_rules_target_dir());
+    command.env("POLINT_RULES_PROFILE", "dev");
     command
 }
 
 pub(crate) fn raw_color_rule_cmd() -> Command {
-    example_rule_cmd("ts-design-tokens")
+    example_rule_cmd("polint-example-ts-design-tokens-rule")
 }
 
 pub(crate) fn ts_complexity_rule_cmd() -> Command {
-    example_rule_cmd("ts-complexity")
+    example_rule_cmd("polint-example-ts-complexity-rule")
 }
 
 pub(crate) fn go_import_boundaries_rule_cmd() -> Command {
-    example_rule_cmd("go-import-boundaries")
+    example_rule_cmd("polint-example-go-import-boundaries-rule")
 }
 
 pub(crate) fn go_branch_obligations_rule_cmd() -> Command {
-    example_rule_cmd("go-branch-obligations")
+    example_rule_cmd("polint-example-go-branch-obligations-rule")
 }
 
 pub(crate) fn write_phase8_raw_color_fixture(root: &Path, severity: &str) {
