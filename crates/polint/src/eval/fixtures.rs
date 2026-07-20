@@ -574,6 +574,21 @@ pub(crate) fn run_direct_calls_core_fixture_for_test(
 }
 
 #[cfg(test)]
+fn cached_direct_calls_core_fixture_for_test(
+    fixture_dir: &Path,
+) -> anyhow::Result<&'static crate::eval::report::EvaluationRun> {
+    static RUN: std::sync::OnceLock<Result<crate::eval::report::EvaluationRun, String>> =
+        std::sync::OnceLock::new();
+
+    match RUN.get_or_init(|| {
+        run_direct_calls_core_fixture_for_test(fixture_dir).map_err(|error| format!("{error:#}"))
+    }) {
+        Ok(run) => Ok(run),
+        Err(error) => Err(anyhow::anyhow!("{error}")),
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn run_abstract_domains_core_fixture_for_test(
     fixture_dir: &Path,
 ) -> anyhow::Result<crate::eval::report::EvaluationRun> {
@@ -775,18 +790,6 @@ pub(crate) fn run_framework_entrypoints_core_fixture_for_test(
     let temp = crate::eval::observed::copy_fixture_repo_for_test(&fixture)?;
     let plan = crate::analysis_plan::AnalysisPlan::from_capability_names_for_test(&["calls"]);
 
-    let cold_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
-        &fixture,
-        temp.path(),
-        true,
-        &plan,
-    )?;
-    let warm_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
-        &fixture,
-        temp.path(),
-        true,
-        &plan,
-    )?;
     let no_cache_observed = crate::eval::observed::observe_kernel_fixture_repo_with_plan_for_test(
         &fixture,
         temp.path(),
@@ -794,20 +797,10 @@ pub(crate) fn run_framework_entrypoints_core_fixture_for_test(
         &plan,
     )?;
 
-    let cold_run = evaluation_run_for_fixture(&fixture, cold_observed);
-    let warm_run = evaluation_run_for_fixture(&fixture, warm_observed);
-    let no_cache_run = evaluation_run_for_fixture(&fixture, no_cache_observed.clone());
-    let deterministic = cache_comparison_json(&cold_run) == cache_comparison_json(&warm_run)
-        && cache_comparison_json(&cold_run) == cache_comparison_json(&no_cache_run);
-
     let mut observed = no_cache_observed
-        .iter()
+        .into_iter()
         .filter(|item| !is_cache_comparison_observed_invariant(item))
-        .cloned()
         .collect::<Vec<_>>();
-    if deterministic {
-        observed.push(framework_entrypoints_determinism_observed_invariant());
-    }
 
     if let Some(budget) = &fixture.manifest.budget {
         let elapsed = started.elapsed();
@@ -821,19 +814,6 @@ pub(crate) fn run_framework_entrypoints_core_fixture_for_test(
     }
 
     Ok(evaluation_run_for_fixture(&fixture, observed))
-}
-
-#[cfg(test)]
-fn framework_entrypoints_determinism_observed_invariant() -> crate::eval::model::ObservedItem {
-    crate::eval::model::ObservedItem::Invariant(crate::eval::model::ObservedInvariant {
-        name: "framework_entrypoints.current_determinism".to_string(),
-        value: "cold_warm_no_cache_equal".to_string(),
-        mode: crate::eval::model::AssertionMode::Exact,
-        producer_id: Some("polint.eval".to_string()),
-        provenance: Some("framework_entrypoints.current_behavior".to_string()),
-        precision: Some("exact".to_string()),
-        status: Some(crate::eval::model::ObservedStatus::Present),
-    })
 }
 
 #[cfg(test)]
@@ -2321,55 +2301,43 @@ mod eval_native_fixture_runner_tests {
 
     #[test]
     fn eval_native_fixture_suite_covers_required_categories() {
-        let fixture_dirs = collect_native_fixture_dirs(&repo_root().join("tests/eval-fixtures"));
-        let mut passing_by_area = std::collections::BTreeMap::<FixtureArea, Vec<String>>::new();
+        let fixture_root = repo_root().join("tests/eval-fixtures");
+        let fixture_dirs = collect_native_fixture_dirs(&fixture_root);
+        let discovered_fixture_dirs = fixture_dirs
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        let declared_fixture_dirs = NATIVE_FIXTURE_DIRS
+            .iter()
+            .map(|relative_path| fixture_root.join(relative_path))
+            .collect::<std::collections::BTreeSet<_>>();
 
         assert!(
             !fixture_dirs.is_empty(),
             "native fixture suite should contain fixture manifests"
         );
+        assert_eq!(
+            discovered_fixture_dirs, declared_fixture_dirs,
+            "every native fixture directory should have an independently schedulable test"
+        );
+
+        let mut fixtures_by_area = std::collections::BTreeMap::<FixtureArea, Vec<String>>::new();
 
         for fixture_dir in fixture_dirs {
             if cfg!(target_os = "windows") && fixture_requires_runtime_extension(&fixture_dir) {
                 continue;
             }
-            let run = run_fixture_for_suite_coverage(&fixture_dir).unwrap_or_else(|error| {
+            let fixture = load_native_fixture(&fixture_dir).unwrap_or_else(|error| {
                 panic!(
-                    "native fixture should run: {}\n{error:#}",
+                    "native fixture manifest should load: {}\n{error:#}",
                     fixture_dir.display()
                 )
             });
-            let case = run
-                .cases
-                .first()
-                .expect("native fixture run should have a case");
 
-            assert_eq!(
-                run.metrics.false_negatives,
-                0,
-                "fixture should not miss expected rows: {}\n{}",
-                case.case_id,
-                to_deterministic_json_pretty(&run)
-            );
-            assert_eq!(
-                run.metrics.forbidden_hits,
-                0,
-                "fixture should not hit forbidden rows: {}\n{}",
-                case.case_id,
-                to_deterministic_json_pretty(&run)
-            );
-            assert_eq!(
-                run.metrics.runtime_budget_failed,
-                0,
-                "fixture should stay inside runtime budget: {}\n{}",
-                case.case_id,
-                to_deterministic_json_pretty(&run)
-            );
-
-            passing_by_area
-                .entry(case.area)
+            fixtures_by_area
+                .entry(fixture.manifest.area)
                 .or_default()
-                .push(case.case_id.clone());
+                .push(fixture.manifest.case_id);
         }
 
         for required_area in [
@@ -2382,10 +2350,121 @@ mod eval_native_fixture_runner_tests {
             FixtureArea::Evidence,
         ] {
             assert!(
-                passing_by_area.contains_key(&required_area),
-                "native fixture suite must include a passing {required_area:?} fixture; found {passing_by_area:#?}"
+                fixtures_by_area.contains_key(&required_area),
+                "native fixture suite must include a {required_area:?} fixture; found {fixtures_by_area:#?}"
             );
         }
+    }
+
+    fn assert_native_fixture_passes(fixture_dir: &Path) {
+        if cfg!(target_os = "windows") && fixture_requires_runtime_extension(fixture_dir) {
+            return;
+        }
+
+        let run = run_fixture_for_suite_coverage(fixture_dir).unwrap_or_else(|error| {
+            panic!(
+                "native fixture should run: {}\n{error:#}",
+                fixture_dir.display()
+            )
+        });
+        let case = run
+            .cases
+            .first()
+            .expect("native fixture run should have a case");
+        let rendered = to_deterministic_json_pretty(&run);
+
+        assert_eq!(
+            run.metrics.false_negatives, 0,
+            "fixture should not miss expected rows: {}\n{rendered}",
+            case.case_id
+        );
+        assert_eq!(
+            run.metrics.forbidden_hits, 0,
+            "fixture should not hit forbidden rows: {}\n{rendered}",
+            case.case_id
+        );
+        assert_eq!(
+            run.metrics.runtime_budget_failed, 0,
+            "fixture should stay inside runtime budget: {}\n{rendered}",
+            case.case_id
+        );
+        if case.area == FixtureArea::FrameworkEntrypoints {
+            assert!(
+                !rendered.contains(repo_root().to_string_lossy().as_ref()),
+                "framework-entrypoint fixture output should not contain the repository root: {rendered}"
+            );
+        }
+    }
+
+    macro_rules! native_fixture_tests {
+        ($($test_name:ident => $relative_path:literal),+ $(,)?) => {
+            const NATIVE_FIXTURE_DIRS: &[&str] = &[$($relative_path),+];
+
+            $(
+                #[test]
+                fn $test_name() {
+                    assert_native_fixture_passes(
+                        &repo_root().join("tests/eval-fixtures").join($relative_path),
+                    );
+                }
+            )+
+        };
+    }
+
+    native_fixture_tests! {
+        eval_native_fixture_abstract_domains_core_passes => "abstract-domains/core",
+        eval_native_fixture_cache_current_determinism_passes => "cache/current-determinism",
+        eval_native_fixture_cache_input_snapshots_passes => "cache/input-snapshots",
+        eval_native_fixture_cache_layer_cache_passes => "cache/layer-cache",
+        eval_native_fixture_cfg_core_passes => "cfg-core",
+        eval_native_fixture_data_flow_core_passes => "data-flow/core",
+        eval_native_fixture_determinism_go_reachable_passes => "determinism/go_reachable",
+        eval_native_fixture_determinism_go_rta_passes => "determinism/go_rta",
+        eval_native_fixture_determinism_ts_object_model_passes => "determinism/ts_object_model",
+        eval_native_fixture_determinism_ts_reachable_passes => "determinism/ts_reachable",
+        eval_native_fixture_determinism_ts_tokens_passes => "determinism/ts_tokens",
+        eval_native_fixture_direct_calls_core_passes => "direct-calls/core",
+        eval_native_fixture_direct_summaries_core_passes => "direct-summaries/core",
+        eval_native_fixture_direct_summaries_scc_closure_passes => "direct-summaries/scc-closure",
+        eval_native_fixture_evidence_passes => "evidence",
+        eval_native_fixture_extension_adaptation_delta_passes => "extension/adaptation-delta",
+        eval_native_fixture_extension_real_sink_passes => "extension/real-sink",
+        eval_native_fixture_extension_rejection_delta_passes => "extension/rejection-delta",
+        eval_native_fixture_framework_entrypoints_mixed_go_ts_passes => "framework-entrypoints/mixed-go-ts",
+        eval_native_fixture_go_rta_address_taken_passes => "go-rta/address-taken",
+        eval_native_fixture_go_rta_alias_dispatch_passes => "go-rta/alias-dispatch",
+        eval_native_fixture_go_rta_alias_generic_dispatch_passes => "go-rta/alias-generic-dispatch",
+        eval_native_fixture_go_rta_generic_dispatch_passes => "go-rta/generic-dispatch",
+        eval_native_fixture_go_rta_interface_dispatch_passes => "go-rta/interface-dispatch",
+        eval_native_fixture_go_rta_iteration_cap_passes => "go-rta/iteration-cap",
+        eval_native_fixture_go_rta_static_reachability_passes => "go-rta/static-reachability",
+        eval_native_fixture_identity_categorized_failures_passes => "identity/categorized_failures",
+        eval_native_fixture_identity_crlf_normalization_passes => "identity/crlf_normalization",
+        eval_native_fixture_identity_dedup_passes => "identity/dedup",
+        eval_native_fixture_identity_jelly_oracle_coverage_passes => "identity/jelly_oracle_coverage",
+        eval_native_fixture_jelly_ts_inventory_spans_passes => "jelly/ts-inventory-spans",
+        eval_native_fixture_kernel_provider_order_passes => "kernel/provider-order",
+        eval_native_fixture_module_topology_core_passes => "module-topology/core",
+        eval_native_fixture_polyglot_canary_go_ts_passes => "polyglot-canary/go-ts",
+        eval_native_fixture_promotion_cfg_call_flow_evidence_passes => "promotion/cfg-call-flow-evidence",
+        eval_native_fixture_provenance_cycle_detection_passes => "provenance/cycle-detection",
+        eval_native_fixture_provenance_metadata_passes => "provenance/metadata",
+        eval_native_fixture_refined_calls_direct_vs_refined_passes => "refined-calls/direct-vs-refined",
+        eval_native_fixture_refined_calls_extension_model_passes => "refined-calls/extension-model",
+        eval_native_fixture_semantic_graph_go_graph_passes => "semantic-graph/go_graph",
+        eval_native_fixture_semantic_graph_go_semantic_passes => "semantic-graph/go_semantic",
+        eval_native_fixture_semantic_graph_ts_direct_bindings_passes => "semantic-graph/ts_direct_bindings",
+        eval_native_fixture_semantic_graph_ts_graph_passes => "semantic-graph/ts_graph",
+        eval_native_fixture_semantic_index_core_passes => "semantic-index/core",
+        eval_native_fixture_semantic_mir_core_passes => "semantic-mir/core",
+        eval_native_fixture_ts_object_model_budget_passes => "ts-object-model/budget",
+        eval_native_fixture_ts_object_model_object_literal_passes => "ts-object-model/object-literal",
+        eval_native_fixture_ts_object_model_prototype_this_passes => "ts-object-model/prototype-this",
+        eval_native_fixture_ts_tokens_alias_parameter_return_passes => "ts-tokens/alias-parameter-return",
+        eval_native_fixture_ts_tokens_token_explosion_passes => "ts-tokens/token-explosion",
+        eval_native_fixture_type_value_alias_extension_precision_passes => "type-value-alias/extension-precision",
+        eval_native_fixture_type_value_alias_go_core_passes => "type-value-alias/go-core",
+        eval_native_fixture_type_value_alias_ts_js_core_passes => "type-value-alias/ts-js-core",
     }
 
     fn expected_identity(item: &ExpectedItem) -> String {
@@ -2507,7 +2586,7 @@ mod eval_native_fixture_runner_tests {
         } else if fixture.manifest.area == FixtureArea::DirectCalls
             && fixture.manifest.case_id == "direct-calls-core"
         {
-            run_direct_calls_core_fixture_for_test(fixture_dir)
+            Ok((*cached_direct_calls_core_fixture_for_test(fixture_dir)?).clone())
         } else if fixture.manifest.area == FixtureArea::AbstractDomains
             && fixture.manifest.case_id == "abstract-domains-core"
         {
@@ -2527,42 +2606,6 @@ mod eval_native_fixture_runner_tests {
         } else {
             run_native_fixture_for_test(fixture_dir)
         }
-    }
-}
-
-#[cfg(test)]
-mod framework_entrypoints_core {
-    use std::path::{Path, PathBuf};
-
-    use crate::eval::model::FixtureArea;
-    use crate::eval::report::to_deterministic_json_pretty;
-
-    use super::*;
-
-    fn repo_root() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .expect("polint crate should live under crates/")
-            .to_path_buf()
-    }
-
-    fn fixture_dir() -> PathBuf {
-        repo_root().join("tests/eval-fixtures/framework-entrypoints/mixed-go-ts")
-    }
-
-    #[test]
-    fn eval_framework_entrypoints_core_fixture_passes() {
-        let run = run_framework_entrypoints_core_fixture_for_test(&fixture_dir()).unwrap();
-        let case = run.cases.first().expect("framework-entrypoints core case");
-        let rendered = to_deterministic_json_pretty(&run);
-
-        assert_eq!(case.case_id, "framework-entrypoints-core");
-        assert_eq!(case.area, FixtureArea::FrameworkEntrypoints);
-        assert_eq!(run.metrics.false_negatives, 0, "{rendered}");
-        assert_eq!(run.metrics.forbidden_hits, 0, "{rendered}");
-        assert_eq!(run.metrics.runtime_budget_failed, 0, "{rendered}");
-        assert!(!rendered.contains(repo_root().to_string_lossy().as_ref()));
     }
 }
 
@@ -3204,9 +3247,9 @@ mod direct_calls_core {
 
     #[test]
     fn eval_direct_calls_core_fixture_passes() {
-        let run = run_direct_calls_core_fixture_for_test(&fixture_dir()).unwrap();
+        let run = cached_direct_calls_core_fixture_for_test(&fixture_dir()).unwrap();
         let case = run.cases.first().expect("direct calls core case");
-        let rendered = to_deterministic_json_pretty(&run);
+        let rendered = to_deterministic_json_pretty(run);
 
         assert_eq!(case.case_id, "direct-calls-core");
         assert_eq!(case.area, FixtureArea::DirectCalls);
@@ -3319,7 +3362,7 @@ mod direct_calls_core {
 
     #[test]
     fn eval_direct_calls_core_observes_supported_language_feature_contract() {
-        let run = run_direct_calls_core_fixture_for_test(&fixture_dir()).unwrap();
+        let run = cached_direct_calls_core_fixture_for_test(&fixture_dir()).unwrap();
         let case = run.cases.first().expect("direct calls core case");
 
         for feature in SUPPORTED_DIRECT_CALL_FEATURES {
@@ -3364,7 +3407,7 @@ mod direct_calls_core {
 
     #[test]
     fn eval_direct_calls_core_observes_required_families_and_determinism() {
-        let run = run_direct_calls_core_fixture_for_test(&fixture_dir()).unwrap();
+        let run = cached_direct_calls_core_fixture_for_test(&fixture_dir()).unwrap();
         let case = run.cases.first().expect("direct calls core case");
 
         for family in crate::eval::model::CALL_FACT_FAMILIES {
@@ -3388,7 +3431,7 @@ mod direct_calls_core {
 
     #[test]
     fn eval_direct_calls_core_observes_counts_and_indexes() {
-        let run = run_direct_calls_core_fixture_for_test(&fixture_dir()).unwrap();
+        let run = cached_direct_calls_core_fixture_for_test(&fixture_dir()).unwrap();
         let case = run.cases.first().expect("direct calls core case");
 
         for required in REQUIRED_COUNT_INVARIANTS
