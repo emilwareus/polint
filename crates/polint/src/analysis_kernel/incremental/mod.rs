@@ -7,6 +7,14 @@ mod invalidation;
 mod keys;
 mod layer_cache;
 mod quarantine;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Run manifests remain unwired from normal analysis."
+    )
+)]
+mod run_manifest;
 mod run_report;
 mod stats;
 
@@ -136,6 +144,21 @@ pub(crate) use layer_cache::{
     expect(unused_imports, reason = "kept for private internal consumers")
 )]
 pub(crate) use quarantine::{QuarantineEntry, QuarantinePolicy, QuarantineStore};
+#[cfg_attr(
+    test,
+    allow(unused_imports, reason = "Tests import manifest terms directly.")
+)]
+#[cfg_attr(
+    not(test),
+    expect(
+        unused_imports,
+        reason = "The private semantic store consumes run manifests before production reuse is enabled."
+    )
+)]
+pub(crate) use run_manifest::{
+    EncodedRunManifest, EncodedRunManifestSource, RUN_MANIFEST_SCHEMA, RunManifest,
+    RunManifestError, RunManifestInputs,
+};
 pub(crate) use run_report::{
     KernelRunReport, provider_output_digest_from_manifest, provider_output_from_manifest,
 };
