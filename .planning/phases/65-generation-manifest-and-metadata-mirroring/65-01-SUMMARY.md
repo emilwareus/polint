@@ -46,7 +46,7 @@ patterns-established:
 requirements-completed: []
 
 # Metrics
-duration: 38min
+duration: 1h35m
 completed: 2026-07-28
 ---
 
@@ -59,12 +59,12 @@ open, and STORE-04, STORE-05, META-01, and META-04 remain open.
 
 ## Performance
 
-- **Duration:** ~38 min
+- **Duration:** ~1h 35 min, including three adversarial code-review iterations and remediation
 - **Started:** 2026-07-28T19:53:33+02:00
-- **Completed:** 2026-07-28T20:31:05+02:00
+- **Completed:** 2026-07-28T21:28:29+02:00
 - **Tasks:** 3
 - **Implementation/test files modified:** 6
-- **Bounded implementation delta:** 1,427 additions, 86 deletions
+- **Bounded implementation delta:** 1,781 additions, 90 deletions
 
 ## Accomplishments
 
@@ -73,6 +73,9 @@ open, and STORE-04, STORE-05, META-01, and META-04 remain open.
 - Added opaque reservation, same-handle atomic completion/selection, explicit relationship-based reads, typed invalid-transition handling, and disabled-before-I/O lifecycle guards.
 - Proved rollback at all five finite publication seams: before update, after update, before selection, after selection, and before commit.
 - Proved successful reopen, A-to-B rotation, newer pending C remaining unreadable, first-publication failure preserving `None`, relational rejection of pending selection, and byte/exit parity for public check behavior.
+- Closed an adversarial review finding by authenticating persistent triggers inside each lifecycle mutation transaction, checking the reserved row remains pending/unselected before commit, and rejecting case-varied trigger targets.
+- Made direct active reads initialize absent stores and migrate exact-v1 stores while retaining disabled-before-I/O and bounded busy behavior.
+- Rejected case/quoted owned-name collisions across SQLite object types as typed invalid schema before legacy migration, with no state mutation.
 - Kept production kernel wiring, public CLI/config/SDK/output, providers, facts, metadata families, and `.github/workflows/ci.yml` unchanged.
 
 ## Task Commits
@@ -83,7 +86,15 @@ Each task was committed atomically:
 2. **Task 2: Implement opaque reservation, atomic publication, and explicit active reads** - `159f4cac` (feat)
 3. **Task 3: Prove rollback, reopen, exact selection, and public-behavior parity** - `92500234` (test)
 
+Post-plan review remediation was committed atomically:
+
+4. **Authenticate lifecycle mutations and reject persistent triggers** - `c01fa930` (fix)
+5. **Initialize and migrate direct active-generation reads** - `6de2949c` (fix)
+6. **Authenticate trigger target names case-insensitively** - `d1494824` (fix)
+7. **Authenticate legacy owned-name collisions across object types** - `1e795d9f` (fix)
+
 **Plan metadata:** `9f3bdc56` (docs: bounded R1 plan)
+**Review artifacts:** `190612ae`, `0a0941dd` (three iterations, final status clean)
 
 ## Files Created/Modified
 
@@ -101,6 +112,8 @@ Each task was committed atomically:
 - Validated the exact candidate before selection and the exact active relationship before commit; zero-row, repeated, and unknown publications return typed rejection.
 - Queried only the singleton active relationship joined to its complete generation. No `MAX(id)`, timestamp, insertion-order, or recency inference exists.
 - Kept `GenerationHandle` relational and opaque: no serialization, display, timestamps, hashes, semantic identity, or public constructor/accessor was added.
+- Bound exact schema authentication to lifecycle mutation transactions and rejected persistent triggers on every owned lifecycle table.
+- Defined direct active reads to initialize/migrate supported state through the existing writer policy before opening the read-only view.
 
 ## Deviations from Plan
 
@@ -114,29 +127,55 @@ Each task was committed atomically:
 - **Impact:** Commit sequencing only. The final file set, behavior, and scope match the plan; no extra file or product surface was introduced.
 - **Committed in:** `159f4cac`
 
-**Total deviations:** 1 sequencing adjustment; zero product-scope deviations.
+### Post-Plan Review Remediation
+
+**2. Hardened exact-schema authentication against persistent behavior**
+
+- **Found during:** Required advisory code review.
+- **Issue:** Exact table/index/FK checks did not inventory persistent triggers, so a claimed-current database could make reservation complete and activate a generation.
+- **Fix:** Reject owned-table triggers, authenticate before and after each mutation inside the immediate transaction, and verify reservation remains pending and unselected.
+- **Committed in:** `c01fa930`, `d1494824`
+
+**3. Made direct active reads self-initializing for supported state**
+
+- **Found during:** Required advisory code review.
+- **Issue:** Direct reads on an absent or exact-v1 store returned `OpenFailed` unless another operation initialized the store first.
+- **Fix:** Initialize/migrate through the existing bounded writer policy before opening the read-only lifecycle view.
+- **Committed in:** `6de2949c`
+
+**4. Classified legacy owned-name collisions as invalid schema**
+
+- **Found during:** Review iteration 2.
+- **Issue:** Case-varied tables and owned-name views could collide during migration and map to generic `OpenFailed`.
+- **Fix:** Authenticate owned names case-insensitively across persistent SQLite object types before v0/v1 migration.
+- **Committed in:** `1e795d9f`
+
+**Total deviations:** 1 sequencing adjustment and 3 review-driven hardening fixes; zero product-scope deviations.
 
 ## Issues Encountered
 
 - Activating the previously retained read-only connection path made two old `dead_code` lint expectations stale; they were removed once the lifecycle legitimately used that path.
-- The full workspace command completed successfully, but Cargo reported several pre-existing evaluation and CLI integration tests running longer than 60 seconds. The new R1 lifecycle suite completed in 0.07 seconds, adds no global serialization, and changes no timeout or CI workflow.
+- The full workspace command completed successfully, but Cargo reported several pre-existing evaluation and CLI integration tests running longer than 60 seconds. Every focused R1 command remained well below 60 seconds, adds no global serialization, and changes no timeout or CI workflow.
+- The first code-review iteration found one critical trigger bypass and one initialization warning; iteration 2 found one narrower legacy collision-classification warning. All three findings were fixed, and iteration 3 was clean.
 
 ## Verification
 
-- `cargo test -p polint --lib analysis_kernel::store::migrations::tests --locked`: 16 passed in 0.03 s.
-- `cargo test -p polint --lib analysis_kernel::store::tests::generation_lifecycle --locked`: 9 passed in 0.07 s.
-- `cargo test -p polint --lib analysis_kernel::store::tests --locked`: 23 passed in 0.32 s.
+- `cargo test -p polint --lib analysis_kernel::store::migrations::tests --locked`: 19 passed.
+- `cargo test -p polint --lib analysis_kernel::store::tests::generation_lifecycle --locked`: 13 passed.
+- `cargo test -p polint --lib analysis_kernel::store::tests --locked`: 29 passed.
 - `cargo test -p polint --lib analysis_kernel::tests::semantic_store_check_parity --locked`: 1 passed; JSON bytes and exit semantics remained identical across all store modes.
 - `make lint`: passed.
+- `cargo clippy -p polint --lib --tests --all-features --locked -- -D warnings`: passed.
 - `cargo test --workspace --all-features --locked`: passed.
-  - polint library: 2,495 passed, 2 intentional ignores.
+  - polint library: 2,504 passed, 2 intentional ignores.
   - CLI integration: 166 passed.
   - public-surface integration: 7 passed.
   - polint-bench: 2 passed.
   - polint-macros: 11 passed.
   - example crates and doctests: all passed.
 - `git diff --check`: passed.
-- Scope audit from the pre-code plan commit: exactly six implementation/test files, 1,427 added lines, one lifecycle schema family, zero provider families, and no CI/public-surface file changes.
+- Three-iteration code review: final status clean, 0 critical / 0 warning / 0 info findings open.
+- Scope audit from the pre-code plan commit: exactly six implementation/test files, 1,781 added lines, one lifecycle schema family, zero provider families, and no CI/public-surface file changes.
 
 ## User Setup Required
 
