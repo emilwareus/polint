@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Static Analysis 2.0 Implementation
 status: in_progress
-last_updated: "2026-07-28T19:28:29Z"
-last_activity: 2026-07-28
+last_updated: "2026-07-28T22:21:27Z"
+last_activity: 2026-07-29
 progress:
   total_phases: 9
   completed_phases: 2
@@ -43,9 +43,9 @@ See: `.planning/PROJECT.md` (updated 2026-07-10)
 ## Current Position
 
 Phase: 65
-Plan: 01 (R1 only)
-Status: R1 complete and code-review clean; broader Phase 65 remains open for R2-R6
-Last activity: 2026-07-28 - Completed and verified the bounded R1 generation lifecycle without closing Phase 65 requirements
+Plan: 02 (R2 only)
+Status: R1 and R2 complete and code-review clean; broader Phase 65 remains open for R3-R6
+Last activity: 2026-07-29 - Completed, repaired, and independently verified the bounded R2 run manifest without closing Phase 65 requirements
 
 ### Active Milestone Phase Progress
 
@@ -591,10 +591,10 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 
 ## Session
 
-- Last session: 2026-07-28
-- Last activity: 2026-07-28 - Phase 65 R1 Plan 01 completed, passed the full workspace suite, and reached a clean third code-review iteration.
-- Stopped at: Phase 65 R1 complete; Phase 65 remains in progress with R2-R6 and all mapped requirements open.
-- Resume file: `.planning/phases/65-generation-manifest-and-metadata-mirroring/65-01-SUMMARY.md`
+- Last session: 2026-07-29
+- Last activity: 2026-07-29 - Phase 65 R2 Plan 02 completed, passed the full workspace suite, closed all deep-review findings, and passed an independent repaired-slice check.
+- Stopped at: Phase 65 R1-R2 complete; Phase 65 remains in progress with R3-R6 and all mapped requirements open.
+- Resume file: `.planning/phases/65-generation-manifest-and-metadata-mirroring/65-02-SUMMARY.md`
 
 ### Quick Tasks Completed
 
@@ -648,16 +648,16 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 
 ## Next Action
 
-Discuss and plan R2 as a new bounded slice: the minimal audited run manifest.
-Do not persist `InputSnapshot` wholesale or pull providers, facts, dependency
-indexes, or broad metadata mirroring into R2. Phase 65 and
+Discuss and plan R3 as a new bounded slice: closed provider execution outcomes,
+dependency blocking, planned absence and failure states, plus post-validation
+capability revocation without SQLite changes. Phase 65 and
 STORE-04/STORE-05/META-01/META-04 remain open. The sub-five-minute CI target
 also remains a separate non-blocking follow-up.
 
 ## Operator Next Steps
 
-- Re-run `/gsd-discuss-phase 65` specifically for the R2 minimal audited run-manifest slice before creating Plan 02.
-- Preserve the restart sequence: R2 manifest → R3 provider outcomes/capability revocation → one audited provider family at a time.
+- Re-run `/gsd-discuss-phase 65` specifically for the R3 provider-outcome and capability-revocation slice before creating Plan 03.
+- Preserve the restart sequence: R3 provider outcomes/capability revocation → one audited provider family at a time.
 
 ## Performance Metrics
 
@@ -668,3 +668,4 @@ also remains a separate non-blocking follow-up.
 | Phase 64 P03 | 16min | 3 tasks | 7 files |
 | Phase 64 P04 | 31min | 3 tasks | 4 files |
 | Phase 65 P01 (R1) | 1h 35min | 3 tasks + review remediation | 6 implementation/test files |
+| Phase 65 P02 (R2) | 40min | 3 tasks + review remediation | 8 implementation/test files |
