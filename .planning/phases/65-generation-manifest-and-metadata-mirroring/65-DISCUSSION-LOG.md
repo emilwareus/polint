@@ -3,10 +3,10 @@
 > **Audit trail only.** Do not use as input to planning, research, or execution agents.
 > Decisions are captured in CONTEXT.md — this log preserves the alternatives considered.
 
-**Date:** 2026-07-28
+**Date:** 2026-07-28 (R1 and R2 entries)
 **Phase:** 65-generation-manifest-and-metadata-mirroring
 **Mode:** `--auto --chain`
-**Areas discussed:** Delivery boundary, generation lifecycle semantics, persistence and API boundary, verification and stop gates
+**Areas discussed:** R1 lifecycle boundary and R2 canonical manifest projection, workspace ownership, publication/read binding, migration posture, and tamper/bounds proof
 
 ---
 
@@ -144,3 +144,133 @@
 - `InputSnapshot`, provider/capability, layer/query/summary, dependency-index, validation-event, statistics, `FactMeta`, and Go/tool metadata persistence.
 - Independently tracked correctness issues #86-#91.
 - Repository-wide CI architecture and branch-protection administration.
+
+---
+
+# R2 Update: Minimal Audited Run Manifest
+
+The R1 entries above remain the audit record for Plan 01. This update records
+the automatically selected decisions for the next independently reviewable
+slice only.
+
+## Canonical Manifest Projection
+
+### Persisted inputs
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Workspace + config + sources | One versioned payload with workspace ownership, complete config identity, and canonical source membership/content rows. | ✓ |
+| Workspace + config only | Omit source membership even though a source change would describe a different run. | |
+| Full `InputSnapshot` v1 | Persist rule/plan, lifecycle, tool, model, extension, provider, mtime, and placeholder fields together. | |
+
+**User's choice:** `--auto` selected the R0-approved workspace/config/source projection.
+**Notes:** Source rows contain only normalized path, closed language, source digest, and byte size. Rules, plans, providers, capabilities, tools, lifecycle inputs, models, extensions, layers, queries, summaries, facts, validation events, dependency indexes, statistics, and telemetry remain out.
+
+### Equality boundary
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Exact typed payload | Recompute the run identity from decoded canonical fields and compare all fields exactly. | ✓ |
+| Digest only | Treat a stored 64-bit fingerprint as sufficient proof of equality. | |
+| Opaque JSON | Compare serialized blobs without a shared typed codec. | |
+
+**User's choice:** `--auto` selected exact typed equality with the digest as supporting evidence.
+**Notes:** Writer, reader, recomputation, and tests share one versioned codec. Rust `Debug` is never identity material.
+
+---
+
+## Workspace Ownership Identity
+
+### Workspace binding
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Opaque purpose-typed root identity | Hash the canonical normalized workspace root and persist only its purpose/value. | ✓ |
+| Raw absolute path | Store the machine-local root in the manifest. | |
+| Cache path only | Infer workspace ownership from the configured cache location. | |
+
+**User's choice:** `--auto` selected the opaque workspace identity.
+**Notes:** This also separates workspaces when `POLINT_CACHE_DIR` is shared. Raw roots, user names, home paths, and temporary paths never persist or reach public output.
+
+---
+
+## Publication and Read Binding
+
+### Publication
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| One authenticated transaction | Write/decode/recompute the complete manifest, complete the reserved generation, and rotate active selection atomically. | ✓ |
+| Staged independent commits | Persist manifest rows before a later completion/selection transaction. | |
+| Digest-led activation | Activate after checking only the stored run digest. | |
+
+**User's choice:** `--auto` selected one authenticated publication transaction.
+**Notes:** Every injected failure leaves the candidate pending and manifest-unreadable while preserving the previous manifested active generation through reopen.
+
+### Reuse seam
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Typed exact match/miss/refusal | Read active handle and manifest in one snapshot; return reusable only after decode, recomputation, and exact expected equality. | ✓ |
+| Raw stored digest | Let later callers decide whether a digest is trustworthy. | |
+| Enable warm provider reuse | Consume persisted provider results in R2. | |
+
+**User's choice:** `--auto` selected the typed private seam without enabling reuse.
+**Notes:** No-active, semantic mismatch, and malformed/refused state remain distinct.
+
+---
+
+## Schema-v2 Migration Posture
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Empty-only v2 migration | Migrate exact empty v2; preserve and refuse populated v2 through rebuild-needed because no manifest can be reconstructed honestly. | ✓ |
+| Synthetic legacy manifest | Invent workspace/config/source provenance for existing generations. | |
+| Destructive transition | Delete rows or clear the active pointer during migration. | |
+
+**User's choice:** `--auto` selected empty-only migration and no-mutation refusal.
+**Notes:** Fresh/v0/v1 stores may migrate through to empty v3. Exact v3 reopen stays idempotent; mixed manifested/manifestless complete generations are forbidden.
+
+---
+
+## Tamper, Bounds, and Telemetry Proof
+
+### Durable representation
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Explicit bounded typed rows | Use relational header/source columns, derived path order, authenticated count, strict labels, and allocation preflight. | ✓ |
+| JSON blob | Persist the payload as one extensible opaque value. | |
+| Debug text | Persist Rust formatting and parse it on reopen. | |
+
+**User's choice:** `--auto` selected explicit bounded typed rows.
+**Notes:** Preflight covers SQLite storage classes, row count, per-field length, aggregate bytes, relationships, and declared child count before allocation. No persisted ordinal is trusted.
+
+### Regression proof
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Mutation matrix + structural exclusion | Round-trip, parent/child tampering, exact mismatch, failure rollback, and proof that telemetry fields cannot enter identity. | ✓ |
+| Digest equality only | Check two happy-path fingerprints. | |
+| Header/count smoke | Inspect schema version and row counts only. | |
+
+**User's choice:** `--auto` selected the mutation matrix and structural telemetry exclusion.
+**Notes:** Timestamps, mtimes, durations, cache counters/outcomes, insertion order, and creation time cannot affect identity. Individual focused tests remain under 60 seconds and ordinary correctness tests remain parallel.
+
+---
+
+## the agent's Discretion for R2
+
+- Private type/module/table names and the exact typed match-result vocabulary.
+- Lossless platform-aware workspace-root encoding before hashing.
+- Concrete count/byte limits that are explicit, preflighted, tested, and appropriate for large repositories.
+- Transactional statement order and finite cfg(test)-only failure/tamper seams within the locked invariants.
+
+## Deferred Ideas after R2
+
+- R3 typed provider outcomes and capability revocation.
+- R4 one audited provider family and exact consumed-input dependency pair.
+- R5 incremental provider expansion.
+- R6 private enablement and one measured cold/warm reuse pair.
+- Full `InputSnapshot`, provider/capability, lifecycle/tool, layer/query/summary, dependency-index, validation-event, statistics, and `FactMeta` persistence.
+- GitHub issues #86-#91 and the sub-five-minute CI follow-up.
