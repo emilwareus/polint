@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Static Analysis 2.0 Implementation
 status: ready
-last_updated: "2026-07-19T19:52:02.761Z"
-last_activity: 2026-07-19
+last_updated: "2026-07-28T16:41:09.382Z"
+last_activity: 2026-07-28
 progress:
   total_phases: 9
   completed_phases: 2
@@ -44,8 +44,8 @@ See: `.planning/PROJECT.md` (updated 2026-07-10)
 
 Phase: 65
 Plan: Not started
-Status: Ready for discussion
-Last activity: 2026-07-19 - Completed quick task 260719-t2i: Parallelize eval fixture coverage tests and inspect remaining serial test bottlenecks without running tests locally
+Status: Ready for planning; implementation gated by the five-minute required-CI budget
+Last activity: 2026-07-28 - Gathered Phase 65 R1 context and recorded the required-CI execution gate
 
 ### Active Milestone Phase Progress
 
@@ -591,10 +591,10 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 
 ## Session
 
-- Last session: 2026-06-23
-- Last activity: 2026-06-23 - Completed quick task 260623-oy3: shipped `polint review` = `polint check` with rules-as-code (`#[polint::rule(kind="review")]`, full SDK/engine) diff-gated to a target branch/commit. New `ChangedFiles<'_>` fact-view + host changeset injection + git shell-out + default finding-level diff gate. Commits b4c66e50..a778b8df; full `cargo test -p polint` green (2450 passed); leak gate honest at 99.
-- Stopped at: `polint review` feature complete and committed (not pushed). Research+plan docs live in the quick dir (a doc-scan test guard objected to them under docs/). Open follow-ups: untracked-file coverage in worktree mode; consider restoring docs to docs/ with the internal type name genericized.
-- Resume file: None
+- Last session: 2026-07-28
+- Last activity: 2026-07-28 - Gathered Phase 65 context for restart slice R1 and verified the current required-CI critical path exceeds the restart budget.
+- Stopped at: Phase 65 context gathered; R1 planning is next, but autonomous implementation must stop unless planning proves a truthful required path at or below five minutes.
+- Resume file: `.planning/phases/65-generation-manifest-and-metadata-mirroring/65-CONTEXT.md`
 
 ### Quick Tasks Completed
 
