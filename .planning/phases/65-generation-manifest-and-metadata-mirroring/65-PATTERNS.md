@@ -195,17 +195,15 @@ files, 2,500 handwritten added lines, one durable schema family, and zero
 provider families. Discovery of any required identity, provider, runtime, or
 validation contract is a stop-and-split condition.
 
-## CI Execution Gate
+## CI Follow-up
 
-Planning does not satisfy the implementation gate. The current required
-workflow still runs full platform library tests; GitHub Actions run
+The current required workflow still runs full platform library tests; GitHub Actions run
 `29752687999` had an approximately **9 minute 52 second** critical path in the
-Windows library-test job. R1 requires a truthfully measured required
-pull-request path at or below **5 minutes**, with no required individual test
-above 60 seconds and no global serialization of ordinary correctness tests.
+Windows library-test job. On 2026-07-28 the user explicitly deferred the
+sub-five-minute target, satisfying the restart plan's required human decision.
+This baseline no longer blocks R1 planning or implementation.
 
-Therefore implementation must stop unless a separate prerequisite or human
-split decision establishes that required path. A focused local store test
-command is useful evidence but does not by itself make the current required
-workflow sub-five-minute. CI redesign, workflow edits, branch-protection
-administration, and timeout increases are explicitly outside this R1 file set.
+The other test-economics constraints remain: no required individual test above
+60 seconds and no global serialization of ordinary correctness tests. CI
+redesign, workflow edits, branch-protection administration, timeout increases,
+and the sub-five-minute follow-up remain explicitly outside this R1 file set.

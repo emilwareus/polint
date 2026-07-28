@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Static Analysis 2.0 Implementation
 status: ready
-last_updated: "2026-07-28T16:41:09.382Z"
+last_updated: "2026-07-28T17:36:12Z"
 last_activity: 2026-07-28
 progress:
   total_phases: 9
@@ -44,8 +44,8 @@ See: `.planning/PROJECT.md` (updated 2026-07-10)
 
 Phase: 65
 Plan: Not started
-Status: Ready for planning; implementation gated by the five-minute required-CI budget
-Last activity: 2026-07-28 - Gathered Phase 65 R1 context and recorded the required-CI execution gate
+Status: Ready for planning; five-minute CI target explicitly deferred
+Last activity: 2026-07-28 - User supplied the Phase 65 R1 CI-budget decision and requested planning continue
 
 ### Active Milestone Phase Progress
 
@@ -592,8 +592,8 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 ## Session
 
 - Last session: 2026-07-28
-- Last activity: 2026-07-28 - Gathered Phase 65 context for restart slice R1 and verified the current required-CI critical path exceeds the restart budget.
-- Stopped at: Phase 65 context gathered; R1 planning is next, but autonomous implementation must stop unless planning proves a truthful required path at or below five minutes.
+- Last activity: 2026-07-28 - Recorded the user’s explicit decision to defer the sub-five-minute CI target and continue bounded R1 planning.
+- Stopped at: Phase 65 R1 context updated; planning may continue while CI latency remains an independent follow-up.
 - Resume file: `.planning/phases/65-generation-manifest-and-metadata-mirroring/65-CONTEXT.md`
 
 ### Quick Tasks Completed

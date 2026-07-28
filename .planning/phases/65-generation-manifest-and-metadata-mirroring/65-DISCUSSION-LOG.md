@@ -112,6 +112,8 @@
 **User's choice:** `--auto` selected the hard execution gate.
 **Notes:** The latest `main` CI run inspected during discussion, run `29752687999`, was green but had an approximately 9 minute 52 second critical path. The restart plan requires a human split decision when the five-minute trigger is crossed; `--auto --chain` does not silently waive that project constraint.
 
+**Later human decision (2026-07-28):** The user explicitly directed, “Let's skip the sub 5 minute CI, we can follow up with that later.” This satisfies the required human decision and removes CI latency as an R1 execution blocker. The measured baseline and follow-up remain recorded; CI redesign is still outside R1.
+
 ### Test architecture
 
 | Option | Description | Selected |

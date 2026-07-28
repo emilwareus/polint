@@ -1,7 +1,7 @@
 # Phase 65: Generation Manifest and Metadata Mirroring - Context
 
 **Gathered:** 2026-07-28
-**Status:** Ready for planning; implementation remains gated by the five-minute required-CI budget
+**Status:** Ready for planning; the five-minute CI target is explicitly deferred
 
 <domain>
 ## Phase Boundary
@@ -48,8 +48,8 @@ marking the phase or those requirements complete after R1.
 - **D-16:** Focused private-store tests must cover reservation, same-handle completion, rejection of pending activation, exact active selection, initial no-active state, reopen behavior, migration from the Phase 64 schema, and idempotent reopen.
 - **D-17:** Inject failures at every state-changing publication seam and prove the previous active complete generation survives. Tests must authenticate persisted relationships and invariants, not merely count rows or inspect a header.
 - **D-18:** No required individual test may exceed 60 seconds, and ordinary correctness tests may not be globally serialized. Exhaustive crash, scale, performance, and cross-platform matrices remain scheduled or merge-queue work.
-- **D-19:** The required pull-request critical path must be at or below five minutes. GitHub Actions run `29752687999` on current `main` had an approximately 9 minute 52 second critical path, so the autonomous chain must stop before implementation unless planning identifies a truthful sub-five-minute required R1 path without bundling a broad CI redesign into R1.
-- **D-20:** Crossing any size or CI budget requires the human split decision mandated by the restart plan. `--auto` does not waive this gate.
+- **D-19:** The required pull-request critical path remains a measured follow-up target, but the user explicitly deferred the five-minute gate on 2026-07-28. GitHub Actions run `29752687999` remains the approximately 9 minute 52 second baseline; it does not block planning or implementation of this bounded R1 slice.
+- **D-20:** The user’s explicit direction to “skip the sub 5 minute CI” is the human decision required by the restart plan. Do not redesign CI, raise timeouts, weaken tests, or expand R1 to address it; record and pursue the latency work independently later.
 - **D-21:** Public `check` and `review` behavior must remain unchanged. Disabled mode still performs zero store I/O, and malformed/future state is contained in private typed outcomes.
 
 ### the agent's Discretion
@@ -131,7 +131,7 @@ marking the phase or those requirements complete after R1.
 - **R6:** Private enablement and one measured cold/warm reuse pair before any default promotion.
 - Cross-file semantic-ID/cache-schema, syntax dependency, semantic graph cache-input, Go RTA-root, and related issues tracked in GitHub issues #86-#91.
 - Whole dependency-index, `FactMeta`, validation-event, query, summary, layer, provider, capability, statistics, and language-tool metadata persistence.
-- Any repository-wide CI/test-architecture change needed to establish a sub-five-minute required path. That is a prerequisite delivery unit, not hidden R1 work.
+- Establishing a sub-five-minute required CI path is a non-blocking follow-up, not hidden R1 work.
 - Branch-protection/ruleset administration and other repository-policy changes.
 
 </deferred>
