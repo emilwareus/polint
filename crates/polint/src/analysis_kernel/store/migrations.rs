@@ -256,7 +256,8 @@ fn validate_no_triggers(
     for table_name in table_names {
         let trigger_count: i64 = connection
             .query_row(
-                "SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND tbl_name = ?1",
+                "SELECT count(*) FROM sqlite_master \
+                 WHERE type = 'trigger' AND tbl_name = ?1 COLLATE NOCASE",
                 [table_name],
                 |row| row.get(0),
             )
@@ -887,7 +888,7 @@ mod tests {
                 "UPDATE _polint_schema_migrations SET version = NEW.version",
             ),
             (
-                GENERATIONS_TABLE,
+                "GENERATIONS",
                 "UPDATE generations SET status = NEW.status \
                  WHERE generation_id = NEW.generation_id",
             ),
