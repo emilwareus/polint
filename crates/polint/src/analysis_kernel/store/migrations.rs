@@ -147,7 +147,7 @@ fn validate_supported_schema(connection: &Connection, version: i32) -> Result<()
         0 => validate_empty_owned_schema(connection, version),
         1 => {
             validate_bootstrap_schema(connection, version, 1)?;
-            validate_tables_absent(
+            validate_owned_names_absent(
                 connection,
                 version,
                 &[GENERATIONS_TABLE, ACTIVE_GENERATION_TABLE],
@@ -162,27 +162,27 @@ fn validate_empty_owned_schema(
     connection: &Connection,
     version: i32,
 ) -> Result<(), MigrationError> {
-    validate_tables_absent(
+    validate_owned_names_absent(
         connection,
         version,
         &[BOOTSTRAP_TABLE, GENERATIONS_TABLE, ACTIVE_GENERATION_TABLE],
     )
 }
 
-fn validate_tables_absent(
+fn validate_owned_names_absent(
     connection: &Connection,
     version: i32,
-    table_names: &[&str],
+    owned_names: &[&str],
 ) -> Result<(), MigrationError> {
-    for table_name in table_names {
-        let table_count: i64 = connection
+    for owned_name in owned_names {
+        let collision_count: i64 = connection
             .query_row(
-                "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
-                [table_name],
+                "SELECT count(*) FROM sqlite_master WHERE name = ?1 COLLATE NOCASE",
+                [owned_name],
                 |row| row.get(0),
             )
             .map_err(|error| classify_invariant_error(error, version))?;
-        if table_count != 0 {
+        if collision_count != 0 {
             return Err(MigrationError::InvalidSchema { version });
         }
     }
@@ -571,6 +571,26 @@ mod tests {
         (version, schema, generations)
     }
 
+    type SchemaObject = (String, String, String, Option<String>);
+
+    fn schema_catalog_snapshot(connection: &Connection) -> (i32, Vec<SchemaObject>) {
+        let version = schema_version(connection).expect("schema version");
+        let mut statement = connection
+            .prepare(
+                "SELECT type, name, tbl_name, sql FROM sqlite_master \
+                 ORDER BY type, name COLLATE BINARY",
+            )
+            .expect("prepare schema catalog snapshot");
+        let objects = statement
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
+            .expect("query schema catalog snapshot")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect schema catalog snapshot");
+        (version, objects)
+    }
+
     #[test]
     fn migration_list_contains_only_bootstrap_and_generation_lifecycle() {
         let versions = MIGRATIONS
@@ -670,6 +690,56 @@ mod tests {
             )
             .expect("lifecycle table count");
         assert_eq!(lifecycle_table_count, 0);
+    }
+
+    #[test]
+    fn version_zero_case_varied_owned_table_is_invalid_without_mutation() {
+        let (_temp, mut connection) = open_temp_database();
+        connection
+            .execute_batch(
+                "CREATE TABLE \"GENERATIONS\" (value TEXT NOT NULL);\
+                 INSERT INTO \"GENERATIONS\" (value) VALUES ('preserve-me');\
+                 PRAGMA user_version = 0;",
+            )
+            .expect("create quoted case-varied collision");
+        let before = schema_catalog_snapshot(&connection);
+
+        let error = apply_migrations(&mut connection).expect_err("owned-name collision refused");
+
+        assert!(matches!(
+            error,
+            MigrationError::InvalidSchema { version: 0 }
+        ));
+        assert_eq!(schema_catalog_snapshot(&connection), before);
+        let value: String = connection
+            .query_row("SELECT value FROM \"GENERATIONS\"", [], |row| row.get(0))
+            .expect("preserved collision value");
+        assert_eq!(value, "preserve-me");
+    }
+
+    #[test]
+    fn version_one_owned_name_view_is_invalid_without_mutation() {
+        let (_temp, mut connection) = open_temp_database();
+        install_version_one_fixture(&connection);
+        connection
+            .execute_batch(
+                "CREATE VIEW \"ACTIVE_GENERATION\" AS \
+                 SELECT value FROM sentinel;",
+            )
+            .expect("create owned-name view collision");
+        let before = schema_catalog_snapshot(&connection);
+
+        let error = apply_migrations(&mut connection).expect_err("owned-name view refused");
+
+        assert!(matches!(
+            error,
+            MigrationError::InvalidSchema { version: 1 }
+        ));
+        assert_eq!(schema_catalog_snapshot(&connection), before);
+        let value: String = connection
+            .query_row("SELECT value FROM sentinel", [], |row| row.get(0))
+            .expect("preserved sentinel value");
+        assert_eq!(value, "preserve-me");
     }
 
     #[test]

@@ -627,6 +627,61 @@ mod recovery {
     }
 
     #[test]
+    fn version_zero_case_varied_owned_table_is_preserved_as_invalid_schema() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let path = store_path(&temp);
+        fs::create_dir_all(path.parent().expect("store parent")).expect("create store directory");
+        let collision = Connection::open(&path).expect("open collision fixture");
+        collision
+            .execute_batch(
+                "CREATE TABLE \"GENERATIONS\" (value TEXT NOT NULL);\
+                 INSERT INTO \"GENERATIONS\" (value) VALUES ('preserve-me');\
+                 PRAGMA user_version = 0;",
+            )
+            .expect("create quoted case-varied collision");
+        drop(collision);
+        let before = fs::read(&path).expect("read collision fixture");
+        let config = StoreConfig::new(&path, true);
+
+        assert_eq!(
+            SemanticStore::maintain(&config),
+            StoreStatus::RebuildNeeded(StoreRebuildReason::InvalidSchema)
+        );
+        assert_eq!(
+            fs::read(&path).expect("read preserved collision fixture"),
+            before
+        );
+    }
+
+    #[test]
+    fn version_one_owned_name_view_is_preserved_as_invalid_schema() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let path = store_path(&temp);
+        fs::create_dir_all(path.parent().expect("store parent")).expect("create store directory");
+        connection::install_version_one_fixture_for_test(&path)
+            .expect("install exact version-one fixture");
+        let collision = Connection::open(&path).expect("open collision fixture");
+        collision
+            .execute_batch(
+                "CREATE VIEW \"ACTIVE_GENERATION\" AS \
+                 SELECT value FROM sentinel;",
+            )
+            .expect("create owned-name view collision");
+        drop(collision);
+        let before = fs::read(&path).expect("read collision fixture");
+        let config = StoreConfig::new(&path, true);
+
+        assert_eq!(
+            SemanticStore::maintain(&config),
+            StoreStatus::RebuildNeeded(StoreRebuildReason::InvalidSchema)
+        );
+        assert_eq!(
+            fs::read(&path).expect("read preserved collision fixture"),
+            before
+        );
+    }
+
+    #[test]
     fn future_store_is_preserved_and_explicit_rebuild_refuses_it() {
         let temp = tempfile::tempdir().expect("temp directory");
         let path = store_path(&temp);
