@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Static Analysis 2.0 Implementation
-status: ready
-last_updated: "2026-07-28T17:36:12Z"
+status: planned
+last_updated: "2026-07-28T17:53:21Z"
 last_activity: 2026-07-28
 progress:
   total_phases: 9
   completed_phases: 2
-  total_plans: 8
+  total_plans: 9
   completed_plans: 8
   percent: 22
 ---
@@ -43,9 +43,9 @@ See: `.planning/PROJECT.md` (updated 2026-07-10)
 ## Current Position
 
 Phase: 65
-Plan: Not started
-Status: Ready for planning; five-minute CI target explicitly deferred
-Last activity: 2026-07-28 - User supplied the Phase 65 R1 CI-budget decision and requested planning continue
+Plan: 01 (R1 only)
+Status: R1 Plan 01 verified and ready for execution; broader Phase 65 remains open
+Last activity: 2026-07-28 - Verified the bounded R1 generation-lifecycle plan with requirement and phase completion explicitly suppressed
 
 ### Active Milestone Phase Progress
 
@@ -592,9 +592,9 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 ## Session
 
 - Last session: 2026-07-28
-- Last activity: 2026-07-28 - Recorded the user’s explicit decision to defer the sub-five-minute CI target and continue bounded R1 planning.
-- Stopped at: Phase 65 R1 context updated; planning may continue while CI latency remains an independent follow-up.
-- Resume file: `.planning/phases/65-generation-manifest-and-metadata-mirroring/65-CONTEXT.md`
+- Last activity: 2026-07-28 - Phase 65 R1 Plan 01 passed plan verification with partial-scope closeout guards.
+- Stopped at: Phase 65 R1 Plan 01 verified; ready for bounded execution.
+- Resume file: `.planning/phases/65-generation-manifest-and-metadata-mirroring/65-01-PLAN.md`
 
 ### Quick Tasks Completed
 
@@ -648,15 +648,15 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 
 ## Next Action
 
-Review the local v1.4 commit stack and decide whether to archive the milestone
-with `/gsd-complete-milestone` or start a v1.5 milestone from the Phase 62 audit
-follow-ups. Do not push local commits unless explicitly instructed; CI is
-intentionally avoided during autonomous local commits.
+Verify and execute Phase 65 Plan 01, which implements only the R1 private
+generation lifecycle. Do not mark Phase 65 or STORE-04/STORE-05/META-01/META-04
+complete after R1; R2-R6 remain separate follow-up slices. The sub-five-minute
+CI target is also a separate non-blocking follow-up.
 
 ## Operator Next Steps
 
-- Review `.planning/phases/62-promotion-gate-boundary-proof-and-closeout/62-MILESTONE-AUDIT.md`.
-- Preserve the current boundary: `Events<'_>`, `Calls<'_>`, `ControlFlow<'_>`, and `DataFlow<'_>` are provider-backed for documented preview scopes; raw `Cfg<'_>`, raw `CallGraph<'_>`, and raw data-flow graph traversal remain private/reserved.
+- Run `/gsd-execute-phase 65` for the bounded Plan 01 after plan verification.
+- Preserve the R1 boundary: three tasks, six product/test files, one lifecycle schema family, zero provider families, and no public product changes.
 
 ## Performance Metrics
 
