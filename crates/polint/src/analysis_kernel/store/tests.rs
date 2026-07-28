@@ -391,6 +391,50 @@ mod run_manifest {
         assert!(reopened.manifest_sources.is_empty());
     }
 
+    #[test]
+    fn writer_preflight_rejects_many_extra_manifest_indexes_without_mutation() {
+        let temp = tempfile::tempdir().expect("store directory");
+        let store_config = config(&temp);
+        assert_eq!(SemanticStore::maintain(&store_config), StoreStatus::Ready);
+        let connection =
+            rusqlite::Connection::open(store_config.path()).expect("open fixture connection");
+        for index in 0..128 {
+            connection
+                .execute(
+                    &format!(
+                        "CREATE INDEX run_manifest_sources_extra_{index} \
+                         ON run_manifest_sources (language)"
+                    ),
+                    [],
+                )
+                .expect("create extra manifest index");
+        }
+        let index_count: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM pragma_index_list('run_manifest_sources')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count fixture indexes");
+        assert_eq!(index_count, 129);
+        drop(connection);
+
+        assert_eq!(
+            SemanticStore::maintain(&store_config),
+            StoreStatus::RebuildNeeded(StoreRebuildReason::InvalidSchema)
+        );
+        let reopened =
+            rusqlite::Connection::open(store_config.path()).expect("reopen refused store");
+        let reopened_count: i64 = reopened
+            .query_row(
+                "SELECT count(*) FROM pragma_index_list('run_manifest_sources')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count preserved fixture indexes");
+        assert_eq!(reopened_count, index_count);
+    }
+
     fn tamper_then_refuse(statement: &str) {
         let temp = tempfile::tempdir().expect("temp directory");
         let store_config = config(&temp);

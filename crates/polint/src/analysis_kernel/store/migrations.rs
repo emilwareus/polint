@@ -538,40 +538,61 @@ fn validate_manifest_sources_index(
     connection: &Connection,
     version: i32,
 ) -> Result<(), MigrationError> {
-    let mut statement = connection
-        .prepare("PRAGMA index_list('run_manifest_sources')")
+    let index_count: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM pragma_index_list('run_manifest_sources')",
+            [],
+            |row| row.get(0),
+        )
         .map_err(|error| classify_invariant_error(error, version))?;
-    let indexes = statement
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, i64>(4)?,
-            ))
-        })
-        .map_err(|error| classify_invariant_error(error, version))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| classify_invariant_error(error, version))?;
-    let [(index_name, 1, origin, 0)] = indexes.as_slice() else {
+    if index_count != 1 {
         return Err(MigrationError::InvalidSchema { version });
-    };
-    if origin != "pk" {
+    }
+    let (index_name, unique, origin, partial): (String, i64, String, i64) = connection
+        .query_row(
+            "SELECT name, \"unique\", origin, partial \
+             FROM pragma_index_list('run_manifest_sources')",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .map_err(|error| classify_invariant_error(error, version))?;
+    if unique != 1 || origin != "pk" || partial != 0 {
         return Err(MigrationError::InvalidSchema { version });
     }
     let mut index_statement = connection
-        .prepare(&format!("PRAGMA index_info('{index_name}')"))
+        .prepare("SELECT name FROM pragma_index_info(?1) ORDER BY seqno")
         .map_err(|error| classify_invariant_error(error, version))?;
-    let columns = index_statement
-        .query_map([], |row| row.get::<_, String>(2))
+    let mut columns = index_statement
+        .query([index_name])
+        .map_err(|error| classify_invariant_error(error, version))?;
+    let Some(first) = columns
+        .next()
         .map_err(|error| classify_invariant_error(error, version))?
-        .collect::<Result<Vec<_>, _>>()
+    else {
+        return Err(MigrationError::InvalidSchema { version });
+    };
+    let first: String = first
+        .get(0)
         .map_err(|error| classify_invariant_error(error, version))?;
-    if columns == ["generation_id", "relative_path"] {
-        Ok(())
-    } else {
-        Err(MigrationError::InvalidSchema { version })
+    let Some(second) = columns
+        .next()
+        .map_err(|error| classify_invariant_error(error, version))?
+    else {
+        return Err(MigrationError::InvalidSchema { version });
+    };
+    let second: String = second
+        .get(0)
+        .map_err(|error| classify_invariant_error(error, version))?;
+    if first != "generation_id"
+        || second != "relative_path"
+        || columns
+            .next()
+            .map_err(|error| classify_invariant_error(error, version))?
+            .is_some()
+    {
+        return Err(MigrationError::InvalidSchema { version });
     }
+    Ok(())
 }
 
 fn validate_manifest_foreign_keys(
