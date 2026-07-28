@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Component, Path};
 
 use super::{Digest, DigestKind, FileSnapshot};
 use crate::core::Language;
@@ -318,6 +318,19 @@ fn validate_canonical_sources(sources: &[RunManifestSource]) -> Result<(), RunMa
 }
 
 fn canonical_source_path(path: &str) -> Result<String, RunManifestError> {
+    let has_native_root_or_prefix = Path::new(path)
+        .components()
+        .any(|component| matches!(component, Component::Prefix(_) | Component::RootDir));
+    let bytes = path.as_bytes();
+    let has_windows_drive_prefix =
+        bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
+    if has_native_root_or_prefix
+        || has_windows_drive_prefix
+        || path.starts_with('/')
+        || path.starts_with('\\')
+    {
+        return Err(RunManifestError::NonCanonicalSourcePath);
+    }
     let normalized =
         normalize_repo_relative(path).ok_or(RunManifestError::NonCanonicalSourcePath)?;
     if normalized != path || normalized == "." {
@@ -491,6 +504,47 @@ mod tests {
     }
 
     #[test]
+    fn platform_absolute_and_prefixed_source_paths_are_rejected_during_build_and_decode() {
+        let root = tempfile::tempdir().expect("create workspace");
+        let config = config_hash("config");
+        let valid = manifest(
+            root.path(),
+            &config,
+            &[source("src/app.ts", Language::TypeScript, "one", 1)],
+        )
+        .expect("construct valid manifest");
+
+        for path in [
+            "/Users/alice/repo/src/app.ts",
+            "C:/Users/alice/repo/src/app.ts",
+            "C:src/app.ts",
+            r"\\server\share\repo\src\app.ts",
+            r"\\?\C:\Users\alice\repo\src\app.ts",
+        ] {
+            assert!(
+                matches!(
+                    manifest(
+                        root.path(),
+                        &config,
+                        &[source(path, Language::TypeScript, "one", 1)]
+                    ),
+                    Err(RunManifestError::NonCanonicalSourcePath)
+                ),
+                "build accepted {path}"
+            );
+            let mut encoded = valid.encode().expect("encode valid manifest");
+            encoded.sources[0].relative_path = path.to_string();
+            assert!(
+                matches!(
+                    RunManifest::decode(encoded),
+                    Err(RunManifestError::NonCanonicalSourcePath)
+                ),
+                "decode accepted {path}"
+            );
+        }
+    }
+
+    #[test]
     fn wrong_digest_purpose_malformed_digest_and_numeric_values_are_rejected() {
         let root = tempfile::tempdir().expect("create workspace");
         let mut file = source("src/app.ts", Language::TypeScript, "one", 1);
@@ -522,16 +576,18 @@ mod tests {
         let first_root = tempfile::tempdir().expect("create first workspace");
         let second_root = tempfile::tempdir().expect("create second workspace");
         let config = config_hash("config");
-        let first = manifest(first_root.path(), &config, &[]).expect("construct first manifest");
-        let second = manifest(second_root.path(), &config, &[]).expect("construct second manifest");
+        let file = source("src/app.ts", Language::TypeScript, "source", 12);
+        let first = manifest(first_root.path(), &config, std::slice::from_ref(&file))
+            .expect("construct first manifest");
+        let second =
+            manifest(second_root.path(), &config, &[file]).expect("construct second manifest");
         let encoded = first.encode().expect("encode first manifest");
+        let first_root = first_root.path().to_str().expect("temporary path is UTF-8");
 
         assert_ne!(first.workspace_identity(), second.workspace_identity());
-        assert!(
-            !encoded
-                .workspace_value
-                .contains(first_root.path().to_str().expect("temporary path is UTF-8"))
-        );
+        assert!(!encoded.workspace_value.contains(first_root));
+        assert_eq!(encoded.sources[0].relative_path, "src/app.ts");
+        assert!(!encoded.sources[0].relative_path.contains(first_root));
     }
 
     #[test]
