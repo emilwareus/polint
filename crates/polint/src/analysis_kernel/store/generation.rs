@@ -11,7 +11,7 @@ use super::{StoreStatus, map_connection_error};
 pub(crate) struct GenerationHandle(NonZeroI64);
 
 impl GenerationHandle {
-    fn from_scalar(value: i64) -> Result<Self, GenerationError> {
+    pub(super) fn from_scalar(value: i64) -> Result<Self, GenerationError> {
         NonZeroI64::new(value)
             .filter(|value| value.get().is_positive())
             .map(Self)
@@ -28,6 +28,47 @@ pub(crate) enum GenerationError {
     Store(StoreStatus),
     InvalidTransition,
     InvalidSelection,
+    #[cfg(test)]
+    InjectedFailure(PublicationFailurePoint),
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GenerationStatus {
+    Pending,
+    Complete,
+}
+
+#[cfg(test)]
+impl GenerationStatus {
+    pub(super) fn from_stored(value: &str) -> Option<Self> {
+        match value {
+            "pending" => Some(Self::Pending),
+            "complete" => Some(Self::Complete),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PublicationFailurePoint {
+    BeforeUpdate,
+    AfterUpdate,
+    BeforeSelection,
+    AfterSelection,
+    BeforeCommit,
+}
+
+#[cfg(test)]
+impl PublicationFailurePoint {
+    pub(crate) const ALL: [Self; 5] = [
+        Self::BeforeUpdate,
+        Self::AfterUpdate,
+        Self::BeforeSelection,
+        Self::AfterSelection,
+        Self::BeforeCommit,
+    ];
 }
 
 impl From<connection::ConnectionError> for GenerationError {
@@ -54,7 +95,25 @@ pub(super) fn publish(
     writer: &mut WriterConnection,
     handle: GenerationHandle,
 ) -> Result<GenerationHandle, GenerationError> {
+    #[cfg(test)]
+    {
+        publish_transaction(writer, handle, None)
+    }
+    #[cfg(not(test))]
+    {
+        publish_transaction(writer, handle)
+    }
+}
+
+fn publish_transaction(
+    writer: &mut WriterConnection,
+    handle: GenerationHandle,
+    #[cfg(test)] failure_point: Option<PublicationFailurePoint>,
+) -> Result<GenerationHandle, GenerationError> {
     connection::with_immediate_transaction(writer, |transaction| {
+        #[cfg(test)]
+        fail_at(failure_point, PublicationFailurePoint::BeforeUpdate)?;
+
         let changed = transaction
             .execute(
                 "UPDATE generations SET status = 'complete' \
@@ -65,8 +124,20 @@ pub(super) fn publish(
         if changed != 1 {
             return Err(GenerationError::InvalidTransition);
         }
+        #[cfg(test)]
+        fail_at(failure_point, PublicationFailurePoint::AfterUpdate)?;
 
-        select_complete(transaction, handle)?;
+        require_complete(transaction, handle)?;
+        #[cfg(test)]
+        fail_at(failure_point, PublicationFailurePoint::BeforeSelection)?;
+
+        replace_selection(transaction, handle)?;
+        #[cfg(test)]
+        fail_at(failure_point, PublicationFailurePoint::AfterSelection)?;
+
+        validate_selection(transaction, handle)?;
+        #[cfg(test)]
+        fail_at(failure_point, PublicationFailurePoint::BeforeCommit)?;
         Ok(handle)
     })
 }
@@ -112,7 +183,17 @@ pub(super) fn active(
     })
 }
 
+#[cfg(test)]
 fn select_complete(
+    transaction: &Transaction<'_>,
+    handle: GenerationHandle,
+) -> Result<(), GenerationError> {
+    require_complete(transaction, handle)?;
+    replace_selection(transaction, handle)?;
+    validate_selection(transaction, handle)
+}
+
+fn require_complete(
     transaction: &Transaction<'_>,
     handle: GenerationHandle,
 ) -> Result<(), GenerationError> {
@@ -127,7 +208,13 @@ fn select_complete(
     if is_complete != Some(true) {
         return Err(GenerationError::InvalidTransition);
     }
+    Ok(())
+}
 
+fn replace_selection(
+    transaction: &Transaction<'_>,
+    handle: GenerationHandle,
+) -> Result<(), GenerationError> {
     transaction
         .execute(
             "INSERT INTO active_generation (singleton, generation_id, required_status) \
@@ -138,7 +225,13 @@ fn select_complete(
             [handle.scalar()],
         )
         .map_err(connection::classify_sqlite_error)?;
+    Ok(())
+}
 
+fn validate_selection(
+    transaction: &Transaction<'_>,
+    handle: GenerationHandle,
+) -> Result<(), GenerationError> {
     let authentic: i64 = transaction
         .query_row(
             "SELECT count(*) \
@@ -158,6 +251,27 @@ fn select_complete(
         return Err(GenerationError::InvalidSelection);
     }
     Ok(())
+}
+
+#[cfg(test)]
+fn fail_at(
+    requested: Option<PublicationFailurePoint>,
+    current: PublicationFailurePoint,
+) -> Result<(), GenerationError> {
+    if requested == Some(current) {
+        Err(GenerationError::InjectedFailure(current))
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+pub(super) fn publish_with_failure_for_test(
+    writer: &mut WriterConnection,
+    handle: GenerationHandle,
+    failure_point: PublicationFailurePoint,
+) -> Result<GenerationHandle, GenerationError> {
+    publish_transaction(writer, handle, Some(failure_point))
 }
 
 #[cfg(test)]

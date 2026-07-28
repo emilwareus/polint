@@ -42,6 +42,10 @@ mod generation_lifecycle {
         StoreConfig::new(temp.path().join("cache/semantic-store/store.sqlite3"), true)
     }
 
+    fn snapshot(config: &StoreConfig) -> StoreFixtureSnapshot {
+        fixture_snapshot_for_test(config.path()).expect("fixture snapshot")
+    }
+
     #[test]
     fn reservation_is_unreadable_until_the_same_handle_is_published() {
         let temp = tempfile::tempdir().expect("temp directory");
@@ -157,6 +161,161 @@ mod generation_lifecycle {
         );
         assert!(!temp.path().join("cache").exists());
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn successful_rotation_and_unselected_candidate_survive_reopen_exactly() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let config = store_config(&temp);
+        let first = SemanticStore::reserve_generation(&config).expect("reserve first");
+        SemanticStore::publish_generation(&config, first).expect("publish first");
+
+        assert_eq!(
+            snapshot(&config).generations,
+            vec![(first, GenerationStatus::Complete)]
+        );
+        assert_eq!(snapshot(&config).selected_generation, Some(first));
+        assert_eq!(
+            SemanticStore::active_generation(&config).expect("reopen first"),
+            Some(first)
+        );
+
+        let second = SemanticStore::reserve_generation(&config).expect("reserve second");
+        SemanticStore::publish_generation(&config, second).expect("publish second");
+        let unselected = SemanticStore::reserve_generation(&config).expect("reserve unselected");
+        let reopened = snapshot(&config);
+
+        assert_eq!(
+            reopened.generations,
+            vec![
+                (first, GenerationStatus::Complete),
+                (second, GenerationStatus::Complete),
+                (unselected, GenerationStatus::Pending),
+            ]
+        );
+        assert_eq!(reopened.selected_generation, Some(second));
+        assert_eq!(
+            SemanticStore::active_generation(&config).expect("reopen second"),
+            Some(second)
+        );
+    }
+
+    #[test]
+    fn every_publication_failure_preserves_the_previous_selection_after_reopen() {
+        for failure_point in PublicationFailurePoint::ALL {
+            let temp = tempfile::tempdir().expect("temp directory");
+            let config = store_config(&temp);
+            let active = SemanticStore::reserve_generation(&config).expect("reserve active");
+            SemanticStore::publish_generation(&config, active).expect("publish active");
+            let candidate = SemanticStore::reserve_generation(&config).expect("reserve candidate");
+
+            assert_eq!(
+                SemanticStore::publish_generation_with_failure_for_test(
+                    &config,
+                    candidate,
+                    failure_point,
+                ),
+                Err(GenerationError::InjectedFailure(failure_point))
+            );
+
+            let reopened = snapshot(&config);
+            assert_eq!(
+                reopened.generations,
+                vec![
+                    (active, GenerationStatus::Complete),
+                    (candidate, GenerationStatus::Pending),
+                ],
+                "failure point: {failure_point:?}"
+            );
+            assert_eq!(
+                reopened.selected_generation,
+                Some(active),
+                "failure point: {failure_point:?}"
+            );
+            assert_eq!(
+                SemanticStore::active_generation(&config).expect("reopen active generation"),
+                Some(active),
+                "failure point: {failure_point:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_failed_first_publication_reopens_without_active_truth() {
+        for failure_point in PublicationFailurePoint::ALL {
+            let temp = tempfile::tempdir().expect("temp directory");
+            let config = store_config(&temp);
+            let candidate = SemanticStore::reserve_generation(&config).expect("reserve candidate");
+
+            assert_eq!(
+                SemanticStore::publish_generation_with_failure_for_test(
+                    &config,
+                    candidate,
+                    failure_point,
+                ),
+                Err(GenerationError::InjectedFailure(failure_point))
+            );
+
+            let reopened = snapshot(&config);
+            assert_eq!(
+                reopened.generations,
+                vec![(candidate, GenerationStatus::Pending)],
+                "failure point: {failure_point:?}"
+            );
+            assert_eq!(
+                reopened.selected_generation, None,
+                "failure point: {failure_point:?}"
+            );
+            assert_eq!(
+                SemanticStore::active_generation(&config).expect("reopen active generation"),
+                None,
+                "failure point: {failure_point:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_and_future_stores_are_refused_without_mutation() {
+        let future_temp = tempfile::tempdir().expect("future temp directory");
+        let future_config = store_config(&future_temp);
+        std::fs::create_dir_all(
+            future_config
+                .path()
+                .parent()
+                .expect("future store directory"),
+        )
+        .expect("create future store directory");
+        install_future_fixture_for_test(future_config.path()).expect("install future fixture");
+        let future_before = snapshot(&future_config);
+        assert_eq!(
+            SemanticStore::active_generation(&future_config),
+            Err(GenerationError::Store(StoreStatus::Skipped(
+                StoreSkipReason::FutureSchema {
+                    found: migrations::CURRENT_SCHEMA_VERSION + 1,
+                    supported: migrations::CURRENT_SCHEMA_VERSION,
+                }
+            )))
+        );
+        assert_eq!(snapshot(&future_config), future_before);
+
+        let invalid_temp = tempfile::tempdir().expect("invalid temp directory");
+        let invalid_config = store_config(&invalid_temp);
+        std::fs::create_dir_all(
+            invalid_config
+                .path()
+                .parent()
+                .expect("invalid store directory"),
+        )
+        .expect("create invalid store directory");
+        install_invalid_fixture_for_test(invalid_config.path()).expect("install invalid fixture");
+        let invalid_before = snapshot(&invalid_config);
+        assert_eq!(
+            SemanticStore::active_generation(&invalid_config),
+            Err(GenerationError::Store(StoreStatus::RebuildNeeded(
+                StoreRebuildReason::InvalidSchema
+            )))
+        );
+        assert_eq!(snapshot(&invalid_config), invalid_before);
     }
 }
 
@@ -367,18 +526,21 @@ mod recovery {
         let path = store_path(&temp);
         fs::create_dir_all(path.parent().expect("store parent")).expect("create store directory");
         let future = Connection::open(&path).expect("open future store");
+        let future_version = migrations::CURRENT_SCHEMA_VERSION + 1;
         future
             .execute_batch(
                 "CREATE TABLE sentinel (value TEXT NOT NULL);\
-                 INSERT INTO sentinel (value) VALUES ('future-data');\
-                 PRAGMA user_version = 2;",
+                 INSERT INTO sentinel (value) VALUES ('future-data');",
             )
             .expect("create future fixture");
+        future
+            .pragma_update(None, "user_version", future_version)
+            .expect("set future version");
         drop(future);
         let original_bytes = fs::read(&path).expect("read original future store");
         let config = StoreConfig::new(&path, true);
         let future_status = StoreStatus::Skipped(StoreSkipReason::FutureSchema {
-            found: 2,
+            found: future_version,
             supported: migrations::CURRENT_SCHEMA_VERSION,
         });
 
@@ -399,7 +561,7 @@ mod recovery {
         let value: String = preserved
             .query_row("SELECT value FROM sentinel", [], |row| row.get(0))
             .expect("sentinel value");
-        assert_eq!(version, 2);
+        assert_eq!(version, future_version);
         assert_eq!(value, "future-data");
     }
 

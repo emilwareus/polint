@@ -1543,7 +1543,7 @@ mod tests {
                 (
                     StoreMode::Future,
                     StoreStatus::Skipped(store::StoreSkipReason::FutureSchema {
-                        found: 2,
+                        found: store::CURRENT_SCHEMA_VERSION_FOR_TEST + 1,
                         supported: store::CURRENT_SCHEMA_VERSION_FOR_TEST,
                     }),
                 ),

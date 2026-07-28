@@ -3,8 +3,12 @@
 use std::path::Path;
 use std::time::Duration;
 
+#[cfg(test)]
+use rusqlite::OptionalExtension;
 use rusqlite::{Connection, ErrorCode, OpenFlags, Transaction, TransactionBehavior};
 
+#[cfg(test)]
+use super::generation::{GenerationHandle, GenerationStatus};
 use super::migrations::{MigrationError, apply_migrations_in_transaction, preflight_schema};
 
 const BUSY_TIMEOUT: Duration = Duration::from_millis(250);
@@ -369,6 +373,8 @@ pub(crate) struct StoreFixtureSnapshot {
     version: i32,
     bootstrap_markers: Option<i64>,
     sentinel: Option<String>,
+    pub(super) generations: Vec<(GenerationHandle, GenerationStatus)>,
+    pub(super) selected_generation: Option<GenerationHandle>,
 }
 
 #[cfg(test)]
@@ -417,11 +423,68 @@ pub(super) fn fixture_snapshot_for_test(
     } else {
         None
     };
+    let generations = if fixture_table_exists(&connection, "generations")? {
+        let mut statement = connection
+            .prepare("SELECT generation_id, status FROM generations ORDER BY generation_id")
+            .map_err(classify_sqlite_error)?;
+        let stored = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(classify_sqlite_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(classify_sqlite_error)?;
+        stored
+            .into_iter()
+            .map(|(scalar, status)| {
+                let handle = GenerationHandle::from_scalar(scalar)
+                    .map_err(|_| ConnectionError::InvalidSchema)?;
+                let status =
+                    GenerationStatus::from_stored(&status).ok_or(ConnectionError::InvalidSchema)?;
+                Ok((handle, status))
+            })
+            .collect::<Result<Vec<_>, ConnectionError>>()?
+    } else {
+        Vec::new()
+    };
+    let selected_generation = if fixture_table_exists(&connection, "active_generation")? {
+        let scalar = connection
+            .query_row(
+                "SELECT generation_id FROM active_generation \
+                 WHERE singleton = 1 AND required_status = 'complete'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(classify_sqlite_error)?;
+        scalar
+            .map(GenerationHandle::from_scalar)
+            .transpose()
+            .map_err(|_| ConnectionError::InvalidSchema)?
+    } else {
+        None
+    };
     Ok(StoreFixtureSnapshot {
         version,
         bootstrap_markers,
         sentinel,
+        generations,
+        selected_generation,
     })
+}
+
+#[cfg(test)]
+fn fixture_table_exists(
+    connection: &Connection,
+    table_name: &str,
+) -> Result<bool, ConnectionError> {
+    connection
+        .query_row(
+            "SELECT count(*) = 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            [table_name],
+            |row| row.get(0),
+        )
+        .map_err(classify_sqlite_error)
 }
 
 #[cfg(test)]

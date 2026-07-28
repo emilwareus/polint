@@ -11,6 +11,8 @@ mod generation;
 mod migrations;
 
 pub(crate) use generation::{GenerationError, GenerationHandle};
+#[cfg(test)]
+pub(crate) use generation::{GenerationStatus, PublicationFailurePoint};
 
 #[cfg(test)]
 pub(crate) use connection::{HeldWriterConnection, StoreFixtureSnapshot};
@@ -154,6 +156,17 @@ impl SemanticStore {
         prepare_generation_store(config)?;
         let reader = connection::open_read_only(config.path()).map_err(GenerationError::from)?;
         generation::active(&reader)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn publish_generation_with_failure_for_test(
+        config: &StoreConfig,
+        handle: GenerationHandle,
+        failure_point: PublicationFailurePoint,
+    ) -> Result<GenerationHandle, GenerationError> {
+        prepare_generation_store(config)?;
+        let mut writer = connection::open_writer(config.path()).map_err(GenerationError::from)?;
+        generation::publish_with_failure_for_test(&mut writer, handle, failure_point)
     }
 }
 
