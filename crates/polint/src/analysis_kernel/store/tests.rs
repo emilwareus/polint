@@ -164,6 +164,46 @@ mod generation_lifecycle {
     }
 
     #[test]
+    fn preopened_writer_refuses_persistent_reservation_trigger_without_mutation() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let config = store_config(&temp);
+        assert_eq!(SemanticStore::maintain(&config), StoreStatus::Ready);
+        let mut writer = connection::open_writer(config.path()).expect("open lifecycle writer");
+        let trigger_connection =
+            rusqlite::Connection::open(config.path()).expect("open trigger fixture connection");
+        trigger_connection
+            .execute_batch(
+                "CREATE TRIGGER publish_reserved_generation \
+                 AFTER INSERT ON generations \
+                 BEGIN \
+                   UPDATE generations SET status = 'complete' \
+                   WHERE generation_id = NEW.generation_id; \
+                   INSERT INTO active_generation \
+                     (singleton, generation_id, required_status) \
+                   VALUES (1, NEW.generation_id, 'complete') \
+                   ON CONFLICT(singleton) DO UPDATE SET \
+                     generation_id = excluded.generation_id, \
+                     required_status = excluded.required_status; \
+                 END;",
+            )
+            .expect("install persistent reservation trigger");
+        drop(trigger_connection);
+        let before = snapshot(&config);
+
+        assert_eq!(
+            generation::reserve(&mut writer),
+            Err(GenerationError::Store(StoreStatus::RebuildNeeded(
+                StoreRebuildReason::InvalidSchema
+            )))
+        );
+        drop(writer);
+
+        assert_eq!(snapshot(&config), before);
+        assert!(before.generations.is_empty());
+        assert_eq!(before.selected_generation, None);
+    }
+
+    #[test]
     fn successful_rotation_and_unselected_candidate_survive_reopen_exactly() {
         let temp = tempfile::tempdir().expect("temp directory");
         let config = store_config(&temp);

@@ -9,7 +9,9 @@ use rusqlite::{Connection, ErrorCode, OpenFlags, Transaction, TransactionBehavio
 
 #[cfg(test)]
 use super::generation::{GenerationHandle, GenerationStatus};
-use super::migrations::{MigrationError, apply_migrations_in_transaction, preflight_schema};
+use super::migrations::{
+    MigrationError, apply_migrations_in_transaction, preflight_schema, validate_current_schema,
+};
 
 const BUSY_TIMEOUT: Duration = Duration::from_millis(250);
 const SYNCHRONOUS_NORMAL: i64 = 1;
@@ -108,7 +110,13 @@ where
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(classify_sqlite_error)
         .map_err(E::from)?;
+    validate_current_schema(&transaction)
+        .map_err(classify_migration_error)
+        .map_err(E::from)?;
     let result = operation(&transaction)?;
+    validate_current_schema(&transaction)
+        .map_err(classify_migration_error)
+        .map_err(E::from)?;
     transaction
         .commit()
         .map_err(classify_sqlite_error)

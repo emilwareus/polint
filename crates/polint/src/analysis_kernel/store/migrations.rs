@@ -173,7 +173,7 @@ fn validate_tables_absent(
     Ok(())
 }
 
-fn validate_current_schema(connection: &Connection) -> Result<(), MigrationError> {
+pub(super) fn validate_current_schema(connection: &Connection) -> Result<(), MigrationError> {
     let version = schema_version(connection)?;
     if version != CURRENT_SCHEMA_VERSION {
         return Err(MigrationError::InvalidSchema { version });
@@ -193,6 +193,11 @@ fn validate_current_schema(connection: &Connection) -> Result<(), MigrationError
     )?;
     validate_generations_index(connection, version)?;
     validate_no_indexes(connection, version, ACTIVE_GENERATION_TABLE)?;
+    validate_no_triggers(
+        connection,
+        version,
+        &[GENERATIONS_TABLE, ACTIVE_GENERATION_TABLE],
+    )?;
     validate_active_foreign_key(connection, version)?;
     validate_lifecycle_rows(connection, version)?;
     validate_foreign_keys(connection, version)
@@ -205,6 +210,7 @@ fn validate_bootstrap_schema(
 ) -> Result<(), MigrationError> {
     validate_table_sql(connection, version, BOOTSTRAP_TABLE, BOOTSTRAP_TABLE_SQL)?;
     validate_no_indexes(connection, version, BOOTSTRAP_TABLE)?;
+    validate_no_triggers(connection, version, &[BOOTSTRAP_TABLE])?;
 
     let marker: Option<i32> = connection
         .query_row(
@@ -222,6 +228,26 @@ fn validate_bootstrap_schema(
         .map_err(|error| classify_invariant_error(error, version))?;
     if marker != Some(expected_marker) || marker_count != 1 {
         return Err(MigrationError::InvalidSchema { version });
+    }
+    Ok(())
+}
+
+fn validate_no_triggers(
+    connection: &Connection,
+    version: i32,
+    table_names: &[&str],
+) -> Result<(), MigrationError> {
+    for table_name in table_names {
+        let trigger_count: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND tbl_name = ?1",
+                [table_name],
+                |row| row.get(0),
+            )
+            .map_err(|error| classify_invariant_error(error, version))?;
+        if trigger_count != 0 {
+            return Err(MigrationError::InvalidSchema { version });
+        }
     }
     Ok(())
 }
@@ -850,6 +876,51 @@ mod tests {
                 version: CURRENT_SCHEMA_VERSION
             }
         ));
+    }
+
+    #[test]
+    fn claimed_current_schema_rejects_persistent_triggers_on_owned_tables() {
+        for (table_name, trigger_body) in [
+            (
+                BOOTSTRAP_TABLE,
+                "UPDATE _polint_schema_migrations SET version = NEW.version",
+            ),
+            (
+                GENERATIONS_TABLE,
+                "UPDATE generations SET status = NEW.status \
+                 WHERE generation_id = NEW.generation_id",
+            ),
+            (
+                ACTIVE_GENERATION_TABLE,
+                "UPDATE active_generation SET generation_id = NEW.generation_id \
+                 WHERE singleton = NEW.singleton",
+            ),
+        ] {
+            let (_temp, mut connection) = open_temp_database();
+            install_claimed_current_schema(
+                &connection,
+                GENERATIONS_TABLE_SQL,
+                ACTIVE_GENERATION_TABLE_SQL,
+            );
+            connection
+                .execute_batch(&format!(
+                    "CREATE TRIGGER owned_table_trigger AFTER INSERT ON {table_name} \
+                     BEGIN {trigger_body}; END;"
+                ))
+                .expect("create persistent trigger");
+
+            let error = apply_migrations(&mut connection).expect_err("persistent trigger refused");
+
+            assert!(
+                matches!(
+                    error,
+                    MigrationError::InvalidSchema {
+                        version: CURRENT_SCHEMA_VERSION
+                    }
+                ),
+                "table: {table_name}"
+            );
+        }
     }
 
     #[test]

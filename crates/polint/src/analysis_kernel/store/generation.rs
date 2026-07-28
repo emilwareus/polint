@@ -87,7 +87,9 @@ pub(super) fn reserve(writer: &mut WriterConnection) -> Result<GenerationHandle,
                 |row| row.get(0),
             )
             .map_err(connection::classify_sqlite_error)?;
-        GenerationHandle::from_scalar(scalar)
+        let handle = GenerationHandle::from_scalar(scalar)?;
+        validate_reservation(transaction, handle)?;
+        Ok(handle)
     })
 }
 
@@ -206,6 +208,28 @@ fn require_complete(
         .optional()
         .map_err(connection::classify_sqlite_error)?;
     if is_complete != Some(true) {
+        return Err(GenerationError::InvalidTransition);
+    }
+    Ok(())
+}
+
+fn validate_reservation(
+    transaction: &Transaction<'_>,
+    handle: GenerationHandle,
+) -> Result<(), GenerationError> {
+    let reservation = transaction
+        .query_row(
+            "SELECT generation.status, \
+                    (SELECT count(*) FROM active_generation AS active \
+                     WHERE active.generation_id = generation.generation_id) \
+             FROM generations AS generation \
+             WHERE generation.generation_id = ?1",
+            [handle.scalar()],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()
+        .map_err(connection::classify_sqlite_error)?;
+    if reservation != Some(("pending".to_owned(), 0)) {
         return Err(GenerationError::InvalidTransition);
     }
     Ok(())
