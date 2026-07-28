@@ -322,8 +322,14 @@ pub(super) fn install_future_fixture_for_test(path: &Path) -> Result<(), Connect
     connection
         .execute_batch(
             "CREATE TABLE sentinel (value TEXT NOT NULL);\
-             INSERT INTO sentinel (value) VALUES ('future-data');\
-             PRAGMA user_version = 2;",
+             INSERT INTO sentinel (value) VALUES ('future-data');",
+        )
+        .map_err(classify_sqlite_error)?;
+    connection
+        .pragma_update(
+            None,
+            "user_version",
+            super::migrations::CURRENT_SCHEMA_VERSION + 1,
         )
         .map_err(classify_sqlite_error)
 }
