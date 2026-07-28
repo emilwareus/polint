@@ -2,23 +2,35 @@
 phase: 65-generation-manifest-and-metadata-mirroring
 scope: r1-only
 depth: standard
-status: issues_found
+status: clean
+iteration: 3
 diff_base: 9f3bdc56
 files_reviewed: 6
+resolved_findings:
+  - CR-01
+  - WR-01
+  - WR-02
 findings:
-  critical: 1
-  warning: 1
+  critical: 0
+  warning: 0
   info: 0
-  total: 2
+  total: 0
 reviewed_at: 2026-07-28
 ---
 
 # Phase 65 R1 Code Review
 
+## Verdict
+
+Clean. CR-01, WR-01, and WR-02 are closed, and the final adversarial pass found
+no new actionable correctness, security, or quality issue in the reviewed R1
+scope.
+
 ## Scope
 
-Reviewed exactly the six implementation and test files committed after
-`9f3bdc56`:
+Reviewed exactly the six R1 implementation and test files changed after
+`9f3bdc56`, including repair commits `c01fa930`, `6de2949c`, `d1494824`, and
+`1e795d9f`:
 
 - `crates/polint/src/analysis_kernel/mod.rs`
 - `crates/polint/src/analysis_kernel/store/connection.rs`
@@ -27,134 +39,83 @@ Reviewed exactly the six implementation and test files committed after
 - `crates/polint/src/analysis_kernel/store/mod.rs`
 - `crates/polint/src/analysis_kernel/store/tests.rs`
 
-This review applies the locked R1 boundary. Deferred manifests, providers,
-fact/metadata families, dependency indexes, production kernel wiring, and the
-sub-five-minute CI follow-up are not treated as implementation defects.
+The implementation remains within the six-file, private R1 boundary. Deferred
+manifests, providers, fact/metadata families, dependency indexes, production
+kernel wiring, and the sub-five-minute CI follow-up are outside this review.
 
-## Findings
+## Closed Findings
 
-### CR-01 — Persistent triggers bypass schema authentication and can make reservation publish truth
+### CR-01 — Persistent-trigger publication bypass
 
-**Severity:** Critical
+- Current-schema authentication inventories persistent triggers attached to
+  `_polint_schema_migrations`, `generations`, and `active_generation`.
+  `tbl_name = ? COLLATE NOCASE` follows SQLite identifier casing; quoting is
+  removed from the catalog value, and a manual mixed-case quoted-target probe
+  confirmed the trigger is found.
+- Persistent triggers cannot target a main owned table from an attached
+  database, and the store opens no attachments. Temporary triggers are
+  connection-local and cannot be injected into the lifecycle writer by a
+  second connection.
+- Every lifecycle mutation starts `BEGIN IMMEDIATE`, authenticates the schema,
+  performs the operation, authenticates it again, then commits. SQLite's
+  single-writer lease prevents persistent trigger or schema DDL from
+  interposing between validation and use.
+- Reservation verifies that the returned row remains pending and has no active
+  relationship before commit.
+- The pre-opened-writer hostile-trigger test returns typed invalid schema and
+  proves generation rows and active truth are unchanged.
 
-**Evidence:**
+### WR-01 — Direct active read initialization
 
-- `crates/polint/src/analysis_kernel/store/migrations.rs:176` authenticates the
-  current schema through table SQL, indexes, the declared foreign key, current
-  rows, and `foreign_key_check`, but it never inventories persistent triggers
-  attached to the three owned tables.
-- `crates/polint/src/analysis_kernel/store/migrations.rs:229` queries only
-  `sqlite_master` rows with `type = 'table'`; the index checks at lines 267-339
-  likewise cannot detect a trigger.
-- `crates/polint/src/analysis_kernel/store/generation.rs:80` inserts a pending
-  row and returns its handle without authenticating that the row is still
-  pending and no active relationship was created.
-- `crates/polint/src/analysis_kernel/store/connection.rs:141` commits schema
-  authentication before the separate lifecycle transaction begins, so even a
-  new trigger check would still have an authentication/use gap under a
-  concurrent writer unless the operation binds them to one protected snapshot.
+- `active_generation` retains the disabled-before-path/I/O guard.
+- Enabled reads initialize or migrate through the writer policy before opening
+  the read-only view.
+- Direct absent-store and exact-v1 calls produce a current schema, preserve v1
+  sentinel data, and return the valid initial `None`.
+- Held-writer contention maps to `BusySkipped` under the 250 ms bound.
+- Future and malformed state remain typed refusals without lifecycle mutation.
 
-An exact claimed-v2 database can add this persistent behavior without changing
-any table SQL, index, foreign-key declaration, or initially validated row:
+### WR-02 — Legacy owned-name collision classification
 
-1. An `AFTER INSERT ON generations` trigger changes `NEW.generation_id` from
-   `pending` to `complete`.
-2. The same trigger inserts singleton `1` into `active_generation` with
-   `required_status = 'complete'`.
-3. `reserve()` inserts what it believes is pending and commits.
-4. The reserved generation is now complete and active even though publication
-   was never called.
+- Version 0 and version 1 preflight now query the persistent schema catalog
+  with `name = ? COLLATE NOCASE` across object types before running migration
+  SQL.
+- Quoted or case-varied tables, views, indexes, and triggers using an owned
+  name are therefore rejected as invalid schema rather than falling through to
+  a migration collision and `OpenFailed`.
+- Migration tests prove a quoted uppercase v0 table and an uppercase v1 view
+  return version-specific `InvalidSchema` with an unchanged catalog, version,
+  and sentinel value.
+- Facade tests prove the same fixtures return
+  `RebuildNeeded(InvalidSchema)` and remain byte-identical after refusal.
+- Exact v0 and v1 fixtures still migrate successfully, current reopen remains
+  idempotent, and future schemas remain unchanged.
 
-This was reproduced against SQLite 3.51 with foreign keys enabled: the reserve
-insert returned handle `1`, after which `generations` contained
-`1|complete`, `active_generation` contained `1|1|complete`, and
-`foreign_key_check` remained clean.
+## Regression Review
 
-**Impact:**
+- Reservation stays unreadable until same-handle publication.
+- Completion and active rotation remain atomic, and every injected failure
+  preserves the prior active selection across reopen.
+- Active reads follow only the explicit singleton complete relationship; no
+  recency or maximum-ID inference was introduced.
+- Public diagnostics, JSON bytes, exit behavior, CLI/config/SDK surfaces, and
+  production kernel wiring are unchanged.
+- The reviewed diff is 1,781 added and 90 removed lines, below the locked 2,500
+  handwritten-added-line budget.
+- No delivery-history comments, unsafe production shortcuts, visibility
+  widening, dependency changes, or CI workflow changes were introduced.
 
-The store accepts a claimed-current malformed/tampered database and violates
-the core R1 rule that reservation is durable but unreadable until explicit
-publication. This directly defeats D-05 through D-07 and the HIGH-blocking
-threats T-65-01-01 and T-65-01-02.
+## Verification
 
-**Actionable fix:**
-
-Reject persistent triggers on `_polint_schema_migrations`, `generations`, and
-`active_generation` as part of exact schema-v2 authentication. Bind that
-authentication to each lifecycle mutation's immediate transaction (or verify
-an authenticated schema cookie/inventory inside that transaction) so another
-writer cannot install schema behavior between validation and use. Also
-authenticate the post-insert reservation state before commit. Add a
-claimed-current trigger fixture proving that reserve is refused without
-changing lifecycle rows or active truth.
-
-### WR-01 — `active_generation` does not initialize an absent or supported-prior store
-
-**Severity:** Warning
-
-**Evidence:**
-
-- `crates/polint/src/analysis_kernel/store/mod.rs:153` prepares the path and
-  opens only a read-only connection for `active_generation`; the method has no
-  encoded or documented prerequisite that `maintain` was called first.
-- `crates/polint/src/analysis_kernel/store/connection.rs:86` opens the database
-  with `SQLITE_OPEN_READ_ONLY`.
-- `crates/polint/src/analysis_kernel/store/migrations.rs:129` treats schema
-  versions 0 and 1 as supported during preflight, so a valid v1 database passes
-  `open_read_only` without receiving migration 2.
-- `crates/polint/src/analysis_kernel/store/generation.rs:151` then queries
-  `active_generation`, which does not exist in v0/v1 and maps to
-  `StoreStatus::Skipped(OpenFailed)`. An absent database fails even earlier at
-  the read-only open.
-- The fresh-store test at
-  `crates/polint/src/analysis_kernel/store/tests.rs:50` calls
-  `SemanticStore::maintain` before the read, so it does not exercise the facade
-  entry point on a genuinely absent or exact-v1 store.
-
-**Impact:**
-
-The three lifecycle facade methods have inconsistent initialization semantics:
-reservation initializes/migrates through `open_writer`, while the read method
-fails unless another operation happened first. A valid Phase 64 database can
-therefore produce `OpenFailed` instead of the valid initial `None`, weakening
-the claimed v1 compatibility and the “fresh store reads `None`” contract.
-
-**Actionable fix:**
-
-Either initialize/migrate absent and supported-prior stores before opening the
-read-only lifecycle view, or encode an initialized/current-store session in the
-type API so the prerequisite cannot be skipped. Preserve the disabled-before-I/O
-guard and bounded busy mapping. Add facade-level tests that call
-`active_generation` directly on (a) an absent owned path and (b) an exact
-schema-v1 fixture and assert the intended current-schema `None` result.
-
-## Verified Strengths
-
-- Publication changes the pending row and singleton selection in one immediate
-  transaction; operation errors and all five injected seams drop the
-  transaction before commit.
-- Under the authenticated declared schema, the composite
-  `(generation_id, required_status)` foreign key prevents a pending row from
-  satisfying active selection.
-- Active reads follow the explicit singleton relationship and do not infer
-  truth from `MAX(id)`, timestamps, insertion order, or recency.
-- The 250 ms busy policy, disabled-before-I/O guard, private visibility, and
-  raw-SQL/rusqlite boundary are preserved.
-- New source comments explain enduring boundaries and contain no delivery
-  phase/plan history.
-- No public CLI/config/SDK/output or CI workflow file is in the reviewed diff.
-
-## Verification Run
-
-- `cargo test -p polint --lib analysis_kernel::store::migrations::tests --locked`
-  — 16 passed.
-- `cargo test -p polint --lib analysis_kernel::store::tests::generation_lifecycle --locked`
-  — 9 passed.
-- `cargo test -p polint --lib analysis_kernel::tests::semantic_store_check_parity --locked`
-  — 1 passed.
+- `cargo test -p polint --lib analysis_kernel::store::migrations::tests --locked -- --nocapture`
+  — 19 passed.
+- `cargo test -p polint --lib analysis_kernel::store::tests --locked -- --nocapture`
+  — 29 passed.
+- `cargo test -p polint --lib analysis_kernel::tests::semantic_store_check_parity --locked -- --nocapture`
+  — 1 passed; public JSON bytes and exit semantics remain identical.
 - `cargo fmt --all -- --check` — passed.
 - `cargo clippy -p polint --lib --tests --all-features --locked -- -D warnings`
   — passed.
-- `git diff --check 9f3bdc56 -- <reviewed files>` — passed.
+- `git diff --check 9f3bdc56 -- <six reviewed files>` — passed.
 
-The passing suite does not cover either finding above.
+No actionable findings remain.
