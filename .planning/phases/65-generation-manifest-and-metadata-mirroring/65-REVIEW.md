@@ -1,121 +1,155 @@
 ---
 phase: 65-generation-manifest-and-metadata-mirroring
-scope: r1-only
-depth: standard
+scope: r1-r2
+depth: deep
 status: clean
-iteration: 3
-diff_base: 9f3bdc56
-files_reviewed: 6
-resolved_findings:
-  - CR-01
-  - WR-01
-  - WR-02
+iteration: 2
+diff_base: f3f4612f
+files_reviewed: 8
+files_reviewed_list:
+  - crates/polint/src/analysis_kernel/incremental/run_manifest.rs
+  - crates/polint/src/analysis_kernel/incremental/digest.rs
+  - crates/polint/src/analysis_kernel/incremental/mod.rs
+  - crates/polint/src/analysis_kernel/store/migrations.rs
+  - crates/polint/src/analysis_kernel/store/connection.rs
+  - crates/polint/src/analysis_kernel/store/generation.rs
+  - crates/polint/src/analysis_kernel/store/mod.rs
+  - crates/polint/src/analysis_kernel/store/tests.rs
 findings:
   critical: 0
   warning: 0
   info: 0
   total: 0
-reviewed_at: 2026-07-28
+reviewed_at: 2026-07-29
 ---
 
-# Phase 65 R1 Code Review
+# Phase 65 R1-R2 Code Review
 
 ## Verdict
 
-Clean. CR-01, WR-01, and WR-02 are closed, and the final adversarial pass found
-no new actionable correctness, security, or quality issue in the reviewed R1
-scope.
+Clean. The three iteration-1 findings are closed by commits `48c5cce2`,
+`00979854`, and `27506a52`. A deep re-review of the full current contents of
+the eight scoped files found no new critical or warning issues and no R1
+regression.
 
 ## Scope
 
-Reviewed exactly the six R1 implementation and test files changed after
-`9f3bdc56`, including repair commits `c01fa930`, `6de2949c`, `d1494824`, and
-`1e795d9f`:
+Reviewed the full `f3f4612f..27506a52` implementation history and current
+source, including the iteration-1 fixes rather than relying on
+`65-REVIEW-FIX.md`. The review retraced canonical manifest construction,
+schema authentication, migration/open policy, generation publication,
+one-snapshot active reads and matching, rollback behavior, workspace ownership,
+typed error mapping, and tamper tests.
 
-- `crates/polint/src/analysis_kernel/mod.rs`
-- `crates/polint/src/analysis_kernel/store/connection.rs`
-- `crates/polint/src/analysis_kernel/store/generation.rs`
-- `crates/polint/src/analysis_kernel/store/migrations.rs`
-- `crates/polint/src/analysis_kernel/store/mod.rs`
-- `crates/polint/src/analysis_kernel/store/tests.rs`
+The three fix commits change only
+`incremental/run_manifest.rs`, `store/migrations.rs`, and `store/tests.rs`.
+The combined R1-R2 implementation remains within the same eight-file private
+boundary and does not add provider families, public CLI/config/SDK/output
+surface, normal-kernel publication/reuse wiring, or CI workflow changes.
 
-The implementation remains within the six-file, private R1 boundary. Deferred
-manifests, providers, fact/metadata families, dependency indexes, production
-kernel wiring, and the sub-five-minute CI follow-up are outside this review.
+## Iteration-1 Finding Closure
 
-## Closed Findings
+### CR-01 — Closed: complete generations now require the singleton active row
 
-### CR-01 — Persistent-trigger publication bypass
+**Evidence:** `crates/polint/src/analysis_kernel/store/migrations.rs:642-695`,
+`crates/polint/src/analysis_kernel/store/connection.rs:43-60`,
+`crates/polint/src/analysis_kernel/store/connection.rs:107-130`, and
+`crates/polint/src/analysis_kernel/store/tests.rs:315-392`
 
-- Current-schema authentication inventories persistent triggers attached to
-  `_polint_schema_migrations`, `generations`, and `active_generation`.
-  `tbl_name = ? COLLATE NOCASE` follows SQLite identifier casing; quoting is
-  removed from the catalog value, and a manual mixed-case quoted-target probe
-  confirmed the trigger is found.
-- Persistent triggers cannot target a main owned table from an attached
-  database, and the store opens no attachments. Temporary triggers are
-  connection-local and cannot be injected into the lifecycle writer by a
-  second connection.
-- Every lifecycle mutation starts `BEGIN IMMEDIATE`, authenticates the schema,
-  performs the operation, authenticates it again, then commits. SQLite's
-  single-writer lease prevents persistent trigger or schema DDL from
-  interposing between validation and use.
-- Reservation verifies that the returned row remains pending and has no active
-  relationship before commit.
-- The pre-opened-writer hostile-trigger test returns typed invalid schema and
-  proves generation rows and active truth are unchanged.
+`validate_manifest_rows` now compares `EXISTS(complete generation)` with
+`EXISTS(active_generation)` and rejects any mismatch. The exact active-table
+shape and lifecycle validation already bound the present case to one singleton
+row pointing at a complete generation; manifest ownership validation binds
+that selection to an existing manifest. Empty and pending-only stores remain
+valid because both existence predicates are false.
 
-### WR-01 — Direct active read initialization
+The invariant is checked by writer preflight and again inside every immediate
+mutation transaction. Active reads and manifest matching initialize/open the
+store and then validate the current schema inside their read transaction before
+reading selected truth. Deleting the active row can therefore no longer become
+normal absence or bypass the workspace-ownership check.
 
-- `active_generation` retains the disabled-before-path/I/O guard.
-- Enabled reads initialize or migrate through the writer policy before opening
-  the read-only view.
-- Direct absent-store and exact-v1 calls produce a current schema, preserve v1
-  sentinel data, and return the valid initial `None`.
-- Held-writer contention maps to `BusySkipped` under the 250 ms bound.
-- Future and malformed state remain typed refusals without lifecycle mutation.
+The regression publishes workspace A, reserves a candidate, deletes the active
+row, and proves active read, exact match, maintenance, same-workspace
+publication, and second-workspace publication all return the typed
+`RebuildNeeded(InvalidSchema)` outcome without changing the complete or pending
+rows.
 
-### WR-02 — Legacy owned-name collision classification
+### CR-02 — Closed: manifest index authentication is bounded and streamed
 
-- Version 0 and version 1 preflight now query the persistent schema catalog
-  with `name = ? COLLATE NOCASE` across object types before running migration
-  SQL.
-- Quoted or case-varied tables, views, indexes, and triggers using an owned
-  name are therefore rejected as invalid schema rather than falling through to
-  a migration collision and `OpenFailed`.
-- Migration tests prove a quoted uppercase v0 table and an uppercase v1 view
-  return version-specific `InvalidSchema` with an unchanged catalog, version,
-  and sentinel value.
-- Facade tests prove the same fixtures return
-  `RebuildNeeded(InvalidSchema)` and remain byte-identical after refusal.
-- Exact v0 and v1 fixtures still migrate successfully, current reopen remains
-  idempotent, and future schemas remain unchanged.
+**Evidence:** `crates/polint/src/analysis_kernel/store/migrations.rs:537-596`
+and `crates/polint/src/analysis_kernel/store/tests.rs:394-436`
+
+The validator first obtains index cardinality with scalar `count(*)` and
+rejects unless it is exactly one. It then decodes only that sole row's bounded
+metadata. Index columns are read as a stream: exactly the first two names are
+decoded and compared with `generation_id` and `relative_path`, while a third
+row is checked only for existence. No attacker-controlled index or column
+catalog is collected into a Rust vector.
+
+The real writer-open regression installs 128 extra indexes, receives the typed
+invalid-schema/rebuild result, and proves the catalog is preserved rather than
+mutated.
+
+### WR-01 — Closed: portable absolute/prefixed paths are rejected
+
+**Evidence:**
+`crates/polint/src/analysis_kernel/incremental/run_manifest.rs:320-339` and
+`crates/polint/src/analysis_kernel/incremental/run_manifest.rs:418-545`
+
+Canonical source validation now rejects native `Prefix`/`RootDir` components,
+portable ASCII drive prefixes such as `C:` (including drive-relative forms),
+and leading POSIX or Windows separators before applying slash/dot
+normalization. Build and stored-decode tests cover POSIX absolute,
+drive-absolute, drive-relative, UNC, and verbatim-prefix spellings.
+
+The checks are limited to actual root/prefix forms. Ordinary canonical relative
+names such as `src/app.ts`, `src/a.ts`, and `src/b.go` still construct,
+round-trip, sort, encode, and decode successfully, so the fix does not reject
+the valid repo-relative path contract.
 
 ## Regression Review
 
-- Reservation stays unreadable until same-handle publication.
-- Completion and active rotation remain atomic, and every injected failure
-  preserves the prior active selection across reopen.
-- Active reads follow only the explicit singleton complete relationship; no
-  recency or maximum-ID inference was introduced.
-- Public diagnostics, JSON bytes, exit behavior, CLI/config/SDK surfaces, and
-  production kernel wiring are unchanged.
-- The reviewed diff is 1,781 added and 90 removed lines, below the locked 2,500
-  handwritten-added-line budget.
-- No delivery-history comments, unsafe production shortcuts, visibility
-  widening, dependency changes, or CI workflow changes were introduced.
+- Publication still writes the header and sources, reads and recomputes the
+  stored identity, completes the supplied reserved handle, and rotates the
+  singleton selection in one immediate transaction.
+- Every publication failure seam still rolls back the candidate manifest,
+  leaves it pending, and preserves the prior active manifested generation
+  across reopen.
+- Active handle, header preflight, source preflight, row decode, and exact
+  comparison still share one validated read transaction/snapshot.
+- Header/source storage classes, counts, scalar lengths, aggregate payload
+  bytes, checked numeric conversions, closed labels, canonical ordering,
+  ownership, and run identity remain authenticated before trust.
+- Exact empty-v2 migration, populated-v2 refusal before persistent policy,
+  transactional revalidation, current-v3 idempotence, future-schema refusal,
+  and malformed-schema preservation remain intact.
+- Disabled entry points still return before path creation, workspace
+  canonicalization, manifest construction, or SQLite access.
+- Production visibility remains crate-private, and the fixes introduce no
+  delivery-history comments or supported-surface widening.
 
 ## Verification
 
-- `cargo test -p polint --lib analysis_kernel::store::migrations::tests --locked -- --nocapture`
-  — 19 passed.
+- `cargo test -p polint --lib analysis_kernel::incremental::run_manifest::tests --locked -- --nocapture`
+  — 8 passed.
 - `cargo test -p polint --lib analysis_kernel::store::tests --locked -- --nocapture`
-  — 29 passed.
+  — 37 passed.
+- `cargo test -p polint --lib analysis_kernel::store::migrations::tests --locked -- --nocapture`
+  — 21 passed.
+- `cargo test -p polint --test public_surface_leak --locked -- --nocapture`
+  — 7 passed.
 - `cargo test -p polint --lib analysis_kernel::tests::semantic_store_check_parity --locked -- --nocapture`
-  — 1 passed; public JSON bytes and exit semantics remain identical.
-- `cargo fmt --all -- --check` — passed.
-- `cargo clippy -p polint --lib --tests --all-features --locked -- -D warnings`
-  — passed.
-- `git diff --check 9f3bdc56 -- <six reviewed files>` — passed.
+  — 1 passed with byte-identical JSON and exit semantics.
+- `make lint` — passed, including workspace/all-target/all-feature Clippy with
+  warnings denied and formatting validation.
+- `git diff --check f3f4612f..HEAD -- <eight reviewed files>` — passed.
 
-No actionable findings remain.
+No product source, test, fix report, backup artifact, or commit was modified by
+this review.
+
+---
+
+_Reviewed: 2026-07-29_
+_Reviewer: gsd-code-reviewer_
+_Depth: deep_

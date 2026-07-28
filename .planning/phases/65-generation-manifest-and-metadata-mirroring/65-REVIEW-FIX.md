@@ -1,110 +1,63 @@
 ---
-status: fixed
-findings_in_scope:
-  - CR-01
-  - WR-01
-  - WR-02
-fixed:
-  - CR-01
-  - WR-01
-  - WR-02
-skipped: []
-iteration: 2
+phase: 65-generation-manifest-and-metadata-mirroring
+fixed_at: 2026-07-28T22:09:12Z
+review_path: .planning/phases/65-generation-manifest-and-metadata-mirroring/65-REVIEW.md
+iteration: 1
+findings_in_scope: 3
+fixed: 3
+skipped: 0
+status: all_fixed
 ---
 
-# Phase 65 R1 Code Review Fix
+# Phase 65: Code Review Fix Report
 
-All three findings across the two `65-REVIEW.md` iterations are fixed. The
-iteration-2 review confirms CR-01 and WR-01 remain resolved, and WR-02 is fixed
-by the latest repair. The changes remain inside the
-private R1 lifecycle/store boundary: five existing files under
-`crates/polint/src/analysis_kernel/store/` changed, with no public API, CLI,
-configuration, provider, metadata-family, kernel-wiring, or CI workflow
-changes.
+**Fixed at:** 2026-07-28T22:09:12Z
+**Source review:** `.planning/phases/65-generation-manifest-and-metadata-mirroring/65-REVIEW.md`
+**Iteration:** 1
 
-## CR-01 — Fixed
+**Summary:**
+- Findings in scope: 3
+- Fixed: 3
+- Skipped: 0
 
-**Commit:** `c01fa930` — `fix(65): authenticate lifecycle mutations`
+## Fixed Issues
 
-- **Identifier hardening:** `d1494824` —
-  `fix(65): authenticate trigger table names`
+### CR-01: Deleting the active pointer erases workspace ownership without invalidating the store
 
-- Exact schema authentication now rejects every persistent trigger attached to
-  `_polint_schema_migrations`, `generations`, or `active_generation`, including
-  trigger definitions that reference an owned table with different identifier
-  casing.
-- Every lifecycle mutation authenticates the current schema after acquiring its
-  immediate transaction and authenticates it again after the operation, before
-  commit. The immediate writer lease prevents a concurrent schema writer from
-  changing persistent behavior between authentication and use.
-- Reservation verifies that the returned handle still names a pending row and
-  has no active relationship before commit.
-- The regression fixture opens the lifecycle writer first, installs a hostile
-  claimed-v2 `AFTER INSERT` trigger through another connection, and then calls
-  reservation. Reservation returns the typed invalid-schema outcome, with the
-  generation rows and active relationship unchanged.
-- Migration coverage separately proves claimed-current schemas are rejected
-  when any of the three owned tables has a persistent trigger.
+**Status:** fixed: requires human verification
+**Files modified:** `crates/polint/src/analysis_kernel/store/migrations.rs`, `crates/polint/src/analysis_kernel/store/tests.rs`
+**Commit:** 48c5cce2
+**Applied fix:** Current-schema content validation now requires active-selection presence to match complete-generation presence. The regression deletes the active pointer after publishing, then proves active reads, exact matching, maintenance, same-workspace publication, and second-workspace publication all return the typed invalid-schema outcome without changing the complete or pending generations.
 
-## WR-01 — Fixed
+### CR-02: Current-schema index preflight allocates an unbounded attacker-controlled vector
 
-**Commit:** `6de2949c` — `fix(65): initialize generation reads`
+**Status:** fixed: requires human verification
+**Files modified:** `crates/polint/src/analysis_kernel/store/migrations.rs`, `crates/polint/src/analysis_kernel/store/tests.rs`
+**Commit:** 00979854
+**Applied fix:** Manifest-source index authentication now checks catalog cardinality with a scalar query, decodes only the sole expected index row, and streams exactly two expected index columns before rejecting any third. A 128-extra-index fixture proves the real writer preflight returns the typed invalid-schema outcome without catalog mutation.
 
-- `SemanticStore::active_generation` keeps its disabled-before-path/I/O guard,
-  then initializes or migrates through the existing writer policy before
-  opening the lifecycle read-only view.
-- Calling the facade directly on an absent owned path creates the exact current
-  schema and returns `None`.
-- Calling it directly on the exact schema-v1 fixture transactionally migrates
-  to v2, preserves the sentinel data, and returns `None`.
-- A held immediate writer lease maps the read-side initialization attempt to
-  `GenerationError::Store(StoreStatus::BusySkipped)` within the existing
-  bounded busy policy.
-- Existing malformed/future typed refusal tests and the disabled zero-I/O test
-  continue to pass.
+### WR-01: The canonical source codec accepts Windows drive-absolute paths
 
-## WR-02 — Fixed
-
-**Commit:** `1e795d9f` — `fix(65): authenticate legacy owned names`
-
-- Pre-migration v0/v1 validation now treats each owned identifier as a
-  case-insensitive SQLite schema namespace. It queries all persistent
-  `sqlite_master` object types rather than only exact-case tables.
-- Version 0 refuses any object named `_polint_schema_migrations`,
-  `generations`, or `active_generation`; version 1 first authenticates its exact
-  bootstrap table and then applies the same collision check to the two
-  lifecycle names.
-- A quoted uppercase `"GENERATIONS"` table fixture returns
-  `MigrationError::InvalidSchema { version: 0 }`. Its full schema catalog,
-  version, and stored sentinel value remain unchanged.
-- An exact-v1 fixture with an uppercase `"ACTIVE_GENERATION"` view returns
-  `MigrationError::InvalidSchema { version: 1 }`. Its full schema catalog,
-  version, and sentinel value remain unchanged.
-- Facade-level versions of both fixtures return
-  `StoreStatus::RebuildNeeded(StoreRebuildReason::InvalidSchema)` and remain
-  byte-identical after refusal.
-- Existing legitimate v0/v1 migration, current-schema reopen, and future-schema
-  refusal coverage continues to pass.
+**Status:** fixed: requires human verification
+**Files modified:** `crates/polint/src/analysis_kernel/incremental/run_manifest.rs`
+**Commit:** 27506a52
+**Applied fix:** Canonical source validation now rejects native root/prefix components plus portable Windows drive, rooted, UNC, and verbatim-prefix spellings before slash/dot normalization. Build and stored-decode regressions cover drive-absolute, drive-relative, UNC, verbatim, and POSIX-absolute paths, and accepted encoded rows are asserted not to retain a workspace prefix.
 
 ## Verification
 
-- `cargo test -p polint --lib analysis_kernel::store::migrations::tests --locked`
-  — 19 passed, 0 failed, 0 ignored.
-- `cargo test -p polint --lib analysis_kernel::store::tests --locked`
-  — 29 passed, 0 failed, 0 ignored.
-- `cargo test -p polint --lib analysis_kernel::tests::semantic_store_check_parity --locked`
-  — 1 passed, 0 failed, 0 ignored; JSON bytes and exit semantics remain
-  identical across store modes.
-- `cargo fmt --all -- --check` — passed.
-- `cargo clippy -p polint --lib --tests --all-features --locked -- -D warnings`
-  — passed.
-- All four repair commits passed the normal Conductor pre-commit hook,
-  including
-  `make lint` and workspace-wide all-target/all-feature strict clippy.
-- `git diff --check` — passed.
+- Run-manifest codec tests: 8 passed.
+- Semantic-store tests: 37 passed.
+- Store migration tests: 21 passed.
+- Public-surface leak tests: 7 passed.
+- `make lint`: passed.
+- `git diff --check 81baf177..HEAD`: passed.
 
-## Scope and Completion
+## Skipped Issues
 
-No finding was skipped. This fixes the reviewed R1 implementation only. Phase
-65, STORE-04, STORE-05, META-01, and META-04 remain open, and the deferred
-sub-five-minute CI follow-up is unchanged.
+None.
+
+---
+
+_Fixed: 2026-07-28T22:09:12Z_
+_Fixer: the agent (gsd-code-fixer)_
+_Iteration: 1_
