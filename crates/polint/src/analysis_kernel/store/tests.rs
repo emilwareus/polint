@@ -35,6 +35,123 @@ fn semantic_store_is_zero_sized_facade() {
     assert_eq!(std::mem::size_of::<SemanticStore>(), 0);
 }
 
+mod run_manifest_storage {
+    use super::*;
+    use crate::analysis_kernel::incremental::{
+        Digest, DigestKind, FileSnapshot, RunManifest, RunManifestInputs,
+    };
+    use crate::core::Language;
+
+    fn config(temp: &tempfile::TempDir) -> StoreConfig {
+        StoreConfig::new(temp.path().join("cache/semantic-store/store.sqlite3"), true)
+    }
+
+    fn source(path: &str) -> FileSnapshot {
+        FileSnapshot {
+            relative_path: path.to_string(),
+            language: Language::TypeScript,
+            source_text_digest: Digest::from_parts(DigestKind::SourceText, "storage-test", &[path]),
+            size_bytes: 12,
+            mtime_hint_present: false,
+        }
+    }
+
+    fn manifest(root: &Path, files: &[FileSnapshot]) -> RunManifest {
+        let config_hash = Digest::from_parts(DigestKind::Config, "storage-test", &["config"]);
+        RunManifest::from_inputs(RunManifestInputs::new(root, &config_hash.value, files))
+            .expect("construct run manifest")
+    }
+
+    fn publish(
+        temp: &tempfile::TempDir,
+        files: &[FileSnapshot],
+    ) -> (StoreConfig, GenerationHandle, RunManifest) {
+        let store_config = config(temp);
+        assert_eq!(SemanticStore::maintain(&store_config), StoreStatus::Ready);
+        let expected = manifest(temp.path(), files);
+        let mut writer = connection::open_writer(store_config.path()).expect("open writer");
+        let handle = generation::reserve(&mut writer).expect("reserve generation");
+        let decoded = generation::publish_manifest_storage_for_test(&mut writer, handle, &expected)
+            .expect("publish manifest storage");
+        assert!(decoded.exact_match(&expected));
+        (store_config, handle, expected)
+    }
+
+    #[test]
+    fn exact_manifest_storage_round_trips_empty_and_populated_sources() {
+        for files in [Vec::new(), vec![source("src/app.ts")]] {
+            let temp = tempfile::tempdir().expect("temp directory");
+            let (store_config, handle, expected) = publish(&temp, &files);
+            let reader =
+                connection::open_read_only(store_config.path()).expect("open read-only store");
+            let decoded =
+                generation::read_manifest_for_test(&reader, handle).expect("read manifest");
+
+            assert!(decoded.exact_match(&expected));
+        }
+    }
+
+    #[test]
+    fn storage_preflight_rejects_wrong_types_counts_lengths_and_aggregate_bytes() {
+        enum Tamper {
+            StorageClass,
+            Count,
+            ScalarLength,
+            Aggregate,
+        }
+        for tamper in [
+            Tamper::StorageClass,
+            Tamper::Count,
+            Tamper::ScalarLength,
+            Tamper::Aggregate,
+        ] {
+            let temp = tempfile::tempdir().expect("temp directory");
+            let (store_config, handle, _) = publish(&temp, &[source("src/app.ts")]);
+            let connection =
+                rusqlite::Connection::open(store_config.path()).expect("open tamper connection");
+            connection
+                .pragma_update(None, "ignore_check_constraints", true)
+                .expect("allow malformed fixture");
+            match tamper {
+                Tamper::StorageClass => {
+                    connection
+                        .execute(
+                            "UPDATE run_manifest_sources SET size_bytes = 'not-an-integer'",
+                            [],
+                        )
+                        .expect("tamper storage class");
+                }
+                Tamper::Count => {
+                    connection
+                        .execute("UPDATE run_manifests SET source_count = 1000001", [])
+                        .expect("tamper count");
+                }
+                Tamper::ScalarLength => {
+                    connection
+                        .execute(
+                            "UPDATE run_manifests SET workspace_value = ?1",
+                            ["f".repeat(17)],
+                        )
+                        .expect("tamper scalar length");
+                }
+                Tamper::Aggregate => {
+                    connection
+                        .execute(
+                            "UPDATE run_manifest_sources SET relative_path = ?1",
+                            [format!("src/{}.ts", "a".repeat(220))],
+                        )
+                        .expect("tamper aggregate bytes");
+                }
+            }
+
+            assert_eq!(
+                generation::read_manifest(&connection, handle).map(|_| ()),
+                Err(GenerationError::InvalidManifest)
+            );
+        }
+    }
+}
+
 mod generation_lifecycle {
     use super::*;
 

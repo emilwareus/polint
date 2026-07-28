@@ -5,11 +5,13 @@ use rusqlite::TransactionBehavior;
 use rusqlite::{Connection, ErrorCode, Transaction};
 use thiserror::Error;
 
-pub(super) const CURRENT_SCHEMA_VERSION: i32 = 2;
+pub(super) const CURRENT_SCHEMA_VERSION: i32 = 3;
 
 const BOOTSTRAP_TABLE: &str = "_polint_schema_migrations";
 const GENERATIONS_TABLE: &str = "generations";
 const ACTIVE_GENERATION_TABLE: &str = "active_generation";
+const RUN_MANIFESTS_TABLE: &str = "run_manifests";
+const RUN_MANIFEST_SOURCES_TABLE: &str = "run_manifest_sources";
 
 const BOOTSTRAP_TABLE_SQL: &str = "CREATE TABLE _polint_schema_migrations (\
     version INTEGER PRIMARY KEY CHECK (version > 0)\
@@ -26,6 +28,26 @@ const ACTIVE_GENERATION_TABLE_SQL: &str = "CREATE TABLE active_generation (\
     FOREIGN KEY (generation_id, required_status)\
         REFERENCES generations (generation_id, status)\
 )";
+const RUN_MANIFESTS_TABLE_SQL: &str = "CREATE TABLE run_manifests (\
+    generation_id INTEGER PRIMARY KEY REFERENCES generations (generation_id),\
+    manifest_schema TEXT NOT NULL CHECK (manifest_schema = 'polint-run-manifest-1'),\
+    workspace_purpose TEXT NOT NULL CHECK (workspace_purpose = 'canonical-workspace-root-v1'),\
+    workspace_value TEXT NOT NULL CHECK (length(workspace_value) = 16),\
+    config_purpose TEXT NOT NULL CHECK (config_purpose = 'complete-polint-config-v1'),\
+    config_value TEXT NOT NULL CHECK (length(config_value) = 16),\
+    source_count INTEGER NOT NULL CHECK (source_count BETWEEN 0 AND 1000000),\
+    run_purpose TEXT NOT NULL CHECK (run_purpose = 'run-manifest-fields-v1'),\
+    run_value TEXT NOT NULL CHECK (length(run_value) = 16)\
+)";
+const RUN_MANIFEST_SOURCES_TABLE_SQL: &str = "CREATE TABLE run_manifest_sources (\
+    generation_id INTEGER NOT NULL REFERENCES run_manifests (generation_id),\
+    relative_path TEXT NOT NULL CHECK (length(relative_path) BETWEEN 1 AND 4096),\
+    language TEXT NOT NULL CHECK (language IN ('go', 'typescript', 'tsx', 'javascript', 'jsx')),\
+    source_purpose TEXT NOT NULL CHECK (source_purpose = 'source-text-v1'),\
+    source_value TEXT NOT NULL CHECK (length(source_value) = 16),\
+    size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),\
+    PRIMARY KEY (generation_id, relative_path)\
+)";
 
 const MIGRATION_ONE_STATEMENTS: &[&str] = &[
     BOOTSTRAP_TABLE_SQL,
@@ -36,6 +58,11 @@ const MIGRATION_TWO_STATEMENTS: &[&str] = &[
     ACTIVE_GENERATION_TABLE_SQL,
     "UPDATE _polint_schema_migrations SET version = 2 WHERE version = 1",
 ];
+const MIGRATION_THREE_STATEMENTS: &[&str] = &[
+    RUN_MANIFESTS_TABLE_SQL,
+    RUN_MANIFEST_SOURCES_TABLE_SQL,
+    "UPDATE _polint_schema_migrations SET version = 3 WHERE version = 2",
+];
 const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -44,6 +71,10 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 2,
         statements: MIGRATION_TWO_STATEMENTS,
+    },
+    Migration {
+        version: 3,
+        statements: MIGRATION_THREE_STATEMENTS,
     },
 ];
 
@@ -150,8 +181,17 @@ fn validate_supported_schema(connection: &Connection, version: i32) -> Result<()
             validate_owned_names_absent(
                 connection,
                 version,
-                &[GENERATIONS_TABLE, ACTIVE_GENERATION_TABLE],
+                &[
+                    GENERATIONS_TABLE,
+                    ACTIVE_GENERATION_TABLE,
+                    RUN_MANIFESTS_TABLE,
+                    RUN_MANIFEST_SOURCES_TABLE,
+                ],
             )
+        }
+        2 => {
+            validate_version_two_schema(connection)?;
+            validate_empty_version_two(connection)
         }
         CURRENT_SCHEMA_VERSION => validate_current_schema(connection),
         _ => Err(MigrationError::InvalidSchema { version }),
@@ -166,6 +206,11 @@ fn validate_empty_owned_schema(
         connection,
         version,
         &[BOOTSTRAP_TABLE, GENERATIONS_TABLE, ACTIVE_GENERATION_TABLE],
+    )?;
+    validate_owned_names_absent(
+        connection,
+        version,
+        &[RUN_MANIFESTS_TABLE, RUN_MANIFEST_SOURCES_TABLE],
     )
 }
 
@@ -195,6 +240,47 @@ pub(super) fn validate_current_schema(connection: &Connection) -> Result<(), Mig
         return Err(MigrationError::InvalidSchema { version });
     }
     validate_bootstrap_schema(connection, version, CURRENT_SCHEMA_VERSION)?;
+    validate_lifecycle_schema(connection, version)?;
+    validate_table_sql(
+        connection,
+        version,
+        RUN_MANIFESTS_TABLE,
+        RUN_MANIFESTS_TABLE_SQL,
+    )?;
+    validate_table_sql(
+        connection,
+        version,
+        RUN_MANIFEST_SOURCES_TABLE,
+        RUN_MANIFEST_SOURCES_TABLE_SQL,
+    )?;
+    validate_no_indexes(connection, version, RUN_MANIFESTS_TABLE)?;
+    validate_manifest_sources_index(connection, version)?;
+    validate_no_triggers(
+        connection,
+        version,
+        &[RUN_MANIFESTS_TABLE, RUN_MANIFEST_SOURCES_TABLE],
+    )?;
+    validate_manifest_foreign_keys(connection, version)?;
+    validate_manifest_rows(connection, version)?;
+    validate_foreign_keys(connection, version)
+}
+
+fn validate_version_two_schema(connection: &Connection) -> Result<(), MigrationError> {
+    let version = schema_version(connection)?;
+    if version != 2 {
+        return Err(MigrationError::InvalidSchema { version });
+    }
+    validate_bootstrap_schema(connection, version, 2)?;
+    validate_lifecycle_schema(connection, version)?;
+    validate_owned_names_absent(
+        connection,
+        version,
+        &[RUN_MANIFESTS_TABLE, RUN_MANIFEST_SOURCES_TABLE],
+    )?;
+    validate_foreign_keys(connection, version)
+}
+
+fn validate_lifecycle_schema(connection: &Connection, version: i32) -> Result<(), MigrationError> {
     validate_table_sql(
         connection,
         version,
@@ -215,8 +301,23 @@ pub(super) fn validate_current_schema(connection: &Connection) -> Result<(), Mig
         &[GENERATIONS_TABLE, ACTIVE_GENERATION_TABLE],
     )?;
     validate_active_foreign_key(connection, version)?;
-    validate_lifecycle_rows(connection, version)?;
-    validate_foreign_keys(connection, version)
+    validate_lifecycle_rows(connection, version)
+}
+
+fn validate_empty_version_two(connection: &Connection) -> Result<(), MigrationError> {
+    let populated: i64 = connection
+        .query_row(
+            "SELECT (SELECT count(*) FROM generations) + \
+                    (SELECT count(*) FROM active_generation)",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| classify_invariant_error(error, 2))?;
+    if populated == 0 {
+        Ok(())
+    } else {
+        Err(MigrationError::InvalidSchema { version: 2 })
+    }
 }
 
 fn validate_bootstrap_schema(
@@ -433,6 +534,130 @@ fn validate_active_foreign_key(
     Ok(())
 }
 
+fn validate_manifest_sources_index(
+    connection: &Connection,
+    version: i32,
+) -> Result<(), MigrationError> {
+    let mut statement = connection
+        .prepare("PRAGMA index_list('run_manifest_sources')")
+        .map_err(|error| classify_invariant_error(error, version))?;
+    let indexes = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+            ))
+        })
+        .map_err(|error| classify_invariant_error(error, version))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| classify_invariant_error(error, version))?;
+    let [(index_name, 1, origin, 0)] = indexes.as_slice() else {
+        return Err(MigrationError::InvalidSchema { version });
+    };
+    if origin != "pk" {
+        return Err(MigrationError::InvalidSchema { version });
+    }
+    let mut index_statement = connection
+        .prepare(&format!("PRAGMA index_info('{index_name}')"))
+        .map_err(|error| classify_invariant_error(error, version))?;
+    let columns = index_statement
+        .query_map([], |row| row.get::<_, String>(2))
+        .map_err(|error| classify_invariant_error(error, version))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| classify_invariant_error(error, version))?;
+    if columns == ["generation_id", "relative_path"] {
+        Ok(())
+    } else {
+        Err(MigrationError::InvalidSchema { version })
+    }
+}
+
+fn validate_manifest_foreign_keys(
+    connection: &Connection,
+    version: i32,
+) -> Result<(), MigrationError> {
+    let header = foreign_key_rows(connection, version, RUN_MANIFESTS_TABLE)?;
+    let sources = foreign_key_rows(connection, version, RUN_MANIFEST_SOURCES_TABLE)?;
+    let expected_header = [(
+        "generations".to_owned(),
+        "generation_id".to_owned(),
+        "generation_id".to_owned(),
+    )];
+    let expected_sources = [(
+        "run_manifests".to_owned(),
+        "generation_id".to_owned(),
+        "generation_id".to_owned(),
+    )];
+    if header == expected_header && sources == expected_sources {
+        Ok(())
+    } else {
+        Err(MigrationError::InvalidSchema { version })
+    }
+}
+
+fn foreign_key_rows(
+    connection: &Connection,
+    version: i32,
+    table: &str,
+) -> Result<Vec<(String, String, String)>, MigrationError> {
+    let mut statement = connection
+        .prepare(&format!("PRAGMA foreign_key_list('{table}')"))
+        .map_err(|error| classify_invariant_error(error, version))?;
+    statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })
+        .map_err(|error| classify_invariant_error(error, version))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| classify_invariant_error(error, version))
+}
+
+fn validate_manifest_rows(connection: &Connection, version: i32) -> Result<(), MigrationError> {
+    let invalid_ownership: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM generations AS generation \
+             LEFT JOIN run_manifests AS manifest \
+               ON manifest.generation_id = generation.generation_id \
+             WHERE (generation.status = 'pending' AND manifest.generation_id IS NOT NULL) \
+                OR (generation.status = 'complete' AND manifest.generation_id IS NULL)",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| classify_invariant_error(error, version))?;
+    let invalid_counts: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM run_manifests AS manifest \
+             WHERE manifest.source_count != (\
+                 SELECT count(*) FROM run_manifest_sources AS source \
+                 WHERE source.generation_id = manifest.generation_id\
+             )",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| classify_invariant_error(error, version))?;
+    let invalid_active: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM active_generation AS active \
+             LEFT JOIN run_manifests AS manifest \
+               ON manifest.generation_id = active.generation_id \
+             WHERE manifest.generation_id IS NULL",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| classify_invariant_error(error, version))?;
+    if invalid_ownership == 0 && invalid_counts == 0 && invalid_active == 0 {
+        Ok(())
+    } else {
+        Err(MigrationError::InvalidSchema { version })
+    }
+}
+
 fn validate_lifecycle_rows(connection: &Connection, version: i32) -> Result<(), MigrationError> {
     let invalid_generation_count: i64 = connection
         .query_row(
@@ -520,6 +745,43 @@ mod tests {
         install_version_one_fixture_for_test(connection).expect("create exact version-one fixture");
     }
 
+    fn install_version_two_fixture(connection: &Connection, populated: bool, selected: bool) {
+        connection
+            .execute_batch(BOOTSTRAP_TABLE_SQL)
+            .expect("create bootstrap table");
+        connection
+            .execute(
+                "INSERT INTO _polint_schema_migrations (version) VALUES (2)",
+                [],
+            )
+            .expect("insert version-two marker");
+        connection
+            .execute_batch(GENERATIONS_TABLE_SQL)
+            .expect("create generations table");
+        connection
+            .execute_batch(ACTIVE_GENERATION_TABLE_SQL)
+            .expect("create active-generation table");
+        if populated {
+            connection
+                .execute(
+                    "INSERT INTO generations (generation_id, status) VALUES (1, 'complete')",
+                    [],
+                )
+                .expect("populate version-two generation");
+        }
+        if selected {
+            connection
+                .execute_batch(
+                    "INSERT INTO active_generation \
+                       (singleton, generation_id, required_status) VALUES (1, 1, 'complete');",
+                )
+                .expect("populate selected version-two generation");
+        }
+        connection
+            .pragma_update(None, "user_version", 2)
+            .expect("set version two");
+    }
+
     fn install_claimed_current_schema(
         connection: &Connection,
         generations_sql: &str,
@@ -540,6 +802,12 @@ mod tests {
         connection
             .execute_batch(active_generation_sql)
             .expect("create active-generation table");
+        connection
+            .execute_batch(RUN_MANIFESTS_TABLE_SQL)
+            .expect("create run-manifest table");
+        connection
+            .execute_batch(RUN_MANIFEST_SOURCES_TABLE_SQL)
+            .expect("create run-manifest source table");
         connection
             .pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)
             .expect("set current version");
@@ -572,6 +840,13 @@ mod tests {
     }
 
     type SchemaObject = (String, String, String, Option<String>);
+    type VersionTwoSnapshot = (
+        String,
+        (i32, Vec<SchemaObject>),
+        i32,
+        Vec<(i64, String)>,
+        Vec<i64>,
+    );
 
     fn schema_catalog_snapshot(connection: &Connection) -> (i32, Vec<SchemaObject>) {
         let version = schema_version(connection).expect("schema version");
@@ -591,6 +866,38 @@ mod tests {
         (version, objects)
     }
 
+    fn version_two_snapshot(connection: &Connection) -> VersionTwoSnapshot {
+        let journal_mode = connection
+            .pragma_query_value(None, "journal_mode", |row| row.get(0))
+            .expect("journal mode");
+        let marker = connection
+            .query_row("SELECT version FROM _polint_schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .expect("version-two marker");
+        let generations = connection
+            .prepare("SELECT generation_id, status FROM generations ORDER BY generation_id")
+            .expect("prepare generations")
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .expect("query generations")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect generations");
+        let selected = connection
+            .prepare("SELECT generation_id FROM active_generation ORDER BY singleton")
+            .expect("prepare selection")
+            .query_map([], |row| row.get(0))
+            .expect("query selection")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect selection");
+        (
+            journal_mode,
+            schema_catalog_snapshot(connection),
+            marker,
+            generations,
+            selected,
+        )
+    }
+
     #[test]
     fn migration_list_contains_only_bootstrap_and_generation_lifecycle() {
         let versions = MIGRATIONS
@@ -598,7 +905,7 @@ mod tests {
             .map(|migration| migration.version)
             .collect::<Vec<_>>();
 
-        assert_eq!(versions, [1, 2]);
+        assert_eq!(versions, [1, 2, 3]);
     }
 
     #[test]
@@ -662,6 +969,51 @@ mod tests {
             .expect("sentinel row");
         assert_eq!(value, "preserve-me");
         validate_current_schema(&connection).expect("migrated schema authenticates");
+    }
+
+    #[test]
+    fn empty_exact_version_two_migrates_to_version_three() {
+        let (_temp, mut connection) = open_temp_database();
+        install_version_two_fixture(&connection, false, false);
+
+        let status = apply_migrations(&mut connection).expect("empty version two migrates");
+
+        assert_eq!(
+            status,
+            MigrationStatus::Migrated {
+                from: 2,
+                to: CURRENT_SCHEMA_VERSION
+            }
+        );
+        validate_current_schema(&connection).expect("version three authenticates");
+    }
+
+    #[test]
+    fn populated_version_two_refuses_before_policy_and_transactional_mutation() {
+        for selected in [false, true] {
+            let temp = TempDir::new().expect("temp directory");
+            let path = database_path(&temp);
+            let connection = Connection::open(&path).expect("open version-two database");
+            connection
+                .pragma_update(None, "journal_mode", "delete")
+                .expect("set rollback journal");
+            install_version_two_fixture(&connection, true, selected);
+            let before = version_two_snapshot(&connection);
+            drop(connection);
+
+            assert_eq!(
+                super::super::connection::open_writer(&path).map(|_| ()),
+                Err(super::super::connection::ConnectionError::InvalidSchema)
+            );
+            let mut connection = Connection::open(&path).expect("reopen refused database");
+            assert_eq!(version_two_snapshot(&connection), before);
+
+            assert!(matches!(
+                apply_migrations(&mut connection),
+                Err(MigrationError::InvalidSchema { version: 2 })
+            ));
+            assert_eq!(version_two_snapshot(&connection), before);
+        }
     }
 
     #[test]
@@ -824,8 +1176,8 @@ mod tests {
         connection
             .execute_batch(
                 "CREATE TABLE _polint_schema_migrations (wrong_column INTEGER);\
-                 INSERT INTO _polint_schema_migrations (wrong_column) VALUES (2);\
-                 PRAGMA user_version = 2;",
+                 INSERT INTO _polint_schema_migrations (wrong_column) VALUES (3);\
+                 PRAGMA user_version = 3;",
             )
             .expect("create wrong-shape fixture");
 
@@ -847,8 +1199,8 @@ mod tests {
                 "CREATE TABLE _polint_schema_migrations (\
                      version INTEGER PRIMARY KEY CHECK (version > 0)\
                  );\
-                 INSERT INTO _polint_schema_migrations (version) VALUES (1), (2);\
-                 PRAGMA user_version = 2;",
+                 INSERT INTO _polint_schema_migrations (version) VALUES (1), (3);\
+                 PRAGMA user_version = 3;",
             )
             .expect("create extra-marker fixture");
 
@@ -1055,11 +1407,11 @@ mod tests {
     fn migration_error_display_is_actionable() {
         assert_eq!(
             MigrationError::FutureSchema {
-                found: 3,
+                found: 4,
                 supported: CURRENT_SCHEMA_VERSION,
             }
             .to_string(),
-            "semantic store schema version 3 is newer than supported version 2"
+            "semantic store schema version 4 is newer than supported version 3"
         );
     }
 

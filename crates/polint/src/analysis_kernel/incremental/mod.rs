@@ -11,7 +11,7 @@ mod quarantine;
     not(test),
     expect(
         dead_code,
-        reason = "Run manifests remain unwired from normal analysis."
+        reason = "Run manifests are consumed only when semantic-store publication is enabled."
     )
 )]
 mod run_manifest;
@@ -156,8 +156,7 @@ pub(crate) use quarantine::{QuarantineEntry, QuarantinePolicy, QuarantineStore};
     )
 )]
 pub(crate) use run_manifest::{
-    EncodedRunManifest, EncodedRunManifestSource, RUN_MANIFEST_SCHEMA, RunManifest,
-    RunManifestError, RunManifestInputs,
+    EncodedRunManifest, EncodedRunManifestSource, RunManifest, RunManifestError, RunManifestInputs,
 };
 pub(crate) use run_report::{
     KernelRunReport, provider_output_digest_from_manifest, provider_output_from_manifest,

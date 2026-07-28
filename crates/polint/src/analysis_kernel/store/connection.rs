@@ -130,11 +130,27 @@ where
     Ok(result)
 }
 
-pub(super) fn with_read_connection<T, E>(
+pub(super) fn with_read_transaction<T, E>(
     reader: &ReadOnlyConnection,
-    operation: impl FnOnce(&Connection) -> Result<T, E>,
-) -> Result<T, E> {
-    operation(&reader.connection)
+    operation: impl FnOnce(&Transaction<'_>) -> Result<T, E>,
+) -> Result<T, E>
+where
+    E: From<ConnectionError>,
+{
+    let transaction = reader
+        .connection
+        .unchecked_transaction()
+        .map_err(classify_sqlite_error)
+        .map_err(E::from)?;
+    validate_current_schema(&transaction)
+        .map_err(classify_migration_error)
+        .map_err(E::from)?;
+    let result = operation(&transaction)?;
+    transaction
+        .commit()
+        .map_err(classify_sqlite_error)
+        .map_err(E::from)?;
+    Ok(result)
 }
 
 pub(super) fn try_writer_lease(
