@@ -40,8 +40,16 @@ pub(crate) enum GenerationError {
     InvalidTransition,
     InvalidSelection,
     InvalidManifest,
+    WorkspaceOwnershipMismatch,
     #[cfg(test)]
     InjectedFailure(PublicationFailurePoint),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ManifestMatch {
+    NoActiveManifest,
+    Exact(GenerationHandle),
+    Mismatch,
 }
 
 #[cfg(test)]
@@ -65,8 +73,14 @@ impl GenerationStatus {
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PublicationFailurePoint {
-    BeforeUpdate,
-    AfterUpdate,
+    BeforeHeaderWrite,
+    AfterHeaderWrite,
+    BeforeSourceWrite,
+    AfterSourceWrite,
+    BeforeStoredRead,
+    AfterStoredRead,
+    BeforeCompletion,
+    AfterCompletion,
     BeforeSelection,
     AfterSelection,
     BeforeCommit,
@@ -74,9 +88,15 @@ pub(crate) enum PublicationFailurePoint {
 
 #[cfg(test)]
 impl PublicationFailurePoint {
-    pub(crate) const ALL: [Self; 5] = [
-        Self::BeforeUpdate,
-        Self::AfterUpdate,
+    pub(crate) const ALL: [Self; 11] = [
+        Self::BeforeHeaderWrite,
+        Self::AfterHeaderWrite,
+        Self::BeforeSourceWrite,
+        Self::AfterSourceWrite,
+        Self::BeforeStoredRead,
+        Self::AfterStoredRead,
+        Self::BeforeCompletion,
+        Self::AfterCompletion,
         Self::BeforeSelection,
         Self::AfterSelection,
         Self::BeforeCommit,
@@ -92,6 +112,14 @@ impl From<connection::ConnectionError> for GenerationError {
 impl From<RunManifestError> for GenerationError {
     fn from(_: RunManifestError) -> Self {
         Self::InvalidManifest
+    }
+}
+
+fn map_manifest_write_error(error: rusqlite::Error) -> GenerationError {
+    if error.sqlite_error_code() == Some(rusqlite::ErrorCode::ConstraintViolation) {
+        GenerationError::InvalidManifest
+    } else {
+        connection::classify_sqlite_error(error).into()
     }
 }
 
@@ -114,26 +142,56 @@ pub(super) fn reserve(writer: &mut WriterConnection) -> Result<GenerationHandle,
 pub(super) fn publish(
     writer: &mut WriterConnection,
     handle: GenerationHandle,
+    manifest: &RunManifest,
 ) -> Result<GenerationHandle, GenerationError> {
     #[cfg(test)]
     {
-        publish_transaction(writer, handle, None)
+        publish_transaction(writer, handle, manifest, None)
     }
     #[cfg(not(test))]
     {
-        publish_transaction(writer, handle)
+        publish_transaction(writer, handle, manifest)
     }
 }
 
 fn publish_transaction(
     writer: &mut WriterConnection,
     handle: GenerationHandle,
+    manifest: &RunManifest,
     #[cfg(test)] failure_point: Option<PublicationFailurePoint>,
 ) -> Result<GenerationHandle, GenerationError> {
     connection::with_immediate_transaction(writer, |transaction| {
-        #[cfg(test)]
-        fail_at(failure_point, PublicationFailurePoint::BeforeUpdate)?;
+        if active_manifest_in_connection(transaction)?
+            .is_some_and(|(_, active)| active.workspace_identity() != manifest.workspace_identity())
+        {
+            return Err(GenerationError::WorkspaceOwnershipMismatch);
+        }
+        validate_pending_candidate(transaction, handle)?;
+        let encoded = manifest.encode()?;
 
+        #[cfg(test)]
+        fail_at(failure_point, PublicationFailurePoint::BeforeHeaderWrite)?;
+        insert_manifest_header(transaction, handle, &encoded)?;
+        #[cfg(test)]
+        fail_at(failure_point, PublicationFailurePoint::AfterHeaderWrite)?;
+
+        #[cfg(test)]
+        fail_at(failure_point, PublicationFailurePoint::BeforeSourceWrite)?;
+        insert_manifest_sources(transaction, handle, &encoded.sources)?;
+        #[cfg(test)]
+        fail_at(failure_point, PublicationFailurePoint::AfterSourceWrite)?;
+
+        #[cfg(test)]
+        fail_at(failure_point, PublicationFailurePoint::BeforeStoredRead)?;
+        let decoded = read_manifest(transaction, handle)?;
+        if !decoded.exact_match(manifest) {
+            return Err(GenerationError::InvalidManifest);
+        }
+        #[cfg(test)]
+        fail_at(failure_point, PublicationFailurePoint::AfterStoredRead)?;
+
+        #[cfg(test)]
+        fail_at(failure_point, PublicationFailurePoint::BeforeCompletion)?;
         let changed = transaction
             .execute(
                 "UPDATE generations SET status = 'complete' \
@@ -145,9 +203,9 @@ fn publish_transaction(
             return Err(GenerationError::InvalidTransition);
         }
         #[cfg(test)]
-        fail_at(failure_point, PublicationFailurePoint::AfterUpdate)?;
+        fail_at(failure_point, PublicationFailurePoint::AfterCompletion)?;
 
-        require_complete(transaction, handle)?;
+        validate_complete_manifest(transaction, handle)?;
         #[cfg(test)]
         fail_at(failure_point, PublicationFailurePoint::BeforeSelection)?;
 
@@ -165,51 +223,77 @@ fn publish_transaction(
 pub(super) fn active(
     reader: &ReadOnlyConnection,
 ) -> Result<Option<GenerationHandle>, GenerationError> {
-    connection::with_read_transaction(reader, |connection| {
-        let selected = connection
-            .query_row(
-                "SELECT active.singleton, active.generation_id, active.required_status, \
-                        generation.generation_id, generation.status \
-                 FROM active_generation AS active \
-                 LEFT JOIN generations AS generation \
-                   ON generation.generation_id = active.generation_id \
-                  AND generation.status = active.required_status",
-                [],
-                |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, i64>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, Option<i64>>(3)?,
-                        row.get::<_, Option<String>>(4)?,
-                    ))
-                },
-            )
-            .optional()
-            .map_err(connection::classify_sqlite_error)?;
+    active_manifest(reader).map(|active| active.map(|(handle, _)| handle))
+}
 
-        let Some((singleton, scalar, required_status, joined_scalar, generation_status)) = selected
-        else {
-            return Ok(None);
-        };
-        if singleton != 1
-            || required_status != "complete"
-            || joined_scalar != Some(scalar)
-            || generation_status.as_deref() != Some("complete")
-        {
-            return Err(GenerationError::InvalidSelection);
+pub(super) fn match_active(
+    reader: &ReadOnlyConnection,
+    requested: &RunManifest,
+) -> Result<ManifestMatch, GenerationError> {
+    connection::with_read_transaction(reader, |connection| {
+        match active_manifest_in_connection(connection)? {
+            None => Ok(ManifestMatch::NoActiveManifest),
+            Some((handle, active)) if active.exact_match(requested) => {
+                Ok(ManifestMatch::Exact(handle))
+            }
+            Some(_) => Ok(ManifestMatch::Mismatch),
         }
-        GenerationHandle::from_scalar(scalar).map(Some)
     })
 }
 
-#[cfg_attr(not(test), expect(dead_code, reason = "Used by manifest publication."))]
-pub(super) fn write_manifest(
+fn active_manifest(
+    reader: &ReadOnlyConnection,
+) -> Result<Option<(GenerationHandle, RunManifest)>, GenerationError> {
+    connection::with_read_transaction(reader, |transaction| {
+        active_manifest_in_connection(transaction)
+    })
+}
+
+fn active_manifest_in_connection(
+    connection: &Connection,
+) -> Result<Option<(GenerationHandle, RunManifest)>, GenerationError> {
+    let selected = connection
+        .query_row(
+            "SELECT active.singleton, active.generation_id, active.required_status, \
+                    generation.generation_id, generation.status \
+             FROM active_generation AS active \
+             LEFT JOIN generations AS generation \
+               ON generation.generation_id = active.generation_id \
+              AND generation.status = active.required_status",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(connection::classify_sqlite_error)?;
+    let Some((singleton, scalar, required_status, joined_scalar, generation_status)) = selected
+    else {
+        return Ok(None);
+    };
+    if singleton != 1
+        || required_status != "complete"
+        || joined_scalar != Some(scalar)
+        || generation_status.as_deref() != Some("complete")
+    {
+        return Err(GenerationError::InvalidSelection);
+    }
+    let handle = GenerationHandle::from_scalar(scalar)?;
+    let manifest = read_manifest(connection, handle)?;
+    Ok(Some((handle, manifest)))
+}
+
+fn insert_manifest_header(
     transaction: &Transaction<'_>,
     handle: GenerationHandle,
-    manifest: &RunManifest,
+    encoded: &EncodedRunManifest,
 ) -> Result<(), GenerationError> {
-    let encoded = manifest.encode()?;
     let inserted = transaction
         .execute(
             "INSERT INTO run_manifests (\
@@ -218,21 +302,29 @@ pub(super) fn write_manifest(
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 handle.scalar(),
-                encoded.schema,
-                encoded.workspace_purpose,
-                encoded.workspace_value,
-                encoded.config_purpose,
-                encoded.config_value,
+                &encoded.schema,
+                &encoded.workspace_purpose,
+                &encoded.workspace_value,
+                &encoded.config_purpose,
+                &encoded.config_value,
                 encoded.source_count,
-                encoded.run_purpose,
-                encoded.run_value,
+                &encoded.run_purpose,
+                &encoded.run_value,
             ],
         )
-        .map_err(connection::classify_sqlite_error)?;
+        .map_err(map_manifest_write_error)?;
     if inserted != 1 {
         return Err(GenerationError::InvalidManifest);
     }
-    for source in encoded.sources {
+    Ok(())
+}
+
+fn insert_manifest_sources(
+    transaction: &Transaction<'_>,
+    handle: GenerationHandle,
+    sources: &[EncodedRunManifestSource],
+) -> Result<(), GenerationError> {
+    for source in sources {
         let inserted = transaction
             .execute(
                 "INSERT INTO run_manifest_sources (\
@@ -241,14 +333,14 @@ pub(super) fn write_manifest(
                  ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     handle.scalar(),
-                    source.relative_path,
-                    source.language,
-                    source.source_purpose,
-                    source.source_value,
+                    &source.relative_path,
+                    &source.language,
+                    &source.source_purpose,
+                    &source.source_value,
                     source.size_bytes,
                 ],
             )
-            .map_err(connection::classify_sqlite_error)?;
+            .map_err(map_manifest_write_error)?;
         if inserted != 1 {
             return Err(GenerationError::InvalidManifest);
         }
@@ -256,7 +348,6 @@ pub(super) fn write_manifest(
     Ok(())
 }
 
-#[cfg_attr(not(test), expect(dead_code, reason = "Used by manifest publication."))]
 pub(super) fn read_manifest(
     connection: &Connection,
     handle: GenerationHandle,
@@ -401,6 +492,55 @@ fn require_complete(
     Ok(())
 }
 
+fn validate_pending_candidate(
+    transaction: &Transaction<'_>,
+    handle: GenerationHandle,
+) -> Result<(), GenerationError> {
+    let candidate = transaction
+        .query_row(
+            "SELECT generation.status, count(manifest.generation_id) \
+             FROM generations AS generation \
+             LEFT JOIN run_manifests AS manifest \
+               ON manifest.generation_id = generation.generation_id \
+             WHERE generation.generation_id = ?1 \
+             GROUP BY generation.generation_id, generation.status",
+            [handle.scalar()],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()
+        .map_err(connection::classify_sqlite_error)?;
+    if candidate != Some(("pending".to_owned(), 0)) {
+        return Err(GenerationError::InvalidTransition);
+    }
+    Ok(())
+}
+
+fn validate_complete_manifest(
+    transaction: &Transaction<'_>,
+    handle: GenerationHandle,
+) -> Result<(), GenerationError> {
+    require_complete(transaction, handle)?;
+    let authentic: bool = transaction
+        .query_row(
+            "SELECT count(*) = 1 FROM generations AS generation \
+             JOIN run_manifests AS manifest \
+               ON manifest.generation_id = generation.generation_id \
+             WHERE generation.generation_id = ?1 \
+               AND generation.status = 'complete' \
+               AND manifest.source_count = (\
+                   SELECT count(*) FROM run_manifest_sources AS source \
+                   WHERE source.generation_id = manifest.generation_id\
+               )",
+            [handle.scalar()],
+            |row| row.get(0),
+        )
+        .map_err(connection::classify_sqlite_error)?;
+    if !authentic {
+        return Err(GenerationError::InvalidManifest);
+    }
+    Ok(())
+}
+
 fn validate_reservation(
     transaction: &Transaction<'_>,
     handle: GenerationHandle,
@@ -451,10 +591,16 @@ fn validate_selection(
              JOIN generations AS generation \
                ON generation.generation_id = active.generation_id \
               AND generation.status = active.required_status \
+             JOIN run_manifests AS manifest \
+               ON manifest.generation_id = generation.generation_id \
              WHERE active.singleton = 1 \
                AND active.generation_id = ?1 \
                AND active.required_status = 'complete' \
-               AND generation.status = 'complete'",
+               AND generation.status = 'complete' \
+               AND manifest.source_count = (\
+                   SELECT count(*) FROM run_manifest_sources AS source \
+                   WHERE source.generation_id = manifest.generation_id\
+               )",
             [handle.scalar()],
             |row| row.get(0),
         )
@@ -481,9 +627,10 @@ fn fail_at(
 pub(super) fn publish_with_failure_for_test(
     writer: &mut WriterConnection,
     handle: GenerationHandle,
+    manifest: &RunManifest,
     failure_point: PublicationFailurePoint,
 ) -> Result<GenerationHandle, GenerationError> {
-    publish_transaction(writer, handle, Some(failure_point))
+    publish_transaction(writer, handle, manifest, Some(failure_point))
 }
 
 #[cfg(test)]
@@ -513,35 +660,6 @@ pub(super) fn select_without_validation_for_test(
             )
             .map_err(connection::classify_sqlite_error)?;
         Ok(())
-    })
-}
-
-#[cfg(test)]
-pub(super) fn publish_manifest_storage_for_test(
-    writer: &mut WriterConnection,
-    handle: GenerationHandle,
-    manifest: &RunManifest,
-) -> Result<RunManifest, GenerationError> {
-    connection::with_immediate_transaction(writer, |transaction| {
-        write_manifest(transaction, handle, manifest)?;
-        let decoded = read_manifest(transaction, handle)?;
-        if !decoded.exact_match(manifest) {
-            return Err(GenerationError::InvalidManifest);
-        }
-        let changed = transaction
-            .execute(
-                "UPDATE generations SET status = 'complete' \
-                 WHERE generation_id = ?1 AND status = 'pending'",
-                [handle.scalar()],
-            )
-            .map_err(connection::classify_sqlite_error)?;
-        if changed != 1 {
-            return Err(GenerationError::InvalidTransition);
-        }
-        require_complete(transaction, handle)?;
-        replace_selection(transaction, handle)?;
-        validate_selection(transaction, handle)?;
-        Ok(decoded)
     })
 }
 

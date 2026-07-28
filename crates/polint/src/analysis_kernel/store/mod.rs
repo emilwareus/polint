@@ -6,11 +6,13 @@
 
 use std::path::{Path, PathBuf};
 
+use super::incremental::{RunManifest, RunManifestInputs};
+
 mod connection;
 mod generation;
 mod migrations;
 
-pub(crate) use generation::{GenerationError, GenerationHandle};
+pub(crate) use generation::{GenerationError, GenerationHandle, ManifestMatch};
 #[cfg(test)]
 pub(crate) use generation::{GenerationStatus, PublicationFailurePoint};
 
@@ -137,10 +139,13 @@ impl SemanticStore {
     pub(crate) fn publish_generation(
         config: &StoreConfig,
         handle: GenerationHandle,
+        inputs: RunManifestInputs<'_>,
     ) -> Result<GenerationHandle, GenerationError> {
-        prepare_generation_store(config)?;
+        require_enabled(config)?;
+        let manifest = RunManifest::from_inputs(inputs)?;
+        prepare_store_path(config.path()).map_err(GenerationError::Store)?;
         let mut writer = connection::open_writer(config.path()).map_err(GenerationError::from)?;
-        generation::publish(&mut writer, handle)
+        generation::publish(&mut writer, handle, &manifest)
     }
 
     #[cfg_attr(
@@ -159,23 +164,51 @@ impl SemanticStore {
         generation::active(&reader)
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the private match seam is reserved for semantic metadata reuse"
+        )
+    )]
+    pub(crate) fn match_active_manifest(
+        config: &StoreConfig,
+        inputs: RunManifestInputs<'_>,
+    ) -> Result<ManifestMatch, GenerationError> {
+        require_enabled(config)?;
+        let manifest = RunManifest::from_inputs(inputs)?;
+        prepare_store_path(config.path()).map_err(GenerationError::Store)?;
+        let reader =
+            connection::open_current_read_only(config.path()).map_err(GenerationError::from)?;
+        generation::match_active(&reader, &manifest)
+    }
+
     #[cfg(test)]
     pub(crate) fn publish_generation_with_failure_for_test(
         config: &StoreConfig,
         handle: GenerationHandle,
+        inputs: RunManifestInputs<'_>,
         failure_point: PublicationFailurePoint,
     ) -> Result<GenerationHandle, GenerationError> {
-        prepare_generation_store(config)?;
+        require_enabled(config)?;
+        let manifest = RunManifest::from_inputs(inputs)?;
+        prepare_store_path(config.path()).map_err(GenerationError::Store)?;
         let mut writer = connection::open_writer(config.path()).map_err(GenerationError::from)?;
-        generation::publish_with_failure_for_test(&mut writer, handle, failure_point)
+        generation::publish_with_failure_for_test(&mut writer, handle, &manifest, failure_point)
     }
 }
 
 fn prepare_generation_store(config: &StoreConfig) -> Result<(), GenerationError> {
-    if !config.is_enabled() {
-        return Err(GenerationError::Store(StoreStatus::Disabled));
-    }
+    require_enabled(config)?;
     prepare_store_path(config.path()).map_err(GenerationError::Store)
+}
+
+fn require_enabled(config: &StoreConfig) -> Result<(), GenerationError> {
+    if config.is_enabled() {
+        Ok(())
+    } else {
+        Err(GenerationError::Store(StoreStatus::Disabled))
+    }
 }
 
 #[cfg_attr(

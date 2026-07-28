@@ -899,7 +899,7 @@ mod tests {
     }
 
     #[test]
-    fn migration_list_contains_only_bootstrap_and_generation_lifecycle() {
+    fn migration_list_contains_bootstrap_lifecycle_and_manifest_schema_only() {
         let versions = MIGRATIONS
             .iter()
             .map(|migration| migration.version)

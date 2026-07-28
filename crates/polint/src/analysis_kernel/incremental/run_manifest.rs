@@ -19,6 +19,13 @@ pub(crate) struct RunManifestInputs<'a> {
 }
 
 impl<'a> RunManifestInputs<'a> {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "private publication callers construct inputs when durable reuse is enabled"
+        )
+    )]
     pub(crate) fn new(
         workspace_root: &'a Path,
         config_hash: &'a str,

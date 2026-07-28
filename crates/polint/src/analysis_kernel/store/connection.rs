@@ -412,6 +412,8 @@ pub(crate) struct StoreFixtureSnapshot {
     pub(super) sentinel: Option<String>,
     pub(super) generations: Vec<(GenerationHandle, GenerationStatus)>,
     pub(super) selected_generation: Option<GenerationHandle>,
+    pub(super) manifested_generations: Vec<GenerationHandle>,
+    pub(super) manifest_sources: Vec<(GenerationHandle, String)>,
 }
 
 #[cfg(test)]
@@ -501,12 +503,54 @@ pub(super) fn fixture_snapshot_for_test(
     } else {
         None
     };
+    let manifested_generations = if fixture_table_exists(&connection, "run_manifests")? {
+        let mut statement = connection
+            .prepare("SELECT generation_id FROM run_manifests ORDER BY generation_id")
+            .map_err(classify_sqlite_error)?;
+        statement
+            .query_map([], |row| row.get::<_, i64>(0))
+            .map_err(classify_sqlite_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(classify_sqlite_error)?
+            .into_iter()
+            .map(GenerationHandle::from_scalar)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| ConnectionError::InvalidSchema)?
+    } else {
+        Vec::new()
+    };
+    let manifest_sources = if fixture_table_exists(&connection, "run_manifest_sources")? {
+        let mut statement = connection
+            .prepare(
+                "SELECT generation_id, relative_path FROM run_manifest_sources \
+                 ORDER BY generation_id, relative_path COLLATE BINARY",
+            )
+            .map_err(classify_sqlite_error)?;
+        statement
+            .query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(classify_sqlite_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(classify_sqlite_error)?
+            .into_iter()
+            .map(|(scalar, path)| {
+                GenerationHandle::from_scalar(scalar)
+                    .map(|handle| (handle, path))
+                    .map_err(|_| ConnectionError::InvalidSchema)
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        Vec::new()
+    };
     Ok(StoreFixtureSnapshot {
         version,
         bootstrap_markers,
         sentinel,
         generations,
         selected_generation,
+        manifested_generations,
+        manifest_sources,
     })
 }
 

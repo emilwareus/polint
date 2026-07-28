@@ -1,4 +1,41 @@
 use super::*;
+use crate::analysis_kernel::incremental::{
+    Digest, DigestKind, FileSnapshot, RunManifest, RunManifestInputs,
+};
+use crate::core::Language;
+
+#[derive(Clone)]
+struct ManifestFixture {
+    config_hash: String,
+    files: Vec<FileSnapshot>,
+}
+
+impl ManifestFixture {
+    fn new(config_seed: &str, files: Vec<FileSnapshot>) -> Self {
+        Self {
+            config_hash: Digest::from_parts(DigestKind::Config, "store-test", &[config_seed]).value,
+            files,
+        }
+    }
+
+    fn inputs<'a>(&'a self, workspace: &'a Path) -> RunManifestInputs<'a> {
+        RunManifestInputs::new(workspace, &self.config_hash, &self.files)
+    }
+}
+
+fn source(path: &str, language: Language, digest_seed: &str, size_bytes: usize) -> FileSnapshot {
+    FileSnapshot {
+        relative_path: path.to_string(),
+        language,
+        source_text_digest: Digest::from_parts(
+            DigestKind::SourceText,
+            "store-test",
+            &[digest_seed],
+        ),
+        size_bytes,
+        mtime_hint_present: false,
+    }
+}
 
 #[test]
 fn config_preserves_path_and_disabled_state() {
@@ -37,29 +74,9 @@ fn semantic_store_is_zero_sized_facade() {
 
 mod run_manifest_storage {
     use super::*;
-    use crate::analysis_kernel::incremental::{
-        Digest, DigestKind, FileSnapshot, RunManifest, RunManifestInputs,
-    };
-    use crate::core::Language;
 
     fn config(temp: &tempfile::TempDir) -> StoreConfig {
         StoreConfig::new(temp.path().join("cache/semantic-store/store.sqlite3"), true)
-    }
-
-    fn source(path: &str) -> FileSnapshot {
-        FileSnapshot {
-            relative_path: path.to_string(),
-            language: Language::TypeScript,
-            source_text_digest: Digest::from_parts(DigestKind::SourceText, "storage-test", &[path]),
-            size_bytes: 12,
-            mtime_hint_present: false,
-        }
-    }
-
-    fn manifest(root: &Path, files: &[FileSnapshot]) -> RunManifest {
-        let config_hash = Digest::from_parts(DigestKind::Config, "storage-test", &["config"]);
-        RunManifest::from_inputs(RunManifestInputs::new(root, &config_hash.value, files))
-            .expect("construct run manifest")
     }
 
     fn publish(
@@ -68,18 +85,25 @@ mod run_manifest_storage {
     ) -> (StoreConfig, GenerationHandle, RunManifest) {
         let store_config = config(temp);
         assert_eq!(SemanticStore::maintain(&store_config), StoreStatus::Ready);
-        let expected = manifest(temp.path(), files);
+        let fixture = ManifestFixture::new("config", files.to_vec());
+        let expected =
+            RunManifest::from_inputs(fixture.inputs(temp.path())).expect("construct run manifest");
         let mut writer = connection::open_writer(store_config.path()).expect("open writer");
         let handle = generation::reserve(&mut writer).expect("reserve generation");
-        let decoded = generation::publish_manifest_storage_for_test(&mut writer, handle, &expected)
-            .expect("publish manifest storage");
+        generation::publish(&mut writer, handle, &expected).expect("publish manifest storage");
+        let reader = connection::open_read_only(store_config.path()).expect("open read-only store");
+        let decoded =
+            generation::read_manifest_for_test(&reader, handle).expect("read manifest storage");
         assert!(decoded.exact_match(&expected));
         (store_config, handle, expected)
     }
 
     #[test]
     fn exact_manifest_storage_round_trips_empty_and_populated_sources() {
-        for files in [Vec::new(), vec![source("src/app.ts")]] {
+        for files in [
+            Vec::new(),
+            vec![source("src/app.ts", Language::TypeScript, "app", 12)],
+        ] {
             let temp = tempfile::tempdir().expect("temp directory");
             let (store_config, handle, expected) = publish(&temp, &files);
             let reader =
@@ -106,7 +130,10 @@ mod run_manifest_storage {
             Tamper::Aggregate,
         ] {
             let temp = tempfile::tempdir().expect("temp directory");
-            let (store_config, handle, _) = publish(&temp, &[source("src/app.ts")]);
+            let (store_config, handle, _) = publish(
+                &temp,
+                &[source("src/app.ts", Language::TypeScript, "app", 12)],
+            );
             let connection =
                 rusqlite::Connection::open(store_config.path()).expect("open tamper connection");
             connection
@@ -152,6 +179,212 @@ mod run_manifest_storage {
     }
 }
 
+mod run_manifest {
+    use super::*;
+
+    fn config(temp: &tempfile::TempDir) -> StoreConfig {
+        StoreConfig::new(temp.path().join("cache/semantic-store/store.sqlite3"), true)
+    }
+
+    #[test]
+    fn active_match_distinguishes_absence_exactness_and_every_semantic_mismatch() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let store_config = config(&temp);
+        let first = source("src/a.ts", Language::TypeScript, "a", 10);
+        let second = source("src/b.go", Language::Go, "b", 20);
+        let baseline = ManifestFixture::new("config", vec![first.clone(), second.clone()]);
+
+        assert_eq!(
+            SemanticStore::match_active_manifest(&store_config, baseline.inputs(temp.path()))
+                .expect("match absent store"),
+            ManifestMatch::NoActiveManifest
+        );
+        let handle = SemanticStore::reserve_generation(&store_config).expect("reserve generation");
+        SemanticStore::publish_generation(&store_config, handle, baseline.inputs(temp.path()))
+            .expect("publish manifest");
+        assert_eq!(
+            SemanticStore::match_active_manifest(&store_config, baseline.inputs(temp.path()))
+                .expect("match reopened manifest"),
+            ManifestMatch::Exact(handle)
+        );
+
+        let reordered = ManifestFixture::new("config", vec![second.clone(), first.clone()]);
+        assert_eq!(
+            SemanticStore::match_active_manifest(&store_config, reordered.inputs(temp.path()))
+                .expect("match reordered sources"),
+            ManifestMatch::Exact(handle)
+        );
+
+        let mut changed_digest = first.clone();
+        changed_digest.source_text_digest =
+            Digest::from_parts(DigestKind::SourceText, "store-test", &["changed"]);
+        let mut changed_size = first.clone();
+        changed_size.size_bytes += 1;
+        let mismatches = [
+            ManifestFixture::new("other-config", vec![first.clone(), second.clone()]),
+            ManifestFixture::new("config", vec![first.clone()]),
+            ManifestFixture::new(
+                "config",
+                vec![
+                    first,
+                    second.clone(),
+                    source("src/c.ts", Language::TypeScript, "c", 30),
+                ],
+            ),
+            ManifestFixture::new(
+                "config",
+                vec![
+                    source("src/renamed.ts", Language::TypeScript, "a", 10),
+                    second.clone(),
+                ],
+            ),
+            ManifestFixture::new(
+                "config",
+                vec![
+                    source("src/a.ts", Language::JavaScript, "a", 10),
+                    second.clone(),
+                ],
+            ),
+            ManifestFixture::new("config", vec![changed_digest, second.clone()]),
+            ManifestFixture::new("config", vec![changed_size, second]),
+        ];
+        for mismatch in &mismatches {
+            assert_eq!(
+                SemanticStore::match_active_manifest(&store_config, mismatch.inputs(temp.path()))
+                    .expect("compare semantic mismatch"),
+                ManifestMatch::Mismatch
+            );
+        }
+
+        let other_workspace = tempfile::tempdir().expect("other workspace");
+        assert_eq!(
+            SemanticStore::match_active_manifest(
+                &store_config,
+                baseline.inputs(other_workspace.path()),
+            )
+            .expect("compare workspace mismatch"),
+            ManifestMatch::Mismatch
+        );
+    }
+
+    #[test]
+    fn shared_store_refuses_a_different_workspace_before_candidate_mutation() {
+        let store_temp = tempfile::tempdir().expect("store directory");
+        let first_workspace = tempfile::tempdir().expect("first workspace");
+        let second_workspace = tempfile::tempdir().expect("second workspace");
+        let store_config = config(&store_temp);
+        let manifest = ManifestFixture::new("config", Vec::new());
+        let active = SemanticStore::reserve_generation(&store_config).expect("reserve active");
+        SemanticStore::publish_generation(
+            &store_config,
+            active,
+            manifest.inputs(first_workspace.path()),
+        )
+        .expect("publish first workspace");
+        let candidate =
+            SemanticStore::reserve_generation(&store_config).expect("reserve candidate");
+
+        assert_eq!(
+            SemanticStore::publish_generation(
+                &store_config,
+                candidate,
+                manifest.inputs(second_workspace.path()),
+            ),
+            Err(GenerationError::WorkspaceOwnershipMismatch)
+        );
+        let reopened = fixture_snapshot_for_test(store_config.path()).expect("reopen snapshot");
+        assert_eq!(reopened.selected_generation, Some(active));
+        assert_eq!(reopened.manifested_generations, vec![active]);
+        assert_eq!(
+            reopened.generations,
+            vec![
+                (active, GenerationStatus::Complete),
+                (candidate, GenerationStatus::Pending)
+            ]
+        );
+        assert_eq!(
+            SemanticStore::match_active_manifest(
+                &store_config,
+                manifest.inputs(first_workspace.path()),
+            )
+            .expect("reopen original owner"),
+            ManifestMatch::Exact(active)
+        );
+    }
+
+    fn tamper_then_refuse(statement: &str) {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let store_config = config(&temp);
+        let manifest = ManifestFixture::new(
+            "config",
+            vec![source("src/app.ts", Language::TypeScript, "app", 12)],
+        );
+        let handle = SemanticStore::reserve_generation(&store_config).expect("reserve generation");
+        SemanticStore::publish_generation(&store_config, handle, manifest.inputs(temp.path()))
+            .expect("publish manifest");
+        let connection =
+            rusqlite::Connection::open(store_config.path()).expect("open tamper connection");
+        connection
+            .execute_batch(
+                "PRAGMA foreign_keys = OFF;\
+                 PRAGMA ignore_check_constraints = ON;",
+            )
+            .expect("allow malformed fixture");
+        connection
+            .execute_batch(statement)
+            .expect("tamper manifest");
+        drop(connection);
+
+        assert!(
+            SemanticStore::active_generation(&store_config).is_err(),
+            "tamper was trusted: {statement}"
+        );
+        assert!(
+            SemanticStore::match_active_manifest(&store_config, manifest.inputs(temp.path()))
+                .is_err(),
+            "tamper matched: {statement}"
+        );
+    }
+
+    #[test]
+    fn every_header_scalar_tamper_is_refused_with_the_stored_identity_unchanged() {
+        for statement in [
+            "UPDATE run_manifests SET manifest_schema = 'wrong'",
+            "UPDATE run_manifests SET workspace_purpose = 'wrong'",
+            "UPDATE run_manifests SET workspace_value = '0000000000000000'",
+            "UPDATE run_manifests SET config_purpose = 'wrong'",
+            "UPDATE run_manifests SET config_value = '0000000000000000'",
+            "UPDATE run_manifests SET source_count = 0",
+            "UPDATE run_manifests SET run_purpose = 'wrong'",
+            "UPDATE run_manifests SET run_value = '0000000000000000'",
+        ] {
+            tamper_then_refuse(statement);
+        }
+    }
+
+    #[test]
+    fn representative_source_membership_and_ownership_tamper_is_refused() {
+        for statement in [
+            "INSERT INTO run_manifest_sources VALUES \
+             ((SELECT generation_id FROM run_manifests), 'src/extra.ts', 'typescript', \
+              'source-text-v1', '0000000000000000', 1)",
+            "DELETE FROM run_manifest_sources",
+            "UPDATE run_manifest_sources SET relative_path = 'src/renamed.ts'",
+            "UPDATE run_manifest_sources SET language = 'javascript'",
+            "UPDATE run_manifest_sources SET source_purpose = 'wrong'",
+            "UPDATE run_manifest_sources SET source_value = '0000000000000000'",
+            "UPDATE run_manifest_sources SET size_bytes = 13",
+            "UPDATE run_manifest_sources SET size_bytes = 'wrong'",
+            "UPDATE run_manifest_sources SET generation_id = 999",
+            "INSERT INTO generations (status) VALUES ('pending');\
+             UPDATE run_manifest_sources SET generation_id = \
+                 (SELECT max(generation_id) FROM generations)",
+        ] {
+            tamper_then_refuse(statement);
+        }
+    }
+}
+
 mod generation_lifecycle {
     use super::*;
 
@@ -161,6 +394,30 @@ mod generation_lifecycle {
 
     fn snapshot(config: &StoreConfig) -> StoreFixtureSnapshot {
         fixture_snapshot_for_test(config.path()).expect("fixture snapshot")
+    }
+
+    fn publish(
+        config: &StoreConfig,
+        workspace: &Path,
+        handle: GenerationHandle,
+    ) -> Result<GenerationHandle, GenerationError> {
+        let manifest = ManifestFixture::new("lifecycle", Vec::new());
+        SemanticStore::publish_generation(config, handle, manifest.inputs(workspace))
+    }
+
+    fn publish_with_failure(
+        config: &StoreConfig,
+        workspace: &Path,
+        handle: GenerationHandle,
+        manifest: &ManifestFixture,
+        failure_point: PublicationFailurePoint,
+    ) -> Result<GenerationHandle, GenerationError> {
+        SemanticStore::publish_generation_with_failure_for_test(
+            config,
+            handle,
+            manifest.inputs(workspace),
+            failure_point,
+        )
     }
 
     #[test]
@@ -245,7 +502,7 @@ mod generation_lifecycle {
             None
         );
         assert_eq!(
-            SemanticStore::publish_generation(&config, reserved).expect("publish generation"),
+            publish(&config, temp.path(), reserved).expect("publish generation"),
             reserved
         );
         assert_eq!(
@@ -259,9 +516,9 @@ mod generation_lifecycle {
         let temp = tempfile::tempdir().expect("temp directory");
         let config = store_config(&temp);
         let first = SemanticStore::reserve_generation(&config).expect("reserve first");
-        SemanticStore::publish_generation(&config, first).expect("publish first");
+        publish(&config, temp.path(), first).expect("publish first");
         let second = SemanticStore::reserve_generation(&config).expect("reserve second");
-        SemanticStore::publish_generation(&config, second).expect("publish second");
+        publish(&config, temp.path(), second).expect("publish second");
         let pending = SemanticStore::reserve_generation(&config).expect("reserve pending");
 
         assert_ne!(pending, second);
@@ -276,10 +533,10 @@ mod generation_lifecycle {
         let temp = tempfile::tempdir().expect("temp directory");
         let config = store_config(&temp);
         let active = SemanticStore::reserve_generation(&config).expect("reserve active");
-        SemanticStore::publish_generation(&config, active).expect("publish active");
+        publish(&config, temp.path(), active).expect("publish active");
 
         assert_eq!(
-            SemanticStore::publish_generation(&config, active),
+            publish(&config, temp.path(), active),
             Err(GenerationError::InvalidTransition)
         );
 
@@ -290,7 +547,7 @@ mod generation_lifecycle {
         let unknown =
             SemanticStore::reserve_generation(&foreign_config).expect("reserve foreign unknown");
         assert_eq!(
-            SemanticStore::publish_generation(&config, unknown),
+            publish(&config, temp.path(), unknown),
             Err(GenerationError::InvalidTransition)
         );
         assert_eq!(
@@ -304,7 +561,7 @@ mod generation_lifecycle {
         let temp = tempfile::tempdir().expect("temp directory");
         let config = store_config(&temp);
         let active = SemanticStore::reserve_generation(&config).expect("reserve active");
-        SemanticStore::publish_generation(&config, active).expect("publish active");
+        publish(&config, temp.path(), active).expect("publish active");
         let pending = SemanticStore::reserve_generation(&config).expect("reserve pending");
 
         let mut writer = connection::open_writer(config.path()).expect("open writer");
@@ -335,7 +592,15 @@ mod generation_lifecycle {
             Err(GenerationError::Store(StoreStatus::Disabled))
         );
         assert_eq!(
-            SemanticStore::publish_generation(&disabled, handle),
+            publish(&disabled, &temp.path().join("missing-workspace"), handle),
+            Err(GenerationError::Store(StoreStatus::Disabled))
+        );
+        let manifest = ManifestFixture::new("disabled", Vec::new());
+        assert_eq!(
+            SemanticStore::match_active_manifest(
+                &disabled,
+                manifest.inputs(&temp.path().join("missing-workspace")),
+            ),
             Err(GenerationError::Store(StoreStatus::Disabled))
         );
         assert_eq!(
@@ -391,7 +656,7 @@ mod generation_lifecycle {
         let temp = tempfile::tempdir().expect("temp directory");
         let config = store_config(&temp);
         let first = SemanticStore::reserve_generation(&config).expect("reserve first");
-        SemanticStore::publish_generation(&config, first).expect("publish first");
+        publish(&config, temp.path(), first).expect("publish first");
 
         assert_eq!(
             snapshot(&config).generations,
@@ -404,7 +669,7 @@ mod generation_lifecycle {
         );
 
         let second = SemanticStore::reserve_generation(&config).expect("reserve second");
-        SemanticStore::publish_generation(&config, second).expect("publish second");
+        publish(&config, temp.path(), second).expect("publish second");
         let unselected = SemanticStore::reserve_generation(&config).expect("reserve unselected");
         let reopened = snapshot(&config);
 
@@ -428,14 +693,23 @@ mod generation_lifecycle {
         for failure_point in PublicationFailurePoint::ALL {
             let temp = tempfile::tempdir().expect("temp directory");
             let config = store_config(&temp);
+            let active_manifest = ManifestFixture::new(
+                "active",
+                vec![source("src/a.ts", Language::TypeScript, "a", 10)],
+            );
+            let candidate_manifest =
+                ManifestFixture::new("candidate", vec![source("src/b.go", Language::Go, "b", 20)]);
             let active = SemanticStore::reserve_generation(&config).expect("reserve active");
-            SemanticStore::publish_generation(&config, active).expect("publish active");
+            SemanticStore::publish_generation(&config, active, active_manifest.inputs(temp.path()))
+                .expect("publish active");
             let candidate = SemanticStore::reserve_generation(&config).expect("reserve candidate");
 
             assert_eq!(
-                SemanticStore::publish_generation_with_failure_for_test(
+                publish_with_failure(
                     &config,
+                    temp.path(),
                     candidate,
+                    &candidate_manifest,
                     failure_point,
                 ),
                 Err(GenerationError::InjectedFailure(failure_point))
@@ -456,8 +730,24 @@ mod generation_lifecycle {
                 "failure point: {failure_point:?}"
             );
             assert_eq!(
+                reopened.manifested_generations,
+                vec![active],
+                "failure point: {failure_point:?}"
+            );
+            assert_eq!(
+                reopened.manifest_sources,
+                vec![(active, "src/a.ts".to_owned())],
+                "failure point: {failure_point:?}"
+            );
+            assert_eq!(
                 SemanticStore::active_generation(&config).expect("reopen active generation"),
                 Some(active),
+                "failure point: {failure_point:?}"
+            );
+            assert_eq!(
+                SemanticStore::match_active_manifest(&config, active_manifest.inputs(temp.path()),)
+                    .expect("reopen active manifest"),
+                ManifestMatch::Exact(active),
                 "failure point: {failure_point:?}"
             );
         }
@@ -468,12 +758,16 @@ mod generation_lifecycle {
         for failure_point in PublicationFailurePoint::ALL {
             let temp = tempfile::tempdir().expect("temp directory");
             let config = store_config(&temp);
+            let candidate_manifest =
+                ManifestFixture::new("candidate", vec![source("src/b.go", Language::Go, "b", 20)]);
             let candidate = SemanticStore::reserve_generation(&config).expect("reserve candidate");
 
             assert_eq!(
-                SemanticStore::publish_generation_with_failure_for_test(
+                publish_with_failure(
                     &config,
+                    temp.path(),
                     candidate,
+                    &candidate_manifest,
                     failure_point,
                 ),
                 Err(GenerationError::InjectedFailure(failure_point))
@@ -487,6 +781,14 @@ mod generation_lifecycle {
             );
             assert_eq!(
                 reopened.selected_generation, None,
+                "failure point: {failure_point:?}"
+            );
+            assert!(
+                reopened.manifested_generations.is_empty(),
+                "failure point: {failure_point:?}"
+            );
+            assert!(
+                reopened.manifest_sources.is_empty(),
                 "failure point: {failure_point:?}"
             );
             assert_eq!(
