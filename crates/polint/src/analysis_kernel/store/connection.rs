@@ -3,10 +3,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use rusqlite::{Connection, ErrorCode, OpenFlags, TransactionBehavior};
-
-#[cfg(test)]
-use rusqlite::Transaction;
+use rusqlite::{Connection, ErrorCode, OpenFlags, Transaction, TransactionBehavior};
 
 use super::migrations::{MigrationError, apply_migrations_in_transaction, preflight_schema};
 
@@ -17,10 +14,6 @@ pub(super) struct WriterConnection {
     connection: Connection,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "kept for private internal consumers")
-)]
 pub(super) struct ReadOnlyConnection {
     connection: Connection,
 }
@@ -86,20 +79,44 @@ pub(super) fn validate_journal_mode(journal_mode: &str) -> Result<(), Connection
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "kept for private internal consumers")
-)]
 pub(super) fn open_read_only(path: &Path) -> Result<ReadOnlyConnection, ConnectionError> {
     let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(classify_sqlite_error)?;
     connection
         .busy_timeout(BUSY_TIMEOUT)
         .map_err(classify_sqlite_error)?;
+    preflight_schema(&connection).map_err(classify_migration_error)?;
     connection
         .pragma_update(None, "foreign_keys", true)
         .map_err(classify_sqlite_error)?;
     Ok(ReadOnlyConnection { connection })
+}
+
+pub(super) fn with_immediate_transaction<T, E>(
+    writer: &mut WriterConnection,
+    operation: impl FnOnce(&Transaction<'_>) -> Result<T, E>,
+) -> Result<T, E>
+where
+    E: From<ConnectionError>,
+{
+    let transaction = writer
+        .connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(classify_sqlite_error)
+        .map_err(E::from)?;
+    let result = operation(&transaction)?;
+    transaction
+        .commit()
+        .map_err(classify_sqlite_error)
+        .map_err(E::from)?;
+    Ok(result)
+}
+
+pub(super) fn with_read_connection<T, E>(
+    reader: &ReadOnlyConnection,
+    operation: impl FnOnce(&Connection) -> Result<T, E>,
+) -> Result<T, E> {
+    operation(&reader.connection)
 }
 
 pub(super) fn try_writer_lease(
@@ -141,7 +158,7 @@ fn classify_migration_error(error: MigrationError) -> ConnectionError {
     }
 }
 
-fn classify_sqlite_error(error: rusqlite::Error) -> ConnectionError {
+pub(super) fn classify_sqlite_error(error: rusqlite::Error) -> ConnectionError {
     match error.sqlite_error_code() {
         Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked) => ConnectionError::Busy,
         Some(ErrorCode::DatabaseCorrupt | ErrorCode::NotADatabase) => ConnectionError::Corrupt,

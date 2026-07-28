@@ -7,7 +7,10 @@
 use std::path::{Path, PathBuf};
 
 mod connection;
+mod generation;
 mod migrations;
+
+pub(crate) use generation::{GenerationError, GenerationHandle};
 
 #[cfg(test)]
 pub(crate) use connection::{HeldWriterConnection, StoreFixtureSnapshot};
@@ -106,6 +109,59 @@ impl SemanticStore {
             Err(error) => map_connection_error(error),
         }
     }
+
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the private lifecycle is reserved for semantic metadata publication"
+        )
+    )]
+    pub(crate) fn reserve_generation(
+        config: &StoreConfig,
+    ) -> Result<GenerationHandle, GenerationError> {
+        prepare_generation_store(config)?;
+        let mut writer = connection::open_writer(config.path()).map_err(GenerationError::from)?;
+        generation::reserve(&mut writer)
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the private lifecycle is reserved for semantic metadata publication"
+        )
+    )]
+    pub(crate) fn publish_generation(
+        config: &StoreConfig,
+        handle: GenerationHandle,
+    ) -> Result<GenerationHandle, GenerationError> {
+        prepare_generation_store(config)?;
+        let mut writer = connection::open_writer(config.path()).map_err(GenerationError::from)?;
+        generation::publish(&mut writer, handle)
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the private lifecycle is reserved for semantic metadata publication"
+        )
+    )]
+    pub(crate) fn active_generation(
+        config: &StoreConfig,
+    ) -> Result<Option<GenerationHandle>, GenerationError> {
+        prepare_generation_store(config)?;
+        let reader = connection::open_read_only(config.path()).map_err(GenerationError::from)?;
+        generation::active(&reader)
+    }
+}
+
+fn prepare_generation_store(config: &StoreConfig) -> Result<(), GenerationError> {
+    if !config.is_enabled() {
+        return Err(GenerationError::Store(StoreStatus::Disabled));
+    }
+    prepare_store_path(config.path()).map_err(GenerationError::Store)
 }
 
 #[cfg_attr(

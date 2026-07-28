@@ -35,6 +35,131 @@ fn semantic_store_is_zero_sized_facade() {
     assert_eq!(std::mem::size_of::<SemanticStore>(), 0);
 }
 
+mod generation_lifecycle {
+    use super::*;
+
+    fn store_config(temp: &tempfile::TempDir) -> StoreConfig {
+        StoreConfig::new(temp.path().join("cache/semantic-store/store.sqlite3"), true)
+    }
+
+    #[test]
+    fn reservation_is_unreadable_until_the_same_handle_is_published() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let config = store_config(&temp);
+        assert_eq!(SemanticStore::maintain(&config), StoreStatus::Ready);
+        assert_eq!(
+            SemanticStore::active_generation(&config).expect("fresh active generation"),
+            None
+        );
+
+        let reserved = SemanticStore::reserve_generation(&config).expect("reserve generation");
+        assert_eq!(
+            SemanticStore::active_generation(&config).expect("active after reservation"),
+            None
+        );
+        assert_eq!(
+            SemanticStore::publish_generation(&config, reserved).expect("publish generation"),
+            reserved
+        );
+        assert_eq!(
+            SemanticStore::active_generation(&config).expect("published active generation"),
+            Some(reserved)
+        );
+    }
+
+    #[test]
+    fn explicit_publication_rotates_active_while_newer_pending_stays_unreadable() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let config = store_config(&temp);
+        let first = SemanticStore::reserve_generation(&config).expect("reserve first");
+        SemanticStore::publish_generation(&config, first).expect("publish first");
+        let second = SemanticStore::reserve_generation(&config).expect("reserve second");
+        SemanticStore::publish_generation(&config, second).expect("publish second");
+        let pending = SemanticStore::reserve_generation(&config).expect("reserve pending");
+
+        assert_ne!(pending, second);
+        assert_eq!(
+            SemanticStore::active_generation(&config).expect("active generation"),
+            Some(second)
+        );
+    }
+
+    #[test]
+    fn repeated_and_unknown_publication_are_typed_rejections() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let config = store_config(&temp);
+        let active = SemanticStore::reserve_generation(&config).expect("reserve active");
+        SemanticStore::publish_generation(&config, active).expect("publish active");
+
+        assert_eq!(
+            SemanticStore::publish_generation(&config, active),
+            Err(GenerationError::InvalidTransition)
+        );
+
+        let foreign_temp = tempfile::tempdir().expect("foreign temp directory");
+        let foreign_config = store_config(&foreign_temp);
+        let _first_foreign =
+            SemanticStore::reserve_generation(&foreign_config).expect("reserve foreign first");
+        let unknown =
+            SemanticStore::reserve_generation(&foreign_config).expect("reserve foreign unknown");
+        assert_eq!(
+            SemanticStore::publish_generation(&config, unknown),
+            Err(GenerationError::InvalidTransition)
+        );
+        assert_eq!(
+            SemanticStore::active_generation(&config).expect("active generation"),
+            Some(active)
+        );
+    }
+
+    #[test]
+    fn pending_selection_is_rejected_by_typed_and_relational_guards() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let config = store_config(&temp);
+        let active = SemanticStore::reserve_generation(&config).expect("reserve active");
+        SemanticStore::publish_generation(&config, active).expect("publish active");
+        let pending = SemanticStore::reserve_generation(&config).expect("reserve pending");
+
+        let mut writer = connection::open_writer(config.path()).expect("open writer");
+        assert_eq!(
+            generation::select_for_test(&mut writer, pending),
+            Err(GenerationError::InvalidTransition)
+        );
+        assert!(generation::select_without_validation_for_test(&mut writer, pending).is_err());
+        drop(writer);
+
+        assert_eq!(
+            SemanticStore::active_generation(&config).expect("active generation"),
+            Some(active)
+        );
+    }
+
+    #[test]
+    fn disabled_lifecycle_returns_before_path_or_sqlite_work() {
+        let source_temp = tempfile::tempdir().expect("source temp directory");
+        let handle =
+            SemanticStore::reserve_generation(&store_config(&source_temp)).expect("reserve source");
+        let temp = tempfile::tempdir().expect("temp directory");
+        let path = temp.path().join("cache/semantic-store/store.sqlite3");
+        let disabled = StoreConfig::new(&path, false);
+
+        assert_eq!(
+            SemanticStore::reserve_generation(&disabled),
+            Err(GenerationError::Store(StoreStatus::Disabled))
+        );
+        assert_eq!(
+            SemanticStore::publish_generation(&disabled, handle),
+            Err(GenerationError::Store(StoreStatus::Disabled))
+        );
+        assert_eq!(
+            SemanticStore::active_generation(&disabled),
+            Err(GenerationError::Store(StoreStatus::Disabled))
+        );
+        assert!(!temp.path().join("cache").exists());
+        assert!(!path.exists());
+    }
+}
+
 mod connection_policy {
     use super::*;
 
