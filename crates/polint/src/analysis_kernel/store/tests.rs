@@ -312,6 +312,85 @@ mod run_manifest {
         );
     }
 
+    #[test]
+    fn deleted_active_pointer_is_malformed_and_cannot_transfer_workspace_ownership() {
+        let store_temp = tempfile::tempdir().expect("store directory");
+        let first_workspace = tempfile::tempdir().expect("first workspace");
+        let second_workspace = tempfile::tempdir().expect("second workspace");
+        let store_config = config(&store_temp);
+        let manifest = ManifestFixture::new("config", Vec::new());
+        let active = SemanticStore::reserve_generation(&store_config).expect("reserve active");
+        SemanticStore::publish_generation(
+            &store_config,
+            active,
+            manifest.inputs(first_workspace.path()),
+        )
+        .expect("publish first workspace");
+        let candidate =
+            SemanticStore::reserve_generation(&store_config).expect("reserve candidate");
+        let tamper_connection =
+            rusqlite::Connection::open(store_config.path()).expect("open tamper connection");
+        tamper_connection
+            .execute("DELETE FROM active_generation", [])
+            .expect("delete active pointer");
+        drop(tamper_connection);
+        let malformed = fixture_snapshot_for_test(store_config.path()).expect("malformed snapshot");
+        let expected_error = GenerationError::Store(StoreStatus::RebuildNeeded(
+            StoreRebuildReason::InvalidSchema,
+        ));
+
+        assert_eq!(
+            SemanticStore::active_generation(&store_config),
+            Err(expected_error.clone())
+        );
+        assert_eq!(
+            SemanticStore::match_active_manifest(
+                &store_config,
+                manifest.inputs(first_workspace.path()),
+            ),
+            Err(expected_error.clone())
+        );
+        assert_eq!(
+            SemanticStore::maintain(&store_config),
+            StoreStatus::RebuildNeeded(StoreRebuildReason::InvalidSchema)
+        );
+        assert_eq!(
+            SemanticStore::publish_generation(
+                &store_config,
+                candidate,
+                manifest.inputs(first_workspace.path()),
+            ),
+            Err(expected_error.clone())
+        );
+        assert_eq!(
+            fixture_snapshot_for_test(store_config.path())
+                .expect("reopen after same-owner refusal"),
+            malformed
+        );
+        assert_eq!(
+            SemanticStore::publish_generation(
+                &store_config,
+                candidate,
+                manifest.inputs(second_workspace.path()),
+            ),
+            Err(expected_error)
+        );
+
+        let reopened =
+            fixture_snapshot_for_test(store_config.path()).expect("reopen malformed store");
+        assert_eq!(reopened, malformed);
+        assert_eq!(
+            reopened.generations,
+            vec![
+                (active, GenerationStatus::Complete),
+                (candidate, GenerationStatus::Pending),
+            ]
+        );
+        assert_eq!(reopened.selected_generation, None);
+        assert_eq!(reopened.manifested_generations, vec![active]);
+        assert!(reopened.manifest_sources.is_empty());
+    }
+
     fn tamper_then_refuse(statement: &str) {
         let temp = tempfile::tempdir().expect("temp directory");
         let store_config = config(&temp);

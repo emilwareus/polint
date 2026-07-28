@@ -651,7 +651,22 @@ fn validate_manifest_rows(connection: &Connection, version: i32) -> Result<(), M
             |row| row.get(0),
         )
         .map_err(|error| classify_invariant_error(error, version))?;
-    if invalid_ownership == 0 && invalid_counts == 0 && invalid_active == 0 {
+    let invalid_active_cardinality: i64 = connection
+        .query_row(
+            "SELECT EXISTS(\
+                 SELECT 1 FROM generations WHERE status = 'complete'\
+             ) != EXISTS(\
+                 SELECT 1 FROM active_generation\
+             )",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| classify_invariant_error(error, version))?;
+    if invalid_ownership == 0
+        && invalid_counts == 0
+        && invalid_active == 0
+        && invalid_active_cardinality == 0
+    {
         Ok(())
     } else {
         Err(MigrationError::InvalidSchema { version })
