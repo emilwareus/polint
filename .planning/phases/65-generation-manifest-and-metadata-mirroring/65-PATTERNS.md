@@ -1,209 +1,307 @@
-# Phase 65 R1 Pattern Map
+# Phase 65 R2 Pattern Map
 
 **Mapped:** 2026-07-28
 
-**Purpose:** Concrete current-main analogs for the private minimal generation
-lifecycle only.
+**Purpose:** Concrete current-tree analogs for the private minimal audited run
+manifest only.
 
 ## Locked Boundary
 
-This map covers restart slice R1, not the original all-at-once Phase 65 design.
-The durable shape is limited to a store-local generation handle, the closed
-`pending`/`complete` lifecycle, and one optional active selection. It must not
-introduce a run manifest, workspace or input identity, providers, capabilities,
-facts, layers, query/summary keys, dependency indexes, validation events,
-statistics, language/tool metadata, or any public API/config/CLI/output change.
+This map covers restart slice R2. R1's schema-v2 generation lifecycle is a
+completed dependency and must be extended, not replaced.
 
-R1 completion does not complete Phase 65 or close STORE-04, STORE-05, META-01,
-or META-04.
+R2 adds one private canonical payload containing only:
+
+- a closed manifest schema version;
+- a purpose-typed workspace/cache-owner digest;
+- the complete config digest with a closed purpose;
+- canonical source rows with normalized repo-relative path, closed language,
+  source-content digest, and byte size;
+- an authenticated source count; and
+- a creation-independent run identity recomputed from those fields.
+
+Rules, plans, providers, capabilities, lifecycle/tool identity, models,
+extensions, layers, queries, summaries, facts, validation events, dependency
+indexes, statistics, telemetry, timestamps, mtimes, and opaque JSON are absent.
+R2 remains unwired from normal kernel persistence/reuse. It adds no public API,
+configuration, CLI, output, diagnostic, CI, or SDK contract.
+
+R2 completion does not complete Phase 65 or STORE-04, STORE-05, META-01, or
+META-04. Plan and summary requirement lists remain empty; contributions are
+tracked separately.
+
+## Ownership Decision
+
+The canonical projection belongs at the analysis-kernel boundary, alongside
+the existing incremental identity vocabulary:
+
+```text
+analysis_kernel::incremental::run_manifest
+        typed manifest construction / codec / equality / identity
+                         |
+                         v
+analysis_kernel::store::generation
+        SQL encode/decode / bounded preflight / atomic publication
+```
+
+`analysis_kernel::store` remains the sole owner of SQL, table names,
+transactions, SQLite storage classes, and relational handles. It must not
+define a competing store-only semantic identity. `InputSnapshot` is an input
+witness for source fields, not the durable payload and not its codec.
 
 ## Likely File Set
 
-The preferred implementation is six files, five under the existing private
-store subtree and one test-only expectation adjustment. A separate generation
-test file may replace the additions to `store/tests.rs` if that keeps the
-failure matrix clearer; it should not cause the production surface to spread.
+The preferred implementation stays within eight product/test files. A separate
+manifest-focused store test file may replace additions to `store/tests.rs`
+without widening the production surface.
 
-| File | Change and role | Data flow | Closest current analog | Pattern to preserve |
-|---|---|---|---|---|
-| `crates/polint/src/analysis_kernel/store/generation.rs` | **Create:** own the typed relational handle, lifecycle SQL, active read, publication validation, and test-only failure seams. | `WriterConnection` → committed pending handle; pending handle + writer → complete-and-selected transaction; `ReadOnlyConnection` → `Option<active complete handle>`. | `connection.rs::try_initialize_writer` for protected transactions; `StoreConfig` for opaque private values; `StoreFixtureSnapshot` for typed test inspection. | Small `Copy + Eq` opaque handle with a private scalar; typed `Result`; no serialization, semantic hashing, timestamps, or raw ID accessor. |
-| `crates/polint/src/analysis_kernel/store/mod.rs` | **Modify:** declare the lifecycle module and expose only narrow crate-private facade operations/outcomes and test helpers. Keep `maintain` and its disabled short circuit intact. | `StoreConfig` is checked before path work; owned path opens the existing connection policy; lower-level lifecycle errors map to private store outcomes. | `SemanticStore::maintain`, `map_connection_error`, and the existing `#[cfg(test)]` forwarding helpers. | No `rusqlite` type, SQL text, table name, or scalar row ID crosses `analysis_kernel::store`; use `pub(crate)` only where an intentional internal caller needs it and tighter visibility otherwise. |
-| `crates/polint/src/analysis_kernel/store/connection.rs` | **Modify:** provide the narrow transaction/read access needed by the sibling lifecycle module; make future-schema fixtures derive from the current version. | Writer → `BEGIN IMMEDIATE` transaction → operation → commit; operation error or injected failure drops/rolls back the transaction. Reader remains separately opened read-only. | `try_initialize_writer`, `try_writer_lease`, `hold_initialization_lease`, `open_read_only`, and `classify_sqlite_error`. | Reuse WAL, foreign keys, 250 ms busy timeout, bounded busy mapping, and migration preflight. Do not add a second connection policy or leak `Connection`/`Transaction` above the store module. |
-| `crates/polint/src/analysis_kernel/store/migrations.rs` | **Modify:** add schema version 2 as the sole R1 durable schema family and extend current-schema validation. | v0 applies v1 then v2; the exact Phase 64 v1 fixture applies only v2; v2 reopens without mutation; future/malformed v2 refuses before lifecycle access. | `MIGRATIONS`, `apply_migrations_in_transaction`, `preflight_schema`, and `validate_current_schema`. | One ordered transactional migration, `PRAGMA user_version` set only inside the migration transaction, one current bootstrap marker, exact shape/relationship validation, and no opportunistic repair. |
-| `crates/polint/src/analysis_kernel/store/tests.rs` | **Modify:** add facade-level lifecycle, reopen, exact-selection, constraint, and failure-preservation tests with typed fixture snapshots. | Fresh temp store → reserve/publish/read/drop/reopen; failure matrix → reopen → authenticate old active relationship and candidate unreadability. | Existing `connection_policy`, `writer_contention`, and `recovery` modules. | Independent temporary databases, no process-global serialization, persisted relationship assertions rather than row counts alone, and every test below 60 seconds. |
-| `crates/polint/src/analysis_kernel/mod.rs` | **Modify test code only:** make the existing future-schema parity expectation use a current-version-relative fixture value. Production `AnalysisKernel::run` remains unchanged. | Existing post-validation `SemanticStore::maintain` call and public-answer parity flow are untouched. | `semantic_store_check_parity::run_mode` and `CURRENT_SCHEMA_VERSION_FOR_TEST`. | Preserve disabled/ready/future/invalid/busy JSON and exit parity. Do not reserve or publish an empty generation from the kernel merely to make R1 code live. |
+| File | Change and role | Current symbols to reuse | Constraint |
+|---|---|---|---|
+| `crates/polint/src/analysis_kernel/incremental/run_manifest.rs` | **Create:** private `RunManifest`, canonical source row, purpose-typed identities, closed codecs, canonical builder, exact comparison, and identity recomputation. | `Digest`/`DigestBuilder` length-prefixed construction; `FileSnapshot`; `Language`; `normalize_repo_relative`. | No serde/JSON/`Debug` identity input. Reject unknown language, noncanonical/duplicate path, wrong digest purpose, count mismatch, and noncanonical row order. |
+| `crates/polint/src/analysis_kernel/incremental/mod.rs` | **Modify:** declare and narrowly re-export only the private manifest vocabulary required by the store and tests. | Existing curated crate-private re-exports. | Do not widen SDK, runner, CLI, or crate-root public surfaces. |
+| `crates/polint/src/analysis_kernel/incremental/digest.rs` | **Modify if needed:** add only closed workspace/run purpose variants and byte-safe canonical builder support. | `DigestKind`, `DigestBuilder`, length-prefixed parts. | Do not use `debug_part`; keep all identity labels explicit and versioned. Do not add provider/layer purposes. |
+| `crates/polint/src/analysis_kernel/store/migrations.rs` | **Modify:** schema version 3, exact empty-v2 migration, strict manifest-family catalog/content authentication, and populated-v2 refusal without mutation. | `MIGRATIONS`, `validate_supported_schema`, `validate_current_schema`, exact SQL comparison, FK/index/trigger/content validators. | One manifest schema family only. Every complete generation has exactly one valid header; pending generations have none; source rows belong to one header. |
+| `crates/polint/src/analysis_kernel/store/generation.rs` | **Modify:** publish a supplied manifest with the same reserved handle and read the active handle plus decoded manifest in one transaction/snapshot. | `publish_transaction`, `active`, `require_complete`, `replace_selection`, `validate_selection`, finite test failure seams. | Manifest write, decode/recompute, completion, selection, and commit are one atomic publication. Handle-only active reads cannot bypass manifest authentication. |
+| `crates/polint/src/analysis_kernel/store/connection.rs` | **Modify:** narrow read-transaction callback and typed manifest fixture support if needed. | `with_immediate_transaction`, `with_read_connection`, writer/read-only policy, error classifier, fixture snapshot. | Reuse WAL, foreign keys, busy timeout, preflight, and recovery mapping. No second connection policy or raw SQLite type above `store`. |
+| `crates/polint/src/analysis_kernel/store/mod.rs` | **Modify:** private manifest-aware facade/result and disabled guard. | `SemanticStore`, `StoreConfig`, `prepare_generation_store`, `GenerationError` mapping. | Disabled mode returns before path validation, workspace canonicalization, manifest construction, or I/O. Keep normal `AnalysisKernel::run` unchanged. |
+| `crates/polint/src/analysis_kernel/store/tests.rs` | **Modify:** round-trip, match/mismatch, migration, tamper, bounds, rollback, reopen, and disabled proof. | Independent temp stores, typed fixture snapshots, R1 lifecycle/failure matrix. | No global serialization; no required individual test over 60 seconds. |
 
-No R1 change is expected in `Cargo.toml`, `cache`, `incremental`,
-`public_surface_leak.rs`, SDK/runner/CLI code, documentation, examples, or
-`.github/workflows/ci.yml`.
+Only if the canonical root encoder cannot live cleanly in the new manifest
+module may a small private helper be added to `repo_fs.rs`. The plan should not
+touch `Cargo.toml`, providers, rule/plan keys, `InputSnapshot` fields, public
+docs, examples, or `.github/workflows/ci.yml`.
 
-## Concrete Lifecycle Shape
+## Current Interfaces and Reuse Points
 
-Names remain discretionary, but the planner should preserve a shape equivalent
-to:
+### Canonical inputs
 
-```rust
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct GenerationHandle(NonZeroI64);
+- `InputSnapshot::files` is already sorted by `relative_path`; each
+  `FileSnapshot` exposes the needed path, `Language`, source-text `Digest`, and
+  byte size. The manifest constructor must copy only those approved fields and
+  revalidate them rather than trust construction order.
+- `InputSnapshot::config.digest` is not the approved durable value because the
+  snapshot component includes broader status/detail vocabulary. R2 receives
+  the already-computed complete `config_hash` string directly and wraps it in
+  the fixed config purpose.
+- `LoadedConfig::root` supplies the workspace root. Canonicalize and normalize
+  it before hashing, encode platform path units losslessly, and persist only
+  the resulting typed digest. Never use `display`, `to_string_lossy`, or
+  `Debug` as identity input.
+- `SourceFile::{relative_path, language, content_hash, source}` is the original
+  source of the approved file fields. `FileSnapshot` is the narrowest existing
+  projection and avoids reparsing or cloning source text.
 
-fn reserve(
-    writer: &mut WriterConnection,
-) -> Result<GenerationHandle, GenerationError>;
+### Digest vocabulary
 
-fn publish(
-    writer: &mut WriterConnection,
-    generation: GenerationHandle,
-) -> Result<(), GenerationError>;
+`Digest` already separates kinds and uses explicit length-prefixed parts.
+Extend that pattern with closed workspace/run purposes or an equivalent private
+wrapper. The durable codec must expose explicit labels for every field:
 
-fn active(
-    reader: &ReadOnlyConnection,
-) -> Result<Option<GenerationHandle>, GenerationError>;
+```text
+manifest-schema
+workspace-purpose + workspace-value
+config-purpose + config-value
+source-count
+for each source in normalized-path order:
+  path + language + source-purpose + source-value + size
 ```
 
-The scalar constructor and accessor stay inside the store module. The wrapper
-is only a store-local relational handle: do not implement a semantic digest,
-cache key, source/run/provider identity, `Serialize`, or public `Display`.
-Passing the small handle by value is appropriate; connections and paths remain
-borrowed.
+The stored run digest is supporting evidence only. Decode all fields,
+reconstruct the same typed projection, recompute the identity, and compare
+exact canonical fields before returning a match.
 
-The connection layer may use a store-internal callback or transaction guard
-equivalent to:
+### Language codec
 
-```rust
-fn with_immediate_transaction<T, E>(
-    writer: &mut WriterConnection,
-    operation: impl FnOnce(&Transaction<'_>) -> Result<T, E>,
-) -> Result<T, E>
-where
-    E: From<ConnectionError>;
-```
+`Language` currently includes `Go`, `TypeScript`, `Tsx`, `JavaScript`, `Jsx`,
+and `Unknown`. The durable codec should use explicit closed labels for supported
+source languages. `Unknown` is not a trusted stored language and must be
+rejected during construction and decode. Do not rely on serde rename behavior
+as the SQLite contract.
 
-`Transaction<'_>` may be visible to sibling code inside
-`analysis_kernel::store`, but never to its callers. Production fallibility uses
-typed `Result` and `?`; `expect`/`unwrap` remain test-only. If the not-yet-wired
-lifecycle needs a lint expectation, follow the existing narrow
-`cfg_attr(not(test), expect(dead_code, reason = "..."))` precedent and describe
-the enduring private-boundary reason without phase/plan chronology.
+### R1 publication primitive
 
-## Transaction and Read Invariants
+`generation::publish_transaction` currently transitions the supplied pending
+handle, validates completion, selects the same handle, validates selection, and
+commits through `connection::with_immediate_transaction`. R2 should extend that
+one transaction:
 
-1. **Reservation is durable and separate.** In one immediate transaction,
-   insert exactly one `pending` row, commit, and return its opaque handle.
-2. **Publication uses that same handle.** In one later immediate transaction,
-   update exactly one row from `pending` to `complete`; zero changed rows is a
-   typed rejection, not success.
-3. **Selection is part of publication.** Validate the completed candidate,
-   replace the singleton active relationship with that exact handle, validate
-   the relationship, then commit. Do not expose a general “activate arbitrary
-   handle” production operation.
-4. **Rollback preserves truth.** Any error after publication begins and before
-   commit rolls the candidate back to `pending` and leaves the prior active
-   pointer unchanged. A failed first publication leaves the valid initial
-   `None` state.
-5. **Reads follow the relationship.** `active()` reads only the singleton
-   selection joined/authenticated against a `complete` generation. `None`
-   means there is no pointer; a dangling, duplicate, pending, malformed, older,
-   or future-schema pointer is a typed refusal, not `None`.
-6. **No inferred selection.** No `MAX(id)`, insertion order, timestamp,
-   recency, or “latest complete” query is permitted. A newer pending handle
-   must not displace an older explicitly active handle, including after reopen.
-7. **Closed lifecycle only.** R1 needs `pending` and `complete`; publication
-   failure is represented by rollback, not a new durable failure/event family.
+1. validate the in-memory canonical manifest;
+2. within the same writer transaction, decode/authenticate the current active
+   manifest when present and refuse before mutation if its workspace identity
+   differs from the candidate;
+3. write the header and owned source rows for the reserved handle;
+4. authenticate storage and decode/recompute the just-written projection;
+5. transition that exact handle from pending to complete;
+6. validate complete-generation/manifest cardinality;
+7. rotate and authenticate the singleton active relationship; and
+8. commit.
 
-## Minimal Relational Constraint Pattern
+Every error rolls the candidate back to its prior durable pending state and
+preserves the previous active manifested generation.
 
-The exact private names are discretionary. The schema needs the equivalent of:
+`generation::active` currently opens one read-only connection but does not
+explicitly begin a read transaction and returns only a handle. R2 needs one
+read snapshot that selects the active complete handle and reads all header and
+source rows before typed reconstruction. The handle-only method must delegate
+to or be replaced by this authenticated path.
+
+## Manifest Relational Shape
+
+Names are discretionary, but one family should be equivalent to:
 
 ```sql
-CREATE TABLE generations (
-    generation_id INTEGER PRIMARY KEY,
-    status TEXT NOT NULL CHECK (status IN ('pending', 'complete')),
-    UNIQUE (generation_id, status)
+CREATE TABLE run_manifests (
+    generation_id INTEGER PRIMARY KEY
+        REFERENCES generations (generation_id),
+    manifest_schema TEXT NOT NULL,
+    workspace_purpose TEXT NOT NULL,
+    workspace_digest TEXT NOT NULL,
+    config_purpose TEXT NOT NULL,
+    config_digest TEXT NOT NULL,
+    source_count INTEGER NOT NULL CHECK (source_count >= 0),
+    run_purpose TEXT NOT NULL,
+    run_digest TEXT NOT NULL
 );
 
-CREATE TABLE active_generation (
-    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+CREATE TABLE run_manifest_sources (
     generation_id INTEGER NOT NULL,
-    required_status TEXT NOT NULL CHECK (required_status = 'complete'),
-    FOREIGN KEY (generation_id, required_status)
-        REFERENCES generations (generation_id, status)
+    relative_path TEXT NOT NULL,
+    language TEXT NOT NULL,
+    source_purpose TEXT NOT NULL,
+    source_digest TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
+    PRIMARY KEY (generation_id, relative_path),
+    FOREIGN KEY (generation_id)
+        REFERENCES run_manifests (generation_id)
 );
 ```
 
-The constant `required_status` column is relational enforcement, not a second
-metadata family: together with the composite foreign key it prevents a pending
-row from becoming active even if a future code path bypasses the normal
-publication method. Equivalent trigger/constraint designs are acceptable only
-if tests prove the same invariant. `AUTOINCREMENT`, timestamps, payload
-columns, semantic IDs, and indexes for future metadata are unnecessary.
+The header references the generation by relational handle, while committed
+content validation enforces the status/cardinality invariant. This permits the
+transaction to stage and authenticate the manifest while the owner is still
+pending, then transition it to complete before selection and commit, in the
+order required by D-16. The uncommitted staged header is invisible to readers.
+Do not weaken this to an unowned scalar, and do not add a `complete`-only
+immediate foreign key that makes the required write-before-complete sequence
+impossible. The exact constraints may otherwise be stricter.
 
-Version 2 should keep the Phase 64 single-marker invariant. Because version 1
-stores one marker row, the version-2 migration should advance that row rather
-than silently leave a v1 marker or accumulate an unrelated marker convention.
-`validate_current_schema` must authenticate the lifecycle tables, columns,
-checks/keys, foreign-key relationship, the singleton bound, and current
-contents (including a foreign-key check), not merely their names.
+Do not persist ordinals. Source order is derived with `ORDER BY relative_path`
+and authenticated again by canonical reconstruction. Header/source columns,
+closed labels, keys, indexes, foreign keys, triggers, and current contents are
+part of current-schema validation.
 
-The supported-prior fixture must be an exact Phase 64 v1 database. Current
-future fixtures hard-code version 2 in `connection.rs`, `store/tests.rs`, and
-the kernel parity expectation; after R1, derive the future value as
-`CURRENT_SCHEMA_VERSION + 1` so version 2 is tested as the supported migration
-source instead of accidentally remaining “future.”
+Schema-v3 content invariants include:
 
-## Failure-Injection Pattern
+- pending generation: zero headers and zero owned source rows;
+- complete generation: exactly one header;
+- manifest header: belongs to the same complete generation;
+- declared source count: exactly equals owned row count;
+- source membership: unique canonical path and closed language/digest purpose;
+- stored run identity: equals typed recomputation;
+- active generation: joins one complete generation with one authenticated
+  manifest; and
+- no orphan/cross-owned header or source row.
 
-Use a deterministic, store-private, test-only hook or finite seam enum. Do not
-add an environment variable, feature, global lock, public option, or
-production-visible failure mode. Cover at least these boundaries:
+## Migration Pattern
 
-- before the pending-to-complete update;
-- immediately after the update;
-- immediately before singleton selection;
-- immediately after singleton selection;
-- immediately before commit.
+Version 2 is supported only when both `generations` and `active_generation` are
+empty. Check this first through the existing read-only `preflight_schema`,
+which runs before `open_uninitialized_writer` applies `synchronous` or
+`journal_mode = WAL`; a populated v2 refusal must not persist a connection
+policy change. Repeat the prerequisite inside the same immediate migration
+transaction before executing any v3 DDL or marker/version update.
 
-For every seam: publish A; reserve B; inject B’s failure; assert the typed
-failure; authenticate that B is not active; drop every connection; reopen; and
-assert A is still the sole selected complete generation. The fixture snapshot
-should carry ordered `(typed handle, typed status)` rows plus the selected
-handle so tests prove relationships and states, not just counts or
-`user_version`.
+- Empty exact v2: add the two manifest tables and advance the single marker and
+  `user_version` to 3.
+- Populated exact v2: return the existing typed invalid-schema/rebuild-needed
+  path with journal mode, catalog, marker, generation rows, and active
+  relationship unchanged.
+- v0/v1: ordered migrations may pass through an empty v2 to v3.
+- v3: strict idempotent validation only.
+- malformed/future: refuse before mutation.
 
-Also prove:
+Do not synthesize a manifest, delete or deactivate legacy generations, or
+support a mixed manifestless current schema.
 
-- a fresh migrated store has no active generation;
-- reservation alone does not create readable truth;
-- successful publication returns/selects the reserved handle;
-- a direct pending-selection attempt is rejected by the relational constraint;
-- publishing B after A selects B exactly, while a newer unselected/pending C
-  does not affect the read;
-- close/reopen preserves the selection;
-- the exact v1 → v2 migration succeeds and v2 reopen is idempotent;
-- malformed current and future schemas remain typed private refusals;
-- disabled lifecycle entry points return before path validation or I/O.
+## Bounded Decode Pattern
+
+SQLite values are untrusted even in a private cache. Before retrieving owned
+text into large Rust allocations:
+
+1. authenticate the current schema and relationships;
+2. query `typeof(...)` for every scalar/column family;
+3. preflight header cardinality and declared child count;
+4. enforce explicit per-field byte limits;
+5. enforce source-row and aggregate payload-byte limits including row overhead;
+6. only then read rows in the same transaction;
+7. decode closed purposes/languages and checked numeric conversions;
+8. reconstruct the canonical projection; and
+9. recompute and compare the run identity and exact fields.
+
+Limits should be constants large enough for real repositories and small enough
+to bound attacker-controlled work. Do not silently truncate, coerce SQLite
+storage classes, allocate from an unchecked count, or accept partial payloads.
+
+## Private Read Result
+
+A narrow private result may be shaped like:
+
+```rust
+enum ManifestMatch {
+    NoActiveManifest,
+    Exact(GenerationHandle),
+    Mismatch,
+}
+```
+
+Malformed storage is an error/refusal rather than another mismatch. Exact
+means the decoded stored manifest and requested manifest compare field for
+field after both identities are recomputed. R2 returns no persisted provider
+facts and changes no analysis result.
+
+## Failure and Tamper Proof
+
+Extend the finite cfg(test)-only publication seams to cover:
+
+- before/after header write;
+- during or after source writes;
+- before/after stored decode and identity validation;
+- before/after pending-to-complete transition;
+- before/after singleton selection; and
+- before commit.
+
+For each seam: publish A with manifest M1; reserve B; fail publication of B
+with M2; close all connections; reopen; authenticate A/M1 as the sole readable
+active truth; prove B remains pending with no manifest rows.
+
+Tamper tests should mutate one field while leaving the stored run digest
+unchanged and require typed refusal for:
+
+- manifest schema, every purpose label, every digest value, declared count,
+  and run identity;
+- source insertion and deletion;
+- source path, language, purpose, digest, and byte-size update;
+- storage-class substitution;
+- oversized scalar/row/count/aggregate cases; and
+- missing, extra, orphaned, or cross-owned relationships.
+
+Normal mismatch tests separately prove exact workspace, config, source
+insert/delete/update/path/language/digest/size changes are non-reusable rather
+than corruption. Insertion order, worker order, timestamps, mtimes, durations,
+and cache telemetry must not affect identity because the constructor and schema
+cannot represent them.
 
 ## Three-Task Planning Fit
 
-1. **Schema:** version-2 migration, exact validation, v1/current/future fixtures.
-2. **Lifecycle:** opaque handle, reservation, atomic publish/select, active
-   read, and narrow connection transaction support.
-3. **Proof:** lifecycle/reopen/failure matrix plus the test-only future-version
-   parity adjustment.
+1. **Projection:** typed canonical manifest/codec/identity plus focused
+   constructor and mutation tests.
+2. **Schema and I/O:** exact v3 migration, bounded relational encode/decode,
+   one-snapshot authenticated reads, and populated-v2 refusal.
+3. **Atomic proof:** manifest-aware publication/match facade, rollback/reopen
+   matrix, tamper/bounds tests, disabled parity, and existing test-suite checks.
 
-This stays within the restart limits of three tasks, fifteen product/test
-files, 2,500 handwritten added lines, one durable schema family, and zero
-provider families. Discovery of any required identity, provider, runtime, or
-validation contract is a stop-and-split condition.
-
-## CI Follow-up
-
-The current required workflow still runs full platform library tests; GitHub Actions run
-`29752687999` had an approximately **9 minute 52 second** critical path in the
-Windows library-test job. On 2026-07-28 the user explicitly deferred the
-sub-five-minute target, satisfying the restart plan's required human decision.
-This baseline no longer blocks R1 planning or implementation.
-
-The other test-economics constraints remain: no required individual test above
-60 seconds and no global serialization of ordinary correctness tests. CI
-redesign, workflow edits, branch-protection administration, timeout increases,
-and the sub-five-minute follow-up remain explicitly outside this R1 file set.
+This remains within three tasks, fifteen product/test files, 2,500 handwritten
+added lines, one schema family, and zero provider families. If the work needs
+provider trust, capability state, tool/environment certification, a general
+dependency index, `InputSnapshot` redesign, production enablement, or CI
+redesign, stop and split it into its owning later slice.
