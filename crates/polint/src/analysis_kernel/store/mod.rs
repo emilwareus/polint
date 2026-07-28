@@ -154,7 +154,8 @@ impl SemanticStore {
         config: &StoreConfig,
     ) -> Result<Option<GenerationHandle>, GenerationError> {
         prepare_generation_store(config)?;
-        let reader = connection::open_read_only(config.path()).map_err(GenerationError::from)?;
+        let reader =
+            connection::open_current_read_only(config.path()).map_err(GenerationError::from)?;
         generation::active(&reader)
     }
 

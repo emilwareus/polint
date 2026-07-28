@@ -98,6 +98,12 @@ pub(super) fn open_read_only(path: &Path) -> Result<ReadOnlyConnection, Connecti
     Ok(ReadOnlyConnection { connection })
 }
 
+pub(super) fn open_current_read_only(path: &Path) -> Result<ReadOnlyConnection, ConnectionError> {
+    let writer = open_writer(path)?;
+    drop(writer);
+    open_read_only(path)
+}
+
 pub(super) fn with_immediate_transaction<T, E>(
     writer: &mut WriterConnection,
     operation: impl FnOnce(&Transaction<'_>) -> Result<T, E>,
@@ -346,6 +352,13 @@ impl Drop for HeldWriterConnection {
 }
 
 #[cfg(test)]
+pub(super) fn install_version_one_fixture_for_test(path: &Path) -> Result<(), ConnectionError> {
+    let connection = Connection::open(path).map_err(classify_sqlite_error)?;
+    super::migrations::install_version_one_fixture_for_test(&connection)
+        .map_err(classify_sqlite_error)
+}
+
+#[cfg(test)]
 pub(super) fn install_future_fixture_for_test(path: &Path) -> Result<(), ConnectionError> {
     let connection = Connection::open(path).map_err(classify_sqlite_error)?;
     connection
@@ -378,9 +391,9 @@ pub(super) fn install_invalid_fixture_for_test(path: &Path) -> Result<(), Connec
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct StoreFixtureSnapshot {
-    version: i32,
+    pub(super) version: i32,
     bootstrap_markers: Option<i64>,
-    sentinel: Option<String>,
+    pub(super) sentinel: Option<String>,
     pub(super) generations: Vec<(GenerationHandle, GenerationStatus)>,
     pub(super) selected_generation: Option<GenerationHandle>,
 }

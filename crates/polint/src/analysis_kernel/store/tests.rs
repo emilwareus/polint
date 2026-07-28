@@ -47,6 +47,72 @@ mod generation_lifecycle {
     }
 
     #[test]
+    fn direct_active_read_initializes_an_absent_owned_store() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let config = store_config(&temp);
+        assert!(!config.path().exists());
+
+        assert_eq!(
+            SemanticStore::active_generation(&config).expect("initialize active-generation read"),
+            None
+        );
+
+        let initialized = snapshot(&config);
+        assert_eq!(initialized.version, migrations::CURRENT_SCHEMA_VERSION);
+        assert!(initialized.generations.is_empty());
+        assert_eq!(initialized.selected_generation, None);
+        assert!(current_schema_is_valid_for_test(config.path()));
+    }
+
+    #[test]
+    fn direct_active_read_migrates_exact_version_one_and_preserves_data() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let config = store_config(&temp);
+        std::fs::create_dir_all(config.path().parent().expect("store directory"))
+            .expect("create store directory");
+        connection::install_version_one_fixture_for_test(config.path())
+            .expect("install exact version-one fixture");
+        let before = snapshot(&config);
+        assert_eq!(before.version, 1);
+        assert_eq!(before.sentinel.as_deref(), Some("preserve-me"));
+
+        assert_eq!(
+            SemanticStore::active_generation(&config).expect("migrate active-generation read"),
+            None
+        );
+
+        let migrated = snapshot(&config);
+        assert_eq!(migrated.version, migrations::CURRENT_SCHEMA_VERSION);
+        assert_eq!(migrated.sentinel.as_deref(), Some("preserve-me"));
+        assert!(migrated.generations.is_empty());
+        assert_eq!(migrated.selected_generation, None);
+        assert!(current_schema_is_valid_for_test(config.path()));
+    }
+
+    #[test]
+    fn direct_active_read_maps_writer_contention_within_the_bounded_policy() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let config = store_config(&temp);
+        assert_eq!(SemanticStore::maintain(&config), StoreStatus::Ready);
+        let held =
+            connection::hold_writer_connection_for_test(config.path()).expect("hold writer lease");
+
+        let started = std::time::Instant::now();
+        let result = SemanticStore::active_generation(&config);
+        let elapsed = started.elapsed();
+
+        assert_eq!(
+            result,
+            Err(GenerationError::Store(StoreStatus::BusySkipped))
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "elapsed: {elapsed:?}"
+        );
+        drop(held);
+    }
+
+    #[test]
     fn reservation_is_unreadable_until_the_same_handle_is_published() {
         let temp = tempfile::tempdir().expect("temp directory");
         let config = store_config(&temp);

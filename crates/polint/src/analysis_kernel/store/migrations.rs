@@ -78,6 +78,22 @@ pub(super) fn apply_migrations(
     Ok(status)
 }
 
+#[cfg(test)]
+pub(super) fn install_version_one_fixture_for_test(
+    connection: &Connection,
+) -> Result<(), rusqlite::Error> {
+    connection.execute_batch(BOOTSTRAP_TABLE_SQL)?;
+    connection.execute(
+        "INSERT INTO _polint_schema_migrations (version) VALUES (1)",
+        [],
+    )?;
+    connection.execute_batch(
+        "CREATE TABLE sentinel (value TEXT NOT NULL);\
+         INSERT INTO sentinel (value) VALUES ('preserve-me');\
+         PRAGMA user_version = 1;",
+    )
+}
+
 pub(super) fn apply_migrations_in_transaction(
     transaction: &Transaction<'_>,
 ) -> Result<MigrationStatus, MigrationError> {
@@ -500,22 +516,7 @@ mod tests {
     }
 
     fn install_version_one_fixture(connection: &Connection) {
-        connection
-            .execute_batch(BOOTSTRAP_TABLE_SQL)
-            .expect("create bootstrap table");
-        connection
-            .execute(
-                "INSERT INTO _polint_schema_migrations (version) VALUES (1)",
-                [],
-            )
-            .expect("insert version-one marker");
-        connection
-            .execute_batch(
-                "CREATE TABLE sentinel (value TEXT NOT NULL);\
-                 INSERT INTO sentinel (value) VALUES ('preserve-me');\
-                 PRAGMA user_version = 1;",
-            )
-            .expect("create exact version-one fixture");
+        install_version_one_fixture_for_test(connection).expect("create exact version-one fixture");
     }
 
     fn install_claimed_current_schema(
