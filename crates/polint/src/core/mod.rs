@@ -80,6 +80,7 @@ use crate::analysis::values::facts::{AllocationTokenFact, ValueFact, ValuePrecis
 use crate::analysis::values::store::ValueStore;
 use crate::analysis_kernel::{
     FactConfidence, FactFamily, FactMeta, FactMetaStore, FactPrecision, FactRef, MissingFactMeta,
+    ProviderFailureReason, ProviderFailureSignal, ProviderFailureStage, ProviderOutcomeStatus,
     ValidationStatus, resolution_metadata, resolution_status_metadata, stable_key_from_parts,
     symbol_metadata,
 };
@@ -133,6 +134,23 @@ pub(crate) const ENTRYPOINTS_PROVIDER_ID: &str = "polint.entrypoints";
 const METRICS_PROVIDER_ID: &str = "polint.metrics";
 const FUNCTION_SIZE_METRIC_NAME: &str = "function_size";
 const CYCLOMATIC_COMPLEXITY_METRIC_NAME: &str = "cyclomatic_complexity";
+
+macro_rules! provider_try {
+    ($db:expr, $provider_id:expr, $result:expr) => {
+        match $result {
+            Ok(value) => value,
+            Err(error) => {
+                $db.record_provider_failure(
+                    $provider_id,
+                    ProviderOutcomeStatus::Failed,
+                    ProviderFailureStage::Execution,
+                    ProviderFailureReason::ExecutionFailed,
+                );
+                return Err(error);
+            }
+        }
+    };
+}
 
 /// Arbitrary per-rule configuration value from `.polint.toml`.
 ///
@@ -658,6 +676,7 @@ pub struct CachedFileFacts {
 pub struct AnalysisDb {
     files: Vec<SourceFile>,
     fact_meta: FactMetaStore,
+    provider_failures: BTreeMap<&'static str, ProviderFailureSignal>,
     packages: Vec<PackageFact>,
     functions: Vec<FunctionFact>,
     imports: Vec<ImportFact>,
@@ -829,6 +848,7 @@ impl Default for AnalysisDb {
         Self {
             files: Vec::new(),
             fact_meta: FactMetaStore::default(),
+            provider_failures: BTreeMap::new(),
             packages: Vec::new(),
             functions: Vec::new(),
             imports: Vec::new(),
@@ -966,6 +986,26 @@ impl Default for AnalysisDb {
 impl AnalysisDb {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub(crate) fn record_provider_failure(
+        &mut self,
+        provider_id: &'static str,
+        status: ProviderOutcomeStatus,
+        stage: ProviderFailureStage,
+        reason: ProviderFailureReason,
+    ) {
+        self.provider_failures.insert(
+            provider_id,
+            ProviderFailureSignal::new(status, stage, reason),
+        );
+    }
+
+    pub(crate) fn take_provider_failure(
+        &mut self,
+        provider_id: &str,
+    ) -> Option<ProviderFailureSignal> {
+        self.provider_failures.remove(provider_id)
     }
 
     /// Injects diff-to-target-ref facts for `polint review`.
@@ -1263,7 +1303,11 @@ impl AnalysisDb {
     }
 
     pub(crate) fn replace_semantic_mir(&mut self, output: MirOutput) -> Result<(), AnalysisError> {
-        self.semantic = Some(SemanticStore::from_output(output)?);
+        self.semantic = Some(provider_try!(
+            self,
+            SEMANTIC_MIR_PROVIDER_ID,
+            SemanticStore::from_output(output)
+        ));
         self.refresh_semantic_mir_metadata();
         Ok(())
     }
@@ -1288,7 +1332,7 @@ impl AnalysisDb {
         mut output: CallOutput,
     ) -> Result<(), AnalysisError> {
         self.populate_call_owner_symbols(&mut output);
-        let store = CallStore::from_output(output)?;
+        let store = provider_try!(self, CALLS_PROVIDER_ID, CallStore::from_output(output));
         self.call_sites = store.sites().to_vec();
         self.call_targets = store.targets().to_vec();
         self.unresolved_calls = store.unresolved().to_vec();
@@ -1307,7 +1351,11 @@ impl AnalysisDb {
             .iter()
             .map(|target| target.id)
             .collect::<BTreeSet<_>>();
-        let store = IdentityStore::from_output(output, &valid_sites, &valid_targets)?;
+        let store = provider_try!(
+            self,
+            "polint.identity",
+            IdentityStore::from_output(output, &valid_sites, &valid_targets)
+        );
         self.identity_records = store.records().to_vec();
         self.identity_store = Some(store);
         Ok(())
@@ -1346,7 +1394,11 @@ impl AnalysisDb {
         &mut self,
         output: RefinedCallOutput,
     ) -> Result<(), AnalysisError> {
-        let store = RefinedCallStore::from_normalized_output(output)?;
+        let store = provider_try!(
+            self,
+            REFINED_CALLS_PROVIDER_ID,
+            RefinedCallStore::from_normalized_output(output)
+        );
         self.refined_call_edges.clear();
         self.refined_call_store = Some(store);
         self.refresh_refined_call_metadata();
@@ -1357,7 +1409,11 @@ impl AnalysisDb {
         &mut self,
         output: DataFlowOutput,
     ) -> Result<(), AnalysisError> {
-        let store = DataFlowStore::from_output(output)?;
+        let store = provider_try!(
+            self,
+            DATA_FLOW_PROVIDER_ID,
+            DataFlowStore::from_output(output)
+        );
         self.data_flow_nodes = store.nodes().to_vec();
         self.data_flow_edges = store.edges().to_vec();
         self.data_flow_models = store.models().to_vec();
@@ -1371,7 +1427,11 @@ impl AnalysisDb {
         &mut self,
         output: EvidenceOutput,
     ) -> Result<(), AnalysisError> {
-        let store = EvidenceStore::from_output(output)?;
+        let store = provider_try!(
+            self,
+            EVIDENCE_PROVIDER_ID,
+            EvidenceStore::from_output(output)
+        );
         self.evidence_nodes = store.nodes().to_vec();
         self.evidence_edges = store.edges().to_vec();
         self.evidence_bundles = store.bundles().to_vec();
@@ -1668,7 +1728,11 @@ impl AnalysisDb {
         &mut self,
         output: EntrypointOutput,
     ) -> Result<(), AnalysisError> {
-        let store = EntrypointStore::from_output(output)?;
+        let store = provider_try!(
+            self,
+            ENTRYPOINTS_PROVIDER_ID,
+            EntrypointStore::from_output(output)
+        );
         self.entrypoint_facts = store.entrypoints().to_vec();
         self.trust_boundary_facts = store.trust_boundaries().to_vec();
         self.dispatch_edge_facts = store.dispatch_edges().to_vec();
@@ -1692,8 +1756,11 @@ impl AnalysisDb {
     ) -> Result<(), AnalysisError> {
         let valid_function_ids = self.functions.iter().map(|row| row.id).collect();
         let valid_entrypoint_ids = self.entrypoint_facts.iter().map(|row| row.id).collect();
-        let store =
-            ReachabilityStore::from_output(output, &valid_function_ids, &valid_entrypoint_ids)?;
+        let store = provider_try!(
+            self,
+            "polint.reachability",
+            ReachabilityStore::from_output(output, &valid_function_ids, &valid_entrypoint_ids)
+        );
         self.reachability_roots = store.roots().to_vec();
         self.reachability_marks = store.marks().to_vec();
         Ok(())
@@ -1736,7 +1803,7 @@ impl AnalysisDb {
         &mut self,
         output: SemanticGraphOutput,
     ) -> Result<(), AnalysisError> {
-        output.validate_references()?;
+        provider_try!(self, "polint.semantic_graph", output.validate_references());
         self.semantic_nodes = output.nodes;
         self.semantic_edges = output.edges;
         self.semantic_constraints = output.constraints;
@@ -1767,7 +1834,11 @@ impl AnalysisDb {
         &mut self,
         output: TsObjectModelOutput,
     ) -> Result<(), AnalysisError> {
-        let store = TsObjectModelStore::try_from_output(output)?;
+        let store = provider_try!(
+            self,
+            "polint.semantic_graph",
+            TsObjectModelStore::try_from_output(output)
+        );
         self.ts_object_allocations = store.allocations().to_vec();
         self.ts_property_writes = store.property_writes().to_vec();
         self.ts_property_reads = store.property_reads().to_vec();
@@ -1835,7 +1906,7 @@ impl AnalysisDb {
         &mut self,
         output: SolverOutput,
     ) -> Result<(), AnalysisError> {
-        let store = SolverStore::from_output(output)?;
+        let store = provider_try!(self, "polint.solver", SolverStore::from_output(output));
         self.solver_derived_edges = store.derived_edges().to_vec();
         self.solver_budget_status = store.budget_status();
         self.solver_budget_reasons = store.budget_reasons().clone();
@@ -1870,7 +1941,11 @@ impl AnalysisDb {
         &mut self,
         output: GoSemanticFactsOutput,
     ) -> Result<GoSemanticStoreReport, AnalysisError> {
-        let store = GoSemanticStore::from_output(output)?;
+        let store = provider_try!(
+            self,
+            "polint.go.semantic",
+            GoSemanticStore::from_output(output)
+        );
         self.go_semantic_packages = store.output().packages.clone();
         self.go_semantic_functions = store.output().functions.clone();
         self.go_semantic_callsites = store.output().callsites.clone();

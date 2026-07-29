@@ -1,5 +1,7 @@
-use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{CacheStats, Digest, DigestKind, InputSnapshot};
+use crate::analysis_kernel::{
+    ProviderFailureReason, ProviderFailureStage, ProviderManifest, ProviderOutcomeStatus,
+};
 use crate::config::LoadedConfig;
 use crate::core::{AnalysisDb, Span};
 use crate::diagnostics::{Diagnostic, TextRange};
@@ -72,6 +74,7 @@ fn derive_go_semantic_with_runner(
     let config = match GoAnalysisConfig::from_loaded_files(loaded, &files) {
         Ok(config) => config,
         Err(error) => {
+            record_setup_missing(db);
             return store_output(
                 db,
                 input_snapshot,
@@ -89,6 +92,7 @@ fn derive_go_semantic_with_runner(
     };
 
     if !config.files_without_module_root.is_empty() {
+        record_setup_missing(db);
         let diagnostics = if go_module_roots_configured(loaded) {
             vec![setup_missing_diagnostic(
                 "some Go files are not under a configured go.mod module root.",
@@ -116,6 +120,7 @@ fn derive_go_semantic_with_runner(
 
     let missing_roots = config.missing_module_roots(&loaded.root);
     if !missing_roots.is_empty() {
+        record_setup_missing(db);
         return store_output(
             db,
             input_snapshot,
@@ -138,6 +143,7 @@ fn derive_go_semantic_with_runner(
     let run = match runner(&config) {
         Ok(run) => run,
         Err(error) => {
+            record_client_failure(db, &error);
             return store_output(
                 db,
                 input_snapshot,
@@ -157,6 +163,12 @@ fn derive_go_semantic_with_runner(
     let lowered = match lower_go_semantic(db, &run.output) {
         Ok(output) => output,
         Err(error) => {
+            db.record_provider_failure(
+                "polint.go.semantic",
+                ProviderOutcomeStatus::Failed,
+                ProviderFailureStage::Execution,
+                ProviderFailureReason::ExecutionFailed,
+            );
             return GoSemanticProviderRunOutput {
                 diagnostics: vec![provider_error_diagnostic(error.to_string())],
                 cache_stats,
@@ -183,6 +195,36 @@ fn derive_go_semantic_with_runner(
             diagnostics,
         },
     )
+}
+
+fn record_setup_missing(db: &mut AnalysisDb) {
+    db.record_provider_failure(
+        "polint.go.semantic",
+        ProviderOutcomeStatus::SetupMissing,
+        ProviderFailureStage::Setup,
+        ProviderFailureReason::SetupMissing,
+    );
+}
+
+fn record_client_failure(db: &mut AnalysisDb, error: &GoSemanticClientError) {
+    let (status, stage, reason) = match error {
+        GoSemanticClientError::Process(GoSemanticProcessError::VersionUnsupported(_)) => (
+            ProviderOutcomeStatus::Unsupported,
+            ProviderFailureStage::Setup,
+            ProviderFailureReason::Unsupported,
+        ),
+        GoSemanticClientError::Process(GoSemanticProcessError::CommandUnavailable(_)) => (
+            ProviderOutcomeStatus::SetupMissing,
+            ProviderFailureStage::Setup,
+            ProviderFailureReason::SetupMissing,
+        ),
+        _ => (
+            ProviderOutcomeStatus::Failed,
+            ProviderFailureStage::Execution,
+            ProviderFailureReason::ExecutionFailed,
+        ),
+    };
+    db.record_provider_failure("polint.go.semantic", status, stage, reason);
 }
 
 #[derive(Debug, Clone)]

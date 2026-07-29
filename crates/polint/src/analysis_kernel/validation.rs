@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
+use std::ops::Deref;
 
 use serde::Serialize;
 
@@ -22,7 +23,7 @@ use crate::analysis::types::facts::{TypePrecision, TypeShape, TypeStatus, TypeSu
 use crate::analysis::validate::validate_semantic_mir;
 use crate::analysis::values::facts::{ValueKind, ValuePrecision, ValueStatus, ValueSubject};
 use crate::analysis_kernel::{
-    FactFamily, FactPrecision, FactRef, PrecisionCeiling, ProviderManifest,
+    FactFamily, FactPrecision, FactRef, PrecisionCeiling, ProviderManifest, ValidationDowngrades,
 };
 use crate::core::{
     AnalysisDb, BranchId, FileId, FunctionId, ImportId, ModuleNodeId, PackageId, ReferenceId,
@@ -38,10 +39,50 @@ use crate::symbol_graph::semantic::{ExportId, ScopeId, SemanticStatus};
 const SYMBOL_GRAPH_PROVIDER_ID: &str = "polint.symbol_graph";
 const SEMANTIC_EVIDENCE_ORDER: (&str, &str, &str) = ("family", "stable_key", "reason");
 
+#[derive(Clone, Debug)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct ValidationIssue {
+    pub(crate) diagnostic: Diagnostic,
+    pub(crate) fact_family: Option<FactFamily>,
+    pub(crate) provider_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ValidationReport {
+    diagnostics: Vec<Diagnostic>,
+    pub(crate) issues: Vec<ValidationIssue>,
+}
+
+impl ValidationReport {
+    pub(crate) fn diagnostics(&self) -> &[Diagnostic] {
+        &self.diagnostics
+    }
+
+    pub(crate) fn downgrades(&self) -> ValidationDowngrades {
+        let mut downgrades = ValidationDowngrades::default();
+        for issue in &self.issues {
+            if issue.provider_ids.is_empty() {
+                downgrades.mark_global();
+            } else {
+                downgrades.extend_provider_ids(issue.provider_ids.iter().cloned());
+            }
+        }
+        downgrades
+    }
+}
+
+impl Deref for ValidationReport {
+    type Target = [Diagnostic];
+
+    fn deref(&self) -> &Self::Target {
+        &self.diagnostics
+    }
+}
+
 pub(crate) fn validate_fact_metadata(
     db: &AnalysisDb,
     manifests: &[ProviderManifest],
-) -> Vec<Diagnostic> {
+) -> ValidationReport {
     let mut diagnostics = Vec::new();
     let ids = IdSets::from_db(db);
     let manifests_by_id = manifests
@@ -70,7 +111,66 @@ pub(crate) fn validate_fact_metadata(
     validate_precision_ceilings(db, &manifests_by_id, &mut diagnostics);
 
     diagnostics.sort_by(diagnostic_order);
-    diagnostics
+    let issues = diagnostics
+        .iter()
+        .cloned()
+        .map(|diagnostic| validation_issue(db, &manifests_by_id, diagnostic))
+        .collect();
+    ValidationReport {
+        diagnostics,
+        issues,
+    }
+}
+
+fn validation_issue(
+    db: &AnalysisDb,
+    manifests: &BTreeMap<&str, ProviderManifest>,
+    diagnostic: Diagnostic,
+) -> ValidationIssue {
+    let evidence = |label: &str| {
+        diagnostic
+            .evidence
+            .iter()
+            .find(|item| item.label == label)
+            .map(|item| item.value.as_str())
+    };
+    let family_label = evidence("family").or_else(|| {
+        evidence("fact_ref").and_then(|value| value.split_once('#').map(|pair| pair.0))
+    });
+    let fact_family = family_label.and_then(|label| {
+        db.fact_meta()
+            .rows()
+            .map(|(reference, _)| reference.family)
+            .chain(
+                db.missing_fact_metadata()
+                    .into_iter()
+                    .map(|missing| missing.family),
+            )
+            .find(|family| family.label() == label)
+    });
+    let mut provider_ids = BTreeSet::new();
+    let mut record = |provider_id: &str| {
+        if manifests.contains_key(provider_id) {
+            provider_ids.insert(provider_id.to_string());
+        }
+    };
+    if let Some(provider_id) = evidence("producer_id") {
+        record(provider_id);
+    }
+    for (reference, metadata) in db.fact_meta().rows() {
+        let exact_ref =
+            evidence("fact_ref").is_some_and(|value| value == fact_ref_value(reference));
+        let stable_key = evidence("stable_key").is_some_and(|value| value == metadata.stable_key);
+        if exact_ref || stable_key || fact_family == Some(reference.family) {
+            record(metadata.producer_id);
+            record(metadata.layer_id);
+        }
+    }
+    ValidationIssue {
+        diagnostic,
+        fact_family,
+        provider_ids: provider_ids.into_iter().collect(),
+    }
 }
 
 fn validate_data_flow(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
@@ -5714,6 +5814,39 @@ mod tests {
                         && evidence.value == "extension_exact_requires_validation_evidence"
                 })
         }));
+    }
+
+    #[test]
+    fn validation_report_attributes_owned_issues_and_preserves_global_fallback() {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(
+            "main.go".into(),
+            "main.go".to_string(),
+            "package main\n".to_string(),
+        );
+        db.push_package(crate::core::PackageFact {
+            id: crate::core::PackageId(0),
+            file,
+            name: "main".to_string(),
+            span: span(file, 0, 99),
+            language: crate::core::Language::Go,
+        });
+        db.remove_fact_metadata_for_test(FactRef::new(FactFamily::SourceFile, 0));
+
+        let report = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let owned = report
+            .issues
+            .iter()
+            .find(|issue| issue.fact_family == Some(FactFamily::Package))
+            .expect("package span issue");
+        assert_eq!(owned.provider_ids, ["polint.go.syntax"]);
+        assert_eq!(owned.diagnostic.rule_id, "polint/internal");
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|issue| issue.provider_ids.is_empty())
+        );
     }
 
     fn test_meta(family: FactFamily, stable_key: &str, payload_digest: &str) -> FactMeta {

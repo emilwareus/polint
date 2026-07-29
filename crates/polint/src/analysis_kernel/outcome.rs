@@ -9,15 +9,7 @@ pub(crate) enum ProviderOutcomeStatus {
     Succeeded,
     Failed,
     DependencyBlocked,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "reserved for typed provider setup outcomes")
-    )]
     Unsupported,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "reserved for typed provider setup outcomes")
-    )]
     SetupMissing,
     PlannedAbsent,
 }
@@ -53,10 +45,6 @@ pub(crate) enum ProviderFailureStage {
     Planning,
     Dependency,
     Setup,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "reserved for typed provider execution outcomes")
-    )]
     Execution,
     Validation,
 }
@@ -79,10 +67,6 @@ pub(crate) enum ProviderFailureReason {
     DependencyUnavailable,
     Unsupported,
     SetupMissing,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "reserved for typed provider execution outcomes")
-    )]
     ExecutionFailed,
     ValidationRejected,
 }
@@ -96,6 +80,27 @@ impl ProviderFailureReason {
             Self::SetupMissing => "setup_missing",
             Self::ExecutionFailed => "execution_failed",
             Self::ValidationRejected => "validation_rejected",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ProviderFailureSignal {
+    pub(crate) status: ProviderOutcomeStatus,
+    pub(crate) stage: ProviderFailureStage,
+    pub(crate) reason: ProviderFailureReason,
+}
+
+impl ProviderFailureSignal {
+    pub(crate) fn new(
+        status: ProviderOutcomeStatus,
+        stage: ProviderFailureStage,
+        reason: ProviderFailureReason,
+    ) -> Self {
+        Self {
+            status,
+            stage,
+            reason,
         }
     }
 }
@@ -252,18 +257,10 @@ impl ValidationDowngrades {
         }
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used when authoritative validation is wired")
-    )]
     pub(crate) fn extend_provider_ids(&mut self, provider_ids: impl IntoIterator<Item = String>) {
         self.provider_ids.extend(provider_ids);
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used when authoritative validation is wired")
-    )]
     pub(crate) fn mark_global(&mut self) {
         self.global = true;
     }
@@ -342,10 +339,6 @@ impl ProviderOutcomeTracker {
         })
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by dependency-aware provider orchestration")
-    )]
     pub(crate) fn can_run(&self, provider_id: &str) -> Result<Vec<String>, ProviderOutcomeError> {
         let state = self.state(provider_id)?;
         if !matches!(state, AttemptState::Pending) {
@@ -365,6 +358,10 @@ impl ProviderOutcomeTracker {
             .collect())
     }
 
+    pub(crate) fn is_pending(&self, provider_id: &str) -> Result<bool, ProviderOutcomeError> {
+        Ok(matches!(self.state(provider_id)?, AttemptState::Pending))
+    }
+
     pub(crate) fn record_success(
         &mut self,
         provider_id: &str,
@@ -376,10 +373,6 @@ impl ProviderOutcomeTracker {
         )
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by typed provider failure orchestration")
-    )]
     pub(crate) fn record_non_success(
         &mut self,
         provider_id: &str,
@@ -397,10 +390,6 @@ impl ProviderOutcomeTracker {
         self.replace_pending(provider_id, AttemptState::Final(outcome))
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by dependency-aware provider orchestration")
-    )]
     pub(crate) fn record_dependency_blocked(
         &mut self,
         provider_id: &str,
