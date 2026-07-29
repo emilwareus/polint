@@ -48,9 +48,9 @@ completed: 2026-07-29
 
 **Production validation now carries authenticated typed ownership, and one real cached TS run is proven cold/warm equivalent through rule dispatch, policy output ordering, and exit behavior.**
 
-This closes the implementation and local-verification work for the two recorded
-R3 gaps only. Independent cumulative review and R3-only reverification remain
-pending. Phase 65, R4-R6, STORE-04, STORE-05, META-01, and META-04 remain open.
+This closes the two recorded R3 gaps and their independent acceptance gates.
+R1-R3 are accepted completed slices only. Phase 65, R4-R6, STORE-04, STORE-05,
+META-01, and META-04 remain open.
 
 ## Performance
 
@@ -60,7 +60,7 @@ pending. Phase 65, R4-R6, STORE-04, STORE-05, META-01, and META-04 remain open.
 - **Tasks:** 2
 - **Plan product/test files modified:** 3
 - **Plan product/test delta:** 379 additions, 469 deletions
-- **Cumulative R3 product/test scope from `c453748c`:** exactly 14 files, 2,499 additions, 822 deletions
+- **Final accepted cumulative R3 product/test scope from `c453748c`:** exactly 14 files, 2,500 additions, 831 deletions
 - **Durable schema families added:** 0
 - **Persisted provider families added:** 0
 
@@ -84,6 +84,10 @@ pending. Phase 65, R4-R6, STORE-04, STORE-05, META-01, and META-04 remain open.
   valid-compute cache-write-warning coverage.
 - Retained the production pre-RuleCtx blocker regression: rejected scheduled
   refinement blocks Events and Calls while an unrelated rule still executes.
+- Closed D-16 and D-23/D-25 with authenticated validation ownership and a
+  complete production cold/warm semantic projection.
+- Closed later review gaps WR-02 and WR-03, then passed cumulative review
+  iteration 9 and the complete R3-only reverification.
 - Preserved the public API, CLI, diagnostic/exit contracts, durable store,
   schema, migrations, CI workflow, and planning completion state.
 
@@ -100,6 +104,16 @@ The Task 1 commit hook passed `make lint` in 24.98s. The successful Task 2
 commit hook passed formatting and strict workspace/all-target/all-feature
 Clippy in 20.77s.
 
+## Independent Remediation and Acceptance Commits
+
+1. **Restore the applicable-syntax production regression (WR-02)** - `34979d2a` (`test`)
+2. **Correct the diagnostic non-leakage assertion (WR-03)** - `e8a1f800` (`test`)
+
+**Fix-history artifacts:** `adc40fc3`, `d926c901`
+
+**Final acceptance artifacts:** `f1d249b3` (cumulative review iteration 9,
+clean) and `21346639` (R3-only reverification, passed)
+
 ## Files Created/Modified
 
 - `crates/polint/src/analysis_kernel/validation.rs` - Structured
@@ -111,7 +125,7 @@ Clippy in 20.77s.
   complete cold/warm production semantic projection, including corrupt/write
   cache branches.
 - `.planning/phases/65-generation-manifest-and-metadata-mirroring/65-04-SUMMARY.md`
-  - This bounded implementation and verification handoff.
+  - This bounded implementation and accepted R3 handoff.
 
 ## Decisions Made
 
@@ -136,27 +150,32 @@ No product-scope deviation. Both tasks stayed within the three declared source
 files, the exact original fourteen-file cumulative boundary, the 2,500-line
 cap, and the private/test-only contract.
 
-The two mandatory independent acceptance gates were intentionally not run in
-this execution lane. Fresh cumulative review and fresh R3-only reverification
-remain pending; consequently this summary does not claim R3 acceptance, Phase
-65 completion, or completion of any mapped requirement.
+The two mandatory independent acceptance gates were deferred from the original
+execution lane and then completed separately. Their passing results accept R3
+only; they do not complete Phase 65 or any mapped requirement.
 
 ## Issues Encountered
 
 - Structured Task 1 attribution temporarily consumed more cumulative addition
   budget than the final cap allowed. Task 2 replaced the superseded partial
   kernel fixture, shared the runner rule/counter harness, and compacted only
-  R3-added code in the three authorized files, finishing at 2,499 additions.
+  R3-added code in the three authorized files, finishing the original Plan 04
+  handoff at 2,499 additions.
 - A compact exact-answer assertion initially compared `&Vec<String>` with a
   string array. Changing the observation to `answers.as_slice()` restored the
   intended value comparison.
 - The first Task 2 commit attempt was rejected by strict Clippy for an
   obfuscated boolean `then(...).unwrap_or(...)` expression. It was rewritten
   as an idiomatic `if/else`; the normal hook then passed.
+- Later review found WR-02 after compaction had removed the applicable-syntax
+  production regression; `34979d2a` restored it at the 2,500-addition cap.
+  WR-03 then corrected a test-only diagnostic projection mismatch in
+  `e8a1f800`, leaving the final cumulative delta at 2,500 additions and 831
+  deletions.
 
 ## Verification
 
-All plan commands were run separately:
+All original Plan 04 local commands were run separately:
 
 - Validation ownership: 8/8 passed; 0.01s test time, 29.00s wall including compilation.
 - Closed outcomes: 6/6 passed; 0.00s test time, 0.47s wall.
@@ -171,28 +190,32 @@ All plan commands were run separately:
 - `cargo check --workspace --all-features --locked`: passed in 8.75s.
 - Cumulative `git diff --check`: passed in 0.04s.
 - Exact fourteen-file audit: passed in 0.00s.
-- Addition-cap audit: passed at 2,499 additions in 0.03s.
+- Addition-cap audit: passed at 2,499 additions at the original Plan 04 handoff in 0.03s.
 - Protected CI/STATE/ROADMAP/REQUIREMENTS audit: passed in 0.01s.
 
 Every individual focused test command completed below sixty seconds.
 
 ## Independent Gate Status
 
-- **Fresh cumulative R3 code review:** pending.
-- **Fresh Plan 65-03 plus Plan 65-04 R3-only reverification:** pending.
-- **R3-only acceptance:** pending both fresh gates.
+- **Cumulative R3 code review:** passed clean at iteration 9 with 0 findings;
+  committed in `f1d249b3`.
+- **Plan 65-03 plus Plan 65-04 R3-only reverification:** passed 7/7
+  must-haves, 27/27 decisions, and 0 high-risk security gaps; committed in
+  `21346639`.
+- **Behavioral verification closeout:** the full validation module passed
+  28/28, the WR-02 applicable-syntax and WR-03 non-leakage regressions passed,
+  and all fifteen Plan 04 commands passed.
+- **R3-only acceptance:** passed. Phase 65 and all mapped requirements remain
+  open.
 
 ## User Setup Required
 
-None - all behavior and proof remain crate-private or test-only.
+None - all behavior and proof remain crate-private or test-only. Behavioral
+automation is appropriate for this trust-boundary work; no human UAT is needed.
 
 ## Next Phase Readiness
 
-- Run the fresh cumulative review over `c453748c..HEAD` and the exact fourteen
-  product/test files.
-- Run the fresh R3-only verifier for Plan 65-03 plus Plan 65-04, explicitly
-  reassessing D-16, D-23, and D-25 without certifying Phase 65.
-- After those gates pass, R4 is the next delivery slice and should mirror one
+- R4 is the next delivery slice and should mirror one
   audited provider family against the sealed success-only identity boundary.
 - R5-R6 remain later slices. Phase 65 and STORE-04, STORE-05, META-01, and
   META-04 remain open.
@@ -200,12 +223,14 @@ None - all behavior and proof remain crate-private or test-only.
 
 ---
 *Phase: 65-generation-manifest-and-metadata-mirroring*
-*Completed: 2026-07-29 (implementation/local verification only; independent R3 gates pending)*
+*Completed: 2026-07-29 (R3 accepted only; Phase 65 remains open)*
 
-## Self-Check: IMPLEMENTATION PASSED; INDEPENDENT ACCEPTANCE PENDING
+## Self-Check: PASSED - R3 ACCEPTED
 
 The three authorized source files and this summary exist, both task commits are
-in history, all fifteen local verification commands pass, cumulative scope is
-exactly fourteen product/test files at 2,499 additions, and no CI, STATE,
-ROADMAP, REQUIREMENTS, phase-completion, or requirement-completion marker was
-changed.
+in history, all fifteen local verification commands pass, cumulative review
+iteration 9 is clean, R3-only reverification passed 7/7 must-haves and 27/27
+decisions with no high-risk security gaps, final cumulative scope is exactly
+fourteen product/test files at 2,500 additions and 831 deletions, and no CI,
+STATE, ROADMAP, REQUIREMENTS, phase-completion, or requirement-completion
+marker was changed.

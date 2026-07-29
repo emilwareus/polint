@@ -65,18 +65,19 @@ completed: 2026-07-29
 
 **Every established kernel run now seals deterministic provider truth after structured validation, blocks language-aware and row-sensitive failed closures before rule dispatch, and keeps cache telemetry outside semantic identity.**
 
-This completes only restart slice R3. R1-R3 are complete, while Phase 65
-remains open. STORE-04, STORE-05, META-01, and META-04 remain open. R4 is next;
-R5 and R6 remain later slices.
+This completes only the accepted restart slice R3. R1-R3 are accepted completed
+slices, while Phase 65 remains open. STORE-04, STORE-05, META-01, and META-04
+remain open. R4 is next; R5 and R6 remain later slices.
 
 ## Performance
 
-- **Duration:** ~3h 25m from implementation start through final review-artifact commit
+- **Duration:** ~3h 25m for the original Plan 03 implementation and review cycle
 - **Started:** 2026-07-29T07:42:01Z
 - **Completed:** 2026-07-29T11:07:48Z
 - **Tasks:** 3
 - **Implementation/test files modified:** 14
-- **Bounded implementation delta:** 2,500 additions, 733 deletions
+- **Original Plan 03 implementation/review delta:** 2,500 additions, 733 deletions
+- **Final accepted cumulative R3 product/test delta from `c453748c`:** exactly 14 files, 2,500 additions, 831 deletions
 - **Durable schema families:** 0
 - **Persisted provider families:** 0
 
@@ -88,9 +89,10 @@ R5 and R6 remain later slices.
 - Recorded replacement, Go setup, client, and lowering failures as typed orchestration evidence rather than inferring truth from diagnostics or optional digests.
 - Split sealed semantic outcomes from provider cache telemetry throughout run reports, performance/observed projections, semantic-graph fixtures, and symbol-graph warm-cache proof.
 - Derived deterministic runtime capability diagnostics and private blocked-rule IDs before store maintenance, then forwarded those blockers through the production runner before `RuleCtx` construction.
-- Closed all four cumulative review findings: applicable syntax failures now block `events`; validation ownership is assigned structurally rather than recovered from diagnostics; scheduled call/refinement rows and corrected reachability sequencing participate truthfully in mixed-plan Events closure; and dependency-blocked Calls cannot execute an omission-only fallback.
+- Closed all six cumulative review findings: the four provider-closure defects from the original review plus WR-02's restored applicable-syntax production regression and WR-03's corrected diagnostic non-leakage assertion.
 - Proved cold and warm runs have identical outcomes, identities, blockers, diagnostics, and dispatch decisions while telemetry differs; corrupt cache payloads recompute and cache-write warnings do not revoke valid success.
-- Finished cumulative review iteration 6 clean with zero critical, warning, or informational findings while retaining all earlier review history.
+- Closed D-16 and D-23/D-25 through Plan 04's authenticated validation ownership and full production cold/warm projection, then passed the R3-only decision and must-have audit.
+- Finished cumulative review iteration 9 clean with zero critical, warning, or informational findings while retaining all earlier review history.
 - Kept public SDK, runner signatures, capability status, CLI/JSON/diagnostic contracts, durable store schema, tracking files, and `.github/workflows/ci.yml` unchanged; no sub-five-minute CI work was absorbed.
 
 ## Task Commits
@@ -112,8 +114,15 @@ The bounded review fixes were committed independently:
 3. **Strengthen private-vocabulary and regression proof** - `f7f593ac` (test)
 4. **Seal scheduled Events enrichments and correct reachability identity sequencing** - `28689ca7` (fix)
 5. **Prevent dependency-blocked Calls from entering fallback execution** - `f86dab67` (fix)
+6. **Restore the applicable-syntax production regression** - `34979d2a` (test)
+7. **Correct the diagnostic non-leakage assertion** - `e8a1f800` (test)
 
-**Final review artifacts:** `67fc39f9` (docs: cumulative clean review and all-fixed report)
+**Historical Plan 03 review artifact:** `67fc39f9`
+
+**Later fix-history artifacts:** `adc40fc3`, `d926c901`
+
+**Final acceptance artifacts:** `f1d249b3` (cumulative review iteration 9,
+clean) and `21346639` (R3-only reverification, passed)
 
 ## Files Created/Modified
 
@@ -149,21 +158,26 @@ within the original three tasks, exactly fourteen declared product/test files,
 the 2,500-line cap, the private API boundary, and zero durable schema/provider
 families.
 
-The bounded review cycle did correct four implementation defects without
+The bounded review and reverification cycle corrected six implementation or
+verification defects without
 expanding scope:
 
 - **CR-01:** completed the language-applicable syntax closure for `events`.
 - **WR-01:** moved validation downgrade ownership fully into structured issues.
 - **CR-02:** sealed row-sensitive scheduled Events enrichments and corrected the reachability identity handoff exposed by the mixed plan.
 - **CR-03:** prevented a dependency-blocked Calls provider from falling through into provider execution.
+- **WR-02:** restored production-dispatch proof that only the applicable language's syntax failure blocks Events.
+- **WR-03:** aligned the non-leakage assertion with the rendered diagnostic projection while preserving private structured ownership.
 
 ## Issues Encountered
 
 - Removing absent-digest substitutions initially pushed the handwritten diff above the cap. The audited dependency table was compacted with function-local provider aliases without changing any edge; bounded remediation then used the remaining allowance and finished exactly at 2,500 additions.
 - Strict clippy identified redundant terminal digest and test clones after the ownership refactor. Moving those values at their final use resolved the warnings without changing behavior.
-- Standard review required three remediation iterations. CR-01 and WR-01 closed first, CR-02 exposed the mixed-plan reachability/enrichment path, and CR-03 exposed blocked-provider fallback execution; the final cumulative review is clean with zero findings.
+- The original review required three remediation iterations. CR-01 and WR-01 closed first, CR-02 exposed the mixed-plan reachability/enrichment path, and CR-03 exposed blocked-provider fallback execution. Later reverification exposed WR-02 and WR-03; both closed before the final cumulative review finished clean at iteration 9.
 
 ## Verification
+
+Original Plan 03 implementation and initial remediation evidence:
 
 - `cargo test -p polint --lib analysis_kernel::outcome::tests --locked`: 6 passed.
 - `cargo test -p polint --lib eval::performance::tests --locked`: 6 passed.
@@ -179,15 +193,21 @@ expanding scope:
 - `cargo fmt --all -- --check`: passed.
 - `cargo clippy -p polint --lib --tests --all-features --locked -- -D warnings`: passed.
 - `cargo check --workspace --all-features --locked`: passed.
-- Normal pre-commit `make lint` passed workspace formatting and strict clippy across all targets and features for all three task commits and all five remediation commits.
+- Normal pre-commit `make lint` passed workspace formatting and strict clippy across all targets and features for all three task commits and the initial five remediation commits.
 - Private-name scans, removal of `ProviderOutputMeta`/semantic `ProviderStatsRow` consumers, absence of kernel `Digest::absent` handoffs, and `git diff --check`: passed.
-- Cumulative review iteration 6: clean with 0 critical, 0 warning, and 0 informational findings; fix report iteration 3: `all_fixed` for 4/4 findings across five remediation commits.
-- Scope audit from `c453748c`: exactly 14 declared implementation/test files, 2,500 additions, 733 deletions, zero durable schema families, zero persisted provider families, and no public/store/CI/tracking expansion.
+
+Final independent acceptance evidence:
+
+- Cumulative review iteration 9: clean with 0 critical, 0 warning, and 0 informational findings, committed in `f1d249b3`.
+- R3-only reverification: 7/7 must-haves, 27/27 decisions, and 0 high-risk security gaps, committed in `21346639`.
+- The full validation module passed 28/28; the WR-02 applicable-syntax and WR-03 non-leakage regressions passed; and all fifteen Plan 04 verification commands passed separately.
+- Final scope audit from `c453748c`: exactly 14 declared implementation/test files, 2,500 additions, 831 deletions, zero durable schema families, zero persisted provider families, and no public/store/CI/tracking expansion.
 
 ## User Setup Required
 
 None - provider outcomes and runtime blockers are crate-private and require no
-external configuration.
+external configuration. Behavioral automation is the appropriate acceptance
+method for this trust-boundary work; no human UAT is needed.
 
 ## Next Phase Readiness
 
@@ -204,7 +224,7 @@ external configuration.
 ## Self-Check: PASSED
 
 All fourteen bounded implementation/test files and this summary exist, all
-three task commits and five remediation commits are in history, the cumulative
-review is clean, required focused/static/public/store verification passed, and
-no Phase 65, requirement, STATE, ROADMAP, or REQUIREMENTS completion marker was
-written.
+three task commits and seven remediation commits are in history, cumulative
+review iteration 9 is clean, R3-only reverification passed 7/7 must-haves and
+27/27 decisions with no high-risk security gaps, and no Phase 65, requirement,
+STATE, ROADMAP, or REQUIREMENTS completion marker was written.
