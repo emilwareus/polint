@@ -1,10 +1,10 @@
 ---
 phase: 65-generation-manifest-and-metadata-mirroring
-scope: r1-r3
-retained_history: "R1-R2 review body preserved verbatim"
-depth: standard
+scope: r1-r3-gap-closure
+retained_history: "R1-R3 review body preserved verbatim"
+depth: deep
 status: clean
-iteration: 6
+iteration: 9
 diff_base: c453748c
 files_reviewed: 14
 files_reviewed_list:
@@ -720,3 +720,408 @@ _Reviewed: 2026-07-29_
 _Reviewer: gsd-code-reviewer_
 _Depth: standard_
 _Remediation iteration: 3 (final)_
+
+## R3 Verification Gap Closure Review
+
+### Verdict
+
+Issues found: **0 critical, 1 warning, 0 info**.
+
+The Plan 65-04 implementation closes D-16 and D-23/D-25, and the production
+fixes for CR-01, WR-01, CR-02, and CR-03 remain correct. One warning remains:
+test compaction removed the only regression that proved an Events rule is
+blocked when its applicable language syntax provider fails.
+
+This review covered the exact product/test diff
+`c453748c..080312c4`: 14 files, 2,499 additions, and 822 deletions. It found no
+new supported SDK or CLI surface, persisted-store/schema changes, protected
+tracking or CI changes, phase-history comments in shipped code, or nondeterministic
+ordering additions.
+
+### Gap-closure assessment
+
+#### D-16 — Closed
+
+Validation ownership is now authenticated structured data. `ValidationIssue`
+holds presentation separately from attribution, and `from_pending` derives
+provider ownership only from a fixed provider id or from a fact's registered
+producer/layer metadata. Missing metadata, family-only attribution, ownership
+conflicts, and unknown owners fail closed to global blocking. Provider ids are
+deduplicated and ordered before downgrade application.
+
+The real FileMetric precision regression proves that only `polint.metrics` is
+downgraded. It then mutates the rendered reason, evidence, and stable
+fingerprint and proves the downgrade decision is unchanged. The synthetic
+global issue remains unattributed and global. This is non-circular evidence
+that presentation strings no longer authorize state transitions.
+
+**Evidence:** `crates/polint/src/analysis_kernel/validation.rs:54-118`,
+`crates/polint/src/analysis_kernel/validation.rs:127-181`, and
+`crates/polint/src/analysis_kernel/validation.rs:5740-5786`
+
+#### D-23/D-25 — Closed
+
+The production cache proof runs the real isolated TypeScript repository through
+the actual kernel and `dispatch_kernel_output_rules` path on cold, warm,
+corrupt-cache, and blocked-cache-write runs. Its projection includes capability
+support, every provider outcome, runtime blockers, kernel and policy
+diagnostics, ordered policy answers, per-rule execution decisions, and the real
+exit code. Cold and warm cache telemetry differs while all projected behavior
+is equal; corrupt reads are evicted and recomputed; blocked writes preserve
+behavior and emit the expected warning. The counted rule consumes a public
+typed `FileMetrics` view, while an unrelated rule proves independent dispatch.
+
+**Evidence:** `crates/polint/src/runner/mod.rs:552-623` and
+`crates/polint/src/runner/mod.rs:659-705`
+
+### Prior finding closure re-check
+
+- **CR-01 remains closed in production.** Events maps to both Go and TypeScript
+  syntax providers, then filters that closure to languages actually present in
+  the repository.
+- **WR-01 remains closed.** Runtime downgrade reads structured provider ids
+  only; it does not parse messages, evidence, fingerprints, or display text.
+- **CR-02 remains closed.** Calls and refined-calls outcomes affect Events only
+  when corresponding rows exist, and a non-absent failed outcome then blocks
+  the consumer.
+- **CR-03 remains closed.** A selected Calls provider executes only after
+  successful readiness; dependency failure cannot fall through to the
+  lightweight derivation path. The failure regression still proves no call
+  identity or rows are produced while Metrics succeeds independently.
+
+**Evidence:** `crates/polint/src/analysis_kernel/mod.rs:389-470`,
+`crates/polint/src/analysis_kernel/mod.rs:1197-1297`, and
+`crates/polint/src/runner/mod.rs:626-658`
+
+### Findings
+
+#### WR-02 — Compaction removed the applicable-syntax failure regression
+
+**Severity:** Warning
+**Category:** Regression coverage / contract proof
+
+The current Events-only test verifies only that the deep semantic pipeline
+stays off. The surviving production-dispatch blocker test injects failure into
+`polint.refined_calls`, after refined rows exist. Neither test makes an
+applicable Go or TypeScript syntax provider fail, and the latter is the only
+test that calls `runtime_capability_blockers`.
+
+The prior dedicated regression removed during compaction used a single-language
+repository, forced syntax outcomes to non-success states, and asserted that the
+applicable syntax provider blocked Events while the irrelevant-language
+provider did not appear in blocker evidence. Consequently, deleting or
+mis-filtering the production mapping
+`"events" => ["polint.go.syntax", "polint.ts.syntax"]` would no longer make the
+focused suite fail, even though that would reopen CR-01.
+
+**Evidence:**
+
+- `crates/polint/src/analysis_kernel/mod.rs:1197-1297` contains the production
+  closure and language filter.
+- `crates/polint/src/analysis_kernel/mod.rs:2330` exercises an Events-only plan
+  without a syntax failure.
+- `crates/polint/src/runner/mod.rs:626-658` exercises a rejected
+  refined-calls provider, not a syntax provider.
+- A source search finds no other test invocation of
+  `runtime_capability_blockers`.
+- The removed test is visible in `bbdedff7..080312c4` as
+  `established_run_seals_static_manifest_order_after_validation`.
+
+**Impact:** A future regression in applicable-language syntax closure could
+silently pass the compacted suite and restore policy execution after a required
+syntax provider failed. This weakens proof for a previously critical runtime
+trust-boundary fix.
+
+**Minimal fix:** Restore or merge a compact single-language production-dispatch
+regression that changes the applicable syntax outcome to `Failed`, proves the
+irrelevant language provider is absent from blocker evidence, proves the Events
+rule does not execute, and proves an unrelated rule still executes. Preserve
+the exact 14-file scope and the 2,500-addition cap; the current diff has one
+addition of headroom, so the proof must replace or compact superseded test
+lines rather than simply append them.
+
+### Verification
+
+All 15 Plan 65-04 commands passed:
+
+- Validation, outcome, provider-outcome, production cache projection, mixed
+  dispatch, core blocker, public-surface, and semantic-store parity tests.
+- `cargo fmt --all -- --check`.
+- Workspace all-target/all-feature strict Clippy.
+- Workspace all-feature check.
+- Diff hygiene, exact 14-file set, 2,499-addition cap, and protected-file
+  audits.
+
+Additional focused suites passed for run reports, stats, eval performance,
+Events-only planning, full-CFG Calls planning, provider-backed Events matching,
+refined-call validation, the Go semantic provider, symbol-cache restore, and
+semantic-graph snapshots.
+
+No product source, test, plan, summary, verification, fix report, tracking
+file, CI workflow, commit, branch, or remote state was modified by this review.
+Only this cumulative review artifact was updated, with the preceding review
+body retained verbatim.
+
+---
+
+_Reviewed: 2026-07-29_
+_Reviewer: gsd-code-reviewer_
+_Depth: deep_
+_Remediation iteration: 4 (verification-gap closure)_
+
+## R3 Verification Gap Closure Re-review
+
+### Verdict
+
+Issues found: **0 critical, 1 warning, 0 info**.
+
+The WR-02 remediation restores the applicable-syntax failure proof without
+weakening the refined-calls, validation-ownership, cold/warm, cache-corruption,
+cache-write-warning, or public-surface proofs. D-16 and D-23/D-25 remain
+closed, and the production fixes for CR-01, WR-01, CR-02, and CR-03 remain
+correct. One new warning prevents a clean result: the structured
+`ValidationReport` wrapper makes a pre-existing validation-diagnostic
+non-leakage test fail when that test debug-formats the wrapper rather than its
+diagnostic slice.
+
+This re-review covered the full current product/test diff
+`c453748c..adc40fc3`: exactly 14 files, 2,500 additions, and 830 deletions. It
+found no fifteenth file, supported SDK/CLI/config/output expansion,
+persisted-store/schema change, protected tracking or CI change, phase-history
+comment in shipped code, or new nondeterministic ordering.
+
+### Independent closure assessment
+
+- **D-16 remains closed.** `ValidationIssue::from_pending` takes only explicit
+  `FactFamily`, `FactRef`, fixed provider context, and manifest-authenticated
+  `FactMeta` producer/layer IDs. `BTreeSet` supplies sorted/deduplicated
+  ownership; missing, family-only, unknown, or unauthenticated ownership
+  remains global. Message, evidence, fingerprint, fact-reference display, and
+  other rendered strings do not authorize ownership or downgrades. Rendering
+  remains a one-way reconstruction of the original Diagnostic fields.
+- **D-23/D-25 remain closed.** The representative isolated TypeScript cold/warm
+  pair calls the actual `dispatch_kernel_output_rules` and `exit_code_for`.
+  Its equality projection contains capability support, complete
+  manifest-ordered outcomes with identities and blockers, runtime blockers,
+  sorted kernel/policy/combined diagnostics, ordered typed `FileMetrics`
+  answers, per-rule decision deltas, and the exit byte. Provider telemetry is
+  explicitly unequal. Real cache corruption still causes invalid eviction and
+  recomputation; blocked writes preserve outcomes and emit the existing cache
+  warning.
+- **CR-01 and WR-02 are closed.** A Go-only real kernel run forces both syntax
+  outcomes to validation failure, invokes actual
+  `runtime_capability_blockers` and production dispatch, and requires exact
+  blocker evidence `polint.go.syntax`; the Events counter stays zero and the
+  unrelated counter reaches one. Deleting the Events-to-syntax mapping leaves
+  no diagnostic, while bypassing language filtering yields both syntax IDs, so
+  either mutation breaks the regression.
+- **WR-01 remains closed.** Validation downgrade ownership reads structured
+  issue fields only; diagnostic presentation is not parsed.
+- **CR-02 remains closed.** The adjacent production regression still makes a
+  scheduled rejected `polint.refined_calls` outcome block both Events and
+  Calls, while the unrelated rule runs.
+- **CR-03 remains closed.** A selected Calls provider can execute only after
+  successful readiness; dependency blocking cannot enter the lightweight
+  derivation branch or evaluate absent identities. The execution-failure
+  regression keeps Calls identity/facts absent while Metrics succeeds.
+- **Fixed-point, failure containment, deterministic ordering, private
+  vocabulary, store/output parity, and semantic/telemetry separation remain
+  intact.** No proof removed by the WR-02 compaction was weakened: the compact
+  provider-identity helper now centrally asserts non-empty success digests,
+  and the prior cache and runner projections retain their semantic fields.
+
+**Evidence:** `crates/polint/src/analysis_kernel/validation.rs:53-125`,
+`crates/polint/src/analysis_kernel/mod.rs:1197-1293`, and
+`crates/polint/src/runner/mod.rs:595-729`
+
+### Findings
+
+#### WR-03 — Structured report Debug output breaks an existing diagnostic non-leakage test
+
+**Severity:** Warning
+**Category:** Regression / validation contract test
+
+`ValidationReport` derives `Debug` and contains both the rendered diagnostics
+and private structured `ValidationIssue` rows. The pre-existing
+`type_value_alias_validation_reports_malformed_rows_deterministically` test
+still binds the return value as `diagnostics` and debug-formats the whole
+value. Its private issues now render
+`provider_ids: ["polint.type_value_alias"]`, so the assertion that validation
+diagnostics do not contain private provider/type vocabulary fails.
+
+The supported Diagnostic projection itself remains generic: iteration through
+the report dereferences to `[Diagnostic]`, the focused public-surface leak test
+passes, and no supported JSON/CLI output was shown to contain the private ID.
+The defect is nevertheless material because a directly affected pre-existing
+unit test and the broader validation module suite are red.
+
+**Evidence:**
+
+- `crates/polint/src/analysis_kernel/validation.rs:103-106` derives `Debug` for
+  the wrapper containing private issues.
+- `crates/polint/src/analysis_kernel/validation.rs:1639-1658` formats the
+  wrapper and applies the Diagnostic non-leakage marker assertions.
+- `cargo test -p polint --lib analysis_kernel::validation --locked` runs 28
+  tests: 27 pass and this test fails at line 1656 after finding
+  `polint.type_value_alias` in the wrapper's private `provider_ids`.
+
+**Impact:** The cumulative R3 slice cannot claim a clean regression suite, and
+a broader library test run would fail even though the supported diagnostic
+bytes remain private-vocabulary-free.
+
+**Minimal fix:** Keep the non-leakage assertion scoped to the rendered
+Diagnostic slice, for example by debug-formatting `&*diagnostics`, or give the
+wrapper an intentional Debug implementation that does not conflate private
+ownership state with rendered diagnostics. Re-run the full
+`analysis_kernel::validation` module plus the Plan 65-04 matrix and public leak
+gate.
+
+### Verification
+
+All 15 Plan 65-04 commands passed separately:
+
+- Validation 8/8, outcome 6/6, execution-failure outcome 1/1, cold/warm
+  production projection 1/1, rejected-refinement dispatch 1/1, core runtime
+  blocker 1/1, public-surface leak 1/1, and semantic-store parity 1/1.
+- Formatting, workspace all-target/all-feature strict Clippy, and workspace
+  all-feature checking.
+- Diff hygiene, exact 14-file scope, the 2,500-addition cap, and protected-file
+  audits.
+
+The restored applicable-syntax production-dispatch test passed 1/1. Additional
+run-report 5/5, telemetry 3/3, eval-performance 6/6, Events-only planning 1/1,
+full-CFG Calls planning 1/1, provider-backed Events matching 1/1, refined-call
+validation 4/4, Go semantic provider 6/6, symbol-cache restore 2/2, and
+semantic-graph snapshot 9/9 suites passed. The broader validation suite found
+WR-03 as described above.
+
+No product source, test, plan, summary, verification, fix report, tracking
+file, CI workflow, commit, branch, or remote state was modified by this
+re-review. Only this cumulative review artifact was updated, with all preceding
+review body/history retained verbatim.
+
+---
+
+_Reviewed: 2026-07-29_
+_Reviewer: gsd-code-reviewer_
+_Depth: deep_
+_Re-review iteration: 2 (verification-gap closure)_
+
+## R3 Verification Gap Closure Final Re-review
+
+### Verdict
+
+Clean. The WR-03 remediation in `e8a1f800` makes the existing non-leak
+regression inspect the dereferenced rendered `[Diagnostic]` value, and the
+complete cumulative `c453748c..d926c901` product/test range has zero critical,
+warning, or informational findings. The prior fixes for CR-01, WR-01, CR-02,
+CR-03, and WR-02 remain correct.
+
+This verdict is limited to the R3 provider-truth slice and its verification-gap
+closure. Phase 65, R4-R6, STORE-04, STORE-05, META-01, and META-04 remain open;
+the deferred sub-five-minute CI work is not part of this review.
+
+### Scope and preservation
+
+- Reviewed all current code in the exact fourteen-file Plan 65-03 boundary
+  across `c453748c..d926c901`, not only the WR-02 and WR-03 fix commits.
+- The cumulative product/test diff is exactly `+2500/-831`; no fifteenth file
+  was introduced.
+- No public API, SDK, CLI, configuration, output, diagnostic-byte, exit-code,
+  durable-store, schema, migration, provider-persistence, CI, roadmap,
+  requirements, or state-tracking surface changed.
+- All preceding review body/history was retained verbatim. This section is an
+  append-only final re-review, apart from the required frontmatter status,
+  iteration, and finding-count update.
+
+### Decision and finding closure
+
+- **D-16 and WR-01 are closed.** Validation ownership originates from explicit
+  `Provider`, `FactFamily`, or `FactRef` context. Fact-backed producer/layer
+  IDs are accepted only when authenticated against the static manifest
+  inventory, and `BTreeSet` collection makes ownership ordered and
+  deduplicated. Missing, unknown, unauthenticated, or otherwise non-narrowable
+  ownership retains an empty provider set and therefore the global fail-closed
+  downgrade. `ValidationReport::downgrades` consumes only this private
+  structured state; rendered messages, evidence, fingerprints, stable keys,
+  labels, and fact-ref display strings are never parsed as trust inputs.
+- **D-23 and D-25 are closed.** One real isolated TypeScript repository is run
+  cold and warm through the production kernel, production
+  `dispatch_kernel_output_rules`, and production `exit_code_for`. Its compared
+  projection includes capability support, full manifest-ordered outcomes,
+  success identities, exact blockers, runtime-blocked rules, sorted kernel and
+  policy diagnostics, typed policy answers and order, combined diagnostics,
+  per-rule execution decisions, and exit byte. The semantic projections are
+  equal while provider telemetry is unequal, proving an actual cache-boundary
+  crossing. Corrupting a real cached blob still proves invalid eviction plus
+  recomputation before success, and a blocked cache write preserves the same
+  outcomes while emitting the existing warning.
+- **CR-01 and WR-02 are closed.** The restored production regression uses a
+  real Go-only kernel database, forces both Go and TypeScript syntax outcomes
+  to fail, derives actual runtime capability blockers, and sends them through
+  production dispatch. The Events rule executes zero times, the unrelated
+  rule executes once, and blocker evidence names exactly
+  `polint.go.syntax`. The assertion is mutation-sensitive: removing Events'
+  syntax mapping or ignoring language applicability breaks it.
+- **CR-02 remains closed.** Scheduled Calls and Refined Calls outcomes affect
+  Events only when their rows can participate in the actual Events precedence
+  path. The retained production regression rejects scheduled refinement,
+  blocks both affected rules, and permits the unrelated rule.
+- **CR-03 remains closed.** Calls runs only after
+  `ProviderOutcomeTracker::can_run` succeeds. A dependency-blocked Calls
+  provider cannot enter its fallback, construct a ready digest, or panic; the
+  execution-failure regression proves exact blockers, no output identity, no
+  call rows, and independent Metrics success.
+- **Fixed-point closure, failure containment, determinism, cache identity, and
+  store parity remain intact.** Validation rejection closes downstream
+  provisional successes in manifest order until a fixed point, while
+  independent branches remain usable. Typed provider failures are consumed
+  before success is recorded, non-success states carry no identity, reports
+  remain complete and manifest ordered, cache telemetry remains semantically
+  separate, and all store modes retain byte-identical JSON and exit behavior.
+- **WR-03 is closed.** The non-leak regression now explicitly formats
+  `&*diagnostics`, so it examines only the rendered diagnostic slice and no
+  longer mistakes private ownership state for public output. Retaining derived
+  `Debug` on `ValidationReport` and `ValidationIssue` is acceptable: both types
+  are private, production consumers only dereference rendered diagnostics or
+  read structured downgrades, and neither value is serialized, emitted, or
+  exported. The exact test, the complete 28-test validation module, and the
+  supported-public-surface leak gate all pass.
+- **Compaction preserved prior proof.** Shared outcome/identity helpers still
+  assert successful non-empty identities, cold/warm identity equality remains
+  explicit, the refined-call blocker proof still checks both blocked rules,
+  and corrupt-cache, write-warning, typed-answer, ordering, and exit assertions
+  remain active.
+
+### Verification
+
+All 15 Plan 65-04 commands passed separately:
+
+- Validation 8/8, outcome tracker 6/6, execution-failure outcome 1/1,
+  cold/warm production projection 1/1, rejected-refinement dispatch 1/1, core
+  runtime blocker 1/1, public-surface leak 1/1, and semantic-store parity 1/1.
+- `cargo fmt --all -- --check`.
+- Workspace all-target/all-feature strict Clippy with `-D warnings`.
+- Workspace all-feature checking.
+- Diff hygiene, the exact fourteen-file set, the 2,500-addition cap, and the
+  protected CI/tracking-file audit.
+
+The restored Go-only applicable-syntax test passed 1/1. The exact WR-03
+rendered-diagnostic test passed 1/1, and the complete
+`analysis_kernel::validation` module passed 28/28. Additional run-report 5/5,
+telemetry 3/3, eval-performance 6/6, Events-only planning 1/1, full-CFG Calls
+planning 1/1, provider-backed Events matching 1/1, refined-call validation
+4/4, Go semantic provider 6/6, symbol-cache restore 2/2, and semantic-graph
+snapshot 9/9 suites passed. Every focused test completed well below sixty
+seconds.
+
+No product source, test, plan, summary, verification, fix report, tracking
+file, CI workflow, commit, branch, or remote state was modified by this final
+re-review. Only this cumulative review artifact was updated.
+
+---
+
+_Reviewed: 2026-07-29_
+_Reviewer: gsd-code-reviewer_
+_Depth: deep_
+_Final re-review iteration: 3 (verification-gap closure)_
