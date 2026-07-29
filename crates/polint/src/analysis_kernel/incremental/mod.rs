@@ -141,6 +141,6 @@ pub(crate) use run_manifest::{
     EncodedRunManifest, EncodedRunManifestSource, RunManifest, RunManifestError, RunManifestInputs,
 };
 pub(crate) use run_report::{
-    KernelRunReport, provider_output_digest_from_manifest, provider_output_from_manifest,
+    KernelRunReport, provider_output_digest_from_manifest, provider_output_identity_from_manifest,
 };
-pub(crate) use stats::{CacheStats, ProviderOutputMeta};
+pub(crate) use stats::{CacheStats, ProviderTelemetry};
