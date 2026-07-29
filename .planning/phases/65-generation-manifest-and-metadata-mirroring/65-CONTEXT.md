@@ -1,22 +1,30 @@
 # Phase 65: Generation Manifest and Metadata Mirroring - Context
 
 **Gathered:** 2026-07-29
-**Status:** Ready for R3 planning; R1 and R2 are complete and the broader phase remains open
+**Status:** Ready for R4 planning; R1-R3 are accepted and the broader phase remains open
 
 <domain>
 ## Phase Boundary
 
-This planning pass covers only restart slice **R3: provider outcome
-correctness**. Build on the locked R1 generation lifecycle and R2 run manifest
-by making the in-memory kernel describe every provider's final execution state
-truthfully, block consumers whose hard producers did not succeed, and finalize
-effective hard-capability support only after authoritative validation.
+This planning pass covers only restart slice **R4: mirror one audited provider
+family end to end**. The selected family is `polint.metrics`. Build on the
+locked R1 generation lifecycle, R2 canonical run manifest, and R3 sealed
+provider outcomes by:
 
-R3 is an independent kernel prerequisite. It makes **no SQLite, schema,
-migration, generation, run-manifest, or store-publication change**. It persists
-no provider family, enables no warm store reuse, redesigns no general cache key
-or dependency index, and adds no public CLI/config/SDK/JSON contract. Completing
-R3 must leave R4-R6, Phase 65, and STORE-04/STORE-05/META-01/META-04 open.
+1. auditing and narrowing the metrics provider's consumed-input and output
+   identity boundary;
+2. persisting its exact static manifest, sealed final outcome, success-only
+   canonical output identity, and exact source/function dependency projection;
+3. publishing and reopening that projection only as part of one authenticated
+   complete generation; and
+4. proving consumed changes invalidate, unrelated changes preserve an exact
+   match, and durable tampering fails closed.
+
+R4 persists **metadata, not metric facts**. It adds no second provider, generic
+dependency-index persistence, normal-kernel publication, warm semantic-store
+reuse, public CLI/config/SDK/output contract, telemetry/statistics persistence,
+or CI redesign. Completing R4 must leave R5-R6, Phase 65, and
+STORE-04/STORE-05/META-01/META-04 open.
 
 </domain>
 
@@ -24,129 +32,205 @@ R3 must leave R4-R6, Phase 65, and STORE-04/STORE-05/META-01/META-04 open.
 ## Implementation Decisions
 
 ### Delivery Boundary
-- **D-01:** Plan and implement R3 only. Treat `65-01-SUMMARY.md`,
-  `65-02-SUMMARY.md`, and the clean combined `65-REVIEW.md` as locked R1/R2
+- **D-01:** Plan and implement R4 only. Treat `65-01-SUMMARY.md`,
+  `65-02-SUMMARY.md`, `65-03-SUMMARY.md`, `65-04-SUMMARY.md`, the final clean
+  `65-REVIEW.md`, and the passed `65-03-VERIFICATION.md` as locked R1-R3
   dependencies.
-- **D-02:** Preserve the restart stop budgets: at most three implementation
-  tasks, fifteen product/test files, and 2,500 handwritten added lines. R3 has
-  zero durable schema families and zero persisted provider families.
-- **D-03:** If correctness requires a repository-wide provider-key migration,
-  whole dependency-index redesign, provider persistence, Go runtime/toolchain
-  certification, cross-file semantic-ID repair, or public API expansion, stop
-  that path and route it to its owning prerequisite or later slice.
-- **D-04:** R3 completion must not mark Phase 65 or any mapped Phase 65
-  requirement complete. The plan and summary use `requirements: []`, record
-  contributions separately, and leave R4-R6 as the next work.
+- **D-02:** Keep the restart stop budgets: at most three implementation tasks,
+  fifteen product/test files, 2,500 handwritten added lines, one new durable
+  schema family, and one persisted provider family.
+- **D-03:** The only provider family in scope is `polint.metrics`. A repair
+  needed solely to give that provider an honest identity/dependency contract
+  belongs in R4; a repair that requires another provider migration, generic
+  index redesign, fact persistence, cross-file semantic-ID repair, Go runtime
+  certification, or public API expansion triggers a stop/split.
+- **D-04:** R4 plans and summaries use `requirements: []`, record
+  contributions separately, and do not mark Phase 65 or any mapped requirement
+  complete.
+- **D-05:** The user's deferred sub-five-minute CI follow-up remains deferred.
+  Do not edit `.github/workflows/ci.yml`, alter timeouts, or absorb
+  branch-protection/required-check work into R4.
 
-### Closed Provider Outcome Contract
-- **D-05:** Every static `ProviderManifest` receives exactly one sealed final
-  outcome in deterministic manifest order for every successfully established
-  kernel run report. Providers omitted by the resolved plan are represented,
-  not silently absent.
-- **D-06:** The closed final status vocabulary is: `Succeeded`, `Failed`,
-  `DependencyBlocked`, `Unsupported`, `SetupMissing`, and `PlannedAbsent`.
-  These states must never be inferred from an optional digest, empty fact set,
-  rendered diagnostic, or cache counter.
-- **D-07:** `Succeeded` means the provider was scheduled and completed, its
-  output identity is present and authenticated, and every authoritative
-  validation applicable to that output passed. Provisional execution success
-  may exist internally but cannot be exposed as final trust.
-- **D-08:** Only `Succeeded` carries a reusable output identity. Non-success
-  outcomes carry a closed typed reason/stage and, for dependency blocking, the
-  exact sorted blocking provider IDs. Open status strings are not semantic
-  truth.
-- **D-09:** A fatal error before a kernel run is established, or an uncontrolled
-  internal panic, returns the existing kernel error rather than fabricating a
-  complete outcome report. R3 does not become a general panic/process
-  containment project.
-- **D-10:** Diagnostics, cache hit/miss/write counters, warnings, durations,
-  timestamps, worker order, and other run telemetry remain outside provider
-  semantic outcome and output identity. The existing open-string
-  `ProviderOutputMeta::validation` shape is not a trusted persistence contract.
+### First Provider Family
+- **D-06:** Use `polint.metrics` as the first durable provider family. It is a
+  deterministic, multi-language, toolchain-free derived provider with an
+  existing layer-cache seam and a small declared input vocabulary:
+  `source_files` and `functions`.
+- **D-07:** Do not choose `polint.source`: its workspace discovery/config
+  boundary is broader, it is declared `NoCache`, and it is not the most useful
+  first reusable provider proof.
+- **D-08:** Do not choose Go or TypeScript syntax. R0 found syntax dependency
+  coverage incomplete, while Go semantic/toolchain state has additional
+  lifecycle and environment prerequisites.
+- **D-09:** `polint.metrics` continues to produce all three declared metric
+  families whenever any metric capability schedules it. Individual rule IDs,
+  rule options, and which one of the three metric views caused scheduling do
+  not alter the provider's output universe.
 
-### Dependency Blocking and Planned Absence
-- **D-11:** R3 models only actual provider-output dependencies consumed by the
-  current kernel orchestration. `ProviderManifest.inputs` prose and the
-  existing broad `DependencyIndex` are not treated as an authenticated provider
-  DAG, and no durable dependency relation is introduced.
-- **D-12:** A scheduled provider executes only when every hard producer it
-  consumes has final/provisionally usable success. Otherwise it does not run
-  and becomes `DependencyBlocked`; independent provider branches continue.
-- **D-13:** Plan gating is evaluated before dependency blocking. A provider not
-  requested by the resolved plan is `PlannedAbsent`. If a scheduled consumer
-  requires such a producer, that is blocking/inconsistent state rather than
-  permission to consume an empty universe.
-- **D-14:** `Digest::absent` or any equivalent sentinel cannot stand in for
-  provider failure, dependency blocking, unsupported setup, setup-missing, or
-  planned absence. Explicit input availability remains a separate typed input
-  contract.
-- **D-15:** Do not invent implicit optional or degraded dependencies in R3.
-  A provider that can soundly operate in a degraded mode needs an explicit,
-  separately proven contract; until then conservative blocking wins.
+### Canonical Metrics Input and Output Identity
+- **D-10:** Replace the current cache-mode-dependent provider identity with one
+  canonical metrics output projection. The identity must be identical for cold
+  computation, a validated warm layer-cache hit, and cache-disabled
+  computation when the produced metrics are identical.
+- **D-11:** Canonical output rows use normalized source paths and semantic
+  metric fields rather than transient `FileId`, `FunctionId`, `FactRef::run_id`,
+  insertion order, Rust `Debug`, or cache-file identity. Sort deterministically
+  and preserve multiplicity where duplicate semantic rows affect output.
+- **D-12:** The source input projection contains the complete normalized source
+  membership plus the fields metrics actually reads or needs to authenticate
+  those values: language, size/line semantics, and a purpose-tagged content
+  digest. Reuse the R2 canonical source vocabulary where possible instead of
+  inventing a competing source identity.
+- **D-13:** The function input projection contains every non-synthetic function
+  as a deterministic, multiplicity-aware tuple of normalized source path,
+  function name, consumed span byte/line bounds, language, and cyclomatic
+  complexity. Exclude `calls`, `is_test`, `is_exported`, unused columns, and
+  transient fact IDs because metrics derivation does not read them.
+- **D-14:** The complete source/function sets are semantic inputs: authenticate
+  counts, bounds, canonical ordering, duplicates/multiplicity, relationships,
+  and every stored field before trust. A digest is supporting evidence, never
+  the sole proof that two decoded projections are equal.
+- **D-15:** Rule code/options, the broad config digest, plan digest, setup
+  checks, toolchain, extensions, models, cache telemetry, timing, and upstream
+  layer-cache identities are not metrics behavior inputs and cannot enter its
+  provider identity or durable dependency projection.
+- **D-16:** Audit and narrow only `LayerKey::metrics_layer_key` and the
+  metrics dependency-edge builder to the same consumed-input contract. Fixed
+  generic key slots use explicit purpose-typed absence; do not redesign
+  `LayerKey` or migrate any other provider.
+- **D-17:** The metrics layer-cache key and durable provider projection may
+  share canonical projection helpers, but the provider output identity is the
+  canonical produced value—not the layer-cache key. Cache location, cache
+  policy outcome, and cache mode cannot change semantic identity.
 
-### Authoritative Validation and Effective Capabilities
-- **D-16:** Refactor authoritative fact validation to return one closed,
-  deterministic structured report with issues and provider/fact-family
-  ownership. Existing internal diagnostics are rendered from that report
-  instead of being the only validation result.
-- **D-17:** An authoritative validation issue downgrades every implicated
-  provisional provider success to `Failed` at the validation stage. If a global
-  issue cannot be attributed safely, downgrade all provisional successes for
-  the run rather than certify a partial universe.
-- **D-18:** A hard requested capability is effective only when its planning and
-  setup state is supported and every provider in its required closure has a
-  sealed `Succeeded` outcome. Any other final provider state revokes the
-  capability before rule dispatch.
-- **D-19:** Planning-time `Unsupported` and `SetupMissing` states remain
-  authoritative lower bounds and cannot be upgraded merely because another
-  provider ran successfully.
-- **D-20:** Skip every affected rule before it can access partial facts and emit
-  one deterministic existing-style `polint/capability` diagnostic per affected
-  rule/capability. Unaffected rules and provider branches continue.
-- **D-21:** Keep final execution-state and revocation machinery crate-private.
-  Do not add a public `CapabilitySupportStatus` variant, SDK type, CLI field,
-  inspect field, JSON schema, diagnostic code, or exit-code contract in R3.
-- **D-22:** Seal provider outcomes and effective capability blockers before
-  constructing `KernelOutput`/`KernelRunReport`. Store maintenance remains
-  strictly afterward and cannot change provider trust, diagnostics, capability
-  support, rule dispatch, or policy answers.
+### Durable Manifest and Outcome Projection
+- **D-18:** Add one private, explicitly versioned relational provider-mirror
+  schema family. Multiple tightly owned header/member/dependency tables may
+  implement that one family, but opaque JSON/blobs, Rust debug text, and raw SQL
+  access outside the store boundary are forbidden.
+- **D-19:** Persist the exact static `polint.metrics` manifest projection:
+  provider ID/version, closed provider kind, canonical input/output members,
+  closed language scope, closed cache policy, canonical schema name/version
+  members, and precision ceiling. Decode through closed codecs and compare
+  exactly with the current static manifest.
+- **D-20:** Every generation published through the R4 facade has exactly one
+  `polint.metrics` outcome row, even when the provider is planned absent,
+  blocked, unsupported, setup-missing, or failed. Missing and duplicate rows
+  are invalid.
+- **D-21:** Persist exactly the R3 six-state outcome vocabulary with its legal
+  shape. `Succeeded` alone carries provider ID/version/schema/precision plus
+  canonical output digest; non-success carries no reusable identity.
+- **D-22:** Failure stage/reason remain closed typed values with the R3
+  compatibility matrix. Only `DependencyBlocked` carries blockers, stored as
+  exact sorted unique manifest-authenticated provider IDs.
+- **D-23:** Exact source/function dependency rows exist only for a succeeded
+  reusable output. Non-success records its truthful outcome but presents no
+  reusable dependency set or match.
+- **D-24:** Derive one canonical provider-owned forward dependency projection
+  and any needed reverse lookup from it. Do not persist the generic
+  `DependencyIndex`, independent forward/reverse maps, stringly cache nodes, or
+  unrelated provider edges.
+- **D-25:** Keep provider mirror, outcome, identity, blockers, and dependencies
+  relationally owned by the same generation. No row may outlive or cross-link
+  its generation.
 
-### Cold/Warm Parity and Verification
-- **D-23:** Cold computation and warm layer-cache execution must have identical
-  final provider statuses, output identities, dependency blockers, effective
-  capabilities, validation/capability diagnostics, rule-dispatch decisions,
-  policy diagnostics, ordering, and exit semantics. Only telemetry may differ.
-- **D-24:** A cache hit is not success by itself. Cached payloads must pass their
-  existing typed decode/validation boundary; invalid cache data is rejected and
-  recomputed or becomes a real provider failure. Cache read/write warnings
-  after valid in-memory computation remain telemetry and do not downgrade
-  semantic success.
-- **D-25:** Focused proof must cover the full closed outcome codec/matrix, one
-  hard dependency chain plus an independent branch, planned absence, controlled
-  execution failure, authoritative validation failure, blocker ordering,
-  capability diagnostic/rule skipping, and one representative cold/warm cache
-  pair.
-- **D-26:** Preserve byte/exit parity for unaffected public behavior and extend
-  the public-surface leak gate for any new private outcome/validation names.
-  Semantic-store disabled/enabled status is irrelevant to R3 outcomes.
-- **D-27:** No required individual test may exceed sixty seconds, ordinary
-  correctness tests may not use process-global serialization, and R3 must not
-  edit `.github/workflows/ci.yml`, raise timeouts, or absorb the deferred
-  sub-five-minute CI redesign.
+### Publication, Migration, and Read Semantics
+- **D-26:** Extend the R2 private publication facade so the run manifest and
+  complete metrics projection are written, read back, boundedly decoded,
+  recomputed, and exactly compared before completion and active-pointer
+  rotation in the same immediate transaction.
+- **D-27:** Pending, failed, unselected, malformed, future-schema, and
+  provider-incomplete generations remain unreadable. Active reads obtain
+  generation, run manifest, metrics manifest/outcome, identity, blockers, and
+  dependencies from one validated read snapshot.
+- **D-28:** Publication failure at any injected boundary rolls back candidate
+  manifest/provider rows, leaves the reserved candidate pending, and preserves
+  the previous active complete generation through reopen.
+- **D-29:** Schema v4 migration accepts only an exact empty v3 store. A
+  populated v3 store has no truthful historical provider outcome and must be
+  preserved without mutation and reported through the existing typed
+  rebuild-needed/refusal path. Do not synthesize `PlannedAbsent` or delete
+  history.
+- **D-30:** Fresh/v0/v1/v2 empty stores may migrate transactionally through the
+  established versions to the new exact current schema. Exact current-schema
+  reopen is idempotent; malformed/current, future, or colliding owned schema
+  remains preserved and refused.
+- **D-31:** Add a private typed read/match result that distinguishes exact
+  match, semantic miss, no active generation, and malformed/refused store
+  state. Callers cannot make reuse decisions from a raw digest or raw stored
+  row.
+- **D-32:** R4 does not wire publication or matching into normal
+  `AnalysisKernel::run`, does not make each normal run durable, and does not
+  consume stored provider output. Kernel behavior remains maintenance-only
+  until the measured private enablement in R6.
+
+### Invalidation, Tamper, and Parity Proof
+- **D-33:** Prove at least one decisive must-invalidate/must-preserve pair:
+  changing consumed source content or a consumed function metric field must
+  miss; changing unrelated config/rule state or an unused function field must
+  preserve an exact provider match.
+- **D-34:** Cover both declared input families in the focused matrix. Source
+  membership/content/line semantics and consumed function
+  name/span/language/complexity/multiplicity changes invalidate; `calls`,
+  `is_test`, `is_exported`, rule/config, tool, model, extension, and telemetry
+  changes preserve when the canonical metrics inputs/output are unchanged.
+- **D-35:** Round-trip a real sealed metrics projection through reserve,
+  publish, close, reopen, active read, and exact match. Also prove a
+  `PlannedAbsent` or other legal non-success outcome round-trips without
+  identity/dependency rows and can never match as reusable.
+- **D-36:** Tamper tests cover static manifest fields/members, status
+  stage/reason shape, blocker ownership/order/count, identity fields/digest,
+  dependency kind/fields/count/multiplicity/relationships, missing/extra rows,
+  wrong SQLite storage classes, and catalog/index/trigger/foreign-key drift.
+- **D-37:** Enforce explicit row, scalar-length, and aggregate-byte limits and
+  check SQLite storage classes/counts before attacker-controlled allocation.
+  Stream bounded catalog and child-row validation rather than collecting
+  unbounded attacker-controlled metadata.
+- **D-38:** Preserve existing workspace-ownership, singleton-active,
+  complete-generation, disabled-store, busy-writer, future-schema, and
+  no-mutation refusal invariants.
+- **D-39:** Focused cold/warm/cache-disabled tests compare canonical metrics
+  provider identity and policy semantics while allowing only cache telemetry
+  to differ. Existing invalid-cache recomputation and cache-write warning
+  behavior remain intact.
+- **D-40:** Preserve public bytes, diagnostics, ordering, exit semantics, SDK,
+  runner, CLI, generated skill, docs/examples, and crate visibility. Extend
+  negative public-surface coverage for any new private store vocabulary.
+
+### Verification and Stop Gates
+- **D-41:** No required individual test may exceed sixty seconds. Ordinary
+  correctness tests use isolated temp stores/repos and may not use
+  process-global serialization, sleeps, environment mutation, network, or
+  release/full-workspace benchmarks.
+- **D-42:** Use focused unit/integration targets for codecs, canonical
+  projection, migration/schema authentication, publication rollback,
+  round-trip/match, mutation pairs, parity, and public-surface leakage, followed
+  by formatting, strict Clippy, workspace check, and diff/scope audits.
+- **D-43:** If the implementation crosses any task/file/line/schema/provider
+  budget, requires a second durable family, or cannot prove the R4 exit without
+  normal-kernel reuse, stop and split rather than weakening the contract.
+- **D-44:** Do not persist metric facts, `FactMeta`, validation events,
+  statistics, the full `InputSnapshot`, layer/query/summary rows, or generic
+  dependency indexes in R4.
+- **D-45:** Do not expand to source, syntax, Go semantic, extension/model,
+  summary/query, graph, solver, or other provider families. Their readiness and
+  environment contracts remain R5 or later work.
+- **D-46:** R4 acceptance means one provider family can be written, reopened,
+  exactly validated/matched, and rejected after tampering. It does not mean
+  every run is persisted or any stored analysis is reused.
 
 ### the agent's Discretion
-- Exact crate-private type/module names and whether the outcome tracker lives
-  beside `provider.rs`, `incremental::run_report`, or an equivalently central
-  kernel boundary.
-- The narrow in-memory representation of actual provider dependency closures,
-  provided it is explicit at orchestration sites, deterministic, and does not
-  pretend to complete R4's durable dependency-edge contract.
-- The exact structured validation issue taxonomy and provider/fact-family
-  attribution helper, provided diagnostics and trust decisions derive from the
-  same report.
-- Finite cfg(test)-only provider/validation failure seams and the representative
-  cached provider used for cold/warm proof, provided they add no public flag,
-  environment-variable protocol, global lock, or production failure mode.
+- Exact crate-private type/module/table/index names and whether canonical
+  metrics projection helpers live beside `metrics.rs`, incremental keys, or a
+  narrow provider-mirror module.
+- The precise relational decomposition of the one provider-mirror schema
+  family, provided it keeps one canonical source of truth, exact ownership,
+  bounded decoding, and strict schema authentication.
+- Purpose labels, numeric bounds, and digest helper names, provided codecs are
+  closed, stable, shared by write/read/recompute, and tested.
+- The finite cfg(test)-only failure/tamper seams and focused fixture layout
+  needed to exercise every locked invariant without adding public or
+  process-global controls.
 
 </decisions>
 
@@ -155,51 +239,57 @@ R3 must leave R4-R6, Phase 65, and STORE-04/STORE-05/META-01/META-04 open.
 
 **Downstream agents MUST read these before planning or implementing.**
 
-### Project, Phase, and Completed Slice Contract
-- `.planning/PROJECT.md` — Defines the private-store product boundary,
-  reliability posture, performance constraints, and strict public API
-  discipline.
+### Project, Phase, and Store Foundation
+- `.planning/PROJECT.md` — Defines the private semantic-store product boundary,
+  reliability/performance posture, and strict public API discipline.
 - `.planning/REQUIREMENTS.md` — Defines STORE-04, STORE-05, META-01, and
-  META-04; R3 contributes prerequisite correctness without completing them.
-- `.planning/ROADMAP.md` — Defines the broader Phase 65 outcome and the Phase
-  66 dependency; this context deliberately limits the next delivery unit.
+  META-04; R4 contributes without completing them.
+- `.planning/ROADMAP.md` — Defines the broader Phase 65 outcome and Phase 66
+  dependency; this context deliberately limits the next delivery unit.
 - `.planning/phases/64-store-foundation-and-boundary-proof/64-CONTEXT.md` —
-  Locks the cache-owned, typed, default-disabled SQLite boundary that R3 must
-  not modify.
+  Locks the cache-owned, typed, default-disabled SQLite boundary.
+
+### Accepted R1-R3 Slice Contracts
 - `.planning/phases/65-generation-manifest-and-metadata-mirroring/65-01-SUMMARY.md`
-  — Authoritative R1 generation-lifecycle result.
+  — Accepted crash-safe generation lifecycle.
 - `.planning/phases/65-generation-manifest-and-metadata-mirroring/65-02-SUMMARY.md`
-  — Authoritative R2 canonical run-manifest result and explicit R3 handoff.
+  — Accepted canonical run-manifest identity and exact-match seam.
+- `.planning/phases/65-generation-manifest-and-metadata-mirroring/65-03-SUMMARY.md`
+  — Accepted closed provider outcomes, dependency blocking, and capability
+  revocation.
+- `.planning/phases/65-generation-manifest-and-metadata-mirroring/65-04-SUMMARY.md`
+  — Accepted R3 validation-ownership and complete cold/warm proof closure.
 - `.planning/phases/65-generation-manifest-and-metadata-mirroring/65-REVIEW.md`
-  — Final clean R1/R2 review and invariants that R3 must preserve.
+  — Final clean cumulative R1-R3 review and retained history.
+- `.planning/phases/65-generation-manifest-and-metadata-mirroring/65-03-VERIFICATION.md`
+  — Passed R3-only 7/7 and 27/27 verification; explicitly leaves R4-R6 open.
 
-### R3 Readiness and Finding Authority
-- `research/local-semantic-store/RESTART-PLAN.md` — Canonical R3 scope, exit
-  proof, review policy, test strategy, and pull-request budgets.
-- `research/local-semantic-store/IDENTITY-READINESS.md` — Records
-  `ProviderOutputMeta`, provider execution outcome, effective capability state,
-  and validation result as R3-blocked contracts.
-- `research/local-semantic-store/REVIEW-FINDINGS-TRIAGE.md` — Owns WR-08,
-  WR-10, WR-14, WR-15, WR-16, WR-21, WR-22, and WR-26 provider-trust
-  regressions.
+### R4 Readiness, Scope, and Lessons
+- `research/local-semantic-store/RESTART-PLAN.md` — Canonical R4 scope, exit
+  proof, pull-request budgets, and stop/split policy.
+- `research/local-semantic-store/IDENTITY-READINESS.md` — Marks
+  `ProviderManifest` conditional, broad `LayerKey` and `DependencyIndex`
+  not ready, `FactMeta` deferred, and mandates one-provider audit.
+- `research/local-semantic-store/REVIEW-FINDINGS-TRIAGE.md` — Owns unresolved
+  correctness/security findings and prevents unrelated finding absorption.
 - `.planning/phases/65-generation-manifest-and-metadata-mirroring/65-LEARNINGS.md`
-  — Locks typed provider outcomes, telemetry separation, conservative omission,
-  provider-scoped dependencies, and bounded-review lessons.
+  — Locks provider-scoped canonical dependency projection, mutation-pair,
+  telemetry separation, conservative omission, and bounded-review patterns.
+- `.planning/phases/65-generation-manifest-and-metadata-mirroring/65-PATTERNS.md`
+  — Records exact R1/R2 relational, migration, identity, and transaction
+  patterns that R4 must extend rather than duplicate.
 - `.planning/forensics/report-20260719-phase-65-scope-collapse.md` — Mandatory
-  stop/split and reviewability guardrails after the abandoned oversized
-  implementation.
+  reviewability, stop/split, and no-big-bang guardrails.
 
-### Store, Visibility, and Deferred-CI Boundary
+### Durable Trust and Visibility
 - `research/local-semantic-store/implementation/STORE-CONTRACT.md` — Defines
-  validated complete-generation trust; R3 supplies a prerequisite without
-  changing the store.
-- `research/local-semantic-store/decisions/DECISIONS.md` — Keeps the provider
-  DAG as computation truth and requires conservative non-reuse for uncertified
-  inputs.
-- `docs/API-VISIBILITY-PLAN.md` — Supported API boundary; provider outcomes,
-  validation internals, raw identities, and store vocabulary remain private.
-- `.github/workflows/ci.yml` — Existing workflow remains unchanged; CI-duration
-  optimization is a separately deferred follow-up.
+  validated complete-generation trust and fail-closed reuse.
+- `research/local-semantic-store/decisions/DECISIONS.md` — Keeps computation
+  truth canonical and requires conservative non-reuse for uncertified inputs.
+- `docs/API-VISIBILITY-PLAN.md` — Supported API boundary; provider/store
+  persistence vocabulary remains private.
+- `.github/workflows/ci.yml` — Remains unchanged under the user's explicit
+  deferral of sub-five-minute CI work.
 
 </canonical_refs>
 
@@ -207,99 +297,108 @@ R3 must leave R4-R6, Phase 65, and STORE-04/STORE-05/META-01/META-04 open.
 ## Existing Code Insights
 
 ### Reusable Assets
-- `crates/polint/src/analysis_kernel/provider.rs`: Static deterministic provider
-  manifest order and closed provider metadata are the inventory anchor. Its
-  descriptive `inputs` strings are not yet an authenticated dependency DAG.
-- `crates/polint/src/analysis_kernel/incremental/stats.rs`: Existing
-  `ProviderOutputMeta` and `CacheStats` show the current semantic/telemetry
-  mixture and the open `validation` string that R3 must stop treating as trust.
-- `crates/polint/src/analysis_kernel/incremental/run_report.rs`: The private
-  run-report seam can carry sealed outcomes without introducing a public
-  contract.
-- `crates/polint/src/analysis_kernel/mod.rs`: The explicit provider sequence,
-  plan gates, output-digest handoffs, early capability-support construction,
-  late validation call, and final store-maintenance boundary are the central
-  orchestration points.
-- `crates/polint/src/analysis_kernel/validation.rs`: Existing comprehensive
-  validators and deterministic diagnostic ordering are reusable; the missing
-  piece is a structured result/ownership boundary.
-- `crates/polint/src/analysis_plan.rs`: Planning/setup support remains the
-  pre-execution lower bound from which effective support is derived.
-- `crates/polint/src/core/mod.rs`: Existing capability view, blocking check,
-  rule isolation, and diagnostic behavior provide the dispatch seam, but
-  runtime revocation should remain a private sidecar rather than widen the
-  public status enum.
+- `crates/polint/src/analysis_kernel/provider.rs`: Static deterministic
+  `ProviderManifest` inventory and closed labels. The `polint.metrics` row
+  declares `source_files`/`functions`, three metric outputs,
+  `InMemoryDerived`, multi-language scope, schema `metrics-facts-1`, and syntax
+  precision.
+- `crates/polint/src/analysis_kernel/outcome.rs`: R3's closed six-state
+  `ProviderOutcome`, success-only `ProviderOutputIdentity`, typed
+  stage/reason, blocker validation, and manifest-order sealing.
+- `crates/polint/src/metrics.rs`: Current metric derivation, payload
+  validation, layer cache, source/function digest helpers, dependency builder,
+  deterministic sort helpers, and focused warm/corruption tests.
+- `crates/polint/src/analysis_kernel/incremental/keys.rs`: Existing metrics
+  `LayerKey` constructor and typed digest slots. Its metrics-specific broad
+  config/upstream inputs are the bounded one-provider audit target.
+- `crates/polint/src/analysis_kernel/incremental/run_manifest.rs`: R2's
+  canonical workspace/config/source projection, exact codecs, purpose-tagged
+  digests, bounds, path normalization, and equality laws.
+- `crates/polint/src/analysis_kernel/store/{mod.rs,generation.rs,migrations.rs,connection.rs,tests.rs}`:
+  Private typed facade, immediate publication transaction, active read
+  snapshot, strict catalog/content authentication, empty-only migration
+  posture, failure injection, and tamper fixtures.
+- `crates/polint/src/analysis_kernel/mod.rs`: Metrics executes last, receives
+  sealed prerequisite identities, records a provisional output identity,
+  undergoes authoritative validation, seals outcomes, and only then performs
+  maintenance-only store work.
 
 ### Established Patterns
-- Provider execution order is explicit and deterministic inside
-  `AnalysisKernel::run`; provider outputs are collected into a crate-private
-  `KernelRunReport`.
-- Current optional output digests serve several meanings: real output,
-  planned default, and controlled failure. R3 must replace that inference at
-  the orchestration/trust boundary without persisting new rows.
-- Module/symbol providers can refine planning-time support, but current support
-  is finalized before most late providers and global validation execute.
-- `validate_fact_metadata` already aggregates and deterministically sorts
-  authoritative issues, but returns only rendered diagnostics.
-- Rules are already skipped before execution when their support view contains
-  a blocking state; R3 extends the private blocker source rather than allowing
-  partial fact access.
-- Store maintenance runs after validation and can remain behaviorally
-  irrelevant to provider outcomes.
+- Durable truth belongs to one explicitly selected complete generation.
+  Reservation is durable but publication of authenticated children,
+  completion, and selection are atomic.
+- R2 writers and readers share a typed canonical codec and recompute identity
+  from decoded fields; digests do not replace exact field comparison.
+- Current metrics derivation always materializes all three metric families
+  when scheduled, so the rule/plan details beyond the scheduling boolean are
+  not behavior inputs.
+- Current metrics cache identity includes broad config and upstream syntax
+  output digests and its uncached provider-output digest follows a different
+  path. R4 must repair this before persisting trust.
+- Current function digests include `calls`, `is_test`, and `is_exported`, even
+  though metrics computation reads only function membership, name, span,
+  language, and complexity. This is the decisive false-invalidation seam.
+- Generic `DependencyIndex` materializes independent forward/reverse stringly
+  maps and is not a persistence contract. R4 needs one metrics-owned canonical
+  projection only.
 
 ### Integration Points
-- Introduce one private closed provider-outcome/reason contract and make
-  run-report construction require one sealed row per manifest.
-- Track actual hard producer outcomes alongside the explicit provider calls;
-  remove failure-to-absent substitution at every consumed provider-output
-  handoff in the bounded R3 scope.
-- Make authoritative validation return structured issues, then seal provisional
-  outcomes and derive effective capability blockers before `KernelOutput`.
-- Pass the final private blocker set through runner dispatch while preserving
-  existing public `RuleCtx`/SDK/CLI schemas and unaffected diagnostics.
-- Add focused deterministic tests near the outcome tracker/kernel validation
-  seams plus one outside-user parity/leak assertion; do not touch store schema
-  or CI.
+- Introduce one canonical metrics input/output projection used by the metrics
+  provider identity, metrics-only layer-key construction, durable writer,
+  durable reader/recomputation, and mutation tests.
+- Extend R2 publication inputs with one sealed metrics provider projection and
+  validate it before completing/selecting the generation.
+- Extend schema migration/authentication by exactly one provider-mirror family
+  and one empty-v3-to-v4 transition; preserve all existing R1/R2 invariants.
+- Add typed active-provider read/match operations behind `SemanticStore`
+  without exposing rusqlite or wiring them into production reuse.
+- Add focused tests near metrics/key, outcome codec projection, store
+  migrations/publication, and public-surface leak gates; do not touch CI.
 
 </code_context>
 
 <specifics>
 ## Specific Ideas
 
-- The decisive dependency case is: provider A fails; scheduled B depends on A;
-  scheduled C depends on B; independent D succeeds; unrequested E is
-  planned-absent. Final outcomes are failed, dependency-blocked,
-  dependency-blocked, succeeded, and planned-absent in manifest order.
-- The decisive validation case first records a provisional provider success,
-  injects an owned authoritative validation issue, seals that provider as
-  failed-at-validation, revokes the consuming hard capability, skips its rule,
-  and preserves an unrelated rule.
-- The decisive warm case runs the same representative provider cold and from a
-  validated layer-cache hit. Semantic outcomes, output identities,
-  capabilities, diagnostics, and policy results are byte-identical while cache
-  counters differ.
-- A cache write warning after valid computation is explicitly not a provider
-  failure; an invalid cached payload is never a trusted success.
+- The decisive success fixture runs a small TypeScript repository requesting
+  metrics, captures the sealed `polint.metrics` outcome and canonical
+  source/function projection, publishes it with the R2 run manifest, closes
+  and reopens the store, and obtains one exact typed match.
+- The decisive input pair changes a consumed source or
+  name/span/language/complexity field and gets a miss, then changes only an
+  unrelated rule/config value or `calls`/`is_test`/`is_exported` and retains an
+  exact match.
+- The decisive identity parity fixture computes the same metrics cold, from a
+  validated layer-cache hit, and with caching disabled. All three provider
+  output identities and semantic results match; telemetry alone differs.
+- A legal planned-absent record has the exact static manifest and typed
+  planning-stage reason, but no identity, blockers, or dependencies. It is
+  readable as outcome history and never reusable.
+- A publication failure after any provider header/member/dependency write
+  leaves the candidate pending and provider-incomplete while the old active
+  generation remains the only readable truth after reopen.
 
 </specifics>
 
 <deferred>
 ## Deferred Ideas
 
-- **R4:** Persist one audited provider family's manifest, final outcome, output
-  identity, and exact consumed-input edges with one invalidate/preserve pair.
-- **R5:** Expand provider mirroring one proven family at a time.
-- **R6:** Private enablement and one measured cold/warm store-reuse pair before
-  any default promotion.
-- Provider-specific cache-key/dependency readiness repairs, whole
-  `DependencyIndex` persistence, `InputSnapshot` redesign, `FactMeta`,
-  validation-event persistence, layer/query/summary keys, and store statistics.
-- Cross-file semantic-ID/cache-schema and other product bugs tracked in GitHub
-  issues #86-#91.
-- Go toolchain/process/filesystem security work, optional/degraded provider
-  semantics, general panic containment, and platform runtime redesign.
-- Establishing a sub-five-minute required CI path and any branch-protection or
-  ruleset administration.
+- **R5:** Mirror additional providers one audited family at a time; keep syntax,
+  Go semantic, extensions/models, and summary/query providers separate when
+  their trust/environment inputs differ.
+- **R6:** Wire private normal-run publication, measure one representative
+  cold/warm semantic-store reuse pair, and decide whether any default
+  enablement is justified.
+- Metric fact payload persistence/restoration, `FactMeta`, validation-event
+  persistence, store statistics, full `InputSnapshot`, generic
+  `DependencyIndex`, and layer/query/summary persistence.
+- Cross-file semantic-ID/cache-schema issues and other independently tracked
+  product bugs in GitHub issues #86-#91.
+- Go process/toolchain/filesystem security, monorepo lifecycle certification,
+  optional/degraded provider semantics, and general panic containment.
+- The separately deferred sub-five-minute required CI path, exhaustive
+  scale/crash/platform matrices, branch protection, and ruleset
+  administration.
 
 </deferred>
 

@@ -359,3 +359,111 @@ global serialization.
 - Provider-specific cache-key audits, optional/degraded semantics, Go runtime
   hardening, general panic containment, GitHub issues #86-#91, and the
   sub-five-minute CI follow-up.
+
+---
+
+# R4 Addendum: Mirror One Audited Provider Family
+
+**Date:** 2026-07-29
+**Mode:** `--auto --chain`
+**Areas discussed:** first provider family; durable provider projection;
+canonical identity and exact dependency edges; publication and read semantics;
+mutation and tamper proof; R4 scope and stop gates
+
+## First Provider Family
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| `polint.metrics` | Audit the deterministic, multi-language, toolchain-free derived provider with an existing cache seam. | ✓ |
+| `polint.source` | Start with workspace discovery/config despite `NoCache` and a broader input boundary. | |
+| Go or TypeScript syntax | Start with a parser provider whose dependency-edge readiness is not yet certified. | |
+
+**User's choice:** `--auto` selected `polint.metrics`.
+**Notes:** R0 blocks generic syntax persistence and Go environment
+certification. Metrics has only two declared fact inputs and produces a useful
+reusable family, but its current cache identity must first be narrowed.
+
+## Durable Provider Projection
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Explicit typed relational projection | Store the exact static metrics manifest and sealed R3 outcome in one versioned provider-mirror family. | ✓ |
+| Opaque serialized blob | Store `ProviderManifest`/`ProviderOutcome` as JSON or another open serialized payload. | |
+| Digest only | Persist only an output fingerprint and leave interpretation to callers. | |
+
+**User's choice:** `--auto` selected explicit typed relational projection.
+**Notes:** Every R4-published generation carries exactly one metrics outcome for
+the closed six-state vocabulary. Only success may carry reusable identity and
+dependency rows.
+
+## Canonical Identity and Exact Dependency Edges
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Canonical metrics value and input projections | Use normalized path-based output rows and complete source/function consumed-input sets. | ✓ |
+| Current layer-cache identity unchanged | Persist the current broad config/upstream-dependent digest, including its cache-mode split. | |
+| FactMeta summary | Derive durable identity from transient fact/run IDs and metadata summaries. | |
+
+**User's choice:** `--auto` selected canonical metrics projections.
+**Notes:** The metrics-only `LayerKey` is narrowed to the same audited
+source/function boundary. Broad config, rule/plan, toolchain, extension/model,
+telemetry, and upstream cache identities are excluded. The generic
+`DependencyIndex` is not persisted.
+
+## Publication and Read Semantics
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Complete-generation atomic publication | Write, decode, recompute, and compare manifest plus provider metadata before completing and selecting. | ✓ |
+| Post-activation provider write | Activate the run manifest first and fill provider metadata afterward. | |
+| Pending-row reads | Let readers consume provider rows before generation completion. | |
+
+**User's choice:** `--auto` selected atomic complete-generation publication.
+**Notes:** Active reads use one validated snapshot. Exact empty v3 stores may
+migrate; populated v3 stores are preserved and refused because no honest
+historical outcome can be reconstructed. The private facade stays unwired from
+normal kernel publication and reuse until R6.
+
+## Mutation and Tamper Proof
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Consumed-field miss plus unrelated-field hit matrix | Change real source/function inputs to miss and unrelated/unused fields to preserve exact match. | ✓ |
+| Digest smoke test | Assert only that one aggregate digest changes. | |
+| Broad conservative invalidation | Keep config and unused fact fields as dependencies. | |
+
+**User's choice:** `--auto` selected the consumed/unrelated mutation matrix.
+**Notes:** Cold, warm layer-cache, and cache-disabled identities must agree.
+Focused proof also covers strict catalog/content authentication, bounded
+decoding, row/shape/relationship tampering, reopen rejection, and publication
+rollback preserving the old active generation.
+
+## R4 Scope and Stop Gates
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Restart hard budgets | At most three tasks, fifteen product/test files, 2,500 additions, one schema family, and one provider family. | ✓ |
+| Advisory budgets | Continue if coherent even after crossing the restart limits. | |
+| Opportunistic expansion | Add adjacent providers, facts, or reuse while touching the store. | |
+
+**User's choice:** `--auto` kept the restart hard budgets.
+**Notes:** R4 uses `requirements: []` and leaves Phase 65 plus all mapped
+requirements open. Facts, other providers, generic indexes, normal-run
+publication, warm store reuse, public surfaces, and the user-deferred
+sub-five-minute CI redesign remain out of scope.
+
+## the agent's Discretion for R4
+
+- Private projection/module/table/index names and relational decomposition
+  within the one provider-mirror family.
+- Closed purpose labels, bounded limits, and digest helper names.
+- Finite cfg(test)-only tamper/failure seams and focused fixture organization.
+
+## Deferred Ideas after R4
+
+- R5 provider-by-provider expansion.
+- R6 private normal-run enablement and one measured cold/warm store-reuse pair.
+- Fact payloads/`FactMeta`, validation events, statistics, full snapshots,
+  generic dependency indexes, and layer/query/summary persistence.
+- Syntax/Go environment readiness, optional/degraded provider semantics,
+  GitHub issues #86-#91, and the sub-five-minute CI follow-up.
