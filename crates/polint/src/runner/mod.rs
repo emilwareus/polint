@@ -535,7 +535,6 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     type Counter = std::sync::Arc<AtomicUsize>;
-
     #[derive(Debug, PartialEq, Eq)]
     struct Projection {
         support: CapabilitySupportView,
@@ -580,7 +579,7 @@ mod tests {
                 };
                 let diagnostic =
                     Diagnostic::warning(id, "", TextRange::point(1, 1), "policy answer");
-                ctx.report(diagnostic.with_evidence("answer", answer.to_string()));
+                ctx.report(diagnostic.with_evidence("answer", format!("{id}={answer}")));
                 Ok(())
             },
         )
@@ -593,6 +592,41 @@ mod tests {
         ]
     }
 
+    fn blocker_fixture(
+        source: (&str, &str),
+        blocked_rules: &[(&'static str, Capabilities)],
+        provider_ids: &[&str],
+    ) -> (Vec<Diagnostic>, [usize; 2]) {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(temp.path().join(source.0), source.1).expect("source");
+        let loaded = load_config(temp.path()).expect("config");
+        let counters = [Counter::default(), Counter::default()];
+        let mut rules = blocked_rules
+            .iter()
+            .map(|(id, caps)| counted_rule(id, *caps, &counters[0]))
+            .collect::<Vec<_>>();
+        rules.push(counted_rule("allowed", Capabilities::new(), &counters[1]));
+        let plan = AnalysisPlan::from_rules(&rules, None, &BTreeMap::new());
+        let mut output = run_kernel(&loaded, &Cache::new("", false), &plan);
+        let outcomes = &mut output.run_report.provider_outcomes;
+        for provider_id in provider_ids {
+            let outcome = outcomes
+                .iter_mut()
+                .find(|row| row.provider_id == *provider_id);
+            outcome
+                .expect("provider outcome")
+                .reject_validation_for_test();
+        }
+        let (blocked, diagnostics) = AnalysisKernel::runtime_capability_blockers(
+            &plan,
+            &output.db,
+            &output.run_report.provider_outcomes,
+        );
+        output.runtime_blocked_rules = blocked;
+        dispatch_kernel_output_rules(&output, &rules, &BTreeMap::new(), None, true);
+        (diagnostics, counts(&counters))
+    }
+
     fn project(output: &KernelOutput, rules: &[Rule], counters: &[Counter; 2]) -> Projection {
         let before = counts(counters);
         let mut policy_diagnostics =
@@ -600,10 +634,10 @@ mod tests {
         let after = counts(counters);
         let decisions = std::array::from_fn(|index| after[index] - before[index]);
         sort_diagnostics(&mut policy_diagnostics);
-        let policy_answers = policy_diagnostics
+        let answers = policy_diagnostics
             .iter()
-            .map(|diagnostic| format!("{}={}", diagnostic.rule_id, diagnostic.evidence[0].value))
-            .collect();
+            .map(|diagnostic| diagnostic.evidence[0].value.clone());
+        let policy_answers = answers.collect();
         let mut kernel_diagnostics = output.diagnostics.clone();
         sort_diagnostics(&mut kernel_diagnostics);
         let mut combined_diagnostics =
@@ -624,35 +658,30 @@ mod tests {
 
     #[test]
     fn production_dispatch_blocks_events_from_rejected_scheduled_refinement() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        std::fs::write(temp.path().join("main.ts"), "export function f(){f()}").expect("source");
-        let loaded = load_config(temp.path()).expect("config");
-        let counters = [Counter::default(), Counter::default()];
-        let rules = vec![
-            counted_rule("test/events", Capabilities::new().events(), &counters[0]),
-            counted_rule("test/calls", Capabilities::new().calls(), &counters[0]),
-            counted_rule("allowed", Capabilities::new(), &counters[1]),
+        let blocked_rules = [
+            ("test/events", Capabilities::new().events()),
+            ("test/calls", Capabilities::new().calls()),
         ];
-        let plan = AnalysisPlan::from_rules(&rules, None, &BTreeMap::new());
-        let mut output = run_kernel(&loaded, &Cache::new("", false), &plan);
-        let refined_calls = output
-            .run_report
-            .provider_outcomes
-            .iter_mut()
-            .find(|row| row.provider_id == "polint.refined_calls")
-            .expect("refined calls outcome");
-        refined_calls.reject_validation_for_test();
-        let (blocked_rules, diagnostics) = AnalysisKernel::runtime_capability_blockers(
-            &plan,
-            &output.db,
-            &output.run_report.provider_outcomes,
+        let (diagnostics, decisions) = blocker_fixture(
+            ("main.ts", "export function f(){f()}"),
+            &blocked_rules,
+            &["polint.refined_calls"],
         );
-        output.runtime_blocked_rules = blocked_rules;
-
-        dispatch_kernel_output_rules(&output, &rules, &BTreeMap::new(), None, true);
-
         assert_eq!(diagnostics.len(), 2);
-        assert_eq!(counts(&counters), [0, 1]);
+        assert_eq!(decisions, [0, 1]);
+    }
+
+    #[test]
+    fn production_dispatch_blocks_events_for_applicable_syntax_failure() {
+        let blocked_rules = [("test/events", Capabilities::new().events())];
+        let failed_providers = ["polint.go.syntax", "polint.ts.syntax"];
+        let (diagnostics, decisions) = blocker_fixture(
+            ("main.go", "package main\n"),
+            &blocked_rules,
+            &failed_providers,
+        );
+        assert_eq!(diagnostics[0].evidence[3].value, "polint.go.syntax");
+        assert_eq!(decisions, [0, 1]);
     }
 
     #[test]
@@ -671,7 +700,6 @@ mod tests {
         let cold_projection = project(&cold, &rules, &counters);
         let warm = run_kernel(&loaded, &cache, &plan);
         let warm_projection = project(&warm, &rules, &counters);
-
         assert_eq!(cold_projection, warm_projection);
         assert_eq!(cold_projection.decisions, [1, 1]);
         let answers = &cold_projection.policy_answers;
@@ -691,17 +719,13 @@ mod tests {
         assert!(repaired.run_report.provider_telemetry.iter().any(|row| {
             row.cache_stats.invalid_evicted_reads > 0 && row.cache_stats.recomputes > 0
         }));
-
         let warning_cache = Cache::new(temp.path().join("warning-cache"), true);
         std::fs::create_dir_all(warning_cache.root()).expect("warning cache root");
         std::fs::write(warning_cache.layer_cache_dir(), b"not a directory").expect("block writes");
         let warned = run_kernel(&loaded, &warning_cache, &plan);
         assert_eq!(expected_outcomes, &warned.run_report.provider_outcomes);
-        let warnings = &warned.diagnostics;
-        assert!(
-            warnings
-                .iter()
-                .any(|d| d.message.contains("cache write failed"))
-        );
+        let mut warnings = warned.diagnostics.iter();
+        let write_warning = warnings.any(|d| d.message.contains("cache write failed"));
+        assert!(write_warning);
     }
 }

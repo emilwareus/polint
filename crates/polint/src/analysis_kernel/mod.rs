@@ -2085,31 +2085,19 @@ mod tests {
         let first_module_topology = provider_telemetry(&first, "polint.module_topology");
         let second_module_topology = provider_telemetry(&second, "polint.module_topology");
         let disabled_module_topology = provider_telemetry(&disabled, "polint.module_topology");
+        let first_identity = provider_identity(&first, "polint.module_topology");
+        let second_identity = provider_identity(&second, "polint.module_topology");
 
         assert_eq!(first_module_topology.cache_stats.misses, 1);
         assert_eq!(first_module_topology.cache_stats.recomputes, 1);
         assert_eq!(first_module_topology.cache_stats.writes, 1);
-        assert!(
-            !provider_identity(&first, "polint.module_topology")
-                .output_digest
-                .value
-                .is_empty()
-        );
         assert_eq!(second_module_topology.cache_stats.hits, 1);
         assert_eq!(second_module_topology.cache_stats.verified_reuse, 1);
         assert_eq!(second_module_topology.cache_stats.recomputes, 0);
-        assert_eq!(
-            provider_identity(&first, "polint.module_topology").output_digest,
-            provider_identity(&second, "polint.module_topology").output_digest
-        );
+        assert_eq!(first_identity.output_digest, second_identity.output_digest);
         assert_eq!(disabled_module_topology.cache_stats.bypasses_disabled, 1);
         assert_eq!(disabled_module_topology.cache_stats.recomputes, 1);
-        assert!(
-            !provider_identity(&disabled, "polint.module_topology")
-                .output_digest
-                .value
-                .is_empty()
-        );
+        let _ = provider_identity(&disabled, "polint.module_topology");
     }
 
     #[test]
@@ -2246,10 +2234,9 @@ mod tests {
         assert_eq!(second_metrics.cache_stats.hits, 1);
         assert_eq!(second_metrics.cache_stats.verified_reuse, 1);
         assert_eq!(second_metrics.cache_stats.recomputes, 0);
-        assert_eq!(
-            provider_identity(&first, "polint.metrics").output_digest,
-            provider_identity(&second, "polint.metrics").output_digest
-        );
+        let first_identity = provider_identity(&first, "polint.metrics");
+        let second_identity = provider_identity(&second, "polint.metrics");
+        assert_eq!(first_identity.output_digest, second_identity.output_digest);
     }
 
     #[test]
@@ -2312,12 +2299,7 @@ mod tests {
                 provider_telemetry(&output, provider_id).cache_stats,
                 CacheStats::default()
             );
-            assert!(
-                !provider_identity(&output, provider_id)
-                    .output_digest
-                    .value
-                    .is_empty()
-            );
+            let _ = provider_identity(&output, provider_id);
         }
 
         let semantic_mir = provider_outcome(&output, "polint.semantic_mir");
@@ -3164,36 +3146,23 @@ function setup() {
         assert_eq!(metrics.status, ProviderOutcomeStatus::Succeeded);
     }
 
-    fn provider_outcome<'a>(output: &'a KernelOutput, provider_id: &str) -> &'a ProviderOutcome {
-        output
-            .run_report
-            .provider_outcomes
-            .iter()
-            .find(|row| row.provider_id == provider_id)
-            .unwrap_or_else(|| panic!("missing provider outcome row {provider_id}"))
+    fn provider_outcome<'a>(output: &'a KernelOutput, id: &str) -> &'a ProviderOutcome {
+        let rows = &output.run_report.provider_outcomes;
+        let outcome = rows.iter().find(|row| row.provider_id == id);
+        outcome.expect("provider outcome")
     }
-    fn provider_identity<'a>(
-        output: &'a KernelOutput,
-        provider_id: &str,
-    ) -> &'a ProviderOutputIdentity {
-        provider_outcome(output, provider_id)
-            .output_identity
-            .as_ref()
-            .unwrap_or_else(|| panic!("provider {provider_id} did not succeed"))
+    fn provider_identity<'a>(output: &'a KernelOutput, id: &str) -> &'a ProviderOutputIdentity {
+        let identity = &provider_outcome(output, id).output_identity;
+        let identity = identity.as_ref().expect("provider success");
+        assert!(!identity.output_digest.value.is_empty());
+        identity
     }
-    fn provider_telemetry<'a>(
-        output: &'a KernelOutput,
-        provider_id: &str,
-    ) -> &'a ProviderTelemetry {
-        output
-            .run_report
-            .provider_telemetry
-            .iter()
-            .find(|row| row.provider_id == provider_id)
-            .unwrap_or_else(|| panic!("missing provider telemetry row {provider_id}"))
+    fn provider_telemetry<'a>(output: &'a KernelOutput, id: &str) -> &'a ProviderTelemetry {
+        let rows = &output.run_report.provider_telemetry;
+        let telemetry = rows.iter().find(|row| row.provider_id == id);
+        telemetry.expect("provider telemetry")
     }
-    fn provider_recomputes(output: &KernelOutput, provider_id: &str) -> u64 {
-        let telemetry = provider_telemetry(output, provider_id);
-        telemetry.cache_stats.recomputes
+    fn provider_recomputes(output: &KernelOutput, id: &str) -> u64 {
+        provider_telemetry(output, id).cache_stats.recomputes
     }
 }
