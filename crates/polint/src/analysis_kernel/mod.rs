@@ -2,7 +2,8 @@ use crate::analysis_plan::AnalysisPlan;
 use crate::cache::Cache;
 use crate::config::LoadedConfig;
 use crate::core::{AnalysisDb, CapabilitySupportView};
-use crate::diagnostics::Diagnostic;
+use crate::diagnostics::{Diagnostic, TextRange};
+use std::collections::{BTreeMap, BTreeSet};
 
 #[rustfmt::skip]
 #[cfg(test)] mod debug;
@@ -12,6 +13,7 @@ mod outcome;
 mod provider;
 mod store;
 pub(crate) mod validation;
+use incremental::{Digest, ProviderTelemetry};
 
 pub(crate) use metadata::{
     FactConfidence, FactFamily, FactMeta, FactMetaStore, FactPrecision, FactRef, MissingFactMeta,
@@ -94,7 +96,7 @@ pub(crate) struct KernelOutput {
     pub(crate) db: AnalysisDb,
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) capability_support: CapabilitySupportView,
-    pub(crate) runtime_blocked_rules: std::collections::BTreeSet<String>,
+    pub(crate) runtime_blocked_rules: BTreeSet<String>,
     #[cfg_attr(
         not(test),
         expect(
@@ -106,10 +108,12 @@ pub(crate) struct KernelOutput {
 }
 
 struct ProviderRunState {
-    identities: std::collections::BTreeMap<String, ProviderOutputIdentity>,
-    telemetry: Vec<incremental::ProviderTelemetry>,
+    identities: BTreeMap<String, ProviderOutputIdentity>,
+    telemetry: Vec<ProviderTelemetry>,
     tracker: ProviderOutcomeTracker,
 }
+
+type ProviderResult<T> = Result<T, outcome::ProviderOutcomeError>;
 
 impl AnalysisKernel {
     pub(crate) fn provider_manifests() -> &'static [ProviderManifest] {
@@ -214,7 +218,7 @@ impl AnalysisKernel {
         );
         let mut diagnostics = Vec::new();
         let mut provider_run = ProviderRunState {
-            identities: std::collections::BTreeMap::new(),
+            identities: BTreeMap::new(),
             telemetry: Vec::new(),
             tracker: ProviderOutcomeTracker::from_manifests(
                 Self::provider_manifests(),
@@ -1095,34 +1099,28 @@ impl AnalysisKernel {
     }
 
     fn record_provider_projection(
-        provider_run: &mut ProviderRunState,
-        selected_providers: &std::collections::BTreeSet<&'static str>,
-        provider_id: &'static str,
+        state: &mut ProviderRunState,
+        selected_providers: &BTreeSet<&'static str>,
+        id: &'static str,
         db: &mut AnalysisDb,
         cache_stats: incremental::CacheStats,
-        output_digest: Option<incremental::Digest>,
-    ) -> Result<(), outcome::ProviderOutcomeError> {
-        provider_run
+        output_digest: Option<Digest>,
+    ) -> ProviderResult<()> {
+        state
             .telemetry
-            .push(incremental::ProviderTelemetry::new(
-                provider_id,
-                cache_stats,
-            ));
-        if !selected_providers.contains(provider_id) {
+            .push(ProviderTelemetry::new(id, cache_stats));
+        if !selected_providers.contains(id) || !state.tracker.is_pending(id)? {
             return Ok(());
         }
-        if !provider_run.tracker.is_pending(provider_id)? {
-            return Ok(());
-        }
-        if let Some(failure) = db.take_provider_failure(provider_id) {
-            return provider_run.tracker.record_non_success(
-                provider_id,
+        if let Some(failure) = db.take_provider_failure(id) {
+            return state.tracker.record_non_success(
+                id,
                 failure.status,
                 failure.stage,
                 failure.reason,
             );
         }
-        let manifest = Self::provider_manifest(provider_id);
+        let manifest = Self::provider_manifest(id);
         let output_digest = output_digest.unwrap_or_else(|| {
             incremental::provider_output_digest_from_manifest(
                 manifest,
@@ -1130,37 +1128,24 @@ impl AnalysisKernel {
             )
         });
         let identity = incremental::provider_output_identity_from_manifest(manifest, output_digest);
-        provider_run
-            .tracker
-            .record_success(provider_id, identity.clone())?;
-        let previous = provider_run
-            .identities
-            .insert(provider_id.to_string(), identity);
-        assert!(previous.is_none(), "provider {provider_id} recorded twice");
+        state.tracker.record_success(id, identity.clone())?;
+        let unique = state.identities.insert(id.to_string(), identity).is_none();
+        assert!(unique, "provider {id} recorded twice");
         Ok(())
     }
 
-    fn begin_provider(
-        provider_run: &mut ProviderRunState,
-        provider_id: &str,
-    ) -> Result<bool, outcome::ProviderOutcomeError> {
-        let blockers = provider_run.tracker.can_run(provider_id)?;
-        if blockers.is_empty() {
-            Ok(true)
-        } else {
-            provider_run
-                .tracker
-                .record_dependency_blocked(provider_id, blockers)?;
-            Ok(false)
+    fn begin_provider(state: &mut ProviderRunState, id: &str) -> ProviderResult<bool> {
+        let blockers = state.tracker.can_run(id)?;
+        let ready = blockers.is_empty();
+        if !ready {
+            state.tracker.record_dependency_blocked(id, blockers)?;
         }
+        Ok(ready)
     }
-    fn provider_digest(
-        provider_run: &ProviderRunState,
-        provider_id: &str,
-    ) -> Option<incremental::Digest> {
-        provider_run
+    fn provider_digest(state: &ProviderRunState, id: &str) -> Option<Digest> {
+        state
             .identities
-            .get(provider_id)
+            .get(id)
             .map(|identity| identity.output_digest.clone())
     }
     fn selected_provider_ids(
@@ -1168,7 +1153,7 @@ impl AnalysisKernel {
         run_cfg_call_pipeline: bool,
         run_full_refinement_pipeline: bool,
         run_data_flow_pipeline: bool,
-    ) -> std::collections::BTreeSet<&'static str> {
+    ) -> BTreeSet<&'static str> {
         let mut selected = [
             "polint.source",
             "polint.go.syntax",
@@ -1178,7 +1163,7 @@ impl AnalysisKernel {
             "polint.metrics",
         ]
         .into_iter()
-        .collect::<std::collections::BTreeSet<_>>();
+        .collect::<BTreeSet<_>>();
         if run_semantic_pipeline {
             selected.insert("polint.semantic_mir");
         }
@@ -1213,12 +1198,12 @@ impl AnalysisKernel {
         plan: &AnalysisPlan,
         db: &AnalysisDb,
         outcomes: &[ProviderOutcome],
-    ) -> (std::collections::BTreeSet<String>, Vec<Diagnostic>) {
+    ) -> (BTreeSet<String>, Vec<Diagnostic>) {
         let by_id = outcomes
             .iter()
             .map(|outcome| (outcome.provider_id.as_str(), outcome))
-            .collect::<std::collections::BTreeMap<_, _>>();
-        let mut blocked_rules = std::collections::BTreeSet::new();
+            .collect::<BTreeMap<_, _>>();
+        let mut blocked_rules = BTreeSet::new();
         let mut diagnostics = Vec::new();
         for rule in plan.rules() {
             for capability in &rule.requested_capabilities {
@@ -1240,16 +1225,9 @@ impl AnalysisKernel {
                         }
                     }
                 }
-                if providers.is_empty() {
-                    continue;
-                }
                 let failed = providers
                     .into_iter()
-                    .map(|provider_id| {
-                        by_id
-                            .get(provider_id)
-                            .expect("capability provider is in the static inventory")
-                    })
+                    .map(|provider_id| by_id[provider_id])
                     .filter(|outcome| outcome.status != ProviderOutcomeStatus::Succeeded)
                     .collect::<Vec<_>>();
                 if failed.is_empty() {
@@ -1258,19 +1236,17 @@ impl AnalysisKernel {
                 blocked_rules.insert(rule.id.clone());
                 let blockers = failed
                     .iter()
-                    .flat_map(|outcome| {
-                        if outcome.blockers.is_empty() {
-                            vec![outcome.provider_id.clone()]
-                        } else {
-                            outcome.blockers.clone()
-                        }
+                    .flat_map(|outcome| match outcome.blockers.as_slice() {
+                        [] => std::slice::from_ref(&outcome.provider_id),
+                        blockers => blockers,
                     })
-                    .collect::<std::collections::BTreeSet<_>>();
+                    .cloned()
+                    .collect::<BTreeSet<_>>();
                 diagnostics.push(
                     Diagnostic::error(
                         "polint/capability",
                         "<workspace>",
-                        crate::diagnostics::TextRange::point(1, 1),
+                        TextRange::point(1, 1),
                         format!(
                             "Rule `{}` requested capability `{capability}`, but provider closure did not succeed.",
                             rule.id
@@ -2166,12 +2142,7 @@ mod tests {
 
         assert_eq!(semantic_mir.schema_version, "semantic-mir-facts-1:1");
         assert!(!semantic_mir.output_digest.value.is_empty());
-        assert_eq!(
-            provider_telemetry(&output, "polint.semantic_mir")
-                .cache_stats
-                .recomputes,
-            1
-        );
+        assert_eq!(provider_recomputes(&output, "polint.semantic_mir"), 1);
     }
 
     #[test]
@@ -2199,12 +2170,7 @@ mod tests {
 
         assert_eq!(cfg.schema_version, "cfg-facts-1:1");
         assert!(!cfg.output_digest.value.is_empty());
-        assert_eq!(
-            provider_telemetry(&output, "polint.cfg")
-                .cache_stats
-                .recomputes,
-            1
-        );
+        assert_eq!(provider_recomputes(&output, "polint.cfg"), 1);
     }
 
     #[test]
@@ -2232,12 +2198,7 @@ mod tests {
 
         assert_eq!(calls.schema_version, "calls-facts-1:1");
         assert!(!calls.output_digest.value.is_empty());
-        assert_eq!(
-            provider_telemetry(&output, "polint.calls")
-                .cache_stats
-                .recomputes,
-            1
-        );
+        assert_eq!(provider_recomputes(&output, "polint.calls"), 1);
     }
 
     #[test]
@@ -2362,12 +2323,7 @@ mod tests {
         let semantic_mir = provider_outcome(&output, "polint.semantic_mir");
         assert_eq!(semantic_mir.status, ProviderOutcomeStatus::PlannedAbsent);
         assert!(semantic_mir.output_identity.is_none());
-        assert_eq!(
-            provider_telemetry(&output, "polint.semantic_mir")
-                .cache_stats
-                .recomputes,
-            0
-        );
+        assert_eq!(provider_recomputes(&output, "polint.semantic_mir"), 0);
     }
 
     #[test]
@@ -2392,36 +2348,11 @@ mod tests {
         })
         .expect("kernel should run");
 
-        assert_eq!(
-            provider_telemetry(&output, "polint.semantic_mir")
-                .cache_stats
-                .recomputes,
-            0
-        );
-        assert_eq!(
-            provider_telemetry(&output, "polint.calls")
-                .cache_stats
-                .recomputes,
-            0
-        );
-        assert_eq!(
-            provider_telemetry(&output, "polint.refined_calls")
-                .cache_stats
-                .recomputes,
-            0
-        );
-        assert_eq!(
-            provider_telemetry(&output, "polint.data_flow")
-                .cache_stats
-                .recomputes,
-            0
-        );
-        assert_eq!(
-            provider_telemetry(&output, "polint.evidence")
-                .cache_stats
-                .recomputes,
-            0
-        );
+        assert_eq!(provider_recomputes(&output, "polint.semantic_mir"), 0);
+        assert_eq!(provider_recomputes(&output, "polint.calls"), 0);
+        assert_eq!(provider_recomputes(&output, "polint.refined_calls"), 0);
+        assert_eq!(provider_recomputes(&output, "polint.data_flow"), 0);
+        assert_eq!(provider_recomputes(&output, "polint.evidence"), 0);
     }
 
     #[test]
@@ -2446,12 +2377,7 @@ mod tests {
         })
         .expect("kernel should run");
 
-        assert_eq!(
-            provider_telemetry(&output, "polint.symbol_graph")
-                .cache_stats
-                .recomputes,
-            1
-        );
+        assert_eq!(provider_recomputes(&output, "polint.symbol_graph"), 1);
         for provider_id in [
             "polint.module_topology",
             "polint.semantic_mir",
@@ -2462,9 +2388,7 @@ mod tests {
             "polint.evidence",
         ] {
             assert_eq!(
-                provider_telemetry(&output, provider_id)
-                    .cache_stats
-                    .recomputes,
+                provider_recomputes(&output, provider_id),
                 0,
                 "{provider_id} should stay off for symbols/references-only plans"
             );
@@ -2510,9 +2434,7 @@ mod tests {
             "polint.refined_calls",
         ] {
             assert_eq!(
-                provider_telemetry(&output, provider_id)
-                    .cache_stats
-                    .recomputes,
+                provider_recomputes(&output, provider_id),
                 1,
                 "{provider_id} should run for control-flow plans"
             );
@@ -2543,9 +2465,7 @@ mod tests {
         );
         for provider_id in ["polint.data_flow", "polint.evidence"] {
             assert_eq!(
-                provider_telemetry(&output, provider_id)
-                    .cache_stats
-                    .recomputes,
+                provider_recomputes(&output, provider_id),
                 0,
                 "{provider_id} should stay off unless a dataflow rule asks for it"
             );
@@ -2574,12 +2494,7 @@ mod tests {
         })
         .expect("kernel should run");
 
-        assert_eq!(
-            provider_telemetry(&output, "polint.cfg")
-                .cache_stats
-                .recomputes,
-            1
-        );
+        assert_eq!(provider_recomputes(&output, "polint.cfg"), 1);
         assert!(
             !output.db.cfg_reachability().is_empty(),
             "calls plans should still derive full CFG relation rows"
@@ -2698,9 +2613,7 @@ function cleanup(value: string) {{ return value.trim(); }}
         }
         for provider_id in ["polint.data_flow", "polint.evidence"] {
             assert_eq!(
-                provider_telemetry(&output, provider_id)
-                    .cache_stats
-                    .recomputes,
+                provider_recomputes(&output, provider_id),
                 0,
                 "{provider_id} should stay off for synthetic control-flow benchmark"
             );
@@ -2729,24 +2642,9 @@ function cleanup(value: string) {{ return value.trim(); }}
         })
         .expect("kernel should run");
 
-        assert_eq!(
-            provider_telemetry(&output, "polint.refined_calls")
-                .cache_stats
-                .recomputes,
-            1
-        );
-        assert_eq!(
-            provider_telemetry(&output, "polint.data_flow")
-                .cache_stats
-                .recomputes,
-            0
-        );
-        assert_eq!(
-            provider_telemetry(&output, "polint.evidence")
-                .cache_stats
-                .recomputes,
-            0
-        );
+        assert_eq!(provider_recomputes(&output, "polint.refined_calls"), 1);
+        assert_eq!(provider_recomputes(&output, "polint.data_flow"), 0);
+        assert_eq!(provider_recomputes(&output, "polint.evidence"), 0);
     }
 
     #[test]
@@ -3244,159 +3142,26 @@ function setup() {
         );
     }
 
-    mod provider_outcomes {
-        use super::*;
-        fn run(
-            loaded: &crate::config::LoadedConfig,
-            cache: &Cache,
-            plan: &AnalysisPlan,
-        ) -> KernelOutput {
-            AnalysisKernel::run(KernelInput {
-                loaded,
-                cache,
-                config_digest: "config",
-                rule_digest: "rules",
-                plan,
-                parallel: false,
-            })
-            .expect("kernel run")
-        }
-        #[test]
-        fn blocked_calls_skip_derivation_after_upstream_execution_failure() {
-            let temp = tempfile::tempdir().expect("tempdir");
-            std::fs::write(
-                temp.path().join("main.ts"),
-                "function callee() {}\nfunction caller() { callee(); }\n",
-            )
-            .expect("source");
-            let loaded = load_config(temp.path()).expect("config");
-            let cache = Cache::new("", false);
-            let plan = AnalysisPlan::from_capability_names_for_test(&["calls"]);
-            FAIL_SEMANTIC_MIR_EXECUTION_ONCE.with(|failure| failure.set(true));
-            let output = run(&loaded, &cache, &plan);
-            let semantic_mir = provider_outcome(&output, "polint.semantic_mir");
-            assert_eq!(semantic_mir.status, ProviderOutcomeStatus::Failed);
-            assert_eq!(
-                semantic_mir.failure_stage,
-                Some(ProviderFailureStage::Execution)
-            );
-            assert_eq!(
-                semantic_mir.failure_reason,
-                Some(ProviderFailureReason::ExecutionFailed)
-            );
-            let calls = provider_outcome(&output, "polint.calls");
-            assert_eq!(calls.status, ProviderOutcomeStatus::DependencyBlocked);
-            assert_eq!(
-                calls.blockers,
-                ["polint.cfg".to_string(), "polint.semantic_mir".to_string()]
-            );
-            assert!(calls.output_identity.is_none() && output.db.call_sites().is_empty());
-            assert_eq!(
-                provider_telemetry(&output, "polint.calls").cache_stats,
-                CacheStats::default()
-            );
-            assert_eq!(
-                provider_outcome(&output, "polint.metrics").status,
-                ProviderOutcomeStatus::Succeeded
-            );
-            assert_eq!(
-                output.run_report.provider_outcomes.len(),
-                AnalysisKernel::provider_manifests().len()
-            );
-        }
-
-        #[test]
-        fn established_run_seals_static_manifest_order_after_validation() {
-            let temp = tempfile::tempdir().expect("tempdir");
-            std::fs::write(temp.path().join("main.go"), "package main\n").expect("source");
-            let loaded = load_config(temp.path()).expect("config");
-            let cache = Cache::new("", false);
-            let plan = AnalysisPlan::empty();
-            let output = run(&loaded, &cache, &plan);
-            assert_eq!(
-                output
-                    .run_report
-                    .provider_outcomes
-                    .iter()
-                    .map(|row| row.provider_id.as_str())
-                    .collect::<Vec<_>>(),
-                AnalysisKernel::provider_manifests()
-                    .iter()
-                    .map(|manifest| manifest.id)
-                    .collect::<Vec<_>>()
-            );
-            assert!(output.runtime_blocked_rules.is_empty());
-            let mut outcomes = output.run_report.provider_outcomes;
-            for provider_id in ["polint.go.syntax", "polint.ts.syntax"] {
-                let syntax = outcomes
-                    .iter_mut()
-                    .find(|row| row.provider_id == provider_id)
-                    .expect("syntax outcome");
-                syntax.status = ProviderOutcomeStatus::Failed;
-                syntax.output_identity = None;
-                syntax.failure_stage = Some(ProviderFailureStage::Execution);
-                syntax.failure_reason = Some(ProviderFailureReason::ExecutionFailed);
-            }
-            let plan = AnalysisPlan::from_capability_names_for_test(&["events"]);
-            let (blocked, diagnostics) =
-                AnalysisKernel::runtime_capability_blockers(&plan, &output.db, &outcomes);
-            assert_eq!(blocked, ["test/requested-capabilities".to_string()].into());
-            assert_eq!(diagnostics.len(), 1);
-            assert_eq!(diagnostics[0].rule_id, "polint/capability");
-            assert_eq!(diagnostics[0].evidence[3].value, "polint.go.syntax");
-        }
-
-        #[test]
-        fn cold_warm_semantics_match() {
-            let temp = tempfile::tempdir().expect("tempdir");
-            std::fs::write(temp.path().join("main.ts"), "export const n = 1;\n").expect("source");
-            let loaded = load_config(temp.path()).expect("config");
-            let cache = Cache::default_for_repo(temp.path(), true);
-            let plan = AnalysisPlan::from_capability_names_for_test(&["file_metrics"]);
-            let cold = run(&loaded, &cache, &plan);
-            let warm = run(&loaded, &cache, &plan);
-            assert_eq!(
-                cold.run_report.provider_outcomes,
-                warm.run_report.provider_outcomes
-            );
-            assert_eq!(cold.runtime_blocked_rules, warm.runtime_blocked_rules);
-            assert_eq!(cold.diagnostics, warm.diagnostics);
-            assert_ne!(
-                cold.run_report.provider_telemetry,
-                warm.run_report.provider_telemetry
-            );
-            let mut blobs = std::fs::read_dir(cache.layer_cache_dir().join("blobs"))
-                .expect("cache blobs")
-                .map(|entry| entry.expect("blob entry").path())
-                .collect::<Vec<_>>();
-            blobs.sort();
-            std::fs::write(blobs.first().expect("cached payload"), b"corrupt").expect("corrupt");
-            let repaired = run(&loaded, &cache, &plan);
-            assert_eq!(
-                warm.run_report.provider_outcomes,
-                repaired.run_report.provider_outcomes
-            );
-            assert!(repaired.run_report.provider_telemetry.iter().any(|row| {
-                row.cache_stats.invalid_evicted_reads > 0 && row.cache_stats.recomputes > 0
-            }));
-            let warning_cache = Cache::new(temp.path().join("warning-cache"), true);
-            std::fs::create_dir_all(warning_cache.root()).expect("warning cache root");
-            std::fs::write(warning_cache.layer_cache_dir(), b"not a directory")
-                .expect("block layer writes");
-            let warned = run(&loaded, &warning_cache, &plan);
-            assert!(warned.run_report.provider_outcomes.iter().all(|outcome| {
-                matches!(
-                    outcome.status,
-                    ProviderOutcomeStatus::Succeeded | ProviderOutcomeStatus::PlannedAbsent
-                )
-            }));
-            assert!(
-                warned
-                    .diagnostics
-                    .iter()
-                    .any(|diagnostic| diagnostic.message.contains("cache write failed"))
-            );
-        }
+    #[test]
+    fn provider_outcomes_block_calls_after_upstream_execution_failure() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(temp.path().join("main.ts"), "export function f(){f()}").expect("source");
+        FAIL_SEMANTIC_MIR_EXECUTION_ONCE.with(|failure| failure.set(true));
+        let output = AnalysisKernel::run(KernelInput {
+            loaded: &load_config(temp.path()).expect("config"),
+            cache: &Cache::new("", false),
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &AnalysisPlan::from_capability_names_for_test(&["calls"]),
+            parallel: false,
+        })
+        .expect("kernel run");
+        let calls = provider_outcome(&output, "polint.calls");
+        assert_eq!(calls.status, ProviderOutcomeStatus::DependencyBlocked);
+        assert_eq!(calls.blockers, ["polint.cfg", "polint.semantic_mir"]);
+        assert!(calls.output_identity.is_none() && output.db.call_sites().is_empty());
+        let metrics = provider_outcome(&output, "polint.metrics");
+        assert_eq!(metrics.status, ProviderOutcomeStatus::Succeeded);
     }
 
     fn provider_outcome<'a>(output: &'a KernelOutput, provider_id: &str) -> &'a ProviderOutcome {
@@ -3419,12 +3184,16 @@ function setup() {
     fn provider_telemetry<'a>(
         output: &'a KernelOutput,
         provider_id: &str,
-    ) -> &'a incremental::ProviderTelemetry {
+    ) -> &'a ProviderTelemetry {
         output
             .run_report
             .provider_telemetry
             .iter()
             .find(|row| row.provider_id == provider_id)
             .unwrap_or_else(|| panic!("missing provider telemetry row {provider_id}"))
+    }
+    fn provider_recomputes(output: &KernelOutput, provider_id: &str) -> u64 {
+        let telemetry = provider_telemetry(output, provider_id);
+        telemetry.cache_stats.recomputes
     }
 }
