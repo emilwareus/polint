@@ -11,7 +11,7 @@ requires:
 provides:
   - Closed in-memory provider outcomes with success-only authenticated output identity
   - Plan-first hard-provider scheduling and post-validation fixed-point dependency closure
-  - Private runtime hard-capability blockers enforced by production rule dispatch
+  - Language-aware and row-sensitive runtime hard-capability blockers enforced by production rule dispatch
   - Semantic outcome and cache telemetry separation with cold/warm parity proof
 affects: [phase-65-r4-r6, semantic-store, provider-mirroring, capability-enforcement]
 
@@ -22,6 +22,7 @@ tech-stack:
     - "Treat provider execution as provisional until structured validation and fixed-point dependency sealing complete"
     - "Keep semantic provider truth separate from cache telemetry and presentation strings"
     - "Forward private runtime blocker sets before RuleCtx construction without widening public capability status"
+    - "A selected provider that fails readiness returns neutral output and cannot enter an omission-only fallback"
 
 key-files:
   created:
@@ -46,6 +47,7 @@ key-decisions:
   - "Only a validated Succeeded outcome carries reusable output identity; every other terminal state carries typed stage/reason and exact blockers"
   - "Planning/setup capability support remains unchanged publicly; sealed runtime blockers are private and enforced before rule context construction"
   - "Cache hits, misses, warnings, and counters are telemetry only and cannot certify or revoke semantic provider success"
+  - "Events require syntax only for languages present in the run and require scheduled call/refinement providers only when their rows can influence matching"
 
 patterns-established:
   - "Validation-first sealing: apply owned/global validation downgrades, then propagate direct hard-provider failures to a manifest-order fixed point"
@@ -55,13 +57,13 @@ patterns-established:
 requirements-completed: []
 
 # Metrics
-duration: 1h 1m
+duration: 3h 25m
 completed: 2026-07-29
 ---
 
 # Phase 65 Plan 03: Provider Closure R3 Summary
 
-**Every established kernel run now seals deterministic provider truth after structured validation, blocks failed hard closures before rule dispatch, and keeps cache telemetry outside semantic identity.**
+**Every established kernel run now seals deterministic provider truth after structured validation, blocks language-aware and row-sensitive failed closures before rule dispatch, and keeps cache telemetry outside semantic identity.**
 
 This completes only restart slice R3. R1-R3 are complete, while Phase 65
 remains open. STORE-04, STORE-05, META-01, and META-04 remain open. R4 is next;
@@ -69,12 +71,12 @@ R5 and R6 remain later slices.
 
 ## Performance
 
-- **Duration:** ~1h 1m
+- **Duration:** ~3h 25m from implementation start through final review-artifact commit
 - **Started:** 2026-07-29T07:42:01Z
-- **Completed:** 2026-07-29T08:43:29Z
+- **Completed:** 2026-07-29T11:07:48Z
 - **Tasks:** 3
 - **Implementation/test files modified:** 14
-- **Bounded implementation delta:** 2,486 additions, 707 deletions
+- **Bounded implementation delta:** 2,500 additions, 733 deletions
 - **Durable schema families:** 0
 - **Persisted provider families:** 0
 
@@ -86,8 +88,10 @@ R5 and R6 remain later slices.
 - Recorded replacement, Go setup, client, and lowering failures as typed orchestration evidence rather than inferring truth from diagnostics or optional digests.
 - Split sealed semantic outcomes from provider cache telemetry throughout run reports, performance/observed projections, semantic-graph fixtures, and symbol-graph warm-cache proof.
 - Derived deterministic runtime capability diagnostics and private blocked-rule IDs before store maintenance, then forwarded those blockers through the production runner before `RuleCtx` construction.
+- Closed all four cumulative review findings: applicable syntax failures now block `events`; validation ownership is assigned structurally rather than recovered from diagnostics; scheduled call/refinement rows and corrected reachability sequencing participate truthfully in mixed-plan Events closure; and dependency-blocked Calls cannot execute an omission-only fallback.
 - Proved cold and warm runs have identical outcomes, identities, blockers, diagnostics, and dispatch decisions while telemetry differs; corrupt cache payloads recompute and cache-write warnings do not revoke valid success.
-- Kept public SDK, runner signatures, capability status, CLI/JSON/diagnostic contracts, durable store schema, and `.github/workflows/ci.yml` unchanged.
+- Finished cumulative review iteration 6 clean with zero critical, warning, or informational findings while retaining all earlier review history.
+- Kept public SDK, runner signatures, capability status, CLI/JSON/diagnostic contracts, durable store schema, tracking files, and `.github/workflows/ci.yml` unchanged; no sub-five-minute CI work was absorbed.
 
 ## Task Commits
 
@@ -99,21 +103,33 @@ Each task was committed atomically:
 
 **Plan metadata:** `c453748c` (docs: R3 provider outcome plan)
 
+## Review Remediation Commits
+
+The bounded review fixes were committed independently:
+
+1. **Seal the applicable syntax-provider closure for Events** - `fde65ff0` (fix)
+2. **Make structured validation ownership authoritative** - `a1da836e` (fix)
+3. **Strengthen private-vocabulary and regression proof** - `f7f593ac` (test)
+4. **Seal scheduled Events enrichments and correct reachability identity sequencing** - `28689ca7` (fix)
+5. **Prevent dependency-blocked Calls from entering fallback execution** - `f86dab67` (fix)
+
+**Final review artifacts:** `67fc39f9` (docs: cumulative clean review and all-fixed report)
+
 ## Files Created/Modified
 
 - `crates/polint/src/analysis_kernel/outcome.rs` - Closed outcomes, authenticated identity, hard dependencies, transition checks, validation downgrades, and fixed-point sealing.
-- `crates/polint/src/analysis_kernel/mod.rs` - Plan-selected scheduling, provider projection, structured sealing, runtime capability closure, and cold/warm regressions.
+- `crates/polint/src/analysis_kernel/mod.rs` - Plan-selected scheduling, provider projection, structured sealing, language/row-sensitive runtime capability closure, readiness-safe Calls dispatch, and cold/warm regressions.
 - `crates/polint/src/analysis_kernel/incremental/mod.rs` - Curated private exports for separate outcome and telemetry vocabulary.
 - `crates/polint/src/analysis_kernel/incremental/run_report.rs` - Manifest-ordered sealed outcomes alongside separately ordered provider telemetry.
 - `crates/polint/src/analysis_kernel/incremental/stats.rs` - Provider-keyed cache telemetry and telemetry-only aggregation.
-- `crates/polint/src/analysis_kernel/validation.rs` - Deterministic structured issues, provider/family ownership, global fallback, and diagnostic rendering.
+- `crates/polint/src/analysis_kernel/validation.rs` - Deterministic structured issues with authoritative provider/family ownership, global fallback, and one-way diagnostic rendering.
 - `crates/polint/src/core/mod.rs` - Typed provider failure ledger and private runtime-blocked rule wrapper.
 - `crates/polint/src/go/semantic/provider.rs` - Explicit Go setup, client, and lowering outcome signals.
 - `crates/polint/src/eval/performance.rs` - One-way closed-status presentation joined independently with telemetry.
 - `crates/polint/src/eval/observed.rs` - Semantic outcome and telemetry projections with separate invariants.
 - `crates/polint/src/eval/semantic_graph_snapshot.rs` - Success-only semantic-graph identity extraction.
 - `crates/polint/src/symbol_graph/mod.rs` - Warm-cache assertions split between identity and telemetry.
-- `crates/polint/src/runner/mod.rs` - Production kernel-output dispatch adapter forwarding sealed blocker IDs.
+- `crates/polint/src/runner/mod.rs` - Production kernel-output dispatch adapter plus mixed-plan Events/refinement blocker proof.
 - `crates/polint/tests/public_surface_leak.rs` - Negative coverage for private outcome, identity, failure, and validation vocabulary.
 
 ## Decisions Made
@@ -123,35 +139,50 @@ Each task was committed atomically:
 - Left `CapabilitySupportStatus` as the planning/setup contract and carried execution-time failure through a private sorted blocker set plus existing-code `polint/capability` diagnostics.
 - Kept store maintenance after provider sealing so store enabled/disabled state cannot mutate outcomes, blockers, or policy behavior.
 - Used existing deterministic provider summaries only for successful no-cache or empty-language computation; missing producer identity never becomes an absent digest.
+- Filtered the Events syntax closure to languages present in `AnalysisDb`, then added call/refinement outcomes only when scheduled rows can affect Events matching; planned-absent and rowless enrichment remains optional.
+- Made failed readiness terminal for selected providers. Omission-only fallback paths cannot run after `begin_provider` records dependency blocking.
 
 ## Deviations from Plan
 
-None - the plan executed within its three tasks, exactly fourteen declared
-product/test files, 2,500-line cap, private API boundary, and zero durable
-schema/provider-family budget.
+No scope deviation. The implementation and all review remediation stayed
+within the original three tasks, exactly fourteen declared product/test files,
+the 2,500-line cap, the private API boundary, and zero durable schema/provider
+families.
+
+The bounded review cycle did correct four implementation defects without
+expanding scope:
+
+- **CR-01:** completed the language-applicable syntax closure for `events`.
+- **WR-01:** moved validation downgrade ownership fully into structured issues.
+- **CR-02:** sealed row-sensitive scheduled Events enrichments and corrected the reachability identity handoff exposed by the mixed plan.
+- **CR-03:** prevented a dependency-blocked Calls provider from falling through into provider execution.
 
 ## Issues Encountered
 
-- Removing absent-digest substitutions initially pushed the handwritten diff above the cap. The audited dependency table was compacted with function-local provider aliases without changing any edge, leaving the final delta fourteen lines under budget.
+- Removing absent-digest substitutions initially pushed the handwritten diff above the cap. The audited dependency table was compacted with function-local provider aliases without changing any edge; bounded remediation then used the remaining allowance and finished exactly at 2,500 additions.
 - Strict clippy identified redundant terminal digest and test clones after the ownership refactor. Moving those values at their final use resolved the warnings without changing behavior.
+- Standard review required three remediation iterations. CR-01 and WR-01 closed first, CR-02 exposed the mixed-plan reachability/enrichment path, and CR-03 exposed blocked-provider fallback execution; the final cumulative review is clean with zero findings.
 
 ## Verification
 
 - `cargo test -p polint --lib analysis_kernel::outcome::tests --locked`: 6 passed.
 - `cargo test -p polint --lib eval::performance::tests --locked`: 6 passed.
 - `cargo test -p polint --lib analysis_kernel::validation::tests --locked`: 9 passed.
-- `cargo test -p polint --lib analysis_kernel::tests::provider_outcomes --locked`: 2 passed, including real cold/warm, corrupt-cache recomputation, and cache-write warning proof.
+- `cargo test -p polint --lib analysis_kernel::tests::provider_outcomes --locked`: 3 passed, including blocked Calls after upstream execution failure, real cold/warm parity, corrupt-cache recomputation, and cache-write warning proof.
 - `cargo test -p polint --lib core::tests::run_rules_skips_rules_with_runtime_provider_blockers --locked`: 1 passed.
-- `cargo test -p polint --lib runner::tests::production_dispatch_forwards_runtime_provider_blockers --locked`: 1 passed.
+- `cargo test -p polint --lib runner::tests::production_dispatch_blocks_events_from_rejected_scheduled_refinement --locked`: 1 passed; the renamed mixed-plan regression blocks Events and Calls while an unrelated rule executes.
+- `cargo test -p polint --lib analysis_kernel::tests::provider_outcomes::blocked_calls_skip_derivation_after_upstream_execution_failure --locked`: 1 passed.
+- Events-only pipeline, deep Calls-plan, provider-backed Events matching, refined-call validation, and structured validation-ownership regressions: 1 passed each.
 - `cargo test -p polint --test public_surface_leak semantic_store_markers_do_not_leak_into_supported_public_surfaces --locked`: 1 passed.
 - `cargo test -p polint --lib analysis_kernel::tests::semantic_store_check_parity --locked`: 1 passed; store modes preserved byte-identical JSON and exit semantics.
 - Every focused target completed below sixty seconds; the slowest took 31.61 seconds including recompilation.
 - `cargo fmt --all -- --check`: passed.
 - `cargo clippy -p polint --lib --tests --all-features --locked -- -D warnings`: passed.
 - `cargo check --workspace --all-features --locked`: passed.
-- Normal pre-commit `make lint` passed workspace formatting and strict clippy across all targets and features for all three task commits.
+- Normal pre-commit `make lint` passed workspace formatting and strict clippy across all targets and features for all three task commits and all five remediation commits.
 - Private-name scans, removal of `ProviderOutputMeta`/semantic `ProviderStatsRow` consumers, absence of kernel `Digest::absent` handoffs, and `git diff --check`: passed.
-- Scope audit from `c453748c`: exactly 14 declared implementation/test files, 2,486 additions, 707 deletions, zero durable schema families, zero persisted provider families, and no CI/public-contract changes.
+- Cumulative review iteration 6: clean with 0 critical, 0 warning, and 0 informational findings; fix report iteration 3: `all_fixed` for 4/4 findings across five remediation commits.
+- Scope audit from `c453748c`: exactly 14 declared implementation/test files, 2,500 additions, 733 deletions, zero durable schema families, zero persisted provider families, and no public/store/CI/tracking expansion.
 
 ## User Setup Required
 
@@ -164,6 +195,7 @@ external configuration.
 - R4 can mirror exactly one audited provider family against the sealed success-only identity boundary.
 - R5-R6 remain later slices; no broader provider persistence, metadata query, or generation lifecycle work was absorbed into R3.
 - Phase 65 and STORE-04, STORE-05, META-01, and META-04 remain open.
+- The deferred sub-five-minute CI redesign remains untouched and outside R3.
 
 ---
 *Phase: 65-generation-manifest-and-metadata-mirroring*
@@ -172,6 +204,7 @@ external configuration.
 ## Self-Check: PASSED
 
 All fourteen bounded implementation/test files and this summary exist, all
-three task commits are in history, required focused/static verification passed,
-and no Phase 65, requirement, STATE, ROADMAP, or REQUIREMENTS completion marker
-was written.
+three task commits and five remediation commits are in history, the cumulative
+review is clean, required focused/static/public/store verification passed, and
+no Phase 65, requirement, STATE, ROADMAP, or REQUIREMENTS completion marker was
+written.
