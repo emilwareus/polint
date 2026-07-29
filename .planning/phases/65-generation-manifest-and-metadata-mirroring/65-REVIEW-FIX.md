@@ -1,10 +1,10 @@
 ---
 phase: 65-generation-manifest-and-metadata-mirroring
 review_path: .planning/phases/65-generation-manifest-and-metadata-mirroring/65-REVIEW.md
-iteration: 3
+iteration: 4
 status: all_fixed
-findings_in_scope: 4
-fixed: 4
+findings_in_scope: 5
+fixed: 5
 skipped: 0
 fix_commit_hashes:
   - fde65ff0748c708949a202d979c86aa8f6551b80
@@ -12,14 +12,17 @@ fix_commit_hashes:
   - f7f593ace2feddfa83e00fb37a039273199e3ff0
   - 28689ca75049bc3d52d30bdb334aa70bab697c26
   - f86dab6729e29e9576fb04613c403861d572a0da
+  - 34979d2a6c282ff60984a469970aaf6837b8e562
 final_budget:
   product_test_files: 14
   additions: 2500
-  deletions: 733
+  deletions: 830
   addition_cap: 2500
 tests:
   status: passed
-  focused_targets: 13
+  focused_targets: 14
+  mutation_checks: 2
+  plan_65_04_commands: 15
   static_checks: 4
 fixed_at: 2026-07-29
 ---
@@ -145,3 +148,47 @@ None.
 
 _Fixer: gsd-code-fixer_
 _Iteration: 3_
+
+## Verification-Gap Review Remediation
+
+### WR-02: Compaction removed the applicable-syntax failure regression
+
+**Status:** fixed
+**Commit:** `34979d2a`
+
+The production-dispatch regression now includes a Go-only repository whose
+Events rule schedules the real syntax providers. The fixture forces both
+`polint.go.syntax` and `polint.ts.syntax` outcomes to fail, derives the blocker
+set through `AnalysisKernel::runtime_capability_blockers`, and then calls the
+actual `dispatch_kernel_output_rules` adapter. Exact blocker evidence contains
+only `polint.go.syntax`, proving that the irrelevant TypeScript provider is
+filtered from the single-language run. The Events rule executes zero times
+while an unrelated rule executes once.
+
+The same compact fixture retains the CR-02 proof: a rejected scheduled
+`polint.refined_calls` outcome blocks both Events and Calls through the
+production dispatcher while the unrelated rule still executes. No production
+provider mapping, filtering, blocker, or dispatch behavior changed.
+
+Mutation checks prove the restored regression is contract-sensitive:
+
+- Removing the Events-to-syntax provider mapping makes the test fail because
+  no capability diagnostic or runtime blocker is produced.
+- Bypassing the Events language filter makes the test fail because blocker
+  evidence becomes `polint.go.syntax,polint.ts.syntax` instead of the exact
+  applicable provider.
+
+All fifteen Plan 65-04 verification commands pass separately, including eight
+focused behavioral targets, formatting, strict workspace/all-target/all-feature
+Clippy, workspace checking, the exact fourteen-file audit, the 2,500-addition
+cap, and protected-file checks. The final cumulative product/test diff from
+`c453748c` is exactly 14 files, 2,500 additions, and 830 deletions. The review
+artifact itself remained byte-identical and unstaged during remediation.
+
+**Evidence:** `crates/polint/src/analysis_kernel/mod.rs:1197-1293` and
+`crates/polint/src/runner/mod.rs:595-685`
+
+---
+
+_Fixer: gsd-code-fixer_
+_Iteration: 4_
