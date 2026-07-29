@@ -1636,7 +1636,7 @@ mod type_value_alias_validation {
                 "missing {expected}: {diagnostics:#?}"
             );
         }
-        let rendered = format!("{diagnostics:#?}");
+        let rendered = format!("{:#?}", &*diagnostics);
         for marker in [
             "polint.type_value_alias",
             "TypeFact",
@@ -5761,7 +5761,6 @@ mod tests {
         );
         assert_eq!(report.issues[0].fact_family, Some(FactFamily::FileMetric));
         assert_eq!(report.issues[0].provider_ids, ["polint.metrics"]);
-
         let expected = report.downgrades();
         report.issues[0].reason = "different rendering".to_string();
         report.issues[0].evidence.clear();
