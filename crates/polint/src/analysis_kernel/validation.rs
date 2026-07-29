@@ -61,7 +61,6 @@ impl ValidationIssue {
             provider_ids: provider_id.into_iter().map(str::to_string).collect(),
         }
     }
-
     fn render(&self) -> Diagnostic {
         let mut diagnostic = self.presentation.clone();
         diagnostic.message.clone_from(&self.reason);
@@ -69,13 +68,11 @@ impl ValidationIssue {
         diagnostic
     }
 }
-
 #[derive(Clone, Debug)]
 pub(crate) struct ValidationReport {
     diagnostics: Vec<Diagnostic>,
     pub(crate) issues: Vec<ValidationIssue>,
 }
-
 impl ValidationReport {
     pub(crate) fn downgrades(&self) -> ValidationDowngrades {
         let mut downgrades = ValidationDowngrades::default();
@@ -89,15 +86,12 @@ impl ValidationReport {
         downgrades
     }
 }
-
 impl Deref for ValidationReport {
     type Target = [Diagnostic];
-
     fn deref(&self) -> &Self::Target {
         &self.diagnostics
     }
 }
-
 pub(crate) fn validate_fact_metadata(
     db: &AnalysisDb,
     manifests: &[ProviderManifest],
@@ -112,7 +106,6 @@ pub(crate) fn validate_fact_metadata(
     const TOPOLOGY: Option<&str> = Some("polint.module_topology");
     const DOMAINS: Option<&str> = Some("polint.abstract_domains");
     const TYPE_VALUE: Option<&str> = Some("polint.type_value_alias");
-
     macro_rules! collect {
         ($provider:expr, $validate:path $(, $arg:expr)*) => {{
             let mut diagnostics = Vec::new();
@@ -143,7 +136,6 @@ pub(crate) fn validate_fact_metadata(
     collect!(Some("polint.data_flow"), validate_data_flow, db);
     collect!(None, validate_metadata_providers, db, &manifests_by_id);
     collect!(None, validate_precision_ceilings, db, &manifests_by_id);
-
     let mut rendered = issues
         .into_iter()
         .map(|issue| (issue.render(), issue))
@@ -5824,7 +5816,6 @@ mod tests {
             .contains("unrelated")
         );
     }
-
     fn test_meta(family: FactFamily, stable_key: &str, payload_digest: &str) -> FactMeta {
         FactMeta {
             stable_key: stable_key.to_string(),

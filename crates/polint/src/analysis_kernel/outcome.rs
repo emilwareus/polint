@@ -1,9 +1,7 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
-
 use super::ProviderManifest;
 use super::incremental::{Digest, PrecisionTier};
-
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ProviderOutcomeStatus {
     Succeeded,
@@ -13,7 +11,6 @@ pub(crate) enum ProviderOutcomeStatus {
     SetupMissing,
     PlannedAbsent,
 }
-
 impl ProviderOutcomeStatus {
     pub(crate) const fn label(self) -> &'static str {
         match self {
@@ -25,7 +22,6 @@ impl ProviderOutcomeStatus {
             Self::PlannedAbsent => "planned_absent",
         }
     }
-
     #[cfg(test)]
     pub(crate) fn decode(label: &str) -> Option<Self> {
         match label {
@@ -39,7 +35,6 @@ impl ProviderOutcomeStatus {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ProviderFailureStage {
     Planning,
@@ -48,7 +43,6 @@ pub(crate) enum ProviderFailureStage {
     Execution,
     Validation,
 }
-
 impl ProviderFailureStage {
     pub(crate) const fn label(self) -> &'static str {
         match self {
@@ -70,7 +64,6 @@ pub(crate) enum ProviderFailureReason {
     ExecutionFailed,
     ValidationRejected,
 }
-
 impl ProviderFailureReason {
     pub(crate) const fn label(self) -> &'static str {
         match self {
@@ -113,7 +106,6 @@ pub(crate) struct ProviderOutputIdentity {
     pub(crate) output_digest: Digest,
     pub(crate) precision: PrecisionTier,
 }
-
 impl ProviderOutputIdentity {
     pub(crate) fn from_manifest(
         manifest: &ProviderManifest,
@@ -129,7 +121,6 @@ impl ProviderOutputIdentity {
         }
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ProviderOutcome {
     pub(crate) provider_id: String,
@@ -139,7 +130,6 @@ pub(crate) struct ProviderOutcome {
     pub(crate) failure_reason: Option<ProviderFailureReason>,
     pub(crate) blockers: Vec<String>,
 }
-
 impl ProviderOutcome {
     fn succeeded(provider_id: String, output_identity: ProviderOutputIdentity) -> Self {
         Self {
@@ -151,7 +141,6 @@ impl ProviderOutcome {
             blockers: Vec::new(),
         }
     }
-
     fn non_success(
         provider_id: String,
         status: ProviderOutcomeStatus,
@@ -201,7 +190,6 @@ impl ProviderOutcome {
                 detail: "status, stage, reason, and blocker shape are inconsistent",
             });
         }
-
         Ok(Self {
             provider_id,
             status,
@@ -211,7 +199,6 @@ impl ProviderOutcome {
             blockers,
         })
     }
-
     #[cfg(test)]
     pub(crate) fn reject_validation_for_test(&mut self) {
         self.status = ProviderOutcomeStatus::Failed;
@@ -219,7 +206,6 @@ impl ProviderOutcome {
         self.failure_stage = Some(ProviderFailureStage::Validation);
         self.failure_reason = Some(ProviderFailureReason::ValidationRejected);
     }
-
     pub(crate) fn validation_display(&self) -> String {
         match (self.failure_stage, self.failure_reason) {
             (None, None) => self.status.label().to_string(),
@@ -233,13 +219,11 @@ impl ProviderOutcome {
         }
     }
 }
-
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ValidationDowngrades {
     global: bool,
     provider_ids: BTreeSet<String>,
 }
-
 impl ValidationDowngrades {
     #[cfg(test)]
     pub(crate) fn for_providers(provider_ids: impl IntoIterator<Item = String>) -> Self {
@@ -258,7 +242,6 @@ impl ValidationDowngrades {
         self.global || self.provider_ids.contains(provider_id)
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum AttemptState {
     PlannedAbsent,
@@ -266,14 +249,12 @@ enum AttemptState {
     ProvisionalSuccess(ProviderOutputIdentity),
     Final(ProviderOutcome),
 }
-
 #[derive(Debug)]
 pub(crate) struct ProviderOutcomeTracker {
     order: Vec<String>,
     dependencies: BTreeMap<String, Vec<String>>,
     states: BTreeMap<String, AttemptState>,
 }
-
 impl ProviderOutcomeTracker {
     pub(crate) fn from_manifests(
         manifests: &[ProviderManifest],
@@ -522,7 +503,6 @@ impl ProviderOutcomeTracker {
         }
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ProviderOutcomeError {
     UnknownProvider(String),
@@ -536,7 +516,6 @@ pub(crate) enum ProviderOutcomeError {
     },
     IncompleteProvider(String),
 }
-
 impl fmt::Display for ProviderOutcomeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -566,9 +545,7 @@ impl fmt::Display for ProviderOutcomeError {
         }
     }
 }
-
 impl std::error::Error for ProviderOutcomeError {}
-
 fn dependency_blocked_outcome(
     provider_id: &str,
     blockers: Vec<String>,
@@ -581,13 +558,11 @@ fn dependency_blocked_outcome(
         blockers,
     )
 }
-
 fn sorted_unique(mut values: Vec<String>) -> Vec<String> {
     values.sort();
     values.dedup();
     values
 }
-
 pub(crate) fn hard_dependencies(provider_id: &str) -> &'static [&'static str] {
     const SRC: &str = "polint.source";
     const GO: &str = "polint.go.syntax";
@@ -610,7 +585,6 @@ pub(crate) fn hard_dependencies(provider_id: &str) -> &'static [&'static str] {
     const SOLVER: &str = "polint.solver";
     const REFINED: &str = "polint.refined_calls";
     const FLOW: &str = "polint.data_flow";
-
     match provider_id {
         "polint.source" => &[],
         "polint.go.syntax" | "polint.ts.syntax" => &[SRC],
@@ -639,13 +613,11 @@ pub(crate) fn hard_dependencies(provider_id: &str) -> &'static [&'static str] {
         _ => &[],
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::analysis_kernel::AnalysisKernel;
     use crate::analysis_kernel::incremental::DigestKind;
-
     fn identity(label: &str) -> ProviderOutputIdentity {
         ProviderOutputIdentity {
             provider_id: label.to_string(),
@@ -655,7 +627,6 @@ mod tests {
             precision: PrecisionTier::Exact,
         }
     }
-
     #[test]
     fn status_codec_accepts_exactly_the_closed_six_labels() {
         let statuses = [
@@ -680,7 +651,6 @@ mod tests {
             assert_eq!(ProviderOutcomeStatus::decode(rejected), None);
         }
     }
-
     #[test]
     fn hard_dependency_audit_references_only_static_manifest_providers() {
         let inventory = AnalysisKernel::provider_manifests()
@@ -702,7 +672,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn duplicate_unknown_and_absent_transitions_are_rejected() {
         let mut tracker = ProviderOutcomeTracker::for_test(&["A", "B"], &["A"], &[]);
@@ -720,7 +689,6 @@ mod tests {
             Err(ProviderOutcomeError::InvalidTransition { .. })
         ));
     }
-
     #[test]
     fn can_run_returns_sorted_exact_blockers_and_skips_unrelated_branches() {
         let mut tracker = ProviderOutcomeTracker::for_test(
@@ -750,7 +718,6 @@ mod tests {
             .record_dependency_blocked("C", vec!["B".to_string(), "A".to_string()])
             .unwrap();
     }
-
     #[test]
     fn validation_failure_closes_transitively_and_preserves_independent_success() {
         let mut tracker = ProviderOutcomeTracker::for_test(
@@ -790,7 +757,6 @@ mod tests {
         assert!(outcomes[3].output_identity.is_some());
         assert!(outcomes[4].output_identity.is_none());
     }
-
     #[test]
     fn global_validation_failure_downgrades_every_provisional_success() {
         let mut tracker =
