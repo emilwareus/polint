@@ -3,10 +3,10 @@
 > **Audit trail only.** Do not use as input to planning, research, or execution agents.
 > Decisions are captured in CONTEXT.md — this log preserves the alternatives considered.
 
-**Date:** 2026-07-28 (R1 and R2 entries)
+**Date:** 2026-07-28 through 2026-07-29 (R1, R2, and R3 entries)
 **Phase:** 65-generation-manifest-and-metadata-mirroring
 **Mode:** `--auto --chain`
-**Areas discussed:** R1 lifecycle boundary and R2 canonical manifest projection, workspace ownership, publication/read binding, migration posture, and tamper/bounds proof
+**Areas discussed:** R1 lifecycle; R2 canonical manifest; R3 provider outcome taxonomy, dependency blocking, authoritative validation, capability revocation, and cold/warm parity
 
 ---
 
@@ -274,3 +274,88 @@ slice only.
 - R6 private enablement and one measured cold/warm reuse pair.
 - Full `InputSnapshot`, provider/capability, lifecycle/tool, layer/query/summary, dependency-index, validation-event, statistics, and `FactMeta` persistence.
 - GitHub issues #86-#91 and the sub-five-minute CI follow-up.
+
+---
+
+# R3 Addendum: Provider Outcome Correctness
+
+**Date:** 2026-07-29
+**Mode:** `--auto --chain`
+
+## Provider Outcome Taxonomy
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Closed six-state contract | Distinguish succeeded, failed, dependency-blocked, unsupported, setup-missing, and planned-absent. | ✓ |
+| Four-state minimum | Merge unsupported/setup-missing/absence into fewer states. | |
+| Digest inference | Infer outcome from optional output digests, empty facts, or diagnostics. | |
+
+**User's choice:** `--auto` selected the closed six-state contract.
+**Notes:** A provider is succeeded only after real execution, authenticated
+output identity, and authoritative validation. Only success carries a reusable
+output identity. Typed reason/stage data is semantic; diagnostics, cache
+counters, warnings, and timing are telemetry.
+
+## Dependency Blocking and Planned Absence
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Explicit hard-edge blocking | Record one outcome per manifest; block only consumers of non-success producers and continue independent branches. | ✓ |
+| Sentinel continuation | Pass absent digests or empty universes to downstream consumers. | |
+| Global abort | Abort every provider branch on the first controlled failure. | |
+
+**User's choice:** `--auto` selected explicit hard-edge blocking.
+**Notes:** Plan gating comes first, so unrequested providers are
+planned-absent. A scheduled consumer whose required producer is absent,
+unsupported, setup-missing, failed, or blocked is dependency-blocked. R3 models
+current actual provider-output edges only; it does not redesign or persist the
+general dependency index and does not invent optional/degraded semantics.
+
+## Authoritative Validation and Capability Revocation
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Structured validation and fail-closed revocation | Return typed issues with ownership, downgrade implicated outcomes, derive effective hard capabilities, and skip affected rules. | ✓ |
+| Diagnostic-only validation | Leave provider trust unchanged after rendering validation diagnostics. | |
+| Partial-fact rule execution | Run rules and ask each rule to handle missing or invalid facts. | |
+
+**User's choice:** `--auto` selected structured validation and fail-closed
+revocation.
+**Notes:** An unowned authoritative issue downgrades all provisional successes
+rather than certifying a partial universe. Each affected rule is skipped before
+fact access and receives one deterministic existing-style capability
+diagnostic; independent rules continue. The machinery stays crate-private and
+does not add a public capability-status variant or output schema.
+
+## Cold/Warm Parity and Verification
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Semantic parity, telemetry-only differences | Require identical outcomes, identities, blockers, capabilities, diagnostics, and policy results across cold/warm runs. | ✓ |
+| Warm-specific trust | Treat a cache hit itself as provider success. | |
+| Exhaustive benchmark matrix | Pull the full cross-platform/scale suite into R3. | |
+
+**User's choice:** `--auto` selected semantic parity with focused proof.
+**Notes:** Invalid cached payloads are rejected and recomputed or become a real
+provider failure; cache I/O warnings after valid computation remain telemetry.
+Tests cover the outcome matrix, dependency chain plus independent branch,
+planned absence, execution and validation failures, rule skipping, and one
+representative cold/warm pair. No test may exceed sixty seconds or require
+global serialization.
+
+## the agent's Discretion for R3
+
+- Private module/type names and the narrow outcome tracker representation.
+- The explicit in-memory representation of current hard provider-output edges.
+- Structured validation issue details and deterministic attribution helpers.
+- Finite cfg(test)-only failure seams and the representative cached provider.
+
+## Deferred Ideas after R3
+
+- R4 persistence for one audited provider family and exact dependency pair.
+- R5 incremental provider expansion and R6 private store-reuse enablement.
+- Whole dependency-index, key-family, snapshot, fact, validation-event, query,
+  summary, and store-stat persistence.
+- Provider-specific cache-key audits, optional/degraded semantics, Go runtime
+  hardening, general panic containment, GitHub issues #86-#91, and the
+  sub-five-minute CI follow-up.
