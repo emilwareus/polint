@@ -703,10 +703,6 @@ impl AnalysisKernel {
         let polint_reachability_cache_stats = reachability.cache_stats.clone();
         let reachability_output_digest = reachability.output_digest;
         diagnostics.extend(reachability.diagnostics);
-        // In-scope dependency digest for the polint.semantic_graph run splice below
-        // (the Option is moved into the provider-output push next).
-        let reachability_dependency_output_digest =
-            Self::provider_digest(&provider_run, "polint.reachability");
         Self::record_provider_projection(
             &mut provider_run,
             &selected_providers,
@@ -715,6 +711,8 @@ impl AnalysisKernel {
             polint_reachability_cache_stats,
             reachability_output_digest,
         )?;
+        let reachability_dependency_output_digest =
+            Self::provider_digest(&provider_run, "polint.reachability");
 
         let extensions = if run_full_refinement_pipeline
             && Self::begin_provider(&mut provider_run, "polint.extensions")?
@@ -1044,11 +1042,6 @@ impl AnalysisKernel {
     }
 
     #[cfg(test)]
-    pub(crate) const fn non_success_status_for_test() -> ProviderOutcomeStatus {
-        ProviderOutcomeStatus::Failed
-    }
-
-    #[cfg(test)]
     pub(crate) fn metadata_debug_json_for_test(db: &AnalysisDb) -> serde_json::Value {
         debug::metadata_debug_json_for_test(db)
     }
@@ -1223,7 +1216,19 @@ impl AnalysisKernel {
                 {
                     continue;
                 }
-                let providers = Self::capability_providers(capability, db);
+                let mut providers = Self::capability_providers(capability, db);
+                if capability == "events" {
+                    for (provider_id, has_rows) in [
+                        ("polint.calls", !db.call_sites().is_empty()),
+                        ("polint.refined_calls", !db.refined_call_edges().is_empty()),
+                    ] {
+                        if has_rows
+                            && by_id[provider_id].status != ProviderOutcomeStatus::PlannedAbsent
+                        {
+                            providers.push(provider_id);
+                        }
+                    }
+                }
                 if providers.is_empty() {
                     continue;
                 }

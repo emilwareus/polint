@@ -212,17 +212,23 @@ impl ProviderOutcome {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn reject_validation_for_test(&mut self) {
+        self.status = ProviderOutcomeStatus::Failed;
+        self.output_identity = None;
+        self.failure_stage = Some(ProviderFailureStage::Validation);
+        self.failure_reason = Some(ProviderFailureReason::ValidationRejected);
+    }
+
     pub(crate) fn validation_display(&self) -> String {
         match (self.failure_stage, self.failure_reason) {
             (None, None) => self.status.label().to_string(),
-            (Some(stage), Some(reason)) => {
-                format!(
-                    "{}:{}:{}",
-                    self.status.label(),
-                    stage.label(),
-                    reason.label()
-                )
-            }
+            (Some(stage), Some(reason)) => format!(
+                "{}:{}:{}",
+                self.status.label(),
+                stage.label(),
+                reason.label()
+            ),
             _ => unreachable!("provider outcome construction enforces paired failure details"),
         }
     }
@@ -242,15 +248,12 @@ impl ValidationDowngrades {
             provider_ids: provider_ids.into_iter().collect(),
         }
     }
-
     pub(crate) fn extend_provider_ids(&mut self, provider_ids: impl IntoIterator<Item = String>) {
         self.provider_ids.extend(provider_ids);
     }
-
     pub(crate) fn mark_global(&mut self) {
         self.global = true;
     }
-
     pub(super) fn contains(&self, provider_id: &str) -> bool {
         self.global || self.provider_ids.contains(provider_id)
     }
@@ -286,7 +289,6 @@ impl ProviderOutcomeTracker {
                 (*unknown).to_string(),
             ));
         }
-
         let dependencies = manifests
             .iter()
             .map(|manifest| {
@@ -317,14 +319,12 @@ impl ProviderOutcomeTracker {
                 (provider_id.clone(), state)
             })
             .collect();
-
         Ok(Self {
             order,
             dependencies,
             states,
         })
     }
-
     pub(crate) fn can_run(&self, provider_id: &str) -> Result<Vec<String>, ProviderOutcomeError> {
         let state = self.state(provider_id)?;
         if !matches!(state, AttemptState::Pending) {
@@ -333,7 +333,6 @@ impl ProviderOutcomeTracker {
                 detail: "provider is not pending",
             });
         }
-
         Ok(self
             .dependencies
             .get(provider_id)
@@ -343,11 +342,9 @@ impl ProviderOutcomeTracker {
             .cloned()
             .collect())
     }
-
     pub(crate) fn is_pending(&self, provider_id: &str) -> Result<bool, ProviderOutcomeError> {
         Ok(matches!(self.state(provider_id)?, AttemptState::Pending))
     }
-
     pub(crate) fn record_success(
         &mut self,
         provider_id: &str,
@@ -358,7 +355,6 @@ impl ProviderOutcomeTracker {
             AttemptState::ProvisionalSuccess(output_identity),
         )
     }
-
     pub(crate) fn record_non_success(
         &mut self,
         provider_id: &str,
@@ -375,7 +371,6 @@ impl ProviderOutcomeTracker {
         )?;
         self.replace_pending(provider_id, AttemptState::Final(outcome))
     }
-
     pub(crate) fn record_dependency_blocked(
         &mut self,
         provider_id: &str,
@@ -384,7 +379,6 @@ impl ProviderOutcomeTracker {
         let outcome = dependency_blocked_outcome(provider_id, blockers)?;
         self.replace_pending(provider_id, AttemptState::Final(outcome))
     }
-
     pub(crate) fn seal(
         mut self,
         validation: &ValidationDowngrades,
@@ -407,7 +401,6 @@ impl ProviderOutcomeTracker {
                     .insert(provider_id.clone(), AttemptState::Final(outcome));
             }
         }
-
         loop {
             let mut changed = false;
             for provider_id in &self.order {
@@ -437,7 +430,6 @@ impl ProviderOutcomeTracker {
                 break;
             }
         }
-
         let mut outcomes = Vec::with_capacity(self.order.len());
         for provider_id in self.order {
             let state = self
@@ -464,13 +456,11 @@ impl ProviderOutcomeTracker {
         }
         Ok(outcomes)
     }
-
     fn state(&self, provider_id: &str) -> Result<&AttemptState, ProviderOutcomeError> {
         self.states
             .get(provider_id)
             .ok_or_else(|| ProviderOutcomeError::UnknownProvider(provider_id.to_string()))
     }
-
     fn replace_pending(
         &mut self,
         provider_id: &str,
@@ -489,7 +479,6 @@ impl ProviderOutcomeTracker {
         *state = replacement;
         Ok(())
     }
-
     fn is_usable(&self, provider_id: &str) -> bool {
         matches!(
             self.states.get(provider_id),
@@ -500,7 +489,6 @@ impl ProviderOutcomeTracker {
                 }))
         )
     }
-
     #[cfg(test)]
     fn for_test(order: &[&str], selected: &[&str], dependencies: &[(&str, &[&str])]) -> Self {
         let selected = selected.iter().copied().collect::<BTreeSet<_>>();
@@ -719,7 +707,6 @@ mod tests {
     fn duplicate_unknown_and_absent_transitions_are_rejected() {
         let mut tracker = ProviderOutcomeTracker::for_test(&["A", "B"], &["A"], &[]);
         tracker.record_success("A", identity("A")).unwrap();
-
         assert!(matches!(
             tracker.record_success("A", identity("again")),
             Err(ProviderOutcomeError::InvalidTransition { .. })
@@ -757,7 +744,6 @@ mod tests {
                 ProviderFailureReason::SetupMissing,
             )
             .unwrap();
-
         assert_eq!(tracker.can_run("C").unwrap(), ["A", "B"]);
         assert!(tracker.can_run("D").unwrap().is_empty());
         tracker
@@ -778,11 +764,9 @@ mod tests {
                 .record_success(provider_id, identity(provider_id))
                 .unwrap();
         }
-
         let outcomes = tracker
             .seal(&ValidationDowngrades::for_providers(["A".to_string()]))
             .unwrap();
-
         assert_eq!(
             outcomes
                 .iter()
@@ -813,12 +797,10 @@ mod tests {
             ProviderOutcomeTracker::for_test(&["A", "B"], &["A", "B"], &[("B", &["A"])]);
         tracker.record_success("A", identity("A")).unwrap();
         tracker.record_success("B", identity("B")).unwrap();
-
         let mut validation = ValidationDowngrades::default();
         validation.extend_provider_ids(["unused".to_string()]);
         validation.mark_global();
         let outcomes = tracker.seal(&validation).unwrap();
-
         assert!(
             outcomes
                 .iter()

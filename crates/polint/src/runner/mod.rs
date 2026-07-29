@@ -528,18 +528,45 @@ fn exit_code_for(diagnostics: &[crate::diagnostics::Diagnostic], fail_on: FailOn
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis::refined_calls::store::RefinedCallOutput;
+    use crate::analysis_kernel::validation::validate_fact_metadata;
+    use crate::core::Capabilities;
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
 
     #[test]
-    fn production_dispatch_forwards_runtime_provider_blockers() {
+    fn production_dispatch_blocks_events_from_rejected_scheduled_refinement() {
         let temp = tempfile::tempdir().expect("tempdir");
-        std::fs::write(temp.path().join("main.go"), "package main\n").expect("source");
+        let source = "function authorize() {}\nfunction dangerous() {}\nexport function app(input: boolean) { if (input) { authorize(); } dangerous(); }\n";
+        std::fs::write(temp.path().join("main.ts"), source).expect("source");
         let loaded = load_config(temp.path()).expect("config");
         let cache = crate::cache::Cache::new("", false);
-        let plan = AnalysisPlan::from_capability_names_for_test(&["events"]);
+        let blocked = Arc::new(AtomicUsize::new(0));
+        let allowed = Arc::new(AtomicUsize::new(0));
+        let rule = |id: &'static str, capabilities: Capabilities, counter: &Arc<AtomicUsize>| {
+            let counter = Arc::clone(counter);
+            Rule::from_parts(
+                move || crate::core::RuleMeta {
+                    id: id.to_string(),
+                    description: id.to_string(),
+                    severity: Severity::Warn,
+                    kind: RuleKind::Check,
+                },
+                move || capabilities,
+                move |_, _| {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                },
+            )
+        };
+        let rules = vec![
+            rule("test/events", Capabilities::new().events(), &blocked),
+            rule("test/calls", Capabilities::new().calls(), &blocked),
+            rule("allowed", Capabilities::new(), &allowed),
+        ];
+        let plan = AnalysisPlan::from_rules(&rules, None, &BTreeMap::new());
         let mut output = AnalysisKernel::run(KernelInput {
             loaded: &loaded,
             cache: &cache,
@@ -549,14 +576,26 @@ mod tests {
             parallel: false,
         })
         .expect("kernel");
-        let go_syntax = output
+        let mut edges = output.db.refined_call_edges().to_vec();
+        edges[0].evidence.clear();
+        output
+            .db
+            .replace_refined_call_facts(RefinedCallOutput { edges })
+            .expect("retain rejected refinement rows");
+        let validation = validate_fact_metadata(&output.db, AnalysisKernel::provider_manifests());
+        assert!(validation.issues.iter().any(|issue| {
+            issue
+                .provider_ids
+                .first()
+                .is_some_and(|provider_id| provider_id == "polint.refined_calls")
+        }));
+        let refined_calls = output
             .run_report
             .provider_outcomes
             .iter_mut()
-            .find(|row| row.provider_id == "polint.go.syntax")
-            .expect("Go syntax outcome");
-        go_syntax.status = AnalysisKernel::non_success_status_for_test();
-        go_syntax.output_identity = None;
+            .find(|row| row.provider_id == "polint.refined_calls")
+            .expect("refined calls outcome");
+        refined_calls.reject_validation_for_test();
         let (blocked_rules, diagnostics) = AnalysisKernel::runtime_capability_blockers(
             &plan,
             &output.db,
@@ -564,35 +603,9 @@ mod tests {
         );
         output.runtime_blocked_rules = blocked_rules;
 
-        let blocked = Arc::new(AtomicUsize::new(0));
-        let allowed = Arc::new(AtomicUsize::new(0));
-        let rule = |id: &'static str, counter: Arc<AtomicUsize>| {
-            Rule::from_parts(
-                move || crate::core::RuleMeta {
-                    id: id.to_string(),
-                    description: id.to_string(),
-                    severity: Severity::Warn,
-                    kind: RuleKind::Check,
-                },
-                crate::core::Capabilities::new,
-                move |_, _| {
-                    counter.fetch_add(1, Ordering::SeqCst);
-                    Ok(())
-                },
-            )
-        };
-        dispatch_kernel_output_rules(
-            &output,
-            &[
-                rule("test/requested-capabilities", blocked.clone()),
-                rule("allowed", allowed.clone()),
-            ],
-            &BTreeMap::new(),
-            None,
-            true,
-        );
+        dispatch_kernel_output_rules(&output, &rules, &BTreeMap::new(), None, true);
 
-        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics.len(), 2);
         assert_eq!(blocked.load(Ordering::SeqCst), 0);
         assert_eq!(allowed.load(Ordering::SeqCst), 1);
     }
