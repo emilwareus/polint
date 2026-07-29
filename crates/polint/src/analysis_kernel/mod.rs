@@ -1005,7 +1005,7 @@ impl AnalysisKernel {
         )?;
         tracing::info!(target: "polint::kernel", "phase: metrics + derived done");
         let validation_report = validation::validate_fact_metadata(&db, Self::provider_manifests());
-        diagnostics.extend(validation_report.diagnostics().iter().cloned());
+        diagnostics.extend(validation_report.iter().cloned());
         let provider_outcomes = provider_run.tracker.seal(&validation_report.downgrades())?;
         let (runtime_blocked_rules, capability_diagnostics) =
             Self::runtime_capability_blockers(input.plan, &db, &provider_outcomes);

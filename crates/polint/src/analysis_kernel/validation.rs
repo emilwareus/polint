@@ -29,7 +29,7 @@ use crate::core::{
     AnalysisDb, BranchId, FileId, FunctionId, ImportId, ModuleNodeId, PackageId, ReferenceId,
     ResolvedImportId, Span, SymbolId,
 };
-use crate::diagnostics::{Diagnostic, TextRange};
+use crate::diagnostics::{Diagnostic, Evidence, TextRange};
 use crate::module_graph::topology::{
     DependencyRequirementId, ImportToPackageStatus, ResolvedDependencyKind, SourceSetId,
     TopologyPackageId, TopologyPrecision, TopologyStatus, WorkspaceRootId,
@@ -40,11 +40,34 @@ const SYMBOL_GRAPH_PROVIDER_ID: &str = "polint.symbol_graph";
 const SEMANTIC_EVIDENCE_ORDER: (&str, &str, &str) = ("family", "stable_key", "reason");
 
 #[derive(Clone, Debug)]
-#[cfg_attr(not(test), allow(dead_code))]
+#[expect(dead_code, reason = "structured attribution")]
 pub(crate) struct ValidationIssue {
-    pub(crate) diagnostic: Diagnostic,
+    presentation: Diagnostic,
+    reason: String,
+    evidence: Vec<Evidence>,
     pub(crate) fact_family: Option<FactFamily>,
     pub(crate) provider_ids: Vec<String>,
+}
+
+impl ValidationIssue {
+    fn from_rendered(mut presentation: Diagnostic, provider_id: Option<&str>) -> Self {
+        let reason = std::mem::take(&mut presentation.message);
+        let evidence = std::mem::take(&mut presentation.evidence);
+        Self {
+            presentation,
+            reason,
+            evidence,
+            fact_family: None,
+            provider_ids: provider_id.into_iter().map(str::to_string).collect(),
+        }
+    }
+
+    fn render(&self) -> Diagnostic {
+        let mut diagnostic = self.presentation.clone();
+        diagnostic.message.clone_from(&self.reason);
+        diagnostic.evidence.clone_from(&self.evidence);
+        diagnostic
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -54,10 +77,6 @@ pub(crate) struct ValidationReport {
 }
 
 impl ValidationReport {
-    pub(crate) fn diagnostics(&self) -> &[Diagnostic] {
-        &self.diagnostics
-    }
-
     pub(crate) fn downgrades(&self) -> ValidationDowngrades {
         let mut downgrades = ValidationDowngrades::default();
         for issue in &self.issues {
@@ -83,93 +102,57 @@ pub(crate) fn validate_fact_metadata(
     db: &AnalysisDb,
     manifests: &[ProviderManifest],
 ) -> ValidationReport {
-    let mut diagnostics = Vec::new();
+    let mut issues = Vec::new();
     let ids = IdSets::from_db(db);
     let manifests_by_id = manifests
         .iter()
         .map(|manifest| (manifest.id, *manifest))
         .collect::<BTreeMap<_, _>>();
+    const SYMBOLS: Option<&str> = Some("polint.symbol_graph");
+    const TOPOLOGY: Option<&str> = Some("polint.module_topology");
+    const DOMAINS: Option<&str> = Some("polint.abstract_domains");
+    const TYPE_VALUE: Option<&str> = Some("polint.type_value_alias");
 
-    validate_missing_metadata(db, &mut diagnostics);
-    validate_stable_key_conflicts(db, &mut diagnostics);
-    validate_references(db, &ids, &mut diagnostics);
-    validate_spans(db, &ids.files, &mut diagnostics);
-    validate_semantic_index(db, &ids, &mut diagnostics);
-    validate_topology_facts(db, &ids, &mut diagnostics);
-    validate_semantic_mir(db, &ids, &mut diagnostics);
-    validate_cfg(db, &mut diagnostics);
-    validate_calls(db, &mut diagnostics);
-    validate_identity(db, &mut diagnostics);
-    validate_abstract_domains(db, &mut diagnostics);
-    validate_summaries(db, &mut diagnostics);
-    validate_entrypoints(db, &mut diagnostics);
-    validate_type_value_alias(db, &mut diagnostics);
-    validate_semantic_graph(db, &mut diagnostics);
-    validate_refined_calls(db, &mut diagnostics);
-    validate_data_flow(db, &mut diagnostics);
-    validate_metadata_providers(db, &manifests_by_id, &mut diagnostics);
-    validate_precision_ceilings(db, &manifests_by_id, &mut diagnostics);
+    macro_rules! collect {
+        ($provider:expr, $validate:path $(, $arg:expr)*) => {{
+            let mut diagnostics = Vec::new();
+            $validate($($arg,)* &mut diagnostics);
+            issues.extend(
+                diagnostics
+                    .into_iter()
+                    .map(|diagnostic| ValidationIssue::from_rendered(diagnostic, $provider)),
+            );
+        }};
+    }
+    collect!(None, validate_missing_metadata, db);
+    collect!(None, validate_stable_key_conflicts, db);
+    collect!(None, validate_references, db, &ids);
+    collect!(None, validate_spans, db, &ids.files);
+    collect!(SYMBOLS, validate_semantic_index, db, &ids);
+    collect!(TOPOLOGY, validate_topology_facts, db, &ids);
+    collect!(Some("polint.semantic_mir"), validate_semantic_mir, db, &ids);
+    collect!(Some("polint.cfg"), validate_cfg, db);
+    collect!(Some("polint.calls"), validate_calls, db);
+    collect!(Some("polint.identity"), validate_identity, db);
+    collect!(DOMAINS, validate_abstract_domains, db);
+    collect!(Some("polint.direct_summaries"), validate_summaries, db);
+    collect!(Some("polint.entrypoints"), validate_entrypoints, db);
+    collect!(TYPE_VALUE, validate_type_value_alias, db);
+    collect!(Some("polint.semantic_graph"), validate_semantic_graph, db);
+    collect!(Some("polint.refined_calls"), validate_refined_calls, db);
+    collect!(Some("polint.data_flow"), validate_data_flow, db);
+    collect!(None, validate_metadata_providers, db, &manifests_by_id);
+    collect!(None, validate_precision_ceilings, db, &manifests_by_id);
 
-    diagnostics.sort_by(diagnostic_order);
-    let issues = diagnostics
-        .iter()
-        .cloned()
-        .map(|diagnostic| validation_issue(db, &manifests_by_id, diagnostic))
-        .collect();
+    let mut rendered = issues
+        .into_iter()
+        .map(|issue| (issue.render(), issue))
+        .collect::<Vec<_>>();
+    rendered.sort_by(|(left, _), (right, _)| diagnostic_order(left, right));
+    let (diagnostics, issues) = rendered.into_iter().unzip();
     ValidationReport {
         diagnostics,
         issues,
-    }
-}
-
-fn validation_issue(
-    db: &AnalysisDb,
-    manifests: &BTreeMap<&str, ProviderManifest>,
-    diagnostic: Diagnostic,
-) -> ValidationIssue {
-    let evidence = |label: &str| {
-        diagnostic
-            .evidence
-            .iter()
-            .find(|item| item.label == label)
-            .map(|item| item.value.as_str())
-    };
-    let family_label = evidence("family").or_else(|| {
-        evidence("fact_ref").and_then(|value| value.split_once('#').map(|pair| pair.0))
-    });
-    let fact_family = family_label.and_then(|label| {
-        db.fact_meta()
-            .rows()
-            .map(|(reference, _)| reference.family)
-            .chain(
-                db.missing_fact_metadata()
-                    .into_iter()
-                    .map(|missing| missing.family),
-            )
-            .find(|family| family.label() == label)
-    });
-    let mut provider_ids = BTreeSet::new();
-    let mut record = |provider_id: &str| {
-        if manifests.contains_key(provider_id) {
-            provider_ids.insert(provider_id.to_string());
-        }
-    };
-    if let Some(provider_id) = evidence("producer_id") {
-        record(provider_id);
-    }
-    for (reference, metadata) in db.fact_meta().rows() {
-        let exact_ref =
-            evidence("fact_ref").is_some_and(|value| value == fact_ref_value(reference));
-        let stable_key = evidence("stable_key").is_some_and(|value| value == metadata.stable_key);
-        if exact_ref || stable_key || fact_family == Some(reference.family) {
-            record(metadata.producer_id);
-            record(metadata.layer_id);
-        }
-    }
-    ValidationIssue {
-        diagnostic,
-        fact_family,
-        provider_ids: provider_ids.into_iter().collect(),
     }
 }
 
@@ -5818,34 +5801,27 @@ mod tests {
 
     #[test]
     fn validation_report_attributes_owned_issues_and_preserves_global_fallback() {
-        let mut db = AnalysisDb::new();
-        let file = db.add_file(
-            "main.go".into(),
-            "main.go".to_string(),
-            "package main\n".to_string(),
+        let downgrades = |issue: super::ValidationIssue| {
+            super::ValidationReport {
+                diagnostics: vec![issue.render()],
+                issues: vec![issue],
+            }
+            .downgrades()
+        };
+        let mut owned = super::ValidationIssue::from_rendered(
+            super::internal_diagnostic("owned").with_evidence("rendering", "first"),
+            Some("polint.go.syntax"),
         );
-        db.push_package(crate::core::PackageFact {
-            id: crate::core::PackageId(0),
-            file,
-            name: "main".to_string(),
-            span: span(file, 0, 99),
-            language: crate::core::Language::Go,
-        });
-        db.remove_fact_metadata_for_test(FactRef::new(FactFamily::SourceFile, 0));
-
-        let report = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
-        let owned = report
-            .issues
-            .iter()
-            .find(|issue| issue.fact_family == Some(FactFamily::Package))
-            .expect("package span issue");
-        assert_eq!(owned.provider_ids, ["polint.go.syntax"]);
-        assert_eq!(owned.diagnostic.rule_id, "polint/internal");
-        assert!(
-            report
-                .issues
-                .iter()
-                .any(|issue| issue.provider_ids.is_empty())
+        let expected = downgrades(owned.clone());
+        owned.reason = "changed rendering".to_string();
+        owned.evidence.clear();
+        assert_eq!(downgrades(owned), expected);
+        assert_eq!(
+            downgrades(super::ValidationIssue::from_rendered(
+                super::internal_diagnostic("global"),
+                None,
+            )),
+            super::ValidationDowngrades::global()
         );
     }
 

@@ -239,7 +239,7 @@ impl ValidationDowngrades {
     pub(crate) fn global() -> Self {
         Self {
             global: true,
-            provider_ids: BTreeSet::new(),
+            ..Self::default()
         }
     }
 
