@@ -1,10 +1,11 @@
 ---
 phase: 65-generation-manifest-and-metadata-mirroring
 review_path: .planning/phases/65-generation-manifest-and-metadata-mirroring/65-REVIEW.md
-iteration: 4
+iteration: 5
+latest_remediation_iteration: 2
 status: all_fixed
-findings_in_scope: 5
-fixed: 5
+findings_in_scope: 6
+fixed: 6
 skipped: 0
 fix_commit_hashes:
   - fde65ff0748c708949a202d979c86aa8f6551b80
@@ -13,14 +14,16 @@ fix_commit_hashes:
   - 28689ca75049bc3d52d30bdb334aa70bab697c26
   - f86dab6729e29e9576fb04613c403861d572a0da
   - 34979d2a6c282ff60984a469970aaf6837b8e562
+  - e8a1f800f0881ab08fd1af93587e127f2c3825b3
 final_budget:
   product_test_files: 14
   additions: 2500
-  deletions: 830
+  deletions: 831
   addition_cap: 2500
 tests:
   status: passed
-  focused_targets: 14
+  focused_targets: 16
+  full_validation_tests: 28
   mutation_checks: 2
   plan_65_04_commands: 15
   static_checks: 4
@@ -192,3 +195,45 @@ artifact itself remained byte-identical and unstaged during remediation.
 
 _Fixer: gsd-code-fixer_
 _Iteration: 4_
+
+## Verification-Gap Review Remediation — Iteration 2
+
+### WR-03: Structured report Debug output breaks a diagnostic non-leakage test
+
+**Status:** fixed
+**Commit:** `e8a1f800`
+
+The malformed type/value/alias regression now debug-formats the dereferenced
+`[Diagnostic]` projection rather than the private `ValidationReport` wrapper.
+Its vocabulary assertions therefore inspect the same rendered diagnostics
+whose non-leakage contract they describe. Private `ValidationIssue`
+`fact_family` and `provider_ids` remain intact and continue to drive
+authoritative downgrade ownership; no structured ownership is parsed, erased,
+or exposed.
+
+This is a test-only, line-neutral correction. One newly added blank separator
+was removed to fund the changed baseline line at the hard cumulative addition
+cap. Production diagnostic bytes, evidence order, report order, visibility,
+and downgrade behavior are unchanged.
+
+The formerly failing test passes 1/1, and the complete
+`analysis_kernel::validation` module passes 28/28. Focused D-16 ownership
+coverage passes 1/1 and 8/8; the supported public-surface leak gate, WR-02
+syntax-blocker regression, and retained CR-02 production-dispatch regression
+each pass 1/1. All fifteen Plan 65-04 verification commands pass separately,
+including formatting, strict workspace/all-target/all-feature Clippy,
+workspace checking, the exact fourteen-file audit, the 2,500-addition cap, and
+protected-file checks.
+
+The final cumulative product/test diff from `c453748c` is exactly 14 files,
+2,500 additions, and 831 deletions. The review artifact remained byte-identical
+and unstaged throughout remediation.
+
+**Evidence:** `crates/polint/src/analysis_kernel/validation.rs:54-127` and
+`crates/polint/src/analysis_kernel/validation.rs:1614-1659`
+
+---
+
+_Fixer: gsd-code-fixer_
+_Remediation iteration: 2_
+_Cumulative fixer iteration: 5_
