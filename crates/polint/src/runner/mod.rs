@@ -555,7 +555,7 @@ mod tests {
             .iter_mut()
             .find(|row| row.provider_id == "polint.go.syntax")
             .expect("Go syntax outcome");
-        go_syntax.status = crate::analysis_kernel::ProviderOutcomeStatus::Failed;
+        go_syntax.status = AnalysisKernel::non_success_status_for_test();
         go_syntax.output_identity = None;
         let (blocked_rules, diagnostics) = AnalysisKernel::runtime_capability_blockers(
             &plan,

@@ -1044,6 +1044,11 @@ impl AnalysisKernel {
     }
 
     #[cfg(test)]
+    pub(crate) const fn non_success_status_for_test() -> ProviderOutcomeStatus {
+        ProviderOutcomeStatus::Failed
+    }
+
+    #[cfg(test)]
     pub(crate) fn metadata_debug_json_for_test(db: &AnalysisDb) -> serde_json::Value {
         debug::metadata_debug_json_for_test(db)
     }

@@ -236,14 +236,6 @@ pub(crate) struct ValidationDowngrades {
 
 impl ValidationDowngrades {
     #[cfg(test)]
-    pub(crate) fn global() -> Self {
-        Self {
-            global: true,
-            ..Self::default()
-        }
-    }
-
-    #[cfg(test)]
     pub(crate) fn for_providers(provider_ids: impl IntoIterator<Item = String>) -> Self {
         Self {
             global: false,
@@ -259,7 +251,7 @@ impl ValidationDowngrades {
         self.global = true;
     }
 
-    fn contains(&self, provider_id: &str) -> bool {
+    pub(super) fn contains(&self, provider_id: &str) -> bool {
         self.global || self.provider_ids.contains(provider_id)
     }
 }
@@ -822,7 +814,7 @@ mod tests {
         tracker.record_success("A", identity("A")).unwrap();
         tracker.record_success("B", identity("B")).unwrap();
 
-        let mut validation = ValidationDowngrades::global();
+        let mut validation = ValidationDowngrades::default();
         validation.extend_provider_ids(["unused".to_string()]);
         validation.mark_global();
         let outcomes = tracker.seal(&validation).unwrap();
