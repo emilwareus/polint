@@ -626,135 +626,53 @@ fn sorted_unique(mut values: Vec<String>) -> Vec<String> {
 }
 
 pub(crate) fn hard_dependencies(provider_id: &str) -> &'static [&'static str] {
+    const SRC: &str = "polint.source";
+    const GO: &str = "polint.go.syntax";
+    const TS: &str = "polint.ts.syntax";
+    const MOD: &str = "polint.module_graph";
+    const SYM: &str = "polint.symbol_graph";
+    const TOP: &str = "polint.module_topology";
+    const MIR: &str = "polint.semantic_mir";
+    const CFG: &str = "polint.cfg";
+    const CALLS: &str = "polint.calls";
+    const GO_SEM: &str = "polint.go.semantic";
+    const ID: &str = "polint.identity";
+    const DOM: &str = "polint.abstract_domains";
+    const SUM: &str = "polint.direct_summaries";
+    const ENTRY: &str = "polint.entrypoints";
+    const REACH: &str = "polint.reachability";
+    const EXT: &str = "polint.extensions";
+    const TVA: &str = "polint.type_value_alias";
+    const GRAPH: &str = "polint.semantic_graph";
+    const SOLVER: &str = "polint.solver";
+    const REFINED: &str = "polint.refined_calls";
+    const FLOW: &str = "polint.data_flow";
+
     match provider_id {
         "polint.source" => &[],
-        "polint.go.syntax" | "polint.ts.syntax" => &["polint.source"],
-        "polint.module_graph" => &["polint.go.syntax", "polint.ts.syntax"],
-        "polint.symbol_graph" => &[
-            "polint.go.syntax",
-            "polint.module_graph",
-            "polint.ts.syntax",
-        ],
-        "polint.module_topology" => &["polint.module_graph", "polint.symbol_graph"],
-        "polint.semantic_mir" => &[
-            "polint.go.syntax",
-            "polint.module_topology",
-            "polint.symbol_graph",
-            "polint.ts.syntax",
-        ],
-        "polint.cfg" => &[
-            "polint.go.syntax",
-            "polint.semantic_mir",
-            "polint.ts.syntax",
-        ],
-        "polint.calls" => &[
-            "polint.cfg",
-            "polint.go.syntax",
-            "polint.module_topology",
-            "polint.semantic_mir",
-            "polint.symbol_graph",
-            "polint.ts.syntax",
-        ],
-        "polint.go.semantic" => &["polint.go.syntax"],
-        "polint.identity" => &["polint.calls", "polint.go.semantic"],
-        "polint.abstract_domains" => &[
-            "polint.calls",
-            "polint.cfg",
-            "polint.go.syntax",
-            "polint.module_topology",
-            "polint.semantic_mir",
-            "polint.symbol_graph",
-            "polint.ts.syntax",
-        ],
-        "polint.direct_summaries" => &[
-            "polint.abstract_domains",
-            "polint.calls",
-            "polint.cfg",
-            "polint.go.syntax",
-            "polint.module_topology",
-            "polint.semantic_mir",
-            "polint.symbol_graph",
-            "polint.ts.syntax",
-        ],
-        "polint.entrypoints" => &[
-            "polint.calls",
-            "polint.cfg",
-            "polint.go.syntax",
-            "polint.module_topology",
-            "polint.semantic_mir",
-            "polint.symbol_graph",
-            "polint.ts.syntax",
-        ],
-        "polint.reachability" => &[
-            "polint.calls",
-            "polint.entrypoints",
-            "polint.identity",
-            "polint.module_topology",
-            "polint.symbol_graph",
-        ],
+        "polint.go.syntax" | "polint.ts.syntax" => &[SRC],
+        "polint.module_graph" => &[GO, TS],
+        "polint.symbol_graph" => &[GO, MOD, TS],
+        "polint.module_topology" => &[MOD, SYM],
+        "polint.semantic_mir" => &[GO, TOP, SYM, TS],
+        "polint.cfg" => &[GO, MIR, TS],
+        "polint.calls" => &[CFG, GO, TOP, MIR, SYM, TS],
+        "polint.go.semantic" => &[GO],
+        "polint.identity" => &[CALLS, GO_SEM],
+        "polint.abstract_domains" => &[CALLS, CFG, GO, TOP, MIR, SYM, TS],
+        "polint.direct_summaries" => &[DOM, CALLS, CFG, GO, TOP, MIR, SYM, TS],
+        "polint.entrypoints" => &[CALLS, CFG, GO, TOP, MIR, SYM, TS],
+        "polint.reachability" => &[CALLS, ENTRY, ID, TOP, SYM],
         "polint.extensions" => &[],
-        "polint.type_value_alias" => &[
-            "polint.abstract_domains",
-            "polint.calls",
-            "polint.cfg",
-            "polint.direct_summaries",
-            "polint.entrypoints",
-            "polint.extensions",
-            "polint.go.syntax",
-            "polint.module_topology",
-            "polint.semantic_mir",
-            "polint.symbol_graph",
-            "polint.ts.syntax",
-        ],
+        "polint.type_value_alias" => &[DOM, CALLS, CFG, SUM, ENTRY, EXT, GO, TOP, MIR, SYM, TS],
         "polint.semantic_graph" => &[
-            "polint.abstract_domains",
-            "polint.calls",
-            "polint.entrypoints",
-            "polint.go.semantic",
-            "polint.go.syntax",
-            "polint.identity",
-            "polint.module_topology",
-            "polint.reachability",
-            "polint.semantic_mir",
-            "polint.symbol_graph",
-            "polint.ts.syntax",
-            "polint.type_value_alias",
+            DOM, CALLS, ENTRY, GO_SEM, GO, ID, TOP, REACH, MIR, SYM, TS, TVA,
         ],
-        "polint.solver" => &[
-            "polint.go.semantic",
-            "polint.semantic_graph",
-            "polint.type_value_alias",
-        ],
-        "polint.refined_calls" => &[
-            "polint.calls",
-            "polint.direct_summaries",
-            "polint.entrypoints",
-            "polint.extensions",
-            "polint.solver",
-            "polint.type_value_alias",
-        ],
-        "polint.data_flow" => &[
-            "polint.calls",
-            "polint.cfg",
-            "polint.direct_summaries",
-            "polint.entrypoints",
-            "polint.extensions",
-            "polint.refined_calls",
-            "polint.semantic_mir",
-            "polint.type_value_alias",
-        ],
-        "polint.evidence" => &[
-            "polint.calls",
-            "polint.cfg",
-            "polint.data_flow",
-            "polint.direct_summaries",
-            "polint.entrypoints",
-            "polint.extensions",
-            "polint.refined_calls",
-            "polint.semantic_mir",
-            "polint.type_value_alias",
-        ],
-        "polint.metrics" => &["polint.go.syntax", "polint.ts.syntax"],
+        "polint.solver" => &[GO_SEM, GRAPH, TVA],
+        "polint.refined_calls" => &[CALLS, SUM, ENTRY, EXT, SOLVER, TVA],
+        "polint.data_flow" => &[CALLS, CFG, SUM, ENTRY, EXT, REFINED, MIR, TVA],
+        "polint.evidence" => &[CALLS, CFG, FLOW, SUM, ENTRY, EXT, REFINED, MIR, TVA],
+        "polint.metrics" => &[GO, TS],
         _ => &[],
     }
 }

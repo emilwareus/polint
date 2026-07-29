@@ -7765,6 +7765,26 @@ pub(crate) fn run_rules_with_capability_support(
     parallel: bool,
     capability_support: &CapabilitySupportView,
 ) -> Vec<Diagnostic> {
+    run_rules_with_runtime_provider_blockers(
+        db,
+        rules,
+        options,
+        enabled,
+        parallel,
+        capability_support,
+        &BTreeSet::new(),
+    )
+}
+
+pub(crate) fn run_rules_with_runtime_provider_blockers(
+    db: &AnalysisDb,
+    rules: &[Rule],
+    options: &BTreeMap<String, RuleOptions>,
+    enabled: Option<&BTreeSet<String>>,
+    parallel: bool,
+    capability_support: &CapabilitySupportView,
+    runtime_blocked_rules: &BTreeSet<String>,
+) -> Vec<Diagnostic> {
     let run_one = |rule: &Rule| {
         let meta = match catch_unwind(AssertUnwindSafe(|| rule.meta())) {
             Ok(meta) => meta,
@@ -7783,7 +7803,9 @@ pub(crate) fn run_rules_with_capability_support(
         {
             return Vec::new();
         }
-        if has_blocking_capability(&meta.id, capability_support) {
+        if has_blocking_capability(&meta.id, capability_support)
+            || runtime_blocked_rules.contains(&meta.id)
+        {
             return Vec::new();
         }
         let rule_options = options.get(&meta.id).cloned().unwrap_or_default();
@@ -9718,6 +9740,46 @@ mod tests {
 
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(diagnostics[0].rule_id, "examples/imports");
+    }
+
+    #[test]
+    fn run_rules_skips_rules_with_runtime_provider_blockers() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let blocked = Arc::new(AtomicUsize::new(0));
+        let allowed = Arc::new(AtomicUsize::new(0));
+        let rule = |id: &'static str, counter: Arc<AtomicUsize>| {
+            Rule::from_parts(
+                move || RuleMeta {
+                    id: id.to_string(),
+                    description: id.to_string(),
+                    severity: Severity::Warn,
+                    kind: RuleKind::Check,
+                },
+                Capabilities::new,
+                move |_, _| {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                },
+            )
+        };
+        let rules = vec![
+            rule("blocked/rule", blocked.clone()),
+            rule("allowed/rule", allowed.clone()),
+        ];
+        for parallel in [false, true] {
+            run_rules_with_runtime_provider_blockers(
+                &AnalysisDb::new(),
+                &rules,
+                &BTreeMap::new(),
+                None,
+                parallel,
+                &CapabilitySupportView::empty(),
+                &BTreeSet::from(["blocked/rule".to_string()]),
+            );
+        }
+        assert_eq!(blocked.load(Ordering::SeqCst), 0);
+        assert_eq!(allowed.load(Ordering::SeqCst), 2);
     }
 
     #[test]

@@ -202,6 +202,11 @@ const STORE_PRIVATE_MARKERS: &[&str] = &[
     "PRAGMA user_version",
     "raw_row_id",
     "sqlite_row_id",
+    "ProviderOutcomeStatus",
+    "ProviderOutputIdentity",
+    "ProviderFailureSignal",
+    "ValidationReport",
+    "ValidationIssue",
 ];
 
 fn store_private_marker_hits(source: &str) -> Vec<&'static str> {
@@ -550,6 +555,8 @@ fn semantic_store_marker_scanner_negative_controls_cover_every_family() {
         ("raw database flag", "SQLITE_OPEN_READ_WRITE"),
         ("migration statement", "PRAGMA user_version"),
         ("raw identifier", "sqlite_row_id"),
+        ("provider outcome", "ProviderOutcomeStatus::Succeeded"),
+        ("validation ownership", "ValidationIssue { provider_ids }"),
     ];
 
     for (family, source) in controls {

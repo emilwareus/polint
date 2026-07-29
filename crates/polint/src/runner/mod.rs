@@ -1,7 +1,7 @@
-use crate::analysis_kernel::{AnalysisKernel, KernelInput};
+use crate::analysis_kernel::{AnalysisKernel, KernelInput, KernelOutput};
 use crate::analysis_plan::{AnalysisPlan, RulePlanInputs};
 use crate::config::{LoadedConfig, load_config};
-use crate::core::{Rule, RuleKind, run_rules_with_capability_support};
+use crate::core::{Rule, RuleKind, run_rules_with_runtime_provider_blockers};
 use crate::diagnostics::{
     ColorChoice, JsonReportMeta, OutputFormat, RenderOpts, Severity, apply_report_filters,
     build_ai_friendly_report, limit_report_diagnostics, render_ai_friendly_stdout,
@@ -421,15 +421,32 @@ fn analyze_and_run(
         let changeset = read_changeset(path)?;
         output.db.set_changeset(changeset);
     }
-    diagnostics.extend(run_rules_with_capability_support(
-        &output.db,
+    diagnostics.extend(dispatch_kernel_output_rules(
+        &output,
         rules,
         &options,
         Some(&exact_enabled),
         true,
-        &output.capability_support,
     ));
     Ok((diagnostics, output.db, loaded))
+}
+
+fn dispatch_kernel_output_rules(
+    output: &KernelOutput,
+    rules: &[Rule],
+    options: &BTreeMap<String, crate::core::RuleOptions>,
+    enabled: Option<&BTreeSet<String>>,
+    parallel: bool,
+) -> Vec<crate::diagnostics::Diagnostic> {
+    run_rules_with_runtime_provider_blockers(
+        &output.db,
+        rules,
+        options,
+        enabled,
+        parallel,
+        &output.capability_support,
+        &output.runtime_blocked_rules,
+    )
 }
 
 /// Read a `polint review` changeset JSON file injected via `--changed-files`.
@@ -506,4 +523,62 @@ fn exit_code_for(diagnostics: &[crate::diagnostics::Diagnostic], fail_on: FailOn
         return 1;
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[test]
+    fn production_dispatch_forwards_runtime_provider_blockers() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let loaded = load_config(temp.path()).expect("config");
+        let cache = crate::cache::Cache::new("", false);
+        let plan = AnalysisPlan::empty();
+        let mut output = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("kernel");
+        output.runtime_blocked_rules.insert("blocked".to_string());
+
+        let blocked = Arc::new(AtomicUsize::new(0));
+        let allowed = Arc::new(AtomicUsize::new(0));
+        let rule = |id: &'static str, counter: Arc<AtomicUsize>| {
+            Rule::from_parts(
+                move || crate::core::RuleMeta {
+                    id: id.to_string(),
+                    description: id.to_string(),
+                    severity: Severity::Warn,
+                    kind: RuleKind::Check,
+                },
+                crate::core::Capabilities::new,
+                move |_, _| {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                },
+            )
+        };
+        dispatch_kernel_output_rules(
+            &output,
+            &[
+                rule("blocked", blocked.clone()),
+                rule("allowed", allowed.clone()),
+            ],
+            &BTreeMap::new(),
+            None,
+            true,
+        );
+
+        assert_eq!(blocked.load(Ordering::SeqCst), 0);
+        assert_eq!(allowed.load(Ordering::SeqCst), 1);
+    }
 }
