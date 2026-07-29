@@ -1008,7 +1008,7 @@ impl AnalysisKernel {
         diagnostics.extend(validation_report.diagnostics().iter().cloned());
         let provider_outcomes = provider_run.tracker.seal(&validation_report.downgrades())?;
         let (runtime_blocked_rules, capability_diagnostics) =
-            Self::runtime_capability_blockers(input.plan, &provider_outcomes);
+            Self::runtime_capability_blockers(input.plan, &db, &provider_outcomes);
         diagnostics.extend(capability_diagnostics);
         db.finish_all_fact_meta_insertions();
         // Persistence is deliberately last: store availability must not change
@@ -1200,8 +1200,9 @@ impl AnalysisKernel {
         selected
     }
 
-    fn runtime_capability_blockers(
+    pub(crate) fn runtime_capability_blockers(
         plan: &AnalysisPlan,
+        db: &AnalysisDb,
         outcomes: &[ProviderOutcome],
     ) -> (std::collections::BTreeSet<String>, Vec<Diagnostic>) {
         let by_id = outcomes
@@ -1217,12 +1218,12 @@ impl AnalysisKernel {
                 {
                     continue;
                 }
-                let providers = Self::capability_providers(capability);
+                let providers = Self::capability_providers(capability, db);
                 if providers.is_empty() {
                     continue;
                 }
                 let failed = providers
-                    .iter()
+                    .into_iter()
                     .map(|provider_id| {
                         by_id
                             .get(provider_id)
@@ -1264,8 +1265,8 @@ impl AnalysisKernel {
         (blocked_rules, diagnostics)
     }
 
-    fn capability_providers(capability: &str) -> &'static [&'static str] {
-        match capability {
+    fn capability_providers(capability: &str, db: &AnalysisDb) -> Vec<&'static str> {
+        let providers: &[&str] = match capability {
             "source_files" => &["polint.source"],
             "syntax" | "packages" | "functions" | "imports" => {
                 &["polint.go.syntax", "polint.ts.syntax"]
@@ -1274,13 +1275,26 @@ impl AnalysisKernel {
             "ts_components" | "ts_classes" | "string_literals" | "jsx_attributes" => {
                 &["polint.ts.syntax"]
             }
+            "events" => &["polint.go.syntax", "polint.ts.syntax"],
             "resolved_imports" | "module_graph" => &["polint.module_graph"],
             "symbols" | "references" => &["polint.symbol_graph"],
             "calls" | "control_flow" | "cfg" | "call_graph" => &["polint.refined_calls"],
             "dataflow" => &["polint.evidence"],
             "file_metrics" | "function_metrics" | "complexity_metrics" => &["polint.metrics"],
             _ => &[],
-        }
+        };
+        providers
+            .iter()
+            .copied()
+            .filter(|provider| {
+                capability != "events"
+                    || db.files().iter().any(|file| match *provider {
+                        "polint.go.syntax" => file.language == crate::core::Language::Go,
+                        "polint.ts.syntax" => file.language.is_ts_family(),
+                        _ => false,
+                    })
+            })
+            .collect()
     }
 
     /// Union of every enabled rule's `files` scope, as a glob set, or `None` when the
@@ -3216,6 +3230,7 @@ function setup() {
         #[test]
         fn established_run_seals_static_manifest_order_after_validation() {
             let temp = tempfile::tempdir().expect("tempdir");
+            std::fs::write(temp.path().join("main.go"), "package main\n").expect("source");
             let loaded = load_config(temp.path()).expect("config");
             let cache = Cache::new("", false);
             let plan = AnalysisPlan::empty();
@@ -3244,20 +3259,23 @@ function setup() {
             assert!(output.runtime_blocked_rules.is_empty());
 
             let mut outcomes = output.run_report.provider_outcomes;
-            let metrics = outcomes
-                .iter_mut()
-                .find(|row| row.provider_id == "polint.metrics")
-                .expect("metrics outcome");
-            metrics.status = ProviderOutcomeStatus::Failed;
-            metrics.output_identity = None;
-            metrics.failure_stage = Some(ProviderFailureStage::Execution);
-            metrics.failure_reason = Some(ProviderFailureReason::ExecutionFailed);
-            let plan = AnalysisPlan::from_capability_names_for_test(&["file_metrics"]);
+            for provider_id in ["polint.go.syntax", "polint.ts.syntax"] {
+                let syntax = outcomes
+                    .iter_mut()
+                    .find(|row| row.provider_id == provider_id)
+                    .expect("syntax outcome");
+                syntax.status = ProviderOutcomeStatus::Failed;
+                syntax.output_identity = None;
+                syntax.failure_stage = Some(ProviderFailureStage::Execution);
+                syntax.failure_reason = Some(ProviderFailureReason::ExecutionFailed);
+            }
+            let plan = AnalysisPlan::from_capability_names_for_test(&["events"]);
             let (blocked, diagnostics) =
-                AnalysisKernel::runtime_capability_blockers(&plan, &outcomes);
+                AnalysisKernel::runtime_capability_blockers(&plan, &output.db, &outcomes);
             assert_eq!(blocked, ["test/requested-capabilities".to_string()].into());
             assert_eq!(diagnostics.len(), 1);
             assert_eq!(diagnostics[0].rule_id, "polint/capability");
+            assert_eq!(diagnostics[0].evidence[3].value, "polint.go.syntax");
         }
 
         #[test]

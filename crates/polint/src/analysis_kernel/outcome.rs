@@ -235,10 +235,7 @@ pub(crate) struct ValidationDowngrades {
 }
 
 impl ValidationDowngrades {
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used when authoritative validation is wired")
-    )]
+    #[cfg(test)]
     pub(crate) fn global() -> Self {
         Self {
             global: true,
@@ -246,10 +243,7 @@ impl ValidationDowngrades {
         }
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used when authoritative validation is wired")
-    )]
+    #[cfg(test)]
     pub(crate) fn for_providers(provider_ids: impl IntoIterator<Item = String>) -> Self {
         Self {
             global: false,
@@ -436,7 +430,7 @@ impl ProviderOutcomeTracker {
                     .get(provider_id)
                     .into_iter()
                     .flatten()
-                    .filter(|dependency| !self.is_finally_succeeded(dependency))
+                    .filter(|dependency| !self.is_usable(dependency))
                     .cloned()
                     .collect::<Vec<_>>();
                 if blockers.is_empty() {
@@ -505,17 +499,6 @@ impl ProviderOutcomeTracker {
     }
 
     fn is_usable(&self, provider_id: &str) -> bool {
-        matches!(
-            self.states.get(provider_id),
-            Some(AttemptState::ProvisionalSuccess(_))
-                | Some(AttemptState::Final(ProviderOutcome {
-                    status: ProviderOutcomeStatus::Succeeded,
-                    ..
-                }))
-        )
-    }
-
-    fn is_finally_succeeded(&self, provider_id: &str) -> bool {
         matches!(
             self.states.get(provider_id),
             Some(AttemptState::ProvisionalSuccess(_))

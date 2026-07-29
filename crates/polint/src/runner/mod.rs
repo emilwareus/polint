@@ -536,9 +536,10 @@ mod tests {
     #[test]
     fn production_dispatch_forwards_runtime_provider_blockers() {
         let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(temp.path().join("main.go"), "package main\n").expect("source");
         let loaded = load_config(temp.path()).expect("config");
         let cache = crate::cache::Cache::new("", false);
-        let plan = AnalysisPlan::empty();
+        let plan = AnalysisPlan::from_capability_names_for_test(&["events"]);
         let mut output = AnalysisKernel::run(KernelInput {
             loaded: &loaded,
             cache: &cache,
@@ -548,7 +549,20 @@ mod tests {
             parallel: false,
         })
         .expect("kernel");
-        output.runtime_blocked_rules.insert("blocked".to_string());
+        let go_syntax = output
+            .run_report
+            .provider_outcomes
+            .iter_mut()
+            .find(|row| row.provider_id == "polint.go.syntax")
+            .expect("Go syntax outcome");
+        go_syntax.status = crate::analysis_kernel::ProviderOutcomeStatus::Failed;
+        go_syntax.output_identity = None;
+        let (blocked_rules, diagnostics) = AnalysisKernel::runtime_capability_blockers(
+            &plan,
+            &output.db,
+            &output.run_report.provider_outcomes,
+        );
+        output.runtime_blocked_rules = blocked_rules;
 
         let blocked = Arc::new(AtomicUsize::new(0));
         let allowed = Arc::new(AtomicUsize::new(0));
@@ -570,7 +584,7 @@ mod tests {
         dispatch_kernel_output_rules(
             &output,
             &[
-                rule("blocked", blocked.clone()),
+                rule("test/requested-capabilities", blocked.clone()),
                 rule("allowed", allowed.clone()),
             ],
             &BTreeMap::new(),
@@ -578,6 +592,7 @@ mod tests {
             true,
         );
 
+        assert_eq!(diagnostics.len(), 1);
         assert_eq!(blocked.load(Ordering::SeqCst), 0);
         assert_eq!(allowed.load(Ordering::SeqCst), 1);
     }
