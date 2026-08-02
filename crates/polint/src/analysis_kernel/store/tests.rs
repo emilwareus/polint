@@ -2,10 +2,16 @@ use super::*;
 use crate::analysis_kernel::incremental::{
     Digest, DigestKind, FileSnapshot, RunManifest, RunManifestInputs,
 };
-use crate::analysis_kernel::metrics_projection::MetricsProviderProjection;
-use crate::analysis_kernel::{
-    ProviderFailureReason, ProviderFailureStage, ProviderOutcome, ProviderOutcomeStatus,
+use crate::analysis_kernel::metrics_projection::{
+    CanonicalMetricsInputs, MetricsProviderProjection,
 };
+use crate::analysis_kernel::{
+    AnalysisKernel, KernelInput, ProviderFailureReason, ProviderFailureStage, ProviderOutcome,
+    ProviderOutcomeStatus,
+};
+use crate::analysis_plan::AnalysisPlan;
+use crate::cache::Cache;
+use crate::config::load_config;
 use crate::core::{AnalysisDb, Language};
 
 fn metrics_projection() -> MetricsProviderProjection {
@@ -226,6 +232,404 @@ mod provider_mirror_storage {
                 .unwrap(),
             MetricsMatch::SemanticMiss
         );
+    }
+}
+
+mod provider_mirror {
+    use super::*;
+
+    const SOURCE: &str =
+        "export function score(value: number) {\n  return value > 0 ? value : 0;\n}\n";
+
+    fn configured_projection(
+        root: &Path,
+        source_text: &str,
+        config_digest: &str,
+        rule_digest: &str,
+        capability: &str,
+        cache_enabled: bool,
+    ) -> MetricsProviderProjection {
+        std::fs::write(root.join("main.ts"), source_text).expect("write TypeScript source");
+        let loaded = load_config(root).expect("load default config");
+        let cache = Cache::new(root.join("analysis-cache"), cache_enabled);
+        let plan = AnalysisPlan::from_capability_names_for_test(&[capability]);
+        let output = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest,
+            rule_digest,
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("run real metrics kernel");
+        let outcome = output
+            .run_report
+            .provider_outcomes
+            .iter()
+            .find(|row| row.provider_id == "polint.metrics")
+            .expect("sealed metrics outcome")
+            .clone();
+        assert_eq!(outcome.status, ProviderOutcomeStatus::Succeeded);
+        MetricsProviderProjection::from_db(outcome, &output.db).expect("canonical real projection")
+    }
+
+    fn real_projection(root: &Path, source_text: &str) -> MetricsProviderProjection {
+        configured_projection(
+            root,
+            source_text,
+            "broad-config",
+            "broad-rules",
+            "file_metrics",
+            false,
+        )
+    }
+
+    fn manifest(projection: &MetricsProviderProjection, config_seed: &str) -> ManifestFixture {
+        let files = projection
+            .inputs
+            .as_ref()
+            .expect("successful projection inputs")
+            .sources
+            .iter()
+            .map(|row| FileSnapshot {
+                relative_path: row.path.clone(),
+                language: row.language,
+                source_text_digest: row.source_digest.clone(),
+                size_bytes: row.byte_count as usize,
+                mtime_hint_present: false,
+            })
+            .collect();
+        ManifestFixture::new(config_seed, files)
+    }
+
+    fn publish_real(
+        temp: &tempfile::TempDir,
+    ) -> (
+        StoreConfig,
+        GenerationHandle,
+        ManifestFixture,
+        MetricsProviderProjection,
+    ) {
+        let projection = real_projection(temp.path(), SOURCE);
+        let manifest = manifest(&projection, "real-config");
+        let config = StoreConfig::new(temp.path().join("cache/semantic-store/store.sqlite3"), true);
+        let handle = SemanticStore::reserve_generation(&config).expect("reserve real generation");
+        SemanticStore::publish_generation(
+            &config,
+            handle,
+            PublicationInputs::new(manifest.inputs(temp.path()), projection.clone()),
+        )
+        .expect("publish real projection");
+        (config, handle, manifest, projection)
+    }
+
+    fn changed(
+        baseline: &MetricsProviderProjection,
+        edit: impl FnOnce(&mut CanonicalMetricsInputs),
+    ) -> MetricsProviderProjection {
+        let mut changed = baseline.clone();
+        edit(changed.inputs.as_mut().expect("successful inputs"));
+        changed
+    }
+
+    #[test]
+    fn real_sealed_success_reopens_and_matches_exactly() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let (config, handle, baseline, expected) = publish_real(&temp);
+
+        assert!(expected.outcome.output_identity.is_some());
+        assert!(expected.outcome.blockers.is_empty());
+        assert!(!expected.inputs.as_ref().unwrap().sources.is_empty());
+        assert!(!expected.inputs.as_ref().unwrap().functions.is_empty());
+        assert_eq!(
+            SemanticStore::active_metrics(&config).expect("reopen active projection"),
+            Some((handle, expected.clone()))
+        );
+        assert_eq!(
+            SemanticStore::match_active_metrics(&config, baseline.inputs(temp.path()), &expected,)
+                .expect("match exact projection"),
+            MetricsMatch::Exact(handle)
+        );
+        assert_eq!(
+            SemanticStore::match_active_manifest(&config, baseline.inputs(temp.path())).unwrap(),
+            ManifestMatch::Exact(handle)
+        );
+
+        let broad_variant = configured_projection(
+            temp.path(),
+            SOURCE,
+            "changed-config",
+            "changed-rules",
+            "complexity_metrics",
+            true,
+        );
+        assert_eq!(broad_variant, expected);
+        let changed_manifest = manifest(&expected, "changed-run-config");
+        assert_eq!(
+            SemanticStore::match_active_metrics(
+                &config,
+                changed_manifest.inputs(temp.path()),
+                &broad_variant,
+            )
+            .unwrap(),
+            MetricsMatch::Exact(handle)
+        );
+        assert_eq!(
+            SemanticStore::match_active_manifest(&config, changed_manifest.inputs(temp.path()),)
+                .unwrap(),
+            ManifestMatch::Mismatch
+        );
+    }
+
+    #[test]
+    fn every_legal_non_success_shape_round_trips_as_history_without_reuse() {
+        for (status, stage, reason, blockers) in [
+            (
+                ProviderOutcomeStatus::Failed,
+                ProviderFailureStage::Execution,
+                ProviderFailureReason::ExecutionFailed,
+                Vec::new(),
+            ),
+            (
+                ProviderOutcomeStatus::DependencyBlocked,
+                ProviderFailureStage::Dependency,
+                ProviderFailureReason::DependencyUnavailable,
+                vec!["polint.ts.syntax".into()],
+            ),
+            (
+                ProviderOutcomeStatus::Unsupported,
+                ProviderFailureStage::Setup,
+                ProviderFailureReason::Unsupported,
+                Vec::new(),
+            ),
+            (
+                ProviderOutcomeStatus::SetupMissing,
+                ProviderFailureStage::Setup,
+                ProviderFailureReason::SetupMissing,
+                Vec::new(),
+            ),
+            (
+                ProviderOutcomeStatus::PlannedAbsent,
+                ProviderFailureStage::Planning,
+                ProviderFailureReason::NotSelected,
+                Vec::new(),
+            ),
+        ] {
+            let temp = tempfile::tempdir().expect("temp directory");
+            let config =
+                StoreConfig::new(temp.path().join("cache/semantic-store/store.sqlite3"), true);
+            let manifest = ManifestFixture::new(status.label(), Vec::new());
+            let outcome = ProviderOutcome::from_closed_parts(
+                "polint.metrics".into(),
+                status,
+                None,
+                Some(stage),
+                Some(reason),
+                blockers,
+            )
+            .expect("seal legal non-success");
+            let projection = MetricsProviderProjection::from_db(outcome, &AnalysisDb::new())
+                .expect("project legal non-success");
+            let handle = SemanticStore::reserve_generation(&config).expect("reserve generation");
+            SemanticStore::publish_generation(
+                &config,
+                handle,
+                PublicationInputs::new(manifest.inputs(temp.path()), projection.clone()),
+            )
+            .expect("publish non-success history");
+            assert_eq!(
+                SemanticStore::active_metrics(&config).unwrap(),
+                Some((handle, projection.clone()))
+            );
+            assert!(projection.outcome.output_identity.is_none());
+            assert!(projection.inputs.is_none());
+            assert_eq!(
+                SemanticStore::match_active_metrics(
+                    &config,
+                    manifest.inputs(temp.path()),
+                    &projection,
+                )
+                .unwrap(),
+                MetricsMatch::SemanticMiss
+            );
+        }
+    }
+
+    #[test]
+    fn consumed_source_and_function_matrix_misses_but_locked_exclusions_preserve() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let (config, handle, baseline, expected) = publish_real(&temp);
+        let mut mutations = Vec::new();
+        mutations.push(changed(&expected, |rows| rows.sources.clear()));
+        mutations.push(changed(&expected, |rows| {
+            rows.sources.push(rows.sources[0].clone())
+        }));
+        mutations.push(changed(&expected, |rows| {
+            rows.sources[0].path = "renamed.ts".into()
+        }));
+        mutations.push(changed(&expected, |rows| {
+            rows.sources[0].source_digest.value = "0000000000000000".into()
+        }));
+        mutations.push(changed(&expected, |rows| rows.sources[0].byte_count += 1));
+        mutations.push(changed(&expected, |rows| rows.sources[0].line_count += 1));
+        mutations.push(changed(&expected, |rows| {
+            rows.sources[0].non_empty_line_count -= 1
+        }));
+        mutations.push(changed(&expected, |rows| {
+            rows.sources[0].language = Language::JavaScript
+        }));
+        mutations.push(changed(&expected, |rows| rows.functions.clear()));
+        mutations.push(changed(&expected, |rows| {
+            rows.functions.push(rows.functions[0].clone())
+        }));
+        mutations.push(changed(&expected, |rows| {
+            rows.functions[0].path = "renamed.ts".into()
+        }));
+        mutations.push(changed(&expected, |rows| {
+            rows.functions[0].name = "renamed".into()
+        }));
+        mutations.push(changed(&expected, |rows| rows.functions[0].start_byte += 1));
+        mutations.push(changed(&expected, |rows| rows.functions[0].end_byte -= 1));
+        mutations.push(changed(&expected, |rows| rows.functions[0].start_line += 1));
+        mutations.push(changed(&expected, |rows| rows.functions[0].end_line -= 1));
+        mutations.push(changed(&expected, |rows| {
+            rows.functions[0].language = Language::JavaScript
+        }));
+        mutations.push(changed(&expected, |rows| {
+            rows.functions[0].cyclomatic_complexity += 1
+        }));
+        for requested in &mutations {
+            assert_eq!(
+                SemanticStore::match_active_metrics(
+                    &config,
+                    baseline.inputs(temp.path()),
+                    requested,
+                )
+                .unwrap(),
+                MetricsMatch::SemanticMiss
+            );
+        }
+
+        let edited = real_projection(
+            temp.path(),
+            "export function score(value: number) { return value + 1; }\n",
+        );
+        assert_eq!(
+            SemanticStore::match_active_metrics(
+                &config,
+                manifest(&edited, "edited").inputs(temp.path()),
+                &edited,
+            )
+            .unwrap(),
+            MetricsMatch::SemanticMiss
+        );
+        std::fs::write(temp.path().join("extra.ts"), "export const extra = 1;\n")
+            .expect("write membership edit");
+        let added = real_projection(temp.path(), SOURCE);
+        assert_eq!(
+            SemanticStore::match_active_metrics(
+                &config,
+                manifest(&added, "added").inputs(temp.path()),
+                &added,
+            )
+            .unwrap(),
+            MetricsMatch::SemanticMiss
+        );
+        assert_eq!(
+            SemanticStore::match_active_metrics(
+                &config,
+                manifest(&expected, "cache-mode-changed").inputs(temp.path()),
+                &expected,
+            )
+            .unwrap(),
+            MetricsMatch::Exact(handle)
+        );
+    }
+
+    fn tamper_then_refuse(statement: &str) {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let (config, _, _, _) = publish_real(&temp);
+        let connection = rusqlite::Connection::open(config.path()).expect("open tamper connection");
+        connection
+            .execute_batch("PRAGMA foreign_keys=OFF; PRAGMA ignore_check_constraints=ON;")
+            .expect("allow malformed fixture");
+        connection.execute_batch(statement).expect("apply tamper");
+        drop(connection);
+        assert!(
+            SemanticStore::active_metrics(&config).is_err(),
+            "provider tamper was trusted: {statement}"
+        );
+        let preserved = rusqlite::Connection::open(config.path()).expect("reopen refused bytes");
+        let lifecycle: (i64, i64) = preserved
+            .query_row(
+                "SELECT (SELECT count(*) FROM generations), \
+                 (SELECT count(*) FROM active_generation)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read preserved lifecycle");
+        assert_eq!(lifecycle, (1, 1), "refusal mutated lifecycle: {statement}");
+    }
+
+    #[test]
+    fn relational_semantic_bounds_and_catalog_tamper_fail_closed() {
+        for statement in [
+            "UPDATE metrics_provider_mirror SET mirror_schema='wrong'",
+            "UPDATE metrics_provider_mirror SET provider_id='wrong'",
+            "UPDATE metrics_provider_mirror SET provider_version='wrong'",
+            "UPDATE metrics_provider_mirror SET provider_kind='wrong'",
+            "UPDATE metrics_provider_mirror SET language_scope='wrong'",
+            "UPDATE metrics_provider_mirror SET cache_policy='wrong'",
+            "UPDATE metrics_provider_mirror SET precision_ceiling='wrong'",
+            "UPDATE metrics_provider_mirror SET outcome_status='failed'",
+            "UPDATE metrics_provider_mirror SET failure_stage='execution'",
+            "UPDATE metrics_provider_mirror SET failure_reason='execution_failed'",
+            "UPDATE metrics_provider_mirror SET witness_kind='wrong'",
+            "UPDATE metrics_provider_mirror SET witness_value='0000000000000000'",
+            "UPDATE metrics_provider_mirror SET identity_provider_id='wrong'",
+            "UPDATE metrics_provider_mirror SET identity_provider_version='wrong'",
+            "UPDATE metrics_provider_mirror SET identity_schema_version='wrong'",
+            "UPDATE metrics_provider_mirror SET identity_digest_kind='wrong'",
+            "UPDATE metrics_provider_mirror SET identity_digest_value='0000000000000000'",
+            "UPDATE metrics_provider_mirror SET identity_precision='exact'",
+            "UPDATE metrics_provider_mirror SET identity_provider_id=printf('%9000s','x')",
+            "UPDATE metrics_provider_mirror SET member_count=5",
+            "UPDATE metrics_provider_mirror SET source_count=1000001",
+            "UPDATE metrics_provider_members SET name='wrong' WHERE category='input' AND ordinal=0",
+            "UPDATE metrics_provider_members SET version=7 WHERE category='schema'",
+            "UPDATE metrics_provider_sources SET ordinal=7",
+            "UPDATE metrics_provider_sources SET relative_path='renamed.ts'",
+            "UPDATE metrics_provider_sources SET language='javascript'",
+            "UPDATE metrics_provider_sources SET digest_kind='wrong'",
+            "UPDATE metrics_provider_sources SET digest_value='0000000000000000'",
+            "UPDATE metrics_provider_sources SET byte_count='wrong'",
+            "UPDATE metrics_provider_sources SET line_count=0",
+            "UPDATE metrics_provider_sources SET non_empty_line_count=0",
+            "UPDATE metrics_provider_functions SET ordinal=7",
+            "UPDATE metrics_provider_functions SET relative_path='renamed.ts'",
+            "UPDATE metrics_provider_functions SET name='wrong'",
+            "UPDATE metrics_provider_functions SET start_byte=1",
+            "UPDATE metrics_provider_functions SET end_byte=1",
+            "UPDATE metrics_provider_functions SET start_line=2",
+            "UPDATE metrics_provider_functions SET end_line=1",
+            "UPDATE metrics_provider_functions SET language='javascript'",
+            "UPDATE metrics_provider_functions SET complexity=99",
+            "DELETE FROM metrics_provider_mirror",
+            "DELETE FROM metrics_provider_members WHERE category='input' AND ordinal=0",
+            "DELETE FROM metrics_provider_sources",
+            "DELETE FROM metrics_provider_functions",
+            "INSERT INTO metrics_provider_sources SELECT generation_id,99,'extra.ts','typescript','source_text','0000000000000000',0,0,0 FROM metrics_provider_mirror",
+            "INSERT INTO metrics_provider_functions SELECT generation_id,99,relative_path,'extra',0,0,1,1,language,1 FROM metrics_provider_sources",
+            "UPDATE metrics_provider_mirror SET blocker_count=1; INSERT INTO metrics_provider_blockers SELECT generation_id,0,'unknown.provider' FROM metrics_provider_mirror",
+            "UPDATE metrics_provider_sources SET relative_path=printf('%9000s','x')",
+            "UPDATE metrics_provider_sources SET relative_path=replace(hex(zeroblob(4090)),'00','a'); UPDATE metrics_provider_functions SET relative_path=replace(hex(zeroblob(4090)),'00','a'); INSERT INTO metrics_provider_sources SELECT generation_id,1,replace(hex(zeroblob(4090)),'00','b'),'typescript','source_text','0000000000000000',0,0,0 FROM metrics_provider_mirror; INSERT INTO metrics_provider_sources SELECT generation_id,2,replace(hex(zeroblob(4090)),'00','c'),'typescript','source_text','0000000000000000',0,0,0 FROM metrics_provider_mirror; UPDATE metrics_provider_mirror SET source_count=3",
+            "UPDATE metrics_provider_sources SET generation_id=999",
+            "CREATE INDEX metrics_provider_sources_extra ON metrics_provider_sources(language)",
+            "CREATE TRIGGER metrics_provider_mirror_extra AFTER UPDATE ON metrics_provider_mirror BEGIN SELECT 1; END",
+            "ALTER TABLE metrics_provider_functions ADD COLUMN surprise TEXT",
+        ] {
+            tamper_then_refuse(statement);
+        }
     }
 }
 

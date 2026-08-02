@@ -275,9 +275,7 @@ impl MetricsProviderProjection {
         )?;
         if outcome.provider_id != manifest.id
             || outcome.blockers.iter().any(|blocker| {
-                !provider::provider_manifests()
-                    .iter()
-                    .any(|row| row.id == blocker)
+                !super::outcome::hard_dependencies(manifest.id).contains(&blocker.as_str())
             })
         {
             return Err(MetricsProjectionError::Output);
@@ -312,7 +310,7 @@ fn validate_inputs(inputs: &CanonicalMetricsInputs) -> Result<(), MetricsProject
             || source.source_digest.kind != DigestKind::SourceText
             || !valid_digest_value(&source.source_digest.value)
             || source.non_empty_line_count > source.line_count
-            || (source.byte_count == 0 && source.line_count != 0)
+            || (source.byte_count == 0) != (source.line_count == 0)
             || sources.insert(source.path.as_str(), source).is_some()
         {
             return Err(MetricsProjectionError::Source);
@@ -562,5 +560,19 @@ mod tests {
         let output = CanonicalMetricsOutput::from_db(&duplicated).unwrap();
         assert_eq!(inputs.functions.len(), 4);
         assert_eq!(output.function_metrics.len(), 4);
+    }
+
+    #[test]
+    fn dependency_blockers_must_be_actual_metrics_dependencies() {
+        let forged = ProviderOutcome::from_closed_parts(
+            "polint.metrics".into(),
+            ProviderOutcomeStatus::DependencyBlocked,
+            None,
+            Some(crate::analysis_kernel::ProviderFailureStage::Dependency),
+            Some(crate::analysis_kernel::ProviderFailureReason::DependencyUnavailable),
+            vec!["polint.evidence".into()],
+        )
+        .unwrap();
+        assert!(MetricsProviderProjection::from_db(forged, &AnalysisDb::new()).is_err());
     }
 }

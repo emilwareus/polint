@@ -2415,9 +2415,22 @@ mod tests {
         assert_eq!(base, changed_config);
         assert_eq!(base, changed_syntax);
         assert_eq!(base.layer_kind, LayerKind::Metrics);
+        assert_eq!(
+            base.config_digest,
+            Digest::absent(DigestKind::Config, "metrics_config")
+        );
+        assert_eq!(
+            base.toolchain_digest,
+            Digest::absent(DigestKind::ToolInvocation, "metrics_toolchain")
+        );
+        assert!(base.dependency_layer_digests.is_empty());
         assert!(base.extension_digests.contains(&Digest::absent(
             DigestKind::ExtensionCode,
             "extension_digest_absent"
+        )));
+        assert!(base.extension_digests.contains(&Digest::absent(
+            DigestKind::ModelFile,
+            "model_digest_absent"
         )));
     }
 

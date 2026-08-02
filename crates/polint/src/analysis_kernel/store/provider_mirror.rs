@@ -188,7 +188,7 @@ fn preflight_header(
     handle: GenerationHandle,
 ) -> Result<(), GenerationError> {
     let valid: bool = connection.query_row(
-        "SELECT count(*) = 1 AND coalesce(sum(CASE WHEN typeof(mirror_schema)='text' AND length(CAST(mirror_schema AS BLOB)) BETWEEN 1 AND 64 AND typeof(provider_id)='text' AND length(CAST(provider_id AS BLOB)) BETWEEN 1 AND 128 AND typeof(provider_version)='text' AND length(CAST(provider_version AS BLOB)) BETWEEN 1 AND 64 AND typeof(provider_kind)='text' AND length(CAST(provider_kind AS BLOB)) BETWEEN 1 AND 32 AND typeof(language_scope)='text' AND length(CAST(language_scope AS BLOB)) BETWEEN 1 AND 32 AND typeof(cache_policy)='text' AND length(CAST(cache_policy AS BLOB)) BETWEEN 1 AND 64 AND typeof(precision_ceiling)='text' AND length(CAST(precision_ceiling AS BLOB)) BETWEEN 1 AND 16 AND typeof(outcome_status)='text' AND length(CAST(outcome_status AS BLOB)) BETWEEN 1 AND 32 AND (failure_stage IS NULL OR typeof(failure_stage)='text') AND (failure_reason IS NULL OR typeof(failure_reason)='text') AND typeof(member_count)='integer' AND member_count BETWEEN 0 AND ?2 AND typeof(blocker_count)='integer' AND blocker_count BETWEEN 0 AND ?2 AND typeof(source_count)='integer' AND source_count BETWEEN 0 AND ?2 AND typeof(function_count)='integer' AND function_count BETWEEN 0 AND ?2 AND typeof(witness_kind)='text' AND typeof(witness_value)='text' AND length(witness_value)=16 AND (identity_provider_id IS NULL OR typeof(identity_provider_id)='text') AND (identity_provider_version IS NULL OR typeof(identity_provider_version)='text') AND (identity_schema_version IS NULL OR typeof(identity_schema_version)='text') AND (identity_digest_kind IS NULL OR typeof(identity_digest_kind)='text') AND (identity_digest_value IS NULL OR (typeof(identity_digest_value)='text' AND length(identity_digest_value)=16)) AND (identity_precision IS NULL OR typeof(identity_precision)='text') THEN 0 ELSE 1 END),0)=0 FROM metrics_provider_mirror WHERE generation_id=?1",
+        "SELECT count(*) = 1 AND coalesce(sum(CASE WHEN typeof(mirror_schema)='text' AND length(CAST(mirror_schema AS BLOB)) BETWEEN 1 AND 64 AND typeof(provider_id)='text' AND length(CAST(provider_id AS BLOB)) BETWEEN 1 AND 128 AND typeof(provider_version)='text' AND length(CAST(provider_version AS BLOB)) BETWEEN 1 AND 64 AND typeof(provider_kind)='text' AND length(CAST(provider_kind AS BLOB)) BETWEEN 1 AND 32 AND typeof(language_scope)='text' AND length(CAST(language_scope AS BLOB)) BETWEEN 1 AND 32 AND typeof(cache_policy)='text' AND length(CAST(cache_policy AS BLOB)) BETWEEN 1 AND 64 AND typeof(precision_ceiling)='text' AND length(CAST(precision_ceiling AS BLOB)) BETWEEN 1 AND 16 AND typeof(outcome_status)='text' AND length(CAST(outcome_status AS BLOB)) BETWEEN 1 AND 32 AND (failure_stage IS NULL OR (typeof(failure_stage)='text' AND length(CAST(failure_stage AS BLOB)) BETWEEN 1 AND 32)) AND (failure_reason IS NULL OR (typeof(failure_reason)='text' AND length(CAST(failure_reason AS BLOB)) BETWEEN 1 AND 32)) AND typeof(member_count)='integer' AND member_count BETWEEN 0 AND ?2 AND typeof(blocker_count)='integer' AND blocker_count BETWEEN 0 AND ?2 AND typeof(source_count)='integer' AND source_count BETWEEN 0 AND ?2 AND typeof(function_count)='integer' AND function_count BETWEEN 0 AND ?2 AND typeof(witness_kind)='text' AND length(CAST(witness_kind AS BLOB)) BETWEEN 1 AND 32 AND typeof(witness_value)='text' AND length(CAST(witness_value AS BLOB))=16 AND (identity_provider_id IS NULL OR (typeof(identity_provider_id)='text' AND length(CAST(identity_provider_id AS BLOB)) BETWEEN 1 AND 128)) AND (identity_provider_version IS NULL OR (typeof(identity_provider_version)='text' AND length(CAST(identity_provider_version AS BLOB)) BETWEEN 1 AND 64)) AND (identity_schema_version IS NULL OR (typeof(identity_schema_version)='text' AND length(CAST(identity_schema_version AS BLOB)) BETWEEN 1 AND 128)) AND (identity_digest_kind IS NULL OR (typeof(identity_digest_kind)='text' AND length(CAST(identity_digest_kind AS BLOB)) BETWEEN 1 AND 32)) AND (identity_digest_value IS NULL OR (typeof(identity_digest_value)='text' AND length(CAST(identity_digest_value AS BLOB))=16)) AND (identity_precision IS NULL OR (typeof(identity_precision)='text' AND length(CAST(identity_precision AS BLOB)) BETWEEN 1 AND 16)) THEN 0 ELSE 1 END),0)=0 FROM metrics_provider_mirror WHERE generation_id=?1",
         params![handle.scalar(), MAX_ROWS], |row| row.get(0),
     ).map_err(connection::classify_sqlite_error)?;
     valid
@@ -359,7 +359,21 @@ fn preflight(
             Ok((row.get(0)?, row.get(1)?, row.get(2)?))
         })
         .map_err(connection::classify_sqlite_error)?;
-    (count == expected && invalid == 0 && bytes <= MAX_AGGREGATE)
+    let ordinals_are_dense = if table == "metrics_provider_members" || expected == 0 {
+        true
+    } else {
+        connection
+            .query_row(
+                &format!(
+                    "SELECT min(ordinal)=0 AND max(ordinal)=?2-1 FROM {table} \
+                     WHERE generation_id=?1"
+                ),
+                params![handle.scalar(), expected],
+                |row| row.get(0),
+            )
+            .map_err(connection::classify_sqlite_error)?
+    };
+    (count == expected && invalid == 0 && bytes <= MAX_AGGREGATE && ordinals_are_dense)
         .then_some(())
         .ok_or(GenerationError::InvalidProviderMirror)
 }

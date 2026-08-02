@@ -205,8 +205,19 @@ const STORE_PRIVATE_MARKERS: &[&str] = &[
     "ProviderOutcomeStatus",
     "ProviderOutputIdentity",
     "ProviderFailureSignal",
+    "ProviderFailureStage",
+    "ProviderFailureReason",
     "ValidationReport",
     "ValidationIssue",
+    "MetricsProviderProjection",
+    "CanonicalMetricsInputs",
+    "PublicationInputs",
+    "MetricsMatch",
+    "metrics_provider_mirror",
+    "metrics_provider_members",
+    "metrics_provider_blockers",
+    "metrics_provider_sources",
+    "metrics_provider_functions",
 ];
 
 fn store_private_marker_hits(source: &str) -> Vec<&'static str> {
