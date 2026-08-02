@@ -44,6 +44,8 @@ key-decisions:
   - "Only Succeeded carries identity and source/function dependencies; all legal non-success states persist as non-reusable history"
   - "Provider matching authenticates workspace ownership but intentionally does not substitute full run-manifest equality for metrics dependency equality"
   - "Normal AnalysisKernel execution remains maintenance-only; publication, reads, and matching stay private and are not wired into production reuse"
+  - "Catalog SQL must pass exact-cardinality, TEXT-storage, and declaration-relative byte bounds before Rust decoding"
+  - "Non-success provider rows require zero source/function counts even when SQLite CHECK enforcement was bypassed"
 
 patterns-established:
   - "Success-only durable metadata: exact identity and consumed inputs exist together or not at all"
@@ -52,7 +54,7 @@ patterns-established:
 requirements-completed: []
 
 # Metrics
-duration: 1h 39m
+duration: 2h 8m
 completed: 2026-08-02
 ---
 
@@ -65,12 +67,14 @@ META-04 remain open.
 
 ## Performance
 
-- **Duration:** 1h 39m
+- **Duration through review fix:** 2h 8m
 - **Started:** 2026-08-02T16:46:08+02:00
-- **Completed:** 2026-08-02T18:25:30+02:00
+- **Initial summary completed:** 2026-08-02T18:25:30+02:00
+- **Review fix completed:** 2026-08-02T18:53:54+02:00
 - **Tasks:** 3
+- **Review-fix commits:** 1
 - **Product/test files modified:** 12 of 13 allowed
-- **Cumulative product/test delta from `013ff41c3`:** 2,198 additions, 384 deletions
+- **Cumulative product/test delta from `013ff41c3`:** 2,281 additions, 386 deletions
 - **New durable schema families:** 1 relational metrics-provider mirror family
 - **Tables in that family:** 5
 - **Persisted provider families:** 1 (`polint.metrics`)
@@ -92,22 +96,28 @@ META-04 remain open.
 - Preserved and refused populated v3 stores without mutation; empty v0-v3
   stores migrate transactionally to v4.
 - Proved a real TypeScript kernel success survives reserve, publish, close,
-  reopen, active read, and `MetricsMatch::Exact`. All five legal non-success
-  shapes round-trip without identity/dependencies and always miss reuse.
+  reopen, active read, and `MetricsMatch::Exact`. All six legal non-success
+  forms across five statuses round-trip without identity/dependencies and
+  always miss reuse.
 - Added consumed-input invalidation and excluded-state preservation matrices,
   53 relational/semantic/storage-class/bounds/catalog/FK tamper cases, dense
   ordinal validation, and private-vocabulary leak coverage.
+- Closed the independent review's two trust-boundary findings by bounding
+  `sqlite_master.sql` before Rust decoding and independently enforcing zero
+  dependency counts for every non-success outcome in both the reader and
+  current-schema validation.
 - Kept the public SDK, runner signature, CLI/config/output/docs/examples,
   generated skill text, CI workflow, and normal-kernel behavior unchanged.
 
-## Task Commits
+## Implementation and Review-Fix Commits
 
-Each task was committed atomically with the normal formatting and strict
-workspace Clippy hook:
+The three planned tasks and subsequent review remediation were committed
+atomically with the normal formatting and strict workspace Clippy hook:
 
 1. **Task 1: Canonicalize metrics identity and dependency inputs** - `5eb94d3a` (`feat`)
 2. **Task 2: Add schema-v4 metrics mirror and atomic publication** - `379bb942` (`feat`)
 3. **Task 3: Prove R4 exit conditions and privacy** - `df0c80ea` (`test`)
+4. **Review remediation: Close catalog-bound and non-success row-shape findings** - `4b925a08` (`fix`)
 
 ## Files Created/Modified
 
@@ -123,16 +133,20 @@ workspace Clippy hook:
 - `crates/polint/src/analysis_kernel/outcome.rs` - Closed durable codecs and a
   constructor that revalidates sealed outcome parts.
 - `crates/polint/src/analysis_kernel/store/migrations.rs` - Exact schema-v4
-  authentication, one provider family, and empty-v3-only migration.
+  authentication, bounded catalog SQL, independent non-success count checks,
+  one provider family, and empty-v3-only migration.
 - `crates/polint/src/analysis_kernel/store/provider_mirror.rs` - Bounded SQL
   encoder/decoder, exact static metadata, dense ordinals, witnesses, and typed
-  canonical reconstruction.
+  canonical reconstruction, including pre-child-read non-success count
+  rejection.
 - `crates/polint/src/analysis_kernel/store/generation.rs` - One atomic
   manifest-plus-provider transaction and authenticated active read/match.
 - `crates/polint/src/analysis_kernel/store/mod.rs` - Private typed publication,
   active projection, and metrics match facade.
 - `crates/polint/src/analysis_kernel/store/tests.rs` - Real success, all legal
-  non-success states, mutation matrices, 23 rollback seams, and 53 tamper cases.
+  non-success forms, mutation matrices, 23 rollback seams, 53 tamper-matrix
+  cases, a 100,000-byte catalog regression, and coherent non-success dependency
+  tamper coverage.
 - `crates/polint/src/runner/mod.rs` - Cold/warm/cache-disabled semantic parity
   plus retained corrupt-cache and write-warning proof.
 - `crates/polint/tests/public_surface_leak.rs` - Negative coverage for all new
@@ -148,9 +162,9 @@ workspace Clippy hook:
   than maintaining independent semantic copies.
 - Required dense ordinals for blocker/source/function rows. Exact duplicate
   function values remain meaningful multiplicity and are therefore retained.
-- Bounded every decoded header/child string, count, row, and aggregate before
-  Rust allocation; schema checks are defense in depth rather than trusted
-  input validation.
+- Bounded catalog SQL and every decoded header/child string, count, row, and
+  aggregate before Rust allocation; schema checks are defense in depth rather
+  than trusted input validation.
 - Authenticated dependency blockers against the actual hard dependencies of
   `polint.metrics`, not merely against the wider provider inventory.
 - Returned `SemanticMiss` for non-success and any consumed-input difference;
@@ -160,11 +174,12 @@ workspace Clippy hook:
 ## Deviations from Plan
 
 No scope deviation. The implementation used exactly three tasks, 12 declared
-product/test paths, 2,198 additions, one schema family, and one persisted
+product/test paths, 2,281 additions, one schema family, and one persisted
 provider family. No CI, state, roadmap, requirements, public surface, or
 normal-run persistence/reuse expansion occurred.
 
-The final review loop found and fixed three in-scope trust-boundary gaps:
+The implementation review loop found and fixed three in-scope trust-boundary
+gaps before the initial summary:
 
 - sparse blocker/source/function ordinals could preserve decoded value order;
   dense ordinal preflight now rejects them;
@@ -172,6 +187,23 @@ The final review loop found and fixed three in-scope trust-boundary gaps:
   before decode; every optional cell is now bounded;
 - blockers were accepted from any known provider; they are now restricted to
   the actual hard dependencies of `polint.metrics`.
+
+The subsequent independent cumulative review found one Critical and one
+Warning at `b0ad9c18`:
+
+- `sqlite_master.sql` was decoded into an owned `String` and normalized before
+  its storage class or byte length was bounded;
+- coherent source/function rows on non-success outcomes could pass count checks
+  and then be silently discarded during reconstruction.
+
+Fix commit `4b925a08` retained the same three-file store scope. It now
+authenticates exact catalog cardinality, TEXT storage, and a byte ceiling equal
+to the expected declaration plus 4,096 formatting bytes before decoding, with
+the bounded predicate repeated on the decode query. It also decodes outcome
+status immediately, rejects non-`Succeeded` headers with nonzero source or
+function counts before child reads, and restates that invariant in current-v4
+row validation. The independent re-review of the full cumulative range is
+clean: 0 Critical, 0 Warning, and 0 informational findings.
 
 ## Verification
 
@@ -181,20 +213,23 @@ All required commands were run separately against the final implementation:
 - Metrics module: 29/29 passed; 0.95s wall.
 - Metrics key: 1/1 passed; 22.58s wall including compilation.
 - Closed outcomes: 6/6 passed; 0.14s wall.
-- Migrations: 22/22 passed; 0.41s wall.
-- Legal non-success storage: 1/1 passed; 0.18s wall.
-- Provider mirror exit suite: 5/5 passed; 1.63s wall.
+- Migrations: 22/22 passed; 0.14s wall on the final review fix.
+- Oversized catalog SQL regression: 1/1 passed; 17.64s wall including
+  compilation.
+- Legal non-success dependency-row regression: 1/1 passed; 0.41s wall.
+- Provider mirror exit suite: 5/5 passed; 1.14s wall.
+- Full semantic-store suite: 65/65 passed; 1.98s wall.
 - Generation lifecycle and 23 rollback seams: 13/13 passed; 1.14s wall.
 - Cold/warm/cache-disabled runner parity: 1/1 passed; 0.47s wall.
 - Store-mode JSON/exit parity: 1/1 passed; 0.48s wall.
-- Public-surface leak proof: 1/1 passed; 16.85s wall including compilation.
-- `cargo fmt --all -- --check`: passed; 1.39s wall.
-- Strict workspace/all-target/all-feature Clippy: passed; 0.61s wall.
-- Workspace/all-target/all-feature check: passed; 7.48s wall.
+- Public-surface leak proof: 7/7 passed; 16.85s wall including compilation.
+- `cargo fmt --all -- --check`: passed; 1.08s wall.
+- Strict workspace/all-target/all-feature Clippy: passed; 14.25s wall.
+- Workspace/all-target/all-feature check: passed; 5.53s wall.
 - Diff, exact allowed-file, addition/file-cap, protected-file,
   forbidden-persistence, one-family/one-provider, visibility, and
   maintenance-only wiring audits: passed; final product/test scope is 12 files
-  with 2,198 additions and 384 deletions.
+  with 2,281 additions and 386 deletions.
 
 Every required focused target completed below sixty seconds. Tests use only
 isolated temp repositories and local SQLite state; no network, sleep, process
@@ -202,11 +237,13 @@ environment mutation, or global serialization was added.
 
 ## Independent Gate Status
 
-- **Fresh cumulative R4 code review:** PASS after the bounded remediation
-  loop; 0 Critical, 0 Warning, and 0 unresolved ASVS-L1 HIGH findings. The
-  final pass covered canonical identity, schema/migration exactness,
-  publication rollback, active selection, bounds, tamper handling, privacy,
-  and budget.
+- **Initial cumulative R4 code review:** ISSUES FOUND at `b0ad9c18`; one
+  Critical for unbounded catalog SQL decoding and one Warning for malformed
+  non-success dependency rows.
+- **Independent remediation re-review:** CLEAN at `4b925a08`; 0 Critical, 0
+  Warning, and 0 informational findings. The final pass covered canonical
+  identity, schema/migration exactness, publication rollback, active selection,
+  bounds, tamper handling, privacy, and budget.
 - **Fresh R4-only verifier:** PASS, D-01 through D-46 (46/46). The verifier
   certifies only provider metadata write/reopen/exact-match/tamper refusal for
   `polint.metrics`; it does not certify R5, R6, Phase 65, STORE-04, STORE-05,
@@ -232,8 +269,8 @@ not enabled in normal analysis.
 ## Self-Check: PASSED - R4 ACCEPTED
 
 The 12 authorized product/test files and this summary exist; all three task
-commits are present; all required tests, format, strict Clippy, workspace
-check, diff, scope, persistence, privacy, and maintenance-only audits pass;
-the final reviewer has no blocking finding; the R4-only verifier passes all
-46 decisions; and no CI, STATE, ROADMAP, REQUIREMENTS, phase-completion, or
-requirement-completion marker changed.
+commits and review-fix commit are present; all required tests, format, strict
+Clippy, workspace check, diff, scope, persistence, privacy, and
+maintenance-only audits pass; the independent re-review is clean; the R4-only
+verifier passes all 46 decisions; and no CI, STATE, ROADMAP, REQUIREMENTS,
+phase-completion, or requirement-completion marker changed.
