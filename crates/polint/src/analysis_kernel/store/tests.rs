@@ -382,12 +382,18 @@ mod provider_mirror {
     }
 
     #[test]
-    fn every_legal_non_success_shape_round_trips_as_history_without_reuse() {
+    fn every_legal_non_success_shape_round_trips_and_rejects_dependency_rows() {
         for (status, stage, reason, blockers) in [
             (
                 ProviderOutcomeStatus::Failed,
                 ProviderFailureStage::Execution,
                 ProviderFailureReason::ExecutionFailed,
+                Vec::new(),
+            ),
+            (
+                ProviderOutcomeStatus::Failed,
+                ProviderFailureStage::Validation,
+                ProviderFailureReason::ValidationRejected,
                 Vec::new(),
             ),
             (
@@ -452,7 +458,59 @@ mod provider_mirror {
                 .unwrap(),
                 MetricsMatch::SemanticMiss
             );
+            let connection =
+                rusqlite::Connection::open(config.path()).expect("open tamper connection");
+            connection
+                .pragma_update(None, "ignore_check_constraints", true)
+                .expect("allow malformed fixture");
+            connection
+                .execute_batch(
+                    "INSERT INTO metrics_provider_sources SELECT generation_id,0,'main.ts','typescript','source_text','0000000000000000',1,1,1 FROM metrics_provider_mirror; \
+                     INSERT INTO metrics_provider_functions SELECT generation_id,0,'main.ts','f',0,1,1,1,'typescript',1 FROM metrics_provider_mirror; \
+                     UPDATE metrics_provider_mirror SET source_count=1,function_count=1;",
+                )
+                .expect("add coherent non-success dependencies");
+            assert_eq!(
+                super::super::provider_mirror::read(&connection, handle),
+                Err(GenerationError::InvalidProviderMirror)
+            );
+            drop(connection);
+            assert_eq!(
+                SemanticStore::active_metrics(&config),
+                Err(GenerationError::Store(StoreStatus::RebuildNeeded(
+                    StoreRebuildReason::InvalidSchema
+                )))
+            );
         }
+    }
+
+    #[test]
+    fn oversized_provider_catalog_sql_is_rejected_as_invalid_schema() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let config = StoreConfig::new(temp.path().join("cache/semantic-store/store.sqlite3"), true);
+        assert_eq!(SemanticStore::maintain(&config), StoreStatus::Ready);
+        let connection = rusqlite::Connection::open(config.path()).expect("open tamper connection");
+        connection
+            .pragma_update(None, "writable_schema", true)
+            .expect("allow hostile catalog fixture");
+        let updated = connection
+            .execute(
+                "UPDATE sqlite_master SET sql=substr(sql,1,instr(sql,'(')) || \
+                 printf('%100000s',' ') || substr(sql,instr(sql,'(')+1) \
+                 WHERE type='table' AND name='metrics_provider_sources'",
+                [],
+            )
+            .expect("inflate provider declaration inside SQLite");
+        assert_eq!(updated, 1);
+        connection
+            .pragma_update(None, "writable_schema", false)
+            .expect("seal hostile catalog fixture");
+        drop(connection);
+
+        assert_eq!(
+            SemanticStore::maintain(&config),
+            StoreStatus::RebuildNeeded(StoreRebuildReason::InvalidSchema)
+        );
     }
 
     #[test]

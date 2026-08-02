@@ -24,6 +24,7 @@ const PROVIDER_TABLES: &[&str] = &[
     PROVIDER_SOURCES,
     PROVIDER_FUNCTIONS,
 ];
+const SCHEMA_SQL_FORMATTING_HEADROOM: i64 = 4_096;
 
 const BOOTSTRAP_TABLE_SQL: &str = "CREATE TABLE _polint_schema_migrations (\
     version INTEGER PRIMARY KEY CHECK (version > 0)\
@@ -484,11 +485,29 @@ fn validate_table_sql(
     table_name: &str,
     expected_sql: &str,
 ) -> Result<(), MigrationError> {
+    let expected_bytes =
+        i64::try_from(expected_sql.len()).map_err(|_| MigrationError::InvalidSchema { version })?;
+    let max_sql_bytes = expected_bytes.saturating_add(SCHEMA_SQL_FORMATTING_HEADROOM);
+    let authentic: bool = connection
+        .query_row(
+            "SELECT count(*) = 1 AND coalesce(sum(CASE WHEN typeof(sql) = 'text' \
+             AND length(CAST(sql AS BLOB)) BETWEEN 1 AND ?2 THEN 0 ELSE 1 END), 0) = 0 \
+             FROM sqlite_master WHERE type = 'table' AND name = ?1 COLLATE BINARY",
+            rusqlite::params![table_name, max_sql_bytes],
+            |row| row.get(0),
+        )
+        .map_err(|error| classify_invariant_error(error, version))?;
+    if !authentic {
+        return Err(MigrationError::InvalidSchema { version });
+    }
     let mut statement = connection
-        .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?1")
+        .prepare(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?1 COLLATE BINARY \
+             AND typeof(sql) = 'text' AND length(CAST(sql AS BLOB)) BETWEEN 1 AND ?2",
+        )
         .map_err(|error| classify_invariant_error(error, version))?;
     let mut rows = statement
-        .query([table_name])
+        .query(rusqlite::params![table_name, max_sql_bytes])
         .map_err(|error| classify_invariant_error(error, version))?;
     let Some(row) = rows
         .next()
@@ -829,7 +848,8 @@ fn validate_provider_rows(connection: &Connection, version: i32) -> Result<(), M
          member_count != (SELECT count(*) FROM metrics_provider_members WHERE generation_id=provider.generation_id) OR \
          blocker_count != (SELECT count(*) FROM metrics_provider_blockers WHERE generation_id=provider.generation_id) OR \
          source_count != (SELECT count(*) FROM metrics_provider_sources WHERE generation_id=provider.generation_id) OR \
-         function_count != (SELECT count(*) FROM metrics_provider_functions WHERE generation_id=provider.generation_id)",
+         function_count != (SELECT count(*) FROM metrics_provider_functions WHERE generation_id=provider.generation_id) OR \
+         (outcome_status != 'succeeded' AND (source_count != 0 OR function_count != 0))",
         [], |row| row.get(0),
     ).map_err(|error| classify_invariant_error(error, version))?;
     let invalid_members: i64 = connection.query_row(

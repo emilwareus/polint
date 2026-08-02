@@ -142,11 +142,14 @@ pub(super) fn write_functions(
 pub(super) fn read(connection: &Connection, handle: GenerationHandle) -> Result<MetricsProviderProjection, GenerationError> {
     preflight_header(connection, handle)?;
     let raw = read_header(connection, handle)?;
+    let status = ProviderOutcomeStatus::decode(&raw.status).ok_or(GenerationError::InvalidProviderMirror)?;
+    if status != ProviderOutcomeStatus::Succeeded && (raw.source_count != 0 || raw.function_count != 0) {
+        return Err(GenerationError::InvalidProviderMirror);
+    }
     let members = read_members(connection, handle, raw.member_count)?;
     let blockers = read_blockers(connection, handle, raw.blocker_count)?;
     let sources = read_sources(connection, handle, raw.source_count)?;
     let functions = read_functions(connection, handle, raw.function_count)?;
-    let status = ProviderOutcomeStatus::decode(&raw.status).ok_or(GenerationError::InvalidProviderMirror)?;
     let stage = decode_optional(raw.stage.as_deref(), ProviderFailureStage::decode)?;
     let reason = decode_optional(raw.reason.as_deref(), ProviderFailureReason::decode)?;
     let identity = decode_identity(&raw)?;
