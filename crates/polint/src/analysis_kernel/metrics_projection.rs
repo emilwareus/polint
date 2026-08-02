@@ -1,4 +1,3 @@
-#![expect(dead_code)]
 use super::incremental::{Digest, DigestKind, PrecisionTier};
 use super::outcome::ProviderOutcomeError;
 use super::{
@@ -237,9 +236,30 @@ impl CanonicalMetricsOutput {
     }
 }
 impl MetricsProviderProjection {
+    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn from_db(
         outcome: ProviderOutcome,
         db: &AnalysisDb,
+    ) -> Result<Self, MetricsProjectionError> {
+        let inputs = match outcome.status {
+            ProviderOutcomeStatus::Succeeded => {
+                let identity = outcome
+                    .output_identity
+                    .as_ref()
+                    .ok_or(MetricsProjectionError::Output)?;
+                let inputs = CanonicalMetricsInputs::from_db(db)?;
+                if identity.output_digest != CanonicalMetricsOutput::from_db(db)?.digest() {
+                    return Err(MetricsProjectionError::Output);
+                }
+                Some(inputs)
+            }
+            _ => None,
+        };
+        Self::from_durable_parts(outcome, inputs)
+    }
+    pub(crate) fn from_durable_parts(
+        outcome: ProviderOutcome,
+        inputs: Option<CanonicalMetricsInputs>,
     ) -> Result<Self, MetricsProjectionError> {
         let manifest = *provider::provider_manifests()
             .iter()
@@ -262,27 +282,57 @@ impl MetricsProviderProjection {
         {
             return Err(MetricsProjectionError::Output);
         }
-        let inputs = match outcome.status {
-            ProviderOutcomeStatus::Succeeded => {
-                let identity = outcome
-                    .output_identity
-                    .as_ref()
-                    .ok_or(MetricsProjectionError::Output)?;
+        match (&outcome.output_identity, &inputs) {
+            (Some(identity), Some(inputs)) => {
                 validate_identity(identity, &manifest)?;
-                let inputs = CanonicalMetricsInputs::from_db(db)?;
-                if identity.output_digest != CanonicalMetricsOutput::from_db(db)?.digest() {
-                    return Err(MetricsProjectionError::Output);
-                }
-                Some(inputs)
+                validate_inputs(inputs)?;
             }
-            _ => None,
-        };
+            (None, None) if outcome.status != ProviderOutcomeStatus::Succeeded => {}
+            _ => return Err(MetricsProjectionError::Output),
+        }
         Ok(Self {
             manifest,
             outcome,
             inputs,
         })
     }
+}
+fn validate_inputs(inputs: &CanonicalMetricsInputs) -> Result<(), MetricsProjectionError> {
+    if inputs.sources.len() > MAX_METRIC_ROWS
+        || inputs.functions.len() > MAX_METRIC_ROWS
+        || !inputs.sources.is_sorted()
+        || !inputs.functions.is_sorted()
+    {
+        return Err(MetricsProjectionError::Source);
+    }
+    let mut sources = BTreeMap::new();
+    for source in &inputs.sources {
+        if canonical_path(&source.path)? != source.path
+            || source.language == Language::Unknown
+            || source.source_digest.kind != DigestKind::SourceText
+            || !valid_digest_value(&source.source_digest.value)
+            || source.non_empty_line_count > source.line_count
+            || (source.byte_count == 0 && source.line_count != 0)
+            || sources.insert(source.path.as_str(), source).is_some()
+        {
+            return Err(MetricsProjectionError::Source);
+        }
+    }
+    for function in &inputs.functions {
+        let source = sources
+            .get(function.path.as_str())
+            .ok_or(MetricsProjectionError::Source)?;
+        if function.language != source.language
+            || function.start_byte > function.end_byte
+            || function.end_byte > source.byte_count
+            || function.start_line == 0
+            || function.start_line > function.end_line
+            || function.end_line > source.line_count
+        {
+            return Err(MetricsProjectionError::Source);
+        }
+    }
+    Ok(())
 }
 fn canonical_context(db: &AnalysisDb) -> Result<CanonicalContext, MetricsProjectionError> {
     if db.files().len() > MAX_METRIC_ROWS || db.functions().len() > MAX_METRIC_ROWS {

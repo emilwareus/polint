@@ -2,7 +2,28 @@ use super::*;
 use crate::analysis_kernel::incremental::{
     Digest, DigestKind, FileSnapshot, RunManifest, RunManifestInputs,
 };
-use crate::core::Language;
+use crate::analysis_kernel::metrics_projection::MetricsProviderProjection;
+use crate::analysis_kernel::{
+    ProviderFailureReason, ProviderFailureStage, ProviderOutcome, ProviderOutcomeStatus,
+};
+use crate::core::{AnalysisDb, Language};
+
+fn metrics_projection() -> MetricsProviderProjection {
+    let outcome = ProviderOutcome::from_closed_parts(
+        "polint.metrics".into(),
+        ProviderOutcomeStatus::PlannedAbsent,
+        None,
+        Some(ProviderFailureStage::Planning),
+        Some(ProviderFailureReason::NotSelected),
+        Vec::new(),
+    )
+    .expect("sealed planned-absent metrics outcome");
+    MetricsProviderProjection::from_db(outcome, &AnalysisDb::new()).expect("metrics projection")
+}
+
+fn publication(inputs: RunManifestInputs<'_>) -> PublicationInputs<'_> {
+    PublicationInputs::new(inputs, metrics_projection())
+}
 
 #[derive(Clone)]
 struct ManifestFixture {
@@ -90,7 +111,8 @@ mod run_manifest_storage {
             RunManifest::from_inputs(fixture.inputs(temp.path())).expect("construct run manifest");
         let mut writer = connection::open_writer(store_config.path()).expect("open writer");
         let handle = generation::reserve(&mut writer).expect("reserve generation");
-        generation::publish(&mut writer, handle, &expected).expect("publish manifest storage");
+        generation::publish(&mut writer, handle, &expected, &metrics_projection())
+            .expect("publish manifest storage");
         let reader = connection::open_read_only(store_config.path()).expect("open read-only store");
         let decoded =
             generation::read_manifest_for_test(&reader, handle).expect("read manifest storage");
@@ -179,6 +201,34 @@ mod run_manifest_storage {
     }
 }
 
+mod provider_mirror_storage {
+    use super::*;
+
+    #[test]
+    fn legal_non_success_round_trips_but_never_matches_reusable() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let config = StoreConfig::new(temp.path().join("cache/semantic-store/store.sqlite3"), true);
+        let manifest = ManifestFixture::new("provider", Vec::new());
+        let expected = metrics_projection();
+        let handle = SemanticStore::reserve_generation(&config).expect("reserve generation");
+        SemanticStore::publish_generation(
+            &config,
+            handle,
+            PublicationInputs::new(manifest.inputs(temp.path()), expected.clone()),
+        )
+        .expect("publish provider mirror");
+        assert_eq!(
+            SemanticStore::active_metrics(&config).unwrap(),
+            Some((handle, expected.clone()))
+        );
+        assert_eq!(
+            SemanticStore::match_active_metrics(&config, manifest.inputs(temp.path()), &expected)
+                .unwrap(),
+            MetricsMatch::SemanticMiss
+        );
+    }
+}
+
 mod run_manifest {
     use super::*;
 
@@ -200,8 +250,12 @@ mod run_manifest {
             ManifestMatch::NoActiveManifest
         );
         let handle = SemanticStore::reserve_generation(&store_config).expect("reserve generation");
-        SemanticStore::publish_generation(&store_config, handle, baseline.inputs(temp.path()))
-            .expect("publish manifest");
+        SemanticStore::publish_generation(
+            &store_config,
+            handle,
+            publication(baseline.inputs(temp.path())),
+        )
+        .expect("publish manifest");
         assert_eq!(
             SemanticStore::match_active_manifest(&store_config, baseline.inputs(temp.path()))
                 .expect("match reopened manifest"),
@@ -278,7 +332,7 @@ mod run_manifest {
         SemanticStore::publish_generation(
             &store_config,
             active,
-            manifest.inputs(first_workspace.path()),
+            publication(manifest.inputs(first_workspace.path())),
         )
         .expect("publish first workspace");
         let candidate =
@@ -288,7 +342,7 @@ mod run_manifest {
             SemanticStore::publish_generation(
                 &store_config,
                 candidate,
-                manifest.inputs(second_workspace.path()),
+                publication(manifest.inputs(second_workspace.path())),
             ),
             Err(GenerationError::WorkspaceOwnershipMismatch)
         );
@@ -323,7 +377,7 @@ mod run_manifest {
         SemanticStore::publish_generation(
             &store_config,
             active,
-            manifest.inputs(first_workspace.path()),
+            publication(manifest.inputs(first_workspace.path())),
         )
         .expect("publish first workspace");
         let candidate =
@@ -358,7 +412,7 @@ mod run_manifest {
             SemanticStore::publish_generation(
                 &store_config,
                 candidate,
-                manifest.inputs(first_workspace.path()),
+                publication(manifest.inputs(first_workspace.path())),
             ),
             Err(expected_error.clone())
         );
@@ -371,7 +425,7 @@ mod run_manifest {
             SemanticStore::publish_generation(
                 &store_config,
                 candidate,
-                manifest.inputs(second_workspace.path()),
+                publication(manifest.inputs(second_workspace.path())),
             ),
             Err(expected_error)
         );
@@ -443,8 +497,12 @@ mod run_manifest {
             vec![source("src/app.ts", Language::TypeScript, "app", 12)],
         );
         let handle = SemanticStore::reserve_generation(&store_config).expect("reserve generation");
-        SemanticStore::publish_generation(&store_config, handle, manifest.inputs(temp.path()))
-            .expect("publish manifest");
+        SemanticStore::publish_generation(
+            &store_config,
+            handle,
+            publication(manifest.inputs(temp.path())),
+        )
+        .expect("publish manifest");
         let connection =
             rusqlite::Connection::open(store_config.path()).expect("open tamper connection");
         connection
@@ -525,7 +583,7 @@ mod generation_lifecycle {
         handle: GenerationHandle,
     ) -> Result<GenerationHandle, GenerationError> {
         let manifest = ManifestFixture::new("lifecycle", Vec::new());
-        SemanticStore::publish_generation(config, handle, manifest.inputs(workspace))
+        SemanticStore::publish_generation(config, handle, publication(manifest.inputs(workspace)))
     }
 
     fn publish_with_failure(
@@ -538,7 +596,7 @@ mod generation_lifecycle {
         SemanticStore::publish_generation_with_failure_for_test(
             config,
             handle,
-            manifest.inputs(workspace),
+            publication(manifest.inputs(workspace)),
             failure_point,
         )
     }
@@ -823,8 +881,12 @@ mod generation_lifecycle {
             let candidate_manifest =
                 ManifestFixture::new("candidate", vec![source("src/b.go", Language::Go, "b", 20)]);
             let active = SemanticStore::reserve_generation(&config).expect("reserve active");
-            SemanticStore::publish_generation(&config, active, active_manifest.inputs(temp.path()))
-                .expect("publish active");
+            SemanticStore::publish_generation(
+                &config,
+                active,
+                publication(active_manifest.inputs(temp.path())),
+            )
+            .expect("publish active");
             let candidate = SemanticStore::reserve_generation(&config).expect("reserve candidate");
 
             assert_eq!(

@@ -5,10 +5,12 @@ use std::num::NonZeroI64;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use super::connection::{self, ReadOnlyConnection, WriterConnection};
+use super::provider_mirror;
 use super::{StoreStatus, map_connection_error};
 use crate::analysis_kernel::incremental::{
     EncodedRunManifest, EncodedRunManifestSource, RunManifest, RunManifestError,
 };
+use crate::analysis_kernel::metrics_projection::MetricsProviderProjection;
 
 const MAX_MANIFEST_SOURCES: i64 = 1_000_000;
 const MAX_MANIFEST_TEXT_BYTES: i64 = 4_096;
@@ -29,7 +31,7 @@ impl GenerationHandle {
             .ok_or(GenerationError::InvalidSelection)
     }
 
-    fn scalar(self) -> i64 {
+    pub(super) fn scalar(self) -> i64 {
         self.0.get()
     }
 }
@@ -40,6 +42,7 @@ pub(crate) enum GenerationError {
     InvalidTransition,
     InvalidSelection,
     InvalidManifest,
+    InvalidProviderMirror,
     WorkspaceOwnershipMismatch,
     #[cfg(test)]
     InjectedFailure(PublicationFailurePoint),
@@ -50,6 +53,13 @@ pub(crate) enum ManifestMatch {
     NoActiveManifest,
     Exact(GenerationHandle),
     Mismatch,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MetricsMatch {
+    NoActive,
+    Exact(GenerationHandle),
+    SemanticMiss,
 }
 
 #[cfg(test)]
@@ -77,6 +87,18 @@ pub(crate) enum PublicationFailurePoint {
     AfterHeaderWrite,
     BeforeSourceWrite,
     AfterSourceWrite,
+    BeforeProviderHeader,
+    AfterProviderHeader,
+    BeforeProviderMembers,
+    AfterProviderMembers,
+    BeforeProviderBlockers,
+    AfterProviderBlockers,
+    BeforeProviderSources,
+    AfterProviderSources,
+    BeforeProviderFunctions,
+    AfterProviderFunctions,
+    BeforeProviderReadback,
+    AfterProviderReadback,
     BeforeStoredRead,
     AfterStoredRead,
     BeforeCompletion,
@@ -88,11 +110,23 @@ pub(crate) enum PublicationFailurePoint {
 
 #[cfg(test)]
 impl PublicationFailurePoint {
-    pub(crate) const ALL: [Self; 11] = [
+    pub(crate) const ALL: [Self; 23] = [
         Self::BeforeHeaderWrite,
         Self::AfterHeaderWrite,
         Self::BeforeSourceWrite,
         Self::AfterSourceWrite,
+        Self::BeforeProviderHeader,
+        Self::AfterProviderHeader,
+        Self::BeforeProviderMembers,
+        Self::AfterProviderMembers,
+        Self::BeforeProviderBlockers,
+        Self::AfterProviderBlockers,
+        Self::BeforeProviderSources,
+        Self::AfterProviderSources,
+        Self::BeforeProviderFunctions,
+        Self::AfterProviderFunctions,
+        Self::BeforeProviderReadback,
+        Self::AfterProviderReadback,
         Self::BeforeStoredRead,
         Self::AfterStoredRead,
         Self::BeforeCompletion,
@@ -106,6 +140,12 @@ impl PublicationFailurePoint {
 impl From<connection::ConnectionError> for GenerationError {
     fn from(error: connection::ConnectionError) -> Self {
         Self::Store(map_connection_error(error))
+    }
+}
+
+impl From<rusqlite::Error> for GenerationError {
+    fn from(error: rusqlite::Error) -> Self {
+        connection::classify_sqlite_error(error).into()
     }
 }
 
@@ -143,14 +183,15 @@ pub(super) fn publish(
     writer: &mut WriterConnection,
     handle: GenerationHandle,
     manifest: &RunManifest,
+    metrics: &MetricsProviderProjection,
 ) -> Result<GenerationHandle, GenerationError> {
     #[cfg(test)]
     {
-        publish_transaction(writer, handle, manifest, None)
+        publish_transaction(writer, handle, manifest, metrics, None)
     }
     #[cfg(not(test))]
     {
-        publish_transaction(writer, handle, manifest)
+        publish_transaction(writer, handle, manifest, metrics)
     }
 }
 
@@ -158,12 +199,13 @@ fn publish_transaction(
     writer: &mut WriterConnection,
     handle: GenerationHandle,
     manifest: &RunManifest,
+    metrics: &MetricsProviderProjection,
     #[cfg(test)] failure_point: Option<PublicationFailurePoint>,
 ) -> Result<GenerationHandle, GenerationError> {
     connection::with_immediate_transaction(writer, |transaction| {
-        if active_manifest_in_connection(transaction)?
-            .is_some_and(|(_, active)| active.workspace_identity() != manifest.workspace_identity())
-        {
+        if active_manifest_in_connection(transaction)?.is_some_and(|(_, active, _)| {
+            active.workspace_identity() != manifest.workspace_identity()
+        }) {
             return Err(GenerationError::WorkspaceOwnershipMismatch);
         }
         validate_pending_candidate(transaction, handle)?;
@@ -182,11 +224,68 @@ fn publish_transaction(
         fail_at(failure_point, PublicationFailurePoint::AfterSourceWrite)?;
 
         #[cfg(test)]
+        fail_at(failure_point, PublicationFailurePoint::BeforeProviderHeader)?;
+        provider_mirror::write_header(transaction, handle, metrics)?;
+        #[cfg(test)]
+        fail_at(failure_point, PublicationFailurePoint::AfterProviderHeader)?;
+        #[cfg(test)]
+        fail_at(
+            failure_point,
+            PublicationFailurePoint::BeforeProviderMembers,
+        )?;
+        provider_mirror::write_members(transaction, handle, metrics)?;
+        #[cfg(test)]
+        fail_at(failure_point, PublicationFailurePoint::AfterProviderMembers)?;
+        #[cfg(test)]
+        fail_at(
+            failure_point,
+            PublicationFailurePoint::BeforeProviderBlockers,
+        )?;
+        provider_mirror::write_blockers(transaction, handle, metrics)?;
+        #[cfg(test)]
+        fail_at(
+            failure_point,
+            PublicationFailurePoint::AfterProviderBlockers,
+        )?;
+        #[cfg(test)]
+        fail_at(
+            failure_point,
+            PublicationFailurePoint::BeforeProviderSources,
+        )?;
+        provider_mirror::write_sources(transaction, handle, metrics)?;
+        #[cfg(test)]
+        fail_at(failure_point, PublicationFailurePoint::AfterProviderSources)?;
+        #[cfg(test)]
+        fail_at(
+            failure_point,
+            PublicationFailurePoint::BeforeProviderFunctions,
+        )?;
+        provider_mirror::write_functions(transaction, handle, metrics)?;
+        #[cfg(test)]
+        fail_at(
+            failure_point,
+            PublicationFailurePoint::AfterProviderFunctions,
+        )?;
+
+        #[cfg(test)]
         fail_at(failure_point, PublicationFailurePoint::BeforeStoredRead)?;
         let decoded = read_manifest(transaction, handle)?;
         if !decoded.exact_match(manifest) {
             return Err(GenerationError::InvalidManifest);
         }
+        #[cfg(test)]
+        fail_at(
+            failure_point,
+            PublicationFailurePoint::BeforeProviderReadback,
+        )?;
+        if provider_mirror::read(transaction, handle)? != *metrics {
+            return Err(GenerationError::InvalidProviderMirror);
+        }
+        #[cfg(test)]
+        fail_at(
+            failure_point,
+            PublicationFailurePoint::AfterProviderReadback,
+        )?;
         #[cfg(test)]
         fail_at(failure_point, PublicationFailurePoint::AfterStoredRead)?;
 
@@ -223,7 +322,7 @@ fn publish_transaction(
 pub(super) fn active(
     reader: &ReadOnlyConnection,
 ) -> Result<Option<GenerationHandle>, GenerationError> {
-    active_manifest(reader).map(|active| active.map(|(handle, _)| handle))
+    active_manifest(reader).map(|active| active.map(|(handle, _, _)| handle))
 }
 
 pub(super) fn match_active(
@@ -233,7 +332,7 @@ pub(super) fn match_active(
     connection::with_read_transaction(reader, |connection| {
         match active_manifest_in_connection(connection)? {
             None => Ok(ManifestMatch::NoActiveManifest),
-            Some((handle, active)) if active.exact_match(requested) => {
+            Some((handle, active, _)) if active.exact_match(requested) => {
                 Ok(ManifestMatch::Exact(handle))
             }
             Some(_) => Ok(ManifestMatch::Mismatch),
@@ -243,7 +342,7 @@ pub(super) fn match_active(
 
 fn active_manifest(
     reader: &ReadOnlyConnection,
-) -> Result<Option<(GenerationHandle, RunManifest)>, GenerationError> {
+) -> Result<Option<(GenerationHandle, RunManifest, MetricsProviderProjection)>, GenerationError> {
     connection::with_read_transaction(reader, |transaction| {
         active_manifest_in_connection(transaction)
     })
@@ -251,7 +350,7 @@ fn active_manifest(
 
 fn active_manifest_in_connection(
     connection: &Connection,
-) -> Result<Option<(GenerationHandle, RunManifest)>, GenerationError> {
+) -> Result<Option<(GenerationHandle, RunManifest, MetricsProviderProjection)>, GenerationError> {
     let selected = connection
         .query_row(
             "SELECT active.singleton, active.generation_id, active.required_status, \
@@ -286,7 +385,34 @@ fn active_manifest_in_connection(
     }
     let handle = GenerationHandle::from_scalar(scalar)?;
     let manifest = read_manifest(connection, handle)?;
-    Ok(Some((handle, manifest)))
+    let metrics = provider_mirror::read(connection, handle)?;
+    Ok(Some((handle, manifest, metrics)))
+}
+
+pub(super) fn active_metrics(
+    reader: &ReadOnlyConnection,
+) -> Result<Option<(GenerationHandle, MetricsProviderProjection)>, GenerationError> {
+    active_manifest(reader).map(|row| row.map(|(handle, _, metrics)| (handle, metrics)))
+}
+
+pub(super) fn match_active_metrics(
+    reader: &ReadOnlyConnection,
+    requested_manifest: &RunManifest,
+    requested: &MetricsProviderProjection,
+) -> Result<MetricsMatch, GenerationError> {
+    connection::with_read_transaction(reader, |connection| {
+        let Some((handle, manifest, active)) = active_manifest_in_connection(connection)? else {
+            return Ok(MetricsMatch::NoActive);
+        };
+        if manifest.workspace_identity() != requested_manifest.workspace_identity()
+            || active.outcome.status != crate::analysis_kernel::ProviderOutcomeStatus::Succeeded
+            || active != *requested
+        {
+            Ok(MetricsMatch::SemanticMiss)
+        } else {
+            Ok(MetricsMatch::Exact(handle))
+        }
+    })
 }
 
 fn insert_manifest_header(
@@ -538,6 +664,7 @@ fn validate_complete_manifest(
     if !authentic {
         return Err(GenerationError::InvalidManifest);
     }
+    provider_mirror::read(transaction, handle)?;
     Ok(())
 }
 
@@ -608,6 +735,7 @@ fn validate_selection(
     if authentic != 1 {
         return Err(GenerationError::InvalidSelection);
     }
+    provider_mirror::read(transaction, handle)?;
     Ok(())
 }
 
@@ -628,9 +756,10 @@ pub(super) fn publish_with_failure_for_test(
     writer: &mut WriterConnection,
     handle: GenerationHandle,
     manifest: &RunManifest,
+    metrics: &MetricsProviderProjection,
     failure_point: PublicationFailurePoint,
 ) -> Result<GenerationHandle, GenerationError> {
-    publish_transaction(writer, handle, manifest, Some(failure_point))
+    publish_transaction(writer, handle, manifest, metrics, Some(failure_point))
 }
 
 #[cfg(test)]

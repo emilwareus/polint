@@ -1,4 +1,3 @@
-#![cfg_attr(not(test), expect(dead_code))]
 use super::ProviderManifest;
 use super::incremental::{Digest, PrecisionTier};
 use std::collections::{BTreeMap, BTreeSet};
@@ -53,6 +52,16 @@ impl ProviderFailureStage {
             Self::Validation => "validation",
         }
     }
+    pub(crate) fn decode(label: &str) -> Option<Self> {
+        match label {
+            "planning" => Some(Self::Planning),
+            "dependency" => Some(Self::Dependency),
+            "setup" => Some(Self::Setup),
+            "execution" => Some(Self::Execution),
+            "validation" => Some(Self::Validation),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,6 +82,17 @@ impl ProviderFailureReason {
             Self::SetupMissing => "setup_missing",
             Self::ExecutionFailed => "execution_failed",
             Self::ValidationRejected => "validation_rejected",
+        }
+    }
+    pub(crate) fn decode(label: &str) -> Option<Self> {
+        match label {
+            "not_selected" => Some(Self::NotSelected),
+            "dependency_unavailable" => Some(Self::DependencyUnavailable),
+            "unsupported" => Some(Self::Unsupported),
+            "setup_missing" => Some(Self::SetupMissing),
+            "execution_failed" => Some(Self::ExecutionFailed),
+            "validation_rejected" => Some(Self::ValidationRejected),
+            _ => None,
         }
     }
 }

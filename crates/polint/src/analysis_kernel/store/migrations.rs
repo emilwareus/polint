@@ -5,13 +5,25 @@ use rusqlite::TransactionBehavior;
 use rusqlite::{Connection, ErrorCode, Transaction};
 use thiserror::Error;
 
-pub(super) const CURRENT_SCHEMA_VERSION: i32 = 3;
+pub(super) const CURRENT_SCHEMA_VERSION: i32 = 4;
 
 const BOOTSTRAP_TABLE: &str = "_polint_schema_migrations";
 const GENERATIONS_TABLE: &str = "generations";
 const ACTIVE_GENERATION_TABLE: &str = "active_generation";
 const RUN_MANIFESTS_TABLE: &str = "run_manifests";
 const RUN_MANIFEST_SOURCES_TABLE: &str = "run_manifest_sources";
+const PROVIDER_HEADER: &str = "metrics_provider_mirror";
+const PROVIDER_MEMBERS: &str = "metrics_provider_members";
+const PROVIDER_BLOCKERS: &str = "metrics_provider_blockers";
+const PROVIDER_SOURCES: &str = "metrics_provider_sources";
+const PROVIDER_FUNCTIONS: &str = "metrics_provider_functions";
+const PROVIDER_TABLES: &[&str] = &[
+    PROVIDER_HEADER,
+    PROVIDER_MEMBERS,
+    PROVIDER_BLOCKERS,
+    PROVIDER_SOURCES,
+    PROVIDER_FUNCTIONS,
+];
 
 const BOOTSTRAP_TABLE_SQL: &str = "CREATE TABLE _polint_schema_migrations (\
     version INTEGER PRIMARY KEY CHECK (version > 0)\
@@ -48,6 +60,11 @@ const RUN_MANIFEST_SOURCES_TABLE_SQL: &str = "CREATE TABLE run_manifest_sources 
     size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),\
     PRIMARY KEY (generation_id, relative_path)\
 )";
+const PROVIDER_HEADER_SQL: &str = "CREATE TABLE metrics_provider_mirror (generation_id INTEGER PRIMARY KEY REFERENCES run_manifests (generation_id), mirror_schema TEXT NOT NULL CHECK (mirror_schema = 'polint-metrics-provider-mirror-1'), provider_id TEXT NOT NULL CHECK (provider_id = 'polint.metrics'), provider_version TEXT NOT NULL CHECK (length(provider_version) BETWEEN 1 AND 64), provider_kind TEXT NOT NULL CHECK (provider_kind = 'metrics_derived'), language_scope TEXT NOT NULL CHECK (language_scope = 'multi_language'), cache_policy TEXT NOT NULL CHECK (cache_policy = 'in_memory_derived'), precision_ceiling TEXT NOT NULL CHECK (precision_ceiling = 'syntax'), outcome_status TEXT NOT NULL CHECK (outcome_status IN ('succeeded', 'failed', 'dependency_blocked', 'unsupported', 'setup_missing', 'planned_absent')), failure_stage TEXT CHECK (failure_stage IN ('planning', 'dependency', 'setup', 'execution', 'validation')), failure_reason TEXT CHECK (failure_reason IN ('not_selected', 'dependency_unavailable', 'unsupported', 'setup_missing', 'execution_failed', 'validation_rejected')), member_count INTEGER NOT NULL CHECK (member_count = 6), blocker_count INTEGER NOT NULL CHECK (blocker_count BETWEEN 0 AND 1000000), source_count INTEGER NOT NULL CHECK (source_count BETWEEN 0 AND 1000000), function_count INTEGER NOT NULL CHECK (function_count BETWEEN 0 AND 1000000), witness_kind TEXT NOT NULL CHECK (witness_kind = 'provider_parameters'), witness_value TEXT NOT NULL CHECK (length(witness_value) = 16), identity_provider_id TEXT, identity_provider_version TEXT, identity_schema_version TEXT, identity_digest_kind TEXT, identity_digest_value TEXT, identity_precision TEXT, CHECK ((outcome_status = 'succeeded' AND failure_stage IS NULL AND failure_reason IS NULL AND blocker_count = 0 AND identity_provider_id IS NOT NULL AND identity_provider_version IS NOT NULL AND identity_schema_version IS NOT NULL AND identity_digest_kind = 'provider_output' AND length(identity_digest_value) = 16 AND identity_precision = 'syntax') OR (outcome_status = 'failed' AND failure_stage IN ('execution', 'validation') AND failure_reason IN ('execution_failed', 'validation_rejected') AND blocker_count = 0 AND source_count = 0 AND function_count = 0 AND identity_provider_id IS NULL AND identity_provider_version IS NULL AND identity_schema_version IS NULL AND identity_digest_kind IS NULL AND identity_digest_value IS NULL AND identity_precision IS NULL) OR (outcome_status = 'dependency_blocked' AND failure_stage = 'dependency' AND failure_reason = 'dependency_unavailable' AND blocker_count > 0 AND source_count = 0 AND function_count = 0 AND identity_provider_id IS NULL AND identity_provider_version IS NULL AND identity_schema_version IS NULL AND identity_digest_kind IS NULL AND identity_digest_value IS NULL AND identity_precision IS NULL) OR (outcome_status = 'unsupported' AND failure_stage = 'setup' AND failure_reason = 'unsupported' AND blocker_count = 0 AND source_count = 0 AND function_count = 0 AND identity_provider_id IS NULL AND identity_provider_version IS NULL AND identity_schema_version IS NULL AND identity_digest_kind IS NULL AND identity_digest_value IS NULL AND identity_precision IS NULL) OR (outcome_status = 'setup_missing' AND failure_stage = 'setup' AND failure_reason = 'setup_missing' AND blocker_count = 0 AND source_count = 0 AND function_count = 0 AND identity_provider_id IS NULL AND identity_provider_version IS NULL AND identity_schema_version IS NULL AND identity_digest_kind IS NULL AND identity_digest_value IS NULL AND identity_precision IS NULL) OR (outcome_status = 'planned_absent' AND failure_stage = 'planning' AND failure_reason = 'not_selected' AND blocker_count = 0 AND source_count = 0 AND function_count = 0 AND identity_provider_id IS NULL AND identity_provider_version IS NULL AND identity_schema_version IS NULL AND identity_digest_kind IS NULL AND identity_digest_value IS NULL AND identity_precision IS NULL)))";
+const PROVIDER_MEMBERS_SQL: &str = "CREATE TABLE metrics_provider_members (generation_id INTEGER NOT NULL REFERENCES metrics_provider_mirror (generation_id), category TEXT NOT NULL CHECK (category IN ('input', 'output', 'schema')), ordinal INTEGER NOT NULL CHECK (ordinal >= 0), name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 4096), version INTEGER NOT NULL CHECK ((category = 'schema' AND version > 0) OR (category != 'schema' AND version = 0)), PRIMARY KEY (generation_id, category, ordinal))";
+const PROVIDER_BLOCKERS_SQL: &str = "CREATE TABLE metrics_provider_blockers (generation_id INTEGER NOT NULL REFERENCES metrics_provider_mirror (generation_id), ordinal INTEGER NOT NULL CHECK (ordinal >= 0), provider_id TEXT NOT NULL CHECK (length(provider_id) BETWEEN 1 AND 128), PRIMARY KEY (generation_id, ordinal), UNIQUE (generation_id, provider_id))";
+const PROVIDER_SOURCES_SQL: &str = "CREATE TABLE metrics_provider_sources (generation_id INTEGER NOT NULL REFERENCES metrics_provider_mirror (generation_id), ordinal INTEGER NOT NULL CHECK (ordinal >= 0), relative_path TEXT NOT NULL CHECK (length(relative_path) BETWEEN 1 AND 4096), language TEXT NOT NULL CHECK (language IN ('go', 'typescript', 'tsx', 'javascript', 'jsx')), digest_kind TEXT NOT NULL CHECK (digest_kind = 'source_text'), digest_value TEXT NOT NULL CHECK (length(digest_value) = 16), byte_count INTEGER NOT NULL CHECK (byte_count BETWEEN 0 AND 4294967295), line_count INTEGER NOT NULL CHECK (line_count BETWEEN 0 AND 4294967295), non_empty_line_count INTEGER NOT NULL CHECK (non_empty_line_count BETWEEN 0 AND line_count), PRIMARY KEY (generation_id, ordinal))";
+const PROVIDER_FUNCTIONS_SQL: &str = "CREATE TABLE metrics_provider_functions (generation_id INTEGER NOT NULL REFERENCES metrics_provider_mirror (generation_id), ordinal INTEGER NOT NULL CHECK (ordinal >= 0), relative_path TEXT NOT NULL CHECK (length(relative_path) BETWEEN 1 AND 4096), name TEXT NOT NULL CHECK (length(name) <= 4096), start_byte INTEGER NOT NULL CHECK (start_byte BETWEEN 0 AND 4294967295), end_byte INTEGER NOT NULL CHECK (end_byte BETWEEN start_byte AND 4294967295), start_line INTEGER NOT NULL CHECK (start_line BETWEEN 1 AND 4294967295), end_line INTEGER NOT NULL CHECK (end_line BETWEEN start_line AND 4294967295), language TEXT NOT NULL CHECK (language IN ('go', 'typescript', 'tsx', 'javascript', 'jsx')), complexity INTEGER NOT NULL CHECK (complexity BETWEEN 0 AND 4294967295), PRIMARY KEY (generation_id, ordinal))";
 
 const MIGRATION_ONE_STATEMENTS: &[&str] = &[
     BOOTSTRAP_TABLE_SQL,
@@ -63,6 +80,14 @@ const MIGRATION_THREE_STATEMENTS: &[&str] = &[
     RUN_MANIFEST_SOURCES_TABLE_SQL,
     "UPDATE _polint_schema_migrations SET version = 3 WHERE version = 2",
 ];
+const MIGRATION_FOUR_STATEMENTS: &[&str] = &[
+    PROVIDER_HEADER_SQL,
+    PROVIDER_MEMBERS_SQL,
+    PROVIDER_BLOCKERS_SQL,
+    PROVIDER_SOURCES_SQL,
+    PROVIDER_FUNCTIONS_SQL,
+    "UPDATE _polint_schema_migrations SET version = 4 WHERE version = 3",
+];
 const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -75,6 +100,10 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 3,
         statements: MIGRATION_THREE_STATEMENTS,
+    },
+    Migration {
+        version: 4,
+        statements: MIGRATION_FOUR_STATEMENTS,
     },
 ];
 
@@ -186,12 +215,22 @@ fn validate_supported_schema(connection: &Connection, version: i32) -> Result<()
                     ACTIVE_GENERATION_TABLE,
                     RUN_MANIFESTS_TABLE,
                     RUN_MANIFEST_SOURCES_TABLE,
+                    PROVIDER_HEADER,
+                    PROVIDER_MEMBERS,
+                    PROVIDER_BLOCKERS,
+                    PROVIDER_SOURCES,
+                    PROVIDER_FUNCTIONS,
                 ],
             )
         }
         2 => {
             validate_version_two_schema(connection)?;
             validate_empty_version_two(connection)
+        }
+        3 => {
+            validate_manifest_schema(connection, 3)?;
+            validate_owned_names_absent(connection, 3, PROVIDER_TABLES)?;
+            validate_empty_version_three(connection)
         }
         CURRENT_SCHEMA_VERSION => validate_current_schema(connection),
         _ => Err(MigrationError::InvalidSchema { version }),
@@ -211,7 +250,8 @@ fn validate_empty_owned_schema(
         connection,
         version,
         &[RUN_MANIFESTS_TABLE, RUN_MANIFEST_SOURCES_TABLE],
-    )
+    )?;
+    validate_owned_names_absent(connection, version, PROVIDER_TABLES)
 }
 
 fn validate_owned_names_absent(
@@ -239,7 +279,53 @@ pub(super) fn validate_current_schema(connection: &Connection) -> Result<(), Mig
     if version != CURRENT_SCHEMA_VERSION {
         return Err(MigrationError::InvalidSchema { version });
     }
-    validate_bootstrap_schema(connection, version, CURRENT_SCHEMA_VERSION)?;
+    validate_manifest_schema(connection, version)?;
+    for (table, sql) in [
+        (PROVIDER_HEADER, PROVIDER_HEADER_SQL),
+        (PROVIDER_MEMBERS, PROVIDER_MEMBERS_SQL),
+        (PROVIDER_BLOCKERS, PROVIDER_BLOCKERS_SQL),
+        (PROVIDER_SOURCES, PROVIDER_SOURCES_SQL),
+        (PROVIDER_FUNCTIONS, PROVIDER_FUNCTIONS_SQL),
+    ] {
+        validate_table_sql(connection, version, table, sql)?;
+    }
+    validate_no_indexes(connection, version, PROVIDER_HEADER)?;
+    validate_primary_key_index(
+        connection,
+        version,
+        PROVIDER_MEMBERS,
+        &["generation_id", "category", "ordinal"],
+        1,
+    )?;
+    validate_primary_key_index(
+        connection,
+        version,
+        PROVIDER_BLOCKERS,
+        &["generation_id", "ordinal"],
+        2,
+    )?;
+    validate_primary_key_index(
+        connection,
+        version,
+        PROVIDER_SOURCES,
+        &["generation_id", "ordinal"],
+        1,
+    )?;
+    validate_primary_key_index(
+        connection,
+        version,
+        PROVIDER_FUNCTIONS,
+        &["generation_id", "ordinal"],
+        1,
+    )?;
+    validate_no_triggers(connection, version, PROVIDER_TABLES)?;
+    validate_provider_foreign_keys(connection, version)?;
+    validate_provider_rows(connection, version)?;
+    validate_foreign_keys(connection, version)
+}
+
+fn validate_manifest_schema(connection: &Connection, version: i32) -> Result<(), MigrationError> {
+    validate_bootstrap_schema(connection, version, version)?;
     validate_lifecycle_schema(connection, version)?;
     validate_table_sql(
         connection,
@@ -254,7 +340,13 @@ pub(super) fn validate_current_schema(connection: &Connection) -> Result<(), Mig
         RUN_MANIFEST_SOURCES_TABLE_SQL,
     )?;
     validate_no_indexes(connection, version, RUN_MANIFESTS_TABLE)?;
-    validate_manifest_sources_index(connection, version)?;
+    validate_primary_key_index(
+        connection,
+        version,
+        RUN_MANIFEST_SOURCES_TABLE,
+        &["generation_id", "relative_path"],
+        1,
+    )?;
     validate_no_triggers(
         connection,
         version,
@@ -318,6 +410,22 @@ fn validate_empty_version_two(connection: &Connection) -> Result<(), MigrationEr
     } else {
         Err(MigrationError::InvalidSchema { version: 2 })
     }
+}
+
+fn validate_empty_version_three(connection: &Connection) -> Result<(), MigrationError> {
+    let populated: i64 = connection
+        .query_row(
+            "SELECT (SELECT count(*) FROM generations) + \
+                    (SELECT count(*) FROM active_generation) + \
+                    (SELECT count(*) FROM run_manifests) + \
+                    (SELECT count(*) FROM run_manifest_sources)",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| classify_invariant_error(error, 3))?;
+    (populated == 0)
+        .then_some(())
+        .ok_or(MigrationError::InvalidSchema { version: 3 })
 }
 
 fn validate_bootstrap_schema(
@@ -534,62 +642,48 @@ fn validate_active_foreign_key(
     Ok(())
 }
 
-fn validate_manifest_sources_index(
+fn validate_primary_key_index(
     connection: &Connection,
     version: i32,
+    table: &str,
+    expected_columns: &[&str],
+    expected_index_count: i64,
 ) -> Result<(), MigrationError> {
+    let list = format!("PRAGMA index_list('{table}')");
     let index_count: i64 = connection
         .query_row(
-            "SELECT count(*) FROM pragma_index_list('run_manifest_sources')",
+            &format!("SELECT count(*) FROM pragma_index_list('{table}')"),
             [],
             |row| row.get(0),
         )
         .map_err(|error| classify_invariant_error(error, version))?;
-    if index_count != 1 {
+    if index_count != expected_index_count {
         return Err(MigrationError::InvalidSchema { version });
     }
-    let (index_name, unique, origin, partial): (String, i64, String, i64) = connection
-        .query_row(
-            "SELECT name, \"unique\", origin, partial \
-             FROM pragma_index_list('run_manifest_sources')",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-        )
+    let mut statement = connection
+        .prepare(&list)
         .map_err(|error| classify_invariant_error(error, version))?;
-    if unique != 1 || origin != "pk" || partial != 0 {
-        return Err(MigrationError::InvalidSchema { version });
-    }
+    let index_name = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(1)?, row.get::<_, String>(3)?))
+        })
+        .map_err(|error| classify_invariant_error(error, version))?
+        .find_map(|row| {
+            row.ok()
+                .filter(|(_, origin)| origin == "pk")
+                .map(|(name, _)| name)
+        })
+        .ok_or(MigrationError::InvalidSchema { version })?;
     let mut index_statement = connection
         .prepare("SELECT name FROM pragma_index_info(?1) ORDER BY seqno")
         .map_err(|error| classify_invariant_error(error, version))?;
-    let mut columns = index_statement
-        .query([index_name])
+    let columns = index_statement
+        .query_map([index_name], |row| row.get::<_, String>(0))
         .map_err(|error| classify_invariant_error(error, version))?;
-    let Some(first) = columns
-        .next()
-        .map_err(|error| classify_invariant_error(error, version))?
-    else {
-        return Err(MigrationError::InvalidSchema { version });
-    };
-    let first: String = first
-        .get(0)
+    let columns = columns
+        .collect::<Result<Vec<_>, _>>()
         .map_err(|error| classify_invariant_error(error, version))?;
-    let Some(second) = columns
-        .next()
-        .map_err(|error| classify_invariant_error(error, version))?
-    else {
-        return Err(MigrationError::InvalidSchema { version });
-    };
-    let second: String = second
-        .get(0)
-        .map_err(|error| classify_invariant_error(error, version))?;
-    if first != "generation_id"
-        || second != "relative_path"
-        || columns
-            .next()
-            .map_err(|error| classify_invariant_error(error, version))?
-            .is_some()
-    {
+    if columns != expected_columns {
         return Err(MigrationError::InvalidSchema { version });
     }
     Ok(())
@@ -616,6 +710,36 @@ fn validate_manifest_foreign_keys(
     } else {
         Err(MigrationError::InvalidSchema { version })
     }
+}
+
+fn validate_provider_foreign_keys(
+    connection: &Connection,
+    version: i32,
+) -> Result<(), MigrationError> {
+    let expected_header = [(
+        RUN_MANIFESTS_TABLE.to_owned(),
+        "generation_id".to_owned(),
+        "generation_id".to_owned(),
+    )];
+    if foreign_key_rows(connection, version, PROVIDER_HEADER)? != expected_header {
+        return Err(MigrationError::InvalidSchema { version });
+    }
+    let expected_child = [(
+        PROVIDER_HEADER.to_owned(),
+        "generation_id".to_owned(),
+        "generation_id".to_owned(),
+    )];
+    for table in [
+        PROVIDER_MEMBERS,
+        PROVIDER_BLOCKERS,
+        PROVIDER_SOURCES,
+        PROVIDER_FUNCTIONS,
+    ] {
+        if foreign_key_rows(connection, version, table)? != expected_child {
+            return Err(MigrationError::InvalidSchema { version });
+        }
+    }
+    Ok(())
 }
 
 fn foreign_key_rows(
@@ -687,6 +811,44 @@ fn validate_manifest_rows(connection: &Connection, version: i32) -> Result<(), M
         && invalid_counts == 0
         && invalid_active == 0
         && invalid_active_cardinality == 0
+    {
+        Ok(())
+    } else {
+        Err(MigrationError::InvalidSchema { version })
+    }
+}
+
+fn validate_provider_rows(connection: &Connection, version: i32) -> Result<(), MigrationError> {
+    let invalid_ownership: i64 = connection.query_row(
+        "SELECT count(*) FROM run_manifests AS manifest LEFT JOIN metrics_provider_mirror AS provider \
+         ON provider.generation_id=manifest.generation_id WHERE provider.generation_id IS NULL",
+        [], |row| row.get(0),
+    ).map_err(|error| classify_invariant_error(error, version))?;
+    let invalid_counts: i64 = connection.query_row(
+        "SELECT count(*) FROM metrics_provider_mirror AS provider WHERE \
+         member_count != (SELECT count(*) FROM metrics_provider_members WHERE generation_id=provider.generation_id) OR \
+         blocker_count != (SELECT count(*) FROM metrics_provider_blockers WHERE generation_id=provider.generation_id) OR \
+         source_count != (SELECT count(*) FROM metrics_provider_sources WHERE generation_id=provider.generation_id) OR \
+         function_count != (SELECT count(*) FROM metrics_provider_functions WHERE generation_id=provider.generation_id)",
+        [], |row| row.get(0),
+    ).map_err(|error| classify_invariant_error(error, version))?;
+    let invalid_members: i64 = connection.query_row(
+        "SELECT count(*) FROM metrics_provider_members WHERE NOT \
+         (category='input' AND ((ordinal=0 AND name='source_files') OR (ordinal=1 AND name='functions')) AND version=0) AND NOT \
+         (category='output' AND ((ordinal=0 AND name='file_metrics') OR (ordinal=1 AND name='function_metrics') OR (ordinal=2 AND name='complexity_metrics')) AND version=0) AND NOT \
+         (category='schema' AND ordinal=0 AND name='metrics-facts-1' AND version=1)",
+        [], |row| row.get(0),
+    ).map_err(|error| classify_invariant_error(error, version))?;
+    let invalid_relationships: i64 = connection.query_row(
+        "SELECT count(*) FROM metrics_provider_functions AS function LEFT JOIN metrics_provider_sources AS source \
+         ON source.generation_id=function.generation_id AND source.relative_path=function.relative_path \
+         AND source.language=function.language WHERE source.generation_id IS NULL OR function.end_byte>source.byte_count OR function.end_line>source.line_count",
+        [], |row| row.get(0),
+    ).map_err(|error| classify_invariant_error(error, version))?;
+    if invalid_ownership == 0
+        && invalid_counts == 0
+        && invalid_members == 0
+        && invalid_relationships == 0
     {
         Ok(())
     } else {
@@ -818,6 +980,25 @@ mod tests {
             .expect("set version two");
     }
 
+    fn install_version_three_fixture(connection: &Connection, populated: bool) {
+        install_version_two_fixture(connection, false, false);
+        connection
+            .execute_batch(RUN_MANIFESTS_TABLE_SQL)
+            .expect("create manifests");
+        connection
+            .execute_batch(RUN_MANIFEST_SOURCES_TABLE_SQL)
+            .expect("create sources");
+        connection
+            .execute("UPDATE _polint_schema_migrations SET version=3", [])
+            .unwrap();
+        connection.pragma_update(None, "user_version", 3).unwrap();
+        if populated {
+            connection
+                .execute("INSERT INTO generations (status) VALUES ('pending')", [])
+                .unwrap();
+        }
+    }
+
     fn install_claimed_current_schema(
         connection: &Connection,
         generations_sql: &str,
@@ -941,7 +1122,7 @@ mod tests {
             .map(|migration| migration.version)
             .collect::<Vec<_>>();
 
-        assert_eq!(versions, [1, 2, 3]);
+        assert_eq!(versions, [1, 2, 3, 4]);
     }
 
     #[test]
@@ -1050,6 +1231,27 @@ mod tests {
             ));
             assert_eq!(version_two_snapshot(&connection), before);
         }
+    }
+
+    #[test]
+    fn populated_version_three_is_preserved_and_refused_before_mutation() {
+        let temp = TempDir::new().expect("temp directory");
+        let path = database_path(&temp);
+        let connection = Connection::open(&path).expect("open version-three database");
+        install_version_three_fixture(&connection, true);
+        let before = version_two_snapshot(&connection);
+        drop(connection);
+        assert_eq!(
+            super::super::connection::open_writer(&path).map(|_| ()),
+            Err(super::super::connection::ConnectionError::InvalidSchema)
+        );
+        let mut connection = Connection::open(&path).expect("reopen refused database");
+        assert_eq!(version_two_snapshot(&connection), before);
+        assert!(matches!(
+            apply_migrations(&mut connection),
+            Err(MigrationError::InvalidSchema { version: 3 })
+        ));
+        assert_eq!(version_two_snapshot(&connection), before);
     }
 
     #[test]
@@ -1212,8 +1414,8 @@ mod tests {
         connection
             .execute_batch(
                 "CREATE TABLE _polint_schema_migrations (wrong_column INTEGER);\
-                 INSERT INTO _polint_schema_migrations (wrong_column) VALUES (3);\
-                 PRAGMA user_version = 3;",
+                 INSERT INTO _polint_schema_migrations (wrong_column) VALUES (4);\
+                 PRAGMA user_version = 4;",
             )
             .expect("create wrong-shape fixture");
 
@@ -1235,8 +1437,8 @@ mod tests {
                 "CREATE TABLE _polint_schema_migrations (\
                      version INTEGER PRIMARY KEY CHECK (version > 0)\
                  );\
-                 INSERT INTO _polint_schema_migrations (version) VALUES (1), (3);\
-                 PRAGMA user_version = 3;",
+                 INSERT INTO _polint_schema_migrations (version) VALUES (1), (4);\
+                 PRAGMA user_version = 4;",
             )
             .expect("create extra-marker fixture");
 
@@ -1443,11 +1645,11 @@ mod tests {
     fn migration_error_display_is_actionable() {
         assert_eq!(
             MigrationError::FutureSchema {
-                found: 4,
+                found: 5,
                 supported: CURRENT_SCHEMA_VERSION,
             }
             .to_string(),
-            "semantic store schema version 4 is newer than supported version 3"
+            "semantic store schema version 5 is newer than supported version 4"
         );
     }
 

@@ -4,15 +4,19 @@
 //! Callers receive typed configuration and status values only; rusqlite types do
 //! not cross this boundary.
 
+#![cfg_attr(not(test), expect(dead_code))]
+
 use std::path::{Path, PathBuf};
 
 use super::incremental::{RunManifest, RunManifestInputs};
+use super::metrics_projection::MetricsProviderProjection;
 
 mod connection;
 mod generation;
 mod migrations;
+mod provider_mirror;
 
-pub(crate) use generation::{GenerationError, GenerationHandle, ManifestMatch};
+pub(crate) use generation::{GenerationError, GenerationHandle, ManifestMatch, MetricsMatch};
 #[cfg(test)]
 pub(crate) use generation::{GenerationStatus, PublicationFailurePoint};
 
@@ -93,6 +97,17 @@ pub(crate) enum StoreRebuildReason {
 
 pub(crate) struct SemanticStore;
 
+pub(crate) struct PublicationInputs<'a> {
+    pub(crate) manifest: RunManifestInputs<'a>,
+    pub(crate) metrics: MetricsProviderProjection,
+}
+
+impl<'a> PublicationInputs<'a> {
+    pub(crate) fn new(manifest: RunManifestInputs<'a>, metrics: MetricsProviderProjection) -> Self {
+        Self { manifest, metrics }
+    }
+}
+
 impl SemanticStore {
     pub(crate) fn maintain(config: &StoreConfig) -> StoreStatus {
         if !config.is_enabled() {
@@ -139,13 +154,13 @@ impl SemanticStore {
     pub(crate) fn publish_generation(
         config: &StoreConfig,
         handle: GenerationHandle,
-        inputs: RunManifestInputs<'_>,
+        inputs: PublicationInputs<'_>,
     ) -> Result<GenerationHandle, GenerationError> {
         require_enabled(config)?;
-        let manifest = RunManifest::from_inputs(inputs)?;
+        let manifest = RunManifest::from_inputs(inputs.manifest)?;
         prepare_store_path(config.path()).map_err(GenerationError::Store)?;
         let mut writer = connection::open_writer(config.path()).map_err(GenerationError::from)?;
-        generation::publish(&mut writer, handle, &manifest)
+        generation::publish(&mut writer, handle, &manifest, &inputs.metrics)
     }
 
     #[cfg_attr(
@@ -183,18 +198,46 @@ impl SemanticStore {
         generation::match_active(&reader, &manifest)
     }
 
+    pub(crate) fn active_metrics(
+        config: &StoreConfig,
+    ) -> Result<Option<(GenerationHandle, MetricsProviderProjection)>, GenerationError> {
+        prepare_generation_store(config)?;
+        let reader =
+            connection::open_current_read_only(config.path()).map_err(GenerationError::from)?;
+        generation::active_metrics(&reader)
+    }
+
+    pub(crate) fn match_active_metrics(
+        config: &StoreConfig,
+        manifest: RunManifestInputs<'_>,
+        metrics: &MetricsProviderProjection,
+    ) -> Result<MetricsMatch, GenerationError> {
+        require_enabled(config)?;
+        let manifest = RunManifest::from_inputs(manifest)?;
+        prepare_store_path(config.path()).map_err(GenerationError::Store)?;
+        let reader =
+            connection::open_current_read_only(config.path()).map_err(GenerationError::from)?;
+        generation::match_active_metrics(&reader, &manifest, metrics)
+    }
+
     #[cfg(test)]
     pub(crate) fn publish_generation_with_failure_for_test(
         config: &StoreConfig,
         handle: GenerationHandle,
-        inputs: RunManifestInputs<'_>,
+        inputs: PublicationInputs<'_>,
         failure_point: PublicationFailurePoint,
     ) -> Result<GenerationHandle, GenerationError> {
         require_enabled(config)?;
-        let manifest = RunManifest::from_inputs(inputs)?;
+        let manifest = RunManifest::from_inputs(inputs.manifest)?;
         prepare_store_path(config.path()).map_err(GenerationError::Store)?;
         let mut writer = connection::open_writer(config.path()).map_err(GenerationError::from)?;
-        generation::publish_with_failure_for_test(&mut writer, handle, &manifest, failure_point)
+        generation::publish_with_failure_for_test(
+            &mut writer,
+            handle,
+            &manifest,
+            &inputs.metrics,
+            failure_point,
+        )
     }
 }
 
