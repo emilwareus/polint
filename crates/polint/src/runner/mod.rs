@@ -700,12 +700,24 @@ mod tests {
         let cold_projection = project(&cold, &rules, &counters);
         let warm = run_kernel(&loaded, &cache, &plan);
         let warm_projection = project(&warm, &rules, &counters);
+        let disabled_cache = Cache::new(temp.path().join("disabled-cache"), false);
+        let disabled = run_kernel(&loaded, &disabled_cache, &plan);
+        let mut disabled_projection = project(&disabled, &rules, &counters);
         assert_eq!(cold_projection, warm_projection);
+        let cold_metrics = cold.run_report.provider_outcomes.last().unwrap();
+        let disabled_metrics = disabled.run_report.provider_outcomes.last().unwrap();
+        assert_eq!(cold_metrics, disabled_metrics);
+        disabled_projection.provider_outcomes = cold_projection.provider_outcomes.clone();
+        assert_eq!(cold_projection, disabled_projection);
         assert_eq!(cold_projection.decisions, [1, 1]);
         let answers = &cold_projection.policy_answers;
         assert_eq!(answers.as_slice(), ["metrics=1", "unaffected=0"]);
         let cold_telemetry = &cold.run_report.provider_telemetry;
         assert_ne!(cold_telemetry, &warm.run_report.provider_telemetry);
+        assert_ne!(
+            &warm.run_report.provider_telemetry,
+            &disabled.run_report.provider_telemetry
+        );
         let expected_outcomes = &warm.run_report.provider_outcomes;
         let blob = std::fs::read_dir(cache.layer_cache_dir().join("blobs"))
             .expect("cache blobs")

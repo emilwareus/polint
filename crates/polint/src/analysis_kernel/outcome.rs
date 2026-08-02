@@ -1,3 +1,4 @@
+#![cfg_attr(not(test), expect(dead_code))]
 use super::ProviderManifest;
 use super::incremental::{Digest, PrecisionTier};
 use std::collections::{BTreeMap, BTreeSet};
@@ -22,7 +23,6 @@ impl ProviderOutcomeStatus {
             Self::PlannedAbsent => "planned_absent",
         }
     }
-    #[cfg(test)]
     pub(crate) fn decode(label: &str) -> Option<Self> {
         match label {
             "succeeded" => Some(Self::Succeeded),
@@ -198,6 +198,43 @@ impl ProviderOutcome {
             failure_reason: Some(failure_reason),
             blockers,
         })
+    }
+
+    pub(crate) fn from_closed_parts(
+        provider_id: String,
+        status: ProviderOutcomeStatus,
+        output_identity: Option<ProviderOutputIdentity>,
+        failure_stage: Option<ProviderFailureStage>,
+        failure_reason: Option<ProviderFailureReason>,
+        blockers: Vec<String>,
+    ) -> Result<Self, ProviderOutcomeError> {
+        let invalid = |provider_id, detail| ProviderOutcomeError::InvalidTransition {
+            provider_id,
+            detail,
+        };
+        match (status, output_identity, failure_stage, failure_reason) {
+            (ProviderOutcomeStatus::Succeeded, Some(identity), None, None)
+                if blockers.is_empty() && identity.provider_id == provider_id =>
+            {
+                Ok(Self::succeeded(provider_id, identity))
+            }
+            (ProviderOutcomeStatus::Succeeded, _, _, _) => Err(invalid(
+                provider_id,
+                "successful outcome has inconsistent fields",
+            )),
+            (_, None, Some(stage), Some(reason)) => {
+                let original_id = provider_id.clone();
+                let canonical =
+                    Self::non_success(provider_id, status, stage, reason, blockers.clone())?;
+                (canonical.blockers == blockers)
+                    .then_some(canonical)
+                    .ok_or_else(|| invalid(original_id, "blockers must be sorted and unique"))
+            }
+            _ => Err(invalid(
+                provider_id,
+                "non-success outcome has inconsistent fields",
+            )),
+        }
     }
     #[cfg(test)]
     pub(crate) fn reject_validation_for_test(&mut self) {
@@ -650,6 +687,17 @@ mod tests {
         ] {
             assert_eq!(ProviderOutcomeStatus::decode(rejected), None);
         }
+        assert!(
+            ProviderOutcome::from_closed_parts(
+                "A".into(),
+                ProviderOutcomeStatus::DependencyBlocked,
+                None,
+                Some(ProviderFailureStage::Dependency),
+                Some(ProviderFailureReason::DependencyUnavailable),
+                vec!["B".into(), "B".into()],
+            )
+            .is_err()
+        );
     }
     #[test]
     fn hard_dependency_audit_references_only_static_manifest_providers() {

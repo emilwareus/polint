@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 #[cfg(test)] mod debug;
 pub(crate) mod incremental;
 mod metadata;
+pub(crate) mod metrics_projection;
 mod outcome;
 mod provider;
 mod store;
@@ -998,13 +999,8 @@ impl AnalysisKernel {
                 &mut db,
                 input.plan,
                 input.cache,
-                &input_snapshot,
                 Self::provider_manifest("polint.metrics"),
-                vec![
-                    ready_digest!(go_dependency_output_digest),
-                    ready_digest!(ts_dependency_output_digest),
-                ],
-            )
+            )?
         } else {
             Default::default()
         };
