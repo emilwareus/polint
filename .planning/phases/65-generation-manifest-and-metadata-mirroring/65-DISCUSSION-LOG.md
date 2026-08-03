@@ -467,3 +467,119 @@ sub-five-minute CI redesign remain out of scope.
   generic dependency indexes, and layer/query/summary persistence.
 - Syntax/Go environment readiness, optional/degraded provider semantics,
   GitHub issues #86-#91, and the sub-five-minute CI follow-up.
+
+---
+
+# R5 Addendum: First Increment — Go Syntax Provider Mirror
+
+> **Audit trail only.** Do not use as input to planning, research, or
+> execution agents. Decisions are captured in `65-CONTEXT.md`; this section
+> preserves the alternatives considered.
+
+**Date:** 2026-08-03
+**Phase:** 65-generation-manifest-and-metadata-mirroring
+**Mode:** `--auto`
+**Areas discussed:** next provider, exact syntax identity, cache-warning
+separation, durable row shape, publication and matching, scope and stop gates
+
+## Next Provider
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| `polint.go.syntax` only | Prove the smallest in-process single-language syntax contract first. | ✓ |
+| `polint.ts.syntax` only | Start with Oxc and its four TS/JS source modes. | |
+| Both syntax providers | Repair and mirror the whole syntax family in one increment. | |
+| `polint.source` | Mirror discovery despite `NoCache` and its broader filesystem/config boundary. | |
+
+**User's choice:** `--auto` selected `polint.go.syntax` only.
+**Notes:** This is the in-process tree-sitter provider, not Go semantic
+analysis or an external Go command. One provider stays inside the restart
+budget and proves the shared syntax pattern before TypeScript is attempted.
+GitHub issue #89 remains only partially addressed.
+
+## Exact Syntax Identity
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Exact consumed-input and produced-value projections | Bind normalized Go sources and an explicit parser contract to a canonical syntax result. | ✓ |
+| Current broad `LayerKey` | Keep config and rendered/debug parser inputs even when parsing does not consume them. | |
+| Full run-manifest equality | Invalidate Go syntax for every config or non-Go workspace change. | |
+
+**User's choice:** `--auto` selected exact consumed-input and produced-value
+projections.
+**Notes:** Go paths/source bytes and the explicit provider/schema/parser
+contract participate. Config, rules, plan, TypeScript sources, Go module
+lifecycle, external toolchains, extensions/models, cache disposition, and
+telemetry do not. Unknown behavior inputs must be represented or trigger a
+split.
+
+## Cache-Warning Separation
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Separate semantic diagnostics from cache telemetry | Hash parser diagnostics/facts, but keep cache I/O warnings outside payload identity. | ✓ |
+| Hash every diagnostic | Let cache failures rotate semantic provider identity. | |
+| Drop all diagnostics | Exclude both parser and cache diagnostics from returned behavior. | |
+
+**User's choice:** `--auto` selected semantic/operational separation.
+**Notes:** Cold, warm, and cache-disabled runs with the same parser result must
+seal the same provider identity. Existing user-visible cache warnings remain
+run-local where applicable and must not be replayed as cached parser output.
+
+## Durable Row Shape
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Provider-owned relational family | Add one exact versioned Go-syntax mirror beside the accepted metrics family. | ✓ |
+| Generic all-provider redesign | Replace the metrics-specific schema with a framework for every provider. | |
+| Opaque payload or digest-only row | Store JSON/blob/debug state or trust a fingerprint without exact dependencies. | |
+
+**User's choice:** `--auto` selected one provider-owned relational family.
+**Notes:** The mirror contains static manifest, sealed outcome, success-only
+identity, blockers, and exact Go-source/parser dependencies—never source text
+or syntax facts. Small closed codec sharing is allowed; framework
+generalization is not.
+
+## Publication and Matching
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Atomic complete-generation publication | Validate run manifest, metrics mirror, and Go syntax mirror before completion/selection. | ✓ |
+| Independent post-activation write | Select the generation before Go syntax metadata is complete. | |
+| Pending-generation reads | Let readers consume uncommitted provider rows. | |
+
+**User's choice:** `--auto` selected atomic complete-generation publication.
+**Notes:** Populated schema-v4 stores are preserved/refused because historical
+Go outcomes cannot be invented. Active reads use one authenticated snapshot;
+normal kernel runs remain maintenance-only until R6.
+
+## Scope and Stop Gates
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Restart hard budgets | At most three tasks, fifteen product/test files, 2,500 additions, one schema family, and one new provider. | ✓ |
+| Advisory budgets | Continue after crossing the reviewability limits. | |
+| Opportunistic expansion | Add TypeScript, facts, generic indexes, normal reuse, or CI work while nearby. | |
+
+**User's choice:** `--auto` kept the restart hard budgets.
+**Notes:** The plan uses `requirements: []` and leaves R5 expansion, R6, Phase
+65, and all mapped requirements open. The explicitly deferred sub-five-minute
+CI follow-up remains untouched.
+
+## the agent's Discretion for This R5 Increment
+
+- Private module/type/table/index names and relational decomposition.
+- Small closed manifest/outcome codec reuse that preserves R4 exactly.
+- Stable parser-contract labels, bounded limits, digest helper names, and
+  finite test-only failure/tamper seams.
+
+## Deferred Ideas after This R5 Increment
+
+- Mirror `polint.ts.syntax` in a separate R5 increment and finish the
+  TypeScript half of GitHub issue #89.
+- Audit remaining provider families independently, with Go semantic,
+  extensions/models, summaries, and queries kept separate.
+- R6 private normal-run publication and one measured cold/warm store pair.
+- Phase 66 fact/`FactMeta` persistence and restoration.
+- GitHub issues #86, #90, and #91, external Go runtime hardening, and the
+  separately deferred sub-five-minute CI follow-up.
