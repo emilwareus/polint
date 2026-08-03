@@ -29,6 +29,7 @@ const GO_PROVIDER_MEMBERS: &str = "go_syntax_provider_members";
 const GO_PROVIDER_BLOCKERS: &str = "go_syntax_provider_blockers";
 const GO_PROVIDER_SOURCES: &str = "go_syntax_provider_sources";
 const GO_PROVIDER_PARSER: &str = "go_syntax_provider_parser";
+const GO_PROVIDER_NAMESPACE: &str = "go_syntax_provider_";
 const GO_PROVIDER_TABLES: &[&str] = &[
     GO_PROVIDER_HEADER,
     GO_PROVIDER_MEMBERS,
@@ -276,6 +277,11 @@ fn validate_supported_schema(connection: &Connection, version: i32) -> Result<()
         }
         CURRENT_SCHEMA_VERSION => validate_current_schema(connection),
         _ => Err(MigrationError::InvalidSchema { version }),
+    }?;
+    if version < CURRENT_SCHEMA_VERSION {
+        validate_go_provider_namespace(connection, version, false)
+    } else {
+        Ok(())
     }
 }
 
@@ -377,6 +383,7 @@ fn validate_go_provider_schema(
     connection: &Connection,
     version: i32,
 ) -> Result<(), MigrationError> {
+    validate_go_provider_namespace(connection, version, true)?;
     for (table, sql) in [
         (GO_PROVIDER_HEADER, GO_PROVIDER_HEADER_SQL),
         (GO_PROVIDER_MEMBERS, GO_PROVIDER_MEMBERS_SQL),
@@ -412,6 +419,24 @@ fn validate_go_provider_schema(
     validate_no_triggers(connection, version, GO_PROVIDER_TABLES)?;
     validate_go_provider_foreign_keys(connection, version)?;
     validate_go_provider_rows(connection, version)
+}
+
+fn validate_go_provider_namespace(
+    connection: &Connection,
+    version: i32,
+    current: bool,
+) -> Result<(), MigrationError> {
+    let expected = if current { 5_i64 } else { 0 };
+    let authentic: bool = connection
+        .query_row(
+            "SELECT count(*)=?2 AND coalesce(sum(CASE WHEN ?2>0 AND type='table' AND name COLLATE BINARY IN ('go_syntax_provider_mirror','go_syntax_provider_members','go_syntax_provider_blockers','go_syntax_provider_sources','go_syntax_provider_parser') THEN 0 ELSE 1 END),0)=0 FROM sqlite_master WHERE substr(name,1,length(?1))=?1 COLLATE NOCASE",
+            rusqlite::params![GO_PROVIDER_NAMESPACE, expected],
+            |row| row.get(0),
+        )
+        .map_err(|error| classify_invariant_error(error, version))?;
+    authentic
+        .then_some(())
+        .ok_or(MigrationError::InvalidSchema { version })
 }
 
 fn validate_manifest_schema(connection: &Connection, version: i32) -> Result<(), MigrationError> {
@@ -632,8 +657,27 @@ fn validate_table_sql(
 }
 
 fn normalize_schema_sql(sql: &str) -> String {
+    let mut quote = None;
     sql.chars()
-        .filter(|character| !character.is_ascii_whitespace())
+        .filter(|&character| match quote {
+            Some(delimiter) => {
+                if character == delimiter {
+                    quote = None;
+                }
+                true
+            }
+            None => match character {
+                '\'' | '"' | '`' => {
+                    quote = Some(character);
+                    true
+                }
+                '[' => {
+                    quote = Some(']');
+                    true
+                }
+                _ => !character.is_ascii_whitespace(),
+            },
+        })
         .collect()
 }
 
@@ -1471,6 +1515,17 @@ mod tests {
             }
         );
         validate_current_schema(&connection).expect("migrated schema authenticates");
+    }
+
+    #[test]
+    #[rustfmt::skip]
+    fn empty_exact_version_four_rejects_reserved_go_catalog_objects_without_mutation() {
+        let (_temp, mut connection) = open_temp_database();
+        install_version_four_fixture(&connection, false);
+        connection.execute_batch("CREATE TABLE go_syntax_provider_shadow (value INTEGER); CREATE INDEX go_syntax_provider_shadow_index ON go_syntax_provider_shadow(value); CREATE TRIGGER go_syntax_provider_shadow_trigger AFTER INSERT ON go_syntax_provider_shadow BEGIN SELECT 1; END;").unwrap();
+        let before = schema_catalog_snapshot(&connection);
+        assert!(matches!(apply_migrations(&mut connection), Err(MigrationError::InvalidSchema { version: 4 })));
+        assert_eq!(schema_catalog_snapshot(&connection), before);
     }
 
     #[test]

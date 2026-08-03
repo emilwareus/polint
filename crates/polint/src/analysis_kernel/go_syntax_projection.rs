@@ -14,6 +14,14 @@ pub(crate) const GO_PAYLOAD_SCHEMA: &str = "go-syntax-layer-v1";
 pub(crate) const GO_PARSER_BACKEND: &str = "tree-sitter-0.26.8";
 pub(crate) const GO_PARSER_GRAMMAR: &str = "tree-sitter-go-0.25.0";
 
+fn ensure_owned_row_capacity(
+    count: usize,
+    limit: usize,
+    error: GoSyntaxProjectionError,
+) -> Result<(), GoSyntaxProjectionError> {
+    (count < limit).then_some(()).ok_or(error)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct CanonicalGoSyntaxSource {
     pub(crate) path: String,
@@ -39,9 +47,6 @@ pub(crate) struct CanonicalGoSyntaxInputs {
 
 impl CanonicalGoSyntaxInputs {
     pub(crate) fn from_db(db: &AnalysisDb) -> Result<Self, GoSyntaxProjectionError> {
-        if db.files().len() > MAX_GO_ROWS {
-            return Err(GoSyntaxProjectionError::Source);
-        }
         let mut sources = Vec::new();
         for file in db.files() {
             if file.relative_path.ends_with(".go") && file.language != Language::Go {
@@ -50,6 +55,7 @@ impl CanonicalGoSyntaxInputs {
             if file.language != Language::Go {
                 continue;
             }
+            ensure_owned_row_capacity(sources.len(), MAX_GO_ROWS, GoSyntaxProjectionError::Source)?;
             let path = canonical_path(&file.relative_path)?;
             let value = crate::diagnostics::fingerprint(&[file.source.as_ref()]);
             if value != file.content_hash || !valid_digest_value(&value) {
@@ -133,22 +139,14 @@ impl CanonicalGoSyntaxOutput {
         diagnostics: &[Diagnostic],
     ) -> Result<Self, GoSyntaxProjectionError> {
         let context = GoContext::new(db)?;
-        for count in [
-            db.packages().len(),
-            db.functions().len(),
-            db.imports().len(),
-            db.tests().len(),
-            db.branches().len(),
-            db.string_literals().len(),
-            diagnostics.len(),
-        ] {
-            if count > MAX_GO_ROWS {
-                return Err(GoSyntaxProjectionError::Output);
-            }
-        }
         let mut functions = BTreeMap::new();
         let mut function_rows = Vec::new();
         for fact in db.functions().iter().filter(|fact| context.owns(fact.file)) {
+            ensure_owned_row_capacity(
+                function_rows.len(),
+                MAX_GO_ROWS,
+                GoSyntaxProjectionError::Output,
+            )?;
             let source = context.source(fact.file)?;
             if fact.language != Language::Go || !fact.calls.is_sorted() {
                 return Err(GoSyntaxProjectionError::Output);
@@ -172,6 +170,11 @@ impl CanonicalGoSyntaxOutput {
         }
         let mut packages = Vec::new();
         for fact in db.packages().iter().filter(|fact| context.owns(fact.file)) {
+            ensure_owned_row_capacity(
+                packages.len(),
+                MAX_GO_ROWS,
+                GoSyntaxProjectionError::Output,
+            )?;
             let source = context.source(fact.file)?;
             if fact.language != Language::Go {
                 return Err(GoSyntaxProjectionError::Output);
@@ -185,6 +188,7 @@ impl CanonicalGoSyntaxOutput {
         }
         let mut imports = Vec::new();
         for fact in db.imports().iter().filter(|fact| context.owns(fact.file)) {
+            ensure_owned_row_capacity(imports.len(), MAX_GO_ROWS, GoSyntaxProjectionError::Output)?;
             let source = context.source(fact.file)?;
             if fact.language != Language::Go {
                 return Err(GoSyntaxProjectionError::Output);
@@ -199,6 +203,7 @@ impl CanonicalGoSyntaxOutput {
         }
         let mut tests = Vec::new();
         for fact in db.tests().iter().filter(|fact| context.owns(fact.file)) {
+            ensure_owned_row_capacity(tests.len(), MAX_GO_ROWS, GoSyntaxProjectionError::Output)?;
             let source = context.source(fact.file)?;
             let span = canonical_span(&fact.span, source)?;
             let function = function_ref(fact.function, &functions)?;
@@ -219,6 +224,11 @@ impl CanonicalGoSyntaxOutput {
         }
         let mut branches = Vec::new();
         for fact in db.branches().iter().filter(|fact| context.owns(fact.file)) {
+            ensure_owned_row_capacity(
+                branches.len(),
+                MAX_GO_ROWS,
+                GoSyntaxProjectionError::Output,
+            )?;
             let source = context.source(fact.file)?;
             let span = canonical_span(&fact.decision_span, source)?;
             let function = function_ref(fact.function, &functions)?;
@@ -237,6 +247,11 @@ impl CanonicalGoSyntaxOutput {
             .iter()
             .filter(|fact| context.owns(fact.file))
         {
+            ensure_owned_row_capacity(
+                literals.len(),
+                MAX_GO_ROWS,
+                GoSyntaxProjectionError::Output,
+            )?;
             let source = context.source(fact.file)?;
             if fact.language != Language::Go {
                 return Err(GoSyntaxProjectionError::Output);
@@ -256,6 +271,11 @@ impl CanonicalGoSyntaxOutput {
             if diagnostic.rule_id != "parser/go" {
                 continue;
             }
+            ensure_owned_row_capacity(
+                parser_diagnostics.len(),
+                MAX_GO_ROWS,
+                GoSyntaxProjectionError::Output,
+            )?;
             let source = context.by_path(&diagnostic.file)?;
             validate_range(diagnostic.range, source)?;
             parser_diagnostics.push(row_digest("parser-diagnostic", |row| {
@@ -585,27 +605,18 @@ fn go_manifest() -> ProviderManifest {
 mod tests {
     use super::*;
 
+    #[rustfmt::skip]
     fn literal_digest(
-        path: &str,
-        value: &str,
-        line: u32,
-        language: Language,
-        count: usize,
+        path: &str, value: &str, line: u32, language: Language, count: usize,
     ) -> Result<Digest, GoSyntaxProjectionError> {
         let mut db = AnalysisDb::new();
         let file = db.add_file(path.into(), path.into(), "first\nsecond\n".into());
         for _ in 0..count {
             db.push_string_literal(crate::core::StringLiteralFact {
-                file,
-                value: value.into(),
+                file, value: value.into(),
                 span: Span {
-                    file,
-                    start_byte: 0,
-                    end_byte: 1,
-                    start_line: line,
-                    start_col: 1,
-                    end_line: line,
-                    end_col: 2,
+                    file, start_byte: 0, end_byte: 1, start_line: line,
+                    start_col: 1, end_line: line, end_col: 2,
                 },
                 language,
             });
@@ -629,6 +640,26 @@ mod tests {
             ["a.go", "b.go"]
         );
         GoSyntaxParserContract::current().validate().unwrap();
+    }
+
+    #[test]
+    #[rustfmt::skip]
+    fn unrelated_language_volume_is_filtered_before_owned_bounds() {
+        let mut go = AnalysisDb::new();
+        go.add_file("a.go".into(), "a.go".into(), "package a\n".into());
+        let expected_inputs = CanonicalGoSyntaxInputs::from_db(&go).unwrap();
+        let expected_output = CanonicalGoSyntaxOutput::from_db(&go, &[]).unwrap();
+        let mut mixed = go.clone();
+        mixed.add_file("unrelated.ts".into(), "unrelated.ts".into(), "import value from 'pkg'; export function pick(flag: boolean) { return flag ? 'yes' : value; }\n".into());
+        let mut diagnostics = crate::ts::analyze(&mut mixed);
+        diagnostics.push(Diagnostic::warning("parser/ts", "unrelated.ts", TextRange::point(1, 1), "unrelated"));
+        assert!(!mixed.functions().is_empty() && !mixed.imports().is_empty() && !mixed.string_literals().is_empty());
+        assert_eq!(CanonicalGoSyntaxInputs::from_db(&mixed).unwrap(), expected_inputs);
+        assert_eq!(CanonicalGoSyntaxOutput::from_db(&mixed, &diagnostics).unwrap(), expected_output);
+        let mut selected = 0;
+        (0..10_000).map(|_| false).chain([true]).filter(|owned| *owned).try_for_each(|_| { ensure_owned_row_capacity(selected, 1, GoSyntaxProjectionError::Output)?; selected += 1; Ok::<(), GoSyntaxProjectionError>(()) }).unwrap();
+        assert_eq!(selected, 1);
+        assert!(ensure_owned_row_capacity(selected, 1, GoSyntaxProjectionError::Output).is_err());
     }
 
     #[test]
