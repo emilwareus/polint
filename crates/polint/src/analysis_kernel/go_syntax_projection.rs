@@ -1,8 +1,3 @@
-#![expect(
-    dead_code,
-    reason = "the private projection also supports isolated durable identity validation"
-)]
-
 use super::incremental::{Digest, DigestBuilder, DigestKind, PrecisionTier};
 use super::outcome::ProviderOutcomeError;
 use super::{
@@ -315,6 +310,13 @@ pub(crate) struct GoSyntaxProviderProjection {
 }
 
 impl GoSyntaxProviderProjection {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the private publication path is not consumed by normal kernel runs"
+        )
+    )]
     pub(crate) fn from_db(
         outcome: ProviderOutcome,
         db: &AnalysisDb,

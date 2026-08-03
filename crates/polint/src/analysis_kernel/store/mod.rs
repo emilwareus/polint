@@ -8,15 +8,19 @@
 
 use std::path::{Path, PathBuf};
 
+use super::go_syntax_projection::GoSyntaxProviderProjection;
 use super::incremental::{RunManifest, RunManifestInputs};
 use super::metrics_projection::MetricsProviderProjection;
 
 mod connection;
 mod generation;
+mod go_syntax_mirror;
 mod migrations;
 mod provider_mirror;
 
-pub(crate) use generation::{GenerationError, GenerationHandle, ManifestMatch, MetricsMatch};
+pub(crate) use generation::{
+    GenerationError, GenerationHandle, GoSyntaxMatch, ManifestMatch, MetricsMatch,
+};
 #[cfg(test)]
 pub(crate) use generation::{GenerationStatus, PublicationFailurePoint};
 
@@ -100,11 +104,20 @@ pub(crate) struct SemanticStore;
 pub(crate) struct PublicationInputs<'a> {
     pub(crate) manifest: RunManifestInputs<'a>,
     pub(crate) metrics: MetricsProviderProjection,
+    pub(crate) go_syntax: GoSyntaxProviderProjection,
 }
 
 impl<'a> PublicationInputs<'a> {
-    pub(crate) fn new(manifest: RunManifestInputs<'a>, metrics: MetricsProviderProjection) -> Self {
-        Self { manifest, metrics }
+    pub(crate) fn new(
+        manifest: RunManifestInputs<'a>,
+        metrics: MetricsProviderProjection,
+        go_syntax: GoSyntaxProviderProjection,
+    ) -> Self {
+        Self {
+            manifest,
+            metrics,
+            go_syntax,
+        }
     }
 }
 
@@ -160,7 +173,13 @@ impl SemanticStore {
         let manifest = RunManifest::from_inputs(inputs.manifest)?;
         prepare_store_path(config.path()).map_err(GenerationError::Store)?;
         let mut writer = connection::open_writer(config.path()).map_err(GenerationError::from)?;
-        generation::publish(&mut writer, handle, &manifest, &inputs.metrics)
+        generation::publish(
+            &mut writer,
+            handle,
+            &manifest,
+            &inputs.metrics,
+            &inputs.go_syntax,
+        )
     }
 
     #[cfg_attr(
@@ -220,6 +239,28 @@ impl SemanticStore {
         generation::match_active_metrics(&reader, &manifest, metrics)
     }
 
+    pub(crate) fn active_go_syntax(
+        config: &StoreConfig,
+    ) -> Result<Option<(GenerationHandle, GoSyntaxProviderProjection)>, GenerationError> {
+        prepare_generation_store(config)?;
+        let reader =
+            connection::open_current_read_only(config.path()).map_err(GenerationError::from)?;
+        generation::active_go_syntax(&reader)
+    }
+
+    pub(crate) fn match_active_go_syntax(
+        config: &StoreConfig,
+        manifest: RunManifestInputs<'_>,
+        go_syntax: &GoSyntaxProviderProjection,
+    ) -> Result<GoSyntaxMatch, GenerationError> {
+        require_enabled(config)?;
+        let manifest = RunManifest::from_inputs(manifest)?;
+        prepare_store_path(config.path()).map_err(GenerationError::Store)?;
+        let reader =
+            connection::open_current_read_only(config.path()).map_err(GenerationError::from)?;
+        generation::match_active_go_syntax(&reader, &manifest, go_syntax)
+    }
+
     #[cfg(test)]
     pub(crate) fn publish_generation_with_failure_for_test(
         config: &StoreConfig,
@@ -236,6 +277,7 @@ impl SemanticStore {
             handle,
             &manifest,
             &inputs.metrics,
+            &inputs.go_syntax,
             failure_point,
         )
     }

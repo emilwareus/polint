@@ -1,4 +1,7 @@
 use super::*;
+use crate::analysis_kernel::go_syntax_projection::{
+    CanonicalGoSyntaxOutput, GoSyntaxProviderProjection,
+};
 use crate::analysis_kernel::incremental::{
     Digest, DigestKind, FileSnapshot, RunManifest, RunManifestInputs,
 };
@@ -27,8 +30,44 @@ fn metrics_projection() -> MetricsProviderProjection {
     MetricsProviderProjection::from_db(outcome, &AnalysisDb::new()).expect("metrics projection")
 }
 
+fn go_syntax_projection() -> GoSyntaxProviderProjection {
+    let outcome = ProviderOutcome::from_closed_parts(
+        "polint.go.syntax".into(),
+        ProviderOutcomeStatus::PlannedAbsent,
+        None,
+        Some(ProviderFailureStage::Planning),
+        Some(ProviderFailureReason::NotSelected),
+        Vec::new(),
+    )
+    .expect("sealed planned-absent Go syntax outcome");
+    GoSyntaxProviderProjection::from_db(outcome, &AnalysisDb::new(), &[])
+        .expect("Go syntax projection")
+}
+
+#[rustfmt::skip]
+fn successful_go_syntax_projection() -> (GoSyntaxProviderProjection, FileSnapshot) {
+    const SOURCE: &str = "package main\nfunc main() {}\n";
+    let mut db = AnalysisDb::new();
+    db.add_file("main.go".into(), "main.go".into(), SOURCE.into());
+    let manifest = crate::analysis_kernel::provider::provider_manifests().iter()
+        .find(|manifest| manifest.id == "polint.go.syntax").expect("Go syntax manifest");
+    let output = CanonicalGoSyntaxOutput::from_db(&db, &[]).unwrap().digest();
+    let identity = crate::analysis_kernel::incremental::provider_output_identity_from_manifest(manifest, output);
+    let outcome = ProviderOutcome::from_closed_parts(
+        manifest.id.into(), ProviderOutcomeStatus::Succeeded, Some(identity), None, None, Vec::new(),
+    ).unwrap();
+    let projection = GoSyntaxProviderProjection::from_db(outcome, &db, &[]).unwrap();
+    let input = &projection.inputs.as_ref().unwrap().sources[0];
+    let snapshot = FileSnapshot {
+        relative_path: input.path.clone(), language: Language::Go,
+        source_text_digest: input.source_digest.clone(), size_bytes: SOURCE.len(),
+        mtime_hint_present: false,
+    };
+    (projection, snapshot)
+}
+
 fn publication(inputs: RunManifestInputs<'_>) -> PublicationInputs<'_> {
-    PublicationInputs::new(inputs, metrics_projection())
+    PublicationInputs::new(inputs, metrics_projection(), go_syntax_projection())
 }
 
 #[derive(Clone)]
@@ -117,8 +156,14 @@ mod run_manifest_storage {
             RunManifest::from_inputs(fixture.inputs(temp.path())).expect("construct run manifest");
         let mut writer = connection::open_writer(store_config.path()).expect("open writer");
         let handle = generation::reserve(&mut writer).expect("reserve generation");
-        generation::publish(&mut writer, handle, &expected, &metrics_projection())
-            .expect("publish manifest storage");
+        generation::publish(
+            &mut writer,
+            handle,
+            &expected,
+            &metrics_projection(),
+            &go_syntax_projection(),
+        )
+        .expect("publish manifest storage");
         let reader = connection::open_read_only(store_config.path()).expect("open read-only store");
         let decoded =
             generation::read_manifest_for_test(&reader, handle).expect("read manifest storage");
@@ -220,7 +265,11 @@ mod provider_mirror_storage {
         SemanticStore::publish_generation(
             &config,
             handle,
-            PublicationInputs::new(manifest.inputs(temp.path()), expected.clone()),
+            PublicationInputs::new(
+                manifest.inputs(temp.path()),
+                expected.clone(),
+                go_syntax_projection(),
+            ),
         )
         .expect("publish provider mirror");
         assert_eq!(
@@ -232,6 +281,50 @@ mod provider_mirror_storage {
                 .unwrap(),
             MetricsMatch::SemanticMiss
         );
+    }
+}
+
+mod go_syntax_provider_mirror_storage {
+    use super::*;
+
+    #[test]
+    #[rustfmt::skip]
+    fn required_projection_round_trips_with_exact_catalog_and_members() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = StoreConfig::new(temp.path().join("store.sqlite3"), true);
+        let (expected, source) = successful_go_syntax_projection();
+        let manifest = ManifestFixture::new("go", vec![source]);
+        assert_eq!(SemanticStore::match_active_go_syntax(&config, manifest.inputs(temp.path()), &expected).unwrap(), GoSyntaxMatch::NoActive);
+        let handle = SemanticStore::reserve_generation(&config).unwrap();
+        SemanticStore::publish_generation(
+            &config, handle, PublicationInputs::new(manifest.inputs(temp.path()), metrics_projection(), expected.clone()),
+        ).unwrap();
+        assert_eq!(SemanticStore::active_go_syntax(&config).unwrap(), Some((handle, expected.clone())));
+        assert_eq!(
+            SemanticStore::match_active_go_syntax(
+                &config,
+                ManifestFixture::new("other-config", manifest.files).inputs(temp.path()),
+                &expected,
+            ).unwrap(),
+            GoSyntaxMatch::Exact(handle)
+        );
+        let connection = rusqlite::Connection::open(config.path()).unwrap();
+        let tables = connection.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'go_syntax_provider_%' ORDER BY name").unwrap()
+            .query_map([], |row| row.get(0)).unwrap().collect::<Result<Vec<String>, _>>().unwrap();
+        assert_eq!(tables, ["go_syntax_provider_blockers", "go_syntax_provider_members", "go_syntax_provider_mirror", "go_syntax_provider_parser", "go_syntax_provider_sources"]);
+        let members = connection.prepare("SELECT category||':'||name||':'||version FROM go_syntax_provider_members ORDER BY CASE category WHEN 'input' THEN 0 WHEN 'output' THEN 1 ELSE 2 END, ordinal").unwrap()
+            .query_map([], |row| row.get(0)).unwrap().collect::<Result<Vec<String>, _>>().unwrap();
+        assert_eq!(members, ["input:source_files:0", "output:packages:0", "output:functions:0", "output:imports:0", "output:go_tests:0", "output:branch_obligations:0", "output:string_literals:0", "schema:go-facts-v2:2"]);
+
+        let absent = go_syntax_projection();
+        let second = tempfile::tempdir().unwrap();
+        let second_config = StoreConfig::new(second.path().join("store.sqlite3"), true);
+        let second_manifest = ManifestFixture::new("absent", Vec::new());
+        let second_handle = SemanticStore::reserve_generation(&second_config).unwrap();
+        SemanticStore::publish_generation(&second_config, second_handle,
+            PublicationInputs::new(second_manifest.inputs(second.path()), metrics_projection(), absent.clone())).unwrap();
+        assert_eq!(SemanticStore::active_go_syntax(&second_config).unwrap(), Some((second_handle, absent.clone())));
+        assert_eq!(SemanticStore::match_active_go_syntax(&second_config, second_manifest.inputs(second.path()), &absent).unwrap(), GoSyntaxMatch::SemanticMiss);
     }
 }
 
@@ -317,7 +410,11 @@ mod provider_mirror {
         SemanticStore::publish_generation(
             &config,
             handle,
-            PublicationInputs::new(manifest.inputs(temp.path()), projection.clone()),
+            PublicationInputs::new(
+                manifest.inputs(temp.path()),
+                projection.clone(),
+                go_syntax_projection(),
+            ),
         )
         .expect("publish real projection");
         (config, handle, manifest, projection)
@@ -440,7 +537,11 @@ mod provider_mirror {
             SemanticStore::publish_generation(
                 &config,
                 handle,
-                PublicationInputs::new(manifest.inputs(temp.path()), projection.clone()),
+                PublicationInputs::new(
+                    manifest.inputs(temp.path()),
+                    projection.clone(),
+                    go_syntax_projection(),
+                ),
             )
             .expect("publish non-success history");
             assert_eq!(
@@ -1063,6 +1164,14 @@ mod generation_lifecycle {
         )
     }
 
+    fn candidate_projection_rows(config: &StoreConfig, handle: GenerationHandle) -> i64 {
+        let connection = rusqlite::Connection::open(config.path()).unwrap();
+        connection.query_row(
+            "SELECT (SELECT count(*) FROM run_manifests WHERE generation_id=?1)+(SELECT count(*) FROM run_manifest_sources WHERE generation_id=?1)+(SELECT count(*) FROM metrics_provider_mirror WHERE generation_id=?1)+(SELECT count(*) FROM metrics_provider_members WHERE generation_id=?1)+(SELECT count(*) FROM metrics_provider_blockers WHERE generation_id=?1)+(SELECT count(*) FROM metrics_provider_sources WHERE generation_id=?1)+(SELECT count(*) FROM metrics_provider_functions WHERE generation_id=?1)+(SELECT count(*) FROM go_syntax_provider_mirror WHERE generation_id=?1)+(SELECT count(*) FROM go_syntax_provider_members WHERE generation_id=?1)+(SELECT count(*) FROM go_syntax_provider_blockers WHERE generation_id=?1)+(SELECT count(*) FROM go_syntax_provider_sources WHERE generation_id=?1)+(SELECT count(*) FROM go_syntax_provider_parser WHERE generation_id=?1)",
+            [handle.scalar()], |row| row.get(0),
+        ).unwrap()
+    }
+
     #[test]
     fn direct_active_read_initializes_an_absent_owned_store() {
         let temp = tempfile::tempdir().expect("temp directory");
@@ -1381,6 +1490,7 @@ mod generation_lifecycle {
                 vec![active],
                 "failure point: {failure_point:?}"
             );
+            assert_eq!(candidate_projection_rows(&config, candidate), 0);
             assert_eq!(
                 reopened.manifest_sources,
                 vec![(active, "src/a.ts".to_owned())],
@@ -1438,6 +1548,7 @@ mod generation_lifecycle {
                 reopened.manifest_sources.is_empty(),
                 "failure point: {failure_point:?}"
             );
+            assert_eq!(candidate_projection_rows(&config, candidate), 0);
             assert_eq!(
                 SemanticStore::active_generation(&config).expect("reopen active generation"),
                 None,

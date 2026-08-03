@@ -5,8 +5,10 @@ use std::num::NonZeroI64;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use super::connection::{self, ReadOnlyConnection, WriterConnection};
+use super::go_syntax_mirror;
 use super::provider_mirror;
 use super::{StoreStatus, map_connection_error};
+use crate::analysis_kernel::go_syntax_projection::GoSyntaxProviderProjection;
 use crate::analysis_kernel::incremental::{
     EncodedRunManifest, EncodedRunManifestSource, RunManifest, RunManifestError,
 };
@@ -62,6 +64,13 @@ pub(crate) enum MetricsMatch {
     SemanticMiss,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GoSyntaxMatch {
+    NoActive,
+    Exact(GenerationHandle),
+    SemanticMiss,
+}
+
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum GenerationStatus {
@@ -97,6 +106,18 @@ pub(crate) enum PublicationFailurePoint {
     AfterProviderSources,
     BeforeProviderFunctions,
     AfterProviderFunctions,
+    BeforeGoHeader,
+    AfterGoHeader,
+    BeforeGoMembers,
+    AfterGoMembers,
+    BeforeGoBlockers,
+    AfterGoBlockers,
+    BeforeGoSources,
+    AfterGoSources,
+    BeforeGoParser,
+    AfterGoParser,
+    BeforeGoReadback,
+    AfterGoReadback,
     BeforeProviderReadback,
     AfterProviderReadback,
     BeforeStoredRead,
@@ -110,7 +131,7 @@ pub(crate) enum PublicationFailurePoint {
 
 #[cfg(test)]
 impl PublicationFailurePoint {
-    pub(crate) const ALL: [Self; 23] = [
+    pub(crate) const ALL: [Self; 35] = [
         Self::BeforeHeaderWrite,
         Self::AfterHeaderWrite,
         Self::BeforeSourceWrite,
@@ -125,6 +146,18 @@ impl PublicationFailurePoint {
         Self::AfterProviderSources,
         Self::BeforeProviderFunctions,
         Self::AfterProviderFunctions,
+        Self::BeforeGoHeader,
+        Self::AfterGoHeader,
+        Self::BeforeGoMembers,
+        Self::AfterGoMembers,
+        Self::BeforeGoBlockers,
+        Self::AfterGoBlockers,
+        Self::BeforeGoSources,
+        Self::AfterGoSources,
+        Self::BeforeGoParser,
+        Self::AfterGoParser,
+        Self::BeforeGoReadback,
+        Self::AfterGoReadback,
         Self::BeforeProviderReadback,
         Self::AfterProviderReadback,
         Self::BeforeStoredRead,
@@ -184,14 +217,15 @@ pub(super) fn publish(
     handle: GenerationHandle,
     manifest: &RunManifest,
     metrics: &MetricsProviderProjection,
+    go_syntax: &GoSyntaxProviderProjection,
 ) -> Result<GenerationHandle, GenerationError> {
     #[cfg(test)]
     {
-        publish_transaction(writer, handle, manifest, metrics, None)
+        publish_transaction(writer, handle, manifest, metrics, go_syntax, None)
     }
     #[cfg(not(test))]
     {
-        publish_transaction(writer, handle, manifest, metrics)
+        publish_transaction(writer, handle, manifest, metrics, go_syntax)
     }
 }
 
@@ -200,10 +234,11 @@ fn publish_transaction(
     handle: GenerationHandle,
     manifest: &RunManifest,
     metrics: &MetricsProviderProjection,
+    go_syntax: &GoSyntaxProviderProjection,
     #[cfg(test)] failure_point: Option<PublicationFailurePoint>,
 ) -> Result<GenerationHandle, GenerationError> {
     connection::with_immediate_transaction(writer, |transaction| {
-        if active_manifest_in_connection(transaction)?.is_some_and(|(_, active, _)| {
+        if active_manifest_in_connection(transaction)?.is_some_and(|(_, active, _, _)| {
             active.workspace_identity() != manifest.workspace_identity()
         }) {
             return Err(GenerationError::WorkspaceOwnershipMismatch);
@@ -266,6 +301,31 @@ fn publish_transaction(
             failure_point,
             PublicationFailurePoint::AfterProviderFunctions,
         )?;
+        #[cfg(test)]
+        fail_at(failure_point, PublicationFailurePoint::BeforeGoHeader)?;
+        go_syntax_mirror::write_header(transaction, handle, go_syntax)?;
+        #[cfg(test)]
+        fail_at(failure_point, PublicationFailurePoint::AfterGoHeader)?;
+        #[cfg(test)]
+        fail_at(failure_point, PublicationFailurePoint::BeforeGoMembers)?;
+        go_syntax_mirror::write_members(transaction, handle, go_syntax)?;
+        #[cfg(test)]
+        fail_at(failure_point, PublicationFailurePoint::AfterGoMembers)?;
+        #[cfg(test)]
+        fail_at(failure_point, PublicationFailurePoint::BeforeGoBlockers)?;
+        go_syntax_mirror::write_blockers(transaction, handle, go_syntax)?;
+        #[cfg(test)]
+        fail_at(failure_point, PublicationFailurePoint::AfterGoBlockers)?;
+        #[cfg(test)]
+        fail_at(failure_point, PublicationFailurePoint::BeforeGoSources)?;
+        go_syntax_mirror::write_sources(transaction, handle, go_syntax)?;
+        #[cfg(test)]
+        fail_at(failure_point, PublicationFailurePoint::AfterGoSources)?;
+        #[cfg(test)]
+        fail_at(failure_point, PublicationFailurePoint::BeforeGoParser)?;
+        go_syntax_mirror::write_parser(transaction, handle, go_syntax)?;
+        #[cfg(test)]
+        fail_at(failure_point, PublicationFailurePoint::AfterGoParser)?;
 
         #[cfg(test)]
         fail_at(failure_point, PublicationFailurePoint::BeforeStoredRead)?;
@@ -286,6 +346,13 @@ fn publish_transaction(
             failure_point,
             PublicationFailurePoint::AfterProviderReadback,
         )?;
+        #[cfg(test)]
+        fail_at(failure_point, PublicationFailurePoint::BeforeGoReadback)?;
+        if go_syntax_mirror::read(transaction, handle)? != *go_syntax {
+            return Err(GenerationError::InvalidProviderMirror);
+        }
+        #[cfg(test)]
+        fail_at(failure_point, PublicationFailurePoint::AfterGoReadback)?;
         #[cfg(test)]
         fail_at(failure_point, PublicationFailurePoint::AfterStoredRead)?;
 
@@ -322,7 +389,7 @@ fn publish_transaction(
 pub(super) fn active(
     reader: &ReadOnlyConnection,
 ) -> Result<Option<GenerationHandle>, GenerationError> {
-    active_manifest(reader).map(|active| active.map(|(handle, _, _)| handle))
+    active_manifest(reader).map(|active| active.map(|(handle, _, _, _)| handle))
 }
 
 pub(super) fn match_active(
@@ -332,7 +399,7 @@ pub(super) fn match_active(
     connection::with_read_transaction(reader, |connection| {
         match active_manifest_in_connection(connection)? {
             None => Ok(ManifestMatch::NoActiveManifest),
-            Some((handle, active, _)) if active.exact_match(requested) => {
+            Some((handle, active, _, _)) if active.exact_match(requested) => {
                 Ok(ManifestMatch::Exact(handle))
             }
             Some(_) => Ok(ManifestMatch::Mismatch),
@@ -340,9 +407,16 @@ pub(super) fn match_active(
     })
 }
 
+type ActiveProjection = (
+    GenerationHandle,
+    RunManifest,
+    MetricsProviderProjection,
+    GoSyntaxProviderProjection,
+);
+
 fn active_manifest(
     reader: &ReadOnlyConnection,
-) -> Result<Option<(GenerationHandle, RunManifest, MetricsProviderProjection)>, GenerationError> {
+) -> Result<Option<ActiveProjection>, GenerationError> {
     connection::with_read_transaction(reader, |transaction| {
         active_manifest_in_connection(transaction)
     })
@@ -350,7 +424,7 @@ fn active_manifest(
 
 fn active_manifest_in_connection(
     connection: &Connection,
-) -> Result<Option<(GenerationHandle, RunManifest, MetricsProviderProjection)>, GenerationError> {
+) -> Result<Option<ActiveProjection>, GenerationError> {
     let selected = connection
         .query_row(
             "SELECT active.singleton, active.generation_id, active.required_status, \
@@ -386,13 +460,14 @@ fn active_manifest_in_connection(
     let handle = GenerationHandle::from_scalar(scalar)?;
     let manifest = read_manifest(connection, handle)?;
     let metrics = provider_mirror::read(connection, handle)?;
-    Ok(Some((handle, manifest, metrics)))
+    let go_syntax = go_syntax_mirror::read(connection, handle)?;
+    Ok(Some((handle, manifest, metrics, go_syntax)))
 }
 
 pub(super) fn active_metrics(
     reader: &ReadOnlyConnection,
 ) -> Result<Option<(GenerationHandle, MetricsProviderProjection)>, GenerationError> {
-    active_manifest(reader).map(|row| row.map(|(handle, _, metrics)| (handle, metrics)))
+    active_manifest(reader).map(|row| row.map(|(handle, _, metrics, _)| (handle, metrics)))
 }
 
 pub(super) fn match_active_metrics(
@@ -401,7 +476,7 @@ pub(super) fn match_active_metrics(
     requested: &MetricsProviderProjection,
 ) -> Result<MetricsMatch, GenerationError> {
     connection::with_read_transaction(reader, |connection| {
-        let Some((handle, manifest, active)) = active_manifest_in_connection(connection)? else {
+        let Some((handle, manifest, active, _)) = active_manifest_in_connection(connection)? else {
             return Ok(MetricsMatch::NoActive);
         };
         if manifest.workspace_identity() != requested_manifest.workspace_identity()
@@ -411,6 +486,32 @@ pub(super) fn match_active_metrics(
             Ok(MetricsMatch::SemanticMiss)
         } else {
             Ok(MetricsMatch::Exact(handle))
+        }
+    })
+}
+
+pub(super) fn active_go_syntax(
+    reader: &ReadOnlyConnection,
+) -> Result<Option<(GenerationHandle, GoSyntaxProviderProjection)>, GenerationError> {
+    active_manifest(reader).map(|row| row.map(|(handle, _, _, go)| (handle, go)))
+}
+
+pub(super) fn match_active_go_syntax(
+    reader: &ReadOnlyConnection,
+    requested_manifest: &RunManifest,
+    requested: &GoSyntaxProviderProjection,
+) -> Result<GoSyntaxMatch, GenerationError> {
+    connection::with_read_transaction(reader, |connection| {
+        let Some((handle, manifest, _, active)) = active_manifest_in_connection(connection)? else {
+            return Ok(GoSyntaxMatch::NoActive);
+        };
+        if manifest.workspace_identity() != requested_manifest.workspace_identity()
+            || active.outcome.status != crate::analysis_kernel::ProviderOutcomeStatus::Succeeded
+            || active != *requested
+        {
+            Ok(GoSyntaxMatch::SemanticMiss)
+        } else {
+            Ok(GoSyntaxMatch::Exact(handle))
         }
     })
 }
@@ -665,6 +766,7 @@ fn validate_complete_manifest(
         return Err(GenerationError::InvalidManifest);
     }
     provider_mirror::read(transaction, handle)?;
+    go_syntax_mirror::read(transaction, handle)?;
     Ok(())
 }
 
@@ -736,6 +838,7 @@ fn validate_selection(
         return Err(GenerationError::InvalidSelection);
     }
     provider_mirror::read(transaction, handle)?;
+    go_syntax_mirror::read(transaction, handle)?;
     Ok(())
 }
 
@@ -757,9 +860,17 @@ pub(super) fn publish_with_failure_for_test(
     handle: GenerationHandle,
     manifest: &RunManifest,
     metrics: &MetricsProviderProjection,
+    go_syntax: &GoSyntaxProviderProjection,
     failure_point: PublicationFailurePoint,
 ) -> Result<GenerationHandle, GenerationError> {
-    publish_transaction(writer, handle, manifest, metrics, Some(failure_point))
+    publish_transaction(
+        writer,
+        handle,
+        manifest,
+        metrics,
+        go_syntax,
+        Some(failure_point),
+    )
 }
 
 #[cfg(test)]
