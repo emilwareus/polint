@@ -19,7 +19,7 @@ const MAX_MANIFEST_TEXT_BYTES: i64 = 4_096;
 #[cfg(not(test))]
 const MAX_MANIFEST_AGGREGATE_BYTES: i64 = 512 * 1024 * 1024;
 #[cfg(test)]
-const MAX_MANIFEST_AGGREGATE_BYTES: i64 = 256;
+const MAX_MANIFEST_AGGREGATE_BYTES: i64 = 384;
 const MANIFEST_ROW_OVERHEAD_BYTES: i64 = 64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

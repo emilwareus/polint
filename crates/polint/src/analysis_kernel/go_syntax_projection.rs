@@ -585,6 +585,34 @@ fn go_manifest() -> ProviderManifest {
 mod tests {
     use super::*;
 
+    fn literal_digest(
+        path: &str,
+        value: &str,
+        line: u32,
+        language: Language,
+        count: usize,
+    ) -> Result<Digest, GoSyntaxProjectionError> {
+        let mut db = AnalysisDb::new();
+        let file = db.add_file(path.into(), path.into(), "first\nsecond\n".into());
+        for _ in 0..count {
+            db.push_string_literal(crate::core::StringLiteralFact {
+                file,
+                value: value.into(),
+                span: Span {
+                    file,
+                    start_byte: 0,
+                    end_byte: 1,
+                    start_line: line,
+                    start_col: 1,
+                    end_line: line,
+                    end_col: 2,
+                },
+                language,
+            });
+        }
+        Ok(CanonicalGoSyntaxOutput::from_db(&db, &[])?.digest())
+    }
+
     #[test]
     fn canonical_inputs_are_ordered_and_parser_contract_is_closed() {
         let mut db = AnalysisDb::new();
@@ -632,5 +660,46 @@ mod tests {
             "write failed",
         );
         assert!(CanonicalGoSyntaxOutput::from_db(&db, &[warning]).is_err());
+    }
+
+    #[test]
+    fn every_produced_family_and_parser_diagnostic_changes_output_identity()
+    -> Result<(), GoSyntaxProjectionError> {
+        let baseline = CanonicalGoSyntaxOutput {
+            families: std::array::from_fn(|index| vec![format!("row-{index}")]),
+        };
+        for family in 0..baseline.families.len() {
+            let mut changed = baseline.clone();
+            changed.families[family].push("additional-row".into());
+            assert_ne!(changed.digest(), baseline.digest(), "family {family}");
+        }
+
+        let mut db = AnalysisDb::new();
+        db.add_file("a.go".into(), "a.go".into(), "package a\n".into());
+        let parser_diagnostic = Diagnostic::warning(
+            "parser/go",
+            "a.go",
+            TextRange::point(1, 1),
+            "recoverable parse error",
+        );
+        assert_ne!(
+            CanonicalGoSyntaxOutput::from_db(&db, &[])?.digest(),
+            CanonicalGoSyntaxOutput::from_db(&db, &[parser_diagnostic])?.digest()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn string_literal_path_value_span_language_and_multiplicity_are_consumed() {
+        let baseline = literal_digest("a.go", "alpha", 1, Language::Go, 1).unwrap();
+        for changed in [
+            literal_digest("b.go", "alpha", 1, Language::Go, 1).unwrap(),
+            literal_digest("a.go", "beta", 1, Language::Go, 1).unwrap(),
+            literal_digest("a.go", "alpha", 2, Language::Go, 1).unwrap(),
+            literal_digest("a.go", "alpha", 1, Language::Go, 2).unwrap(),
+        ] {
+            assert_ne!(changed, baseline);
+        }
+        assert!(literal_digest("a.go", "alpha", 1, Language::JavaScript, 1).is_err());
     }
 }

@@ -211,13 +211,29 @@ const STORE_PRIVATE_MARKERS: &[&str] = &[
     "ValidationIssue",
     "MetricsProviderProjection",
     "CanonicalMetricsInputs",
+    "GoSyntaxProviderProjection",
+    "CanonicalGoSyntaxInputs",
+    "CanonicalGoSyntaxOutput",
+    "GoSyntaxParserContract",
     "PublicationInputs",
     "MetricsMatch",
+    "GoSyntaxMatch",
     "metrics_provider_mirror",
     "metrics_provider_members",
     "metrics_provider_blockers",
     "metrics_provider_sources",
     "metrics_provider_functions",
+    "go_syntax_provider_mirror",
+    "go_syntax_provider_members",
+    "go_syntax_provider_blockers",
+    "go_syntax_provider_sources",
+    "go_syntax_provider_parser",
+    "polint-go-syntax-provider-mirror",
+    "go-syntax-layer-v1",
+    "go-parser-contract-v1",
+    "go-facts-v2",
+    "go-source:",
+    "go-parser:",
 ];
 
 fn store_private_marker_hits(source: &str) -> Vec<&'static str> {
@@ -567,6 +583,7 @@ fn semantic_store_marker_scanner_negative_controls_cover_every_family() {
         ("migration statement", "PRAGMA user_version"),
         ("raw identifier", "sqlite_row_id"),
         ("provider outcome", "ProviderOutcomeStatus::Succeeded"),
+        ("Go syntax mirror", "let _: GoSyntaxMatch;"),
         ("validation ownership", "ValidationIssue { provider_ids }"),
     ];
 

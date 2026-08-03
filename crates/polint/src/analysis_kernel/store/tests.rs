@@ -3,7 +3,7 @@ use crate::analysis_kernel::go_syntax_projection::{
     CanonicalGoSyntaxOutput, GoSyntaxProviderProjection,
 };
 use crate::analysis_kernel::incremental::{
-    Digest, DigestKind, FileSnapshot, RunManifest, RunManifestInputs,
+    Digest, DigestKind, FileSnapshot, PrecisionTier, RunManifest, RunManifestInputs,
 };
 use crate::analysis_kernel::metrics_projection::{
     CanonicalMetricsInputs, MetricsProviderProjection,
@@ -238,7 +238,7 @@ mod run_manifest_storage {
                     connection
                         .execute(
                             "UPDATE run_manifest_sources SET relative_path = ?1",
-                            [format!("src/{}.ts", "a".repeat(220))],
+                            [format!("src/{}.ts", "a".repeat(300))],
                         )
                         .expect("tamper aggregate bytes");
                 }
@@ -786,6 +786,337 @@ mod provider_mirror {
             "CREATE INDEX metrics_provider_sources_extra ON metrics_provider_sources(language)",
             "CREATE TRIGGER metrics_provider_mirror_extra AFTER UPDATE ON metrics_provider_mirror BEGIN SELECT 1; END",
             "ALTER TABLE metrics_provider_functions ADD COLUMN surprise TEXT",
+        ] {
+            tamper_then_refuse(statement);
+        }
+    }
+}
+
+mod go_syntax_provider_mirror {
+    use super::*;
+
+    const GO_MAIN: &str = "package sample\nimport \"fmt\"\nfunc Answer(v string) string { if v == \"\" { return \"empty\" }; return fmt.Sprintf(\"%s\", v) }\n";
+    const GO_TEST: &str = "package sample\nimport \"testing\"\nfunc TestAnswer(t *testing.T) { t.Run(\"empty\", func(t *testing.T) { if Answer(\"\") != \"empty\" { t.Fatal(\"bad\") } }) }\n";
+    const TS_SOURCE: &str = "export const unrelated = 'ts-only';\n";
+
+    fn write_fixture(root: &Path) {
+        std::fs::write(root.join("a.go"), GO_MAIN).unwrap();
+        std::fs::write(root.join("b_test.go"), GO_TEST).unwrap();
+        std::fs::write(root.join("unrelated.ts"), TS_SOURCE).unwrap();
+    }
+
+    #[rustfmt::skip]
+    fn projections(
+        root: &Path,
+        config_digest: &str,
+        rule_digest: &str,
+        metric_capability: &str,
+        cache_enabled: bool,
+    ) -> (ManifestFixture, MetricsProviderProjection, GoSyntaxProviderProjection) {
+        let loaded = load_config(root).unwrap();
+        let cache = Cache::new(root.join("analysis-cache"), cache_enabled);
+        let plan = AnalysisPlan::from_capability_names_for_test(&[
+            metric_capability,
+            "string_literals",
+            "go_tests",
+            "branch_obligations",
+        ]);
+        let output = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest,
+            rule_digest,
+            plan: &plan,
+            parallel: false,
+        })
+        .unwrap();
+        let outcome = |provider: &str| {
+            output
+                .run_report
+                .provider_outcomes
+                .iter()
+                .find(|outcome| outcome.provider_id == provider)
+                .unwrap()
+                .clone()
+        };
+        let metrics = MetricsProviderProjection::from_db(outcome("polint.metrics"), &output.db)
+            .unwrap();
+        let go = GoSyntaxProviderProjection::from_db(
+            outcome("polint.go.syntax"),
+            &output.db,
+            &output.diagnostics,
+        )
+        .unwrap();
+        let files = metrics
+            .inputs
+            .as_ref()
+            .unwrap()
+            .sources
+            .iter()
+            .map(|source| FileSnapshot {
+                relative_path: source.path.clone(),
+                language: source.language,
+                source_text_digest: source.source_digest.clone(),
+                size_bytes: source.byte_count as usize,
+                mtime_hint_present: false,
+            })
+            .collect();
+        (ManifestFixture::new(config_digest, files), metrics, go)
+    }
+
+    #[rustfmt::skip]
+    fn publish_real(
+        temp: &tempfile::TempDir,
+    ) -> (
+        StoreConfig,
+        GenerationHandle,
+        ManifestFixture,
+        MetricsProviderProjection,
+        GoSyntaxProviderProjection,
+    ) {
+        write_fixture(temp.path());
+        let (manifest, metrics, go) =
+            projections(temp.path(), "config", "rules", "file_metrics", false);
+        let config = StoreConfig::new(temp.path().join("semantic-store.sqlite3"), true);
+        let handle = SemanticStore::reserve_generation(&config).unwrap();
+        SemanticStore::publish_generation(
+            &config,
+            handle,
+            PublicationInputs::new(
+                manifest.inputs(temp.path()),
+                metrics.clone(),
+                go.clone(),
+            ),
+        )
+        .unwrap();
+        (config, handle, manifest, metrics, go)
+    }
+
+    fn changed(
+        baseline: &GoSyntaxProviderProjection,
+        mutate: fn(&mut GoSyntaxProviderProjection),
+    ) -> GoSyntaxProviderProjection {
+        let mut changed = baseline.clone();
+        mutate(&mut changed);
+        changed
+    }
+
+    #[test]
+    #[rustfmt::skip]
+    fn real_success_reopens_exactly_and_invalidation_polarity_is_provider_scoped() {
+        let temp = tempfile::tempdir().unwrap();
+        let (config, handle, manifest, metrics, expected) = publish_real(&temp);
+        assert_eq!(expected.outcome.status, ProviderOutcomeStatus::Succeeded);
+        assert!(expected.outcome.output_identity.is_some());
+        assert_eq!(expected.inputs.as_ref().unwrap().sources.len(), 2);
+        assert!(expected.parser.is_some());
+        assert_eq!(SemanticStore::match_active_manifest(&config, manifest.inputs(temp.path())).unwrap(), ManifestMatch::Exact(handle));
+        assert_eq!(SemanticStore::active_metrics(&config).unwrap(), Some((handle, metrics)));
+        assert_eq!(SemanticStore::active_go_syntax(&config).unwrap(), Some((handle, expected.clone())));
+        assert_eq!(SemanticStore::match_active_go_syntax(&config, manifest.inputs(temp.path()), &expected).unwrap(), GoSyntaxMatch::Exact(handle));
+
+        for (config_digest, rule_digest, metric_capability, cache_enabled) in [
+            ("changed-config", "rules", "file_metrics", false),
+            ("config", "changed-rules", "file_metrics", false),
+            ("config", "rules", "complexity_metrics", false),
+            ("config", "rules", "file_metrics", true),
+        ] {
+            let (preserved_manifest, _, preserved) = projections(temp.path(), config_digest, rule_digest, metric_capability, cache_enabled);
+            assert_eq!(preserved, expected);
+            assert_eq!(SemanticStore::match_active_go_syntax(&config, preserved_manifest.inputs(temp.path()), &preserved).unwrap(), GoSyntaxMatch::Exact(handle));
+        }
+        std::fs::write(temp.path().join("unrelated.ts"), "export const changed = 2;\n").unwrap();
+        let (ts_manifest, _, ts_changed) =
+            projections(temp.path(), "config", "rules", "file_metrics", false);
+        assert_eq!(ts_changed, expected);
+        assert_eq!(SemanticStore::match_active_go_syntax(&config, ts_manifest.inputs(temp.path()), &ts_changed).unwrap(), GoSyntaxMatch::Exact(handle));
+        std::fs::rename(temp.path().join("unrelated.ts"), temp.path().join("renamed.ts")).unwrap();
+        let (ts_path_manifest, _, ts_path) =
+            projections(temp.path(), "config", "rules", "file_metrics", false);
+        assert_eq!(ts_path, expected);
+        assert_eq!(SemanticStore::match_active_go_syntax(&config, ts_path_manifest.inputs(temp.path()), &ts_path).unwrap(), GoSyntaxMatch::Exact(handle));
+        std::fs::write(temp.path().join("extra.ts"), "export {};\n").unwrap();
+        let (ts_membership, _, ts_only) =
+            projections(temp.path(), "config", "rules", "file_metrics", false);
+        assert_eq!(ts_only, expected);
+        assert_eq!(SemanticStore::match_active_go_syntax(&config, ts_membership.inputs(temp.path()), &ts_only).unwrap(), GoSyntaxMatch::Exact(handle));
+
+        std::fs::write(temp.path().join("a.go"), "package sample\nfunc Changed() {}\n").unwrap();
+        let (content_manifest, _, content) = projections(temp.path(), "config", "rules", "file_metrics", false);
+        assert_eq!(SemanticStore::match_active_go_syntax(&config, content_manifest.inputs(temp.path()), &content).unwrap(), GoSyntaxMatch::SemanticMiss);
+        std::fs::write(temp.path().join("a.go"), GO_MAIN).unwrap();
+        std::fs::remove_file(temp.path().join("b_test.go")).unwrap();
+        let (membership_manifest, _, membership) = projections(temp.path(), "config", "rules", "file_metrics", false);
+        assert_eq!(SemanticStore::match_active_go_syntax(&config, membership_manifest.inputs(temp.path()), &membership).unwrap(), GoSyntaxMatch::SemanticMiss);
+        std::fs::write(temp.path().join("b_test.go"), GO_TEST).unwrap();
+        std::fs::rename(temp.path().join("a.go"), temp.path().join("renamed.go")).unwrap();
+        let (path_manifest, _, path) = projections(temp.path(), "config", "rules", "file_metrics", false);
+        assert_eq!(SemanticStore::match_active_go_syntax(&config, path_manifest.inputs(temp.path()), &path).unwrap(), GoSyntaxMatch::SemanticMiss);
+        std::fs::rename(temp.path().join("renamed.go"), temp.path().join("a.go")).unwrap();
+
+        let mutations: [fn(&mut GoSyntaxProviderProjection); 15] = [
+            |row| { let source = row.inputs.as_ref().unwrap().sources[0].clone(); row.inputs.as_mut().unwrap().sources.push(source); },
+            |row| row.inputs.as_mut().unwrap().sources[0].language = Language::TypeScript,
+            |row| row.inputs.as_mut().unwrap().sources.swap(0, 1),
+            |row| row.parser.as_mut().unwrap().provider_id.push('x'),
+            |row| row.parser.as_mut().unwrap().provider_version.push('x'),
+            |row| row.parser.as_mut().unwrap().fact_schema.push('x'),
+            |row| row.parser.as_mut().unwrap().payload_schema.push('x'),
+            |row| row.parser.as_mut().unwrap().backend.push('x'),
+            |row| row.parser.as_mut().unwrap().grammar.push('x'),
+            |row| row.outcome.output_identity.as_mut().unwrap().provider_id.push('x'),
+            |row| row.outcome.output_identity.as_mut().unwrap().provider_version.push('x'),
+            |row| row.outcome.output_identity.as_mut().unwrap().schema_version.push('x'),
+            |row| row.outcome.output_identity.as_mut().unwrap().output_digest.kind = DigestKind::Config,
+            |row| row.outcome.output_identity.as_mut().unwrap().output_digest.value = "0000000000000000".into(),
+            |row| row.outcome.output_identity.as_mut().unwrap().precision = PrecisionTier::Exact,
+        ];
+        for mutate in mutations {
+            let requested = changed(&expected, mutate);
+            assert_eq!(SemanticStore::match_active_go_syntax(&config, manifest.inputs(temp.path()), &requested).unwrap(), GoSyntaxMatch::SemanticMiss);
+        }
+    }
+
+    #[test]
+    #[rustfmt::skip]
+    fn legal_non_success_history_has_no_reusable_rows() {
+        for (status, stage, reason, blockers) in [
+            (ProviderOutcomeStatus::PlannedAbsent, ProviderFailureStage::Planning, ProviderFailureReason::NotSelected, Vec::new()),
+            (ProviderOutcomeStatus::DependencyBlocked, ProviderFailureStage::Dependency, ProviderFailureReason::DependencyUnavailable, vec!["polint.source".into()]),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let config = StoreConfig::new(temp.path().join("store.sqlite3"), true);
+            let manifest = ManifestFixture::new(status.label(), Vec::new());
+            let outcome = ProviderOutcome::from_closed_parts(
+                "polint.go.syntax".into(), status, None, Some(stage), Some(reason), blockers,
+            ).unwrap();
+            let expected = GoSyntaxProviderProjection::from_db(outcome, &AnalysisDb::new(), &[]).unwrap();
+            let handle = SemanticStore::reserve_generation(&config).unwrap();
+            SemanticStore::publish_generation(&config, handle, PublicationInputs::new(manifest.inputs(temp.path()), metrics_projection(), expected.clone())).unwrap();
+            assert_eq!(SemanticStore::active_go_syntax(&config).unwrap(), Some((handle, expected.clone())));
+            assert_eq!(SemanticStore::match_active_go_syntax(&config, manifest.inputs(temp.path()), &expected).unwrap(), GoSyntaxMatch::SemanticMiss);
+            let connection = rusqlite::Connection::open(config.path()).unwrap();
+            let shape: (i64, i64, i64, i64) = connection.query_row(
+                "SELECT identity_provider_id IS NOT NULL,source_count,parser_count,blocker_count FROM go_syntax_provider_mirror",
+                [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            ).unwrap();
+            assert_eq!(shape, (0, 0, 0, i64::from(status == ProviderOutcomeStatus::DependencyBlocked)));
+        }
+    }
+
+    #[rustfmt::skip]
+    fn tamper_then_refuse(statement: &str) {
+        let temp = tempfile::tempdir().unwrap();
+        let (config, _, manifest, _, expected) = publish_real(&temp);
+        let connection = rusqlite::Connection::open(config.path()).unwrap();
+        connection.execute_batch("PRAGMA foreign_keys=OFF; PRAGMA ignore_check_constraints=ON;").unwrap();
+        connection.execute_batch(statement).unwrap();
+        drop(connection);
+        assert!(SemanticStore::active_go_syntax(&config).is_err(), "trusted tamper: {statement}");
+        assert!(SemanticStore::match_active_go_syntax(&config, manifest.inputs(temp.path()), &expected).is_err(), "matched tamper: {statement}");
+        let preserved = rusqlite::Connection::open(config.path()).unwrap();
+        let lifecycle: (i64, i64) = preserved.query_row(
+            "SELECT (SELECT count(*) FROM generations),(SELECT count(*) FROM active_generation)",
+            [], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).unwrap();
+        assert_eq!(lifecycle, (1, i64::from(statement != "DELETE FROM active_generation")));
+    }
+
+    #[test]
+    #[rustfmt::skip]
+    fn go_source_aggregate_is_bounded_after_relationship_preflight() {
+        let temp = tempfile::tempdir().unwrap();
+        let (config, handle, _, _, _) = publish_real(&temp);
+        let connection = rusqlite::Connection::open(config.path()).unwrap();
+        let first = format!("{}.go", "a".repeat(4087));
+        let second = format!("{}.go", "b".repeat(4087));
+        connection.execute("UPDATE go_syntax_provider_sources SET relative_path=?1 WHERE ordinal=0", [&first]).unwrap();
+        connection.execute("UPDATE go_syntax_provider_sources SET relative_path=?1 WHERE ordinal=1", [&second]).unwrap();
+        connection.execute("UPDATE run_manifest_sources SET relative_path=?1 WHERE relative_path='a.go'", [&first]).unwrap();
+        connection.execute("UPDATE run_manifest_sources SET relative_path=?1 WHERE relative_path='b_test.go'", [&second]).unwrap();
+        assert_eq!(super::super::go_syntax_mirror::read(&connection, handle).map(|_| ()), Err(GenerationError::InvalidProviderMirror));
+    }
+
+    #[test]
+    #[rustfmt::skip]
+    fn manifest_outcome_dependency_bounds_and_catalog_tamper_fail_closed() {
+        for statement in [
+            "UPDATE go_syntax_provider_mirror SET mirror_schema='wrong'",
+            "UPDATE go_syntax_provider_mirror SET provider_id='wrong'",
+            "UPDATE go_syntax_provider_mirror SET provider_version='wrong'",
+            "UPDATE go_syntax_provider_mirror SET provider_kind='wrong'",
+            "UPDATE go_syntax_provider_mirror SET language_scope='wrong'",
+            "UPDATE go_syntax_provider_mirror SET cache_policy='wrong'",
+            "UPDATE go_syntax_provider_mirror SET precision_ceiling='exact'",
+            "UPDATE go_syntax_provider_mirror SET outcome_status='failed'",
+            "UPDATE go_syntax_provider_mirror SET outcome_status='dependency_blocked'",
+            "UPDATE go_syntax_provider_mirror SET outcome_status='unsupported'",
+            "UPDATE go_syntax_provider_mirror SET outcome_status='setup_missing'",
+            "UPDATE go_syntax_provider_mirror SET outcome_status='planned_absent'",
+            "UPDATE go_syntax_provider_mirror SET failure_stage='execution'",
+            "UPDATE go_syntax_provider_mirror SET failure_reason='execution_failed'",
+            "UPDATE go_syntax_provider_mirror SET member_count=7",
+            "UPDATE go_syntax_provider_mirror SET blocker_count=1",
+            "UPDATE go_syntax_provider_mirror SET source_count=0",
+            "UPDATE go_syntax_provider_mirror SET parser_count=0",
+            "UPDATE go_syntax_provider_mirror SET witness_kind='wrong'",
+            "UPDATE go_syntax_provider_mirror SET witness_value='0000000000000000'",
+            "UPDATE go_syntax_provider_mirror SET identity_provider_id='wrong'",
+            "UPDATE go_syntax_provider_mirror SET identity_provider_version='wrong'",
+            "UPDATE go_syntax_provider_mirror SET identity_schema_version='wrong'",
+            "UPDATE go_syntax_provider_mirror SET identity_digest_kind='wrong'",
+            "UPDATE go_syntax_provider_mirror SET identity_digest_value='0000000000000000'",
+            "UPDATE go_syntax_provider_mirror SET identity_precision='exact'",
+            "UPDATE go_syntax_provider_mirror SET identity_provider_id=zeroblob(16)",
+            "UPDATE go_syntax_provider_mirror SET provider_version=printf('%9000s','x')",
+            "UPDATE go_syntax_provider_mirror SET source_count=1000001",
+            "UPDATE go_syntax_provider_members SET name='wrong' WHERE category='input'",
+            "UPDATE go_syntax_provider_members SET name='wrong' WHERE category='output' AND ordinal=0",
+            "UPDATE go_syntax_provider_members SET name='wrong' WHERE category='output' AND ordinal=1",
+            "UPDATE go_syntax_provider_members SET name='wrong' WHERE category='output' AND ordinal=2",
+            "UPDATE go_syntax_provider_members SET name='wrong' WHERE category='output' AND ordinal=3",
+            "UPDATE go_syntax_provider_members SET name='wrong' WHERE category='output' AND ordinal=4",
+            "UPDATE go_syntax_provider_members SET name='wrong' WHERE category='output' AND ordinal=5",
+            "UPDATE go_syntax_provider_members SET name='wrong' WHERE category='schema'",
+            "UPDATE go_syntax_provider_members SET category='wrong' WHERE category='schema'",
+            "UPDATE go_syntax_provider_members SET version=7 WHERE category='schema'",
+            "UPDATE go_syntax_provider_members SET ordinal=9 WHERE category='input'",
+            "UPDATE go_syntax_provider_members SET version='wrong' WHERE category='output' AND ordinal=0",
+            "DELETE FROM go_syntax_provider_members WHERE category='input'",
+            "UPDATE go_syntax_provider_mirror SET outcome_status='dependency_blocked',failure_stage='dependency',failure_reason='dependency_unavailable',blocker_count=1,source_count=0,parser_count=0,identity_provider_id=NULL,identity_provider_version=NULL,identity_schema_version=NULL,identity_digest_kind=NULL,identity_digest_value=NULL,identity_precision=NULL; DELETE FROM go_syntax_provider_sources; DELETE FROM go_syntax_provider_parser; INSERT INTO go_syntax_provider_blockers VALUES (1,0,'wrong')",
+            "UPDATE go_syntax_provider_mirror SET blocker_count=1; INSERT INTO go_syntax_provider_blockers VALUES (1,1,'polint.source')",
+            "UPDATE go_syntax_provider_sources SET relative_path='renamed.go' WHERE ordinal=0",
+            "UPDATE go_syntax_provider_sources SET relative_path='/absolute.go' WHERE ordinal=0",
+            "UPDATE go_syntax_provider_sources SET language='typescript' WHERE ordinal=0",
+            "UPDATE go_syntax_provider_sources SET digest_kind='wrong' WHERE ordinal=0",
+            "UPDATE go_syntax_provider_sources SET digest_value='0000000000000000' WHERE ordinal=0",
+            "UPDATE go_syntax_provider_sources SET digest_value=zeroblob(16) WHERE ordinal=0",
+            "UPDATE go_syntax_provider_sources SET ordinal=99 WHERE ordinal=0; UPDATE go_syntax_provider_sources SET ordinal=0 WHERE ordinal=1; UPDATE go_syntax_provider_sources SET ordinal=1 WHERE ordinal=99",
+            "DELETE FROM go_syntax_provider_sources WHERE ordinal=0",
+            "INSERT INTO go_syntax_provider_sources VALUES (1,2,'extra.go','go','source_text','0000000000000000'); UPDATE go_syntax_provider_mirror SET source_count=3",
+            "UPDATE go_syntax_provider_sources SET relative_path=printf('%9000s','x') WHERE ordinal=0",
+            "UPDATE go_syntax_provider_sources SET generation_id=999 WHERE ordinal=0",
+            "UPDATE go_syntax_provider_parser SET provider_id='wrong'",
+            "UPDATE go_syntax_provider_parser SET provider_version='wrong'",
+            "UPDATE go_syntax_provider_parser SET fact_schema='wrong'",
+            "UPDATE go_syntax_provider_parser SET payload_schema='wrong'",
+            "UPDATE go_syntax_provider_parser SET backend='wrong'",
+            "UPDATE go_syntax_provider_parser SET grammar='wrong'",
+            "UPDATE go_syntax_provider_parser SET digest_kind='wrong'",
+            "UPDATE go_syntax_provider_parser SET digest_value='0000000000000000'",
+            "UPDATE go_syntax_provider_parser SET provider_version=zeroblob(16)",
+            "DELETE FROM go_syntax_provider_parser",
+            "UPDATE go_syntax_provider_mirror SET parser_count=2",
+            "UPDATE generations SET status='pending'",
+            "DELETE FROM active_generation",
+            "DELETE FROM go_syntax_provider_mirror",
+            "UPDATE go_syntax_provider_mirror SET generation_id=999",
+            "ALTER TABLE go_syntax_provider_mirror RENAME TO go_syntax_provider_old; CREATE TABLE go_syntax_provider_mirror AS SELECT * FROM go_syntax_provider_old; INSERT INTO go_syntax_provider_mirror SELECT * FROM go_syntax_provider_old",
+            "CREATE INDEX go_syntax_provider_sources_extra ON go_syntax_provider_sources(language)",
+            "CREATE TRIGGER go_syntax_provider_extra AFTER UPDATE ON go_syntax_provider_mirror BEGIN SELECT 1; END",
+            "ALTER TABLE go_syntax_provider_parser ADD COLUMN surprise TEXT",
+            "ALTER TABLE go_syntax_provider_parser RENAME TO go_syntax_provider_parser_old; CREATE TABLE go_syntax_provider_parser AS SELECT * FROM go_syntax_provider_parser_old",
+            "PRAGMA writable_schema=ON; UPDATE sqlite_master SET sql=substr(sql,1,instr(sql,'('))||printf('%100000s',' ')||substr(sql,instr(sql,'(')+1) WHERE type='table' AND name='go_syntax_provider_sources'; PRAGMA writable_schema=OFF",
         ] {
             tamper_then_refuse(statement);
         }

@@ -755,5 +755,19 @@ mod tests {
         let mut warnings = warned.diagnostics.iter();
         let write_warning = warnings.any(|d| d.message.contains("cache write failed"));
         assert!(write_warning);
+        std::fs::remove_file(warning_cache.layer_cache_dir()).expect("remove write blocker");
+        let recovered = run_kernel(&loaded, &warning_cache, &plan);
+        assert_eq!(expected_outcomes, &recovered.run_report.provider_outcomes);
+        assert!(
+            !recovered
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("cache write failed"))
+        );
+        let later_warm = run_kernel(&loaded, &warning_cache, &plan);
+        assert_eq!(expected_outcomes, &later_warm.run_report.provider_outcomes);
+        assert!(later_warm.run_report.provider_telemetry.iter().any(|row| {
+            row.provider_id == "polint.go.syntax" && row.cache_stats.verified_reuse > 0
+        }));
     }
 }

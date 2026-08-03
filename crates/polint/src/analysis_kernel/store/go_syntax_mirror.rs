@@ -103,6 +103,9 @@ pub(super) fn read(connection: &Connection, handle: GenerationHandle) -> Result<
     if status != ProviderOutcomeStatus::Succeeded && (raw.source_count != 0 || raw.parser_count != 0) {
         return Err(GenerationError::InvalidProviderMirror);
     }
+    if status == ProviderOutcomeStatus::Succeeded {
+        preflight_source_relationships(connection, handle, raw.source_count)?;
+    }
     let members = read_members(connection, handle, raw.member_count)?;
     let blockers = read_blockers(connection, handle, raw.blocker_count)?;
     let sources = read_sources(connection, handle, raw.source_count)?;
@@ -140,6 +143,15 @@ fn preflight_header(connection: &Connection, handle: GenerationHandle) -> Result
     let valid: bool = connection.query_row(
         "SELECT count(*)=1 AND coalesce(sum(CASE WHEN typeof(mirror_schema)='text' AND length(CAST(mirror_schema AS BLOB)) BETWEEN 1 AND 64 AND typeof(provider_id)='text' AND length(CAST(provider_id AS BLOB)) BETWEEN 1 AND 128 AND typeof(provider_version)='text' AND length(CAST(provider_version AS BLOB)) BETWEEN 1 AND 64 AND typeof(provider_kind)='text' AND length(CAST(provider_kind AS BLOB)) BETWEEN 1 AND 32 AND typeof(language_scope)='text' AND length(CAST(language_scope AS BLOB)) BETWEEN 1 AND 32 AND typeof(cache_policy)='text' AND length(CAST(cache_policy AS BLOB)) BETWEEN 1 AND 64 AND typeof(precision_ceiling)='text' AND length(CAST(precision_ceiling AS BLOB)) BETWEEN 1 AND 16 AND typeof(outcome_status)='text' AND length(CAST(outcome_status AS BLOB)) BETWEEN 1 AND 32 AND (failure_stage IS NULL OR (typeof(failure_stage)='text' AND length(CAST(failure_stage AS BLOB)) BETWEEN 1 AND 32)) AND (failure_reason IS NULL OR (typeof(failure_reason)='text' AND length(CAST(failure_reason AS BLOB)) BETWEEN 1 AND 32)) AND typeof(member_count)='integer' AND member_count BETWEEN 0 AND ?2 AND typeof(blocker_count)='integer' AND blocker_count BETWEEN 0 AND ?2 AND typeof(source_count)='integer' AND source_count BETWEEN 0 AND ?2 AND typeof(parser_count)='integer' AND parser_count BETWEEN 0 AND 1 AND typeof(witness_kind)='text' AND length(CAST(witness_kind AS BLOB)) BETWEEN 1 AND 32 AND typeof(witness_value)='text' AND length(CAST(witness_value AS BLOB))=16 AND (identity_provider_id IS NULL OR (typeof(identity_provider_id)='text' AND length(CAST(identity_provider_id AS BLOB)) BETWEEN 1 AND 128)) AND (identity_provider_version IS NULL OR (typeof(identity_provider_version)='text' AND length(CAST(identity_provider_version AS BLOB)) BETWEEN 1 AND 64)) AND (identity_schema_version IS NULL OR (typeof(identity_schema_version)='text' AND length(CAST(identity_schema_version AS BLOB)) BETWEEN 1 AND 64)) AND (identity_digest_kind IS NULL OR (typeof(identity_digest_kind)='text' AND length(CAST(identity_digest_kind AS BLOB)) BETWEEN 1 AND 32)) AND (identity_digest_value IS NULL OR (typeof(identity_digest_value)='text' AND length(CAST(identity_digest_value AS BLOB))=16)) AND (identity_precision IS NULL OR (typeof(identity_precision)='text' AND length(CAST(identity_precision AS BLOB)) BETWEEN 1 AND 16)) THEN 0 ELSE 1 END),0)=0 FROM go_syntax_provider_mirror WHERE generation_id=?1",
         params![handle.scalar(),MAX_ROWS], |row| row.get(0),
+    ).map_err(connection::classify_sqlite_error)?;
+    valid.then_some(()).ok_or(GenerationError::InvalidProviderMirror)
+}
+
+#[rustfmt::skip]
+fn preflight_source_relationships(connection:&Connection,handle:GenerationHandle,expected:i64)->Result<(),GenerationError>{
+    let valid:bool=connection.query_row(
+        "SELECT (SELECT count(*) FROM run_manifest_sources WHERE generation_id=?1 AND language='go')=?2 AND NOT EXISTS(SELECT 1 FROM go_syntax_provider_sources AS source LEFT JOIN run_manifest_sources AS manifest ON manifest.generation_id=source.generation_id AND manifest.relative_path=source.relative_path AND manifest.language=source.language AND manifest.source_purpose='source-text-v1' AND manifest.source_value=source.digest_value WHERE source.generation_id=?1 AND manifest.generation_id IS NULL)",
+        params![handle.scalar(),expected],|row|row.get(0),
     ).map_err(connection::classify_sqlite_error)?;
     valid.then_some(()).ok_or(GenerationError::InvalidProviderMirror)
 }

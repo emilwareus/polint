@@ -1021,7 +1021,15 @@ fn validate_go_provider_rows(connection: &Connection, version: i32) -> Result<()
         "SELECT count(*) FROM go_syntax_provider_members WHERE NOT (category='input' AND ordinal=0 AND name='source_files' AND version=0) AND NOT (category='output' AND ((ordinal=0 AND name='packages') OR (ordinal=1 AND name='functions') OR (ordinal=2 AND name='imports') OR (ordinal=3 AND name='go_tests') OR (ordinal=4 AND name='branch_obligations') OR (ordinal=5 AND name='string_literals')) AND version=0) AND NOT (category='schema' AND ordinal=0 AND name='go-facts-v2' AND version=2)",
         [], |row| row.get(0),
     ).map_err(|error| classify_invariant_error(error, version))?;
-    if invalid_ownership == 0 && invalid_counts == 0 && invalid_members == 0 {
+    let invalid_relationships: i64 = connection.query_row(
+        "SELECT count(*) FROM go_syntax_provider_mirror AS provider WHERE outcome_status='succeeded' AND (source_count!=(SELECT count(*) FROM run_manifest_sources WHERE generation_id=provider.generation_id AND language='go') OR EXISTS(SELECT 1 FROM go_syntax_provider_sources AS source LEFT JOIN run_manifest_sources AS manifest ON manifest.generation_id=source.generation_id AND manifest.relative_path=source.relative_path AND manifest.language=source.language AND manifest.source_purpose='source-text-v1' AND manifest.source_value=source.digest_value WHERE source.generation_id=provider.generation_id AND manifest.generation_id IS NULL))",
+        [], |row| row.get(0),
+    ).map_err(|error| classify_invariant_error(error, version))?;
+    if invalid_ownership == 0
+        && invalid_counts == 0
+        && invalid_members == 0
+        && invalid_relationships == 0
+    {
         Ok(())
     } else {
         Err(MigrationError::InvalidSchema { version })
