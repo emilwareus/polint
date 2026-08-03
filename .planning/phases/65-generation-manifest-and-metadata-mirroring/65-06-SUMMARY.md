@@ -56,7 +56,7 @@ patterns-established:
 requirements-completed: []
 
 # Metrics
-duration: 1h 25m
+duration: 5h 43m
 completed: 2026-08-03
 ---
 
@@ -70,14 +70,16 @@ reuse, Phase 65, STORE-04, STORE-05, META-01, and META-04 remain open.
 
 ## Performance
 
-- **Duration:** 1h 25m
+- **Duration:** 5h 43m, including two independent review-and-repair loops and
+  final goal-backward verification
 - **Started:** 2026-08-03T13:51:33+02:00
 - **Task implementation completed:** 2026-08-03T15:16:27+02:00
+- **Independent verification completed:** 2026-08-03T19:34:15+02:00
 - **Tasks:** 3
 - **Product/test files modified:** 13 of 13 allowed
-- **Cumulative product/test delta from `4b925a088`:** 2,307 additions, 127 deletions
-- **Task 3 delta:** 548 additions, 4 deletions
-- **Task 3 `store/tests.rs` additions:** 333 of 350 allowed
+- **Cumulative product/test delta from `4b925a088`:** 2,280 additions, 128 deletions
+- **Task 3 delta from `3bcb2a99`:** 550 additions, 34 deletions
+- **Task 3 `store/tests.rs` additions:** 232 of 350 allowed
 - **New durable schema families:** 1 relational Go-syntax provider mirror family
 - **Tables in that family:** 5
 - **Newly mirrored providers:** 1 (`polint.go.syntax`)
@@ -113,11 +115,16 @@ reuse, Phase 65, STORE-04, STORE-05, META-01, and META-04 remain open.
 - Proved real Go content, membership, and path changes miss, while independent
   config, rule, plan-only, cache-mode, and TypeScript byte/path/membership
   changes preserve exact Go matching.
-- Added five isolated raw layer-edge adversaries and 76 table-driven SQLite
-  tamper cases plus a direct relationship-valid aggregate overflow. Malformed
+- Added five isolated raw layer-edge adversaries and comprehensive table-driven
+  SQLite tamper cases plus a direct relationship-valid aggregate overflow. Malformed
   status shapes, identities, blockers, sources, parser rows, storage classes,
   counts, ordinals, relationships, ownership, catalog declarations, FKs, and
   hostile sizes fail closed without becoming active or Exact.
+- Hardened review-discovered boundaries: unrelated-language volume is excluded
+  before Go bounds, quoted SQLite literals retain semantic whitespace, the
+  reserved Go catalog namespace is authenticated exactly, test/branch function
+  relationships are mandatory and same-file, and duplicate function detection
+  is deterministic `O(n log n)` rather than quadratic.
 - Kept source bodies and fact payloads out of SQLite, all new vocabulary
   crate-private, and `SemanticStore::maintain` as the sole production kernel
   store operation.
@@ -130,6 +137,12 @@ formatting and Clippy hook:
 1. **Task 1: Canonicalize Go syntax identity** - `63cc093b` (`feat`)
 2. **Task 2: Add schema-v5 Go syntax mirror and atomic publication** - `3bcb2a99` (`feat`)
 3. **Task 3: Prove exact matching, invalidation, tamper refusal, and privacy** - `4a255b51` (`test`)
+
+Independent review then produced two bounded repair commits without adding a
+fourth task or widening scope:
+
+- `02610e9d` - close Go bounds and SQLite catalog-authentication warnings
+- `9d1a94cc` - close exact function-relationship and duplicate-detection warnings
 
 ## Files Created/Modified
 
@@ -157,7 +170,7 @@ formatting and Clippy hook:
   publication, active projection, and match facade.
 - `crates/polint/src/analysis_kernel/store/tests.rs` - Real success/non-success,
   preserve/invalidate matrices, 35 rollback seams, bounded aggregate proof, and
-  76-case SQLite/catalog tamper suite.
+  comprehensive SQLite/catalog tamper suite.
 - `crates/polint/src/go/tests.rs` - Isolated missing/extra/replaced/duplicate/
   reordered layer-edge repair and later verified-warm proof.
 - `crates/polint/src/runner/mod.rs` - Cold/warm/disabled identity parity plus
@@ -186,8 +199,8 @@ formatting and Clippy hook:
 
 ## Deviations from Plan
 
-No scope deviation. The implementation used exactly three task commits, all
-thirteen declared product/test paths, 2,307 cumulative additions, one new
+No scope deviation. The implementation used exactly three planned task commits,
+all thirteen declared product/test paths, 2,280 cumulative additions, one new
 durable family, and one newly mirrored provider. It made no CI, state, roadmap,
 requirements, public-surface, TypeScript-parser, Go-semantic/toolchain, fact-
 persistence, or normal-run persistence/reuse change.
@@ -201,36 +214,32 @@ During implementation review, three evidence gaps were closed before the Task
 3 commit: Go mirror sources were related directly to run-manifest Go rows; the
 duplicate layer-edge case was sorted so it exercised duplication independently
 from reordering; and real Go content, membership, and rename cases replaced
-synthetic-only source mutations. No separate remediation commit was needed.
+synthetic-only source mutations. The later independent review found five
+additional warnings; all were repaired in `02610e9d` and `9d1a94cc` within the
+same thirteen-file scope and original line caps, then independently re-reviewed
+clean.
 
 ## Verification
 
-All required commands were run separately against the final implementation;
-every focused target completed below sixty seconds:
+The independent verifier reran 16/16 named gates plus exact audits 17-21
+against the repaired product head:
 
-- Go provider manifest: 1/1 passed; 0.24s wall.
-- Present-language string-literal ownership/gating: 1/1 passed; 0.30s wall.
-- Canonical Go projection: 5/5 passed; 0.35s wall.
-- Go syntax layer, including five edge adversaries: 6/6 passed; 24.59s wall
-  including compilation.
-- Raw duplicate layer dependency guard: 1/1 passed; 0.41s wall.
-- Closed outcomes: 6/6 passed; 0.65s wall.
-- Schema migrations: 24/24 passed; 0.64s wall.
-- Go schema/storage round trip: 1/1 passed; 1.01s wall.
-- Go provider mirror exit suite: 5/5 passed; 36.57s wall including compilation.
-- Generation lifecycle and 35 rollback seams: 13/13 passed; 44.92s wall.
-- Cold/warm/cache-disabled/warning-recovery parity: 1/1 passed; 0.42s wall.
-- Store-mode JSON/exit parity: 1/1 passed; 1.20s wall.
-- Public-surface leak proof: 1/1 passed; 46.10s wall including compilation.
-- Full semantic-store module: 48/48 passed; 5.88s wall.
-- Public marker negative controls: 1/1 passed.
-- `cargo fmt --all -- --check`: passed.
-- Final strict workspace/all-target/all-feature Clippy: passed; 17.11s wall.
-- Final workspace/all-target/all-feature check: passed; 7.99s wall.
-- Final `make lint`: passed; 2.77s wall.
+- Go provider manifest 1/1; present-language ownership/gating 1/1; canonical
+  projection 8/8; Go layer 6/6; raw layer dependency guard 1/1; closed outcomes
+  6/6.
+- Schema migrations 25/25; Go schema/storage round trip 1/1; Go mirror exact,
+  mutation, and tamper suite 6/6; generation lifecycle and rollback 13/13.
+- Cold/warm/cache-disabled/warning-recovery parity 1/1; store-mode parity 1/1;
+  public-surface leak proof 1/1; full semantic-store module 49/49.
+- `cargo fmt --all -- --check`, strict workspace/all-target/all-feature Clippy,
+  workspace/all-target/all-feature check, and `make lint` passed.
 - Diff, exact allowed-file, Task 3/cumulative addition caps, protected-file,
   forbidden-persistence, private-visibility, one-family/one-provider, and
-  maintenance-only wiring audits: passed.
+  maintenance-only wiring audits passed.
+
+One-time cold integration linking and cold all-features Clippy dependency
+building exceeded sixty seconds; the plan's required post-compilation reruns
+completed in 2.31s and 0.54s respectively. No timeout was added.
 
 Tests use isolated local temp repositories/stores and in-process tree-sitter
 parsing. No network, external Go process, sleep, process environment mutation,
@@ -238,15 +247,15 @@ global serialization, or timeout increase was added.
 
 ## Gate Status
 
-- **Executor cumulative bounded review:** CLEAN at `4a255b51`; no unresolved
-  Critical, Warning, informational finding, or ASVS-L1 HIGH within the declared
-  Go-only scope.
-- **Independent cumulative review:** pending parent/orchestrator gate. This
-  summary does not pre-certify that independent result.
-- **Fresh R5-Go-only verifier:** pending parent/orchestrator gate. Verification
-  must cover D-01 through D-44 only and must not certify the TypeScript half of
+- **Independent cumulative review:** CLEAN at repaired product head `9d1a94cc`;
+  13 files reviewed at standard depth, WR-01 through WR-05 resolved, and zero
+  Critical, Blocker, Warning, or Info findings remain. See `65-06-REVIEW.md`.
+- **Fresh R5-Go-only verifier:** PASSED with 7/7 must-have truths and 44/44
+  locked decisions, 16/16 named gates, and audits 17-21. No gaps or human
+  verification are required. See `65-06-VERIFICATION.md`.
+- **Boundary:** these gates certify only Plan 65-06. The TypeScript half of
   issue #89, another R5 increment, R6, Phase 65, STORE-04, STORE-05, META-01,
-  or META-04.
+  and META-04 remain open.
 
 ## User Setup Required
 
