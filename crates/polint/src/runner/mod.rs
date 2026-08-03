@@ -688,6 +688,11 @@ mod tests {
     fn cold_warm_production_semantic_projection_matches() {
         let temp = tempfile::tempdir().expect("tempdir");
         std::fs::write(temp.path().join("main.ts"), "export const n = 1;\n").expect("source");
+        std::fs::write(
+            temp.path().join("main.go"),
+            "package main\nfunc answer() string { return \"yes\" }\n",
+        )
+        .expect("Go source");
         let loaded = load_config(temp.path()).expect("config");
         let cache = Cache::default_for_repo(temp.path(), true);
         let counters = [Counter::default(), Counter::default()];
@@ -707,11 +712,22 @@ mod tests {
         let cold_metrics = cold.run_report.provider_outcomes.last().unwrap();
         let disabled_metrics = disabled.run_report.provider_outcomes.last().unwrap();
         assert_eq!(cold_metrics, disabled_metrics);
+        let go = |output: &KernelOutput| {
+            output
+                .run_report
+                .provider_outcomes
+                .iter()
+                .find(|outcome| outcome.provider_id == "polint.go.syntax")
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(go(&cold), go(&disabled));
+        assert!(go(&cold).output_identity.is_some());
         disabled_projection.provider_outcomes = cold_projection.provider_outcomes.clone();
         assert_eq!(cold_projection, disabled_projection);
         assert_eq!(cold_projection.decisions, [1, 1]);
         let answers = &cold_projection.policy_answers;
-        assert_eq!(answers.as_slice(), ["metrics=1", "unaffected=0"]);
+        assert_eq!(answers.as_slice(), ["metrics=2", "unaffected=0"]);
         let cold_telemetry = &cold.run_report.provider_telemetry;
         assert_ne!(cold_telemetry, &warm.run_report.provider_telemetry);
         assert_ne!(

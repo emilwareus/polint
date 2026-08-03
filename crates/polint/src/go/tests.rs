@@ -170,6 +170,8 @@ func Authorize() {}
     assert_eq!(second_result.cache_stats.verified_reuse, 1);
     assert_eq!(second_result.cache_stats.recomputes, 0);
     assert_eq!(second_result.cache_stats.writes, 0);
+    assert!(first_result.output_digest.is_some());
+    assert_eq!(first_result.output_digest, second_result.output_digest);
 
     fs::remove_dir_all(cache_root).ok();
 }
@@ -264,6 +266,7 @@ fn go_syntax_layer_cache_disabled_bypass() {
     assert_eq!(result.cache_stats.bypasses_disabled, 1);
     assert_eq!(result.cache_stats.recomputes, 1);
     assert_eq!(result.cache_stats.writes, 0);
+    assert!(result.output_digest.is_some());
     assert!(!cache_root.join("layers").exists());
 }
 

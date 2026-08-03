@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[rustfmt::skip]
 #[cfg(test)] mod debug;
+pub(crate) mod go_syntax_projection;
 pub(crate) mod incremental;
 mod metadata;
 pub(crate) mod metrics_projection;
@@ -1264,9 +1265,8 @@ impl AnalysisKernel {
                 &["polint.go.syntax", "polint.ts.syntax"]
             }
             "go_tests" | "branch_obligations" | "coverage_facts" => &["polint.go.syntax"],
-            "ts_components" | "ts_classes" | "string_literals" | "jsx_attributes" => {
-                &["polint.ts.syntax"]
-            }
+            "string_literals" => &["polint.go.syntax", "polint.ts.syntax"],
+            "ts_components" | "ts_classes" | "jsx_attributes" => &["polint.ts.syntax"],
             "events" => &["polint.go.syntax", "polint.ts.syntax"],
             "resolved_imports" | "module_graph" => &["polint.module_graph"],
             "symbols" | "references" => &["polint.symbol_graph"],
@@ -1279,7 +1279,7 @@ impl AnalysisKernel {
             .iter()
             .copied()
             .filter(|provider| {
-                capability != "events"
+                !matches!(capability, "events" | "string_literals")
                     || db.files().iter().any(|file| match *provider {
                         "polint.go.syntax" => file.language == crate::core::Language::Go,
                         "polint.ts.syntax" => file.language.is_ts_family(),
@@ -1377,6 +1377,66 @@ mod tests {
             end_line: 1,
             end_col: start_byte + 11,
         }
+    }
+
+    #[test]
+    fn string_literals_capability_ownership_and_failure_gating_tracks_present_languages() {
+        let plan = AnalysisPlan::from_capability_names_for_test(&["string_literals"]);
+        for (paths, expected) in [
+            (vec!["a.go"], vec!["polint.go.syntax"]),
+            (vec!["a.ts"], vec!["polint.ts.syntax"]),
+            (
+                vec!["a.go", "a.ts"],
+                vec!["polint.go.syntax", "polint.ts.syntax"],
+            ),
+        ] {
+            let mut db = AnalysisDb::new();
+            for path in paths {
+                db.add_file(path.into(), path.into(), "x\n".into());
+            }
+            assert_eq!(
+                AnalysisKernel::capability_providers("string_literals", &db),
+                expected
+            );
+            for failed_id in ["polint.go.syntax", "polint.ts.syntax"] {
+                let outcomes = ["polint.go.syntax", "polint.ts.syntax"]
+                    .map(|id| syntax_outcome(id, id == failed_id));
+                let (blocked, _) =
+                    AnalysisKernel::runtime_capability_blockers(&plan, &db, &outcomes);
+                assert_eq!(
+                    blocked.contains("test/requested-capabilities"),
+                    expected.contains(&failed_id)
+                );
+            }
+        }
+    }
+
+    fn syntax_outcome(id: &str, failed: bool) -> ProviderOutcome {
+        if failed {
+            return ProviderOutcome::from_closed_parts(
+                id.into(),
+                ProviderOutcomeStatus::Failed,
+                None,
+                Some(ProviderFailureStage::Execution),
+                Some(ProviderFailureReason::ExecutionFailed),
+                Vec::new(),
+            )
+            .unwrap();
+        }
+        let manifest = AnalysisKernel::provider_manifest(id);
+        let identity = incremental::provider_output_identity_from_manifest(
+            manifest,
+            Digest::from_parts(incremental::DigestKind::ProviderOutput, "test", &[id]),
+        );
+        ProviderOutcome::from_closed_parts(
+            id.into(),
+            ProviderOutcomeStatus::Succeeded,
+            Some(identity),
+            None,
+            None,
+            Vec::new(),
+        )
+        .unwrap()
     }
 
     fn db_with_one_fact_from_every_current_family() -> AnalysisDb {

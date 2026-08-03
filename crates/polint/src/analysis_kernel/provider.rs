@@ -273,6 +273,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "imports",
             "go_tests",
             "branch_obligations",
+            "string_literals",
         ],
         language_scope: LanguageScope::Go,
         cache_policy: CachePolicy::ExistingFileFactCache {
@@ -890,6 +891,34 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     #[test]
+    fn go_syntax_manifest_declares_all_owned_outputs() {
+        let manifest = provider_manifests()
+            .iter()
+            .find(|manifest| manifest.id == "polint.go.syntax")
+            .unwrap();
+        assert_eq!(
+            manifest.outputs,
+            [
+                "packages",
+                "functions",
+                "imports",
+                "go_tests",
+                "branch_obligations",
+                "string_literals",
+            ]
+        );
+        assert_eq!(manifest.language_scope, LanguageScope::Go);
+        assert_eq!(
+            manifest.cache_policy,
+            CachePolicy::ExistingFileFactCache {
+                schema: "go-facts-v2"
+            }
+        );
+        assert_eq!(manifest.schema_versions, GO_SYNTAX_SCHEMA);
+        assert_eq!(manifest.precision_ceiling, PrecisionCeiling::Syntax);
+    }
+
+    #[test]
     fn provider_manifests_have_required_metadata() {
         for manifest in provider_manifests() {
             assert!(!manifest.id.is_empty());
@@ -1125,6 +1154,7 @@ mod tests {
                         "imports",
                         "go_tests",
                         "branch_obligations",
+                        "string_literals",
                     ],
                 },
                 ProviderOrderRow {
