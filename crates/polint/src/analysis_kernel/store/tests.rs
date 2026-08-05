@@ -244,8 +244,16 @@ mod run_manifest_storage {
                 }
             }
 
+            // Only the aggregate case needs a lowered ceiling; the rest must
+            // still be rejected under the production limit.
+            let limit = match tamper {
+                Tamper::Aggregate => 384,
+                _ => super::super::MAX_AGGREGATE_BYTES,
+            };
             assert_eq!(
-                generation::read_manifest(&connection, handle).map(|_| ()),
+                super::super::with_aggregate_bytes_limit(limit, || {
+                    generation::read_manifest(&connection, handle).map(|_| ())
+                }),
                 Err(GenerationError::InvalidManifest)
             );
         }
@@ -964,7 +972,7 @@ mod go_syntax_provider_mirror {
         connection.execute("UPDATE go_syntax_provider_sources SET relative_path=?1 WHERE ordinal=1", [&second]).unwrap();
         connection.execute("UPDATE run_manifest_sources SET relative_path=?1 WHERE relative_path='a.go'", [&first]).unwrap();
         connection.execute("UPDATE run_manifest_sources SET relative_path=?1 WHERE relative_path='b_test.go'", [&second]).unwrap();
-        assert_eq!(super::super::go_syntax_mirror::read(&connection, handle).map(|_| ()), Err(GenerationError::InvalidProviderMirror));
+        assert_eq!(super::super::with_aggregate_bytes_limit(8_192, || super::super::go_syntax_mirror::read(&connection, handle).map(|_| ())), Err(GenerationError::InvalidProviderMirror));
     }
 
     #[test]

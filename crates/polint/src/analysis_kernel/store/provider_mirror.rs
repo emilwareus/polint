@@ -18,10 +18,6 @@ use crate::core::Language;
 
 const MIRROR_SCHEMA: &str = "polint-metrics-provider-mirror-1";
 const MAX_ROWS: i64 = 1_000_000;
-#[cfg(not(test))]
-const MAX_AGGREGATE: i64 = 512 * 1024 * 1024;
-#[cfg(test)]
-const MAX_AGGREGATE: i64 = 8_192;
 
 #[rustfmt::skip]
 struct RawHeader {
@@ -376,7 +372,10 @@ fn preflight(
             )
             .map_err(connection::classify_sqlite_error)?
     };
-    (count == expected && invalid == 0 && bytes <= MAX_AGGREGATE && ordinals_are_dense)
+    (count == expected
+        && invalid == 0
+        && bytes <= super::max_aggregate_bytes()
+        && ordinals_are_dense)
         .then_some(())
         .ok_or(GenerationError::InvalidProviderMirror)
 }

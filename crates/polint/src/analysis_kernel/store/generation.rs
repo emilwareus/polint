@@ -7,7 +7,7 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use super::connection::{self, ReadOnlyConnection, WriterConnection};
 use super::go_syntax_mirror;
 use super::provider_mirror;
-use super::{StoreStatus, map_connection_error};
+use super::{StoreStatus, map_connection_error, max_aggregate_bytes};
 use crate::analysis_kernel::go_syntax_projection::GoSyntaxProviderProjection;
 use crate::analysis_kernel::incremental::{
     EncodedRunManifest, EncodedRunManifestSource, RunManifest, RunManifestError,
@@ -16,10 +16,6 @@ use crate::analysis_kernel::metrics_projection::MetricsProviderProjection;
 
 const MAX_MANIFEST_SOURCES: i64 = 1_000_000;
 const MAX_MANIFEST_TEXT_BYTES: i64 = 4_096;
-#[cfg(not(test))]
-const MAX_MANIFEST_AGGREGATE_BYTES: i64 = 512 * 1024 * 1024;
-#[cfg(test)]
-const MAX_MANIFEST_AGGREGATE_BYTES: i64 = 384;
 const MANIFEST_ROW_OVERHEAD_BYTES: i64 = 64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -651,7 +647,7 @@ pub(super) fn read_manifest(
     if actual_count != header.5
         || actual_count > MAX_MANIFEST_SOURCES
         || invalid_rows != 0
-        || aggregate_bytes > MAX_MANIFEST_AGGREGATE_BYTES
+        || aggregate_bytes > max_aggregate_bytes()
     {
         return Err(GenerationError::InvalidManifest);
     }
@@ -901,6 +897,20 @@ pub(super) fn select_without_validation_for_test(
             .map_err(connection::classify_sqlite_error)?;
         Ok(())
     })
+}
+
+#[cfg(test)]
+pub(super) fn read_manifest_in_connection_for_test(
+    connection: &Connection,
+) -> Result<RunManifest, GenerationError> {
+    let handle = connection
+        .query_row(
+            "SELECT generation_id FROM active_generation WHERE singleton = 1",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(connection::classify_sqlite_error)?;
+    read_manifest(connection, GenerationHandle::from_scalar(handle)?)
 }
 
 #[cfg(test)]

@@ -17,6 +17,8 @@ mod generation;
 mod go_syntax_mirror;
 mod migrations;
 mod provider_mirror;
+#[cfg(test)]
+mod scale_tests;
 
 pub(crate) use generation::{
     GenerationError, GenerationHandle, GoSyntaxMatch, ManifestMatch, MetricsMatch,
@@ -52,6 +54,43 @@ pub(crate) fn hold_writer_connection_for_test(path: &Path) -> Result<HeldWriterC
 #[cfg(test)]
 pub(crate) fn current_schema_is_valid_for_test(path: &Path) -> bool {
     connection::current_schema_is_valid_for_test(path)
+}
+
+/// Aggregate byte ceiling applied to one generation's relational rows in each
+/// bounded read.
+///
+/// This is deliberately a runtime lookup rather than a `cfg(test)` constant: an
+/// override compiled only under `cfg(test)` means the value the tests exercise
+/// is never the value that ships, and the shipping value is never executed.
+/// Tests lower it explicitly with [`with_aggregate_bytes_limit`].
+const MAX_AGGREGATE_BYTES: i64 = 512 * 1024 * 1024;
+
+#[cfg(test)]
+thread_local! {
+    static AGGREGATE_BYTES_LIMIT: std::cell::Cell<i64> =
+        const { std::cell::Cell::new(MAX_AGGREGATE_BYTES) };
+}
+
+pub(super) fn max_aggregate_bytes() -> i64 {
+    #[cfg(test)]
+    {
+        AGGREGATE_BYTES_LIMIT.with(std::cell::Cell::get)
+    }
+    #[cfg(not(test))]
+    {
+        MAX_AGGREGATE_BYTES
+    }
+}
+
+/// Runs `body` with a lowered aggregate ceiling so bound rejection stays
+/// testable on fixture-sized data. The override is thread-local and the test
+/// harness gives each test its own thread, so it cannot leak between tests.
+#[cfg(test)]
+pub(crate) fn with_aggregate_bytes_limit<T>(limit: i64, body: impl FnOnce() -> T) -> T {
+    let previous = AGGREGATE_BYTES_LIMIT.with(|cell| cell.replace(limit));
+    let result = body();
+    AGGREGATE_BYTES_LIMIT.with(|cell| cell.set(previous));
+    result
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

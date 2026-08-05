@@ -18,10 +18,6 @@ use crate::core::Language;
 
 const MIRROR_SCHEMA: &str = "polint-go-syntax-provider-mirror-1";
 const MAX_ROWS: i64 = 1_000_000;
-#[cfg(not(test))]
-const MAX_AGGREGATE: i64 = 512 * 1024 * 1024;
-#[cfg(test)]
-const MAX_AGGREGATE: i64 = 8_192;
 
 #[rustfmt::skip]
 struct RawHeader {
@@ -244,7 +240,7 @@ fn preflight(connection:&Connection,table:&str,handle:GenerationHandle,expected:
     let sql=format!("SELECT count(*),coalesce(sum(CASE WHEN {valid} THEN 0 ELSE 1 END),0),coalesce(sum({aggregate}),0) FROM {table} WHERE generation_id=?1");
     let (count,invalid,bytes):(i64,i64,i64)=connection.query_row(&sql,[handle.scalar()],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).map_err(connection::classify_sqlite_error)?;
     let dense=if table=="go_syntax_provider_members"||table=="go_syntax_provider_parser"||expected==0{true}else{connection.query_row(&format!("SELECT min(ordinal)=0 AND max(ordinal)=?2-1 FROM {table} WHERE generation_id=?1"),params![handle.scalar(),expected],|row|row.get(0)).map_err(connection::classify_sqlite_error)?};
-    (count==expected&&invalid==0&&bytes<=MAX_AGGREGATE&&dense).then_some(()).ok_or(GenerationError::InvalidProviderMirror)
+    (count==expected&&invalid==0&&bytes<=super::max_aggregate_bytes()&&dense).then_some(()).ok_or(GenerationError::InvalidProviderMirror)
 }
 
 #[rustfmt::skip]
@@ -268,7 +264,12 @@ fn member_rows(manifest:&crate::analysis_kernel::ProviderManifest)->Vec<(String,
     let mut rows=Vec::new();
     for (ordinal,name) in manifest.inputs.iter().enumerate(){rows.push(("input".into(),ordinal as i64,(*name).into(),0));}
     for (ordinal,name) in manifest.outputs.iter().enumerate(){rows.push(("output".into(),ordinal as i64,(*name).into(),0));}
-    for (ordinal,schema) in manifest.schema_versions.iter().enumerate(){rows.push(("schema".into(),ordinal as i64,schema.name.into(),i64::from(schema.version)));}
+    // Sorted before ordinals are assigned, matching `provider_mirror`: the
+    // manifest's declaration order is not a canonical order, and the two
+    // mirrors must canonicalise identically.
+    let mut schemas = manifest.schema_versions.to_vec();
+    schemas.sort_by_key(|schema| (schema.name, schema.version));
+    for (ordinal,schema) in schemas.iter().enumerate(){rows.push(("schema".into(),ordinal as i64,schema.name.into(),i64::from(schema.version)));}
     rows
 }
 
