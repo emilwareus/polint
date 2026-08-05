@@ -740,6 +740,29 @@ mod tests {
             }
         }
     }
+    /// Every provider in the sealed inventory needs an explicit
+    /// `hard_dependencies` arm. The `_ => &[]` fallback would otherwise give a
+    /// newly added provider zero dependencies, so a failed upstream would never
+    /// block it and its outcome would claim success on missing inputs.
+    #[test]
+    fn every_manifest_provider_has_an_explicit_hard_dependency_arm() {
+        let declared = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/analysis_kernel/outcome.rs"),
+        )
+        .expect("this source file is readable");
+        let arms = declared
+            .split("match provider_id {")
+            .nth(1)
+            .expect("hard_dependencies has a match on provider_id");
+        for manifest in AnalysisKernel::provider_manifests() {
+            assert!(
+                arms.contains(&format!("\"{}\"", manifest.id)),
+                "{} falls through to the `_ => &[]` hard-dependency default",
+                manifest.id
+            );
+        }
+    }
+
     #[test]
     fn duplicate_unknown_and_absent_transitions_are_rejected() {
         let mut tracker = ProviderOutcomeTracker::for_test(&["A", "B"], &["A"], &[]);

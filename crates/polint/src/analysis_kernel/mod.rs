@@ -7,6 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[rustfmt::skip]
 #[cfg(test)] mod debug;
+#[cfg(test)]
+mod dispatch_tests;
 pub(crate) mod go_syntax_projection;
 pub(crate) mod incremental;
 mod metadata;
@@ -1216,15 +1218,21 @@ impl AnalysisKernel {
                         ("polint.refined_calls", !db.refined_call_edges().is_empty()),
                     ] {
                         if has_rows
-                            && by_id[provider_id].status != ProviderOutcomeStatus::PlannedAbsent
+                            && by_id.get(provider_id).is_some_and(|outcome| {
+                                outcome.status != ProviderOutcomeStatus::PlannedAbsent
+                            })
                         {
                             providers.push(provider_id);
                         }
                     }
                 }
+                // `capability_providers` is a hand-maintained table; a provider
+                // id that is not in the sealed inventory is a table bug, caught
+                // by `capability_provider_table_references_only_manifest_ids`.
+                // Skipping it here keeps that bug from panicking a real run.
                 let failed = providers
                     .into_iter()
-                    .map(|provider_id| by_id[provider_id])
+                    .filter_map(|provider_id| by_id.get(provider_id).copied())
                     .filter(|outcome| outcome.status != ProviderOutcomeStatus::Succeeded)
                     .collect::<Vec<_>>();
                 if failed.is_empty() {
@@ -2707,6 +2715,46 @@ function cleanup(value: string) {{ return value.trim(); }}
             assert!(
                 !source.contains(&forbidden),
                 "synthetic manifest helper remains in kernel: {forbidden}"
+            );
+        }
+    }
+
+    /// `capability_providers` and the `events` special case name providers by
+    /// string. An id outside the sealed inventory silently contributes no
+    /// blocker, so a rule would run against a failed provider closure.
+    #[test]
+    fn capability_provider_table_references_only_manifest_ids() {
+        let source = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("src/analysis_kernel/mod.rs"),
+        )
+        .expect("this source file is readable");
+        let body = source
+            .split("fn capability_providers(")
+            .nth(1)
+            .expect("capability_providers is defined here")
+            .split("\n    }\n")
+            .next()
+            .expect("capability_providers has a body");
+        let inventory = AnalysisKernel::provider_manifests()
+            .iter()
+            .map(|manifest| manifest.id)
+            .collect::<BTreeSet<_>>();
+        let mut referenced = body
+            .split("\"polint.")
+            .skip(1)
+            .filter_map(|rest| rest.split('"').next())
+            .map(|suffix| format!("polint.{suffix}"))
+            .collect::<Vec<_>>();
+        // The `events` fan-out in `runtime_capability_blockers` names two more.
+        referenced.extend([
+            "polint.calls".to_string(),
+            "polint.refined_calls".to_string(),
+        ]);
+        assert!(!referenced.is_empty(), "no provider ids were extracted");
+        for provider_id in referenced {
+            assert!(
+                inventory.contains(provider_id.as_str()),
+                "capability table names `{provider_id}`, which is not a manifest provider"
             );
         }
     }
