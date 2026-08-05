@@ -45,6 +45,15 @@ enum Attribution {
     Global,
     Provider(&'static str),
     Family(FactFamily),
+    /// A family-scoped issue about fact *identity* rather than fact content.
+    ///
+    /// Two facts can legitimately collapse to one stable key — TypeScript
+    /// declaration merging emits one `Export` per declaration for a single
+    /// merged entity. The facts themselves are present and usable, so the
+    /// issue is reported but must not downgrade the producing provider: doing
+    /// so would block every rule requesting that provider's capabilities and
+    /// silently strip real findings from any repo using a merged declaration.
+    FamilyIdentity(FactFamily),
     Fact(FactRef),
 }
 
@@ -57,6 +66,10 @@ pub(crate) struct ValidationIssue {
     evidence: Vec<Evidence>,
     pub(crate) fact_family: Option<FactFamily>,
     pub(crate) provider_ids: Vec<String>,
+    /// Whether this issue should mark its providers as validation-rejected.
+    /// Identity-only issues are reported without downgrading — see
+    /// [`Attribution::FamilyIdentity`].
+    downgrades_providers: bool,
 }
 
 impl ValidationIssue {
@@ -65,21 +78,34 @@ impl ValidationIssue {
         db: &AnalysisDb,
         manifests_by_id: &BTreeMap<&'static str, ProviderManifest>,
     ) -> Self {
+        // An empty owner set escalates to a *global* downgrade in
+        // `ValidationReport::downgrades`, which fails every provider and
+        // therefore blocks every capability-requesting rule. That is only ever
+        // correct for a genuinely unattributable issue, so family- and
+        // fact-scoped issues resolve their owners from the producers that
+        // actually emitted facts in that family before falling back.
         let (fact_family, owners) = match attribution {
             #[cfg(test)]
             Attribution::Global => (None, None),
             Attribution::Provider(id) => (None, Some(BTreeSet::from([id]))),
-            Attribution::Family(family) => (Some(family), None),
+            Attribution::Family(family) | Attribution::FamilyIdentity(family) => {
+                (Some(family), family_owners(db, family))
+            }
             Attribution::Fact(reference) => (
                 Some(reference.family),
                 db.metadata_for(reference)
-                    .map(|metadata| BTreeSet::from([metadata.producer_id, metadata.layer_id])),
+                    .map(|metadata| BTreeSet::from([metadata.producer_id, metadata.layer_id]))
+                    .or_else(|| family_owners(db, reference.family)),
             ),
         };
+        // Keep the owners that name a real provider rather than discarding the
+        // whole set when one of them does not. Extension producers and unknown
+        // producer ids are reported separately by `validate_metadata_providers`;
+        // they must not erase an otherwise precise attribution.
         let provider_ids = owners
-            .filter(|ids| ids.iter().all(|id| manifests_by_id.contains_key(id)))
             .into_iter()
             .flatten()
+            .filter(|id| manifests_by_id.contains_key(id))
             .map(str::to_string)
             .collect();
         let reason = std::mem::take(&mut presentation.message);
@@ -90,6 +116,7 @@ impl ValidationIssue {
             evidence,
             fact_family,
             provider_ids,
+            downgrades_providers: !matches!(attribution, Attribution::FamilyIdentity(_)),
         }
     }
 
@@ -100,6 +127,18 @@ impl ValidationIssue {
         diagnostic
     }
 }
+/// Providers that emitted at least one fact in `family`, taken from the
+/// metadata rows the facts carry. Returns `None` when the family has no
+/// metadata at all, which is the only case that stays unattributable.
+fn family_owners(db: &AnalysisDb, family: FactFamily) -> Option<BTreeSet<&'static str>> {
+    let owners = db
+        .fact_meta()
+        .family_rows(family)
+        .flat_map(|metadata| [metadata.producer_id, metadata.layer_id])
+        .collect::<BTreeSet<_>>();
+    (!owners.is_empty()).then_some(owners)
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct ValidationReport {
     diagnostics: Vec<Diagnostic>,
@@ -108,7 +147,11 @@ pub(crate) struct ValidationReport {
 impl ValidationReport {
     pub(crate) fn downgrades(&self) -> ValidationDowngrades {
         let mut downgrades = ValidationDowngrades::default();
-        for issue in &self.issues {
+        for issue in self
+            .issues
+            .iter()
+            .filter(|issue| issue.downgrades_providers)
+        {
             if issue.provider_ids.is_empty() {
                 downgrades.mark_global();
             } else {
@@ -3404,7 +3447,7 @@ fn validate_stable_key_conflicts(db: &AnalysisDb, diagnostics: &mut Vec<PendingI
             .with_evidence("stable_key", conflict.stable_key.clone())
             .with_evidence("existing_ref", fact_ref_value(conflict.existing))
             .with_evidence("incoming_ref", fact_ref_value(conflict.incoming)),
-            Attribution::Family(conflict.family),
+            Attribution::FamilyIdentity(conflict.family),
         ));
     }
 }
@@ -5784,6 +5827,147 @@ mod tests {
             .downgrades()
             .contains("unrelated")
         );
+    }
+
+    /// A family-scoped issue must downgrade only the providers that emitted
+    /// facts in that family. Escalating to a global downgrade would fail every
+    /// provider, which blocks every capability-requesting rule and silently
+    /// empties the run of findings.
+    #[test]
+    fn family_scoped_issues_downgrade_only_that_familys_producers() {
+        let mut db = AnalysisDb::new();
+        db.fact_meta_mut_for_test().insert(
+            FactRef::new(FactFamily::FileMetric, 0),
+            FactMeta {
+                stable_key: "metric:key".to_string(),
+                producer_id: "polint.metrics",
+                layer_id: "polint.metrics",
+                precision: FactPrecision::Syntax,
+                confidence: FactConfidence::High,
+                validation: ValidationStatus::NativeTrusted,
+                payload_digest: "payload:a".to_string(),
+            },
+        );
+
+        for attribution in [
+            super::Attribution::Family(FactFamily::FileMetric),
+            // A fact whose own metadata row is absent still resolves through
+            // its family rather than escalating.
+            super::Attribution::Fact(FactRef::new(FactFamily::FileMetric, 404)),
+        ] {
+            let issue = super::ValidationIssue::from_pending(
+                (super::internal_diagnostic("family scoped"), attribution),
+                &db,
+                &AnalysisKernel::provider_manifests()
+                    .iter()
+                    .map(|manifest| (manifest.id, *manifest))
+                    .collect(),
+            );
+            assert_eq!(issue.provider_ids, ["polint.metrics"], "{attribution:?}");
+            let downgrades = super::ValidationReport {
+                diagnostics: vec![issue.render()],
+                issues: vec![issue],
+            }
+            .downgrades();
+            assert!(downgrades.contains("polint.metrics"), "{attribution:?}");
+            assert!(!downgrades.contains("polint.go.syntax"), "{attribution:?}");
+        }
+    }
+
+    /// TypeScript declaration merging (two `export interface Foo`) emits one
+    /// `Export` fact per declaration for a single merged entity, so they share
+    /// a stable key. That is an identity artefact, not broken output: it must
+    /// be reported without downgrading `polint.symbol_graph`, because a
+    /// downgrade blocks every rule requesting `symbols` or `references`.
+    #[test]
+    fn stable_key_conflicts_are_reported_without_downgrading_the_producer() {
+        let mut db = AnalysisDb::new();
+        for run_id in [0, 1] {
+            db.fact_meta_mut_for_test().insert(
+                FactRef::new(FactFamily::Export, run_id),
+                FactMeta {
+                    stable_key: "Export|export_name=MergeMe".to_string(),
+                    producer_id: super::SYMBOL_GRAPH_PROVIDER_ID,
+                    layer_id: super::SYMBOL_GRAPH_PROVIDER_ID,
+                    precision: FactPrecision::Exact,
+                    confidence: FactConfidence::High,
+                    validation: ValidationStatus::NativeTrusted,
+                    payload_digest: format!("payload:{run_id}"),
+                },
+            );
+        }
+
+        let report = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+
+        let conflict = report
+            .issues
+            .iter()
+            .find(|issue| issue.reason.contains("stable key conflict"))
+            .expect("the duplicate stable key is still reported");
+        assert_eq!(conflict.fact_family, Some(FactFamily::Export));
+        assert_eq!(conflict.provider_ids, [super::SYMBOL_GRAPH_PROVIDER_ID]);
+        assert!(
+            report
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("stable key conflict")),
+            "the conflict stays user-visible as an internal diagnostic"
+        );
+        // The synthetic metadata rows above trip other validators too, so the
+        // no-downgrade property is asserted on the conflict issue alone.
+        let conflict_only = super::ValidationReport {
+            diagnostics: vec![conflict.render()],
+            issues: vec![conflict.clone()],
+        };
+        assert!(
+            !conflict_only
+                .downgrades()
+                .contains(super::SYMBOL_GRAPH_PROVIDER_ID),
+            "an identity-only conflict must not reject the symbol graph provider"
+        );
+        assert_eq!(
+            conflict_only.downgrades(),
+            crate::analysis_kernel::ValidationDowngrades::default(),
+            "an identity-only conflict must not downgrade anything, globally or otherwise"
+        );
+    }
+
+    /// An extension-produced fact names a producer that is not in the static
+    /// manifest inventory. The known co-owner must survive rather than the
+    /// whole attribution collapsing into a global downgrade.
+    #[test]
+    fn unknown_producer_ids_do_not_erase_a_known_co_owner() {
+        let mut db = AnalysisDb::new();
+        db.fact_meta_mut_for_test().insert(
+            FactRef::new(FactFamily::FileMetric, 0),
+            FactMeta {
+                stable_key: "metric:key".to_string(),
+                producer_id: "acme.extension",
+                layer_id: "polint.metrics",
+                precision: FactPrecision::Syntax,
+                confidence: FactConfidence::High,
+                validation: ValidationStatus::NativeTrusted,
+                payload_digest: "payload:a".to_string(),
+            },
+        );
+        let issue = super::ValidationIssue::from_pending(
+            (
+                super::internal_diagnostic("extension fact"),
+                super::Attribution::Fact(FactRef::new(FactFamily::FileMetric, 0)),
+            ),
+            &db,
+            &AnalysisKernel::provider_manifests()
+                .iter()
+                .map(|manifest| (manifest.id, *manifest))
+                .collect(),
+        );
+        assert_eq!(issue.provider_ids, ["polint.metrics"]);
+        let downgrades = super::ValidationReport {
+            diagnostics: vec![issue.render()],
+            issues: vec![issue],
+        }
+        .downgrades();
+        assert!(downgrades.contains("polint.metrics"));
+        assert!(!downgrades.contains("polint.source"));
     }
 
     #[test]

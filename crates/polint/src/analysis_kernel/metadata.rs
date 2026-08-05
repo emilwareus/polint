@@ -460,6 +460,16 @@ impl FactMetaStore {
                 .map(move |(run_id, metadata)| (FactRef::new(*family, run_id), metadata))
         })
     }
+
+    /// Rows for one family only. Callers that attribute a single family must
+    /// not walk the whole store: validation resolves owners once per issue, so
+    /// a full scan would be quadratic in issues x facts.
+    pub(crate) fn family_rows(&self, family: FactFamily) -> impl Iterator<Item = &FactMeta> {
+        self.rows
+            .get(&family)
+            .into_iter()
+            .flat_map(|rows| rows.rows().map(|(_, metadata)| metadata))
+    }
 }
 
 pub(crate) fn stable_key_from_parts(family: FactFamily, parts: &[(&str, String)]) -> String {
