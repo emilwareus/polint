@@ -63,6 +63,10 @@ struct CanonicalContext {
     inputs: CanonicalMetricsInputs,
     sources: BTreeMap<FileId, CanonicalMetricSource>,
     functions: BTreeMap<FunctionId, (CanonicalMetricFunction, FunctionFact)>,
+    /// Owned function count per file, tallied once. Recounting it per file
+    /// metric would make the projection O(files x functions), and it runs on
+    /// both the cold metrics path and every warm layer-cache validation.
+    functions_per_file: BTreeMap<FileId, u32>,
 }
 impl CanonicalMetricsInputs {
     pub(crate) fn from_db(db: &AnalysisDb) -> Result<Self, MetricsProjectionError> {
@@ -124,14 +128,11 @@ impl CanonicalMetricsOutput {
                 .sources
                 .get(&metric.file)
                 .ok_or(MetricsProjectionError::Output)?;
-            let function_count = u32::try_from(
-                context
-                    .functions
-                    .values()
-                    .filter(|(_, function)| function.file == metric.file)
-                    .count(),
-            )
-            .map_err(|_| MetricsProjectionError::Output)?;
+            let function_count = context
+                .functions_per_file
+                .get(&metric.file)
+                .copied()
+                .ok_or(MetricsProjectionError::Output)?;
             if !seen_files.insert(metric.file)
                 || (
                     metric.language,
@@ -407,6 +408,16 @@ fn canonical_context(db: &AnalysisDb) -> Result<CanonicalContext, MetricsProject
             return Err(MetricsProjectionError::Source);
         }
     }
+    let mut functions_per_file = sources
+        .keys()
+        .map(|file| (*file, 0u32))
+        .collect::<BTreeMap<_, _>>();
+    for (_, function) in functions.values() {
+        let count = functions_per_file
+            .get_mut(&function.file)
+            .ok_or(MetricsProjectionError::Source)?;
+        *count = count.checked_add(1).ok_or(MetricsProjectionError::Source)?;
+    }
     let mut source_rows = sources.values().cloned().collect::<Vec<_>>();
     let mut function_rows = functions
         .values()
@@ -421,6 +432,7 @@ fn canonical_context(db: &AnalysisDb) -> Result<CanonicalContext, MetricsProject
         },
         sources,
         functions,
+        functions_per_file,
     })
 }
 fn linked_function<'a>(

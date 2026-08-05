@@ -124,7 +124,11 @@ pub(crate) fn analyze_with_plan_options_and_cache_stats(
             let payload = read
                 .value
                 .expect("layer cache hit should include syntax payload");
-            finish_projection(db, payload, Vec::new(), cache_stats)
+            // `validate_syntax_layer_payload` already recomputed the canonical
+            // output for this payload and proved it equals the manifest digest,
+            // so recomputing it a second time here would walk every produced Go
+            // row again for a value we are holding.
+            finish_projection(db, payload, Vec::new(), cache_stats, read.output_digest)
         }
         LayerCacheReadStatus::BypassedDisabled => {
             cache_stats.record_disabled_bypass();
@@ -137,7 +141,7 @@ pub(crate) fn analyze_with_plan_options_and_cache_stats(
                 plan,
                 parallel,
             );
-            finish_projection(db, payload, warnings, cache_stats)
+            finish_projection(db, payload, warnings, cache_stats, None)
         }
         LayerCacheReadStatus::Miss | LayerCacheReadStatus::InvalidEvicted => {
             if read.status == LayerCacheReadStatus::Miss {
@@ -387,21 +391,29 @@ fn canonical_output_for_payload(
     Ok(CanonicalGoSyntaxOutput::from_db(&db, &diagnostics)?.digest())
 }
 
+/// `validated_digest` is the canonical output digest a verified layer-cache hit
+/// already established for this payload; `None` means it still has to be
+/// derived from the restored facts.
 fn finish_projection(
     db: &mut AnalysisDb,
     payload: SyntaxLayerPayload,
     warnings: Vec<Diagnostic>,
     cache_stats: CacheStats,
+    validated_digest: Option<Digest>,
 ) -> ProviderAnalysisResult {
     let semantic = restore_syntax_layer_payload(db, payload);
-    match CanonicalGoSyntaxOutput::from_db(db, &semantic) {
-        Ok(output) => {
+    let output_digest = match validated_digest {
+        Some(digest) => Ok(digest),
+        None => CanonicalGoSyntaxOutput::from_db(db, &semantic).map(|output| output.digest()),
+    };
+    match output_digest {
+        Ok(output_digest) => {
             let mut diagnostics = semantic;
             diagnostics.extend(warnings);
             ProviderAnalysisResult {
                 diagnostics,
                 cache_stats,
-                output_digest: Some(output.digest()),
+                output_digest: Some(output_digest),
             }
         }
         Err(error) => projection_failure_with_stats(db, error, cache_stats),
