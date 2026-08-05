@@ -172,7 +172,10 @@ fn aggregate_cache_stats(provider_telemetry: &[ProviderTelemetry]) -> CacheStats
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis_kernel::incremental::DigestKind;
+    use crate::analysis_kernel::incremental::{
+        DigestKind, GoLifecycleSnapshot, InputComponent, InputComponentStatus,
+        TsJsLifecycleSnapshot,
+    };
     use crate::analysis_kernel::{
         CachePolicy, LanguageScope, PrecisionCeiling, ProviderKind, ProviderManifest,
         ProviderOutcomeStatus, ProviderOutcomeTracker, SchemaVersion, ValidationDowngrades,
@@ -253,8 +256,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn report_requires_outcomes_and_telemetry_in_the_same_manifest_order() {
+    fn sealed_outcomes() -> Vec<ProviderOutcome> {
         let manifests = crate::analysis_kernel::AnalysisKernel::provider_manifests();
         let selected = manifests
             .iter()
@@ -272,10 +274,84 @@ mod tests {
                 )
                 .unwrap();
         }
-        let outcomes = tracker.seal(&ValidationDowngrades::default()).unwrap();
+        tracker.seal(&ValidationDowngrades::default()).unwrap()
+    }
+
+    fn report_input_snapshot() -> InputSnapshot {
+        InputSnapshot {
+            schema_version: "test".to_string(),
+            files: Vec::new(),
+            config: InputComponent {
+                name: "config".to_string(),
+                status: InputComponentStatus::Present,
+                digest: Digest::from_parts(DigestKind::Config, "config", &["test"]),
+                detail: Vec::new(),
+            },
+            go_lifecycle: GoLifecycleSnapshot {
+                components: Vec::new(),
+            },
+            ts_js_lifecycle: TsJsLifecycleSnapshot {
+                components: Vec::new(),
+            },
+            rules: Vec::new(),
+            models: Vec::new(),
+            extensions: Vec::new(),
+            tool_invocations: Vec::new(),
+            provider_schemas: Vec::new(),
+        }
+    }
+
+    fn build_report(
+        outcomes: Vec<ProviderOutcome>,
+        telemetry: Vec<ProviderTelemetry>,
+    ) -> std::thread::Result<KernelRunReport> {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            KernelRunReport::new(
+                report_input_snapshot(),
+                outcomes,
+                telemetry,
+                DemandQueryTrace::default(),
+                StoreStatus::Disabled,
+            )
+        }))
+    }
+
+    /// `KernelRunReport::new` pairs outcomes with telemetry positionally, and
+    /// every consumer (eval performance rows, observed invariants) relies on
+    /// that. Both guards must actually reject a desynchronised pair.
+    #[test]
+    fn report_requires_outcomes_and_telemetry_in_the_same_manifest_order() {
+        let outcomes = sealed_outcomes();
         assert!(outcomes.iter().all(|outcome| {
             outcome.status == ProviderOutcomeStatus::Succeeded && outcome.output_identity.is_some()
         }));
+        let telemetry = outcomes
+            .iter()
+            .map(|outcome| {
+                ProviderTelemetry::new(outcome.provider_id.clone(), CacheStats::default())
+            })
+            .collect::<Vec<_>>();
+
+        let aligned = build_report(outcomes.clone(), telemetry.clone())
+            .expect("aligned outcomes and telemetry build a report");
+        assert_eq!(aligned.provider_outcomes.len(), outcomes.len());
+        assert_eq!(aligned.provider_telemetry.len(), telemetry.len());
+
+        let mut short = telemetry.clone();
+        short.pop();
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        assert!(
+            build_report(outcomes.clone(), short).is_err(),
+            "a telemetry row count that differs from the outcome count must be rejected"
+        );
+        let mut swapped = telemetry;
+        swapped.swap(0, 1);
+        assert!(
+            build_report(outcomes, swapped).is_err(),
+            "telemetry in a different order than the outcomes must be rejected"
+        );
+        std::panic::set_hook(previous);
     }
 
     #[test]

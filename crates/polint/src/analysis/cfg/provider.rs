@@ -597,7 +597,20 @@ mod cfg_provider {
         fs::write(temp.path().join(".polint.toml"), "").expect("config");
         let loaded = load_config(temp.path()).expect("config loads");
         let cache = Cache::new(temp.path().join(".polint/cache"), false);
-        let plan = AnalysisPlan::empty();
+        // The plan must request a control-flow capability: `polint.cfg` is only
+        // selected when the CFG pipeline is gated on, and an unselected provider
+        // is `PlannedAbsent` with no output identity to compare.
+        let rules = vec![crate::core::Rule::from_parts(
+            || crate::core::RuleMeta {
+                id: "test/control-flow".to_string(),
+                description: "requests control flow".to_string(),
+                severity: crate::diagnostics::Severity::Warn,
+                kind: crate::core::RuleKind::Check,
+            },
+            || crate::core::Capabilities::new().control_flow(),
+            |_, _| Ok(()),
+        )];
+        let plan = AnalysisPlan::from_rules(&rules, None, &std::collections::BTreeMap::new());
         let first = AnalysisKernel::run(crate::analysis_kernel::KernelInput {
             loaded: &loaded,
             cache: &cache,
