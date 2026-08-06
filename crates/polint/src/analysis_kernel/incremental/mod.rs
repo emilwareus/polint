@@ -7,6 +7,7 @@ mod invalidation;
 mod keys;
 mod layer_cache;
 mod quarantine;
+mod run_manifest;
 mod run_report;
 mod stats;
 
@@ -136,7 +137,10 @@ pub(crate) use layer_cache::{
     expect(unused_imports, reason = "kept for private internal consumers")
 )]
 pub(crate) use quarantine::{QuarantineEntry, QuarantinePolicy, QuarantineStore};
-pub(crate) use run_report::{
-    KernelRunReport, provider_output_digest_from_manifest, provider_output_from_manifest,
+pub(crate) use run_manifest::{
+    EncodedRunManifest, EncodedRunManifestSource, RunManifest, RunManifestError, RunManifestInputs,
 };
-pub(crate) use stats::{CacheStats, ProviderOutputMeta};
+pub(crate) use run_report::{
+    KernelRunReport, provider_output_digest_from_manifest, provider_output_identity_from_manifest,
+};
+pub(crate) use stats::{CacheStats, ProviderTelemetry};

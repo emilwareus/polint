@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Static Analysis 2.0 Implementation
-status: ready
-last_updated: "2026-07-19T19:52:02.761Z"
-last_activity: 2026-07-19
+status: in_progress
+last_updated: "2026-07-28T22:21:27Z"
+last_activity: 2026-07-29
 progress:
   total_phases: 9
   completed_phases: 2
-  total_plans: 8
-  completed_plans: 8
+  total_plans: 9
+  completed_plans: 9
   percent: 22
 ---
 
@@ -43,9 +43,9 @@ See: `.planning/PROJECT.md` (updated 2026-07-10)
 ## Current Position
 
 Phase: 65
-Plan: Not started
-Status: Ready for discussion
-Last activity: 2026-07-19 - Completed quick task 260719-t2i: Parallelize eval fixture coverage tests and inspect remaining serial test bottlenecks without running tests locally
+Plan: 02 (R2 only)
+Status: R1 and R2 complete and code-review clean; broader Phase 65 remains open for R3-R6
+Last activity: 2026-07-29 - Completed, repaired, and independently verified the bounded R2 run manifest without closing Phase 65 requirements
 
 ### Active Milestone Phase Progress
 
@@ -591,10 +591,10 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 
 ## Session
 
-- Last session: 2026-06-23
-- Last activity: 2026-06-23 - Completed quick task 260623-oy3: shipped `polint review` = `polint check` with rules-as-code (`#[polint::rule(kind="review")]`, full SDK/engine) diff-gated to a target branch/commit. New `ChangedFiles<'_>` fact-view + host changeset injection + git shell-out + default finding-level diff gate. Commits b4c66e50..a778b8df; full `cargo test -p polint` green (2450 passed); leak gate honest at 99.
-- Stopped at: `polint review` feature complete and committed (not pushed). Research+plan docs live in the quick dir (a doc-scan test guard objected to them under docs/). Open follow-ups: untracked-file coverage in worktree mode; consider restoring docs to docs/ with the internal type name genericized.
-- Resume file: None
+- Last session: 2026-07-29
+- Last activity: 2026-07-29 - Phase 65 R2 Plan 02 completed, passed the full workspace suite, closed all deep-review findings, and passed an independent repaired-slice check.
+- Stopped at: Phase 65 R1-R2 complete; Phase 65 remains in progress with R3-R6 and all mapped requirements open.
+- Resume file: `.planning/phases/65-generation-manifest-and-metadata-mirroring/65-02-SUMMARY.md`
 
 ### Quick Tasks Completed
 
@@ -648,15 +648,16 @@ Items acknowledged and deferred at v1.2 milestone close on 2026-05-27. These are
 
 ## Next Action
 
-Review the local v1.4 commit stack and decide whether to archive the milestone
-with `/gsd-complete-milestone` or start a v1.5 milestone from the Phase 62 audit
-follow-ups. Do not push local commits unless explicitly instructed; CI is
-intentionally avoided during autonomous local commits.
+Discuss and plan R3 as a new bounded slice: closed provider execution outcomes,
+dependency blocking, planned absence and failure states, plus post-validation
+capability revocation without SQLite changes. Phase 65 and
+STORE-04/STORE-05/META-01/META-04 remain open. The sub-five-minute CI target
+also remains a separate non-blocking follow-up.
 
 ## Operator Next Steps
 
-- Review `.planning/phases/62-promotion-gate-boundary-proof-and-closeout/62-MILESTONE-AUDIT.md`.
-- Preserve the current boundary: `Events<'_>`, `Calls<'_>`, `ControlFlow<'_>`, and `DataFlow<'_>` are provider-backed for documented preview scopes; raw `Cfg<'_>`, raw `CallGraph<'_>`, and raw data-flow graph traversal remain private/reserved.
+- Re-run `/gsd-discuss-phase 65` specifically for the R3 provider-outcome and capability-revocation slice before creating Plan 03.
+- Preserve the restart sequence: R3 provider outcomes/capability revocation → one audited provider family at a time.
 
 ## Performance Metrics
 
@@ -666,3 +667,5 @@ intentionally avoided during autonomous local commits.
 | Phase 64 P02 | 13min | 3 tasks | 4 files |
 | Phase 64 P03 | 16min | 3 tasks | 7 files |
 | Phase 64 P04 | 31min | 3 tasks | 4 files |
+| Phase 65 P01 (R1) | 1h 35min | 3 tasks + review remediation | 6 implementation/test files |
+| Phase 65 P02 (R2) | 40min | 3 tasks + review remediation | 8 implementation/test files |

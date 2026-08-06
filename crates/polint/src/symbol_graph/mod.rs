@@ -2116,15 +2116,24 @@ mod semantic_cache_restore {
         .expect("kernel run should succeed")
     }
 
-    fn symbol_graph_output(
-        output: &KernelOutput,
-    ) -> &crate::analysis_kernel::incremental::ProviderOutputMeta {
+    fn symbol_graph_outcome(output: &KernelOutput) -> &crate::analysis_kernel::ProviderOutcome {
         output
             .run_report
-            .provider_outputs
+            .provider_outcomes
             .iter()
             .find(|row| row.provider_id == "polint.symbol_graph")
-            .expect("symbol graph provider output exists")
+            .expect("symbol graph provider outcome exists")
+    }
+
+    fn symbol_graph_telemetry(
+        output: &KernelOutput,
+    ) -> &crate::analysis_kernel::incremental::ProviderTelemetry {
+        output
+            .run_report
+            .provider_telemetry
+            .iter()
+            .find(|row| row.provider_id == "polint.symbol_graph")
+            .expect("symbol graph provider telemetry exists")
     }
 
     fn stable_export_keys(output: &KernelOutput) -> Vec<String> {
@@ -2145,10 +2154,16 @@ mod semantic_cache_restore {
     }
 
     fn assert_warm_symbol_graph_reuse(output: &KernelOutput) {
-        let warm = symbol_graph_output(output);
-        assert_eq!(warm.cache_stats.hits, 1);
-        assert_eq!(warm.cache_stats.verified_reuse, 1);
-        assert_eq!(warm.cache_stats.recomputes, 0);
+        let outcome = symbol_graph_outcome(output);
+        assert_eq!(
+            outcome.status,
+            crate::analysis_kernel::ProviderOutcomeStatus::Succeeded
+        );
+        assert!(outcome.output_identity.is_some());
+        let telemetry = symbol_graph_telemetry(output);
+        assert_eq!(telemetry.cache_stats.hits, 1);
+        assert_eq!(telemetry.cache_stats.verified_reuse, 1);
+        assert_eq!(telemetry.cache_stats.recomputes, 0);
     }
 
     #[test]

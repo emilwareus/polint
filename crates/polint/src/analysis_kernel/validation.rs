@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
+use std::ops::Deref;
 
 use serde::Serialize;
 
@@ -22,13 +23,13 @@ use crate::analysis::types::facts::{TypePrecision, TypeShape, TypeStatus, TypeSu
 use crate::analysis::validate::validate_semantic_mir;
 use crate::analysis::values::facts::{ValueKind, ValuePrecision, ValueStatus, ValueSubject};
 use crate::analysis_kernel::{
-    FactFamily, FactPrecision, FactRef, PrecisionCeiling, ProviderManifest,
+    FactFamily, FactPrecision, FactRef, PrecisionCeiling, ProviderManifest, ValidationDowngrades,
 };
 use crate::core::{
     AnalysisDb, BranchId, FileId, FunctionId, ImportId, ModuleNodeId, PackageId, ReferenceId,
     ResolvedImportId, Span, SymbolId,
 };
-use crate::diagnostics::{Diagnostic, TextRange};
+use crate::diagnostics::{Diagnostic, Evidence, TextRange};
 use crate::module_graph::topology::{
     DependencyRequirementId, ImportToPackageStatus, ResolvedDependencyKind, SourceSetId,
     TopologyPackageId, TopologyPrecision, TopologyStatus, WorkspaceRootId,
@@ -38,39 +39,191 @@ use crate::symbol_graph::semantic::{ExportId, ScopeId, SemanticStatus};
 const SYMBOL_GRAPH_PROVIDER_ID: &str = "polint.symbol_graph";
 const SEMANTIC_EVIDENCE_ORDER: (&str, &str, &str) = ("family", "stable_key", "reason");
 
+#[derive(Clone, Copy, Debug)]
+enum Attribution {
+    #[cfg(test)]
+    Global,
+    Provider(&'static str),
+    Family(FactFamily),
+    /// A family-scoped issue about fact *identity* rather than fact content.
+    ///
+    /// Two facts can legitimately collapse to one stable key — TypeScript
+    /// declaration merging emits one `Export` per declaration for a single
+    /// merged entity. The facts themselves are present and usable, so the
+    /// issue is reported but must not downgrade the producing provider: doing
+    /// so would block every rule requesting that provider's capabilities and
+    /// silently strip real findings from any repo using a merged declaration.
+    FamilyIdentity(FactFamily),
+    Fact(FactRef),
+}
+
+type PendingIssue = (Diagnostic, Attribution);
+
+#[derive(Clone, Debug)]
+pub(crate) struct ValidationIssue {
+    presentation: Diagnostic,
+    reason: String,
+    evidence: Vec<Evidence>,
+    pub(crate) fact_family: Option<FactFamily>,
+    pub(crate) provider_ids: Vec<String>,
+    /// Whether this issue should mark its providers as validation-rejected.
+    /// Identity-only issues are reported without downgrading — see
+    /// [`Attribution::FamilyIdentity`].
+    downgrades_providers: bool,
+}
+
+impl ValidationIssue {
+    fn from_pending(
+        (mut presentation, attribution): PendingIssue,
+        db: &AnalysisDb,
+        manifests_by_id: &BTreeMap<&'static str, ProviderManifest>,
+    ) -> Self {
+        // An empty owner set escalates to a *global* downgrade in
+        // `ValidationReport::downgrades`, which fails every provider and
+        // therefore blocks every capability-requesting rule. That is only ever
+        // correct for a genuinely unattributable issue, so family- and
+        // fact-scoped issues resolve their owners from the producers that
+        // actually emitted facts in that family before falling back.
+        let (fact_family, owners) = match attribution {
+            #[cfg(test)]
+            Attribution::Global => (None, None),
+            Attribution::Provider(id) => (None, Some(BTreeSet::from([id]))),
+            Attribution::Family(family) | Attribution::FamilyIdentity(family) => {
+                (Some(family), family_owners(db, family))
+            }
+            Attribution::Fact(reference) => (
+                Some(reference.family),
+                db.metadata_for(reference)
+                    .map(|metadata| BTreeSet::from([metadata.producer_id, metadata.layer_id]))
+                    .or_else(|| family_owners(db, reference.family)),
+            ),
+        };
+        // Keep the owners that name a real provider rather than discarding the
+        // whole set when one of them does not. Extension producers and unknown
+        // producer ids are reported separately by `validate_metadata_providers`;
+        // they must not erase an otherwise precise attribution.
+        let provider_ids = owners
+            .into_iter()
+            .flatten()
+            .filter(|id| manifests_by_id.contains_key(id))
+            .map(str::to_string)
+            .collect();
+        let reason = std::mem::take(&mut presentation.message);
+        let evidence = std::mem::take(&mut presentation.evidence);
+        Self {
+            presentation,
+            reason,
+            evidence,
+            fact_family,
+            provider_ids,
+            downgrades_providers: !matches!(attribution, Attribution::FamilyIdentity(_)),
+        }
+    }
+
+    fn render(&self) -> Diagnostic {
+        let mut diagnostic = self.presentation.clone();
+        diagnostic.message.clone_from(&self.reason);
+        diagnostic.evidence.clone_from(&self.evidence);
+        diagnostic
+    }
+}
+/// Providers that emitted at least one fact in `family`, taken from the
+/// metadata rows the facts carry. Returns `None` when the family has no
+/// metadata at all, which is the only case that stays unattributable.
+fn family_owners(db: &AnalysisDb, family: FactFamily) -> Option<BTreeSet<&'static str>> {
+    let owners = db
+        .fact_meta()
+        .family_rows(family)
+        .flat_map(|metadata| [metadata.producer_id, metadata.layer_id])
+        .collect::<BTreeSet<_>>();
+    (!owners.is_empty()).then_some(owners)
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ValidationReport {
+    diagnostics: Vec<Diagnostic>,
+    pub(crate) issues: Vec<ValidationIssue>,
+}
+impl ValidationReport {
+    pub(crate) fn downgrades(&self) -> ValidationDowngrades {
+        let mut downgrades = ValidationDowngrades::default();
+        for issue in self
+            .issues
+            .iter()
+            .filter(|issue| issue.downgrades_providers)
+        {
+            if issue.provider_ids.is_empty() {
+                downgrades.mark_global();
+            } else {
+                downgrades.extend_provider_ids(issue.provider_ids.iter().cloned());
+            }
+        }
+        downgrades
+    }
+}
+impl Deref for ValidationReport {
+    type Target = [Diagnostic];
+    fn deref(&self) -> &Self::Target {
+        &self.diagnostics
+    }
+}
 pub(crate) fn validate_fact_metadata(
     db: &AnalysisDb,
     manifests: &[ProviderManifest],
-) -> Vec<Diagnostic> {
-    let mut diagnostics = Vec::new();
+) -> ValidationReport {
+    let mut pending = Vec::new();
     let ids = IdSets::from_db(db);
     let manifests_by_id = manifests
         .iter()
         .map(|manifest| (manifest.id, *manifest))
         .collect::<BTreeMap<_, _>>();
-
-    validate_missing_metadata(db, &mut diagnostics);
-    validate_stable_key_conflicts(db, &mut diagnostics);
-    validate_references(db, &ids, &mut diagnostics);
-    validate_spans(db, &ids.files, &mut diagnostics);
-    validate_semantic_index(db, &ids, &mut diagnostics);
-    validate_topology_facts(db, &ids, &mut diagnostics);
-    validate_semantic_mir(db, &ids, &mut diagnostics);
-    validate_cfg(db, &mut diagnostics);
-    validate_calls(db, &mut diagnostics);
-    validate_identity(db, &mut diagnostics);
-    validate_abstract_domains(db, &mut diagnostics);
-    validate_summaries(db, &mut diagnostics);
-    validate_entrypoints(db, &mut diagnostics);
-    validate_type_value_alias(db, &mut diagnostics);
-    validate_semantic_graph(db, &mut diagnostics);
-    validate_refined_calls(db, &mut diagnostics);
-    validate_data_flow(db, &mut diagnostics);
-    validate_metadata_providers(db, &manifests_by_id, &mut diagnostics);
-    validate_precision_ceilings(db, &manifests_by_id, &mut diagnostics);
-
-    diagnostics.sort_by(diagnostic_order);
-    diagnostics
+    macro_rules! collect {
+        ($provider:expr, $validate:path $(, $arg:expr)*) => {{
+            let mut diagnostics = Vec::new();
+            $validate($($arg,)* &mut diagnostics);
+            pending.extend(
+                diagnostics
+                    .into_iter()
+                    .map(|diagnostic| (diagnostic, Attribution::Provider($provider))),
+            );
+        }};
+    }
+    validate_missing_metadata(db, &mut pending);
+    validate_stable_key_conflicts(db, &mut pending);
+    validate_references(db, &ids, &mut pending);
+    validate_spans(db, &ids.files, &mut pending);
+    collect!("polint.symbol_graph", validate_semantic_index, db, &ids);
+    collect!("polint.module_topology", validate_topology_facts, db, &ids);
+    collect!("polint.semantic_mir", validate_semantic_mir, db, &ids);
+    collect!("polint.cfg", validate_cfg, db);
+    collect!("polint.calls", validate_calls, db);
+    collect!("polint.identity", validate_identity, db);
+    collect!("polint.abstract_domains", validate_abstract_domains, db);
+    collect!("polint.direct_summaries", validate_summaries, db);
+    collect!("polint.entrypoints", validate_entrypoints, db);
+    collect!("polint.type_value_alias", validate_type_value_alias, db);
+    collect!("polint.semantic_graph", validate_semantic_graph, db);
+    collect!("polint.refined_calls", validate_refined_calls, db);
+    collect!("polint.data_flow", validate_data_flow, db);
+    validate_metadata_providers(db, &manifests_by_id, &mut pending);
+    validate_precision_ceilings(db, &manifests_by_id, &mut pending);
+    let mut rendered = pending
+        .into_iter()
+        .map(|pending| {
+            let issue = ValidationIssue::from_pending(pending, db, &manifests_by_id);
+            (issue.render(), issue)
+        })
+        .collect::<Vec<_>>();
+    rendered.sort_by(|(left, left_issue), (right, right_issue)| {
+        diagnostic_order(left, right)
+            .then_with(|| left_issue.fact_family.cmp(&right_issue.fact_family))
+            .then_with(|| left_issue.provider_ids.cmp(&right_issue.provider_ids))
+    });
+    let (diagnostics, issues) = rendered.into_iter().unzip();
+    ValidationReport {
+        diagnostics,
+        issues,
+    }
 }
 
 fn validate_data_flow(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
@@ -1526,7 +1679,7 @@ mod type_value_alias_validation {
                 "missing {expected}: {diagnostics:#?}"
             );
         }
-        let rendered = format!("{diagnostics:#?}");
+        let rendered = format!("{:#?}", &*diagnostics);
         for marker in [
             "polint.type_value_alias",
             "TypeFact",
@@ -3267,26 +3420,25 @@ impl IdSets {
     }
 }
 
-fn validate_missing_metadata(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
+fn validate_missing_metadata(db: &AnalysisDb, diagnostics: &mut Vec<PendingIssue>) {
     for missing in db.missing_fact_metadata() {
-        diagnostics.push(
+        let reference = FactRef::new(missing.family, missing.run_id);
+        diagnostics.push((
             internal_diagnostic(format!(
                 "Fact metadata missing for {}#{}.",
                 missing.family.label(),
                 missing.run_id
             ))
             .with_evidence("family", missing.family.label())
-            .with_evidence(
-                "fact_ref",
-                fact_ref_value(FactRef::new(missing.family, missing.run_id)),
-            ),
-        );
+            .with_evidence("fact_ref", fact_ref_value(reference)),
+            Attribution::Family(missing.family),
+        ));
     }
 }
 
-fn validate_stable_key_conflicts(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
+fn validate_stable_key_conflicts(db: &AnalysisDb, diagnostics: &mut Vec<PendingIssue>) {
     for conflict in db.fact_meta().stable_key_conflicts() {
-        diagnostics.push(
+        diagnostics.push((
             internal_diagnostic(format!(
                 "Fact metadata stable key conflict detected for {} stable key.",
                 conflict.family.label()
@@ -3295,38 +3447,37 @@ fn validate_stable_key_conflicts(db: &AnalysisDb, diagnostics: &mut Vec<Diagnost
             .with_evidence("stable_key", conflict.stable_key.clone())
             .with_evidence("existing_ref", fact_ref_value(conflict.existing))
             .with_evidence("incoming_ref", fact_ref_value(conflict.incoming)),
-        );
+            Attribution::FamilyIdentity(conflict.family),
+        ));
     }
 }
 
 fn validate_metadata_providers(
     db: &AnalysisDb,
     manifests_by_id: &BTreeMap<&'static str, ProviderManifest>,
-    diagnostics: &mut Vec<Diagnostic>,
+    diagnostics: &mut Vec<PendingIssue>,
 ) {
     for (reference, metadata) in db.fact_meta().rows() {
         if !manifests_by_id.contains_key(metadata.producer_id)
             && !is_known_extension_producer(db, metadata.producer_id)
         {
-            diagnostics.push(provider_manifest_diagnostic(
-                reference,
-                "producer_id",
-                metadata.producer_id,
+            diagnostics.push((
+                provider_manifest_diagnostic(reference, "producer_id", metadata.producer_id),
+                Attribution::Family(reference.family),
             ));
         }
         if !manifests_by_id.contains_key(metadata.layer_id)
             && !is_known_extension_producer(db, metadata.layer_id)
         {
-            diagnostics.push(provider_manifest_diagnostic(
-                reference,
-                "layer_id",
-                metadata.layer_id,
+            diagnostics.push((
+                provider_manifest_diagnostic(reference, "layer_id", metadata.layer_id),
+                Attribution::Family(reference.family),
             ));
         }
     }
 }
 
-fn validate_references(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<Diagnostic>) {
+fn validate_references(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<PendingIssue>) {
     for fact in db.functions() {
         check_ref(
             diagnostics,
@@ -3779,7 +3930,11 @@ fn validate_references(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<Diag
     }
 }
 
-fn validate_spans(db: &AnalysisDb, file_ids: &BTreeSet<FileId>, diagnostics: &mut Vec<Diagnostic>) {
+fn validate_spans(
+    db: &AnalysisDb,
+    file_ids: &BTreeSet<FileId>,
+    diagnostics: &mut Vec<PendingIssue>,
+) {
     for fact in db.functions() {
         check_span(
             db,
@@ -4003,7 +4158,7 @@ fn validate_spans(db: &AnalysisDb, file_ids: &BTreeSet<FileId>, diagnostics: &mu
 fn validate_precision_ceilings(
     db: &AnalysisDb,
     manifests_by_id: &BTreeMap<&'static str, ProviderManifest>,
-    diagnostics: &mut Vec<Diagnostic>,
+    diagnostics: &mut Vec<PendingIssue>,
 ) {
     for (reference, metadata) in db.fact_meta().rows() {
         if metadata.producer_id.starts_with("polint.extension.") {
@@ -4016,7 +4171,7 @@ fn validate_precision_ceilings(
         if precision_within_ceiling(metadata.precision, manifest.precision_ceiling) {
             continue;
         }
-        diagnostics.push(
+        diagnostics.push((
             internal_diagnostic(format!(
                 "Fact metadata precision ceiling violated for {}#{}.",
                 reference.family.label(),
@@ -4026,7 +4181,8 @@ fn validate_precision_ceilings(
             .with_evidence("family", reference.family.label())
             .with_evidence("precision", precision_label(metadata.precision))
             .with_evidence("ceiling", ceiling_label(manifest.precision_ceiling)),
-        );
+            Attribution::Fact(reference),
+        ));
     }
 }
 
@@ -4045,7 +4201,7 @@ fn validate_extension_precision(
     reference: FactRef,
     metadata: &crate::analysis_kernel::FactMeta,
     db: &AnalysisDb,
-    diagnostics: &mut Vec<Diagnostic>,
+    diagnostics: &mut Vec<PendingIssue>,
 ) {
     let Some(fact) = db.extension_facts().get(reference.run_id as usize) else {
         return;
@@ -4060,7 +4216,7 @@ fn validate_extension_precision(
     {
         return;
     }
-    diagnostics.push(
+    diagnostics.push((
         internal_diagnostic(format!(
             "Fact metadata precision ceiling violated for {}#{}.",
             reference.family.label(),
@@ -4070,7 +4226,8 @@ fn validate_extension_precision(
         .with_evidence("family", reference.family.label())
         .with_evidence("precision", precision_label(metadata.precision))
         .with_evidence("ceiling", "extension_exact_requires_validation_evidence"),
-    );
+        Attribution::Fact(reference),
+    ));
 }
 
 fn validate_semantic_index(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<Diagnostic>) {
@@ -5124,7 +5281,7 @@ fn semantic_diagnostic(
 }
 
 fn check_ref<T>(
-    diagnostics: &mut Vec<Diagnostic>,
+    diagnostics: &mut Vec<PendingIssue>,
     valid_ids: &BTreeSet<T>,
     family: FactFamily,
     run_id: u64,
@@ -5136,11 +5293,15 @@ fn check_ref<T>(
     if valid_ids.contains(&value) {
         return;
     }
-    diagnostics.push(reference_diagnostic(family, run_id, field, value));
+    let reference = FactRef::new(family, run_id);
+    diagnostics.push((
+        reference_diagnostic(family, run_id, field, value),
+        Attribution::Fact(reference),
+    ));
 }
 
 fn check_optional_ref<T>(
-    diagnostics: &mut Vec<Diagnostic>,
+    diagnostics: &mut Vec<PendingIssue>,
     valid_ids: &BTreeSet<T>,
     family: FactFamily,
     run_id: u64,
@@ -5199,13 +5360,14 @@ struct SpanCheck<'a> {
 fn check_span(
     db: &AnalysisDb,
     file_ids: &BTreeSet<FileId>,
-    diagnostics: &mut Vec<Diagnostic>,
+    diagnostics: &mut Vec<PendingIssue>,
     check: SpanCheck<'_>,
 ) {
     let Some(reason) = span_failure_reason(db, file_ids, check.owner_file, check.span) else {
         return;
     };
-    diagnostics.push(
+    let reference = FactRef::new(check.family, check.run_id);
+    diagnostics.push((
         internal_diagnostic(format!(
             "Fact metadata span validation failed for {}#{}.",
             check.family.label(),
@@ -5222,7 +5384,8 @@ fn check_span(
         .with_evidence("owner_file", owner_file_value(check.owner_file))
         .with_evidence("start_byte", check.span.start_byte.to_string())
         .with_evidence("end_byte", check.span.end_byte.to_string()),
-    );
+        Attribution::Fact(reference),
+    ));
 }
 
 fn span_failure_reason(
@@ -5627,18 +5790,184 @@ mod tests {
             },
         );
 
-        let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+        let mut report = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
 
-        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(report.len(), 1);
         assert!(
-            diagnostics[0]
+            report[0]
                 .message
                 .starts_with("Fact metadata precision ceiling violated")
         );
         assert_eq!(
-            evidence_labels(&diagnostics[0]),
+            evidence_labels(&report[0]),
             BTreeSet::from(["ceiling", "family", "precision", "producer_id"])
         );
+        assert_eq!(report.issues[0].fact_family, Some(FactFamily::FileMetric));
+        assert_eq!(report.issues[0].provider_ids, ["polint.metrics"]);
+        let expected = report.downgrades();
+        report.issues[0].reason = "different rendering".to_string();
+        report.issues[0].evidence.clear();
+        report.issues[0].presentation.stable_fingerprint = "different fingerprint".to_string();
+        assert_eq!(report.downgrades(), expected);
+        let global = super::ValidationIssue::from_pending(
+            (
+                super::internal_diagnostic("global"),
+                super::Attribution::Global,
+            ),
+            &AnalysisDb::new(),
+            &Default::default(),
+        );
+        assert_eq!(global.fact_family, None);
+        assert!(global.provider_ids.is_empty());
+        assert!(
+            super::ValidationReport {
+                diagnostics: vec![global.render()],
+                issues: vec![global],
+            }
+            .downgrades()
+            .contains("unrelated")
+        );
+    }
+
+    /// A family-scoped issue must downgrade only the providers that emitted
+    /// facts in that family. Escalating to a global downgrade would fail every
+    /// provider, which blocks every capability-requesting rule and silently
+    /// empties the run of findings.
+    #[test]
+    fn family_scoped_issues_downgrade_only_that_familys_producers() {
+        let mut db = AnalysisDb::new();
+        db.fact_meta_mut_for_test().insert(
+            FactRef::new(FactFamily::FileMetric, 0),
+            FactMeta {
+                stable_key: "metric:key".to_string(),
+                producer_id: "polint.metrics",
+                layer_id: "polint.metrics",
+                precision: FactPrecision::Syntax,
+                confidence: FactConfidence::High,
+                validation: ValidationStatus::NativeTrusted,
+                payload_digest: "payload:a".to_string(),
+            },
+        );
+
+        for attribution in [
+            super::Attribution::Family(FactFamily::FileMetric),
+            // A fact whose own metadata row is absent still resolves through
+            // its family rather than escalating.
+            super::Attribution::Fact(FactRef::new(FactFamily::FileMetric, 404)),
+        ] {
+            let issue = super::ValidationIssue::from_pending(
+                (super::internal_diagnostic("family scoped"), attribution),
+                &db,
+                &AnalysisKernel::provider_manifests()
+                    .iter()
+                    .map(|manifest| (manifest.id, *manifest))
+                    .collect(),
+            );
+            assert_eq!(issue.provider_ids, ["polint.metrics"], "{attribution:?}");
+            let downgrades = super::ValidationReport {
+                diagnostics: vec![issue.render()],
+                issues: vec![issue],
+            }
+            .downgrades();
+            assert!(downgrades.contains("polint.metrics"), "{attribution:?}");
+            assert!(!downgrades.contains("polint.go.syntax"), "{attribution:?}");
+        }
+    }
+
+    /// TypeScript declaration merging (two `export interface Foo`) emits one
+    /// `Export` fact per declaration for a single merged entity, so they share
+    /// a stable key. That is an identity artefact, not broken output: it must
+    /// be reported without downgrading `polint.symbol_graph`, because a
+    /// downgrade blocks every rule requesting `symbols` or `references`.
+    #[test]
+    fn stable_key_conflicts_are_reported_without_downgrading_the_producer() {
+        let mut db = AnalysisDb::new();
+        for run_id in [0, 1] {
+            db.fact_meta_mut_for_test().insert(
+                FactRef::new(FactFamily::Export, run_id),
+                FactMeta {
+                    stable_key: "Export|export_name=MergeMe".to_string(),
+                    producer_id: super::SYMBOL_GRAPH_PROVIDER_ID,
+                    layer_id: super::SYMBOL_GRAPH_PROVIDER_ID,
+                    precision: FactPrecision::Exact,
+                    confidence: FactConfidence::High,
+                    validation: ValidationStatus::NativeTrusted,
+                    payload_digest: format!("payload:{run_id}"),
+                },
+            );
+        }
+
+        let report = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+
+        let conflict = report
+            .issues
+            .iter()
+            .find(|issue| issue.reason.contains("stable key conflict"))
+            .expect("the duplicate stable key is still reported");
+        assert_eq!(conflict.fact_family, Some(FactFamily::Export));
+        assert_eq!(conflict.provider_ids, [super::SYMBOL_GRAPH_PROVIDER_ID]);
+        assert!(
+            report
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("stable key conflict")),
+            "the conflict stays user-visible as an internal diagnostic"
+        );
+        // The synthetic metadata rows above trip other validators too, so the
+        // no-downgrade property is asserted on the conflict issue alone.
+        let conflict_only = super::ValidationReport {
+            diagnostics: vec![conflict.render()],
+            issues: vec![conflict.clone()],
+        };
+        assert!(
+            !conflict_only
+                .downgrades()
+                .contains(super::SYMBOL_GRAPH_PROVIDER_ID),
+            "an identity-only conflict must not reject the symbol graph provider"
+        );
+        assert_eq!(
+            conflict_only.downgrades(),
+            crate::analysis_kernel::ValidationDowngrades::default(),
+            "an identity-only conflict must not downgrade anything, globally or otherwise"
+        );
+    }
+
+    /// An extension-produced fact names a producer that is not in the static
+    /// manifest inventory. The known co-owner must survive rather than the
+    /// whole attribution collapsing into a global downgrade.
+    #[test]
+    fn unknown_producer_ids_do_not_erase_a_known_co_owner() {
+        let mut db = AnalysisDb::new();
+        db.fact_meta_mut_for_test().insert(
+            FactRef::new(FactFamily::FileMetric, 0),
+            FactMeta {
+                stable_key: "metric:key".to_string(),
+                producer_id: "acme.extension",
+                layer_id: "polint.metrics",
+                precision: FactPrecision::Syntax,
+                confidence: FactConfidence::High,
+                validation: ValidationStatus::NativeTrusted,
+                payload_digest: "payload:a".to_string(),
+            },
+        );
+        let issue = super::ValidationIssue::from_pending(
+            (
+                super::internal_diagnostic("extension fact"),
+                super::Attribution::Fact(FactRef::new(FactFamily::FileMetric, 0)),
+            ),
+            &db,
+            &AnalysisKernel::provider_manifests()
+                .iter()
+                .map(|manifest| (manifest.id, *manifest))
+                .collect(),
+        );
+        assert_eq!(issue.provider_ids, ["polint.metrics"]);
+        let downgrades = super::ValidationReport {
+            diagnostics: vec![issue.render()],
+            issues: vec![issue],
+        }
+        .downgrades();
+        assert!(downgrades.contains("polint.metrics"));
+        assert!(!downgrades.contains("polint.source"));
     }
 
     #[test]

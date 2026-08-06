@@ -1,4 +1,5 @@
 use super::*;
+use crate::analysis_kernel::incremental::{CacheNode, LayerCacheManifest};
 use crate::analysis_plan::AnalysisPlan;
 use crate::core::{AnalysisDb, BranchObligation, Language};
 use crate::diagnostics::TextRange;
@@ -170,8 +171,102 @@ func Authorize() {}
     assert_eq!(second_result.cache_stats.verified_reuse, 1);
     assert_eq!(second_result.cache_stats.recomputes, 0);
     assert_eq!(second_result.cache_stats.writes, 0);
+    assert!(first_result.output_digest.is_some());
+    assert_eq!(first_result.output_digest, second_result.output_digest);
 
     fs::remove_dir_all(cache_root).ok();
+}
+
+#[test]
+fn go_syntax_layer_dependency_delete_add_replace_duplicate_and_reorder_recompute() {
+    enum Tamper {
+        Delete,
+        Add,
+        Replace,
+        Duplicate,
+        Reorder,
+    }
+    for tamper in [
+        Tamper::Delete,
+        Tamper::Add,
+        Tamper::Replace,
+        Tamper::Duplicate,
+        Tamper::Reorder,
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let cache_root = temp.path();
+        let cache = crate::cache::Cache::new(cache_root.join("analysis"), true);
+        let plan = AnalysisPlan::empty();
+        let make_db = || {
+            let mut db = db_with_go_file("a.go", "package a\nfunc A() {}\n");
+            db.add_file(
+                "b.go".into(),
+                "b.go".into(),
+                "package b\nfunc B() {}\n".into(),
+            );
+            db
+        };
+        let first = analyze_with_plan_options_and_cache_stats(
+            &mut make_db(),
+            &cache,
+            "config",
+            "rule",
+            &plan,
+            false,
+        );
+        assert_eq!(first.cache_stats.writes, 1);
+        let path = first_layer_file(cache_root, "manifests");
+        let mut manifest: LayerCacheManifest =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let expected = manifest.dependencies.clone();
+        match tamper {
+            Tamper::Delete => {
+                manifest.dependencies.remove(0);
+            }
+            Tamper::Add => {
+                let mut edge = manifest.dependencies[0].clone();
+                edge.to = CacheNode::Input("unrelated".into());
+                manifest.dependencies.push(edge);
+                manifest.dependencies.sort();
+            }
+            Tamper::Replace => {
+                manifest.dependencies[0].to = CacheNode::Input("replaced".into());
+                manifest.dependencies.sort();
+            }
+            Tamper::Duplicate => {
+                let edge = manifest.dependencies[0].clone();
+                manifest.dependencies.push(edge);
+                manifest.dependencies.sort();
+            }
+            Tamper::Reorder => manifest.dependencies.swap(0, 1),
+        }
+        fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+
+        let repaired = analyze_with_plan_options_and_cache_stats(
+            &mut make_db(),
+            &cache,
+            "config",
+            "rule",
+            &plan,
+            false,
+        );
+        assert_eq!(repaired.cache_stats.invalid_evicted_reads, 1);
+        assert_eq!(repaired.cache_stats.recomputes, 1);
+        assert_eq!(repaired.cache_stats.verified_reuse, 0);
+        let repaired: LayerCacheManifest =
+            serde_json::from_slice(&fs::read(first_layer_file(cache_root, "manifests")).unwrap())
+                .unwrap();
+        assert_eq!(repaired.dependencies, expected);
+        let warm = analyze_with_plan_options_and_cache_stats(
+            &mut make_db(),
+            &cache,
+            "config",
+            "rule",
+            &plan,
+            false,
+        );
+        assert_eq!(warm.cache_stats.verified_reuse, 1);
+    }
 }
 
 #[test]
@@ -264,6 +359,7 @@ fn go_syntax_layer_cache_disabled_bypass() {
     assert_eq!(result.cache_stats.bypasses_disabled, 1);
     assert_eq!(result.cache_stats.recomputes, 1);
     assert_eq!(result.cache_stats.writes, 0);
+    assert!(result.output_digest.is_some());
     assert!(!cache_root.join("layers").exists());
 }
 

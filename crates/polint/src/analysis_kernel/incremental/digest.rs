@@ -12,6 +12,8 @@ pub(crate) struct Digest {
 pub(crate) enum DigestKind {
     SourceText,
     Config,
+    Workspace,
+    RunManifest,
     GoLifecycle,
     TsJsLifecycle,
     RuleCode,
@@ -84,6 +86,20 @@ impl DigestBuilder {
         fingerprint_length_prefixed_part(&mut self.hash, self.label, value);
     }
 
+    pub(crate) fn field(&mut self, label: &str, value: &str) {
+        fingerprint_length_prefixed_part(&mut self.hash, label, value);
+    }
+
+    pub(crate) fn bytes_field(&mut self, label: &str, value: &[u8]) {
+        fingerprint_length_prefixed_bytes(&mut self.hash, label, value);
+    }
+
+    pub(crate) fn u64_field(&mut self, label: &str, value: u64) {
+        let mut buffer = [0u8; 20];
+        let value = decimal_bytes(value, &mut buffer);
+        fingerprint_length_prefixed_bytes(&mut self.hash, label, value);
+    }
+
     pub(crate) fn debug_part(&mut self, value: impl fmt::Debug) {
         self.part(&format!("{value:?}"));
     }
@@ -101,10 +117,12 @@ impl DigestBuilder {
 }
 
 impl DigestKind {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::SourceText => "source_text",
             Self::Config => "config",
+            Self::Workspace => "workspace",
+            Self::RunManifest => "run_manifest",
             Self::GoLifecycle => "go_lifecycle",
             Self::TsJsLifecycle => "ts_js_lifecycle",
             Self::RuleCode => "rule_code",
@@ -136,13 +154,17 @@ const FNV_PRIME: u64 = 0x100000001b3;
 const PART_SEPARATOR: u8 = 0xfe;
 
 fn fingerprint_length_prefixed_part(hash: &mut u64, label: &str, value: &str) {
+    fingerprint_length_prefixed_bytes(hash, label, value.as_bytes());
+}
+
+fn fingerprint_length_prefixed_bytes(hash: &mut u64, label: &str, value: &[u8]) {
     fingerprint_usize_decimal(hash, label.len());
     fingerprint_byte(hash, b':');
     fingerprint_bytes(hash, label.as_bytes());
     fingerprint_byte(hash, b'=');
     fingerprint_usize_decimal(hash, value.len());
     fingerprint_byte(hash, b':');
-    fingerprint_bytes(hash, value.as_bytes());
+    fingerprint_bytes(hash, value);
     fingerprint_byte(hash, PART_SEPARATOR);
 }
 
@@ -166,6 +188,21 @@ fn fingerprint_bytes(hash: &mut u64, bytes: &[u8]) {
     for byte in bytes {
         fingerprint_byte(hash, *byte);
     }
+}
+
+fn decimal_bytes(mut value: u64, buffer: &mut [u8; 20]) -> &[u8] {
+    if value == 0 {
+        buffer[19] = b'0';
+        return &buffer[19..];
+    }
+
+    let mut index = buffer.len();
+    while value > 0 {
+        index -= 1;
+        buffer[index] = b'0' + (value % 10) as u8;
+        value /= 10;
+    }
+    &buffer[index..]
 }
 
 fn fingerprint_byte(hash: &mut u64, byte: u8) {

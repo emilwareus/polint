@@ -762,8 +762,6 @@ impl LayerKey {
         manifest: &ProviderManifest,
         source_text_digests: Vec<Digest>,
         function_fact_digests: Vec<Digest>,
-        config_digest: Digest,
-        upstream_syntax_output_digests: Vec<Digest>,
         metrics_parameter_digest: Digest,
     ) -> Self {
         debug_assert_eq!(
@@ -803,17 +801,14 @@ impl LayerKey {
             manifest.primary_schema_label(),
             metrics_parameter_digest,
             Digest::absent(DigestKind::ProviderParameters, "metrics_lifecycle"),
-            config_digest,
+            Digest::absent(DigestKind::Config, "metrics_config"),
             Digest::absent(DigestKind::ToolInvocation, "metrics_toolchain"),
             input_digests,
-            upstream_syntax_output_digests
-                .into_iter()
-                .map(dependency_layer_digest)
-                .collect(),
-            vec![Digest::absent(
-                DigestKind::ExtensionCode,
-                "extension_digest_absent",
-            )],
+            Vec::new(),
+            vec![
+                Digest::absent(DigestKind::ExtensionCode, "extension_digest_absent"),
+                Digest::absent(DigestKind::ModelFile, "model_digest_absent"),
+            ],
         )
     }
 }
@@ -1394,15 +1389,13 @@ mod tests {
     fn metrics_key(
         source_digest: Digest,
         function_digest: Digest,
-        config_digest: Digest,
-        syntax_output_digest: Digest,
+        _config_digest: Digest,
+        _syntax_output_digest: Digest,
     ) -> LayerKey {
         LayerKey::metrics_layer_key(
             metrics_manifest(),
             vec![source_digest],
             vec![function_digest],
-            config_digest,
-            vec![syntax_output_digest],
             Digest::from_parts(
                 DigestKind::ProviderParameters,
                 "metrics_parameters",
@@ -2355,7 +2348,7 @@ mod tests {
     }
 
     #[test]
-    fn metrics_layer_key_changes_on_source_function_config_or_syntax_digest() {
+    fn metrics_layer_key_changes_only_on_consumed_source_and_function_inputs() {
         let base = metrics_key(
             Digest::from_parts(DigestKind::SourceText, "source", &["src/app.ts", "base"]),
             Digest::from_parts(
@@ -2414,17 +2407,30 @@ mod tests {
         for changed in [
             changed_source,
             changed_function,
-            changed_config,
-            changed_syntax,
             changed_provider_version,
             changed_schema,
         ] {
             assert_ne!(base, changed);
         }
+        assert_eq!(base, changed_config);
+        assert_eq!(base, changed_syntax);
         assert_eq!(base.layer_kind, LayerKind::Metrics);
+        assert_eq!(
+            base.config_digest,
+            Digest::absent(DigestKind::Config, "metrics_config")
+        );
+        assert_eq!(
+            base.toolchain_digest,
+            Digest::absent(DigestKind::ToolInvocation, "metrics_toolchain")
+        );
+        assert!(base.dependency_layer_digests.is_empty());
         assert!(base.extension_digests.contains(&Digest::absent(
             DigestKind::ExtensionCode,
             "extension_digest_absent"
+        )));
+        assert!(base.extension_digests.contains(&Digest::absent(
+            DigestKind::ModelFile,
+            "model_digest_absent"
         )));
     }
 

@@ -4,10 +4,27 @@
 //! Callers receive typed configuration and status values only; rusqlite types do
 //! not cross this boundary.
 
+#![cfg_attr(not(test), expect(dead_code))]
+
 use std::path::{Path, PathBuf};
 
+use super::go_syntax_projection::GoSyntaxProviderProjection;
+use super::incremental::{RunManifest, RunManifestInputs};
+use super::metrics_projection::MetricsProviderProjection;
+
 mod connection;
+mod generation;
+mod go_syntax_mirror;
 mod migrations;
+mod provider_mirror;
+#[cfg(test)]
+mod scale_tests;
+
+pub(crate) use generation::{
+    GenerationError, GenerationHandle, GoSyntaxMatch, ManifestMatch, MetricsMatch,
+};
+#[cfg(test)]
+pub(crate) use generation::{GenerationStatus, PublicationFailurePoint};
 
 #[cfg(test)]
 pub(crate) use connection::{HeldWriterConnection, StoreFixtureSnapshot};
@@ -37,6 +54,43 @@ pub(crate) fn hold_writer_connection_for_test(path: &Path) -> Result<HeldWriterC
 #[cfg(test)]
 pub(crate) fn current_schema_is_valid_for_test(path: &Path) -> bool {
     connection::current_schema_is_valid_for_test(path)
+}
+
+/// Aggregate byte ceiling applied to one generation's relational rows in each
+/// bounded read.
+///
+/// This is deliberately a runtime lookup rather than a `cfg(test)` constant: an
+/// override compiled only under `cfg(test)` means the value the tests exercise
+/// is never the value that ships, and the shipping value is never executed.
+/// Tests lower it explicitly with [`with_aggregate_bytes_limit`].
+const MAX_AGGREGATE_BYTES: i64 = 512 * 1024 * 1024;
+
+#[cfg(test)]
+thread_local! {
+    static AGGREGATE_BYTES_LIMIT: std::cell::Cell<i64> =
+        const { std::cell::Cell::new(MAX_AGGREGATE_BYTES) };
+}
+
+pub(super) fn max_aggregate_bytes() -> i64 {
+    #[cfg(test)]
+    {
+        AGGREGATE_BYTES_LIMIT.with(std::cell::Cell::get)
+    }
+    #[cfg(not(test))]
+    {
+        MAX_AGGREGATE_BYTES
+    }
+}
+
+/// Runs `body` with a lowered aggregate ceiling so bound rejection stays
+/// testable on fixture-sized data. The override is thread-local and the test
+/// harness gives each test its own thread, so it cannot leak between tests.
+#[cfg(test)]
+pub(crate) fn with_aggregate_bytes_limit<T>(limit: i64, body: impl FnOnce() -> T) -> T {
+    let previous = AGGREGATE_BYTES_LIMIT.with(|cell| cell.replace(limit));
+    let result = body();
+    AGGREGATE_BYTES_LIMIT.with(|cell| cell.set(previous));
+    result
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -86,6 +140,26 @@ pub(crate) enum StoreRebuildReason {
 
 pub(crate) struct SemanticStore;
 
+pub(crate) struct PublicationInputs<'a> {
+    pub(crate) manifest: RunManifestInputs<'a>,
+    pub(crate) metrics: MetricsProviderProjection,
+    pub(crate) go_syntax: GoSyntaxProviderProjection,
+}
+
+impl<'a> PublicationInputs<'a> {
+    pub(crate) fn new(
+        manifest: RunManifestInputs<'a>,
+        metrics: MetricsProviderProjection,
+        go_syntax: GoSyntaxProviderProjection,
+    ) -> Self {
+        Self {
+            manifest,
+            metrics,
+            go_syntax,
+        }
+    }
+}
+
 impl SemanticStore {
     pub(crate) fn maintain(config: &StoreConfig) -> StoreStatus {
         if !config.is_enabled() {
@@ -105,6 +179,159 @@ impl SemanticStore {
             Ok(connection::LeaseStatus::Busy) => StoreStatus::BusySkipped,
             Err(error) => map_connection_error(error),
         }
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the private lifecycle is reserved for semantic metadata publication"
+        )
+    )]
+    pub(crate) fn reserve_generation(
+        config: &StoreConfig,
+    ) -> Result<GenerationHandle, GenerationError> {
+        prepare_generation_store(config)?;
+        let mut writer = connection::open_writer(config.path()).map_err(GenerationError::from)?;
+        generation::reserve(&mut writer)
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the private lifecycle is reserved for semantic metadata publication"
+        )
+    )]
+    pub(crate) fn publish_generation(
+        config: &StoreConfig,
+        handle: GenerationHandle,
+        inputs: PublicationInputs<'_>,
+    ) -> Result<GenerationHandle, GenerationError> {
+        require_enabled(config)?;
+        let manifest = RunManifest::from_inputs(inputs.manifest)?;
+        prepare_store_path(config.path()).map_err(GenerationError::Store)?;
+        let mut writer = connection::open_writer(config.path()).map_err(GenerationError::from)?;
+        generation::publish(
+            &mut writer,
+            handle,
+            &manifest,
+            &inputs.metrics,
+            &inputs.go_syntax,
+        )
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the private lifecycle is reserved for semantic metadata publication"
+        )
+    )]
+    pub(crate) fn active_generation(
+        config: &StoreConfig,
+    ) -> Result<Option<GenerationHandle>, GenerationError> {
+        prepare_generation_store(config)?;
+        let reader =
+            connection::open_current_read_only(config.path()).map_err(GenerationError::from)?;
+        generation::active(&reader)
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the private match seam is reserved for semantic metadata reuse"
+        )
+    )]
+    pub(crate) fn match_active_manifest(
+        config: &StoreConfig,
+        inputs: RunManifestInputs<'_>,
+    ) -> Result<ManifestMatch, GenerationError> {
+        require_enabled(config)?;
+        let manifest = RunManifest::from_inputs(inputs)?;
+        prepare_store_path(config.path()).map_err(GenerationError::Store)?;
+        let reader =
+            connection::open_current_read_only(config.path()).map_err(GenerationError::from)?;
+        generation::match_active(&reader, &manifest)
+    }
+
+    pub(crate) fn active_metrics(
+        config: &StoreConfig,
+    ) -> Result<Option<(GenerationHandle, MetricsProviderProjection)>, GenerationError> {
+        prepare_generation_store(config)?;
+        let reader =
+            connection::open_current_read_only(config.path()).map_err(GenerationError::from)?;
+        generation::active_metrics(&reader)
+    }
+
+    pub(crate) fn match_active_metrics(
+        config: &StoreConfig,
+        manifest: RunManifestInputs<'_>,
+        metrics: &MetricsProviderProjection,
+    ) -> Result<MetricsMatch, GenerationError> {
+        require_enabled(config)?;
+        let manifest = RunManifest::from_inputs(manifest)?;
+        prepare_store_path(config.path()).map_err(GenerationError::Store)?;
+        let reader =
+            connection::open_current_read_only(config.path()).map_err(GenerationError::from)?;
+        generation::match_active_metrics(&reader, &manifest, metrics)
+    }
+
+    pub(crate) fn active_go_syntax(
+        config: &StoreConfig,
+    ) -> Result<Option<(GenerationHandle, GoSyntaxProviderProjection)>, GenerationError> {
+        prepare_generation_store(config)?;
+        let reader =
+            connection::open_current_read_only(config.path()).map_err(GenerationError::from)?;
+        generation::active_go_syntax(&reader)
+    }
+
+    pub(crate) fn match_active_go_syntax(
+        config: &StoreConfig,
+        manifest: RunManifestInputs<'_>,
+        go_syntax: &GoSyntaxProviderProjection,
+    ) -> Result<GoSyntaxMatch, GenerationError> {
+        require_enabled(config)?;
+        let manifest = RunManifest::from_inputs(manifest)?;
+        prepare_store_path(config.path()).map_err(GenerationError::Store)?;
+        let reader =
+            connection::open_current_read_only(config.path()).map_err(GenerationError::from)?;
+        generation::match_active_go_syntax(&reader, &manifest, go_syntax)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn publish_generation_with_failure_for_test(
+        config: &StoreConfig,
+        handle: GenerationHandle,
+        inputs: PublicationInputs<'_>,
+        failure_point: PublicationFailurePoint,
+    ) -> Result<GenerationHandle, GenerationError> {
+        require_enabled(config)?;
+        let manifest = RunManifest::from_inputs(inputs.manifest)?;
+        prepare_store_path(config.path()).map_err(GenerationError::Store)?;
+        let mut writer = connection::open_writer(config.path()).map_err(GenerationError::from)?;
+        generation::publish_with_failure_for_test(
+            &mut writer,
+            handle,
+            &manifest,
+            &inputs.metrics,
+            &inputs.go_syntax,
+            failure_point,
+        )
+    }
+}
+
+fn prepare_generation_store(config: &StoreConfig) -> Result<(), GenerationError> {
+    require_enabled(config)?;
+    prepare_store_path(config.path()).map_err(GenerationError::Store)
+}
+
+fn require_enabled(config: &StoreConfig) -> Result<(), GenerationError> {
+    if config.is_enabled() {
+        Ok(())
+    } else {
+        Err(GenerationError::Store(StoreStatus::Disabled))
     }
 }
 
