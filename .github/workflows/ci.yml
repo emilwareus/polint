@@ -146,6 +146,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          # The restored `target/` contains prebuilt build-script binaries. An
+          # entry saved on a different runner architecture restores executables
+          # this host cannot run — `rayon-core`'s build script failed with
+          # "cannot execute binary file" on macos-latest. Scoping the key by
+          # arch retires that entry and stops the mix recurring.
+          key: ${{ runner.arch }}
 
       - name: cargo test (lib)
         run: cargo test -p polint --lib --all-features --locked
