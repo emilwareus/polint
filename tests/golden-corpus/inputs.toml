@@ -1,0 +1,63 @@
+# Golden-corpus analysis targets - input surface only.
+# Characterization outputs and the CLI harness are separate; this file lists
+# what may be analysed, not what is expected.
+schema_version = "polint-golden-corpus-inputs-1"
+
+# Local example rule packs (`examples/*/.polint/rules/`).
+example_rule_packs = [
+  "examples/basic/.polint/rules",
+  "examples/code-quality-metrics/.polint/rules",
+  "examples/comment-ignores/.polint/rules",
+  "examples/config-denied-literal/.polint/rules",
+  "examples/custom-rule-go/.polint/rules",
+  "examples/custom-rule-ts/.polint/rules",
+  "examples/go-branch-obligations/.polint/rules",
+  "examples/go-complexity/.polint/rules",
+  "examples/go-import-boundaries/.polint/rules",
+  "examples/go-sensitive-writes/.polint/rules",
+  "examples/go-test-quality/.polint/rules",
+  "examples/gorm-review-indexes/.polint/rules",
+  "examples/multiple-rules/.polint/rules",
+  "examples/review-rules/.polint/rules",
+  "examples/ts-complexity/.polint/rules",
+  "examples/ts-design-tokens/.polint/rules",
+  "examples/ts-no-raw-api-calls/.polint/rules",
+]
+
+# Top-level trees under `tests/eval-fixtures/` (directories only).
+eval_fixture_trees = [
+  "tests/eval-fixtures/abstract-domains",
+  "tests/eval-fixtures/adaptation-model",
+  "tests/eval-fixtures/cache",
+  "tests/eval-fixtures/cfg-core",
+  "tests/eval-fixtures/data-flow",
+  "tests/eval-fixtures/determinism",
+  "tests/eval-fixtures/direct-calls",
+  "tests/eval-fixtures/direct-summaries",
+  "tests/eval-fixtures/evidence",
+  "tests/eval-fixtures/extension",
+  "tests/eval-fixtures/framework-entrypoints",
+  "tests/eval-fixtures/go-rta",
+  "tests/eval-fixtures/identity",
+  "tests/eval-fixtures/jelly",
+  "tests/eval-fixtures/kernel",
+  "tests/eval-fixtures/module-topology",
+  "tests/eval-fixtures/polyglot-canary",
+  "tests/eval-fixtures/promotion",
+  "tests/eval-fixtures/provenance",
+  "tests/eval-fixtures/refined-calls",
+  "tests/eval-fixtures/semantic-graph",
+  "tests/eval-fixtures/semantic-index",
+  "tests/eval-fixtures/semantic-mir",
+  "tests/eval-fixtures/ts-object-model",
+  "tests/eval-fixtures/ts-tokens",
+  "tests/eval-fixtures/type-value-alias",
+]
+
+# Scale repositories. Pins (URL + commit SHA + checkout path) live in the suite
+# manifests; never clone a floating branch or tag tip.
+scale_suite_manifests = [
+  "research/evaluation-harness/suites/excalidraw-excalidraw-scale.toml",
+  "research/evaluation-harness/suites/gohugoio-hugo-scale.toml",
+  "research/evaluation-harness/suites/grafana-grafana-scale.toml",
+]

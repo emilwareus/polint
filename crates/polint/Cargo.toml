@@ -59,6 +59,7 @@ insta.workspace = true
 predicates.workspace = true
 proptest.workspace = true
 tempfile.workspace = true
+toml.workspace = true
 
 # polint owns its lint table (instead of `[lints] workspace = true`) so that the
 # single audited `getrusage` FFI in src/eval/bench/measure.rs can opt in via a

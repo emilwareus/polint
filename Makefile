@@ -1,7 +1,7 @@
 CARGO ?= cargo
 PYTHON ?= python3
 
-.PHONY: install test lint doc install-smoke deny check readme-assets
+.PHONY: install test lint doc install-smoke deny check readme-assets fetch-scale-repos
 
 install:
 	$(CARGO) install --locked --path crates/polint --force
@@ -27,6 +27,12 @@ deny:
 
 # Full local gate aligned with `.github/workflows/ci.yml` (all jobs on one machine).
 check: lint test doc install-smoke deny
+
+# Materialize the three golden-corpus scale repositories at the commit SHAs
+# pinned in research/evaluation-harness/suites/*-scale.toml (never floating).
+# Checkouts are gitignored under research/evaluation-harness/repos/.
+fetch-scale-repos:
+	$(PYTHON) scripts/fetch-scale-repos.py
 
 # Regenerate the colored-output SVGs embedded in README.md from the tracked
 # ANSI fixtures under docs/img/. Run after changing diagnostic colors/format.
