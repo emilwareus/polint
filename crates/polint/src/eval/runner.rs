@@ -101,6 +101,7 @@ pub(crate) fn build_report_for_cases<A: BenchmarkAdapter>(
                 budget_name: "eval-runner".to_string(),
                 budget_passed: true,
                 observed_runtime_ms: None,
+                peak_rss_bytes: None,
             },
         });
     }
@@ -237,19 +238,31 @@ fn build_external_suite_report_for_test<A: BenchmarkAdapter>(
     let mut limitations = plan.limitations.clone();
 
     for case in cases.iter().filter(|case| selected.contains(&case.case_id)) {
-        let started = std::time::Instant::now();
-        let prepared = adapter.prepare_case_with_scratch(manifest, case, scratch.path())?;
-        let observed = if plan.should_run_polint_analysis {
-            run_polint_for_prepared_case(adapter, manifest, case, &prepared)
-                .unwrap_or_else(|error| analysis_error_observed(case, error))
-        } else {
-            case.observed.clone()
-        };
-        let matches = match_case(&case.expected, &observed, MatcherConfig::default());
-        if observed
-            .iter()
-            .any(|item| analysis_run_limitation_key(item).is_some())
-        {
+        type CaseOutcome = (
+            Vec<ObservedItem>,
+            Vec<crate::eval::report::MatchSummary>,
+            bool,
+        );
+        let mut case_outcome: Option<anyhow::Result<CaseOutcome>> = None;
+        let timing = crate::eval::bench::measure::TimedRun::measure(|| {
+            case_outcome = Some((|| {
+                let prepared = adapter.prepare_case_with_scratch(manifest, case, scratch.path())?;
+                let observed = if plan.should_run_polint_analysis {
+                    run_polint_for_prepared_case(adapter, manifest, case, &prepared)
+                        .unwrap_or_else(|error| analysis_error_observed(case, error))
+                } else {
+                    case.observed.clone()
+                };
+                let matches = match_case(&case.expected, &observed, MatcherConfig::default());
+                let has_limitation = observed
+                    .iter()
+                    .any(|item| analysis_run_limitation_key(item).is_some());
+                Ok((observed, matches, has_limitation))
+            })());
+        });
+        let (observed, matches, has_limitation) =
+            case_outcome.expect("timed case outcome must be set")?;
+        if has_limitation {
             limitations.push(format!(
                 "case {} produced an analysis run limitation",
                 case.case_id
@@ -264,9 +277,8 @@ fn build_external_suite_report_for_test<A: BenchmarkAdapter>(
             runtime: RuntimeObservation {
                 budget_name: "eval-runner".to_string(),
                 budget_passed: true,
-                observed_runtime_ms: Some(
-                    started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
-                ),
+                observed_runtime_ms: Some(timing.elapsed_ms),
+                peak_rss_bytes: Some(timing.peak_rss_bytes),
             },
         });
     }
@@ -281,6 +293,8 @@ fn build_external_suite_report_for_test<A: BenchmarkAdapter>(
         crate::eval::metrics::jelly_oracle_coverage_for_cases(&case_results);
     metrics.sections.categorized_failures = categorized_failures_for_cases(&case_results);
 
+    let performance = performance_report_from_case_costs(&case_results);
+
     let mut run = EvaluationRun {
         schema_version: EVALUATION_SCHEMA_VERSION.to_string(),
         suite_id: manifest.id.0.clone(),
@@ -288,7 +302,7 @@ fn build_external_suite_report_for_test<A: BenchmarkAdapter>(
         suite_manifest: Some(manifest.clone()),
         cases: case_results,
         metrics,
-        performance: None,
+        performance,
         comparison_rows: Vec::new(),
         adaptation: None,
         adaptation_delta: None,
@@ -481,7 +495,7 @@ fn graph_comparison_rows(
 
 #[cfg(test)]
 fn run_metric_map(run: &EvaluationRun) -> BTreeMap<String, f64> {
-    BTreeMap::from([
+    let mut metrics = BTreeMap::from([
         (
             "true_positives".to_string(),
             run.metrics.true_positives as f64,
@@ -509,7 +523,56 @@ fn run_metric_map(run: &EvaluationRun) -> BTreeMap<String, f64> {
             "graph_edges_observed".to_string(),
             run.metrics.graph_edges_observed as f64,
         ),
-    ])
+    ]);
+    let mut runtime_ms = 0u64;
+    let mut peak_rss_bytes = 0u64;
+    let mut saw_runtime = false;
+    let mut saw_peak_rss = false;
+    for case in &run.cases {
+        if let Some(ms) = case.runtime.observed_runtime_ms {
+            runtime_ms = runtime_ms.saturating_add(ms);
+            saw_runtime = true;
+        }
+        if let Some(rss) = case.runtime.peak_rss_bytes {
+            peak_rss_bytes = peak_rss_bytes.max(rss);
+            saw_peak_rss = true;
+        }
+    }
+    if saw_runtime {
+        metrics.insert("runtime_ms".to_string(), runtime_ms as f64);
+    }
+    if saw_peak_rss {
+        metrics.insert("peak_rss_bytes".to_string(), peak_rss_bytes as f64);
+    }
+    metrics
+}
+
+#[cfg(test)]
+fn performance_report_from_case_costs(
+    cases: &[CaseResult],
+) -> Option<crate::eval::performance::EvalPerformanceReport> {
+    let mut runtime_ms = 0u64;
+    let mut peak_rss_bytes = 0u64;
+    let mut saw_runtime = false;
+    let mut saw_peak_rss = false;
+    for case in cases {
+        if let Some(ms) = case.runtime.observed_runtime_ms {
+            runtime_ms = runtime_ms.saturating_add(ms);
+            saw_runtime = true;
+        }
+        if let Some(rss) = case.runtime.peak_rss_bytes {
+            peak_rss_bytes = peak_rss_bytes.max(rss);
+            saw_peak_rss = true;
+        }
+    }
+    if !saw_runtime && !saw_peak_rss {
+        return None;
+    }
+    let mut performance = crate::eval::performance::EvalPerformanceReport::default();
+    performance.runtime.observed_runtime_ms = saw_runtime.then_some(runtime_ms);
+    performance.runtime.peak_rss_bytes = saw_peak_rss.then_some(peak_rss_bytes);
+    performance.sync_peak_rss_from_runtime();
+    Some(performance)
 }
 
 #[cfg(test)]

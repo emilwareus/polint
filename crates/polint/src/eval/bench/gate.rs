@@ -200,6 +200,89 @@ pub(crate) fn is_blocking(report: &RegressionGateReport) -> bool {
     report.verdict == GateVerdict::Fail
 }
 
+/// Locked relative cost-column budget: measured wall-clock and peak RSS may
+/// grow by at most +20% versus a committed accuracy-baseline row. Restores the
+/// cost discipline that was dropped when the Jelly iteration log stopped
+/// recording runtime — every accuracy iteration that claims a cost column must
+/// stay inside this budget or Fail the build.
+#[cfg(test)]
+pub(crate) const DEFAULT_MAX_COST_COLUMN_RATIO: f64 = 1.20;
+
+/// Absolute wall-clock noise floor (ms) for cost-column gating.
+#[cfg(test)]
+pub(crate) const COST_RUNTIME_ABS_FLOOR_MS: u64 = 50;
+
+/// Absolute peak-RSS noise floor (bytes) for cost-column gating — same 16 MiB
+/// floor as the store regression gate.
+#[cfg(test)]
+pub(crate) const COST_PEAK_RSS_ABS_FLOOR_BYTES: u64 = PEAK_RSS_ABS_FLOOR_BYTES;
+
+/// Compare measured accuracy-suite cost columns against a committed baseline
+/// row. Emits one check per present cost metric; a missing measured value when
+/// the baseline recorded one is an explicit Fail (costs must stay recorded).
+#[cfg(test)]
+pub(crate) fn evaluate_cost_columns_budget(
+    baseline: &crate::eval::bench::report::GraphAccuracyRow,
+    measured: &crate::eval::bench::report::GraphAccuracyRow,
+    max_ratio: f64,
+) -> RegressionGateReport {
+    let checks = vec![
+        optional_ratio_budget_check(
+            "runtime_ms_ratio",
+            measured.runtime_ms,
+            baseline.runtime_ms,
+            max_ratio,
+            COST_RUNTIME_ABS_FLOOR_MS,
+        ),
+        optional_ratio_budget_check(
+            "peak_rss_bytes_ratio",
+            measured.peak_rss_bytes,
+            baseline.peak_rss_bytes,
+            max_ratio,
+            COST_PEAK_RSS_ABS_FLOOR_BYTES,
+        ),
+    ];
+    let verdict = checks
+        .iter()
+        .map(|check| check.verdict)
+        .max()
+        .unwrap_or(GateVerdict::Pass);
+    RegressionGateReport { verdict, checks }
+}
+
+#[cfg(test)]
+fn optional_ratio_budget_check(
+    metric: &str,
+    measured: Option<u64>,
+    baseline: Option<u64>,
+    budget: f64,
+    abs_floor: u64,
+) -> GateCheck {
+    match (measured, baseline) {
+        (None, None) => GateCheck {
+            metric: metric.to_string(),
+            observed: "unmeasured".to_string(),
+            threshold: "optional when baseline is also unmeasured".to_string(),
+            verdict: GateVerdict::Pass,
+        },
+        (None, Some(_)) => GateCheck {
+            metric: metric.to_string(),
+            observed: "missing measured cost column".to_string(),
+            threshold: "cost column must be recorded when baseline has one".to_string(),
+            verdict: GateVerdict::Fail,
+        },
+        (Some(_), None) => GateCheck {
+            metric: metric.to_string(),
+            observed: "measured; baseline cost column not yet committed".to_string(),
+            threshold: "record-only until baseline cost columns are populated".to_string(),
+            verdict: GateVerdict::Pass,
+        },
+        (Some(measured), Some(baseline)) => {
+            ratio_budget_check(metric, measured, baseline, budget, abs_floor)
+        }
+    }
+}
+
 /// Build a "measured must not exceed its budget" check with an absolute noise
 /// floor (HI-03). The measured value may exceed the baseline by up to the LARGER
 /// of the ratio budget (`baseline * budget`) and an absolute tolerance
@@ -617,5 +700,78 @@ mod tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod cost_columns_tests {
+    use super::*;
+    use crate::eval::bench::report::GraphAccuracyRow;
+
+    fn row(runtime_ms: Option<u64>, peak_rss_bytes: Option<u64>) -> GraphAccuracyRow {
+        GraphAccuracyRow {
+            suite_id: "jelly-callgraph-micro".to_string(),
+            suite_commit: Some("b799ed4".to_string()),
+            recall: Some(0.88),
+            precision: Some(0.96),
+            graph_edges_expected: 100,
+            graph_edges_observed: 90,
+            unknown_count: 0,
+            runtime_ms,
+            peak_rss_bytes,
+        }
+    }
+
+    #[test]
+    fn over_budget_runtime_cost_column_fails_and_is_blocking() {
+        let baseline = row(Some(1000), Some(100 * 1024 * 1024));
+        // 1.50x runtime exceeds the +20% cost-column budget.
+        let measured = row(Some(1500), Some(100 * 1024 * 1024));
+        let report =
+            evaluate_cost_columns_budget(&baseline, &measured, DEFAULT_MAX_COST_COLUMN_RATIO);
+        assert!(is_blocking(&report), "{report:#?}");
+        assert!(report.checks.iter().any(|check| {
+            check.metric == "runtime_ms_ratio" && check.verdict == GateVerdict::Fail
+        }));
+    }
+
+    #[test]
+    fn over_budget_peak_rss_cost_column_fails_and_is_blocking() {
+        let baseline = row(Some(1000), Some(100 * 1024 * 1024));
+        // 1.50x peak RSS exceeds the +20% cost-column budget.
+        let measured = row(Some(1000), Some(150 * 1024 * 1024));
+        let report =
+            evaluate_cost_columns_budget(&baseline, &measured, DEFAULT_MAX_COST_COLUMN_RATIO);
+        assert!(is_blocking(&report), "{report:#?}");
+        assert!(report.checks.iter().any(|check| {
+            check.metric == "peak_rss_bytes_ratio" && check.verdict == GateVerdict::Fail
+        }));
+    }
+
+    #[test]
+    fn within_budget_cost_columns_pass() {
+        let baseline = row(Some(1000), Some(100 * 1024 * 1024));
+        let measured = row(Some(1100), Some(110 * 1024 * 1024));
+        let report =
+            evaluate_cost_columns_budget(&baseline, &measured, DEFAULT_MAX_COST_COLUMN_RATIO);
+        assert!(!is_blocking(&report), "{report:#?}");
+        assert!(
+            report
+                .checks
+                .iter()
+                .all(|check| check.verdict == GateVerdict::Pass)
+        );
+    }
+
+    #[test]
+    fn dropping_a_measured_cost_column_fails() {
+        let baseline = row(Some(1000), Some(100 * 1024 * 1024));
+        let measured = row(None, Some(100 * 1024 * 1024));
+        let report =
+            evaluate_cost_columns_budget(&baseline, &measured, DEFAULT_MAX_COST_COLUMN_RATIO);
+        assert!(is_blocking(&report), "{report:#?}");
+        assert!(report.checks.iter().any(|check| {
+            check.metric == "runtime_ms_ratio" && check.verdict == GateVerdict::Fail
+        }));
     }
 }

@@ -1274,6 +1274,7 @@ mod tests {
                 budget_name: "delta".to_string(),
                 budget_passed: true,
                 observed_runtime_ms: runtime_ms,
+                peak_rss_bytes: None,
             },
         }
     }

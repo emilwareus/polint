@@ -293,6 +293,9 @@ pub(crate) struct ObservedRuntimeBudget {
     pub(crate) name: String,
     pub(crate) budget_passed: bool,
     pub(crate) observed_runtime_ms: Option<u64>,
+    /// Peak RSS (bytes) observed for the iteration, when measured.
+    #[serde(default)]
+    pub(crate) peak_rss_bytes: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -423,6 +426,7 @@ mod tests {
                 name: "fast-ci".to_string(),
                 budget_passed: true,
                 observed_runtime_ms: Some(412),
+                peak_rss_bytes: None,
             }),
         ];
 
@@ -532,6 +536,7 @@ mod tests {
             name: "fast-ci".to_string(),
             budget_passed: false,
             observed_runtime_ms: Some(725),
+            peak_rss_bytes: None,
         };
 
         assert_eq!(expected.max_runtime_ms, 500);

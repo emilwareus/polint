@@ -117,6 +117,14 @@ pub(crate) struct GraphAccuracyRow {
     pub(crate) graph_edges_expected: u64,
     pub(crate) graph_edges_observed: u64,
     pub(crate) unknown_count: u64,
+    /// Suite wall-clock across scored cases (ms). Cost column restored so
+    /// accuracy work cannot silently regress runtime.
+    #[serde(default)]
+    pub(crate) runtime_ms: Option<u64>,
+    /// Process peak RSS (bytes) across scored cases. Cost column restored so
+    /// accuracy work cannot silently regress memory.
+    #[serde(default)]
+    pub(crate) peak_rss_bytes: Option<u64>,
 }
 
 /// The committed pre-store persisted-graph recall/precision baseline (BENCH-04).
@@ -147,17 +155,22 @@ impl GraphAccuracyBaseline {
     pub(crate) fn from_runs(runs: &[&EvaluationRun]) -> Self {
         let mut rows: Vec<GraphAccuracyRow> = runs
             .iter()
-            .map(|run| GraphAccuracyRow {
-                suite_id: run.suite_id.clone(),
-                suite_commit: run
-                    .suite_manifest
-                    .as_ref()
-                    .and_then(|manifest| manifest.source_commit.clone()),
-                recall: run.metrics.recall,
-                precision: run.metrics.precision,
-                graph_edges_expected: run.metrics.graph_edges_expected,
-                graph_edges_observed: run.metrics.graph_edges_observed,
-                unknown_count: run.metrics.unknown_count,
+            .map(|run| {
+                let (runtime_ms, peak_rss_bytes) = cost_columns_from_run(run);
+                GraphAccuracyRow {
+                    suite_id: run.suite_id.clone(),
+                    suite_commit: run
+                        .suite_manifest
+                        .as_ref()
+                        .and_then(|manifest| manifest.source_commit.clone()),
+                    recall: run.metrics.recall,
+                    precision: run.metrics.precision,
+                    graph_edges_expected: run.metrics.graph_edges_expected,
+                    graph_edges_observed: run.metrics.graph_edges_observed,
+                    unknown_count: run.metrics.unknown_count,
+                    runtime_ms,
+                    peak_rss_bytes,
+                }
             })
             .collect();
         rows.sort_by(|left, right| left.suite_id.cmp(&right.suite_id));
@@ -203,22 +216,24 @@ pub(crate) fn load_graph_accuracy_baseline(path: &Path) -> anyhow::Result<GraphA
 
 /// Render `baseline` to a markdown "## Persisted-Graph Accuracy Baseline"
 /// section. Columns: Suite, Commit, Recall, Precision, Edges expected, Edges
-/// observed, Unknowns. Rows are sorted by `suite_id` (deterministic).
+/// observed, Unknowns, Runtime ms, Peak RSS bytes. Rows are sorted by
+/// `suite_id` (deterministic). Cost columns sit beside accuracy so a
+/// recall/precision win cannot hide a runtime or RSS regression.
 pub(crate) fn render_graph_accuracy_markdown(baseline: &GraphAccuracyBaseline) -> String {
     let sorted = baseline.sorted();
     let mut out = String::new();
     out.push_str("## Persisted-Graph Accuracy Baseline\n\n");
     out.push_str(&format!("_{}_\n\n", escape_cell(&sorted.reference)));
     out.push_str(
-        "| Suite | Commit | Recall | Precision | Edges expected | Edges observed | Unknowns |\n",
+        "| Suite | Commit | Recall | Precision | Edges expected | Edges observed | Unknowns | Runtime ms | Peak RSS bytes |\n",
     );
-    out.push_str("|---|---|---:|---:|---:|---:|---:|\n");
+    out.push_str("|---|---|---:|---:|---:|---:|---:|---:|---:|\n");
     if sorted.rows.is_empty() {
-        out.push_str("| _none_ |  |  |  |  |  |  |\n");
+        out.push_str("| _none_ |  |  |  |  |  |  |  |  |\n");
     } else {
         for row in &sorted.rows {
             out.push_str(&format!(
-                "| `{}` | `{}` | {} | {} | {} | {} | {} |\n",
+                "| `{}` | `{}` | {} | {} | {} | {} | {} | {} | {} |\n",
                 escape_cell(&row.suite_id),
                 escape_cell(row.suite_commit.as_deref().unwrap_or("-")),
                 metric_cell(row.recall),
@@ -226,6 +241,8 @@ pub(crate) fn render_graph_accuracy_markdown(baseline: &GraphAccuracyBaseline) -
                 row.graph_edges_expected,
                 row.graph_edges_observed,
                 row.unknown_count,
+                optional_u64_cell(row.runtime_ms),
+                optional_u64_cell(row.peak_rss_bytes),
             ));
         }
     }
@@ -235,6 +252,32 @@ pub(crate) fn render_graph_accuracy_markdown(baseline: &GraphAccuracyBaseline) -
 
 fn metric_cell(value: Option<f64>) -> String {
     value.map_or_else(|| "-".to_string(), |value| format!("{value:.4}"))
+}
+
+fn optional_u64_cell(value: Option<u64>) -> String {
+    value.map_or_else(|| "-".to_string(), |value| value.to_string())
+}
+
+/// Sum wall-clock and take the max peak RSS across cases that recorded costs.
+fn cost_columns_from_run(run: &EvaluationRun) -> (Option<u64>, Option<u64>) {
+    let mut runtime_ms = 0u64;
+    let mut peak_rss_bytes = 0u64;
+    let mut saw_runtime = false;
+    let mut saw_peak_rss = false;
+    for case in &run.cases {
+        if let Some(ms) = case.runtime.observed_runtime_ms {
+            runtime_ms = runtime_ms.saturating_add(ms);
+            saw_runtime = true;
+        }
+        if let Some(rss) = case.runtime.peak_rss_bytes {
+            peak_rss_bytes = peak_rss_bytes.max(rss);
+            saw_peak_rss = true;
+        }
+    }
+    (
+        saw_runtime.then_some(runtime_ms),
+        saw_peak_rss.then_some(peak_rss_bytes),
+    )
 }
 
 #[cfg(test)]
@@ -499,15 +542,74 @@ mod graph_accuracy_tests {
             }
         }
 
-        // recall/precision keys are present in the committed JSON, and no
-        // absolute host path leaks (threat T-63-03-03).
+        // recall/precision/cost-column keys are present in the committed JSON,
+        // and no absolute host path leaks (threat T-63-03-03).
         let raw = std::fs::read_to_string(&path).unwrap();
         assert!(raw.contains("\"recall\""), "recall field must be present");
         assert!(
             raw.contains("\"precision\""),
             "precision field must be present"
         );
+        assert!(
+            raw.contains("\"runtime_ms\""),
+            "runtime_ms cost column must be present"
+        );
+        assert!(
+            raw.contains("\"peak_rss_bytes\""),
+            "peak_rss_bytes cost column must be present"
+        );
         assert!(!raw.contains("/Users/"));
         assert!(!raw.contains("/home/"));
+    }
+
+    #[test]
+    fn graph_accuracy_baseline_from_runs_records_cost_columns() {
+        use crate::eval::model::FixtureArea;
+        use crate::eval::report::{CaseResult, RuntimeObservation};
+
+        let mut jelly = graph_run("jelly-callgraph-micro", 0.42, 0.90, 120, 50, 7);
+        jelly.cases.push(CaseResult {
+            case_id: "case-a".to_string(),
+            area: FixtureArea::Graphs,
+            expected: Vec::new(),
+            observed: Vec::new(),
+            matches: Vec::new(),
+            runtime: RuntimeObservation {
+                budget_name: "eval-runner".to_string(),
+                budget_passed: true,
+                observed_runtime_ms: Some(40_000),
+                peak_rss_bytes: Some(32 * 1024 * 1024),
+            },
+        });
+        jelly.cases.push(CaseResult {
+            case_id: "case-b".to_string(),
+            area: FixtureArea::Graphs,
+            expected: Vec::new(),
+            observed: Vec::new(),
+            matches: Vec::new(),
+            runtime: RuntimeObservation {
+                budget_name: "eval-runner".to_string(),
+                budget_passed: true,
+                observed_runtime_ms: Some(65_380),
+                peak_rss_bytes: Some(48 * 1024 * 1024),
+            },
+        });
+
+        let baseline = GraphAccuracyBaseline::from_runs(&[&jelly]);
+        assert_eq!(baseline.rows.len(), 1);
+        assert_eq!(baseline.rows[0].runtime_ms, Some(105_380));
+        assert_eq!(baseline.rows[0].peak_rss_bytes, Some(48 * 1024 * 1024));
+
+        let markdown = render_graph_accuracy_markdown(&baseline);
+        assert!(
+            markdown.contains("Runtime ms"),
+            "accuracy markdown must restore the runtime cost column"
+        );
+        assert!(
+            markdown.contains("Peak RSS bytes"),
+            "accuracy markdown must restore the peak RSS cost column"
+        );
+        assert!(markdown.contains("105380"));
+        assert!(markdown.contains(&(48 * 1024 * 1024).to_string()));
     }
 }

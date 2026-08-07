@@ -1621,6 +1621,7 @@ mod tests {
                 budget_name: "eval-runner".to_string(),
                 budget_passed: true,
                 observed_runtime_ms: None,
+                peak_rss_bytes: None,
             },
         };
 

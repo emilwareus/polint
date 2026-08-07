@@ -59,6 +59,12 @@ pub(crate) struct RuntimeObservation {
     pub(crate) budget_name: String,
     pub(crate) budget_passed: bool,
     pub(crate) observed_runtime_ms: Option<u64>,
+    /// Peak resident-set size in bytes, captured via
+    /// [`crate::eval::bench::measure::peak_rss_bytes`] on the iteration that
+    /// produced this case. Absent on older reports and on paths that have not
+    /// yet wired OS RSS measurement.
+    #[serde(default)]
+    pub(crate) peak_rss_bytes: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -380,9 +386,11 @@ pub(crate) fn deterministic_output_hash(run: &EvaluationRun) -> String {
     normalized.output_hash.clear();
     for case in &mut normalized.cases {
         case.runtime.observed_runtime_ms = None;
+        case.runtime.peak_rss_bytes = None;
         for item in &mut case.observed {
             if let ObservedItem::RuntimeBudget(budget) = item {
                 budget.observed_runtime_ms = None;
+                budget.peak_rss_bytes = None;
             }
         }
         for summary in &mut case.matches {
@@ -1287,6 +1295,7 @@ mod tests {
                 budget_name: "fast-ci".to_string(),
                 budget_passed: true,
                 observed_runtime_ms: Some(42),
+                peak_rss_bytes: None,
             },
         }
     }
@@ -1351,6 +1360,7 @@ mod tests {
                 name: "fast-ci".to_string(),
                 budget_passed: true,
                 observed_runtime_ms: Some(42),
+                peak_rss_bytes: None,
             }),
             ObservedItem::Invariant(ObservedInvariant {
                 name: "provider_order_stable".to_string(),

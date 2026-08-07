@@ -126,6 +126,62 @@ mod tests {
         assert_f1_against_baseline(&go, &committed);
         assert_f1_against_baseline(&jelly, &committed);
 
+        // Cost columns must be recorded on every benchmark iteration — the
+        // discipline that was dropped from the Jelly iteration log. Coexists
+        // with the F1 accuracy gate above (same run, same baseline JSON).
+        for run in [&go, &jelly] {
+            assert!(
+                !run.cases.is_empty(),
+                "{} must produce scored cases",
+                run.suite_id
+            );
+            for case in &run.cases {
+                assert!(
+                    case.runtime.observed_runtime_ms.is_some(),
+                    "{} case {} missing runtime_ms cost column",
+                    run.suite_id,
+                    case.case_id
+                );
+                assert!(
+                    case.runtime.peak_rss_bytes.is_some_and(|bytes| bytes > 0),
+                    "{} case {} missing peak_rss_bytes cost column",
+                    run.suite_id,
+                    case.case_id
+                );
+            }
+            let performance = run
+                .performance
+                .as_ref()
+                .expect("external suite runs must populate performance cost columns");
+            assert!(performance.runtime.observed_runtime_ms.is_some());
+            assert!(
+                performance
+                    .runtime
+                    .peak_rss_bytes
+                    .is_some_and(|bytes| bytes > 0)
+            );
+            assert!(performance.rss.peak_rss_observed_mb.is_some());
+        }
+
+        let measured = GraphAccuracyBaseline::from_runs(&[&go, &jelly]);
+        for measured_row in &measured.rows {
+            let baseline_row = committed
+                .rows
+                .iter()
+                .find(|row| row.suite_id == measured_row.suite_id)
+                .unwrap_or(measured_row);
+            let cost_report = crate::eval::bench::gate::evaluate_cost_columns_budget(
+                baseline_row,
+                measured_row,
+                crate::eval::bench::gate::DEFAULT_MAX_COST_COLUMN_RATIO,
+            );
+            assert!(
+                !crate::eval::bench::gate::is_blocking(&cost_report),
+                "cost-column budget breached for {}: {cost_report:#?}",
+                measured_row.suite_id
+            );
+        }
+
         if std::env::var_os("POLINT_WRITE_GRAPH_BENCH").is_some() {
             // Refresh the committed pre-store persisted-graph accuracy baseline
             // with the real measured recall/precision. Rows read the metrics off
@@ -210,7 +266,7 @@ mod tests {
 
     fn write_summary(output_dir: &Path, runs: &[EvaluationRun]) -> anyhow::Result<()> {
         let mut markdown = String::from(
-            "# Graph Benchmark Summary\n\n| Suite | Mode | TP | FP | FN | Precision | Recall | Unknowns | Runtime ms | Output hash |\n|---|---:|---:|---:|---:|---:|---:|---:|---:|---|\n",
+            "# Graph Benchmark Summary\n\n| Suite | Mode | TP | FP | FN | Precision | Recall | Unknowns | Runtime ms | Peak RSS bytes | Output hash |\n|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|\n",
         );
         for run in runs {
             let runtime_ms = run
@@ -218,8 +274,13 @@ mod tests {
                 .iter()
                 .filter_map(|case| case.runtime.observed_runtime_ms)
                 .sum::<u64>();
+            let peak_rss_bytes = run
+                .cases
+                .iter()
+                .filter_map(|case| case.runtime.peak_rss_bytes)
+                .max();
             markdown.push_str(&format!(
-                "| {} | {:?} | {} | {} | {} | {} | {} | {} | {} | `{}` |\n",
+                "| {} | {:?} | {} | {} | {} | {} | {} | {} | {} | {} | `{}` |\n",
                 run.suite_id,
                 run.mode,
                 run.metrics.true_positives,
@@ -229,6 +290,9 @@ mod tests {
                 pct(run.metrics.recall),
                 run.metrics.unknown_count,
                 runtime_ms,
+                peak_rss_bytes
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
                 run.output_hash
             ));
         }

@@ -381,12 +381,16 @@ mod tests {
                 graph_edges_expected: 100,
                 graph_edges_observed: 50,
                 unknown_count: 7,
+                runtime_ms: Some(105_380),
+                peak_rss_bytes: Some(64 * 1024 * 1024),
             }],
         };
         let with_accuracy = render_benchmark_report(&series, Some(&accuracy));
         assert!(with_accuracy.contains("## Persisted-Graph Accuracy Baseline"));
         assert!(with_accuracy.contains("Recall"));
         assert!(with_accuracy.contains("Precision"));
+        assert!(with_accuracy.contains("Runtime ms"));
+        assert!(with_accuracy.contains("Peak RSS bytes"));
     }
 
     fn report() -> EvaluationRun {

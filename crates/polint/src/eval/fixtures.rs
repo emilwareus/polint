@@ -37,6 +37,10 @@ pub(crate) struct FixtureRepo {
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) struct FixtureBudget {
     pub(crate) max_runtime_ms: u64,
+    /// Optional absolute peak-RSS ceiling (bytes). When absent, only the
+    /// wall-clock budget participates in `budget_passed`.
+    #[serde(default)]
+    pub(crate) max_peak_rss_bytes: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -272,14 +276,10 @@ pub(crate) fn run_layer_cache_fixture_for_test(
         "layer_cache.disabled.no_new_files",
         bool_string(layer_file_count_after_warm == layer_file_count_after_disabled),
     ));
-    if let Some(budget) = &fixture.manifest.budget {
+    if fixture.manifest.budget.is_some() {
         let elapsed = started.elapsed();
         observed.push(crate::eval::model::ObservedItem::RuntimeBudget(
-            crate::eval::model::ObservedRuntimeBudget {
-                name: runtime_budget_name(&fixture.manifest.expected, &fixture.manifest.case_id),
-                budget_passed: elapsed <= std::time::Duration::from_millis(budget.max_runtime_ms),
-                observed_runtime_ms: Some(saturating_millis(elapsed)),
-            },
+            observe_fixture_runtime_budget(&fixture, elapsed),
         ));
     }
 
@@ -324,14 +324,10 @@ pub(crate) fn run_semantic_index_core_fixture_for_test(
     observed.extend(tagged_layer_cache_invariants("cold", &cold_observed));
     observed.extend(tagged_layer_cache_invariants("warm", &warm_observed));
 
-    if let Some(budget) = &fixture.manifest.budget {
+    if fixture.manifest.budget.is_some() {
         let elapsed = started.elapsed();
         observed.push(crate::eval::model::ObservedItem::RuntimeBudget(
-            crate::eval::model::ObservedRuntimeBudget {
-                name: runtime_budget_name(&fixture.manifest.expected, &fixture.manifest.case_id),
-                budget_passed: elapsed <= std::time::Duration::from_millis(budget.max_runtime_ms),
-                observed_runtime_ms: Some(saturating_millis(elapsed)),
-            },
+            observe_fixture_runtime_budget(&fixture, elapsed),
         ));
     }
 
@@ -393,14 +389,10 @@ pub(crate) fn run_module_topology_core_fixture_for_test(
         &go_mod_observed,
     ));
 
-    if let Some(budget) = &fixture.manifest.budget {
+    if fixture.manifest.budget.is_some() {
         let elapsed = started.elapsed();
         observed.push(crate::eval::model::ObservedItem::RuntimeBudget(
-            crate::eval::model::ObservedRuntimeBudget {
-                name: runtime_budget_name(&fixture.manifest.expected, &fixture.manifest.case_id),
-                budget_passed: elapsed <= std::time::Duration::from_millis(budget.max_runtime_ms),
-                observed_runtime_ms: Some(saturating_millis(elapsed)),
-            },
+            observe_fixture_runtime_budget(&fixture, elapsed),
         ));
     }
 
@@ -443,14 +435,10 @@ pub(crate) fn run_semantic_mir_core_fixture_for_test(
         observed.push(semantic_mir_determinism_observed_invariant());
     }
 
-    if let Some(budget) = &fixture.manifest.budget {
+    if fixture.manifest.budget.is_some() {
         let elapsed = started.elapsed();
         observed.push(crate::eval::model::ObservedItem::RuntimeBudget(
-            crate::eval::model::ObservedRuntimeBudget {
-                name: runtime_budget_name(&fixture.manifest.expected, &fixture.manifest.case_id),
-                budget_passed: elapsed <= std::time::Duration::from_millis(budget.max_runtime_ms),
-                observed_runtime_ms: Some(saturating_millis(elapsed)),
-            },
+            observe_fixture_runtime_budget(&fixture, elapsed),
         ));
     }
 
@@ -502,14 +490,10 @@ pub(crate) fn run_cfg_core_fixture_for_test(
         observed.push(cfg_determinism_observed_invariant());
     }
 
-    if let Some(budget) = &fixture.manifest.budget {
+    if fixture.manifest.budget.is_some() {
         let elapsed = started.elapsed();
         observed.push(crate::eval::model::ObservedItem::RuntimeBudget(
-            crate::eval::model::ObservedRuntimeBudget {
-                name: runtime_budget_name(&fixture.manifest.expected, &fixture.manifest.case_id),
-                budget_passed: elapsed <= std::time::Duration::from_millis(budget.max_runtime_ms),
-                observed_runtime_ms: Some(saturating_millis(elapsed)),
-            },
+            observe_fixture_runtime_budget(&fixture, elapsed),
         ));
     }
 
@@ -559,14 +543,10 @@ pub(crate) fn run_direct_calls_core_fixture_for_test(
         observed.push(direct_calls_determinism_observed_invariant());
     }
 
-    if let Some(budget) = &fixture.manifest.budget {
+    if fixture.manifest.budget.is_some() {
         let elapsed = started.elapsed();
         observed.push(crate::eval::model::ObservedItem::RuntimeBudget(
-            crate::eval::model::ObservedRuntimeBudget {
-                name: runtime_budget_name(&fixture.manifest.expected, &fixture.manifest.case_id),
-                budget_passed: elapsed <= std::time::Duration::from_millis(budget.max_runtime_ms),
-                observed_runtime_ms: Some(saturating_millis(elapsed)),
-            },
+            observe_fixture_runtime_budget(&fixture, elapsed),
         ));
     }
 
@@ -653,14 +633,10 @@ pub(crate) fn run_abstract_domains_core_fixture_for_test(
         observed.push(abstract_domains_determinism_observed_invariant());
     }
 
-    if let Some(budget) = &fixture.manifest.budget {
+    if fixture.manifest.budget.is_some() {
         let elapsed = started.elapsed();
         observed.push(crate::eval::model::ObservedItem::RuntimeBudget(
-            crate::eval::model::ObservedRuntimeBudget {
-                name: runtime_budget_name(&fixture.manifest.expected, &fixture.manifest.case_id),
-                budget_passed: elapsed <= std::time::Duration::from_millis(budget.max_runtime_ms),
-                observed_runtime_ms: Some(saturating_millis(elapsed)),
-            },
+            observe_fixture_runtime_budget(&fixture, elapsed),
         ));
     }
 
@@ -710,14 +686,10 @@ pub(crate) fn run_direct_summaries_core_fixture_for_test(
         observed.push(direct_summaries_determinism_observed_invariant());
     }
 
-    if let Some(budget) = &fixture.manifest.budget {
+    if fixture.manifest.budget.is_some() {
         let elapsed = started.elapsed();
         observed.push(crate::eval::model::ObservedItem::RuntimeBudget(
-            crate::eval::model::ObservedRuntimeBudget {
-                name: runtime_budget_name(&fixture.manifest.expected, &fixture.manifest.case_id),
-                budget_passed: elapsed <= std::time::Duration::from_millis(budget.max_runtime_ms),
-                observed_runtime_ms: Some(saturating_millis(elapsed)),
-            },
+            observe_fixture_runtime_budget(&fixture, elapsed),
         ));
     }
 
@@ -767,14 +739,10 @@ pub(crate) fn run_direct_summaries_scc_closure_fixture_for_test(
         observed.push(direct_summaries_determinism_observed_invariant());
     }
 
-    if let Some(budget) = &fixture.manifest.budget {
+    if fixture.manifest.budget.is_some() {
         let elapsed = started.elapsed();
         observed.push(crate::eval::model::ObservedItem::RuntimeBudget(
-            crate::eval::model::ObservedRuntimeBudget {
-                name: runtime_budget_name(&fixture.manifest.expected, &fixture.manifest.case_id),
-                budget_passed: elapsed <= std::time::Duration::from_millis(budget.max_runtime_ms),
-                observed_runtime_ms: Some(saturating_millis(elapsed)),
-            },
+            observe_fixture_runtime_budget(&fixture, elapsed),
         ));
     }
 
@@ -802,14 +770,10 @@ pub(crate) fn run_framework_entrypoints_core_fixture_for_test(
         .filter(|item| !is_cache_comparison_observed_invariant(item))
         .collect::<Vec<_>>();
 
-    if let Some(budget) = &fixture.manifest.budget {
+    if fixture.manifest.budget.is_some() {
         let elapsed = started.elapsed();
         observed.push(crate::eval::model::ObservedItem::RuntimeBudget(
-            crate::eval::model::ObservedRuntimeBudget {
-                name: runtime_budget_name(&fixture.manifest.expected, &fixture.manifest.case_id),
-                budget_passed: elapsed <= std::time::Duration::from_millis(budget.max_runtime_ms),
-                observed_runtime_ms: Some(saturating_millis(elapsed)),
-            },
+            observe_fixture_runtime_budget(&fixture, elapsed),
         ));
     }
 
@@ -1066,11 +1030,13 @@ fn run_without_runtime_durations(
     normalized.output_hash.clear();
     for case in &mut normalized.cases {
         case.runtime.observed_runtime_ms = None;
+        case.runtime.peak_rss_bytes = None;
         case.observed
             .retain(|item| !is_cache_comparison_observed_invariant(item));
         for item in &mut case.observed {
             if let crate::eval::model::ObservedItem::RuntimeBudget(budget) = item {
                 budget.observed_runtime_ms = None;
+                budget.peak_rss_bytes = None;
             }
         }
         for summary in &mut case.matches {
@@ -1247,6 +1213,30 @@ fn bool_string(value: bool) -> &'static str {
 }
 
 #[cfg(test)]
+fn observe_fixture_runtime_budget(
+    fixture: &NativeFixture,
+    elapsed: std::time::Duration,
+) -> crate::eval::model::ObservedRuntimeBudget {
+    let budget = fixture
+        .manifest
+        .budget
+        .as_ref()
+        .expect("observe_fixture_runtime_budget requires a fixture budget");
+    let peak_rss_bytes = crate::eval::bench::measure::peak_rss_bytes();
+    let runtime_ms = saturating_millis(elapsed);
+    let runtime_ok = runtime_ms <= budget.max_runtime_ms;
+    let rss_ok = budget
+        .max_peak_rss_bytes
+        .is_none_or(|max| peak_rss_bytes <= max);
+    crate::eval::model::ObservedRuntimeBudget {
+        name: runtime_budget_name(&fixture.manifest.expected, &fixture.manifest.case_id),
+        budget_passed: runtime_ok && rss_ok,
+        observed_runtime_ms: Some(runtime_ms),
+        peak_rss_bytes: Some(peak_rss_bytes),
+    }
+}
+
+#[cfg(test)]
 fn saturating_millis(duration: std::time::Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
@@ -1268,6 +1258,7 @@ fn runtime_observation(
             .map(|budget| budget.budget_passed)
             .unwrap_or(true),
         observed_runtime_ms: runtime_budget.and_then(|budget| budget.observed_runtime_ms),
+        peak_rss_bytes: runtime_budget.and_then(|budget| budget.peak_rss_bytes),
     }
 }
 

@@ -856,11 +856,13 @@ mod tests {
                 name: "fast-ci".to_string(),
                 budget_passed: true,
                 observed_runtime_ms: Some(900),
+                peak_rss_bytes: None,
             }),
             ObservedItem::RuntimeBudget(ObservedRuntimeBudget {
                 name: "slow-ci".to_string(),
                 budget_passed: false,
                 observed_runtime_ms: Some(400),
+                peak_rss_bytes: None,
             }),
         ];
 

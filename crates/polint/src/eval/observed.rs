@@ -427,10 +427,17 @@ pub(crate) fn observe_kernel_fixture_repo_with_plan_for_test(
     observed.extend(extension_facts(&output.db));
     observed.extend(extension_invariants(&output.db));
     if let Some(budget) = &fixture.manifest.budget {
+        let peak_rss_bytes = crate::eval::bench::measure::peak_rss_bytes();
+        let runtime_ms = saturating_millis(elapsed);
+        let runtime_ok = runtime_ms <= budget.max_runtime_ms;
+        let rss_ok = budget
+            .max_peak_rss_bytes
+            .is_none_or(|max| peak_rss_bytes <= max);
         observed.push(ObservedItem::RuntimeBudget(ObservedRuntimeBudget {
             name: runtime_budget_name(&fixture.manifest.expected, &fixture.manifest.case_id),
-            budget_passed: elapsed <= Duration::from_millis(budget.max_runtime_ms),
-            observed_runtime_ms: Some(saturating_millis(elapsed)),
+            budget_passed: runtime_ok && rss_ok,
+            observed_runtime_ms: Some(runtime_ms),
+            peak_rss_bytes: Some(peak_rss_bytes),
         }));
     }
     observed.sort_by_key(observed_sort_key);
@@ -3986,6 +3993,7 @@ path = "repo"
                     budget_name: "provider-order".to_string(),
                     budget_passed: true,
                     observed_runtime_ms: Some(runtime_ms),
+                    peak_rss_bytes: None,
                 },
             }],
             metrics: MetricSummary {
