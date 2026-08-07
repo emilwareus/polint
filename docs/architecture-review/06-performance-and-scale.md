@@ -325,7 +325,7 @@ with no gate.
 ### b.8 Persistence
 
 The SQLite store (`analysis_kernel/store/`) has exactly one table,
-`_polint_schema_migrations` (`store/migrations.rs:13`). It persists no facts. `SemanticStore::maintain`
+`_polint_schema_migrations` (`store/migrations.rs:13`). It persists no facts. `semantic-store type::maintain`
 runs last (`analysis_kernel/mod.rs:964-968`) and its own comment says persistence "must not
 change provider execution." The layer cache (`incremental/layer_cache.rs`) is used by 6 modules
 but caches whole-layer JSON payloads keyed by all inputs at once (see doc 05), capped at

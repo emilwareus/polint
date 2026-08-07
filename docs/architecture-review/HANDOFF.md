@@ -210,7 +210,7 @@ up as an intentional golden change.
 ## 6. Escalate instead of guessing
 
 Report `ESCALATE` to the orchestrator when any of these is true. Guessing costs more than stopping.
-The orchestrator quarantines the task and continues with independent work — you are not blocking anyone.
+The orchestrator holds the task and continues with independent work — you are not blocking anyone.
 
 - A task requires a design decision not written down anywhere
 - A golden file or baseline appears to need updating

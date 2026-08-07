@@ -171,7 +171,7 @@ Severity: **P0** = blocks 10x scale directly · **P1** = large tax per new langu
 
 ### b.1 The one genuinely good abstraction
 
-`analysis/mir/op.rs:21` — `MirOperationKind` has exactly 9 variants (`StorageLive`, `Bind`, `Assign`,
+`analysis/mir/op.rs:21` — `MIR-operation kind` has exactly 9 variants (`StorageLive`, `Bind`, `Assign`,
 `Read`, `Write`, `Branch`, `Call`, `Return`, `Unsupported`), zero language-specific variants, and
 `MirValue` (`:70`) has 5. This is a correct, language-neutral IR. `lower_go.rs` and `lower_ts.rs`
 are the only files that *should* import `crate::go` / `crate::ts`, and they do (`lower_ts.rs:31`).

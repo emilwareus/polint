@@ -213,7 +213,7 @@ Unlocks languages and taint simultaneously. Nothing in M4 can be built correctly
 |---|---|---|
 | W3.1 | `MirBlock` + terminators: `Goto`, `Branch { predicate, then, else }`, `Switch`, `Return`, `Unreachable`. | M2 |
 | W3.2 | **`Throw { value, unwind }`, `Call { normal, unwind }`, `Suspend { Await\|Yield\|ChannelRecv\|ChannelSend }`.** The difference between "Java/Python/C#/Kotlin/Swift are analysable" and "they are not." | W3.1 |
-| W3.3 | `BinOp`, `Aggregate`, `Closure { body, captures }`, and `PlaceFact.ty` into the existing type lattice. | W3.1 |
+| W3.3 | `BinOp`, `Aggregate`, `Closure { body, captures }`, and `place-fact record.ty` into the existing type lattice. | W3.1 |
 | W3.4 | **Delete both per-language CFG lowerers** (1,629 LOC) and the substring-matching loop recovery. | W3.1 |
 | W3.5 | Fold `ts_value_flows.rs` (11,898 LOC) back onto the shared pipeline, or retire it. `Closure` with explicit captures is why it forked. | W3.3 |
 

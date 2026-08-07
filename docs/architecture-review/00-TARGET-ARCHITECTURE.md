@@ -205,7 +205,7 @@ Add the structural layer that is entirely absent: `MirBlock`, and terminators �
 `Goto`, `Branch { predicate, then, else }`, `Switch`, `Return`, **`Throw { value, unwind }`**,
 `Call { site, normal, unwind }`, **`Suspend { kind: Await|Yield|ChannelRecv|ChannelSend }`**,
 `Unreachable`, `Unsupported`. Plus `BinOp`, `Aggregate`, `Closure { body, captures }`, and
-`PlaceFact.ty` referencing the existing type lattice.
+`place-fact record.ty` referencing the existing type lattice.
 
 Payoffs, in order of size:
 - **`Throw` / `Call { unwind }`** is the difference between "Java, Python, C#, Kotlin, Swift are
@@ -216,7 +216,7 @@ Payoffs, in order of size:
   fold back into the shared pipeline.
 - **Branch predicates** are the prerequisite for path sensitivity, which is structurally dead today.
 
-Keep `UnsupportedSemanticFact` exactly as-is. Keep the
+Keep `unsupported-semantic fact record` exactly as-is. Keep the
 `mir_contract_source_does_not_store_parser_ast_objects` guard and extend it to every new IR file.
 
 ### I6 — Analysis: 18 unioned producers → one principled engine

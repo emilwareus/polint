@@ -54,7 +54,7 @@ pub struct SymbolFact {
     pub stable_key: String,    // 24 B + 150-300 B heap — the id, restated in text
 }
 ```
-~400-540 B and 3 mallocs per symbol; `ReferenceFact` (`core/mod.rs:548`) is worse and references outnumber symbols 5-10:1. `MirStatement`, `MirTerminator`, `MirBody` (two Strings), `PlaceFact`, `CallSiteFact`, `CallTargetFact` all carry the same field at per-*node* cardinality.
+~400-540 B and 3 mallocs per symbol; `ReferenceFact` (`core/mod.rs:548`) is worse and references outnumber symbols 5-10:1. `MirStatement`, `MirTerminator`, `MIR body` (two Strings), `place-fact record`, `CallSiteFact`, `CallTargetFact` all carry the same field at per-*node* cardinality.
 **Fix:** `StableKeyId(u32)` + an interner in `AnalysisDb`; keep the text side-table for serialization only. This also converts 318 `BTreeMap<String, _>` lookups into integer compares. **Effort: L.**
 
 ### D3 — The Go RTA fixpoint's worklist is a `BTreeSet<String>`
@@ -166,7 +166,7 @@ and `ts/tests.rs:684-697`, which asserts `adapter.rs` textually contains `"fn pa
 ## (c) Systemic patterns that will hurt at 10×
 
 **1. Strings are the identity model, and that is a hard scaling wall.**
-This is not fifteen local defects; it is one decision repeated 229 times. `stable_key: String` is on every fact family, at per-*node* cardinality (`MirStatement`, `PlaceFact`, `CallSiteFact`). At 10× repo size the memory profile is dominated by identity text, not by facts; `BTreeMap<String, _>` lookups degrade super-linearly because keys share long prefixes and differ only in their tails; and `MirOutput::normalized` (`analysis/mir/body.rs:73-86`) sorts four vectors by 200-byte `memcmp`. rust-analyzer solved this in 2019 with `SmolStr` + salsa interning; oxc solved it with arena `Atom<'a>`; ruff solved it with `ustr`. `polint` has the newtype IDs already — it just never made them the identity. **Every other performance item on this list is downstream of this one.**
+This is not fifteen local defects; it is one decision repeated 229 times. `stable_key: String` is on every fact family, at per-*node* cardinality (`MirStatement`, `place-fact record`, `CallSiteFact`). At 10× repo size the memory profile is dominated by identity text, not by facts; `BTreeMap<String, _>` lookups degrade super-linearly because keys share long prefixes and differ only in their tails; and `MirOutput::normalized` (`analysis/mir/body.rs:73-86`) sorts four vectors by 200-byte `memcmp`. rust-analyzer solved this in 2019 with `SmolStr` + salsa interning; oxc solved it with arena `Atom<'a>`; ruff solved it with `ustr`. `polint` has the newtype IDs already — it just never made them the identity. **Every other performance item on this list is downstream of this one.**
 
 **2. Extension by exhaustive match, in a project whose whole thesis is "more languages".**
 999 `Language::` sites, four competing language enums, zero adapter trait, providers wired by hardcoded path in an 877-line function. Adding Python is an O(files-in-crate) edit, not a new module. The ironic part: the crate already contains a *better* pattern — `polint-macros` derives rule capabilities from typed fact-view parameters. Types drive metadata there and nowhere else.

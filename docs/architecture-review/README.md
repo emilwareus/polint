@@ -29,7 +29,7 @@ promotion gates: all built, none load-bearing. Fixing this is rewiring, not rewr
 | **00** | [Target Architecture](00-TARGET-ARCHITECTURE.md) | Seven inversions; critical path is interning → provider trait → real IR → IFDS |
 | **↳** | [**PLAN.md**](PLAN.md) | Six milestones with falsifiable exit gates; the v2.0 reordering call; Phase-65-derived working rules |
 | **⚠** | [**HANDOFF.md**](HANDOFF.md) | **Errata (authoritative), hard rules, task tiering, the golden-harness spec.** Implementing agents start here |
-| **🤖** | [**ORCHESTRATION.md**](ORCHESTRATION.md) | **Swarm runbook** — task DAG with parallel widths, locks, exact gate commands, orchestrator decision table, quarantine protocol |
+| **🤖** | [**ORCHESTRATION.md**](ORCHESTRATION.md) | **Swarm runbook** — task DAG with parallel widths, locks, exact gate commands, orchestrator decision table, hold protocol |
 | **↳** | [**specs/**](specs/README.md) | Eight binding implementation specs — design decisions, PR-sized steps, acceptance commands, anti-goals |
 | 01 | [Layering and boundaries](01-layering-and-boundaries.md) | 26 of 27 modules in import cycles; 17 traits in 267k LOC; one 877-line pipeline function; 132-field god struct |
 | 02 | [Rust code quality](02-rust-code-quality.md) | Discipline A-tier (clean clippy, forbidden unsafe, 12 CI jobs); data modelling D-tier (zero interner, 229 `stable_key: String`) |

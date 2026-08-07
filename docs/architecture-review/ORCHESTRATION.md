@@ -3,7 +3,7 @@
 **Audience:** the orchestrator agent. Workers read [HANDOFF.md](HANDOFF.md) and their spec; they do
 not read this file.
 
-**Model:** one orchestrator, N workers. No human in the merge loop. Humans drain the quarantine queue
+**Model:** one orchestrator, N workers. No human in the merge loop. Humans drain the hold queue
 asynchronously and never block progress.
 
 ---
@@ -11,7 +11,7 @@ asynchronously and never block progress.
 ## 1. Roles
 
 **Orchestrator** — owns the task graph, dependency resolution, lock arbitration, gate verification,
-merge decisions, and quarantine. Writes no product code. Never implements a task itself, never
+merge decisions, and holds. Writes no product code. Never implements a task itself, never
 "fixes up" a worker's PR, never resolves an escalation.
 
 **Worker** — claims exactly one task, works in an isolated git worktree, produces one PR-sized branch,
@@ -19,7 +19,7 @@ reports `DONE` or `ESCALATE`. Never merges. Never claims a second task while hol
 to another worker.
 
 **The orchestrator's most important property is that it does not improvise.** Every decision it makes
-is a table lookup in this document. If a situation is not covered here, quarantine and move on.
+is a table lookup in this document. If a situation is not covered here, hold the task and move on.
 
 ---
 
@@ -32,16 +32,16 @@ Orchestrator maintains `.swarm/state.json` (gitignored):
   "tasks": {
     "W0.A1": {"state": "MERGED",  "branch": "swarm/W0.A1", "attempts": 1},
     "W0.A2": {"state": "CLAIMED", "worker": "w3", "branch": "swarm/W0.A2", "attempts": 1},
-    "W1.5":  {"state": "QUARANTINED", "reason": "step-1 measurement: parse cost 4% of run"}
+    "W1.5":  {"state": "HELD", "reason": "step-1 measurement: parse cost 4% of run"}
   },
   "locks": {"golden": null, "fact_family": {}},
   "milestone": "M0"
 }
 ```
 
-**States:** `BLOCKED` (deps unmet) → `READY` → `CLAIMED` → `IN_REVIEW` → `MERGED` · or → `QUARANTINED`.
+**States:** `BLOCKED` (deps unmet) → `READY` → `CLAIMED` → `IN_REVIEW` → `MERGED` · or → `HELD`.
 
-Append-only human-readable log at `.swarm/blocked.md` for every quarantine.
+Append-only human-readable log at `.swarm/blocked.md` for every hold.
 
 ---
 
@@ -193,7 +193,7 @@ If the diff adds a `trait`, or a `pub(crate) struct`/`enum` in a new module:
 2. Comment it out.
 3. Run `G3`.
 4. **A test must fail.** If everything still passes, the abstraction is not wired → **REJECT** with
-   reason `unwired-abstraction`. Do not quarantine; this is a fixable worker error (§6).
+   reason `unwired-abstraction`. Do not hold; this is a fixable worker error (§6).
 5. Restore.
 
 ---
@@ -205,26 +205,26 @@ Worker reports, or a gate fails. Look it up. Do not reason beyond the table.
 | Situation | Action |
 |---|---|
 | All gates + R1–R7 green | **MERGE**. Release locks. Recompute `READY` set. Dispatch. |
-| G1/G2/G8 fail (fmt, lint, doc) | **RETURN to same worker**, verbatim compiler output. Max 2 returns, then quarantine. |
-| G3/G6 fail (tests) | **RETURN to same worker** once. If the second attempt also fails → **QUARANTINE**. |
-| **G4 fails (public surface)** | **QUARANTINE immediately.** Product contract. Never auto-retry. |
-| **G5 fails (determinism)** | **QUARANTINE immediately.** Never retry, never weaken the gate. |
-| **G7 fails (golden) on a structural task** | **QUARANTINE.** A refactor changed behaviour — that is the exact thing the harness exists to catch. |
-| G7 fails on a sanctioned regeneration PR | Expected. Verify the diff is **added fields only**, or that the *set* of diagnostics is unchanged. If the set changed → **QUARANTINE**. |
-| R1 fails (over budget) | **RETURN** with instruction to split into ≤ 1500-line PRs. Not a quarantine. |
-| R2/R4/R5 fail | **RETURN** once with the offending lines. Second occurrence → quarantine. |
+| G1/G2/G8 fail (fmt, lint, doc) | **RETURN to same worker**, verbatim compiler output. Max 2 returns, then hold. |
+| G3/G6 fail (tests) | **RETURN to same worker** once. If the second attempt also fails → **HOLD**. |
+| **G4 fails (public surface)** | **HOLD immediately.** Product contract. Never auto-retry. |
+| **G5 fails (determinism)** | **HOLD immediately.** Never retry, never weaken the gate. |
+| **G7 fails (golden) on a structural task** | **HOLD.** A refactor changed behaviour — that is the exact thing the harness exists to catch. |
+| G7 fails on a sanctioned regeneration PR | Expected. Verify the diff is **added fields only**, or that the *set* of diagnostics is unchanged. If the set changed → **HOLD**. |
+| R1 fails (over budget) | **RETURN** with instruction to split into ≤ 1500-line PRs. Not a hold. |
+| R2/R4/R5 fail | **RETURN** once with the offending lines. Second occurrence → hold. |
 | R6 fails | **RETURN** with instruction to split structure from behaviour. |
-| R7 fails | **RETURN** with `unwired-abstraction` and HANDOFF §3. Max 1 return, then quarantine. |
-| Worker reports `ESCALATE` | **QUARANTINE.** Never reassign. See §7. |
-| Worker silent / exceeds wall-clock | Kill, release locks, reset task to `READY`, `attempts += 1`. At `attempts == 3` → quarantine. |
-| Two workers conflict on merge | Second worker rebases and re-runs all gates. If conflict is semantic, not textual → quarantine both. |
+| R7 fails | **RETURN** with `unwired-abstraction` and HANDOFF §3. Max 1 return, then hold. |
+| Worker reports `ESCALATE` | **HOLD.** Never reassign. See §7. |
+| Worker silent / exceeds wall-clock | Kill, release locks, reset task to `READY`, `attempts += 1`. At `attempts == 3` → hold. |
+| Two workers conflict on merge | Second worker rebases and re-runs all gates. If conflict is semantic, not textual → hold both. |
 
 **Merge order is arbitrary among green PRs. Always re-run the full gate set after rebase — never
 merge on stale results.**
 
 ---
 
-## 7. Escalation = quarantine, never reassignment
+## 7. Escalation = hold, never reassignment
 
 Every `Escalate if` clause in a spec marks a case where **the correct answer requires information the
 swarm does not have.** A different worker will not do better; it will produce a confident wrong
@@ -233,7 +233,7 @@ unreferenced slicing code.
 
 On `ESCALATE`, the orchestrator:
 
-1. Sets `QUARANTINED` with the worker's verbatim reason.
+1. Sets `HELD` with the worker's verbatim reason.
 2. Abandons the branch (keeps it, does not merge, does not delete).
 3. Releases locks.
 4. Appends to `.swarm/blocked.md`: task, reason, branch, spec section, timestamp.
@@ -243,13 +243,13 @@ On `ESCALATE`, the orchestrator:
 Three escalations are *expected outcomes*, not failures — the spec anticipates them:
 
 - **W1.5 step 1** — if measured parse cost is a small fraction of the run, the correct result is
-  "don't do this task." Quarantine with `not-worth-doing` and mark it `MERGED-NOOP`; dependents proceed.
+  "don't do this task." Hold with `not-worth-doing` and mark it `MERGED-NOOP`; dependents proceed.
 - **W2.3 step 1** — if the Go RTA conversion shows no measurable win, the memory model is wrong.
-  Quarantine the whole of W2.3. **Do not let W2.5 proceed on the assumption interning is coming.**
-- **W2.4 step 4** — if topological sort ≠ declared manifest order, quarantine. Do not edit the
+  Hold the whole of W2.3. **Do not let W2.5 proceed on the assumption interning is coming.**
+- **W2.4 step 4** — if topological sort ≠ declared manifest order, hold. Do not edit the
   expected value, do not special-case the sort, do not "fix" the manifest data.
 
-If the quarantine queue reaches **3 open items**, the orchestrator **stops dispatching new work** and
+If the hold queue reaches **3 open items**, the orchestrator **stops dispatching new work** and
 writes `.swarm/HALT.md`. A swarm accumulating unresolved blockers is producing debt, not progress.
 
 ---

@@ -1,7 +1,7 @@
 # 05 — Incrementality, Caching, Persistence, and the Query Engine
 
 **Scope:** `analysis_kernel/incremental/`, `analysis_kernel/store/`, `src/cache/`, `analysis_kernel/{mod,provider,validation,debug}.rs`, `src/fs/`, `src/analysis/demand/`.
-**Verdict up front:** polint has a *content-addressed memoization cache*, not an incremental engine. The vocabulary of an incremental query engine (query keys, demand engine, dependency index, invalidation planner, precision tiers, quarantine) has been built — roughly 11,500 LOC of it — but the load-bearing parts are not wired to anything. `AnalysisKernel::run` is a hardcoded straight-line pipeline of 23 whole-program passes over one 132-field mutable struct. The SQLite store ships in every binary and contains exactly one table with one column and one row.
+**Verdict up front:** polint has a *content-addressed memoization cache*, not an incremental engine. The vocabulary of an incremental query engine (query keys, demand engine, dependency index, invalidation planner, precision tiers, extension isolation) has been built — roughly 11,500 LOC of it — but the load-bearing parts are not wired to anything. `AnalysisKernel::run` is a hardcoded straight-line pipeline of 23 whole-program passes over one 132-field mutable struct. The SQLite store ships in every binary and contains exactly one table with one column and one row.
 
 The determinism work, by contrast, is genuinely good and should be protected.
 
@@ -45,7 +45,7 @@ So in practice: **any source edit recomputes every downstream layer.** The shape
 
 Two separate demand-query scaffolds exist and neither is wired.
 
-**Scaffold 1 — `crates/polint/src/analysis/demand/` (2,188 LOC).** Declares 7 `QueryKind`s, `QueryBudget`, `QueryContext`, `QueryStatus`, SCC helpers. Every `QueryKind::` construction in the crate is inside a `#[cfg(test)]` block (verified: `context.rs` tests start at :264, `trace.rs` at :213, `query.rs` at :198; all uses are past those lines). `demand_query_key` (`analysis/demand/query.rs:181`) has **zero non-test callers**. The only reference to the module from outside its own directory is a test asserting its names don't leak into the public surface (`analysis_kernel/provider.rs:1818-1821`).
+**Scaffold 1 — `crates/polint/src/analysis/demand/` (2,188 LOC).** Declares 7 `QueryKind`s, `QueryBudget`, `QueryContext`, `QueryStatus`, SCC helpers. Every `QueryKind::` construction in the crate is inside a `#[cfg(test)]` block (verified: `context.rs` tests start at :264, `trace.rs` at :213, `query.rs` at :198; all uses are past those lines). The key builder in `analysis/demand/query.rs:181` has **zero non-test callers**. The only reference to the module from outside its own directory is a test asserting its names don't leak into the public surface (`analysis_kernel/provider.rs:1818-1821`).
 
 **Scaffold 2 — `analysis_kernel/incremental/demand.rs`.** Carries `#![cfg_attr(not(test), expect(dead_code, reason = "Demand query engine infrastructure is established before Plan 04 wires real demand-driven consumers."))]` at line 1-7. It has exactly one production consumer: SCC closure.
 
@@ -56,11 +56,11 @@ for scc in &schedule.sccs {
     ...
     let (scc_summaries, scc_events, iterations, budget_exceeded) = process_recursive_scc(db, scc, config);
     ...
-    record_scc_demand_query(demand_engine, scc, &scc_digest, iterations, was_backdated);   // :145
+    // post-work SCC query recorder (writes only; never looked up)  // :145
 }
 ```
 
-`record_scc_demand_query` runs *after* the work. `DemandQueryEngine::lookup` has **zero production callers** anywhere in the crate. The engine is a write-only trace log.
+That recorder runs *after* the work. The demand-query engine type's `lookup` has **zero production callers** anywhere in the crate. The engine is a write-only trace log.
 
 The design bug that proves this was never intended to short-circuit: the query key's `budget_digest` is derived from `iterations` (`closure.rs:719-724`), which is an *output* of the computation. You cannot look up a key you can only construct after doing the work. The key also has `layer_digests: Vec::new()` (`closure.rs:714`) — it doesn't record its own inputs, so it could never be validated across runs either.
 
@@ -108,7 +108,7 @@ Two residual determinism notes, neither a bug today:
 
 What production actually has: `tracing::info!` phase markers (`mod.rs:127, 200, 218, …`) and `KernelRunReport`, whose accessors are `#[cfg(test)]`-gated (`incremental/run_report.rs:62-65`) and whose field carries `expect(dead_code, reason = "The crate-private run report is consumed by internal tests and eval fixtures before a public surface exists.")` (`mod.rs:77-83`). `CacheStats` is collected per provider and never surfaced to a user.
 
-So: no way for a user or an agent to ask "why did my cache miss?" The research doc's promotion gate — "benchmark output reports hit/miss/recompute/quarantine counts" — is unmet outside tests.
+So: no way for a user or an agent to ask "why did my cache miss?" The research doc's promotion gate — "benchmark output reports hit/miss/recompute/isolation-hold counts" — is unmet outside tests.
 
 ---
 
@@ -221,8 +221,8 @@ The research is unusually good — specific, falsifiable, with explicit anti-goa
 | Phase 5: `ChangeSet` with 14 `ChangeKind`s | **Built, but fed only by key-diffing** — no edit detection (§A2) |
 | Phase 6: invalidation planner | **Built and live** (`layer_cache.rs:657`) |
 | Phase 7: demand query engine | **Scaffolded twice, wired zero times** (§A3) |
-| Phase 8: summary SCC cache + backdating | **Backdating only.** Digest cache exists; no per-summary persistence |
-| Phase 9: extension quarantine | `quarantine.rs` is `expect(dead_code)`, in-memory, never persisted |
+| Phase 8: summary SCC cache + back-dating | **Back-dating only.** Digest cache exists; no per-summary persistence |
+| Phase 9: extension isolation | `isolation.rs` (extension-isolation module) is `expect(dead_code)`, in-memory, never persisted |
 | Phase 10-12: diagnostic cache, watch/daemon, relation engine | Correctly deferred |
 | SQLite store via rusqlite | **Skeleton only** (§C3) |
 | Multi-level shape digests (text / syntax / import-export / public-signature) | **Not built.** One digest per file: its content hash |
@@ -271,7 +271,7 @@ const MIGRATIONS: &[Migration] = &[Migration {
 
 One table. One column. One row, containing the integer `1`. No fact, diagnostic, symbol, or file table.
 
-Worse, it **cannot be enabled in a production build**. `Cache::semantic_store_enabled` is hardcoded `false` at construction (`cache/mod.rs:108`) and the only mutator is `#[cfg(test)] with_semantic_store_enabled_for_test` (`cache/mod.rs:144-148`). There is no CLI flag, no config key, no env var. `SemanticStore::maintain` short-circuits at `store/mod.rs:91-93`. And its result is never read: `KernelRunReport::store_status()` is `#[cfg(test)]`-gated (`run_report.rs:62-65`).
+Worse, it **cannot be enabled in a production build**. `Cache::semantic_store_enabled` is hardcoded `false` at construction (`cache/mod.rs:108`) and the only mutator is `#[cfg(test)] with_semantic_store_enabled_for_test` (`cache/mod.rs:144-148`). There is no CLI flag, no config key, no env var. `semantic-store type::maintain` short-circuits at `store/mod.rs:91-93`. And its result is never read: `KernelRunReport::store_status()` is `#[cfg(test)]`-gated (`run_report.rs:62-65`).
 
 So `rusqlite` with a **bundled SQLite C build** compiles into every shipped binary to service dead code.
 
@@ -346,7 +346,7 @@ The research's own revisit criteria (`research/incremental-query-engine/decision
 
 What is missing is not *shape*, it is *plumbing*: a query function that calls `lookup` before it computes. The gap is small and structural, not conceptual. The one thing that must be fixed on the key side is the SCC key's circular `budget_digest` (`closure.rs:719-724`) and its empty `layer_digests` — a key must be constructible from inputs alone.
 
-If Salsa is ever adopted, adopt it for the demand-query subsystem only, behind the `QueryKey` abstraction that already exists. Keep the layer cache bespoke — it handles lifecycle digests, tool invocations, extension quarantine, and validation status, none of which Salsa models.
+If Salsa is ever adopted, adopt it for the demand-query subsystem only, behind the `QueryKey` abstraction that already exists. Keep the layer cache bespoke — it handles lifecycle digests, tool invocations, extension isolation, and validation status, none of which Salsa models.
 
 ### D2. Target architecture
 
@@ -437,7 +437,7 @@ For scope calibration. LOC includes tests.
 
 | Module | LOC | Status |
 |---|---|---|
-| `analysis_kernel/incremental/` | 9,349 | Live: `digest`, `layer_cache`, `keys` (LayerKey only), `invalidation`, `dependency_index`, `input_snapshot`, `stats`. Dead: `demand`, `quarantine`, `change_set` (as an edit-change-set), `QueryKey`/`SummaryKey`/`DiagnosticKey` |
+| `analysis_kernel/incremental/` | 9,349 | Live: `digest`, `layer_cache`, `keys` (LayerKey only), `invalidation`, `dependency_index`, `input_snapshot`, `stats`. Dead: `demand`, extension-isolation module, `change_set` (as an edit-change-set), `QueryKey`/`SummaryKey`/`DiagnosticKey` |
 | `analysis/demand/` | 2,188 | **Entirely dead** — every use is `#[cfg(test)]` |
 | `analysis_kernel/store/` | 1,303 | Wired but permanently disabled; schema is one bookkeeping table |
 | `analysis_kernel/debug.rs` | 3,960 | `#![cfg(test)]` — absent from release builds |

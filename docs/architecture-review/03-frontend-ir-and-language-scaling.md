@@ -249,7 +249,7 @@ The entire language-neutral schema is:
 comparison, LLVM IR, Rust MIR, and Soot Jimple all sit on the other side of 1:1 —
 the whole point of an IR is that the shared part is the expensive part.
 
-The complete operation vocabulary — `MirOperationKind` at `analysis/mir/op.rs:21`,
+The complete operation vocabulary — `MIR-operation kind` at `analysis/mir/op.rs:21`,
 **9 variants**:
 
 ```rust
@@ -274,20 +274,20 @@ The complete value vocabulary — `MirValue` at `op.rs:70`, **5 variants**:
 
 | Construct | Modelled? | Evidence |
 |---|---|---|
-| Local variable assignment | **Yes** | `MirOperationKind::Assign`, `op.rs:29` |
+| Local variable assignment | **Yes** | `MIR-operation kind::Assign`, `op.rs:29` |
 | Field / property read & write | **Yes** | `PlaceProjection::{Field, Property}`, `places.rs:51-52` |
-| Direct & indirect call, args, return place | **Yes** | `MirOperationKind::Call`, `op.rs:45` |
+| Direct & indirect call, args, return place | **Yes** | `MIR-operation kind::Call`, `op.rs:45` |
 | `if` / two-way branch | **Partial** | `Branch { predicate }` — the predicate itself lives outside MIR as an opaque `MirPredicateId` |
 | Return | **Yes** | `op.rs:51` |
 | Deref | **Yes** | `PlaceProjection::Deref`, `places.rs:55` |
 | Array/map index (known key) | **Yes** | `PlaceProjection::IndexKnown(String)`, `places.rs:53` |
 | Assignment *mode* (declaration / overwrite / partial / simultaneous / projection-mutation) | **Yes — unusually good** | `AssignMode`, `op.rs:60`. This is a genuine design strength: Go's `a, b = b, a` and JS destructuring are distinguishable |
-| Explicit unknown-with-evidence + conservative action | **Yes — genuinely good** | `UnsupportedSemanticFact` `op.rs:79`; `ConservativeAction::{SkipOperation, HavocAffectedPlaces, PreserveWithUnknownValue, StopLowering}` `op.rs:117`; per-domain blast radius `UnsupportedDomain` `op.rs:106` |
+| Explicit unknown-with-evidence + conservative action | **Yes — genuinely good** | `unsupported-semantic fact record` `op.rs:79`; `ConservativeAction::{SkipOperation, HavocAffectedPlaces, PreserveWithUnknownValue, StopLowering}` `op.rs:117`; per-domain blast radius `UnsupportedDomain` `op.rs:106` |
 | **Basic blocks** | **NO** | `MirOutput` `body.rs:66` has no blocks field. Operations carry only `ordinal: u32` |
 | **Terminators** | **NO** | `MirTerminator` declared `body.rs:49`, `MirTerminatorKind` `body.rs:59` — **constructed nowhere in the crate** (verified by grep) |
 | **`MirStatement`** | **NO** | declared `body.rs:32`, constructed nowhere; the `#[cfg(test)] expect(dead_code)` reason at `body.rs:27-30` says "before lowering populates them" — it never did |
 | **SSA / phi nodes** | **NO** | no versioning anywhere; `PlaceRoot::Local { function, name }` `places.rs:24` is name-keyed |
-| **Types on places or operations** | **NO** | `PlaceFact` `places.rs:11` has no type field; `MirValue::Literal` is a bare `String` |
+| **Types on places or operations** | **NO** | `place-fact record` `places.rs:11` has no type field; `MirValue::Literal` is a bare `String` |
 | **Binary / unary operators** | **NO** | no `BinOp` in `op.rs`. `a + b` lowers to two operand places and a temporary. Only special case: string-concat for property keys, `lower_ts.rs:866`, `:880` |
 | **Aggregate construction** (struct/object/array/tuple literal) | **NO** | no `Aggregate`/`New`/`Alloc` operation |
 | **Exceptions** — `try`/`catch`/`finally`/`throw`, Go `panic`/`recover` | **NO** | `"try"`, `"throw"`, `"catch destructuring"` → `Unsupported` (`lower_ts.rs:2894-2942`); `"panic"`, `"recover"` → `Unsupported` (`lower_go.rs:1275-1295`). No unwind edges, no exception terminator |
@@ -345,7 +345,7 @@ language on the target list needs strictly more than that intersection.**
 
 Two things in this IR are better than most:
 
-1. **`UnsupportedSemanticFact`** (`op.rs:79`) is an excellent idea, well executed.
+1. **`unsupported-semantic fact record`** (`op.rs:79`) is an excellent idea, well executed.
    Recording `construct`, `source_evidence`, `affected_places`, `affected_domains`,
    `conservative_action`, and `precision` for every unmodelled construct — and
    requiring completeness (`is_complete`, `op.rs:97`) — means the engine's
@@ -448,11 +448,11 @@ language**. Five changes, in dependency order. Each is independently shippable.
 
 **This is the keystone. Nothing else compounds without it.**
 
-Grow `MirOperationKind` and add the missing structural layer:
+Grow `MIR-operation kind` and add the missing structural layer:
 
 ```rust
 // New: the structural layer that is currently absent entirely.
-struct MirBlock { id: BlockId, body: MirBodyId, ordinal: u32,
+struct MirBlock { id: BlockId, body: MIR-body id, ordinal: u32,
                   statements: Vec<MirOpId>, terminator: MirTerminatorId }
 
 enum MirTerminatorKind {
@@ -474,7 +474,7 @@ BinOp    { place: PlaceId, op: BinOpKind, lhs: MirValue, rhs: MirValue }
 UnOp     { place: PlaceId, op: UnOpKind, operand: MirValue }
 Aggregate{ place: PlaceId, kind: AggregateKind /* Struct|Object|Array|Tuple|Map */,
            fields: Vec<(FieldKey, MirValue)>, alloc: AllocationTokenId }
-Closure  { place: PlaceId, body: MirBodyId, captures: Vec<(PlaceId, CaptureMode)> }
+Closure  { place: PlaceId, body: MIR-body id, captures: Vec<(PlaceId, CaptureMode)> }
 ```
 
 Why each earns its place:
@@ -491,12 +491,12 @@ Why each earns its place:
 - **`BinOp` / `Aggregate`** unlock constant propagation, string-concat taint, and
   object-literal points-to without per-language hacks.
 
-Keep `UnsupportedSemanticFact` exactly as it is. Keep the
+Keep `unsupported-semantic fact record` exactly as it is. Keep the
 `mir_contract_source_does_not_store_parser_ast_objects` guard
 (`body.rs:244`) and extend it to every new IR file.
 
-Add types to places: `PlaceFact.ty: Option<TypeSetId>`, referencing the existing
-`analysis/types` lattice. Today `PlaceFact` (`places.rs:11`) has no type field at
+Add types to places: `place-fact record.ty: Option<TypeSetId>`, referencing the existing
+`analysis/types` lattice. Today `place-fact record` (`places.rs:11`) has no type field at
 all, which is why the type layer is a separate, near-duplicated pair of files.
 
 Target ratio after this work: **~3,000 LOC of shared IR to ~1,500 LOC per

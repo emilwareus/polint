@@ -33,7 +33,7 @@ Sensitivity legend: **Flow** = per-program-point facts; **Ctx** = call-site/cont
 | **Interprocedural dataflow** | **Graph reachability (BFS path enumeration)** over a prebuilt edge set — *not* IFDS/IDE | no | **none — unrealizable paths possible** | via `FieldProjection` edges only | statuses `Unknown`/`BudgetExceeded` are surfaced as results | `data_flow/query.rs:42-140`, `:217-221` |
 | **Function summaries** | Bottom-up over SCC condensation; payload = param→return reachability triples | — | — | **no** | `SummaryStatus` tracked | `summaries/facts.rs:131-165`, `summaries/scc.rs` |
 | **Taint tracking** | **Absent as an analysis.** Sources modeled; sinks/propagators/sanitizers are unused enum variants | — | — | — | n/a | see §(a).1 below |
-| **CFG** | Real basic blocks; **branch shape chosen by substring-matching source text**; branch arms structurally empty | — | — | — | `UnsupportedSemanticFact` taxonomy is honest | `cfg/builder.rs:248-304`; `cfg/lower_ts.rs:244-266`; `:172-241` |
+| **CFG** | Real basic blocks; **branch shape chosen by substring-matching source text**; branch arms structurally empty | — | — | — | `unsupported-semantic fact record` taxonomy is honest | `cfg/builder.rs:248-304`; `cfg/lower_ts.rs:244-266`; `:172-241` |
 | **Dominators** | Iterative set-intersection (Allen–Cocke), `BTreeSet` order not RPO; post-dominators via virtual exit | — | — | — | correct algorithm, wrong input graph | `cfg/derived.rs:292-356`, `:358-379` |
 | Control dependence | Ferrante–Ottenstein–Warren ipdom walk | — | — | — | only derived consumer of dominance | `cfg/derived.rs:163-216` |
 | Dominance frontiers / SSA / φ | **Absent** | — | — | — | — | zero hits repo-wide |
@@ -232,7 +232,7 @@ This is the part with the widest blast radius, because every downstream analysis
   (`cfg/lower_ts.rs:309-314`); `CfgEdgeKind::ImplicitThrow` and `CfgNodeKind::RunDefers` are declared
   and never constructed — Go `defer` bodies **never execute at function exit**.
 
-To be fair: the `UnsupportedSemanticFact` mechanism (`mir/op.rs:79-129`) records every lowering gap
+To be fair: the `unsupported-semantic fact record` mechanism (`mir/op.rs:79-129`) records every lowering gap
 with `construct`, `source_evidence`, `affected_domains`, and a `conservative_action`
 (`SkipOperation` / `HavocAffectedPlaces` / `PreserveWithUnknownValue` / `StopLowering`). ~40 TS/JS
 constructs are recorded this way. Most commercial tools silently lie here. This engine mostly does
@@ -375,7 +375,7 @@ is the smallest change that makes the answer yes.
 | `slicing/paths.rs` `PathOmittedRegion` | Every truncation records what was hidden. Make this the repo-wide pattern. |
 | `access_paths/facts.rs` | Right vocabulary with k-limiting. Currently unused by summaries — wire it up. |
 | `entrypoints/` + `trust_boundaries.rs` | 3 900 LOC of framework recognizers producing 14 typed untrusted-source kinds. This is the taint source side, already done, and it is the expensive part. |
-| `mir/op.rs` `UnsupportedSemanticFact` | Honest gap taxonomy with conservative actions. Extend, don't remove. |
+| `mir/op.rs` `unsupported-semantic fact record` | Honest gap taxonomy with conservative actions. Extend, don't remove. |
 | Provider DAG + capability gating + determinism gates | The reason the OOM was fixable and the reason results are reproducible. Architecturally load-bearing. |
 
 ### Rewrite
