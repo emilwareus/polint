@@ -8,12 +8,47 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use crate::eval::adapter::BenchmarkAdapter;
+    use crate::eval::bench::report::{
+        GraphAccuracyBaseline, load_graph_accuracy_baseline, write_graph_accuracy_baseline,
+    };
     use crate::eval::external::go_x_tools_callgraph::GoXToolsCallgraphAdapter;
     use crate::eval::external::jelly_callgraph::JellyCallgraphAdapter;
     use crate::eval::model::EvaluationMode;
     use crate::eval::report::EvaluationRun;
     use crate::eval::runner::run_external_suite_for_test;
     use crate::eval::suite::{LocalClonePolicy, SuiteTier};
+
+    /// Maximum allowed F1 regression against the committed graph-accuracy baseline.
+    const F1_REGRESSION_TOLERANCE: f64 = 0.005;
+
+    #[test]
+    fn committed_graph_accuracy_baseline_is_measured() {
+        let baseline = load_committed_baseline();
+        assert!(
+            !baseline.rows.is_empty(),
+            "committed persisted-graph-accuracy.json must contain suite rows"
+        );
+        for row in &baseline.rows {
+            assert!(
+                row.recall.is_some() && row.precision.is_some(),
+                "suite {} must be a measured baseline (non-null recall/precision); \
+                 regenerate with POLINT_WRITE_GRAPH_BENCH=1 and POLINT_GRAPH_BENCH_TIER=release",
+                row.suite_id
+            );
+            assert!(
+                row.graph_edges_expected > 0,
+                "measured suite {} must record a non-zero graph_edges_expected",
+                row.suite_id
+            );
+            let f1 = f1_from_precision_recall(row.precision, row.recall)
+                .expect("measured row must yield an F1");
+            assert!(
+                f1.is_finite() && (0.0..=1.0).contains(&f1),
+                "suite {} F1 must be in [0, 1], got {f1}",
+                row.suite_id
+            );
+        }
+    }
 
     #[test]
     fn external_graph_baseline_reports_can_be_generated() {
@@ -25,8 +60,21 @@ mod tests {
         let go_repo = root.join("research/evaluation-harness/repos/golang-tools");
         let jelly_repo = root.join("research/evaluation-harness/repos/jelly");
         if !go_repo.exists() || !jelly_repo.exists() {
+            let message = format!(
+                "SKIP external_graph_baseline_reports_can_be_generated: missing benchmark \
+                 clone(s); need both {} and {} (set POLINT_REQUIRE_BENCH_CORPUS=1 to fail \
+                 instead of skip)",
+                go_repo.display(),
+                jelly_repo.display()
+            );
+            if std::env::var_os("POLINT_REQUIRE_BENCH_CORPUS").is_some() {
+                panic!("{message}");
+            }
+            eprintln!("{message}");
             return;
         }
+
+        let committed = load_committed_baseline();
         let output_dir = if std::env::var_os("POLINT_WRITE_GRAPH_BENCH").is_some() {
             root.join(".context/graph-benchmarks")
         } else {
@@ -44,6 +92,8 @@ mod tests {
         jelly_suite.checkout.path = jelly_repo.to_string_lossy().to_string();
         jelly_suite.checkout.local_clone_policy = LocalClonePolicy::AllowAbsolute;
 
+        // The committed accuracy baseline is the full-suite (release) measurement.
+        // Keep the gate on that tier so F1 is compared apples-to-apples.
         let tier = graph_bench_tier();
         let go_artifacts = run_external_suite_for_test(
             &GoXToolsCallgraphAdapter,
@@ -73,13 +123,15 @@ mod tests {
         assert!(go.comparison_rows.len() >= 2);
         assert!(jelly.comparison_rows.len() >= 2);
 
+        assert_f1_against_baseline(&go, &committed);
+        assert_f1_against_baseline(&jelly, &committed);
+
         if std::env::var_os("POLINT_WRITE_GRAPH_BENCH").is_some() {
             // Refresh the committed pre-store persisted-graph accuracy baseline
-            // (BENCH-04) with the real measured recall/precision. Rows read the
-            // metrics off the produced runs; scoring is not reimplemented here.
-            let baseline =
-                crate::eval::bench::report::GraphAccuracyBaseline::from_runs(&[&go, &jelly]);
-            crate::eval::bench::report::write_graph_accuracy_baseline(
+            // with the real measured recall/precision. Rows read the metrics off
+            // the produced runs; scoring is not reimplemented here.
+            let baseline = GraphAccuracyBaseline::from_runs(&[&go, &jelly]);
+            write_graph_accuracy_baseline(
                 &root.join("research/evaluation-harness/baselines/persisted-graph-accuracy.json"),
                 &baseline,
             )
@@ -88,9 +140,61 @@ mod tests {
         }
     }
 
+    fn assert_f1_against_baseline(run: &EvaluationRun, baseline: &GraphAccuracyBaseline) {
+        let row = baseline
+            .rows
+            .iter()
+            .find(|row| row.suite_id == run.suite_id)
+            .unwrap_or_else(|| {
+                panic!(
+                    "committed baseline missing suite {}; regenerate with \
+                     POLINT_WRITE_GRAPH_BENCH=1",
+                    run.suite_id
+                )
+            });
+        let baseline_f1 =
+            f1_from_precision_recall(row.precision, row.recall).unwrap_or_else(|| {
+                panic!(
+                    "suite {}: committed baseline is still a null stub; regenerate with \
+                 POLINT_WRITE_GRAPH_BENCH=1 and POLINT_GRAPH_BENCH_TIER=release",
+                    run.suite_id
+                )
+            });
+        let f1 = run.metrics.f1.unwrap_or_else(|| {
+            panic!(
+                "suite {}: evaluation run must compute F1 when the accuracy gate runs",
+                run.suite_id
+            )
+        });
+        assert!(
+            f1 >= baseline_f1 - F1_REGRESSION_TOLERANCE,
+            "suite {}: F1 {f1:.6} dropped below committed baseline {baseline_f1:.6} \
+             (tolerance {F1_REGRESSION_TOLERANCE})",
+            run.suite_id
+        );
+    }
+
+    fn f1_from_precision_recall(precision: Option<f64>, recall: Option<f64>) -> Option<f64> {
+        match (precision, recall) {
+            (Some(precision), Some(recall)) if precision + recall > 0.0 => {
+                Some(2.0 * precision * recall / (precision + recall))
+            }
+            _ => None,
+        }
+    }
+
+    fn load_committed_baseline() -> GraphAccuracyBaseline {
+        let path =
+            repo_root().join("research/evaluation-harness/baselines/persisted-graph-accuracy.json");
+        load_graph_accuracy_baseline(&path).unwrap_or_else(|error| {
+            panic!("committed persisted-graph-accuracy.json must load: {error}")
+        })
+    }
+
     fn graph_bench_tier() -> SuiteTier {
+        // Default to release: the committed F1 floor is the full-suite measurement.
         match std::env::var("POLINT_GRAPH_BENCH_TIER")
-            .unwrap_or_else(|_| "fast".to_string())
+            .unwrap_or_else(|_| "release".to_string())
             .as_str()
         {
             "fast" => SuiteTier::Fast,
