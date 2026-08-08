@@ -1,3 +1,4 @@
+use crate::analysis_kernel::ProviderRunResult;
 use crate::analysis_kernel::incremental::{
     CacheStats, Digest, DigestKind, LayerCacheManifest, LayerCacheReadStatus, LayerCacheStore,
     LayerCacheWriteStatus, LayerKey, LayerKind, PrecisionTier,
@@ -100,13 +101,6 @@ pub(crate) fn analyze_with_plan_options(
         .diagnostics
 }
 
-#[allow(dead_code)]
-pub(crate) struct ProviderAnalysisResult {
-    pub(crate) diagnostics: Vec<Diagnostic>,
-    pub(crate) cache_stats: CacheStats,
-    pub(crate) output_digest: Option<Digest>,
-}
-
 pub(crate) fn analyze_with_plan_options_and_cache_stats(
     db: &mut AnalysisDb,
     cache: &crate::cache::Cache,
@@ -114,7 +108,7 @@ pub(crate) fn analyze_with_plan_options_and_cache_stats(
     rule_hash: &str,
     plan: &AnalysisPlan,
     parallel: bool,
-) -> ProviderAnalysisResult {
+) -> ProviderRunResult {
     let files: Vec<&SourceFile> = db
         .files()
         .iter()
@@ -123,7 +117,7 @@ pub(crate) fn analyze_with_plan_options_and_cache_stats(
 
     let mut cache_stats = CacheStats::default();
     if files.is_empty() {
-        return ProviderAnalysisResult {
+        return ProviderRunResult {
             diagnostics: Vec::new(),
             cache_stats,
             output_digest: None,
@@ -146,7 +140,7 @@ pub(crate) fn analyze_with_plan_options_and_cache_stats(
             let payload = read
                 .value
                 .expect("layer cache hit should include syntax payload");
-            ProviderAnalysisResult {
+            ProviderRunResult {
                 diagnostics: restore_syntax_layer_payload(db, payload),
                 cache_stats,
                 output_digest: read.output_digest,
@@ -163,7 +157,7 @@ pub(crate) fn analyze_with_plan_options_and_cache_stats(
                 plan,
                 parallel,
             );
-            ProviderAnalysisResult {
+            ProviderRunResult {
                 diagnostics: restore_syntax_layer_payload(db, payload),
                 cache_stats,
                 output_digest: None,
@@ -194,7 +188,7 @@ pub(crate) fn analyze_with_plan_options_and_cache_stats(
             );
             let mut diagnostics = restore_syntax_layer_payload(db, payload);
             diagnostics.extend(write_diagnostics);
-            ProviderAnalysisResult {
+            ProviderRunResult {
                 diagnostics,
                 cache_stats,
                 output_digest,

@@ -1,3 +1,6 @@
+use super::incremental::{CacheStats, Digest};
+use crate::diagnostics::Diagnostic;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ProviderManifest {
     pub(crate) id: &'static str,
@@ -8,6 +11,13 @@ pub(crate) struct ProviderManifest {
     pub(crate) cache_policy: CachePolicy,
     pub(crate) schema_versions: &'static [SchemaVersion],
     pub(crate) precision_ceiling: PrecisionCeiling,
+}
+
+/// Result of running a single analysis provider stage.
+pub(crate) struct ProviderRunResult {
+    pub(crate) diagnostics: Vec<Diagnostic>,
+    pub(crate) cache_stats: CacheStats,
+    pub(crate) output_digest: Option<Digest>,
 }
 
 impl ProviderManifest {
