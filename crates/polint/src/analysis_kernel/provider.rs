@@ -1,5 +1,9 @@
 use super::incremental::{CacheStats, Digest};
+use crate::analysis_plan::AnalysisPlan;
+use crate::cache::Cache;
+use crate::core::AnalysisDb;
 use crate::diagnostics::Diagnostic;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ProviderManifest {
@@ -18,6 +22,68 @@ pub(crate) struct ProviderRunResult {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) cache_stats: CacheStats,
     pub(crate) output_digest: Option<Digest>,
+}
+
+pub(crate) trait Provider: Send + Sync {
+    fn manifest(&self) -> &'static ProviderManifest;
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult;
+}
+
+pub(crate) struct ProviderCtx<'a> {
+    pub(crate) db: &'a mut AnalysisDb,
+    pub(crate) cache: &'a Cache,
+    pub(crate) config_digest: &'a str,
+    pub(crate) rule_digest: &'a str,
+    pub(crate) plan: &'a AnalysisPlan,
+    pub(crate) parallel: bool,
+    /// Output digests of already-run providers, keyed by provider id.
+    pub(crate) upstream_digests: &'a BTreeMap<&'static str, Digest>,
+}
+
+fn manifest_by_id(id: &'static str) -> &'static ProviderManifest {
+    provider_manifests()
+        .iter()
+        .find(|manifest| manifest.id == id)
+        .unwrap_or_else(|| panic!("missing provider manifest {id}"))
+}
+
+pub(crate) struct SourceProvider;
+
+impl Provider for SourceProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.source")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        // Source discovery has no provider-output dependencies; the map is empty here.
+        debug_assert!(ctx.upstream_digests.is_empty());
+        // Source files are already loaded into the db before providers run;
+        // this stage only records the discovery provider output metadata.
+        ProviderRunResult {
+            diagnostics: Vec::new(),
+            cache_stats: CacheStats::default(),
+            output_digest: None,
+        }
+    }
+}
+
+pub(crate) struct GoSyntaxProvider;
+
+impl Provider for GoSyntaxProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.go.syntax")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        crate::go::analyze_with_plan_options_and_cache_stats(
+            ctx.db,
+            ctx.cache,
+            ctx.config_digest,
+            ctx.rule_digest,
+            ctx.plan,
+            ctx.parallel,
+        )
+    }
 }
 
 impl ProviderManifest {

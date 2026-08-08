@@ -20,8 +20,8 @@ pub(crate) use metadata::{
 #[cfg(test)]
 pub(crate) use provider::ProviderKind;
 pub(crate) use provider::{
-    CachePolicy, LanguageScope, PrecisionCeiling, ProviderManifest, ProviderRunResult,
-    SchemaVersion,
+    CachePolicy, GoSyntaxProvider, LanguageScope, PrecisionCeiling, Provider, ProviderCtx,
+    ProviderManifest, ProviderRunResult, SchemaVersion, SourceProvider,
 };
 pub(crate) use store::StoreStatus;
 
@@ -183,26 +183,44 @@ impl AnalysisKernel {
         );
         let mut diagnostics = load_diagnostics;
         let mut provider_outputs = Vec::new();
+        let upstream_digests = std::collections::BTreeMap::new();
 
+        let source_result = {
+            let mut ctx = ProviderCtx {
+                db: &mut db,
+                cache: input.cache,
+                config_digest: input.config_digest,
+                rule_digest: input.rule_digest,
+                plan: input.plan,
+                parallel: input.parallel,
+                upstream_digests: &upstream_digests,
+            };
+            SourceProvider.run(&mut ctx)
+        };
+        diagnostics.extend(source_result.diagnostics);
         provider_outputs.push(Self::provider_output_for(
-            "polint.source",
+            SourceProvider.manifest().id,
             &db,
-            incremental::CacheStats::default(),
+            source_result.cache_stats,
         ));
 
-        let go_output = crate::go::analyze_with_plan_options_and_cache_stats(
-            &mut db,
-            input.cache,
-            input.config_digest,
-            input.rule_digest,
-            input.plan,
-            input.parallel,
-        );
+        let go_output = {
+            let mut ctx = ProviderCtx {
+                db: &mut db,
+                cache: input.cache,
+                config_digest: input.config_digest,
+                rule_digest: input.rule_digest,
+                plan: input.plan,
+                parallel: input.parallel,
+                upstream_digests: &upstream_digests,
+            };
+            GoSyntaxProvider.run(&mut ctx)
+        };
         let go_output_digest = go_output.output_digest.clone();
         tracing::info!(target: "polint::kernel", "phase: go.syntax done");
         diagnostics.extend(go_output.diagnostics);
         provider_outputs.push(Self::provider_output_for_with_optional_digest(
-            "polint.go.syntax",
+            GoSyntaxProvider.manifest().id,
             &db,
             go_output.cache_stats,
             go_output_digest.clone(),
