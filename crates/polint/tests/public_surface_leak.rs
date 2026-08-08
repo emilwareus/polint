@@ -648,6 +648,7 @@ fn prelude_structs_and_language_are_non_exhaustive() {
         root.join("crates/polint/src/core/metadata.rs"),
         root.join("crates/polint/src/core/labels.rs"),
         root.join("crates/polint/src/core/capability.rs"),
+        root.join("crates/polint/src/core/rule.rs"),
         root.join("crates/polint/src/diagnostics/mod.rs"),
         root.join("crates/polint/src/sdk/facts.rs"),
         root.join("crates/polint/src/sdk/policy.rs"),

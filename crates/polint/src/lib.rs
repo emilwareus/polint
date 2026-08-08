@@ -58,7 +58,8 @@ pub mod _bench {
     }
 
     pub mod core {
-        pub use crate::core::{AnalysisDb, Rule, RuleOptions, run_rules};
+        pub use crate::core::rule::run_rules;
+        pub use crate::core::{AnalysisDb, Rule, RuleOptions};
     }
 
     pub mod fs {
