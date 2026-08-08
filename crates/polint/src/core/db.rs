@@ -100,8 +100,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::fact_store::{
-    CFG_STORE_FAMILY, CfgFactStore, FactStore, FactStoreEntry, GO_SYNTAX_STORE_FAMILY,
-    GoSyntaxStore, TS_SYNTAX_STORE_FAMILY, TsSyntaxStore,
+    CALL_STORE_FAMILY, CFG_STORE_FAMILY, CfgFactStore, FactStore, FactStoreEntry,
+    GO_SYNTAX_STORE_FAMILY, GoSyntaxStore, TS_SYNTAX_STORE_FAMILY, TsSyntaxStore,
 };
 use super::facts::{
     BranchObligation, CachedFileFacts, ComplexityMetricFact, CoverageFact, DefinitionFact,
@@ -170,10 +170,6 @@ pub struct AnalysisDb {
     pub(crate) function_metrics: Vec<FunctionMetricFact>,
     pub(crate) complexity_metrics: Vec<ComplexityMetricFact>,
     pub(crate) semantic: Option<SemanticStore>,
-    pub(crate) call_sites: Vec<CallSiteFact>,
-    pub(crate) call_targets: Vec<CallTargetFact>,
-    pub(crate) unresolved_calls: Vec<UnresolvedCallFact>,
-    pub(crate) call_store: Option<CallStore>,
     pub(crate) identity_records: Vec<IdentityRecord>,
     pub(crate) identity_store: Option<IdentityStore>,
     pub(crate) refined_call_edges: Vec<RefinedCallEdgeFact>,
@@ -294,6 +290,9 @@ impl Default for AnalysisDb {
         let mut cfg_store = CfgFactStore::default();
         FactStore::clear(&mut cfg_store);
         fact_stores.insert(CFG_STORE_FAMILY, FactStoreEntry::new(cfg_store));
+        let mut call_store = CallStore::default();
+        FactStore::clear(&mut call_store);
+        fact_stores.insert(CALL_STORE_FAMILY, FactStoreEntry::new(call_store));
         Self {
             files: Vec::new(),
             fact_meta: FactMetaStore::default(),
@@ -336,10 +335,6 @@ impl Default for AnalysisDb {
             function_metrics: Vec::new(),
             complexity_metrics: Vec::new(),
             semantic: None,
-            call_sites: Vec::new(),
-            call_targets: Vec::new(),
-            unresolved_calls: Vec::new(),
-            call_store: None,
             identity_records: Vec::new(),
             identity_store: None,
             refined_call_edges: Vec::new(),
@@ -447,6 +442,16 @@ impl AnalysisDb {
     fn cfg_store_mut(&mut self) -> &mut CfgFactStore {
         self.fact_store_mut(CFG_STORE_FAMILY)
             .expect("CfgFactStore is installed when AnalysisDb is constructed")
+    }
+
+    fn calls_store(&self) -> &CallStore {
+        self.fact_store(CALL_STORE_FAMILY)
+            .expect("CallStore is installed when AnalysisDb is constructed")
+    }
+
+    fn calls_store_mut(&mut self) -> &mut CallStore {
+        self.fact_store_mut(CALL_STORE_FAMILY)
+            .expect("CallStore is installed when AnalysisDb is constructed")
     }
 
     /// Typed downcast helper for registry stores. Returns `None` when the family
@@ -772,10 +777,7 @@ impl AnalysisDb {
     ) -> Result<(), AnalysisError> {
         self.populate_call_owner_symbols(&mut output);
         let store = CallStore::from_output(output)?;
-        self.call_sites = store.sites().to_vec();
-        self.call_targets = store.targets().to_vec();
-        self.unresolved_calls = store.unresolved().to_vec();
-        self.call_store = Some(store);
+        *self.calls_store_mut() = store;
         self.refresh_call_metadata();
         Ok(())
     }
@@ -786,7 +788,7 @@ impl AnalysisDb {
     ) -> Result<(), AnalysisError> {
         let valid_sites = valid_call_site_ids(self);
         let valid_targets = self
-            .call_targets
+            .call_targets()
             .iter()
             .map(|target| target.id)
             .collect::<BTreeSet<_>>();
@@ -935,20 +937,19 @@ impl AnalysisDb {
     }
 
     pub(crate) fn call_sites(&self) -> &[CallSiteFact] {
-        &self.call_sites
+        self.calls_store().sites()
     }
 
     pub(crate) fn call_targets(&self) -> &[CallTargetFact] {
-        &self.call_targets
+        self.calls_store().targets()
     }
 
     pub(crate) fn unresolved_calls(&self) -> &[UnresolvedCallFact] {
-        &self.unresolved_calls
+        self.calls_store().unresolved()
     }
 
-    #[allow(dead_code)]
     pub(crate) fn call_store(&self) -> Option<&CallStore> {
-        self.call_store.as_ref()
+        Some(self.calls_store())
     }
 
     pub(crate) fn refined_call_edges(&self) -> &[RefinedCallEdgeFact] {
@@ -1526,44 +1527,32 @@ impl AnalysisDb {
 
     #[allow(dead_code)]
     pub(crate) fn call_sites_by_caller(&self, caller: FunctionId) -> Vec<&CallSiteFact> {
-        self.call_store
-            .as_ref()
-            .map_or_else(Vec::new, |store| store.sites_by_caller(caller))
+        self.calls_store().sites_by_caller(caller)
     }
 
     #[allow(dead_code)]
     pub(crate) fn call_targets_by_site(&self, site: CallSiteId) -> Vec<&CallTargetFact> {
-        self.call_store
-            .as_ref()
-            .map_or_else(Vec::new, |store| store.targets_by_site(site))
+        self.calls_store().targets_by_site(site)
     }
 
     #[allow(dead_code)]
     pub(crate) fn outgoing_calls_by_function(&self, caller: FunctionId) -> Vec<&CallTargetFact> {
-        self.call_store
-            .as_ref()
-            .map_or_else(Vec::new, |store| store.outgoing_by_function(caller))
+        self.calls_store().outgoing_by_function(caller)
     }
 
     #[allow(dead_code)]
     pub(crate) fn outgoing_calls_by_symbol(&self, caller: SymbolId) -> Vec<&CallTargetFact> {
-        self.call_store
-            .as_ref()
-            .map_or_else(Vec::new, |store| store.outgoing_by_symbol(caller))
+        self.calls_store().outgoing_by_symbol(caller)
     }
 
     #[allow(dead_code)]
     pub(crate) fn incoming_calls_by_symbol(&self, target: SymbolId) -> Vec<&CallTargetFact> {
-        self.call_store
-            .as_ref()
-            .map_or_else(Vec::new, |store| store.incoming_by_symbol(target))
+        self.calls_store().incoming_by_symbol(target)
     }
 
     #[allow(dead_code)]
     pub(crate) fn incoming_calls_by_function(&self, target: FunctionId) -> Vec<&CallTargetFact> {
-        self.call_store
-            .as_ref()
-            .map_or_else(Vec::new, |store| store.incoming_by_function(target))
+        self.calls_store().incoming_by_function(target)
     }
 
     #[allow(dead_code)]
@@ -1571,9 +1560,7 @@ impl AnalysisDb {
         &self,
         reason: UnresolvedCallReason,
     ) -> Vec<&UnresolvedCallFact> {
-        self.call_store
-            .as_ref()
-            .map_or_else(Vec::new, |store| store.unresolved_by_reason(reason))
+        self.calls_store().unresolved_by_reason(reason)
     }
 
     #[allow(dead_code)]
@@ -1581,9 +1568,7 @@ impl AnalysisDb {
         &self,
         status: CallTargetStatus,
     ) -> Vec<&UnresolvedCallFact> {
-        self.call_store
-            .as_ref()
-            .map_or_else(Vec::new, |store| store.unresolved_by_status(status))
+        self.calls_store().unresolved_by_status(status)
     }
 
     fn refresh_call_metadata(&mut self) {
@@ -1591,28 +1576,23 @@ impl AnalysisDb {
         self.fact_meta.remove_family(FactFamily::CallTarget);
         self.fact_meta.remove_family(FactFamily::UnresolvedCall);
 
-        for index in 0..self.call_sites.len() {
-            let (run_id, metadata) = {
-                let fact = &self.call_sites[index];
-                (fact.id.0, self.call_site_metadata(fact))
-            };
-            self.record_fact_meta(FactFamily::CallSite, run_id, metadata);
+        let call_sites = self.call_sites().to_vec();
+        let call_targets = self.call_targets().to_vec();
+        let unresolved_calls = self.unresolved_calls().to_vec();
+
+        for fact in &call_sites {
+            let metadata = self.call_site_metadata(fact);
+            self.record_fact_meta(FactFamily::CallSite, fact.id.0, metadata);
         }
 
-        for index in 0..self.call_targets.len() {
-            let (run_id, metadata) = {
-                let fact = &self.call_targets[index];
-                (fact.id.0, self.call_target_metadata(fact))
-            };
-            self.record_fact_meta(FactFamily::CallTarget, run_id, metadata);
+        for fact in &call_targets {
+            let metadata = self.call_target_metadata(fact);
+            self.record_fact_meta(FactFamily::CallTarget, fact.id.0, metadata);
         }
 
-        for index in 0..self.unresolved_calls.len() {
-            let (run_id, metadata) = {
-                let fact = &self.unresolved_calls[index];
-                (index as u64, self.unresolved_call_metadata(fact))
-            };
-            self.record_fact_meta(FactFamily::UnresolvedCall, run_id, metadata);
+        for (index, fact) in unresolved_calls.iter().enumerate() {
+            let metadata = self.unresolved_call_metadata(fact);
+            self.record_fact_meta(FactFamily::UnresolvedCall, index as u64, metadata);
         }
 
         self.finish_fact_meta_insertions(&[

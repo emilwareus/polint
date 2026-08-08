@@ -7,6 +7,7 @@
 use std::any::Any;
 use std::fmt;
 
+use crate::analysis::calls::store::CallStore;
 use crate::analysis::cfg::facts::{
     BasicBlockFact, CfgEdgeFact, CfgFunctionFact, CfgNodeFact, ControlDependenceFact,
     DominatorFact, PostDominatorFact, ReachabilityFact, UnsupportedControlFlowFact,
@@ -307,6 +308,31 @@ impl FactStore for CfgFactStore {
 
 /// Registry key used for [`CfgFactStore`] in `AnalysisDb::fact_stores`.
 pub(crate) const CFG_STORE_FAMILY: FactFamily = FactFamily::CfgFunction;
+
+impl FactStore for CallStore {
+    fn family(&self) -> FactFamily {
+        FactFamily::CallSite
+    }
+
+    fn clear(&mut self) {
+        *self = CallStore::default();
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn clone_box(&self) -> Box<dyn FactStore> {
+        Box::new(self.clone())
+    }
+}
+
+/// Registry key used for [`CallStore`] in `AnalysisDb::fact_stores`.
+pub(crate) const CALL_STORE_FAMILY: FactFamily = FactFamily::CallSite;
 
 #[cfg(test)]
 mod tests {
