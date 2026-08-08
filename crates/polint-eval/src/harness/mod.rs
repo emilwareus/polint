@@ -1,54 +1,30 @@
-#[path = "../../../polint-eval/src/harness/adaptation.rs"]
 pub(crate) mod adaptation;
-#[path = "../../../polint-eval/src/harness/adapter.rs"]
 pub(crate) mod adapter;
-#[path = "../../../polint-eval/src/harness/baseline.rs"]
 pub(crate) mod baseline;
-#[path = "../../../polint-eval/src/harness/bench/mod.rs"]
 pub(crate) mod bench;
-#[path = "../../../polint-eval/src/harness/competitors.rs"]
 pub(crate) mod competitors;
-#[path = "../../../polint-eval/src/harness/delta.rs"]
 pub(crate) mod delta;
-#[path = "../../../polint-eval/src/harness/determinism_gate.rs"]
 pub(crate) mod determinism_gate;
-#[path = "../../../polint-eval/src/harness/external/mod.rs"]
 pub(crate) mod external;
-#[path = "../../../polint-eval/src/harness/fixtures.rs"]
 pub(crate) mod fixtures;
-#[path = "../../../polint-eval/src/harness/gates.rs"]
 pub(crate) mod gates;
 #[cfg(test)]
-#[path = "../../../polint-eval/src/harness/go_rta.rs"]
 pub(crate) mod go_rta;
-#[path = "../../../polint-eval/src/harness/markdown.rs"]
 pub(crate) mod markdown;
-#[path = "../../../polint-eval/src/harness/matcher.rs"]
 pub(crate) mod matcher;
-#[path = "../../../polint-eval/src/harness/metrics.rs"]
 pub(crate) mod metrics;
-#[path = "../../../polint-eval/src/harness/model.rs"]
 pub(crate) mod model;
-#[path = "../../../polint-eval/src/harness/observed.rs"]
 pub(crate) mod observed;
-#[path = "../../../polint-eval/src/harness/performance.rs"]
 pub(crate) mod performance;
-#[path = "../../../polint-eval/src/harness/report.rs"]
 pub(crate) mod report;
-#[path = "../../../polint-eval/src/harness/runner.rs"]
 pub(crate) mod runner;
 #[cfg(test)]
-#[path = "../../../polint-eval/src/harness/semantic_graph_snapshot.rs"]
 pub(crate) mod semantic_graph_snapshot;
-#[path = "../../../polint-eval/src/harness/suite.rs"]
 pub(crate) mod suite;
-#[path = "../../../polint-eval/src/harness/tiers.rs"]
 pub(crate) mod tiers;
 #[cfg(test)]
-#[path = "../../../polint-eval/src/harness/ts_object_model.rs"]
 pub(crate) mod ts_object_model;
 #[cfg(test)]
-#[path = "../../../polint-eval/src/harness/ts_tokens.rs"]
 pub(crate) mod ts_tokens;
 
 #[cfg(test)]
