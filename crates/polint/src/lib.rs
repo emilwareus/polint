@@ -27,6 +27,7 @@ pub(crate) mod eval;
 pub(crate) mod fs;
 pub(crate) mod git;
 pub(crate) mod go;
+pub(crate) mod golden_cost;
 #[cfg(test)]
 pub(crate) mod graph;
 pub(crate) mod ignores;

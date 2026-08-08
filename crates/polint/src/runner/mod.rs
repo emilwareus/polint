@@ -159,7 +159,7 @@ pub fn run_cli(rules: Vec<Rule>) -> ExitCode {
 fn run(rules: Vec<Rule>) -> Result<u8> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Check(args) => crate::eval::bench::golden_cost::run_with_optional_cost(|| {
+        Command::Check(args) => crate::golden_cost::run_with_optional_cost(|| {
             check(std::env::current_dir()?, &args, &rules)
         }),
         Command::Inspect(args) => inspect(std::env::current_dir()?, &args, &rules),

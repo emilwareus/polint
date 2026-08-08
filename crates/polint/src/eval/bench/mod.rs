@@ -8,7 +8,6 @@
 
 pub(crate) mod curve;
 pub(crate) mod gate;
-pub(crate) mod golden_cost;
 pub(crate) mod measure;
 pub(crate) mod report;
 pub(crate) mod retained_bytes;

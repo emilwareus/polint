@@ -20,7 +20,7 @@ const GOLDEN_ROOT_REL: &str = "tests/golden";
 const OUTPUTS_REL: &str = "tests/golden/outputs";
 const UPDATE_ENV: &str = "POLINT_UPDATE_GOLDENS";
 const UPDATE_COSTS_ENV: &str = "POLINT_UPDATE_GOLDEN_COSTS";
-/// Must match `crate::eval::bench::golden_cost::COST_PATH_ENV`.
+/// Must match `crate::golden_cost::COST_PATH_ENV`.
 const COST_PATH_ENV: &str = "POLINT_GOLDEN_COST_PATH";
 const COST_SCHEMA_VERSION: &str = "polint-golden-cost-1";
 /// Fail when measured wall-clock or peak RSS exceeds committed × this ratio

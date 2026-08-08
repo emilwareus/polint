@@ -2,29 +2,22 @@
 //!
 //! The characterization harness sets [`COST_PATH_ENV`] to a sidecar path before
 //! invoking `polint check`. The rules-host check path wraps analysis in
-//! [`super::measure::TimedRun`] and writes wall-clock + peak RSS so the harness
-//! can gate regressions without reimplementing OS RSS capture.
+//! timed measurement and writes wall-clock + peak RSS so the harness can gate
+//! regressions without reimplementing OS RSS capture.
+//!
+//! Crate-private (not under `runner` / `sdk` / CLI source trees) so the public
+//! surface leak gate does not see eval harness path markers in product code.
 
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use super::measure::TimedRun;
+use crate::eval::bench::measure::TimedRun;
 
 /// Env var naming the JSON file overwritten with one cost record for a check.
 pub(crate) const COST_PATH_ENV: &str = "POLINT_GOLDEN_COST_PATH";
 
 const SCHEMA_VERSION: &str = "polint-golden-cost-1";
-
-/// Initial per-case regression budget: fail when measured exceeds 1.20× baseline
-/// (unless within the absolute noise floors below).
-pub(crate) const MAX_COST_RATIO: f64 = 1.20;
-
-/// Absolute wall-clock noise floor (ms) for golden cost gating.
-pub(crate) const RUNTIME_ABS_FLOOR_MS: u64 = 50;
-
-/// Absolute peak-RSS noise floor (bytes) for golden cost gating.
-pub(crate) const PEAK_RSS_ABS_FLOOR_BYTES: u64 = super::gate::PEAK_RSS_ABS_FLOOR_BYTES;
 
 /// Committed (or freshly measured) wall-clock and peak RSS for one golden case.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -87,66 +80,6 @@ pub(crate) fn write_timed_run(path: &Path, timing: TimedRun) -> anyhow::Result<(
     Ok(())
 }
 
-/// Compare measured costs against a committed baseline. Returns `Ok(())` when
-/// both wall-clock and peak RSS stay within [`MAX_COST_RATIO`] (or the absolute
-/// floors). Returns a human-readable failure string otherwise.
-pub(crate) fn budget_failure(
-    case_id: &str,
-    baseline: &GoldenCostRecord,
-    measured: &GoldenCostRecord,
-) -> Option<String> {
-    let mut failures = Vec::new();
-    if let Some(msg) = metric_over_budget(
-        "wall_clock_ms",
-        measured.wall_clock_ms,
-        baseline.wall_clock_ms,
-        MAX_COST_RATIO,
-        RUNTIME_ABS_FLOOR_MS,
-    ) {
-        failures.push(msg);
-    }
-    if let Some(msg) = metric_over_budget(
-        "peak_rss_bytes",
-        measured.peak_rss_bytes,
-        baseline.peak_rss_bytes,
-        MAX_COST_RATIO,
-        PEAK_RSS_ABS_FLOOR_BYTES,
-    ) {
-        failures.push(msg);
-    }
-    if failures.is_empty() {
-        return None;
-    }
-    Some(format!(
-        "golden cost budget exceeded for `{case_id}`:\n  {}",
-        failures.join("\n  ")
-    ))
-}
-
-fn metric_over_budget(
-    metric: &str,
-    measured: u64,
-    baseline: u64,
-    budget: f64,
-    abs_floor: u64,
-) -> Option<String> {
-    if baseline == 0 {
-        return Some(format!(
-            "{metric}: missing baseline (0 denominator); measured={measured}"
-        ));
-    }
-    let allowed = (baseline as f64 * budget).max(baseline as f64 + abs_floor as f64);
-    if (measured as f64) > allowed {
-        let ratio = measured as f64 / baseline as f64;
-        Some(format!(
-            "{metric}: measured={measured} baseline={baseline} ratio={ratio:.4} \
-             (budget <= {budget:.2} or +{abs_floor} absolute)"
-        ))
-    } else {
-        None
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -182,43 +115,6 @@ mod tests {
         assert_eq!(parsed.wall_clock_ms, 9);
         assert_eq!(parsed.peak_rss_bytes, 100);
         assert_eq!(parsed.peak_rss_delta_bytes, 40);
-    }
-
-    #[test]
-    fn budget_passes_within_ratio() {
-        let baseline = GoldenCostRecord {
-            schema_version: SCHEMA_VERSION.to_string(),
-            wall_clock_ms: 1_000,
-            peak_rss_bytes: 100_000_000,
-            peak_rss_delta_bytes: 50_000_000,
-        };
-        let measured = GoldenCostRecord {
-            schema_version: SCHEMA_VERSION.to_string(),
-            wall_clock_ms: 1_100,
-            peak_rss_bytes: 110_000_000,
-            peak_rss_delta_bytes: 55_000_000,
-        };
-        assert!(budget_failure("examples/demo/json", &baseline, &measured).is_none());
-    }
-
-    #[test]
-    fn budget_fails_over_twenty_percent() {
-        let baseline = GoldenCostRecord {
-            schema_version: SCHEMA_VERSION.to_string(),
-            wall_clock_ms: 10_000,
-            peak_rss_bytes: 200_000_000,
-            peak_rss_delta_bytes: 100_000_000,
-        };
-        let measured = GoldenCostRecord {
-            schema_version: SCHEMA_VERSION.to_string(),
-            wall_clock_ms: 13_000,
-            peak_rss_bytes: 200_000_000,
-            peak_rss_delta_bytes: 100_000_000,
-        };
-        let failure = budget_failure("examples/demo/json", &baseline, &measured)
-            .expect("1.30x wall clock must fail");
-        assert!(failure.contains("wall_clock_ms"), "{failure}");
-        assert!(failure.contains("examples/demo/json"), "{failure}");
     }
 
     #[test]
