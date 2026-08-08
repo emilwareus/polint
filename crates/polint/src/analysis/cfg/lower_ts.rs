@@ -349,7 +349,7 @@ impl<'db> TsCfgLowering<'db> {
     }
 
     fn source_text(&self, span: Span) -> Option<&str> {
-        let file = self.db.files().iter().find(|file| file.id == span.file)?;
+        let file = self.db.file(span.file)?;
         source_slice(file, &span)
     }
 

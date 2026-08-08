@@ -25,7 +25,7 @@ use oxc_parser::Parser;
 use oxc_span::{GetSpan, SourceType};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -332,20 +332,28 @@ fn restore_syntax_layer_payload(
     db: &mut AnalysisDb,
     payload: SyntaxLayerPayload,
 ) -> Vec<Diagnostic> {
-    let mut diagnostics = Vec::new();
-    for file in payload.files {
-        let Some(file_id) = db
+    // FileId is dense; build a path→id index once so restore is O(F), not O(F²).
+    let restores: Vec<(FileId, Option<_>, Vec<Diagnostic>)> = {
+        let file_id_by_path: HashMap<&str, FileId> = db
             .files()
             .iter()
-            .find(|source| source.relative_path == file.relative_path)
-            .map(|source| source.id)
-        else {
-            continue;
-        };
-        if let Some(facts) = file.facts {
+            .map(|source| (source.relative_path.as_str(), source.id))
+            .collect();
+        payload
+            .files
+            .into_iter()
+            .filter_map(|file| {
+                let &file_id = file_id_by_path.get(file.relative_path.as_str())?;
+                Some((file_id, file.facts, file.diagnostics))
+            })
+            .collect()
+    };
+    let mut diagnostics = Vec::new();
+    for (file_id, facts, file_diagnostics) in restores {
+        if let Some(facts) = facts {
             db.restore_file_facts(file_id, facts);
         }
-        diagnostics.extend(file.diagnostics);
+        diagnostics.extend(file_diagnostics);
     }
     diagnostics
 }
