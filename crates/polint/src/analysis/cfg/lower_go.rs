@@ -52,9 +52,19 @@ impl<'db> GoCfgLowering<'db> {
         bodies.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
 
         for body in bodies {
-            let has_exceptional_control = self
+            let has_exceptional_control = self.db.mir_terminators().iter().any(|terminator| {
+                terminator.body == body.id
+                    && matches!(
+                        terminator.kind,
+                        MirTerminatorKind::Throw { .. }
+                            | MirTerminatorKind::Call {
+                                unwind: Some(_),
+                                ..
+                            }
+                    )
+            }) || self
                 .unsupported_for_body(body.id)
-                .any(|row| matches!(row.construct.as_str(), "panic" | "recover" | "ERROR"));
+                .any(|row| row.construct == "ERROR");
             let function = self.builder.start_function(body, has_exceptional_control);
             self.body_to_function.insert(body.id, function);
             self.lower_body(body.id);
@@ -73,6 +83,20 @@ impl<'db> GoCfgLowering<'db> {
             (left.ordinal, left.stable_key.as_str())
                 .cmp(&(right.ordinal, right.stable_key.as_str()))
         });
+        let unwind_targets = self
+            .db
+            .mir_terminators()
+            .iter()
+            .filter(|terminator| terminator.body == body)
+            .filter_map(|terminator| match terminator.kind {
+                MirTerminatorKind::Throw { unwind, .. } => Some((unwind, CfgEdgeKind::Panic)),
+                MirTerminatorKind::Call {
+                    unwind: Some(unwind),
+                    ..
+                } => Some((unwind, CfgEdgeKind::Panic)),
+                _ => None,
+            })
+            .collect::<BTreeMap<_, _>>();
         if blocks.is_empty() {
             let current = self.builder.current_block();
             let exit = self.builder.normal_exit_block();
@@ -93,11 +117,15 @@ impl<'db> GoCfgLowering<'db> {
                 MirTerminatorKind::Branch { .. } | MirTerminatorKind::Switch { .. } => {
                     BasicBlockKind::Branch
                 }
-                MirTerminatorKind::Unreachable => BasicBlockKind::Unreachable,
+                MirTerminatorKind::Unreachable if !unwind_targets.contains_key(&block.id) => {
+                    BasicBlockKind::Unreachable
+                }
                 _ => BasicBlockKind::StraightLine,
             };
             let cfg_block = self.builder.start_block(kind);
-            if matches!(terminator.kind, MirTerminatorKind::Unreachable) {
+            if matches!(terminator.kind, MirTerminatorKind::Unreachable)
+                && !unwind_targets.contains_key(&block.id)
+            {
                 self.builder.mark_unreachable(cfg_block);
             }
             for (index, statement_id) in block.statements.iter().enumerate() {
@@ -113,16 +141,15 @@ impl<'db> GoCfgLowering<'db> {
                     .iter()
                     .find(|operation| operation.id == statement.operation)
                     .expect("MIR statement operation must exist");
-                let is_condition = index + 1 == block.statements.len()
-                    && matches!(
-                        terminator.kind,
-                        MirTerminatorKind::Branch { .. } | MirTerminatorKind::Switch { .. }
-                    );
-                self.append_operation(cfg_block, operation, is_condition);
+                let is_last = index + 1 == block.statements.len();
+                self.append_operation(operation, &terminator.kind, is_last);
             }
             if block.statements.is_empty() {
-                self.builder
-                    .append_operation_node(None, CfgNodeKind::Synthetic, None);
+                let node_kind = match terminator.kind {
+                    MirTerminatorKind::Throw { .. } => CfgNodeKind::Panic,
+                    _ => CfgNodeKind::Synthetic,
+                };
+                self.builder.append_operation_node(None, node_kind, None);
             }
             cfg_blocks.insert(block.id, cfg_block);
         }
@@ -152,11 +179,6 @@ impl<'db> GoCfgLowering<'db> {
                     .iter()
                     .find(|operation| operation.id == statement.operation)
                     .expect("MIR statement operation must exist");
-                if matches!(operation.kind, MirOperationKind::Call { .. })
-                    && self.call_shape(operation).exit_edge == Some(CfgEdgeKind::Panic)
-                {
-                    stop_lowering = true;
-                }
                 let MirOperationKind::Unsupported { unsupported } = &operation.kind else {
                     continue;
                 };
@@ -208,7 +230,42 @@ impl<'db> GoCfgLowering<'db> {
                         CfgEdgeKind::Return,
                     );
                 }
-                MirTerminatorKind::Unreachable | MirTerminatorKind::Unsupported { .. } => {}
+                MirTerminatorKind::Throw { unwind, .. } => {
+                    self.add_mir_edge(from, *unwind, &cfg_blocks, CfgEdgeKind::Panic);
+                }
+                MirTerminatorKind::Call { normal, unwind, .. } => {
+                    if let Some(unwind) = unwind {
+                        self.add_mir_edge(from, *unwind, &cfg_blocks, CfgEdgeKind::Panic);
+                    } else {
+                        self.add_mir_edge(from, *normal, &cfg_blocks, CfgEdgeKind::Normal);
+                    }
+                }
+                MirTerminatorKind::Suspend { kind, resume, .. } => {
+                    let (suspend, resumed) = match kind {
+                        crate::analysis::mir::body::SuspendKind::Await => {
+                            (CfgEdgeKind::AwaitSuspend, CfgEdgeKind::AwaitResume)
+                        }
+                        crate::analysis::mir::body::SuspendKind::Yield => {
+                            (CfgEdgeKind::YieldSuspend, CfgEdgeKind::YieldResume)
+                        }
+                        crate::analysis::mir::body::SuspendKind::ChannelRecv
+                        | crate::analysis::mir::body::SuspendKind::ChannelSend => {
+                            (CfgEdgeKind::Unknown, CfgEdgeKind::Normal)
+                        }
+                    };
+                    self.add_mir_edge(from, *resume, &cfg_blocks, suspend);
+                    self.add_mir_edge(from, *resume, &cfg_blocks, resumed);
+                }
+                MirTerminatorKind::Unreachable => {
+                    if unwind_targets.contains_key(&block.id) {
+                        let exit = self
+                            .builder
+                            .exceptional_exit_block()
+                            .unwrap_or_else(|| self.builder.normal_exit_block());
+                        self.builder.add_edge(from, exit, CfgEdgeKind::Normal);
+                    }
+                }
+                MirTerminatorKind::Unsupported { .. } => {}
             }
         }
     }
@@ -228,55 +285,39 @@ impl<'db> GoCfgLowering<'db> {
 
     fn append_operation(
         &mut self,
-        cfg_block: crate::analysis::cfg::ids::BasicBlockId,
         operation: &MirOperation,
-        is_condition: bool,
+        terminator: &MirTerminatorKind,
+        is_last: bool,
     ) {
-        let node_kind = if is_condition {
-            CfgNodeKind::Condition
-        } else {
-            match &operation.kind {
-                MirOperationKind::Return { .. } => CfgNodeKind::Return,
-                MirOperationKind::Call { .. } => self.call_shape(operation).node_kind,
-                MirOperationKind::Unsupported { unsupported } => {
-                    self.unsupported_shape(*unsupported).node_kind
+        let node_kind = if is_last {
+            match terminator {
+                MirTerminatorKind::Branch { .. } | MirTerminatorKind::Switch { .. } => {
+                    CfgNodeKind::Condition
                 }
-                _ => CfgNodeKind::Operation,
+                MirTerminatorKind::Throw { .. } => CfgNodeKind::Panic,
+                MirTerminatorKind::Call {
+                    unwind: Some(_), ..
+                } => CfgNodeKind::Panic,
+                _ => self.operation_node_kind(operation),
             }
+        } else {
+            self.operation_node_kind(operation)
         };
         self.builder.append_operation_node(
             Some(operation),
             node_kind,
             Some(operation.span.clone()),
         );
-        if let MirOperationKind::Call { .. } = &operation.kind
-            && let Some(edge_kind) = self.call_shape(operation).exit_edge
-        {
-            let exit = self
-                .builder
-                .exceptional_exit_block()
-                .unwrap_or_else(|| self.builder.normal_exit_block());
-            self.builder.add_edge(cfg_block, exit, edge_kind);
-        }
     }
 
-    fn call_shape(&self, operation: &MirOperation) -> OperationShape {
-        match self
-            .unsupported_at_operation_span(operation)
-            .map(|row| row.construct.as_str())
-        {
-            Some("panic") => OperationShape {
-                node_kind: CfgNodeKind::Panic,
-                exit_edge: Some(CfgEdgeKind::Panic),
-            },
-            Some("recover") => OperationShape {
-                node_kind: CfgNodeKind::CallSite,
-                exit_edge: Some(CfgEdgeKind::Recover),
-            },
-            _ => OperationShape {
-                node_kind: CfgNodeKind::CallSite,
-                exit_edge: None,
-            },
+    fn operation_node_kind(&self, operation: &MirOperation) -> CfgNodeKind {
+        match &operation.kind {
+            MirOperationKind::Return { .. } => CfgNodeKind::Return,
+            MirOperationKind::Call { .. } => CfgNodeKind::CallSite,
+            MirOperationKind::Unsupported { unsupported } => {
+                self.unsupported_shape(*unsupported).node_kind
+            }
+            _ => CfgNodeKind::Operation,
         }
     }
 
@@ -341,19 +382,6 @@ impl<'db> GoCfgLowering<'db> {
         })
     }
 
-    fn unsupported_at_operation_span(
-        &self,
-        operation: &MirOperation,
-    ) -> Option<&UnsupportedSemanticFact> {
-        self.db.unsupported_semantics().iter().find(|row| {
-            row.language == Language::Go
-                && row.body == Some(operation.body)
-                && row.operation.is_none()
-                && row.span == operation.span
-                && row.affected_domains.contains(&UnsupportedDomain::Cfg)
-        })
-    }
-
     fn finish(self) -> CfgOutput {
         let body_to_function = self.body_to_function;
         let db = self.db;
@@ -371,11 +399,6 @@ impl<'db> GoCfgLowering<'db> {
         output.unsupported.append(&mut unsupported);
         output.normalized()
     }
-}
-
-struct OperationShape {
-    node_kind: CfgNodeKind,
-    exit_edge: Option<CfgEdgeKind>,
 }
 
 #[derive(Clone, Copy)]
@@ -453,7 +476,7 @@ fn cfg_precision(precision: UnsupportedPrecision) -> CfgPrecision {
 mod tests {
     use super::*;
     use crate::analysis::cfg::facts::CfgEdgeKind;
-    use crate::analysis::ids::{CallSiteId, MirStatementId, MirTerminatorId, PlaceId};
+    use crate::analysis::ids::{MirStatementId, MirTerminatorId, PlaceId};
     use crate::analysis::mir::body::{
         MirBlock, MirBlockId, MirBody, MirOutput, MirStatement, MirTerminator, MirTerminatorKind,
     };
@@ -507,25 +530,6 @@ mod tests {
         }
     }
 
-    fn call(id: u64, ordinal: u32) -> MirOperation {
-        MirOperation {
-            id: MirOpId(id),
-            body: MirBodyId(0),
-            ordinal,
-            span: span(ordinal as usize, ordinal as usize + 1),
-            kind: MirOperationKind::Call {
-                site: CallSiteId(1),
-                callee: MirValue::Unknown {
-                    evidence: "callee".to_string(),
-                },
-                arguments: Vec::new(),
-                return_place: PlaceId(2),
-            },
-            stable_key: format!("go:call:{ordinal}"),
-            status: MirStatus::Partial,
-        }
-    }
-
     fn return_op(id: u64, ordinal: u32) -> MirOperation {
         MirOperation {
             id: MirOpId(id),
@@ -535,20 +539,6 @@ mod tests {
             kind: MirOperationKind::Return { value: None },
             stable_key: format!("go:return:{ordinal}"),
             status: MirStatus::Partial,
-        }
-    }
-
-    fn unsupported_operation(id: u64, ordinal: u32, unsupported: u64) -> MirOperation {
-        MirOperation {
-            id: MirOpId(id),
-            body: MirBodyId(0),
-            ordinal,
-            span: span(ordinal as usize, ordinal as usize + 1),
-            kind: MirOperationKind::Unsupported {
-                unsupported: UnsupportedId(unsupported),
-            },
-            stable_key: format!("go:unsupported:{ordinal}"),
-            status: MirStatus::Unsupported,
         }
     }
 
@@ -735,22 +725,28 @@ mod tests {
 
     #[test]
     fn go_cfg_abrupt_and_unsupported_rows_are_truthful() {
-        let db = db_with(
-            vec![
-                unsupported_operation(1, 1, 1),
-                unsupported_operation(2, 2, 2),
-                unsupported_operation(3, 3, 3),
-                call(4, 4),
-            ],
-            vec![
-                unsupported(1, Some(MirOpId(1)), "go_statement"),
-                unsupported(2, Some(MirOpId(2)), "defer_statement"),
-                unsupported(3, Some(MirOpId(3)), "select_statement"),
-                unsupported(4, None, "panic"),
-                unsupported(5, Some(MirOpId(3)), "goto"),
-                unsupported(6, Some(MirOpId(3)), "fallthrough"),
-            ],
+        let mut db = AnalysisDb::new();
+        db.add_file(
+            std::path::PathBuf::from("effects.go"),
+            "effects.go".to_string(),
+            r#"
+package p
+func flow(ch chan int, value int) {
+    go helper(value)
+    defer helper(value)
+    select {
+    case ch <- value:
+    case value = <-ch:
+    }
+    panic(value)
+}
+"#
+            .to_string(),
         );
+        assert!(crate::go::analyze(&mut db).is_empty());
+        let mir = crate::analysis::mir::lower_go::lower_go_mir(&db);
+        db.replace_semantic_mir(mir)
+            .expect("MIR output should store");
         let output = lower_go_cfg(&db);
         let edge_kinds = output
             .edges
@@ -768,9 +764,6 @@ mod tests {
         assert!(edge_kinds.contains(&CfgEdgeKind::Unknown));
         assert!(edge_kinds.contains(&CfgEdgeKind::Panic));
         assert!(unsupported.contains("select_statement"));
-        assert!(unsupported.contains("panic"));
-        assert!(unsupported.contains("goto"));
-        assert!(unsupported.contains("fallthrough"));
         assert!(
             output
                 .blocks

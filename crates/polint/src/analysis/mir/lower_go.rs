@@ -8,7 +8,7 @@ use crate::analysis::ids::{
 };
 use crate::analysis::mir::body::{
     MirBlock, MirBlockId, MirBody, MirOutput, MirStatement, MirStatus, MirTerminator,
-    MirTerminatorKind,
+    MirTerminatorKind, SuspendKind,
 };
 use crate::analysis::mir::op::{
     AssignMode, ConservativeAction, MirOperation, MirOperationKind, MirValue, UnsupportedDomain,
@@ -41,6 +41,19 @@ pub(crate) fn lower_go_mir(db: &AnalysisDb) -> MirOutput {
         .collect::<BTreeMap<_, _>>();
     let operations = lowering.finish_operations(&place_ids);
     let unsupported = lowering.finish_unsupported(&place_ids);
+    let control_effects = lowering
+        .operations
+        .iter()
+        .filter_map(|operation| operation.to_control_effect(&place_ids))
+        .collect::<Vec<_>>();
+    let call_unwinds = lowering
+        .operations
+        .iter()
+        .filter_map(|operation| match operation.kind {
+            OperationKindDraft::Call { unwind: true, .. } => Some(operation.id),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
     let control_shapes = lowering
         .operations
         .iter()
@@ -49,8 +62,13 @@ pub(crate) fn lower_go_mir(db: &AnalysisDb) -> MirOutput {
             _ => None,
         })
         .collect::<BTreeMap<_, _>>();
-    let (blocks, statements, terminators) =
-        lower_control_flow(&lowering.bodies, &operations, &control_shapes);
+    let (blocks, statements, terminators) = lower_control_flow(
+        &lowering.bodies,
+        &operations,
+        &control_shapes,
+        &control_effects,
+        &call_unwinds,
+    );
 
     MirOutput {
         bodies: lowering.bodies,
@@ -68,106 +86,151 @@ fn lower_control_flow(
     bodies: &[MirBody],
     operations: &[MirOperation],
     control_shapes: &BTreeMap<MirOpId, ControlShape>,
+    control_effects: &[ControlEffect],
+    call_unwinds: &BTreeSet<MirOpId>,
 ) -> (Vec<MirBlock>, Vec<MirStatement>, Vec<MirTerminator>) {
     let mut blocks = Vec::new();
     let mut statements = Vec::new();
     let mut terminators = Vec::new();
 
     for body in bodies {
-        let mut body_operations = operations
+        let body_operations = operations
             .iter()
             .filter(|operation| operation.body == body.id)
-            .collect::<Vec<_>>();
-        body_operations.sort_by(|left, right| {
-            (left.ordinal, left.stable_key.as_str())
-                .cmp(&(right.ordinal, right.stable_key.as_str()))
-        });
+            .map(|operation| (operation.id, operation))
+            .collect::<BTreeMap<_, _>>();
+        let body_effects = control_effects
+            .iter()
+            .filter(|effect| effect.body == body.id)
+            .map(|effect| (effect.id, effect))
+            .collect::<BTreeMap<_, _>>();
+        let step_ids = body_operations
+            .keys()
+            .chain(body_effects.keys())
+            .copied()
+            .collect::<BTreeSet<_>>();
         let mut drafts = vec![BlockDraft::new(MirBlockId(blocks.len() as u64), body.id, 0)];
         let mut current = push_block_draft(&mut drafts, blocks.len(), body.id);
         drafts[0].terminator = Some(MirTerminatorKind::Goto {
             target: drafts[current].id,
         });
-        let operation_count = body_operations.len();
+        let step_count = step_ids.len();
 
-        for (operation_index, operation) in body_operations.into_iter().enumerate() {
-            let statement = MirStatement {
-                id: MirStatementId(statements.len() as u64),
-                body: body.id,
-                ordinal: operation.ordinal,
-                operation: operation.id,
-                stable_key: format!("{}:statement", operation.stable_key),
-                status: operation.status,
-            };
-            drafts[current].statements.push(statement.id);
-            statements.push(statement);
+        for (step_index, step_id) in step_ids.into_iter().enumerate() {
+            if let Some(operation) = body_operations.get(&step_id).copied() {
+                let statement = MirStatement {
+                    id: MirStatementId(statements.len() as u64),
+                    body: body.id,
+                    ordinal: operation.ordinal,
+                    operation: operation.id,
+                    stable_key: format!("{}:statement", operation.stable_key),
+                    status: operation.status,
+                };
+                drafts[current].statements.push(statement.id);
+                statements.push(statement);
 
-            match &operation.kind {
-                MirOperationKind::Branch {
-                    predicate,
-                    predicate_place,
-                } => {
-                    let shape = control_shapes
-                        .get(&operation.id)
-                        .copied()
-                        .unwrap_or(ControlShape::Conditional);
-                    let first = push_block_draft(&mut drafts, blocks.len(), body.id);
-                    let second = push_block_draft(&mut drafts, blocks.len(), body.id);
-                    let join = push_block_draft(&mut drafts, blocks.len(), body.id);
-                    drafts[current].terminator = Some(match shape {
-                        ControlShape::Conditional => MirTerminatorKind::Branch {
-                            predicate: *predicate,
-                            predicate_place: *predicate_place,
-                            then_target: drafts[first].id,
-                            else_target: drafts[second].id,
-                        },
-                        ControlShape::Loop => MirTerminatorKind::Branch {
-                            predicate: *predicate,
-                            predicate_place: *predicate_place,
-                            then_target: drafts[first].id,
-                            else_target: drafts[join].id,
-                        },
-                        ControlShape::Switch => MirTerminatorKind::Switch {
-                            discriminant: MirValue::Unknown {
-                                evidence: operation.stable_key.clone(),
+                match &operation.kind {
+                    MirOperationKind::Branch {
+                        predicate,
+                        predicate_place,
+                    } => {
+                        let shape = control_shapes
+                            .get(&operation.id)
+                            .copied()
+                            .unwrap_or(ControlShape::Conditional);
+                        let first = push_block_draft(&mut drafts, blocks.len(), body.id);
+                        let second = push_block_draft(&mut drafts, blocks.len(), body.id);
+                        let join = push_block_draft(&mut drafts, blocks.len(), body.id);
+                        drafts[current].terminator = Some(match shape {
+                            ControlShape::Conditional => MirTerminatorKind::Branch {
+                                predicate: *predicate,
+                                predicate_place: *predicate_place,
+                                then_target: drafts[first].id,
+                                else_target: drafts[second].id,
                             },
-                            cases: vec![(
-                                MirValue::Unknown {
-                                    evidence: "case".to_string(),
+                            ControlShape::Loop => MirTerminatorKind::Branch {
+                                predicate: *predicate,
+                                predicate_place: *predicate_place,
+                                then_target: drafts[first].id,
+                                else_target: drafts[join].id,
+                            },
+                            ControlShape::Switch => MirTerminatorKind::Switch {
+                                discriminant: MirValue::Unknown {
+                                    evidence: operation.stable_key.clone(),
                                 },
-                                drafts[first].id,
-                            )],
-                            otherwise: drafts[second].id,
-                        },
-                    });
-                    drafts[first].terminator = Some(MirTerminatorKind::Goto {
-                        target: if shape == ControlShape::Loop {
-                            drafts[current].id
-                        } else {
-                            drafts[join].id
-                        },
-                    });
-                    drafts[second].terminator = Some(MirTerminatorKind::Goto {
-                        target: drafts[join].id,
-                    });
-                    current = join;
+                                cases: vec![(
+                                    MirValue::Unknown {
+                                        evidence: "case".to_string(),
+                                    },
+                                    drafts[first].id,
+                                )],
+                                otherwise: drafts[second].id,
+                            },
+                        });
+                        drafts[first].terminator = Some(MirTerminatorKind::Goto {
+                            target: if shape == ControlShape::Loop {
+                                drafts[current].id
+                            } else {
+                                drafts[join].id
+                            },
+                        });
+                        drafts[second].terminator = Some(MirTerminatorKind::Goto {
+                            target: drafts[join].id,
+                        });
+                        current = join;
+                    }
+                    MirOperationKind::Return { value } => {
+                        drafts[current].terminator = Some(MirTerminatorKind::Return {
+                            value: value.clone(),
+                        });
+                        if step_index + 1 < step_count {
+                            current = push_block_draft(&mut drafts, blocks.len(), body.id);
+                            drafts[current].terminator = Some(MirTerminatorKind::Unreachable);
+                        }
+                    }
+                    MirOperationKind::Call {
+                        site,
+                        callee,
+                        arguments,
+                        return_place,
+                    } => {
+                        let normal = push_block_draft(&mut drafts, blocks.len(), body.id);
+                        let unwind = call_unwinds.contains(&operation.id).then(|| {
+                            let unwind = push_block_draft(&mut drafts, blocks.len(), body.id);
+                            drafts[unwind].terminator = Some(MirTerminatorKind::Unreachable);
+                            drafts[unwind].id
+                        });
+                        drafts[current].terminator = Some(MirTerminatorKind::Call {
+                            site: *site,
+                            callee: callee.clone(),
+                            arguments: arguments.clone(),
+                            return_place: *return_place,
+                            normal: drafts[normal].id,
+                            unwind,
+                        });
+                        current = normal;
+                    }
+                    MirOperationKind::Unsupported { unsupported }
+                        if step_index + 1 == step_count =>
+                    {
+                        drafts[current].terminator = Some(MirTerminatorKind::Unsupported {
+                            unsupported: *unsupported,
+                        });
+                    }
+                    _ => {}
                 }
-                MirOperationKind::Return { value } => {
-                    drafts[current].terminator = Some(MirTerminatorKind::Return {
-                        value: value.clone(),
-                    });
-                    if operation_index + 1 < operation_count {
-                        current = push_block_draft(&mut drafts, blocks.len(), body.id);
-                        drafts[current].terminator = Some(MirTerminatorKind::Unreachable);
+            } else if let Some(effect) = body_effects.get(&step_id) {
+                match &effect.kind {
+                    ControlEffectKind::Suspend { kind, value } => {
+                        let resume = push_block_draft(&mut drafts, blocks.len(), body.id);
+                        drafts[current].terminator = Some(MirTerminatorKind::Suspend {
+                            kind: *kind,
+                            value: value.clone(),
+                            resume: drafts[resume].id,
+                        });
+                        current = resume;
                     }
                 }
-                MirOperationKind::Unsupported { unsupported }
-                    if operation_index + 1 == operation_count =>
-                {
-                    drafts[current].terminator = Some(MirTerminatorKind::Unsupported {
-                        unsupported: *unsupported,
-                    });
-                }
-                _ => {}
             }
         }
 
@@ -199,6 +262,19 @@ fn lower_control_flow(
     }
 
     (blocks, statements, terminators)
+}
+
+struct ControlEffect {
+    id: MirOpId,
+    body: MirBodyId,
+    kind: ControlEffectKind,
+}
+
+enum ControlEffectKind {
+    Suspend {
+        kind: SuspendKind,
+        value: Option<MirValue>,
+    },
 }
 
 struct BlockDraft {
@@ -578,6 +654,30 @@ impl<'source> FunctionLowering<'source> {
             "call_expression" => {
                 self.lower_call(statement, places, operations, unsupported);
             }
+            "unary_expression"
+                if node_text(self.source, statement)
+                    .is_some_and(|text| text.trim_start().starts_with("<-")) =>
+            {
+                self.lower_expression(statement, places, operations, unsupported, false);
+            }
+            "send_statement" => {
+                let value = self.lower_expression_children(
+                    statement,
+                    places,
+                    operations,
+                    unsupported,
+                    false,
+                );
+                self.push_operation(
+                    operations,
+                    statement,
+                    OperationKindDraft::Suspend {
+                        kind: SuspendKind::ChannelSend,
+                        value: value.map(|shape| ValueDraft::PlaceKey(shape.key)),
+                    },
+                    MirStatus::Partial,
+                );
+            }
             "identifier" | "selector_expression" | "index_expression" | "binary_expression" => {
                 if let Some(shape) =
                     self.lower_expression(statement, places, operations, unsupported, false)
@@ -707,6 +807,27 @@ impl<'source> FunctionLowering<'source> {
         unsupported: &mut Vec<UnsupportedDraft>,
         assignment_destination: bool,
     ) -> Option<PlaceShape> {
+        if node_text(self.source, node).is_some_and(|text| text.trim_start().starts_with("<-"))
+            || node
+                .child_by_field_name("operator")
+                .and_then(|operator| node_text(self.source, operator))
+                == Some("<-")
+        {
+            let value =
+                self.lower_expression_children(node, places, operations, unsupported, false);
+            self.push_operation(
+                operations,
+                node,
+                OperationKindDraft::Suspend {
+                    kind: SuspendKind::ChannelRecv,
+                    value: value
+                        .as_ref()
+                        .map(|shape| ValueDraft::PlaceKey(shape.key.clone())),
+                },
+                MirStatus::Partial,
+            );
+            return value;
+        }
         self.lower_unsupported(node, operations, unsupported);
         match node.kind() {
             "identifier" => self.lower_identifier(node, places, assignment_destination),
@@ -881,9 +1002,13 @@ impl<'source> FunctionLowering<'source> {
             Vec::new(),
             PlaceStatus::Partial,
         );
-        let callee = node
+        let callee_node = node
             .child_by_field_name("function")
-            .or_else(|| node.named_child(0))
+            .or_else(|| node.named_child(0));
+        let unwind = callee_node
+            .and_then(|callee| node_text(self.source, callee))
+            .is_some_and(|callee| callee == "panic");
+        let callee = callee_node
             .and_then(|callee| node_text(self.source, callee))
             .map(|evidence| ValueDraft::Unknown {
                 evidence: evidence.to_string(),
@@ -912,6 +1037,7 @@ impl<'source> FunctionLowering<'source> {
                 callee,
                 arguments,
                 return_place_key: return_key.clone(),
+                unwind,
             },
             MirStatus::Partial,
         );
@@ -928,13 +1054,7 @@ impl<'source> FunctionLowering<'source> {
             "go_statement" => Some("go_statement"),
             "defer_statement" => Some("defer_statement"),
             "select_statement" => Some("select_statement"),
-            "send_statement" => Some("send_statement"),
             _ if node.is_error() || node.kind() == "ERROR" => Some("ERROR"),
-            _ if node_text(self.source, node)
-                .is_some_and(|text| text.trim_start().starts_with("<-")) =>
-            {
-                Some("channel_receive")
-            }
             _ => None,
         };
         let Some(construct) = construct else {
@@ -1174,14 +1294,30 @@ impl OperationDraft {
     }
 
     fn to_operation(&self, place_ids: &BTreeMap<String, PlaceId>) -> Option<MirOperation> {
+        let kind = self.kind.to_kind(place_ids)?;
         Some(MirOperation {
             id: self.id,
             body: self.body,
             ordinal: self.ordinal,
             span: self.span.clone(),
-            kind: self.kind.to_kind(place_ids)?,
+            kind,
             stable_key: self.stable_key.clone(),
             status: self.status,
+        })
+    }
+
+    fn to_control_effect(&self, place_ids: &BTreeMap<String, PlaceId>) -> Option<ControlEffect> {
+        let kind = match &self.kind {
+            OperationKindDraft::Suspend { kind, value } => ControlEffectKind::Suspend {
+                kind: *kind,
+                value: value.as_ref().map(|value| value.to_value(place_ids)),
+            },
+            _ => return None,
+        };
+        Some(ControlEffect {
+            id: self.id,
+            body: self.body,
+            kind,
         })
     }
 }
@@ -1206,8 +1342,13 @@ enum OperationKindDraft {
         callee: ValueDraft,
         arguments: Vec<String>,
         return_place_key: String,
+        unwind: bool,
     },
     Return {
+        value: Option<ValueDraft>,
+    },
+    Suspend {
+        kind: SuspendKind,
         value: Option<ValueDraft>,
     },
     Unsupported {
@@ -1246,6 +1387,7 @@ impl OperationKindDraft {
                 callee,
                 arguments,
                 return_place_key,
+                ..
             } => {
                 debug_assert!(
                     arguments.iter().all(|key| place_ids.contains_key(key)),
@@ -1264,6 +1406,7 @@ impl OperationKindDraft {
             Self::Return { value } => Some(MirOperationKind::Return {
                 value: value.as_ref().map(|value| value.to_value(place_ids)),
             }),
+            Self::Suspend { .. } => None,
             Self::Unsupported { unsupported_id } => Some(MirOperationKind::Unsupported {
                 unsupported: *unsupported_id,
             }),
@@ -1277,6 +1420,12 @@ impl OperationKindDraft {
             Self::Branch { .. } => "branch",
             Self::Call { .. } => "call",
             Self::Return { .. } => "return",
+            Self::Suspend { kind, .. } => match kind {
+                SuspendKind::Await => "await",
+                SuspendKind::Yield => "yield",
+                SuspendKind::ChannelRecv => "channel-recv",
+                SuspendKind::ChannelSend => "channel-send",
+            },
             Self::Unsupported { .. } => "unsupported",
         }
     }
@@ -1303,6 +1452,9 @@ impl OperationKindDraft {
                 keys
             }
             Self::Return { value } => value.as_ref().map_or_else(Vec::new, ValueDraft::place_keys),
+            Self::Suspend { value, .. } => {
+                value.as_ref().map_or_else(Vec::new, ValueDraft::place_keys)
+            }
             Self::Branch { .. } | Self::Unsupported { .. } => Vec::new(),
         }
     }
@@ -1480,7 +1632,7 @@ fn unsupported_domains_for(construct: &str) -> Vec<UnsupportedDomain> {
             UnsupportedDomain::Calls,
             UnsupportedDomain::DataFlow,
         ],
-        "select_statement" | "send_statement" | "channel_receive" => vec![
+        "select_statement" => vec![
             UnsupportedDomain::Mir,
             UnsupportedDomain::Cfg,
             UnsupportedDomain::Domains,
@@ -1488,7 +1640,6 @@ fn unsupported_domains_for(construct: &str) -> Vec<UnsupportedDomain> {
         ],
         "panic" | "recover" => vec![
             UnsupportedDomain::Mir,
-            UnsupportedDomain::Cfg,
             UnsupportedDomain::Domains,
             UnsupportedDomain::DataFlow,
         ],
@@ -2116,8 +2267,6 @@ func flow(ch chan int, token string, count int) bool {
             "go_statement",
             "defer_statement",
             "select_statement",
-            "send_statement",
-            "channel_receive",
             "reflect",
             "unsafe",
             "panic",
@@ -2135,5 +2284,26 @@ func flow(ch chan int, token string, count int) bool {
                 ConservativeAction::HavocAffectedPlaces | ConservativeAction::StopLowering
             ));
         }
+        assert!(output.terminators.iter().any(|terminator| matches!(
+            terminator.kind,
+            MirTerminatorKind::Suspend {
+                kind: SuspendKind::ChannelSend,
+                ..
+            }
+        )));
+        assert!(output.terminators.iter().any(|terminator| matches!(
+            terminator.kind,
+            MirTerminatorKind::Suspend {
+                kind: SuspendKind::ChannelRecv,
+                ..
+            }
+        )));
+        assert!(output.terminators.iter().any(|terminator| matches!(
+            terminator.kind,
+            MirTerminatorKind::Call {
+                unwind: Some(_),
+                ..
+            }
+        )));
     }
 }

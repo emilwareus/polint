@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
@@ -15,7 +15,7 @@ use crate::analysis::ids::{
 };
 use crate::analysis::mir::body::{
     MirBlock, MirBlockId, MirBody, MirOutput, MirStatement, MirStatus, MirTerminator,
-    MirTerminatorKind,
+    MirTerminatorKind, SuspendKind,
 };
 use crate::analysis::mir::op::{
     AssignMode, ConservativeAction, MirOperation, MirOperationKind, MirValue, UnsupportedDomain,
@@ -58,6 +58,19 @@ pub(crate) fn lower_ts_mir(db: &AnalysisDb) -> MirOutput {
         .collect::<BTreeMap<_, _>>();
     let operations = lowering.finish_operations(&place_ids);
     let unsupported = lowering.finish_unsupported(&place_ids);
+    let control_effects = lowering
+        .operations
+        .iter()
+        .filter_map(|operation| operation.to_control_effect(&place_ids))
+        .collect::<Vec<_>>();
+    let call_unwinds = lowering
+        .operations
+        .iter()
+        .filter_map(|operation| match operation.kind {
+            OperationKindDraft::Call { unwind: true, .. } => Some(operation.id),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
     let control_shapes = lowering
         .operations
         .iter()
@@ -66,8 +79,13 @@ pub(crate) fn lower_ts_mir(db: &AnalysisDb) -> MirOutput {
             _ => None,
         })
         .collect::<BTreeMap<_, _>>();
-    let (blocks, statements, terminators) =
-        lower_control_flow(&lowering.bodies, &operations, &control_shapes);
+    let (blocks, statements, terminators) = lower_control_flow(
+        &lowering.bodies,
+        &operations,
+        &control_shapes,
+        &control_effects,
+        &call_unwinds,
+    );
 
     MirOutput {
         bodies: lowering.bodies,
@@ -85,106 +103,163 @@ fn lower_control_flow(
     bodies: &[MirBody],
     operations: &[MirOperation],
     control_shapes: &BTreeMap<MirOpId, ControlShape>,
+    control_effects: &[ControlEffect],
+    call_unwinds: &BTreeSet<MirOpId>,
 ) -> (Vec<MirBlock>, Vec<MirStatement>, Vec<MirTerminator>) {
     let mut blocks = Vec::new();
     let mut statements = Vec::new();
     let mut terminators = Vec::new();
 
     for body in bodies {
-        let mut body_operations = operations
+        let body_operations = operations
             .iter()
             .filter(|operation| operation.body == body.id)
-            .collect::<Vec<_>>();
-        body_operations.sort_by(|left, right| {
-            (left.ordinal, left.stable_key.as_str())
-                .cmp(&(right.ordinal, right.stable_key.as_str()))
-        });
+            .map(|operation| (operation.id, operation))
+            .collect::<BTreeMap<_, _>>();
+        let body_effects = control_effects
+            .iter()
+            .filter(|effect| effect.body == body.id)
+            .map(|effect| (effect.id, effect))
+            .collect::<BTreeMap<_, _>>();
+        let step_ids = body_operations
+            .keys()
+            .chain(body_effects.keys())
+            .copied()
+            .collect::<BTreeSet<_>>();
         let mut drafts = vec![BlockDraft::new(MirBlockId(blocks.len() as u64), body.id, 0)];
         let mut current = push_block_draft(&mut drafts, blocks.len(), body.id);
         drafts[0].terminator = Some(MirTerminatorKind::Goto {
             target: drafts[current].id,
         });
-        let operation_count = body_operations.len();
+        let step_count = step_ids.len();
 
-        for (operation_index, operation) in body_operations.into_iter().enumerate() {
-            let statement = MirStatement {
-                id: MirStatementId(statements.len() as u64),
-                body: body.id,
-                ordinal: operation.ordinal,
-                operation: operation.id,
-                stable_key: format!("{}:statement", operation.stable_key),
-                status: operation.status,
-            };
-            drafts[current].statements.push(statement.id);
-            statements.push(statement);
+        for (step_index, step_id) in step_ids.into_iter().enumerate() {
+            if let Some(operation) = body_operations.get(&step_id).copied() {
+                let statement = MirStatement {
+                    id: MirStatementId(statements.len() as u64),
+                    body: body.id,
+                    ordinal: operation.ordinal,
+                    operation: operation.id,
+                    stable_key: format!("{}:statement", operation.stable_key),
+                    status: operation.status,
+                };
+                drafts[current].statements.push(statement.id);
+                statements.push(statement);
 
-            match &operation.kind {
-                MirOperationKind::Branch {
-                    predicate,
-                    predicate_place,
-                } => {
-                    let shape = control_shapes
-                        .get(&operation.id)
-                        .copied()
-                        .unwrap_or(ControlShape::Conditional);
-                    let first = push_block_draft(&mut drafts, blocks.len(), body.id);
-                    let second = push_block_draft(&mut drafts, blocks.len(), body.id);
-                    let join = push_block_draft(&mut drafts, blocks.len(), body.id);
-                    drafts[current].terminator = Some(match shape {
-                        ControlShape::Conditional => MirTerminatorKind::Branch {
-                            predicate: *predicate,
-                            predicate_place: *predicate_place,
-                            then_target: drafts[first].id,
-                            else_target: drafts[second].id,
-                        },
-                        ControlShape::Loop => MirTerminatorKind::Branch {
-                            predicate: *predicate,
-                            predicate_place: *predicate_place,
-                            then_target: drafts[first].id,
-                            else_target: drafts[join].id,
-                        },
-                        ControlShape::Switch => MirTerminatorKind::Switch {
-                            discriminant: MirValue::Unknown {
-                                evidence: operation.stable_key.clone(),
+                match &operation.kind {
+                    MirOperationKind::Branch {
+                        predicate,
+                        predicate_place,
+                    } => {
+                        let shape = control_shapes
+                            .get(&operation.id)
+                            .copied()
+                            .unwrap_or(ControlShape::Conditional);
+                        let first = push_block_draft(&mut drafts, blocks.len(), body.id);
+                        let second = push_block_draft(&mut drafts, blocks.len(), body.id);
+                        let join = push_block_draft(&mut drafts, blocks.len(), body.id);
+                        drafts[current].terminator = Some(match shape {
+                            ControlShape::Conditional => MirTerminatorKind::Branch {
+                                predicate: *predicate,
+                                predicate_place: *predicate_place,
+                                then_target: drafts[first].id,
+                                else_target: drafts[second].id,
                             },
-                            cases: vec![(
-                                MirValue::Unknown {
-                                    evidence: "case".to_string(),
+                            ControlShape::Loop => MirTerminatorKind::Branch {
+                                predicate: *predicate,
+                                predicate_place: *predicate_place,
+                                then_target: drafts[first].id,
+                                else_target: drafts[join].id,
+                            },
+                            ControlShape::Switch => MirTerminatorKind::Switch {
+                                discriminant: MirValue::Unknown {
+                                    evidence: operation.stable_key.clone(),
                                 },
-                                drafts[first].id,
-                            )],
-                            otherwise: drafts[second].id,
-                        },
-                    });
-                    drafts[first].terminator = Some(MirTerminatorKind::Goto {
-                        target: if shape == ControlShape::Loop {
-                            drafts[current].id
-                        } else {
-                            drafts[join].id
-                        },
-                    });
-                    drafts[second].terminator = Some(MirTerminatorKind::Goto {
-                        target: drafts[join].id,
-                    });
-                    current = join;
+                                cases: vec![(
+                                    MirValue::Unknown {
+                                        evidence: "case".to_string(),
+                                    },
+                                    drafts[first].id,
+                                )],
+                                otherwise: drafts[second].id,
+                            },
+                        });
+                        drafts[first].terminator = Some(MirTerminatorKind::Goto {
+                            target: if shape == ControlShape::Loop {
+                                drafts[current].id
+                            } else {
+                                drafts[join].id
+                            },
+                        });
+                        drafts[second].terminator = Some(MirTerminatorKind::Goto {
+                            target: drafts[join].id,
+                        });
+                        current = join;
+                    }
+                    MirOperationKind::Return { value } => {
+                        drafts[current].terminator = Some(MirTerminatorKind::Return {
+                            value: value.clone(),
+                        });
+                        if step_index + 1 < step_count {
+                            current = push_block_draft(&mut drafts, blocks.len(), body.id);
+                            drafts[current].terminator = Some(MirTerminatorKind::Unreachable);
+                        }
+                    }
+                    MirOperationKind::Call {
+                        site,
+                        callee,
+                        arguments,
+                        return_place,
+                    } => {
+                        let normal = push_block_draft(&mut drafts, blocks.len(), body.id);
+                        let unwind = call_unwinds.contains(&operation.id).then(|| {
+                            let unwind = push_block_draft(&mut drafts, blocks.len(), body.id);
+                            drafts[unwind].terminator = Some(MirTerminatorKind::Unreachable);
+                            drafts[unwind].id
+                        });
+                        drafts[current].terminator = Some(MirTerminatorKind::Call {
+                            site: *site,
+                            callee: callee.clone(),
+                            arguments: arguments.clone(),
+                            return_place: *return_place,
+                            normal: drafts[normal].id,
+                            unwind,
+                        });
+                        current = normal;
+                    }
+                    MirOperationKind::Unsupported { unsupported }
+                        if step_index + 1 == step_count =>
+                    {
+                        drafts[current].terminator = Some(MirTerminatorKind::Unsupported {
+                            unsupported: *unsupported,
+                        });
+                    }
+                    _ => {}
                 }
-                MirOperationKind::Return { value } => {
-                    drafts[current].terminator = Some(MirTerminatorKind::Return {
-                        value: value.clone(),
-                    });
-                    if operation_index + 1 < operation_count {
-                        current = push_block_draft(&mut drafts, blocks.len(), body.id);
-                        drafts[current].terminator = Some(MirTerminatorKind::Unreachable);
+            } else if let Some(effect) = body_effects.get(&step_id) {
+                match &effect.kind {
+                    ControlEffectKind::Throw { value } => {
+                        let unwind = push_block_draft(&mut drafts, blocks.len(), body.id);
+                        drafts[unwind].terminator = Some(MirTerminatorKind::Unreachable);
+                        drafts[current].terminator = Some(MirTerminatorKind::Throw {
+                            value: value.clone(),
+                            unwind: drafts[unwind].id,
+                        });
+                        if step_index + 1 < step_count {
+                            current = push_block_draft(&mut drafts, blocks.len(), body.id);
+                            drafts[current].terminator = Some(MirTerminatorKind::Unreachable);
+                        }
+                    }
+                    ControlEffectKind::Suspend { kind, value } => {
+                        let resume = push_block_draft(&mut drafts, blocks.len(), body.id);
+                        drafts[current].terminator = Some(MirTerminatorKind::Suspend {
+                            kind: *kind,
+                            value: value.clone(),
+                            resume: drafts[resume].id,
+                        });
+                        current = resume;
                     }
                 }
-                MirOperationKind::Unsupported { unsupported }
-                    if operation_index + 1 == operation_count =>
-                {
-                    drafts[current].terminator = Some(MirTerminatorKind::Unsupported {
-                        unsupported: *unsupported,
-                    });
-                }
-                _ => {}
             }
         }
 
@@ -216,6 +291,22 @@ fn lower_control_flow(
     }
 
     (blocks, statements, terminators)
+}
+
+struct ControlEffect {
+    id: MirOpId,
+    body: MirBodyId,
+    kind: ControlEffectKind,
+}
+
+enum ControlEffectKind {
+    Throw {
+        value: Option<MirValue>,
+    },
+    Suspend {
+        kind: SuspendKind,
+        value: Option<MirValue>,
+    },
 }
 
 struct BlockDraft {
@@ -347,16 +438,6 @@ impl TsMirLowering {
             let body = self.push_body(db, file, function_fact, span);
             let mut function_lowering =
                 FunctionLowering::new(file, file.source.as_ref(), function_fact.id, &body);
-            if function.r#async {
-                function_lowering.push_unsupported(
-                    &mut self.operations,
-                    &mut self.unsupported,
-                    function.span_for_unsupported,
-                    "async rejection path",
-                    Vec::new(),
-                    ConservativeAction::HavocAffectedPlaces,
-                );
-            }
             function_lowering.lower_parameters(&function.parameters, &mut self.places);
             match function.body {
                 CandidateBody::Statements(statements) => function_lowering.lower_statements(
@@ -448,8 +529,6 @@ struct TsFunctionCandidate<'ast> {
     span: oxc_span::Span,
     parameters: Vec<String>,
     body: CandidateBody<'ast>,
-    r#async: bool,
-    span_for_unsupported: oxc_span::Span,
 }
 
 /// What a [`TsFunctionCandidate`] lowers. Function/arrow bodies and class static
@@ -559,8 +638,6 @@ fn collect_variable_function<'ast>(
                 span: function.span,
                 parameters: parameter_names(&function.params),
                 body: CandidateBody::Statements(&function.body.statements),
-                r#async: function.r#async,
-                span_for_unsupported: function.span,
             });
         }
         Expression::FunctionExpression(function) => {
@@ -570,8 +647,6 @@ fn collect_variable_function<'ast>(
                     span: function.span,
                     parameters: parameter_names(&function.params),
                     body: CandidateBody::Statements(&body.statements),
-                    r#async: function.r#async,
-                    span_for_unsupported: function.span,
                 });
             }
         }
@@ -591,8 +666,6 @@ fn collect_function<'ast>(
             span,
             parameters: parameter_names(&function.params),
             body: CandidateBody::Statements(&body.statements),
-            r#async: function.r#async,
-            span_for_unsupported: function.span,
         });
     }
 }
@@ -625,8 +698,6 @@ fn collect_class_functions<'ast>(
                     span: block.span,
                     parameters: Vec::new(),
                     body: CandidateBody::Statements(&block.body),
-                    r#async: false,
-                    span_for_unsupported: block.span,
                 });
             }
             // A class field initializer (`x = <expr>`) is its own function in
@@ -642,8 +713,6 @@ fn collect_class_functions<'ast>(
                         span,
                         parameters: Vec::new(),
                         body: CandidateBody::Expression(value),
-                        r#async: false,
-                        span_for_unsupported: span,
                     });
                 }
             }
@@ -829,8 +898,6 @@ fn collect_anonymous_functions_from_expression<'ast>(
                     span: function.span,
                     parameters: parameter_names(&function.params),
                     body: CandidateBody::Statements(&function.body.statements),
-                    r#async: function.r#async,
-                    span_for_unsupported: function.span,
                 });
             }
             collect_anonymous_functions_from_body(&function.body, functions);
@@ -842,8 +909,6 @@ fn collect_anonymous_functions_from_expression<'ast>(
                     span: function.span,
                     parameters: parameter_names(&function.params),
                     body: CandidateBody::Statements(&body.statements),
-                    r#async: function.r#async,
-                    span_for_unsupported: function.span,
                 });
             }
             if let Some(body) = function.body.as_deref() {
@@ -933,8 +998,6 @@ fn collect_anonymous_functions_from_expression<'ast>(
                             span: property.span,
                             parameters: parameter_names(&function.params),
                             body: CandidateBody::Statements(&body.statements),
-                            r#async: function.r#async,
-                            span_for_unsupported: function.span,
                         });
                         collect_anonymous_functions_from_body(body, functions);
                     }
@@ -1022,8 +1085,6 @@ fn collect_anonymous_functions_from_argument<'ast>(
                 span: function.span,
                 parameters: parameter_names(&function.params),
                 body: CandidateBody::Statements(&function.body.statements),
-                r#async: function.r#async,
-                span_for_unsupported: function.span,
             });
             collect_anonymous_functions_from_body(&function.body, functions);
         }
@@ -1034,8 +1095,6 @@ fn collect_anonymous_functions_from_argument<'ast>(
                     span: function.span,
                     parameters: parameter_names(&function.params),
                     body: CandidateBody::Statements(&body.statements),
-                    r#async: function.r#async,
-                    span_for_unsupported: function.span,
                 });
                 collect_anonymous_functions_from_body(body, functions);
             }
@@ -1256,16 +1315,23 @@ impl<'source> FunctionLowering<'source> {
                     operations,
                     unsupported,
                     statement.span,
-                    if statement.r#await {
-                        "for await"
-                    } else {
-                        "for-of"
-                    },
+                    "for-of",
                     Vec::new(),
                     ConservativeAction::HavocAffectedPlaces,
                 );
                 self.lower_for_statement_left(&statement.left, places, operations, unsupported);
-                self.lower_expression(&statement.right, places, operations, unsupported, false);
+                let value = self.lower_value(&statement.right, places, operations, unsupported);
+                if statement.r#await {
+                    self.push_operation(
+                        operations,
+                        statement.span,
+                        OperationKindDraft::Suspend {
+                            kind: SuspendKind::Await,
+                            value,
+                        },
+                        MirStatus::Partial,
+                    );
+                }
                 self.lower_statement(&statement.body, places, operations, unsupported);
             }
             Statement::SwitchStatement(statement) => {
@@ -1333,15 +1399,13 @@ impl<'source> FunctionLowering<'source> {
                 }
             }
             Statement::ThrowStatement(statement) => {
-                self.push_unsupported(
+                let value = self.lower_value(&statement.argument, places, operations, unsupported);
+                self.push_operation(
                     operations,
-                    unsupported,
                     statement.span,
-                    "throw",
-                    Vec::new(),
-                    ConservativeAction::HavocAffectedPlaces,
+                    OperationKindDraft::Throw { value },
+                    MirStatus::Partial,
                 );
-                self.lower_expression(&statement.argument, places, operations, unsupported, false);
             }
             Statement::BreakStatement(statement) => {
                 self.push_unsupported(
@@ -1795,21 +1859,25 @@ impl<'source> FunctionLowering<'source> {
                 self.lower_chain_element(&chain.expression, places, operations, unsupported)
             }
             Expression::AwaitExpression(await_expression) => {
-                self.push_unsupported(
-                    operations,
-                    unsupported,
-                    await_expression.span,
-                    "await",
-                    Vec::new(),
-                    ConservativeAction::HavocAffectedPlaces,
-                );
-                self.lower_expression(
+                let shape = self.lower_expression(
                     &await_expression.argument,
                     places,
                     operations,
                     unsupported,
                     false,
-                )
+                );
+                self.push_operation(
+                    operations,
+                    await_expression.span,
+                    OperationKindDraft::Suspend {
+                        kind: SuspendKind::Await,
+                        value: shape
+                            .as_ref()
+                            .map(|shape| ValueDraft::PlaceKey(shape.key.clone())),
+                    },
+                    MirStatus::Partial,
+                );
+                shape
             }
             Expression::ImportExpression(import_expression) => {
                 self.push_unsupported(
@@ -1833,17 +1901,21 @@ impl<'source> FunctionLowering<'source> {
                 Some(self.temporary_shape(places, import_expression.span))
             }
             Expression::YieldExpression(yield_expression) => {
-                self.push_unsupported(
-                    operations,
-                    unsupported,
-                    yield_expression.span,
-                    "yield",
-                    Vec::new(),
-                    ConservativeAction::HavocAffectedPlaces,
-                );
-                yield_expression.argument.as_ref().and_then(|argument| {
+                let shape = yield_expression.argument.as_ref().and_then(|argument| {
                     self.lower_expression(argument, places, operations, unsupported, false)
-                })
+                });
+                self.push_operation(
+                    operations,
+                    yield_expression.span,
+                    OperationKindDraft::Suspend {
+                        kind: SuspendKind::Yield,
+                        value: shape
+                            .as_ref()
+                            .map(|shape| ValueDraft::PlaceKey(shape.key.clone())),
+                    },
+                    MirStatus::Partial,
+                );
+                shape
             }
             Expression::NewExpression(new_expression) => self
                 .lower_new_expression(new_expression, places, operations, unsupported)
@@ -2567,6 +2639,7 @@ impl<'source> FunctionLowering<'source> {
                 callee,
                 arguments,
                 return_place_key: return_key.clone(),
+                unwind: false,
             },
             MirStatus::Partial,
         );
@@ -2617,6 +2690,7 @@ impl<'source> FunctionLowering<'source> {
                 callee,
                 arguments,
                 return_place_key: return_key.clone(),
+                unwind: false,
             },
             MirStatus::Partial,
         );
@@ -2676,6 +2750,7 @@ impl<'source> FunctionLowering<'source> {
                 callee,
                 arguments,
                 return_place_key: return_key.clone(),
+                unwind: false,
             },
             MirStatus::Partial,
         );
@@ -2831,14 +2906,33 @@ impl OperationDraft {
     }
 
     fn to_operation(&self, place_ids: &BTreeMap<String, PlaceId>) -> Option<MirOperation> {
+        let kind = self.kind.to_kind(place_ids)?;
         Some(MirOperation {
             id: self.id,
             body: self.body,
             ordinal: self.ordinal,
             span: self.span.clone(),
-            kind: self.kind.to_kind(place_ids)?,
+            kind,
             stable_key: self.stable_key.clone(),
             status: self.status,
+        })
+    }
+
+    fn to_control_effect(&self, place_ids: &BTreeMap<String, PlaceId>) -> Option<ControlEffect> {
+        let kind = match &self.kind {
+            OperationKindDraft::Throw { value } => ControlEffectKind::Throw {
+                value: value.as_ref().map(|value| value.to_value(place_ids)),
+            },
+            OperationKindDraft::Suspend { kind, value } => ControlEffectKind::Suspend {
+                kind: *kind,
+                value: value.as_ref().map(|value| value.to_value(place_ids)),
+            },
+            _ => return None,
+        };
+        Some(ControlEffect {
+            id: self.id,
+            body: self.body,
+            kind,
         })
     }
 }
@@ -2863,8 +2957,16 @@ enum OperationKindDraft {
         callee: ValueDraft,
         arguments: Vec<String>,
         return_place_key: String,
+        unwind: bool,
     },
     Return {
+        value: Option<ValueDraft>,
+    },
+    Throw {
+        value: Option<ValueDraft>,
+    },
+    Suspend {
+        kind: SuspendKind,
         value: Option<ValueDraft>,
     },
     Unsupported {
@@ -2903,6 +3005,7 @@ impl OperationKindDraft {
                 callee,
                 arguments,
                 return_place_key,
+                ..
             } => {
                 debug_assert!(
                     arguments.iter().all(|key| place_ids.contains_key(key)),
@@ -2921,6 +3024,7 @@ impl OperationKindDraft {
             Self::Return { value } => Some(MirOperationKind::Return {
                 value: value.as_ref().map(|value| value.to_value(place_ids)),
             }),
+            Self::Throw { .. } | Self::Suspend { .. } => None,
             Self::Unsupported { unsupported_id } => Some(MirOperationKind::Unsupported {
                 unsupported: *unsupported_id,
             }),
@@ -2934,6 +3038,13 @@ impl OperationKindDraft {
             Self::Branch { .. } => "branch",
             Self::Call { .. } => "call",
             Self::Return { .. } => "return",
+            Self::Throw { .. } => "throw",
+            Self::Suspend { kind, .. } => match kind {
+                SuspendKind::Await => "await",
+                SuspendKind::Yield => "yield",
+                SuspendKind::ChannelRecv => "channel-recv",
+                SuspendKind::ChannelSend => "channel-send",
+            },
             Self::Unsupported { .. } => "unsupported",
         }
     }
@@ -2960,6 +3071,9 @@ impl OperationKindDraft {
                 keys
             }
             Self::Return { value } => value.as_ref().map_or_else(Vec::new, ValueDraft::place_keys),
+            Self::Throw { value } | Self::Suspend { value, .. } => {
+                value.as_ref().map_or_else(Vec::new, ValueDraft::place_keys)
+            }
             Self::Branch { .. } | Self::Unsupported { .. } => Vec::new(),
         }
     }
@@ -3095,17 +3209,12 @@ fn unsupported_domains_for(construct: &str) -> Vec<UnsupportedDomain> {
         ],
         "dynamic property key"
         | "optional chaining"
-        | "await"
-        | "yield"
-        | "async rejection path"
         | "switch"
         | "try"
-        | "throw"
         | "for initializer"
         | "for left binding"
         | "for-in"
         | "for-of"
-        | "for await"
         | "do while"
         | "break"
         | "continue"
@@ -3913,7 +4022,6 @@ export async function flow(obj, key, promise, value) {
             "Proxy",
             "dynamic property key",
             "optional chaining",
-            "await",
             "complex destructuring",
             "spread",
             "dynamic CommonJS require",
@@ -3931,6 +4039,13 @@ export async function flow(obj, key, promise, value) {
                 ConservativeAction::HavocAffectedPlaces | ConservativeAction::StopLowering
             ));
         }
+        assert!(output.terminators.iter().any(|terminator| matches!(
+            terminator.kind,
+            MirTerminatorKind::Suspend {
+                kind: SuspendKind::Await,
+                ..
+            }
+        )));
     }
 
     #[test]
@@ -4034,7 +4149,7 @@ export function control(kind, items, errors) {
         );
 
         for construct in [
-            "try", "switch", "break", "for-of", "for-in", "continue", "do while", "throw",
+            "try", "switch", "break", "for-of", "for-in", "continue", "do while",
         ] {
             let row = output
                 .unsupported
@@ -4054,6 +4169,12 @@ export function control(kind, items, errors) {
         assert!(
             calls >= 7,
             "expected nested calls to remain visible: {output:#?}"
+        );
+        assert!(
+            output
+                .terminators
+                .iter()
+                .any(|terminator| matches!(terminator.kind, MirTerminatorKind::Throw { .. }))
         );
     }
 

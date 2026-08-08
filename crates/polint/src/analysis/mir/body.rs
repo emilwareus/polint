@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::analysis::ids::{
-    MirBodyId, MirOpId, MirPredicateId, MirStatementId, MirTerminatorId, UnsupportedId,
+    CallSiteId, MirBodyId, MirOpId, MirPredicateId, MirStatementId, MirTerminatorId, PlaceId,
+    UnsupportedId,
 };
 use crate::analysis::mir::op::{MirOperation, MirValue, UnsupportedSemanticFact};
 use crate::analysis::places::PlaceFact;
@@ -63,10 +64,35 @@ pub(crate) enum MirTerminatorKind {
     Return {
         value: Option<MirValue>,
     },
+    Throw {
+        value: Option<MirValue>,
+        unwind: MirBlockId,
+    },
+    Call {
+        site: CallSiteId,
+        callee: MirValue,
+        arguments: Vec<PlaceId>,
+        return_place: PlaceId,
+        normal: MirBlockId,
+        unwind: Option<MirBlockId>,
+    },
+    Suspend {
+        kind: SuspendKind,
+        value: Option<MirValue>,
+        resume: MirBlockId,
+    },
     Unreachable,
     Unsupported {
         unsupported: UnsupportedId,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum SuspendKind {
+    Await,
+    Yield,
+    ChannelRecv,
+    ChannelSend,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

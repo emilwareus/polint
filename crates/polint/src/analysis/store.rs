@@ -312,6 +312,38 @@ fn remap_terminator_kind(
                 remap_value(value, place_ids)?;
             }
         }
+        MirTerminatorKind::Throw { value, unwind } => {
+            if let Some(value) = value {
+                remap_value(value, place_ids)?;
+            }
+            *unwind = remap_id(*unwind, block_ids, "dangling MIR throw unwind target")?;
+        }
+        MirTerminatorKind::Call {
+            callee,
+            arguments,
+            return_place,
+            normal,
+            unwind,
+            ..
+        } => {
+            remap_value(callee, place_ids)?;
+            for argument in arguments {
+                *argument =
+                    remap_place_id(*argument, place_ids, "dangling MIR call argument place")?;
+            }
+            *return_place =
+                remap_place_id(*return_place, place_ids, "dangling MIR call return place")?;
+            *normal = remap_id(*normal, block_ids, "dangling MIR call normal target")?;
+            if let Some(unwind) = unwind {
+                *unwind = remap_id(*unwind, block_ids, "dangling MIR call unwind target")?;
+            }
+        }
+        MirTerminatorKind::Suspend { value, resume, .. } => {
+            if let Some(value) = value {
+                remap_value(value, place_ids)?;
+            }
+            *resume = remap_id(*resume, block_ids, "dangling MIR suspend resume target")?;
+        }
         MirTerminatorKind::Unreachable => {}
         MirTerminatorKind::Unsupported { unsupported } => {
             *unsupported = remap_unsupported_id(

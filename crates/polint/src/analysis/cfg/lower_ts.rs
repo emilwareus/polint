@@ -52,12 +52,19 @@ impl<'db> TsCfgLowering<'db> {
         bodies.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
 
         for body in bodies {
-            let has_exceptional_control = self.unsupported_for_body(body.id).any(|row| {
-                matches!(
-                    row.construct.as_str(),
-                    "throw" | "try" | "async rejection path" | "parser recovery"
-                )
-            });
+            let has_exceptional_control = self.db.mir_terminators().iter().any(|terminator| {
+                terminator.body == body.id
+                    && matches!(
+                        terminator.kind,
+                        MirTerminatorKind::Throw { .. }
+                            | MirTerminatorKind::Call {
+                                unwind: Some(_),
+                                ..
+                            }
+                    )
+            }) || self
+                .unsupported_for_body(body.id)
+                .any(|row| matches!(row.construct.as_str(), "try" | "parser recovery"));
             let function = self.builder.start_function(body, has_exceptional_control);
             self.body_to_function.insert(body.id, function);
             self.lower_body(body.id);
@@ -76,6 +83,20 @@ impl<'db> TsCfgLowering<'db> {
             (left.ordinal, left.stable_key.as_str())
                 .cmp(&(right.ordinal, right.stable_key.as_str()))
         });
+        let unwind_targets = self
+            .db
+            .mir_terminators()
+            .iter()
+            .filter(|terminator| terminator.body == body)
+            .filter_map(|terminator| match terminator.kind {
+                MirTerminatorKind::Throw { unwind, .. } => Some((unwind, CfgEdgeKind::Throw)),
+                MirTerminatorKind::Call {
+                    unwind: Some(unwind),
+                    ..
+                } => Some((unwind, CfgEdgeKind::ImplicitThrow)),
+                _ => None,
+            })
+            .collect::<BTreeMap<_, _>>();
         if blocks.is_empty() {
             let current = self.builder.current_block();
             let exit = self.builder.normal_exit_block();
@@ -96,11 +117,15 @@ impl<'db> TsCfgLowering<'db> {
                 MirTerminatorKind::Branch { .. } | MirTerminatorKind::Switch { .. } => {
                     BasicBlockKind::Branch
                 }
-                MirTerminatorKind::Unreachable => BasicBlockKind::Unreachable,
+                MirTerminatorKind::Unreachable if !unwind_targets.contains_key(&block.id) => {
+                    BasicBlockKind::Unreachable
+                }
                 _ => BasicBlockKind::StraightLine,
             };
             let cfg_block = self.builder.start_block(kind);
-            if matches!(terminator.kind, MirTerminatorKind::Unreachable) {
+            if matches!(terminator.kind, MirTerminatorKind::Unreachable)
+                && !unwind_targets.contains_key(&block.id)
+            {
                 self.builder.mark_unreachable(cfg_block);
             }
             for (index, statement_id) in block.statements.iter().enumerate() {
@@ -116,21 +141,24 @@ impl<'db> TsCfgLowering<'db> {
                     .iter()
                     .find(|operation| operation.id == statement.operation)
                     .expect("MIR statement operation must exist");
-                let node_kind = if index + 1 == block.statements.len()
-                    && matches!(
-                        terminator.kind,
-                        MirTerminatorKind::Branch { .. } | MirTerminatorKind::Switch { .. }
-                    ) {
-                    CfgNodeKind::Condition
-                } else {
-                    match &operation.kind {
-                        MirOperationKind::Return { .. } => CfgNodeKind::Return,
-                        MirOperationKind::Call { .. } => CfgNodeKind::CallSite,
-                        MirOperationKind::Unsupported { unsupported } => {
-                            self.unsupported_shape(*unsupported).node_kind
+                let node_kind = if index + 1 == block.statements.len() {
+                    match terminator.kind {
+                        MirTerminatorKind::Branch { .. } | MirTerminatorKind::Switch { .. } => {
+                            CfgNodeKind::Condition
                         }
-                        _ => CfgNodeKind::Operation,
+                        MirTerminatorKind::Throw { .. } => CfgNodeKind::Throw,
+                        MirTerminatorKind::Suspend {
+                            kind: crate::analysis::mir::body::SuspendKind::Await,
+                            ..
+                        } => CfgNodeKind::Await,
+                        MirTerminatorKind::Suspend {
+                            kind: crate::analysis::mir::body::SuspendKind::Yield,
+                            ..
+                        } => CfgNodeKind::Yield,
+                        _ => self.operation_node_kind(operation),
                     }
+                } else {
+                    self.operation_node_kind(operation)
                 };
                 self.builder.append_operation_node(
                     Some(operation),
@@ -139,8 +167,19 @@ impl<'db> TsCfgLowering<'db> {
                 );
             }
             if block.statements.is_empty() {
-                self.builder
-                    .append_operation_node(None, CfgNodeKind::Synthetic, None);
+                let node_kind = match terminator.kind {
+                    MirTerminatorKind::Throw { .. } => CfgNodeKind::Throw,
+                    MirTerminatorKind::Suspend {
+                        kind: crate::analysis::mir::body::SuspendKind::Await,
+                        ..
+                    } => CfgNodeKind::Await,
+                    MirTerminatorKind::Suspend {
+                        kind: crate::analysis::mir::body::SuspendKind::Yield,
+                        ..
+                    } => CfgNodeKind::Yield,
+                    _ => CfgNodeKind::Synthetic,
+                };
+                self.builder.append_operation_node(None, node_kind, None);
             }
             cfg_blocks.insert(block.id, cfg_block);
         }
@@ -230,7 +269,41 @@ impl<'db> TsCfgLowering<'db> {
                         CfgEdgeKind::Return,
                     );
                 }
-                MirTerminatorKind::Unreachable | MirTerminatorKind::Unsupported { .. } => {}
+                MirTerminatorKind::Throw { unwind, .. } => {
+                    self.add_mir_edge(from, *unwind, &cfg_blocks, CfgEdgeKind::Throw);
+                }
+                MirTerminatorKind::Call { normal, unwind, .. } => {
+                    self.add_mir_edge(from, *normal, &cfg_blocks, CfgEdgeKind::Normal);
+                    if let Some(unwind) = unwind {
+                        self.add_mir_edge(from, *unwind, &cfg_blocks, CfgEdgeKind::ImplicitThrow);
+                    }
+                }
+                MirTerminatorKind::Suspend { kind, resume, .. } => {
+                    let (suspend, resumed) = match kind {
+                        crate::analysis::mir::body::SuspendKind::Await => {
+                            (CfgEdgeKind::AwaitSuspend, CfgEdgeKind::AwaitResume)
+                        }
+                        crate::analysis::mir::body::SuspendKind::Yield => {
+                            (CfgEdgeKind::YieldSuspend, CfgEdgeKind::YieldResume)
+                        }
+                        crate::analysis::mir::body::SuspendKind::ChannelRecv
+                        | crate::analysis::mir::body::SuspendKind::ChannelSend => {
+                            (CfgEdgeKind::Unknown, CfgEdgeKind::Normal)
+                        }
+                    };
+                    self.add_mir_edge(from, *resume, &cfg_blocks, suspend);
+                    self.add_mir_edge(from, *resume, &cfg_blocks, resumed);
+                }
+                MirTerminatorKind::Unreachable => {
+                    if unwind_targets.contains_key(&block.id) {
+                        let exit = self
+                            .builder
+                            .exceptional_exit_block()
+                            .unwrap_or_else(|| self.builder.normal_exit_block());
+                        self.builder.add_edge(from, exit, CfgEdgeKind::Normal);
+                    }
+                }
+                MirTerminatorKind::Unsupported { .. } => {}
             }
         }
     }
@@ -248,17 +321,25 @@ impl<'db> TsCfgLowering<'db> {
         self.builder.add_edge(from, to, kind);
     }
 
+    fn operation_node_kind(
+        &self,
+        operation: &crate::analysis::mir::op::MirOperation,
+    ) -> CfgNodeKind {
+        match &operation.kind {
+            MirOperationKind::Return { .. } => CfgNodeKind::Return,
+            MirOperationKind::Call { .. } => CfgNodeKind::CallSite,
+            MirOperationKind::Unsupported { unsupported } => {
+                self.unsupported_shape(*unsupported).node_kind
+            }
+            _ => CfgNodeKind::Operation,
+        }
+    }
+
     fn unsupported_shape(&self, unsupported: UnsupportedId) -> UnsupportedShape {
         match self
             .unsupported_by_id(unsupported)
             .map(|row| row.construct.as_str())
         {
-            Some("throw") => UnsupportedShape {
-                node_kind: CfgNodeKind::Throw,
-                boundary_edges: vec![CfgEdgeKind::Throw],
-                to_exceptional_exit: true,
-                stop_lowering: true,
-            },
             Some("break") => UnsupportedShape {
                 node_kind: CfgNodeKind::Break,
                 boundary_edges: vec![CfgEdgeKind::Break],
@@ -274,18 +355,6 @@ impl<'db> TsCfgLowering<'db> {
             Some("optional chaining") => UnsupportedShape {
                 node_kind: CfgNodeKind::Condition,
                 boundary_edges: vec![CfgEdgeKind::OptionalChain],
-                to_exceptional_exit: false,
-                stop_lowering: false,
-            },
-            Some("await") | Some("for await") | Some("async rejection path") => UnsupportedShape {
-                node_kind: CfgNodeKind::Await,
-                boundary_edges: vec![CfgEdgeKind::AwaitSuspend, CfgEdgeKind::AwaitResume],
-                to_exceptional_exit: false,
-                stop_lowering: false,
-            },
-            Some("yield") => UnsupportedShape {
-                node_kind: CfgNodeKind::Yield,
-                boundary_edges: vec![CfgEdgeKind::YieldSuspend, CfgEdgeKind::YieldResume],
                 to_exceptional_exit: false,
                 stop_lowering: false,
             },
@@ -448,7 +517,7 @@ fn language_label(language: Language) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::ids::{CallSiteId, MirStatementId, MirTerminatorId, PlaceId};
+    use crate::analysis::ids::{MirStatementId, MirTerminatorId, PlaceId};
     use crate::analysis::mir::body::{
         MirBlock, MirBlockId, MirBody, MirOutput, MirStatement, MirTerminator, MirTerminatorKind,
     };
@@ -502,25 +571,6 @@ mod tests {
         }
     }
 
-    fn call(id: u64, ordinal: u32) -> MirOperation {
-        MirOperation {
-            id: MirOpId(id),
-            body: MirBodyId(0),
-            ordinal,
-            span: span(ordinal as usize, ordinal as usize + 1),
-            kind: MirOperationKind::Call {
-                site: CallSiteId(1),
-                callee: MirValue::Unknown {
-                    evidence: "callee".to_string(),
-                },
-                arguments: Vec::new(),
-                return_place: PlaceId(2),
-            },
-            stable_key: format!("ts:call:{ordinal}"),
-            status: MirStatus::Partial,
-        }
-    }
-
     fn return_op(id: u64, ordinal: u32) -> MirOperation {
         MirOperation {
             id: MirOpId(id),
@@ -530,20 +580,6 @@ mod tests {
             kind: MirOperationKind::Return { value: None },
             stable_key: format!("ts:return:{ordinal}"),
             status: MirStatus::Partial,
-        }
-    }
-
-    fn unsupported_operation(id: u64, ordinal: u32, unsupported: u64) -> MirOperation {
-        MirOperation {
-            id: MirOpId(id),
-            body: MirBodyId(0),
-            ordinal,
-            span: span(ordinal as usize, ordinal as usize + 1),
-            kind: MirOperationKind::Unsupported {
-                unsupported: UnsupportedId(unsupported),
-            },
-            stable_key: format!("ts:unsupported:{ordinal}"),
-            status: MirStatus::Unsupported,
         }
     }
 
@@ -707,10 +743,16 @@ mod tests {
 
     #[test]
     fn ts_cfg_throw_prevents_impossible_fallthrough() {
-        let db = db_with(
-            vec![unsupported_operation(1, 1, 1), assign(2, 2)],
-            vec![unsupported(1, Some(MirOpId(1)), "throw")],
+        let mut db = AnalysisDb::new();
+        db.add_file(
+            std::path::PathBuf::from("throw.ts"),
+            "throw.ts".to_string(),
+            "export function fail(value) { throw new Error(value); value = 1; }".to_string(),
         );
+        assert!(crate::ts::analyze(&mut db).is_empty());
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir)
+            .expect("MIR output should store");
         let output = lower_ts_cfg(&db);
         let unreachable_blocks = output
             .blocks
@@ -745,23 +787,24 @@ mod tests {
 
     #[test]
     fn ts_cfg_async_cleanup_and_unsupported_rows_are_truthful() {
-        let db = db_with(
-            vec![
-                unsupported_operation(1, 1, 1),
-                unsupported_operation(2, 2, 2),
-                unsupported_operation(3, 3, 3),
-                unsupported_operation(4, 4, 4),
-                unsupported_operation(5, 5, 5),
-                call(6, 6),
-            ],
-            vec![
-                unsupported(1, Some(MirOpId(1)), "await"),
-                unsupported(2, Some(MirOpId(2)), "yield"),
-                unsupported(3, Some(MirOpId(3)), "try"),
-                unsupported(4, Some(MirOpId(4)), "optional chaining"),
-                unsupported(5, Some(MirOpId(5)), "dynamic import"),
-            ],
+        let mut db = AnalysisDb::new();
+        db.add_file(
+            std::path::PathBuf::from("effects.ts"),
+            "effects.ts".to_string(),
+            r#"
+export async function load(promise, value) {
+  await promise;
+  try { value?.run(); } finally { cleanup(); }
+  return import("./module.js");
+}
+export function* values(value) { yield value; }
+"#
+            .to_string(),
         );
+        assert!(crate::ts::analyze(&mut db).is_empty());
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir)
+            .expect("MIR output should store");
         let output = lower_ts_cfg(&db);
         let edge_kinds = output
             .edges

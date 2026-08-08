@@ -74,7 +74,12 @@ fn append_language_output(merged: &mut MirOutput, mut output: MirOutput) {
     let statement_offset = merged.statements.len() as u64;
     let terminator_offset = merged.terminators.len() as u64;
     let place_offset = merged.places.len() as u64;
-    let operation_offset = merged.operations.len() as u64;
+    let operation_offset = merged
+        .operations
+        .iter()
+        .map(|operation| operation.id.0)
+        .max()
+        .map_or(0, |id| id + 1);
     let unsupported_offset = merged.unsupported.len() as u64;
 
     for body in &mut output.bodies {
@@ -172,6 +177,36 @@ fn offset_terminator_kind_refs(
             if let Some(value) = value {
                 offset_value_ref(value, place_offset);
             }
+        }
+        MirTerminatorKind::Throw { value, unwind } => {
+            if let Some(value) = value {
+                offset_value_ref(value, place_offset);
+            }
+            *unwind = offset_block_id(*unwind, block_offset);
+        }
+        MirTerminatorKind::Call {
+            callee,
+            arguments,
+            return_place,
+            normal,
+            unwind,
+            ..
+        } => {
+            offset_value_ref(callee, place_offset);
+            for argument in arguments {
+                *argument = offset_place_id(*argument, place_offset);
+            }
+            *return_place = offset_place_id(*return_place, place_offset);
+            *normal = offset_block_id(*normal, block_offset);
+            if let Some(unwind) = unwind {
+                *unwind = offset_block_id(*unwind, block_offset);
+            }
+        }
+        MirTerminatorKind::Suspend { value, resume, .. } => {
+            if let Some(value) = value {
+                offset_value_ref(value, place_offset);
+            }
+            *resume = offset_block_id(*resume, block_offset);
         }
         MirTerminatorKind::Unreachable => {}
         MirTerminatorKind::Unsupported { unsupported } => {
