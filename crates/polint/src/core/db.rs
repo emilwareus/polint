@@ -101,10 +101,10 @@ use std::sync::Arc;
 
 use super::fact_store::{
     CALL_STORE_FAMILY, CFG_STORE_FAMILY, CfgFactStore, FactStore, FactStoreEntry,
-    GO_SEMANTIC_STORE_FAMILY, GO_SYNTAX_STORE_FAMILY, GoSyntaxStore, MODULE_GRAPH_STORE_FAMILY,
-    MODULE_TOPOLOGY_STORE_FAMILY, ModuleGraphStore, ModuleTopologyStore,
-    SEMANTIC_INDEX_STORE_FAMILY, SYMBOL_STORE_FAMILY, SemanticIndexStore, SymbolStore,
-    TS_SYNTAX_STORE_FAMILY, TsSyntaxStore,
+    GO_SEMANTIC_STORE_FAMILY, GO_SYNTAX_STORE_FAMILY, GoSyntaxStore, METRICS_STORE_FAMILY,
+    MODULE_GRAPH_STORE_FAMILY, MODULE_TOPOLOGY_STORE_FAMILY, MetricsStore, ModuleGraphStore,
+    ModuleTopologyStore, SEMANTIC_INDEX_STORE_FAMILY, SYMBOL_STORE_FAMILY, SemanticIndexStore,
+    SymbolStore, TS_SYNTAX_STORE_FAMILY, TsSyntaxStore,
 };
 use super::facts::{
     BranchObligation, CachedFileFacts, ComplexityMetricFact, CoverageFact, DefinitionFact,
@@ -135,10 +135,6 @@ pub struct AnalysisDb {
     pub(crate) fact_meta: FactMetaStore,
     /// Provider-owned stores keyed by primary [`FactFamily`]. Iteration stays ordered.
     pub(crate) fact_stores: BTreeMap<FactFamily, FactStoreEntry>,
-    pub(crate) coverage: Vec<CoverageFact>,
-    pub(crate) file_metrics: Vec<FileMetricFact>,
-    pub(crate) function_metrics: Vec<FunctionMetricFact>,
-    pub(crate) complexity_metrics: Vec<ComplexityMetricFact>,
     pub(crate) semantic: Option<SemanticStore>,
     pub(crate) identity_records: Vec<IdentityRecord>,
     pub(crate) identity_store: Option<IdentityStore>,
@@ -275,14 +271,13 @@ impl Default for AnalysisDb {
             SEMANTIC_INDEX_STORE_FAMILY,
             FactStoreEntry::new(semantic_index),
         );
+        let mut metrics = MetricsStore::default();
+        FactStore::clear(&mut metrics);
+        fact_stores.insert(METRICS_STORE_FAMILY, FactStoreEntry::new(metrics));
         Self {
             files: Vec::new(),
             fact_meta: FactMetaStore::default(),
             fact_stores,
-            coverage: Vec::new(),
-            file_metrics: Vec::new(),
-            function_metrics: Vec::new(),
-            complexity_metrics: Vec::new(),
             semantic: None,
             identity_records: Vec::new(),
             identity_store: None,
@@ -444,6 +439,16 @@ impl AnalysisDb {
             .expect("SemanticIndexStore is installed when AnalysisDb is constructed")
     }
 
+    fn metrics_store(&self) -> &MetricsStore {
+        self.fact_store(METRICS_STORE_FAMILY)
+            .expect("MetricsStore is installed when AnalysisDb is constructed")
+    }
+
+    fn metrics_store_mut(&mut self) -> &mut MetricsStore {
+        self.fact_store_mut(METRICS_STORE_FAMILY)
+            .expect("MetricsStore is installed when AnalysisDb is constructed")
+    }
+
     /// Typed downcast helper for registry stores. Returns `None` when the family
     /// is absent or holds a different concrete store type.
     pub(crate) fn fact_store<T: 'static>(&self, family: FactFamily) -> Option<&T> {
@@ -558,9 +563,8 @@ impl AnalysisDb {
     }
 
     pub fn push_coverage(&mut self, fact: CoverageFact) {
-        let run_id = self.coverage.len() as u64;
         let metadata = self.coverage_metadata(&fact);
-        self.coverage.push(fact);
+        let run_id = self.metrics_store_mut().push_coverage(fact);
         self.record_fact_meta(FactFamily::Coverage, run_id, metadata);
     }
 
@@ -570,9 +574,11 @@ impl AnalysisDb {
         function_metrics: Vec<FunctionMetricFact>,
         complexity_metrics: Vec<ComplexityMetricFact>,
     ) {
-        self.file_metrics = file_metrics;
-        self.function_metrics = function_metrics;
-        self.complexity_metrics = complexity_metrics;
+        self.metrics_store_mut().replace_metrics(
+            file_metrics,
+            function_metrics,
+            complexity_metrics,
+        );
         self.refresh_metric_metadata();
     }
 
@@ -2789,8 +2795,11 @@ impl AnalysisDb {
         self.fact_meta.remove_family(FactFamily::FunctionMetric);
         self.fact_meta.remove_family(FactFamily::ComplexityMetric);
 
-        let file_metadata = self
-            .file_metrics
+        let file_metrics = self.file_metrics().to_vec();
+        let function_metrics = self.function_metrics().to_vec();
+        let complexity_metrics = self.complexity_metrics().to_vec();
+
+        let file_metadata = file_metrics
             .iter()
             .enumerate()
             .map(|(index, fact)| (index as u64, self.file_metric_metadata(fact)))
@@ -2799,8 +2808,7 @@ impl AnalysisDb {
             self.record_fact_meta(FactFamily::FileMetric, run_id, metadata);
         }
 
-        let function_metadata = self
-            .function_metrics
+        let function_metadata = function_metrics
             .iter()
             .enumerate()
             .map(|(index, fact)| (index as u64, self.function_metric_metadata(fact)))
@@ -2809,8 +2817,7 @@ impl AnalysisDb {
             self.record_fact_meta(FactFamily::FunctionMetric, run_id, metadata);
         }
 
-        let complexity_metadata = self
-            .complexity_metrics
+        let complexity_metadata = complexity_metrics
             .iter()
             .enumerate()
             .map(|(index, fact)| (index as u64, self.complexity_metric_metadata(fact)))
@@ -3355,19 +3362,19 @@ impl AnalysisDb {
     }
 
     pub fn coverage(&self) -> &[CoverageFact] {
-        &self.coverage
+        self.metrics_store().coverage()
     }
 
     pub fn file_metrics(&self) -> &[FileMetricFact] {
-        &self.file_metrics
+        self.metrics_store().file_metrics()
     }
 
     pub fn function_metrics(&self) -> &[FunctionMetricFact] {
-        &self.function_metrics
+        self.metrics_store().function_metrics()
     }
 
     pub fn complexity_metrics(&self) -> &[ComplexityMetricFact] {
-        &self.complexity_metrics
+        self.metrics_store().complexity_metrics()
     }
 
     pub fn ts_components(&self) -> &[TsComponentFact] {
@@ -3433,7 +3440,7 @@ impl AnalysisDb {
                 .cloned()
                 .collect(),
             coverage: self
-                .coverage
+                .coverage()
                 .iter()
                 .filter(|fact| branch_ids.contains(&fact.branch))
                 .cloned()

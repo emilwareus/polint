@@ -16,9 +16,10 @@ use crate::analysis::cfg::facts::{
 use crate::analysis::cfg::store::CfgOutput;
 use crate::analysis_kernel::FactFamily;
 use crate::core::facts::{
-    BranchObligation, DefinitionFact, FunctionFact, ImportFact, JsxAttributeFact, ModuleEdge,
-    ModuleNode, PackageFact, ReferenceFact, ResolvedImportFact, StringLiteralFact, SymbolFact,
-    TestFact, TsClassFact, TsComponentFact,
+    BranchObligation, ComplexityMetricFact, CoverageFact, DefinitionFact, FileMetricFact,
+    FunctionFact, FunctionMetricFact, ImportFact, JsxAttributeFact, ModuleEdge, ModuleNode,
+    PackageFact, ReferenceFact, ResolvedImportFact, StringLiteralFact, SymbolFact, TestFact,
+    TsClassFact, TsComponentFact,
 };
 use crate::core::ids::{BranchId, FileId, FunctionId, ImportId, PackageId, SymbolId};
 use crate::go::semantic::store::GoSemanticStore;
@@ -818,6 +819,75 @@ impl FactStore for SemanticIndexStore {
 
 /// Registry key used for [`SemanticIndexStore`] in `AnalysisDb::fact_stores`.
 pub(crate) const SEMANTIC_INDEX_STORE_FAMILY: FactFamily = FactFamily::Scope;
+
+/// Coverage and metric facts produced by the metrics/coverage providers.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct MetricsStore {
+    pub(crate) coverage: Vec<CoverageFact>,
+    pub(crate) file_metrics: Vec<FileMetricFact>,
+    pub(crate) function_metrics: Vec<FunctionMetricFact>,
+    pub(crate) complexity_metrics: Vec<ComplexityMetricFact>,
+}
+
+impl MetricsStore {
+    pub(crate) fn coverage(&self) -> &[CoverageFact] {
+        &self.coverage
+    }
+
+    pub(crate) fn file_metrics(&self) -> &[FileMetricFact] {
+        &self.file_metrics
+    }
+
+    pub(crate) fn function_metrics(&self) -> &[FunctionMetricFact] {
+        &self.function_metrics
+    }
+
+    pub(crate) fn complexity_metrics(&self) -> &[ComplexityMetricFact] {
+        &self.complexity_metrics
+    }
+
+    pub(crate) fn push_coverage(&mut self, fact: CoverageFact) -> u64 {
+        let run_id = self.coverage.len() as u64;
+        self.coverage.push(fact);
+        run_id
+    }
+
+    pub(crate) fn replace_metrics(
+        &mut self,
+        file_metrics: Vec<FileMetricFact>,
+        function_metrics: Vec<FunctionMetricFact>,
+        complexity_metrics: Vec<ComplexityMetricFact>,
+    ) {
+        self.file_metrics = file_metrics;
+        self.function_metrics = function_metrics;
+        self.complexity_metrics = complexity_metrics;
+    }
+}
+
+impl FactStore for MetricsStore {
+    fn family(&self) -> FactFamily {
+        FactFamily::FileMetric
+    }
+
+    fn clear(&mut self) {
+        *self = MetricsStore::default();
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn clone_box(&self) -> Box<dyn FactStore> {
+        Box::new(self.clone())
+    }
+}
+
+/// Registry key used for [`MetricsStore`] in `AnalysisDb::fact_stores`.
+pub(crate) const METRICS_STORE_FAMILY: FactFamily = FactFamily::FileMetric;
 
 #[cfg(test)]
 mod tests {
