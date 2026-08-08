@@ -1047,6 +1047,8 @@ pub struct RenderOpts<'a> {
     pub color: ColorChoice,
     /// Indexed by `Diagnostic.file`-style relative paths for human code snippets.
     pub sources: Option<&'a BTreeMap<String, Arc<str>>>,
+    /// Per-rule execution telemetry embedded in `--format json` summary.
+    pub(crate) rule_execution: &'a [RuleExecutionRow],
 }
 
 /// Tool identity in a [`PolintReport`].
@@ -1085,7 +1087,29 @@ pub(crate) struct AiFriendlySummary {
     pub(crate) rules_triggered: usize,
     pub(crate) by_severity: BTreeMap<String, usize>,
     pub(crate) by_rule: Vec<AiFriendlyRuleSummary>,
+    /// Per registered rule, including zero-finding and capability-skipped rules.
+    pub(crate) rules: Vec<RuleExecutionRow>,
     pub(crate) examples_limit: usize,
+}
+
+/// One row of rule-execution telemetry for silent-rule diagnosis.
+///
+/// `rules_triggered` stays the count of rules with ≥1 diagnostic; this list is
+/// the registry view that also includes rules that planned, ran, and found nothing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct RuleExecutionRow {
+    pub(crate) rule_id: String,
+    /// `true` when the rule survived capability planning and will execute.
+    pub(crate) planned: bool,
+    /// `true` when every requested capability is supported for this run.
+    pub(crate) capabilities_ok: bool,
+    /// Files matching this rule's scope after `files` / `allow_files` filtering
+    /// against the analyzed file set (already narrowed by discovery scope).
+    pub(crate) files_in_scope: usize,
+    pub(crate) diagnostics_emitted: usize,
+    /// Set when `!planned || !capabilities_ok`, using existing capability wording.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) skipped_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1122,7 +1146,14 @@ struct PolintReportWire<'a> {
     version: u32,
     schema: &'static str,
     tool: PolintToolWire<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    summary: Option<PolintReportSummaryWire<'a>>,
     diagnostics: &'a [Diagnostic],
+}
+
+#[derive(Serialize)]
+struct PolintReportSummaryWire<'a> {
+    rules: &'a [RuleExecutionRow],
 }
 
 #[derive(Serialize)]
@@ -1131,22 +1162,40 @@ struct PolintToolWire<'a> {
     version: &'a str,
 }
 
+#[derive(Debug, Deserialize)]
+struct HostJsonReport {
+    diagnostics: Vec<Diagnostic>,
+    #[serde(default)]
+    summary: Option<HostJsonSummary>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HostJsonSummary {
+    #[serde(default)]
+    rules: Vec<RuleExecutionRow>,
+}
+
 /// Parse stdout from a `polint-local-rules check --format json` process.
 pub fn diagnostics_from_json_report(s: &str) -> Result<Vec<Diagnostic>, serde_json::Error> {
     let report: PolintReport = serde_json::from_str(s)?;
     Ok(report.diagnostics)
 }
 
-/// Parse public diagnostics from an external rule-host JSON process.
-pub(crate) fn diagnostics_from_public_json_report(
+/// Parse diagnostics plus rule-execution telemetry from a rule-host JSON report.
+pub(crate) fn diagnostics_and_rule_execution_from_public_json_report(
     s: &str,
-) -> Result<Vec<Diagnostic>, serde_json::Error> {
-    let mut diagnostics = diagnostics_from_json_report(s)?;
+) -> Result<(Vec<Diagnostic>, Vec<RuleExecutionRow>), serde_json::Error> {
+    let report: HostJsonReport = serde_json::from_str(s)?;
+    let mut diagnostics = report.diagnostics;
     for diagnostic in &mut diagnostics {
         diagnostic.evidence_v1 = None;
         diagnostic.evidence_bundle = None;
     }
-    Ok(diagnostics)
+    let rules = report
+        .summary
+        .map(|summary| summary.rules)
+        .unwrap_or_default();
+    Ok((diagnostics, rules))
 }
 
 pub(crate) fn build_ai_friendly_report(
@@ -1154,8 +1203,9 @@ pub(crate) fn build_ai_friendly_report(
     persisted_diagnostics: &[Diagnostic],
     json_meta: JsonReportMeta<'_>,
     generated_at: impl Into<String>,
+    rule_execution: &[RuleExecutionRow],
 ) -> AiFriendlyReport {
-    let summary = ai_friendly_summary(diagnostics);
+    let summary = ai_friendly_summary(diagnostics, rule_execution);
     let examples = ai_friendly_examples(diagnostics, &summary.by_rule);
     let truncation = if persisted_diagnostics.len() < diagnostics.len() {
         Some(AiFriendlyTruncation {
@@ -1181,7 +1231,10 @@ pub(crate) fn build_ai_friendly_report(
     }
 }
 
-fn ai_friendly_summary(diagnostics: &[Diagnostic]) -> AiFriendlySummary {
+fn ai_friendly_summary(
+    diagnostics: &[Diagnostic],
+    rule_execution: &[RuleExecutionRow],
+) -> AiFriendlySummary {
     let mut by_severity = empty_severity_counts();
     let mut by_rule: BTreeMap<String, RuleSummaryDraft> = BTreeMap::new();
     for diagnostic in diagnostics {
@@ -1222,6 +1275,7 @@ fn ai_friendly_summary(diagnostics: &[Diagnostic]) -> AiFriendlySummary {
                 by_severity: draft.by_severity,
             })
             .collect(),
+        rules: rule_execution.to_vec(),
         examples_limit: AI_FRIENDLY_EXAMPLE_LIMIT,
     }
 }
@@ -1373,6 +1427,9 @@ pub(crate) fn render_ai_friendly_stdout(report: &AiFriendlyReport, json_path: &s
     );
     out.push_str("Do not read the whole file into an AI prompt. Query it with bounded commands:\n");
     out.push_str(&format!("  jq '.summary.by_rule' {json_path}\n"));
+    out.push_str(&format!(
+        "  jq '.summary.rules[] | select(.diagnostics_emitted == 0)' {json_path}\n"
+    ));
     if let Some(example) = report.examples.first() {
         let rule_id = jq_string_literal(&example.rule_id);
         let file = jq_string_literal(&example.file);
@@ -1561,10 +1618,16 @@ pub(crate) fn render_with_sarif_help(
     match format {
         OutputFormat::Human => render_human(diagnostics, opts.color, opts.sources),
         OutputFormat::Github => render_github(diagnostics),
-        OutputFormat::Json => render_json(diagnostics, opts.json),
+        OutputFormat::Json => render_json(diagnostics, opts.json, opts.rule_execution),
         OutputFormat::Sarif => render_sarif(diagnostics, sarif_rule_help_uri),
         OutputFormat::AiFriendly => {
-            let report = build_ai_friendly_report(diagnostics, diagnostics, opts.json, "unknown");
+            let report = build_ai_friendly_report(
+                diagnostics,
+                diagnostics,
+                opts.json,
+                "unknown",
+                opts.rule_execution,
+            );
             render_ai_friendly_stdout(&report, ".polint/output/latest.json")
         }
     }
@@ -1619,7 +1682,14 @@ fn escape_github_message(value: &str) -> String {
         .replace('\n', "%0A")
 }
 
-fn render_json(diagnostics: &[Diagnostic], json_meta: JsonReportMeta<'_>) -> String {
+fn render_json(
+    diagnostics: &[Diagnostic],
+    json_meta: JsonReportMeta<'_>,
+    rule_execution: &[RuleExecutionRow],
+) -> String {
+    let summary = (!rule_execution.is_empty()).then_some(PolintReportSummaryWire {
+        rules: rule_execution,
+    });
     let wire = PolintReportWire {
         version: 1,
         schema: POLINT_REPORT_JSON_SCHEMA_V1_URL,
@@ -1627,6 +1697,7 @@ fn render_json(diagnostics: &[Diagnostic], json_meta: JsonReportMeta<'_>) -> Str
             name: json_meta.tool_name,
             version: json_meta.tool_version,
         },
+        summary,
         diagnostics,
     };
     serde_json::to_string_pretty(&wire).unwrap_or_else(|_| "{}".to_string())
@@ -2323,6 +2394,7 @@ mod tests {
             },
             color: ColorChoice::Never,
             sources: None,
+            rule_execution: &[],
         }
     }
 
@@ -2515,7 +2587,8 @@ mod tests {
         .with_structured_evidence_v1(structured(minimal_structured_evidence_value()));
         let json = render(OutputFormat::Json, &[diagnostic], test_opts());
 
-        let diagnostics = diagnostics_from_public_json_report(&json).expect("public diagnostics");
+        let (diagnostics, _rules) = diagnostics_and_rule_execution_from_public_json_report(&json)
+            .expect("public diagnostics");
 
         assert_eq!(diagnostics.len(), 1);
         assert!(
@@ -2699,6 +2772,7 @@ mod tests {
             },
             color: ColorChoice::Never,
             sources: Some(&sources),
+            rule_execution: &[],
         };
         insta::assert_snapshot!(
             render(OutputFormat::Human, &[contract_diagnostic()], opts),
@@ -2810,7 +2884,8 @@ mod tests {
         sort_diagnostics(&mut diagnostics);
 
         let persisted = diagnostics[..3].to_vec();
-        let report = build_ai_friendly_report(&diagnostics, &persisted, test_opts().json, "123456");
+        let report =
+            build_ai_friendly_report(&diagnostics, &persisted, test_opts().json, "123456", &[]);
 
         assert_eq!(report.version, 1);
         assert_eq!(report.schema, POLINT_AI_FRIENDLY_JSON_SCHEMA_V1_URL);
@@ -2820,6 +2895,7 @@ mod tests {
         assert_eq!(report.summary.by_severity["warn"], 12);
         assert_eq!(report.summary.by_rule[0].rule_id, "local/rule-05");
         assert_eq!(report.summary.by_rule[0].total, 2);
+        assert!(report.summary.rules.is_empty());
         assert_eq!(report.examples.len(), AI_FRIENDLY_EXAMPLE_LIMIT);
         assert_eq!(report.examples[0].message, "more important");
         assert!(report.examples[0].labels.is_empty());
@@ -2832,7 +2908,7 @@ mod tests {
     fn render_ai_friendly_stdout_is_compact_and_query_oriented() {
         let diagnostics = vec![contract_diagnostic()];
         let report =
-            build_ai_friendly_report(&diagnostics, &diagnostics, test_opts().json, "123456");
+            build_ai_friendly_report(&diagnostics, &diagnostics, test_opts().json, "123456", &[]);
         let rendered = render_ai_friendly_stdout(&report, ".polint/output/latest.json");
 
         assert!(rendered.contains("polint: 1 diagnostic across 1 rule"));
@@ -2845,6 +2921,9 @@ mod tests {
         assert!(rendered.contains("fix: Replace unsafe_api"));
         assert!(rendered.contains("help: Use the safe wrapper before crossing this boundary."));
         assert!(rendered.contains("jq '.summary.by_rule' .polint/output/latest.json"));
+        assert!(rendered.contains(
+            "jq '.summary.rules[] | select(.diagnostics_emitted == 0)' .polint/output/latest.json"
+        ));
         assert!(
             rendered.contains(
                 "jq '[.diagnostics[] | select(.rule_id==\"project/rule\")][0:20]' .polint/output/latest.json"
@@ -2924,6 +3003,7 @@ mod tests {
                 },
                 color: ColorChoice::Never,
                 sources: None,
+                rule_execution: &[],
             },
             Some(&help),
         );

@@ -1631,6 +1631,7 @@ mod public_boundary_no_leak {
                 },
                 color: crate::diagnostics::ColorChoice::Never,
                 sources: None,
+                rule_execution: &[],
             },
         );
 

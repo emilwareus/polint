@@ -231,7 +231,7 @@ fn render_inspect_rule_human(report: &InspectRuleReport) -> String {
 }
 
 fn check(root: PathBuf, args: &CheckArgs, rules: &[Rule]) -> Result<u8> {
-    let (mut diagnostics, db, loaded) = analyze_and_run(&root, args, rules)?;
+    let (mut diagnostics, db, loaded, rule_execution) = analyze_and_run(&root, args, rules)?;
     if args.ignore_comments {
         diagnostics = apply_ignores(&db, diagnostics, &loaded.config.ignores).diagnostics;
     }
@@ -269,9 +269,11 @@ fn check(root: PathBuf, args: &CheckArgs, rules: &[Rule]) -> Result<u8> {
             ColorArg::Never => ColorChoice::Never,
         },
         sources,
+        rule_execution: &rule_execution,
     };
     if matches!(args.format, FormatArg::AiFriendly) {
-        let report = write_ai_friendly_report(&root, &diagnostics, &rendered_diagnostics)?;
+        let report =
+            write_ai_friendly_report(&root, &diagnostics, &rendered_diagnostics, &rule_execution)?;
         print!(
             "{}",
             render_ai_friendly_stdout(&report, AI_FRIENDLY_LATEST_OUTPUT)
@@ -290,6 +292,7 @@ fn write_ai_friendly_report(
     root: &Path,
     diagnostics: &[crate::diagnostics::Diagnostic],
     persisted_diagnostics: &[crate::diagnostics::Diagnostic],
+    rule_execution: &[crate::diagnostics::RuleExecutionRow],
 ) -> Result<crate::diagnostics::AiFriendlyReport> {
     crate::repo_fs::ensure_repo_dir(root, AI_FRIENDLY_OUTPUT_DIR).with_context(|| {
         format!(
@@ -307,6 +310,7 @@ fn write_ai_friendly_report(
             tool_version: env!("CARGO_PKG_VERSION"),
         },
         generated_at.clone(),
+        rule_execution,
     );
     let json = serde_json::to_string_pretty(&report)?;
     let hash = crate::cache::stable_hash(&[&json]);
@@ -382,6 +386,7 @@ fn analyze_and_run(
     Vec<crate::diagnostics::Diagnostic>,
     crate::core::AnalysisDb,
     LoadedConfig,
+    Vec<crate::diagnostics::RuleExecutionRow>,
 )> {
     let loaded = load_config_for_check(root, &args.paths)?;
     let cache = crate::cache::Cache::default_for_repo(root, !args.no_cache);
@@ -431,7 +436,14 @@ fn analyze_and_run(
         true,
         &output.capability_support,
     ));
-    Ok((diagnostics, output.db, loaded))
+    let file_paths = output
+        .db
+        .files()
+        .iter()
+        .map(|file| file.relative_path.as_str())
+        .collect::<Vec<_>>();
+    let rule_execution = plan.rule_execution_rows(&options, &file_paths, &diagnostics);
+    Ok((diagnostics, output.db, loaded, rule_execution))
 }
 
 /// Read a `polint review` changeset JSON file injected via `--changed-files`.

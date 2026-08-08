@@ -15,8 +15,9 @@ use crate::core::{
 };
 use crate::diagnostics::{
     AiFriendlyReport, ColorChoice, Diagnostic, JsonReportMeta, OutputFormat, RenderOpts, Severity,
-    apply_report_filters, build_ai_friendly_report, diagnostics_from_public_json_report,
-    limit_report_diagnostics, render_ai_friendly_stdout, render_with_sarif_help,
+    apply_report_filters, build_ai_friendly_report,
+    diagnostics_and_rule_execution_from_public_json_report, limit_report_diagnostics,
+    render_ai_friendly_stdout, render_with_sarif_help,
 };
 use crate::fs::load_analysis_files_scoped;
 use crate::ignores::{apply_ignores, filter_report, render_ignore_report_human};
@@ -56,6 +57,7 @@ fn json_report_meta() -> JsonReportMeta<'static> {
 fn render_opts<'a>(
     args: &CheckArgs,
     sources: Option<&'a BTreeMap<String, Arc<str>>>,
+    rule_execution: &'a [crate::diagnostics::RuleExecutionRow],
 ) -> RenderOpts<'a> {
     RenderOpts {
         json: json_report_meta(),
@@ -65,6 +67,7 @@ fn render_opts<'a>(
             ColorArg::Never => ColorChoice::Never,
         },
         sources,
+        rule_execution,
     }
 }
 
@@ -81,6 +84,7 @@ fn write_ai_friendly_report(
     diagnostics: &[Diagnostic],
     persisted_diagnostics: &[Diagnostic],
     json_meta: JsonReportMeta<'_>,
+    rule_execution: &[crate::diagnostics::RuleExecutionRow],
 ) -> Result<AiFriendlyOutput> {
     crate::repo_fs::ensure_repo_dir(root, AI_FRIENDLY_OUTPUT_DIR).with_context(|| {
         format!(
@@ -96,6 +100,7 @@ fn write_ai_friendly_report(
         persisted_diagnostics,
         json_meta,
         generated_at.clone(),
+        rule_execution,
     );
     let json = serde_json::to_string_pretty(&report)?;
     let hash = crate::cache::stable_hash(&[&json]);
@@ -3213,6 +3218,7 @@ fn check(root: PathBuf, args: &CheckArgs) -> Result<u8> {
             &diagnostics,
             &rendered_diagnostics,
             json_report_meta(),
+            &[],
         )?;
         print!(
             "{}",
@@ -3224,7 +3230,7 @@ fn check(root: PathBuf, args: &CheckArgs) -> Result<u8> {
             render_with_sarif_help(
                 format,
                 &rendered_diagnostics,
-                render_opts(args, sources),
+                render_opts(args, sources, &[]),
                 sarif_help_map(&loaded),
             )
         );
@@ -3289,7 +3295,8 @@ fn collect_ignore_report(root: &Path, args: &IgnoresArgs) -> Result<crate::ignor
     let enabled = selected_rule_patterns(&config, args.profile.as_deref())?;
     let mut diagnostics = Vec::new();
     for manifest in &local_rule_hosts {
-        diagnostics.extend(run_local_rule_host(root, manifest, &check_args, false)?);
+        let (host_diagnostics, _) = run_local_rule_host(root, manifest, &check_args, false)?;
+        diagnostics.extend(host_diagnostics);
     }
     // Same scope narrowing as `check_local_rule_hosts`: the db only feeds
     // ignore-directive scanning, which is limited to the configured rule scopes
@@ -3525,7 +3532,8 @@ fn collect_diagnostics_for_baseline(
         let enabled = selected_rule_patterns(&config, profile)?;
         let mut diagnostics = Vec::new();
         for manifest in &local_rule_hosts {
-            diagnostics.extend(run_local_rule_host(root, manifest, &check_args, false)?);
+            let (host_diagnostics, _) = run_local_rule_host(root, manifest, &check_args, false)?;
+            diagnostics.extend(host_diagnostics);
         }
         // Same scope narrowing as `check_local_rule_hosts`.
         let rule_scope = config_rule_scope_globset(&config, enabled.as_ref());
@@ -3699,14 +3707,14 @@ fn check_local_rule_hosts(root: &Path, args: &CheckArgs, manifests: &[PathBuf]) 
     let child_applies_ignores =
         args.ignore_comments && manifests.len() == 1 && !should_render_check_stats(args);
     let mut diagnostics = Vec::new();
+    let mut rule_execution = Vec::new();
     for manifest in manifests {
-        diagnostics.extend(run_local_rule_host(
-            root,
-            manifest,
-            args,
-            child_applies_ignores,
-        )?);
+        let (host_diagnostics, host_rules) =
+            run_local_rule_host(root, manifest, args, child_applies_ignores)?;
+        diagnostics.extend(host_diagnostics);
+        rule_execution.extend(host_rules);
     }
+    merge_rule_execution_rows(&mut rule_execution);
 
     let mut db = None;
     let mut ignore_report = None;
@@ -3755,6 +3763,7 @@ fn check_local_rule_hosts(root: &Path, args: &CheckArgs, manifests: &[PathBuf]) 
             &diagnostics,
             &rendered_diagnostics,
             json_report_meta(),
+            &rule_execution,
         )?;
         print!(
             "{}",
@@ -3766,7 +3775,7 @@ fn check_local_rule_hosts(root: &Path, args: &CheckArgs, manifests: &[PathBuf]) 
             render_with_sarif_help(
                 format,
                 &rendered_diagnostics,
-                render_opts(args, sources),
+                render_opts(args, sources, &rule_execution),
                 sarif_help_map(&config),
             )
         );
@@ -3835,16 +3844,20 @@ fn review(root: PathBuf, args: &ReviewArgs) -> Result<u8> {
     let enabled = selected_rule_patterns(&config, check_args.profile.as_deref())?;
     let child_applies_ignores = check_args.ignore_comments && manifests.len() == 1;
     let mut diagnostics = Vec::new();
+    let mut rule_execution = Vec::new();
     for manifest in &manifests {
-        diagnostics.extend(run_local_rule_host_kind(
+        let (host_diagnostics, host_rules) = run_local_rule_host_kind(
             &root,
             manifest,
             &check_args,
             child_applies_ignores,
             "review",
             Some(changeset_file.as_path()),
-        )?);
+        )?;
+        diagnostics.extend(host_diagnostics);
+        rule_execution.extend(host_rules);
     }
+    merge_rule_execution_rows(&mut rule_execution);
 
     if check_args.ignore_comments && !child_applies_ignores {
         let rule_scope = config_rule_scope_globset(&config, enabled.as_ref());
@@ -3887,6 +3900,7 @@ fn review(root: PathBuf, args: &ReviewArgs) -> Result<u8> {
             &diagnostics,
             &rendered_diagnostics,
             json_report_meta(),
+            &rule_execution,
         )?;
         print!(
             "{}",
@@ -3898,7 +3912,7 @@ fn review(root: PathBuf, args: &ReviewArgs) -> Result<u8> {
             render_with_sarif_help(
                 format,
                 &rendered_diagnostics,
-                render_opts(&check_args, sources),
+                render_opts(&check_args, sources, &rule_execution),
                 sarif_help_map(&config),
             )
         );
@@ -3978,7 +3992,7 @@ fn run_local_rule_host(
     manifest: &Path,
     args: &CheckArgs,
     apply_ignore_comments: bool,
-) -> Result<Vec<Diagnostic>> {
+) -> Result<(Vec<Diagnostic>, Vec<crate::diagnostics::RuleExecutionRow>)> {
     // The outer `check` path always runs Check-kind rules and injects no diff.
     run_local_rule_host_kind(root, manifest, args, apply_ignore_comments, "check", None)
 }
@@ -3996,7 +4010,7 @@ fn run_local_rule_host_kind(
     apply_ignore_comments: bool,
     kind: &str,
     changed_files: Option<&Path>,
-) -> Result<Vec<Diagnostic>> {
+) -> Result<(Vec<Diagnostic>, Vec<crate::diagnostics::RuleExecutionRow>)> {
     let cargo = std::env::var("POLINT_CARGO")
         .or_else(|_| std::env::var("CARGO"))
         .unwrap_or_else(|_| "cargo".to_string());
@@ -4074,12 +4088,17 @@ fn run_local_rule_host_kind(
             manifest.display()
         )
     })?;
-    diagnostics_from_public_json_report(&stdout).with_context(|| {
+    diagnostics_and_rule_execution_from_public_json_report(&stdout).with_context(|| {
         format!(
             "local rule host did not emit polint JSON report: {}",
             manifest.display()
         )
     })
+}
+
+fn merge_rule_execution_rows(rows: &mut Vec<crate::diagnostics::RuleExecutionRow>) {
+    rows.sort_by(|left, right| left.rule_id.cmp(&right.rule_id));
+    rows.dedup_by(|left, right| left.rule_id == right.rule_id);
 }
 
 fn run_local_rule_host_inspect(root: &Path, manifest: &Path) -> Result<InspectRuleReport> {

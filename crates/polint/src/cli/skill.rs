@@ -217,13 +217,21 @@ into your prompt; query it with bounded commands:
 
 ```bash
 jq '.summary.by_rule' .polint/output/latest.json
+jq '.summary.rules[] | select(.diagnostics_emitted == 0)' .polint/output/latest.json
 jq '[.diagnostics[] | select(.rule_id=="local/no-raw-colors")][0:20]' .polint/output/latest.json
 jq '.diagnostics[] | select(.file=="src/Button.tsx") | {{rule_id, range, message}}' .polint/output/latest.json | head -c 12000
 ```
 
+`summary.rules` lists every registered rule for the run, including rules that
+matched nothing or were skipped for capability reasons. Use
+`.diagnostics_emitted == 0` to find silent rules; `files_in_scope` and
+`skipped_reason` explain why.
+
 Use `polint check --format json` when another program needs the full report on
 stdout. JSON is a versioned report object with a `diagnostics` array (not a bare
-array at the root); the schema lives in `docs/schemas/polint-report-v1.json` in
+array at the root); when a rule host ran, `summary.rules` carries the same
+per-rule execution telemetry as ai-friendly output. The schema lives in
+`docs/schemas/polint-report-v1.json` in
 the polint repo. Human output uses ANSI colors on a TTY unless `NO_COLOR` is set;
 use `--color never` for plain text. Use `polint check --format sarif` for CI
 upload paths. Use `--fail-on warn`, `error`, or `none` to control the exit

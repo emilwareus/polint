@@ -613,6 +613,7 @@ mod entrypoints_provider {
                 },
                 color: crate::diagnostics::ColorChoice::Never,
                 sources: None,
+                rule_execution: &[],
             },
         );
 

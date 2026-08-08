@@ -1552,6 +1552,7 @@ mod tests {
                     },
                     color: ColorChoice::Never,
                     sources: None,
+                    rule_execution: &[],
                 },
             );
 
@@ -2530,6 +2531,7 @@ function cleanup(value: string) {{ return value.trim(); }}
                 },
                 color: crate::diagnostics::ColorChoice::Never,
                 sources: None,
+                rule_execution: &[],
             },
         );
         assert_no_framework_markers("polint check --format json", &rendered, &markers);
@@ -2576,6 +2578,7 @@ function cleanup(value: string) {{ return value.trim(); }}
                 },
                 color: crate::diagnostics::ColorChoice::Never,
                 sources: None,
+                rule_execution: &[],
             },
         );
         assert_no_refined_call_markers("polint check --format json", &rendered, &markers);
@@ -2621,6 +2624,7 @@ function cleanup(value: string) {{ return value.trim(); }}
                 },
                 color: crate::diagnostics::ColorChoice::Never,
                 sources: None,
+                rule_execution: &[],
             },
         );
         assert_no_data_flow_markers("polint check --format json", &rendered, &markers);

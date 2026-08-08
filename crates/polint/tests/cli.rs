@@ -7636,6 +7636,16 @@ pub(crate) fn no_todo_literals(
         "{stdout}"
     );
     assert!(
+        stdout.contains("jq '.summary.by_rule' .polint/output/latest.json"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "jq '.summary.rules[] | select(.diagnostics_emitted == 0)' .polint/output/latest.json"
+        ),
+        "{stdout}"
+    );
+    assert!(
         stdout.contains(
             "jq '[.diagnostics[] | select(.rule_id==\"custom/no-todo-literals\")][0:20]' .polint/output/latest.json"
         ),
@@ -7665,6 +7675,17 @@ pub(crate) fn no_todo_literals(
         report["summary"]["by_rule"][0]["rule_id"],
         "custom/no-todo-literals"
     );
+    let rules = report["summary"]["rules"]
+        .as_array()
+        .expect("summary.rules must be present");
+    let silent_or_hit = rules
+        .iter()
+        .find(|row| row["rule_id"] == "custom/no-todo-literals");
+    let row = silent_or_hit.expect("registered rule must appear in summary.rules");
+    assert_eq!(row["planned"], true);
+    assert_eq!(row["capabilities_ok"], true);
+    assert!(row["files_in_scope"].as_u64().unwrap() > 0);
+    assert_eq!(row["diagnostics_emitted"], 1);
     assert_eq!(report["examples"].as_array().unwrap().len(), 1);
     assert_eq!(report["examples"][0]["rule_id"], "custom/no-todo-literals");
     assert_eq!(report["examples"][0]["labels"], serde_json::json!([]));
