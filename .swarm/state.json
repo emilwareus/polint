@@ -710,7 +710,7 @@
       "attempts": 1
     },
     "W3.5": {
-      "state": "CLAIMED",
+      "state": "MERGED",
       "spec": "docs/architecture-review/specs/W3.5-fold-ts-value-flows.md",
       "depends_on": [
         "W3.3"
@@ -718,7 +718,10 @@
       "created_at": "2026-08-08T20:27:05+02:00",
       "branch": "swarm/W3.5",
       "dispatched_at": "2026-08-08T21:14:21+02:00",
-      "attempts": 1
+      "attempts": 1,
+      "commit": "3e25db23",
+      "merged_at": "2026-08-08T21:19:49+02:00",
+      "note": "Deleted ts_value_flows + calls/js_points_to Oxc pipeline; shared solver remains"
     }
   },
   "locks": {
@@ -728,8 +731,7 @@
   "milestone": "M3",
   "READY": [],
   "IN_FLIGHT": [
-    "W3.4",
-    "W3.5"
+    "W3.4"
   ],
   "IN_REVIEW": [],
   "MERGED": [
@@ -757,7 +759,8 @@
     "W1.9",
     "W2.1",
     "W3.2",
-    "W3.3"
+    "W3.3",
+    "W3.5"
   ],
   "HELD": [
     "W2.3"
@@ -771,7 +774,7 @@
   },
   "integration_branch": "static-analysis-architecture-review",
   "never_merge_to_main": true,
-  "integration_head": "835859bf",
+  "integration_head": "3e25db23",
   "m0_gate": {
     "status": "PASS",
     "completed_at": "2026-08-08T11:52:00+02:00",
