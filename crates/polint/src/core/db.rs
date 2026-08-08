@@ -99,7 +99,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use super::fact_store::{FactStore, FactStoreEntry, GO_SYNTAX_STORE_FAMILY, GoSyntaxStore};
+use super::fact_store::{
+    FactStore, FactStoreEntry, GO_SYNTAX_STORE_FAMILY, GoSyntaxStore, TS_SYNTAX_STORE_FAMILY,
+    TsSyntaxStore,
+};
 use super::facts::{
     BranchObligation, CachedFileFacts, ComplexityMetricFact, CoverageFact, DefinitionFact,
     FileMetricFact, FunctionFact, FunctionMetricFact, ImportFact, JsxAttributeFact, ModuleEdge,
@@ -166,10 +169,6 @@ pub struct AnalysisDb {
     pub(crate) file_metrics: Vec<FileMetricFact>,
     pub(crate) function_metrics: Vec<FunctionMetricFact>,
     pub(crate) complexity_metrics: Vec<ComplexityMetricFact>,
-    pub(crate) ts_components: Vec<TsComponentFact>,
-    pub(crate) ts_classes: Vec<TsClassFact>,
-    pub(crate) string_literals: Vec<StringLiteralFact>,
-    pub(crate) jsx_attributes: Vec<JsxAttributeFact>,
     pub(crate) semantic: Option<SemanticStore>,
     pub(crate) cfg_functions: Vec<CfgFunctionFact>,
     pub(crate) cfg_nodes: Vec<CfgNodeFact>,
@@ -298,6 +297,9 @@ impl Default for AnalysisDb {
         // empty store at construction keeps the method on the product path.
         FactStore::clear(&mut go_syntax);
         fact_stores.insert(GO_SYNTAX_STORE_FAMILY, FactStoreEntry::new(go_syntax));
+        let mut ts_syntax = TsSyntaxStore::default();
+        FactStore::clear(&mut ts_syntax);
+        fact_stores.insert(TS_SYNTAX_STORE_FAMILY, FactStoreEntry::new(ts_syntax));
         Self {
             files: Vec::new(),
             fact_meta: FactMetaStore::default(),
@@ -339,10 +341,6 @@ impl Default for AnalysisDb {
             file_metrics: Vec::new(),
             function_metrics: Vec::new(),
             complexity_metrics: Vec::new(),
-            ts_components: Vec::new(),
-            ts_classes: Vec::new(),
-            string_literals: Vec::new(),
-            jsx_attributes: Vec::new(),
             semantic: None,
             cfg_functions: Vec::new(),
             cfg_nodes: Vec::new(),
@@ -444,6 +442,16 @@ impl AnalysisDb {
     fn go_syntax_store_mut(&mut self) -> &mut GoSyntaxStore {
         self.fact_store_mut(GO_SYNTAX_STORE_FAMILY)
             .expect("GoSyntaxStore is installed when AnalysisDb is constructed")
+    }
+
+    fn ts_syntax_store(&self) -> &TsSyntaxStore {
+        self.fact_store(TS_SYNTAX_STORE_FAMILY)
+            .expect("TsSyntaxStore is installed when AnalysisDb is constructed")
+    }
+
+    fn ts_syntax_store_mut(&mut self) -> &mut TsSyntaxStore {
+        self.fact_store_mut(TS_SYNTAX_STORE_FAMILY)
+            .expect("TsSyntaxStore is installed when AnalysisDb is constructed")
     }
 
     /// Typed downcast helper for registry stores. Returns `None` when the family
@@ -2997,30 +3005,26 @@ impl AnalysisDb {
     }
 
     pub fn push_ts_component(&mut self, fact: TsComponentFact) {
-        let run_id = self.ts_components.len() as u64;
         let metadata = self.ts_component_metadata(&fact);
-        self.ts_components.push(fact);
+        let run_id = self.ts_syntax_store_mut().push_ts_component(fact);
         self.record_fact_meta(FactFamily::TsComponent, run_id, metadata);
     }
 
     pub fn push_ts_class(&mut self, fact: TsClassFact) {
-        let run_id = self.ts_classes.len() as u64;
         let metadata = self.ts_class_metadata(&fact);
-        self.ts_classes.push(fact);
+        let run_id = self.ts_syntax_store_mut().push_ts_class(fact);
         self.record_fact_meta(FactFamily::TsClass, run_id, metadata);
     }
 
     pub fn push_string_literal(&mut self, fact: StringLiteralFact) {
-        let run_id = self.string_literals.len() as u64;
         let metadata = self.string_literal_metadata(&fact);
-        self.string_literals.push(fact);
+        let run_id = self.ts_syntax_store_mut().push_string_literal(fact);
         self.record_fact_meta(FactFamily::StringLiteral, run_id, metadata);
     }
 
     pub fn push_jsx_attribute(&mut self, fact: JsxAttributeFact) {
-        let run_id = self.jsx_attributes.len() as u64;
         let metadata = self.jsx_attribute_metadata(&fact);
-        self.jsx_attributes.push(fact);
+        let run_id = self.ts_syntax_store_mut().push_jsx_attribute(fact);
         self.record_fact_meta(FactFamily::JsxAttribute, run_id, metadata);
     }
 
@@ -3575,19 +3579,19 @@ impl AnalysisDb {
     }
 
     pub fn ts_components(&self) -> &[TsComponentFact] {
-        &self.ts_components
+        self.ts_syntax_store().ts_components()
     }
 
     pub fn ts_classes(&self) -> &[TsClassFact] {
-        &self.ts_classes
+        self.ts_syntax_store().ts_classes()
     }
 
     pub fn string_literals(&self) -> &[StringLiteralFact] {
-        &self.string_literals
+        self.ts_syntax_store().string_literals()
     }
 
     pub fn jsx_attributes(&self) -> &[JsxAttributeFact] {
-        &self.jsx_attributes
+        self.ts_syntax_store().jsx_attributes()
     }
 
     pub fn path_for(&self, file: FileId) -> String {
@@ -3643,25 +3647,25 @@ impl AnalysisDb {
                 .cloned()
                 .collect(),
             ts_components: self
-                .ts_components
+                .ts_components()
                 .iter()
                 .filter(|fact| fact.file == file)
                 .cloned()
                 .collect(),
             ts_classes: self
-                .ts_classes
+                .ts_classes()
                 .iter()
                 .filter(|fact| fact.file == file)
                 .cloned()
                 .collect(),
             string_literals: self
-                .string_literals
+                .string_literals()
                 .iter()
                 .filter(|fact| fact.file == file)
                 .cloned()
                 .collect(),
             jsx_attributes: self
-                .jsx_attributes
+                .jsx_attributes()
                 .iter()
                 .filter(|fact| fact.file == file)
                 .cloned()
