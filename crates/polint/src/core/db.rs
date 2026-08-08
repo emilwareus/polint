@@ -77,7 +77,7 @@ use crate::diagnostics::fingerprint;
 use crate::go::semantic::facts::{
     GoSemanticAddressTakenFact, GoSemanticCallsiteFact, GoSemanticDynamicDispatchFact,
     GoSemanticFunctionFact, GoSemanticInstantiatedTypeFact, GoSemanticMethodSetFact,
-    GoSemanticPackageErrorFact, GoSemanticPackageFact, GoSemanticRtaEdgeFact,
+    GoSemanticPackageErrorFact, GoSemanticPackageFact,
 };
 use crate::go::semantic::store::{GoSemanticFactsOutput, GoSemanticStore, GoSemanticStoreReport};
 use crate::module_graph::topology::{
@@ -101,7 +101,8 @@ use std::sync::Arc;
 
 use super::fact_store::{
     CALL_STORE_FAMILY, CFG_STORE_FAMILY, CfgFactStore, FactStore, FactStoreEntry,
-    GO_SYNTAX_STORE_FAMILY, GoSyntaxStore, TS_SYNTAX_STORE_FAMILY, TsSyntaxStore,
+    GO_SEMANTIC_STORE_FAMILY, GO_SYNTAX_STORE_FAMILY, GoSyntaxStore, TS_SYNTAX_STORE_FAMILY,
+    TsSyntaxStore,
 };
 use super::facts::{
     BranchObligation, CachedFileFacts, ComplexityMetricFact, CoverageFact, DefinitionFact,
@@ -244,15 +245,6 @@ pub struct AnalysisDb {
     pub(crate) solver_derived_edges: Vec<DerivedEdgeFact>,
     pub(crate) solver_budget_status: BudgetStatus,
     pub(crate) solver_budget_reasons: BTreeSet<String>,
-    pub(crate) go_semantic_packages: Vec<GoSemanticPackageFact>,
-    pub(crate) go_semantic_functions: Vec<GoSemanticFunctionFact>,
-    pub(crate) go_semantic_callsites: Vec<GoSemanticCallsiteFact>,
-    pub(crate) go_semantic_method_sets: Vec<GoSemanticMethodSetFact>,
-    pub(crate) go_semantic_address_taken: Vec<GoSemanticAddressTakenFact>,
-    pub(crate) go_semantic_instantiated_types: Vec<GoSemanticInstantiatedTypeFact>,
-    pub(crate) go_semantic_dynamic_dispatch: Vec<GoSemanticDynamicDispatchFact>,
-    pub(crate) go_semantic_rta_edges: Vec<GoSemanticRtaEdgeFact>,
-    pub(crate) go_semantic_package_errors: Vec<GoSemanticPackageErrorFact>,
     pub(crate) type_facts: Vec<TypeFact>,
     pub(crate) narrowed_type_facts: Vec<NarrowedTypeFact>,
     pub(crate) value_facts: Vec<ValueFact>,
@@ -293,6 +285,9 @@ impl Default for AnalysisDb {
         let mut call_store = CallStore::default();
         FactStore::clear(&mut call_store);
         fact_stores.insert(CALL_STORE_FAMILY, FactStoreEntry::new(call_store));
+        let mut go_semantic = GoSemanticStore::default();
+        FactStore::clear(&mut go_semantic);
+        fact_stores.insert(GO_SEMANTIC_STORE_FAMILY, FactStoreEntry::new(go_semantic));
         Self {
             files: Vec::new(),
             fact_meta: FactMetaStore::default(),
@@ -381,15 +376,6 @@ impl Default for AnalysisDb {
             solver_derived_edges: Vec::new(),
             solver_budget_status: BudgetStatus::NotRun,
             solver_budget_reasons: BTreeSet::new(),
-            go_semantic_packages: Vec::new(),
-            go_semantic_functions: Vec::new(),
-            go_semantic_callsites: Vec::new(),
-            go_semantic_method_sets: Vec::new(),
-            go_semantic_address_taken: Vec::new(),
-            go_semantic_instantiated_types: Vec::new(),
-            go_semantic_dynamic_dispatch: Vec::new(),
-            go_semantic_rta_edges: Vec::new(),
-            go_semantic_package_errors: Vec::new(),
             type_facts: Vec::new(),
             narrowed_type_facts: Vec::new(),
             value_facts: Vec::new(),
@@ -452,6 +438,16 @@ impl AnalysisDb {
     fn calls_store_mut(&mut self) -> &mut CallStore {
         self.fact_store_mut(CALL_STORE_FAMILY)
             .expect("CallStore is installed when AnalysisDb is constructed")
+    }
+
+    fn go_semantic_store(&self) -> &GoSemanticStore {
+        self.fact_store(GO_SEMANTIC_STORE_FAMILY)
+            .expect("GoSemanticStore is installed when AnalysisDb is constructed")
+    }
+
+    fn go_semantic_store_mut(&mut self) -> &mut GoSemanticStore {
+        self.fact_store_mut(GO_SEMANTIC_STORE_FAMILY)
+            .expect("GoSemanticStore is installed when AnalysisDb is constructed")
     }
 
     /// Typed downcast helper for registry stores. Returns `None` when the family
@@ -1354,16 +1350,9 @@ impl AnalysisDb {
         output: GoSemanticFactsOutput,
     ) -> Result<GoSemanticStoreReport, AnalysisError> {
         let store = GoSemanticStore::from_output(output)?;
-        self.go_semantic_packages = store.output().packages.clone();
-        self.go_semantic_functions = store.output().functions.clone();
-        self.go_semantic_callsites = store.output().callsites.clone();
-        self.go_semantic_method_sets = store.output().method_sets.clone();
-        self.go_semantic_address_taken = store.output().address_taken.clone();
-        self.go_semantic_instantiated_types = store.output().instantiated_types.clone();
-        self.go_semantic_dynamic_dispatch = store.output().dynamic_dispatch.clone();
-        self.go_semantic_rta_edges = store.output().rta_edges.clone();
-        self.go_semantic_package_errors = store.output().package_errors.clone();
-        Ok(store.report())
+        let report = store.report();
+        *self.go_semantic_store_mut() = store;
+        Ok(report)
     }
 
     /// The normalized Go semantic output currently stored in the database.
@@ -1372,29 +1361,19 @@ impl AnalysisDb {
     /// the rows that survived store-time resilience passes (invalid harvest-row drops and
     /// duplicate structural-key collapse), not the raw sidecar/lowering rows.
     pub(crate) fn go_semantic_facts_output(&self) -> GoSemanticFactsOutput {
-        GoSemanticFactsOutput {
-            packages: self.go_semantic_packages.clone(),
-            functions: self.go_semantic_functions.clone(),
-            callsites: self.go_semantic_callsites.clone(),
-            method_sets: self.go_semantic_method_sets.clone(),
-            address_taken: self.go_semantic_address_taken.clone(),
-            instantiated_types: self.go_semantic_instantiated_types.clone(),
-            dynamic_dispatch: self.go_semantic_dynamic_dispatch.clone(),
-            rta_edges: self.go_semantic_rta_edges.clone(),
-            package_errors: self.go_semantic_package_errors.clone(),
-        }
+        self.go_semantic_store().output().clone()
     }
 
     pub(crate) fn go_semantic_packages(&self) -> &[GoSemanticPackageFact] {
-        &self.go_semantic_packages
+        &self.go_semantic_store().output().packages
     }
 
     pub(crate) fn go_semantic_functions(&self) -> &[GoSemanticFunctionFact] {
-        &self.go_semantic_functions
+        &self.go_semantic_store().output().functions
     }
 
     pub(crate) fn go_semantic_callsites(&self) -> &[GoSemanticCallsiteFact] {
-        &self.go_semantic_callsites
+        &self.go_semantic_store().output().callsites
     }
 
     #[allow(
@@ -1402,7 +1381,7 @@ impl AnalysisDb {
         reason = "Method-set facts are stored privately for receiver/RTA expansion."
     )]
     pub(crate) fn go_semantic_method_sets(&self) -> &[GoSemanticMethodSetFact] {
-        &self.go_semantic_method_sets
+        &self.go_semantic_store().output().method_sets
     }
 
     #[allow(
@@ -1410,7 +1389,7 @@ impl AnalysisDb {
         reason = "Address-taken facts are stored privately for the Plan 2 go_rta dispatch-candidate set (GO-05)."
     )]
     pub(crate) fn go_semantic_address_taken(&self) -> &[GoSemanticAddressTakenFact] {
-        &self.go_semantic_address_taken
+        &self.go_semantic_store().output().address_taken
     }
 
     #[allow(
@@ -1418,7 +1397,7 @@ impl AnalysisDb {
         reason = "Instantiated-type facts are stored privately for the Plan 2 go_rta rapid-type filter (GO-05)."
     )]
     pub(crate) fn go_semantic_instantiated_types(&self) -> &[GoSemanticInstantiatedTypeFact] {
-        &self.go_semantic_instantiated_types
+        &self.go_semantic_store().output().instantiated_types
     }
 
     #[allow(
@@ -1426,14 +1405,14 @@ impl AnalysisDb {
         reason = "Dynamic-dispatch detail is stored privately for the Plan 2 go_rta method-set matching (GO-05)."
     )]
     pub(crate) fn go_semantic_dynamic_dispatch(&self) -> &[GoSemanticDynamicDispatchFact] {
-        &self.go_semantic_dynamic_dispatch
+        &self.go_semantic_store().output().dynamic_dispatch
     }
 
     #[cfg(test)]
     pub(crate) fn go_semantic_rta_edges(
         &self,
     ) -> &[crate::go::semantic::facts::GoSemanticRtaEdgeFact] {
-        &self.go_semantic_rta_edges
+        &self.go_semantic_store().output().rta_edges
     }
 
     #[allow(
@@ -1441,7 +1420,7 @@ impl AnalysisDb {
         reason = "Package-load errors are stored privately for capability diagnostics once the provider is kernel-wired."
     )]
     pub(crate) fn go_semantic_package_errors(&self) -> &[GoSemanticPackageErrorFact] {
-        &self.go_semantic_package_errors
+        &self.go_semantic_store().output().package_errors
     }
 
     pub(crate) fn trust_boundary_facts(&self) -> &[TrustBoundaryFact] {

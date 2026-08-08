@@ -19,6 +19,7 @@ use crate::core::facts::{
     TestFact, TsClassFact, TsComponentFact,
 };
 use crate::core::ids::{BranchId, FunctionId, ImportId, PackageId};
+use crate::go::semantic::store::GoSemanticStore;
 
 /// Erased provider-owned fact container. Not public — rule authors use SDK views.
 pub(crate) trait FactStore: Any + Send + Sync {
@@ -333,6 +334,31 @@ impl FactStore for CallStore {
 
 /// Registry key used for [`CallStore`] in `AnalysisDb::fact_stores`.
 pub(crate) const CALL_STORE_FAMILY: FactFamily = FactFamily::CallSite;
+
+impl FactStore for GoSemanticStore {
+    fn family(&self) -> FactFamily {
+        FactFamily::GoSemantic
+    }
+
+    fn clear(&mut self) {
+        *self = GoSemanticStore::default();
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn clone_box(&self) -> Box<dyn FactStore> {
+        Box::new(self.clone())
+    }
+}
+
+/// Registry key used for [`GoSemanticStore`] in `AnalysisDb::fact_stores`.
+pub(crate) const GO_SEMANTIC_STORE_FAMILY: FactFamily = FactFamily::GoSemantic;
 
 #[cfg(test)]
 mod tests {
