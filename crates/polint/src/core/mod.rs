@@ -73,7 +73,7 @@ use crate::diagnostics::fingerprint;
 use crate::go::semantic::facts::{
     GoSemanticAddressTakenFact, GoSemanticCallsiteFact, GoSemanticDynamicDispatchFact,
     GoSemanticFunctionFact, GoSemanticInstantiatedTypeFact, GoSemanticMethodSetFact,
-    GoSemanticPackageErrorFact, GoSemanticPackageFact, GoSemanticRtaEdgeFact,
+    GoSemanticPackageErrorFact, GoSemanticPackageFact,
 };
 use crate::go::semantic::store::{GoSemanticFactsOutput, GoSemanticStore, GoSemanticStoreReport};
 use crate::module_graph::topology::{
@@ -112,6 +112,7 @@ const FUNCTION_SIZE_METRIC_NAME: &str = "function_size";
 const CYCLOMATIC_COMPLEXITY_METRIC_NAME: &str = "cyclomatic_complexity";
 
 mod capability;
+mod db;
 mod facts;
 mod ids;
 mod labels;
@@ -149,321 +150,13 @@ use metadata::*;
 pub use capability::{
     Capabilities, CapabilitySupport, CapabilitySupportStatus, CapabilitySupportView,
 };
+pub use db::AnalysisDb;
 #[cfg(test)]
 pub(crate) use rule::RuleRegistry;
 pub use rule::{Rule, RuleConfigValue, RuleCtx, RuleKind, RuleMeta, RuleOptions};
 pub(crate) use rule::{
     rule_id_matches, run_rules, run_rules_with_capability_support, span_from_byte_range,
 };
-
-#[derive(Debug, Clone)]
-pub struct AnalysisDb {
-    files: Vec<SourceFile>,
-    fact_meta: FactMetaStore,
-    packages: Vec<PackageFact>,
-    functions: Vec<FunctionFact>,
-    imports: Vec<ImportFact>,
-    resolved_imports: Vec<ResolvedImportFact>,
-    module_nodes: Vec<ModuleNode>,
-    module_edges: Vec<ModuleEdge>,
-    workspace_roots: Vec<WorkspaceRootFact>,
-    topology_packages: Vec<TopologyPackageFact>,
-    source_sets: Vec<SourceSetFact>,
-    dependency_requirements: Vec<DependencyRequirementFact>,
-    resolved_dependency_edges: Vec<ResolvedDependencyEdgeFact>,
-    import_to_package_edges: Vec<ImportToPackageFact>,
-    repo_topology_overlays: Vec<RepoTopologyOverlayFact>,
-    scopes: Vec<ScopeFact>,
-    semantic_imports: Vec<SemanticImportFact>,
-    exports: Vec<ExportFact>,
-    aliases: Vec<AliasFact>,
-    resolution_facts: Vec<ResolutionFact>,
-    generated_symbols: Vec<GeneratedSymbolFact>,
-    stable_exports: Vec<StableExportIdentity>,
-    scopes_by_id: BTreeMap<ScopeId, usize>,
-    semantic_imports_by_id: BTreeMap<SemanticImportId, usize>,
-    exports_by_id: BTreeMap<ExportId, usize>,
-    aliases_by_id: BTreeMap<AliasId, usize>,
-    resolution_facts_by_id: BTreeMap<ResolutionId, usize>,
-    generated_symbols_by_id: BTreeMap<GeneratedSymbolId, usize>,
-    stable_exports_by_id: BTreeMap<StableExportId, usize>,
-    symbols: Vec<SymbolFact>,
-    definitions: Vec<DefinitionFact>,
-    references: Vec<ReferenceFact>,
-    symbols_by_id: BTreeMap<SymbolId, usize>,
-    definitions_by_symbol: BTreeMap<SymbolId, Vec<usize>>,
-    references_by_target: BTreeMap<SymbolId, Vec<usize>>,
-    symbols_by_file: BTreeMap<FileId, Vec<usize>>,
-    references_by_file: BTreeMap<FileId, Vec<usize>>,
-    symbols_by_name: BTreeMap<String, Vec<usize>>,
-    branches: Vec<BranchObligation>,
-    tests: Vec<TestFact>,
-    coverage: Vec<CoverageFact>,
-    file_metrics: Vec<FileMetricFact>,
-    function_metrics: Vec<FunctionMetricFact>,
-    complexity_metrics: Vec<ComplexityMetricFact>,
-    ts_components: Vec<TsComponentFact>,
-    ts_classes: Vec<TsClassFact>,
-    string_literals: Vec<StringLiteralFact>,
-    jsx_attributes: Vec<JsxAttributeFact>,
-    semantic: Option<SemanticStore>,
-    cfg_functions: Vec<CfgFunctionFact>,
-    cfg_nodes: Vec<CfgNodeFact>,
-    cfg_blocks: Vec<BasicBlockFact>,
-    cfg_edges: Vec<CfgEdgeFact>,
-    cfg_reachability: Vec<ReachabilityFact>,
-    cfg_dominators: Vec<DominatorFact>,
-    cfg_postdominators: Vec<PostDominatorFact>,
-    cfg_control_dependence: Vec<ControlDependenceFact>,
-    unsupported_control_flow: Vec<UnsupportedControlFlowFact>,
-    call_sites: Vec<CallSiteFact>,
-    call_targets: Vec<CallTargetFact>,
-    unresolved_calls: Vec<UnresolvedCallFact>,
-    call_store: Option<CallStore>,
-    identity_records: Vec<IdentityRecord>,
-    identity_store: Option<IdentityStore>,
-    refined_call_edges: Vec<RefinedCallEdgeFact>,
-    refined_call_store: Option<RefinedCallStore>,
-    data_flow_nodes: Vec<DataFlowNodeFact>,
-    data_flow_edges: Vec<DataFlowEdgeFact>,
-    data_flow_models: Vec<DataFlowModelFact>,
-    data_flow_budgets: Vec<DataFlowBudgetFact>,
-    data_flow_store: Option<DataFlowStore>,
-    evidence_nodes: Vec<EvidenceNodeFact>,
-    evidence_edges: Vec<EvidenceEdgeFact>,
-    evidence_bundles: Vec<EvidenceBundleFact>,
-    evidence_paths: Vec<EvidencePathFact>,
-    evidence_slices: Vec<EvidenceSliceFact>,
-    evidence_unknowns: Vec<EvidenceUnknownFact>,
-    evidence_omitted_regions: Vec<EvidenceOmittedRegionFact>,
-    evidence_replay_keys: Vec<EvidenceReplayKeyFact>,
-    evidence_store: Option<EvidenceStore>,
-    abstract_domain_store: Option<DomainStore>,
-    summary_facts: Vec<SummaryFact>,
-    summary_events: Vec<SummaryEventFact>,
-    summary_store: Option<SummaryStore>,
-    extension_activations: Vec<ExtensionActivationRow>,
-    extension_facts: Vec<AcceptedExtensionFact>,
-    #[allow(
-        dead_code,
-        reason = "Rejected extension audit rows are surfaced by the extension provider/debug wiring in the next plan."
-    )]
-    rejected_extension_facts: Vec<RejectedExtensionFact>,
-    adaptation_model_facts: Vec<AcceptedModelFact>,
-    rejected_adaptation_model_facts: Vec<RejectedModelFact>,
-    entrypoint_facts: Vec<EntrypointFact>,
-    trust_boundary_facts: Vec<TrustBoundaryFact>,
-    dispatch_edge_facts: Vec<FrameworkDispatchEdgeFact>,
-    unresolved_framework_facts: Vec<UnresolvedFrameworkFact>,
-    entrypoint_store: Option<EntrypointStore>,
-    reachability_roots: Vec<ReachabilityRootFact>,
-    reachability_marks: Vec<CallReachabilityFact>,
-    semantic_nodes: Vec<SemanticNodeFact>,
-    semantic_edges: Vec<SemanticEdgeFact>,
-    semantic_constraints: Vec<ConstraintFact>,
-    #[allow(
-        dead_code,
-        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
-    )]
-    ts_object_allocations: Vec<TsObjectAllocationFact>,
-    #[allow(
-        dead_code,
-        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
-    )]
-    ts_property_writes: Vec<TsPropertyWriteFact>,
-    #[allow(
-        dead_code,
-        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
-    )]
-    ts_property_reads: Vec<TsPropertyReadFact>,
-    #[allow(
-        dead_code,
-        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
-    )]
-    ts_receiver_bindings: Vec<TsReceiverBindingFact>,
-    #[allow(
-        dead_code,
-        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
-    )]
-    ts_prototype_links: Vec<TsPrototypeLinkFact>,
-    #[allow(
-        dead_code,
-        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
-    )]
-    ts_object_model_store: Option<TsObjectModelStore>,
-    solver_derived_edges: Vec<DerivedEdgeFact>,
-    solver_budget_status: BudgetStatus,
-    solver_budget_reasons: BTreeSet<String>,
-    go_semantic_packages: Vec<GoSemanticPackageFact>,
-    go_semantic_functions: Vec<GoSemanticFunctionFact>,
-    go_semantic_callsites: Vec<GoSemanticCallsiteFact>,
-    go_semantic_method_sets: Vec<GoSemanticMethodSetFact>,
-    go_semantic_address_taken: Vec<GoSemanticAddressTakenFact>,
-    go_semantic_instantiated_types: Vec<GoSemanticInstantiatedTypeFact>,
-    go_semantic_dynamic_dispatch: Vec<GoSemanticDynamicDispatchFact>,
-    go_semantic_rta_edges: Vec<GoSemanticRtaEdgeFact>,
-    go_semantic_package_errors: Vec<GoSemanticPackageErrorFact>,
-    type_facts: Vec<TypeFact>,
-    narrowed_type_facts: Vec<NarrowedTypeFact>,
-    value_facts: Vec<ValueFact>,
-    allocation_tokens: Vec<AllocationTokenFact>,
-    access_path_facts: Vec<AccessPathFact>,
-    points_to_constraints: Vec<PointsToConstraintFact>,
-    points_to_sets: Vec<PointsToSetFact>,
-    alias_answers: Vec<AliasAnswerFact>,
-    type_store: Option<TypeStore>,
-    value_store: Option<ValueStore>,
-    access_path_store: Option<AccessPathStore>,
-    points_to_store: Option<PointsToStore>,
-    alias_store: Option<AliasStore>,
-    path_contexts: Option<crate::path_context::PathContextIndex>,
-    /// Diff-to-target-ref facts, injected by the host for `polint review`.
-    ///
-    /// This is the first externally injected fact family: it is set by the
-    /// runner via [`AnalysisDb::set_changeset`] after the kernel runs, not
-    /// derived by a provider. It is `None` under `polint check` (so the
-    /// `ChangedFiles` view is empty there) and excluded from all cache digests.
-    changeset: Option<ReviewChangeset>,
-}
-
-impl Default for AnalysisDb {
-    fn default() -> Self {
-        Self {
-            files: Vec::new(),
-            fact_meta: FactMetaStore::default(),
-            packages: Vec::new(),
-            functions: Vec::new(),
-            imports: Vec::new(),
-            resolved_imports: Vec::new(),
-            module_nodes: Vec::new(),
-            module_edges: Vec::new(),
-            workspace_roots: Vec::new(),
-            topology_packages: Vec::new(),
-            source_sets: Vec::new(),
-            dependency_requirements: Vec::new(),
-            resolved_dependency_edges: Vec::new(),
-            import_to_package_edges: Vec::new(),
-            repo_topology_overlays: Vec::new(),
-            scopes: Vec::new(),
-            semantic_imports: Vec::new(),
-            exports: Vec::new(),
-            aliases: Vec::new(),
-            resolution_facts: Vec::new(),
-            generated_symbols: Vec::new(),
-            stable_exports: Vec::new(),
-            scopes_by_id: BTreeMap::new(),
-            semantic_imports_by_id: BTreeMap::new(),
-            exports_by_id: BTreeMap::new(),
-            aliases_by_id: BTreeMap::new(),
-            resolution_facts_by_id: BTreeMap::new(),
-            generated_symbols_by_id: BTreeMap::new(),
-            stable_exports_by_id: BTreeMap::new(),
-            symbols: Vec::new(),
-            definitions: Vec::new(),
-            references: Vec::new(),
-            symbols_by_id: BTreeMap::new(),
-            definitions_by_symbol: BTreeMap::new(),
-            references_by_target: BTreeMap::new(),
-            symbols_by_file: BTreeMap::new(),
-            references_by_file: BTreeMap::new(),
-            symbols_by_name: BTreeMap::new(),
-            branches: Vec::new(),
-            tests: Vec::new(),
-            coverage: Vec::new(),
-            file_metrics: Vec::new(),
-            function_metrics: Vec::new(),
-            complexity_metrics: Vec::new(),
-            ts_components: Vec::new(),
-            ts_classes: Vec::new(),
-            string_literals: Vec::new(),
-            jsx_attributes: Vec::new(),
-            semantic: None,
-            cfg_functions: Vec::new(),
-            cfg_nodes: Vec::new(),
-            cfg_blocks: Vec::new(),
-            cfg_edges: Vec::new(),
-            cfg_reachability: Vec::new(),
-            cfg_dominators: Vec::new(),
-            cfg_postdominators: Vec::new(),
-            cfg_control_dependence: Vec::new(),
-            unsupported_control_flow: Vec::new(),
-            call_sites: Vec::new(),
-            call_targets: Vec::new(),
-            unresolved_calls: Vec::new(),
-            call_store: None,
-            identity_records: Vec::new(),
-            identity_store: None,
-            refined_call_edges: Vec::new(),
-            refined_call_store: None,
-            data_flow_nodes: Vec::new(),
-            data_flow_edges: Vec::new(),
-            data_flow_models: Vec::new(),
-            data_flow_budgets: Vec::new(),
-            data_flow_store: None,
-            evidence_nodes: Vec::new(),
-            evidence_edges: Vec::new(),
-            evidence_bundles: Vec::new(),
-            evidence_paths: Vec::new(),
-            evidence_slices: Vec::new(),
-            evidence_unknowns: Vec::new(),
-            evidence_omitted_regions: Vec::new(),
-            evidence_replay_keys: Vec::new(),
-            evidence_store: None,
-            abstract_domain_store: None,
-            summary_facts: Vec::new(),
-            summary_events: Vec::new(),
-            summary_store: None,
-            extension_activations: Vec::new(),
-            extension_facts: Vec::new(),
-            rejected_extension_facts: Vec::new(),
-            adaptation_model_facts: Vec::new(),
-            rejected_adaptation_model_facts: Vec::new(),
-            entrypoint_facts: Vec::new(),
-            trust_boundary_facts: Vec::new(),
-            dispatch_edge_facts: Vec::new(),
-            unresolved_framework_facts: Vec::new(),
-            entrypoint_store: None,
-            reachability_roots: Vec::new(),
-            reachability_marks: Vec::new(),
-            semantic_nodes: Vec::new(),
-            semantic_edges: Vec::new(),
-            semantic_constraints: Vec::new(),
-            ts_object_allocations: Vec::new(),
-            ts_property_writes: Vec::new(),
-            ts_property_reads: Vec::new(),
-            ts_receiver_bindings: Vec::new(),
-            ts_prototype_links: Vec::new(),
-            ts_object_model_store: None,
-            solver_derived_edges: Vec::new(),
-            solver_budget_status: BudgetStatus::NotRun,
-            solver_budget_reasons: BTreeSet::new(),
-            go_semantic_packages: Vec::new(),
-            go_semantic_functions: Vec::new(),
-            go_semantic_callsites: Vec::new(),
-            go_semantic_method_sets: Vec::new(),
-            go_semantic_address_taken: Vec::new(),
-            go_semantic_instantiated_types: Vec::new(),
-            go_semantic_dynamic_dispatch: Vec::new(),
-            go_semantic_rta_edges: Vec::new(),
-            go_semantic_package_errors: Vec::new(),
-            type_facts: Vec::new(),
-            narrowed_type_facts: Vec::new(),
-            value_facts: Vec::new(),
-            allocation_tokens: Vec::new(),
-            access_path_facts: Vec::new(),
-            points_to_constraints: Vec::new(),
-            points_to_sets: Vec::new(),
-            alias_answers: Vec::new(),
-            type_store: None,
-            value_store: None,
-            access_path_store: None,
-            points_to_store: None,
-            alias_store: None,
-            path_contexts: None,
-            changeset: None,
-        }
-    }
-}
 
 impl AnalysisDb {
     pub fn new() -> Self {
@@ -1449,7 +1142,9 @@ impl AnalysisDb {
     }
 
     #[cfg(test)]
-    pub(crate) fn go_semantic_rta_edges(&self) -> &[GoSemanticRtaEdgeFact] {
+    pub(crate) fn go_semantic_rta_edges(
+        &self,
+    ) -> &[crate::go::semantic::facts::GoSemanticRtaEdgeFact] {
         &self.go_semantic_rta_edges
     }
 
