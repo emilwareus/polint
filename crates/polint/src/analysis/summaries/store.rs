@@ -550,6 +550,7 @@ mod tests {
 
         assert!(db.summary_facts().is_empty());
         assert!(db.summary_events().is_empty());
-        assert!(db.summary_store().is_none());
+        assert!(db.summary_store().is_some());
+        assert!(db.summary_store().unwrap().all_summaries().is_empty());
     }
 }

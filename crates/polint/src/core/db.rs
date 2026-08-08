@@ -56,7 +56,7 @@ use crate::analysis::refined_calls::provider::REFINED_CALLS_PROVIDER_ID;
 use crate::analysis::refined_calls::store::{RefinedCallOutput, RefinedCallStore};
 use crate::analysis::semantic_graph::constraints::ConstraintFact;
 use crate::analysis::semantic_graph::facts::{SemanticEdgeFact, SemanticNodeFact};
-use crate::analysis::semantic_graph::store::SemanticGraphOutput;
+use crate::analysis::semantic_graph::store::{SemanticGraphOutput, SemanticGraphStore};
 use crate::analysis::solver::budget::BudgetStatus;
 use crate::analysis::solver::facts::DerivedEdgeFact;
 use crate::analysis::solver::store::{SolverOutput, SolverStore};
@@ -100,12 +100,17 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::fact_store::{
-    CALL_STORE_FAMILY, CFG_STORE_FAMILY, CfgFactStore, FactStore, FactStoreEntry,
-    GO_SEMANTIC_STORE_FAMILY, GO_SYNTAX_STORE_FAMILY, GoSyntaxStore, IDENTITY_STORE_FAMILY,
-    METRICS_STORE_FAMILY, MODULE_GRAPH_STORE_FAMILY, MODULE_TOPOLOGY_STORE_FAMILY, MetricsStore,
-    ModuleGraphStore, ModuleTopologyStore, SEMANTIC_INDEX_STORE_FAMILY, SYMBOL_STORE_FAMILY,
-    SemanticIndexStore, SymbolStore, TS_OBJECT_MODEL_STORE_FAMILY, TS_SYNTAX_STORE_FAMILY,
-    TsSyntaxStore,
+    ACCESS_PATH_STORE_FAMILY, ADAPTATION_STORE_FAMILY, ALIAS_STORE_FAMILY, AdaptationFactStore,
+    CALL_STORE_FAMILY, CFG_STORE_FAMILY, CfgFactStore, DATA_FLOW_STORE_FAMILY, DOMAIN_STORE_FAMILY,
+    ENTRYPOINT_STORE_FAMILY, EVIDENCE_STORE_FAMILY, EXTENSION_STORE_FAMILY, ExtensionFactStore,
+    FactStore, FactStoreEntry, GO_SEMANTIC_STORE_FAMILY, GO_SYNTAX_STORE_FAMILY, GoSyntaxStore,
+    IDENTITY_STORE_FAMILY, METRICS_STORE_FAMILY, MODULE_GRAPH_STORE_FAMILY,
+    MODULE_TOPOLOGY_STORE_FAMILY, MetricsStore, ModuleGraphStore, ModuleTopologyStore,
+    POINTS_TO_STORE_FAMILY, REACHABILITY_STORE_FAMILY, REFINED_CALL_STORE_FAMILY,
+    SEMANTIC_GRAPH_STORE_FAMILY, SEMANTIC_INDEX_STORE_FAMILY, SEMANTIC_MIR_STORE_FAMILY,
+    SOLVER_STORE_FAMILY, SUMMARY_STORE_FAMILY, SYMBOL_STORE_FAMILY, SemanticIndexStore,
+    SymbolStore, TS_OBJECT_MODEL_STORE_FAMILY, TS_SYNTAX_STORE_FAMILY, TYPE_STORE_FAMILY,
+    TsSyntaxStore, VALUE_STORE_FAMILY,
 };
 use super::facts::{
     BranchObligation, CachedFileFacts, ComplexityMetricFact, CoverageFact, DefinitionFact,
@@ -136,62 +141,6 @@ pub struct AnalysisDb {
     pub(crate) fact_meta: FactMetaStore,
     /// Provider-owned stores keyed by primary [`FactFamily`]. Iteration stays ordered.
     pub(crate) fact_stores: BTreeMap<FactFamily, FactStoreEntry>,
-    pub(crate) semantic: Option<SemanticStore>,
-    pub(crate) refined_call_edges: Vec<RefinedCallEdgeFact>,
-    pub(crate) refined_call_store: Option<RefinedCallStore>,
-    pub(crate) data_flow_nodes: Vec<DataFlowNodeFact>,
-    pub(crate) data_flow_edges: Vec<DataFlowEdgeFact>,
-    pub(crate) data_flow_models: Vec<DataFlowModelFact>,
-    pub(crate) data_flow_budgets: Vec<DataFlowBudgetFact>,
-    pub(crate) data_flow_store: Option<DataFlowStore>,
-    pub(crate) evidence_nodes: Vec<EvidenceNodeFact>,
-    pub(crate) evidence_edges: Vec<EvidenceEdgeFact>,
-    pub(crate) evidence_bundles: Vec<EvidenceBundleFact>,
-    pub(crate) evidence_paths: Vec<EvidencePathFact>,
-    pub(crate) evidence_slices: Vec<EvidenceSliceFact>,
-    pub(crate) evidence_unknowns: Vec<EvidenceUnknownFact>,
-    pub(crate) evidence_omitted_regions: Vec<EvidenceOmittedRegionFact>,
-    pub(crate) evidence_replay_keys: Vec<EvidenceReplayKeyFact>,
-    pub(crate) evidence_store: Option<EvidenceStore>,
-    pub(crate) abstract_domain_store: Option<DomainStore>,
-    pub(crate) summary_facts: Vec<SummaryFact>,
-    pub(crate) summary_events: Vec<SummaryEventFact>,
-    pub(crate) summary_store: Option<SummaryStore>,
-    pub(crate) extension_activations: Vec<ExtensionActivationRow>,
-    pub(crate) extension_facts: Vec<AcceptedExtensionFact>,
-    #[allow(
-        dead_code,
-        reason = "Rejected extension audit rows are surfaced by the extension provider/debug wiring in the next plan."
-    )]
-    pub(crate) rejected_extension_facts: Vec<RejectedExtensionFact>,
-    pub(crate) adaptation_model_facts: Vec<AcceptedModelFact>,
-    pub(crate) rejected_adaptation_model_facts: Vec<RejectedModelFact>,
-    pub(crate) entrypoint_facts: Vec<EntrypointFact>,
-    pub(crate) trust_boundary_facts: Vec<TrustBoundaryFact>,
-    pub(crate) dispatch_edge_facts: Vec<FrameworkDispatchEdgeFact>,
-    pub(crate) unresolved_framework_facts: Vec<UnresolvedFrameworkFact>,
-    pub(crate) entrypoint_store: Option<EntrypointStore>,
-    pub(crate) reachability_roots: Vec<ReachabilityRootFact>,
-    pub(crate) reachability_marks: Vec<CallReachabilityFact>,
-    pub(crate) semantic_nodes: Vec<SemanticNodeFact>,
-    pub(crate) semantic_edges: Vec<SemanticEdgeFact>,
-    pub(crate) semantic_constraints: Vec<ConstraintFact>,
-    pub(crate) solver_derived_edges: Vec<DerivedEdgeFact>,
-    pub(crate) solver_budget_status: BudgetStatus,
-    pub(crate) solver_budget_reasons: BTreeSet<String>,
-    pub(crate) type_facts: Vec<TypeFact>,
-    pub(crate) narrowed_type_facts: Vec<NarrowedTypeFact>,
-    pub(crate) value_facts: Vec<ValueFact>,
-    pub(crate) allocation_tokens: Vec<AllocationTokenFact>,
-    pub(crate) access_path_facts: Vec<AccessPathFact>,
-    pub(crate) points_to_constraints: Vec<PointsToConstraintFact>,
-    pub(crate) points_to_sets: Vec<PointsToSetFact>,
-    pub(crate) alias_answers: Vec<AliasAnswerFact>,
-    pub(crate) type_store: Option<TypeStore>,
-    pub(crate) value_store: Option<ValueStore>,
-    pub(crate) access_path_store: Option<AccessPathStore>,
-    pub(crate) points_to_store: Option<PointsToStore>,
-    pub(crate) alias_store: Option<AliasStore>,
     pub(crate) path_contexts: Option<crate::path_context::PathContextIndex>,
     /// Diff-to-target-ref facts, injected by the host for `polint review`.
     ///
@@ -252,62 +201,67 @@ impl Default for AnalysisDb {
         let mut identity = IdentityStore::default();
         FactStore::clear(&mut identity);
         fact_stores.insert(IDENTITY_STORE_FAMILY, FactStoreEntry::new(identity));
+        let mut refined_call = RefinedCallStore::default();
+        FactStore::clear(&mut refined_call);
+        fact_stores.insert(REFINED_CALL_STORE_FAMILY, FactStoreEntry::new(refined_call));
+        let mut data_flow = DataFlowStore::default();
+        FactStore::clear(&mut data_flow);
+        fact_stores.insert(DATA_FLOW_STORE_FAMILY, FactStoreEntry::new(data_flow));
+        let mut evidence = EvidenceStore::default();
+        FactStore::clear(&mut evidence);
+        fact_stores.insert(EVIDENCE_STORE_FAMILY, FactStoreEntry::new(evidence));
+        let mut domain = DomainStore::default();
+        FactStore::clear(&mut domain);
+        fact_stores.insert(DOMAIN_STORE_FAMILY, FactStoreEntry::new(domain));
+        let mut summary = SummaryStore::default();
+        FactStore::clear(&mut summary);
+        fact_stores.insert(SUMMARY_STORE_FAMILY, FactStoreEntry::new(summary));
+        let mut entrypoint = EntrypointStore::default();
+        FactStore::clear(&mut entrypoint);
+        fact_stores.insert(ENTRYPOINT_STORE_FAMILY, FactStoreEntry::new(entrypoint));
+        let mut type_store = TypeStore::default();
+        FactStore::clear(&mut type_store);
+        fact_stores.insert(TYPE_STORE_FAMILY, FactStoreEntry::new(type_store));
+        let mut value_store = ValueStore::default();
+        FactStore::clear(&mut value_store);
+        fact_stores.insert(VALUE_STORE_FAMILY, FactStoreEntry::new(value_store));
+        let mut access_path_store = AccessPathStore::default();
+        FactStore::clear(&mut access_path_store);
+        fact_stores.insert(
+            ACCESS_PATH_STORE_FAMILY,
+            FactStoreEntry::new(access_path_store),
+        );
+        let mut points_to_store = PointsToStore::default();
+        FactStore::clear(&mut points_to_store);
+        fact_stores.insert(POINTS_TO_STORE_FAMILY, FactStoreEntry::new(points_to_store));
+        let mut alias_store = AliasStore::default();
+        FactStore::clear(&mut alias_store);
+        fact_stores.insert(ALIAS_STORE_FAMILY, FactStoreEntry::new(alias_store));
+        let mut extension = ExtensionFactStore::default();
+        FactStore::clear(&mut extension);
+        fact_stores.insert(EXTENSION_STORE_FAMILY, FactStoreEntry::new(extension));
+        let mut adaptation = AdaptationFactStore::default();
+        FactStore::clear(&mut adaptation);
+        fact_stores.insert(ADAPTATION_STORE_FAMILY, FactStoreEntry::new(adaptation));
+        let mut reachability = ReachabilityStore::default();
+        FactStore::clear(&mut reachability);
+        fact_stores.insert(REACHABILITY_STORE_FAMILY, FactStoreEntry::new(reachability));
+        let mut semantic_graph = SemanticGraphStore::default();
+        FactStore::clear(&mut semantic_graph);
+        fact_stores.insert(
+            SEMANTIC_GRAPH_STORE_FAMILY,
+            FactStoreEntry::new(semantic_graph),
+        );
+        let mut solver = SolverStore::default();
+        FactStore::clear(&mut solver);
+        fact_stores.insert(SOLVER_STORE_FAMILY, FactStoreEntry::new(solver));
+        let mut semantic_mir = SemanticStore::default();
+        FactStore::clear(&mut semantic_mir);
+        fact_stores.insert(SEMANTIC_MIR_STORE_FAMILY, FactStoreEntry::new(semantic_mir));
         Self {
             files: Vec::new(),
             fact_meta: FactMetaStore::default(),
             fact_stores,
-            semantic: None,
-            refined_call_edges: Vec::new(),
-            refined_call_store: None,
-            data_flow_nodes: Vec::new(),
-            data_flow_edges: Vec::new(),
-            data_flow_models: Vec::new(),
-            data_flow_budgets: Vec::new(),
-            data_flow_store: None,
-            evidence_nodes: Vec::new(),
-            evidence_edges: Vec::new(),
-            evidence_bundles: Vec::new(),
-            evidence_paths: Vec::new(),
-            evidence_slices: Vec::new(),
-            evidence_unknowns: Vec::new(),
-            evidence_omitted_regions: Vec::new(),
-            evidence_replay_keys: Vec::new(),
-            evidence_store: None,
-            abstract_domain_store: None,
-            summary_facts: Vec::new(),
-            summary_events: Vec::new(),
-            summary_store: None,
-            extension_activations: Vec::new(),
-            extension_facts: Vec::new(),
-            rejected_extension_facts: Vec::new(),
-            adaptation_model_facts: Vec::new(),
-            rejected_adaptation_model_facts: Vec::new(),
-            entrypoint_facts: Vec::new(),
-            trust_boundary_facts: Vec::new(),
-            dispatch_edge_facts: Vec::new(),
-            unresolved_framework_facts: Vec::new(),
-            entrypoint_store: None,
-            reachability_roots: Vec::new(),
-            reachability_marks: Vec::new(),
-            semantic_nodes: Vec::new(),
-            semantic_edges: Vec::new(),
-            semantic_constraints: Vec::new(),
-            solver_derived_edges: Vec::new(),
-            solver_budget_status: BudgetStatus::NotRun,
-            solver_budget_reasons: BTreeSet::new(),
-            type_facts: Vec::new(),
-            narrowed_type_facts: Vec::new(),
-            value_facts: Vec::new(),
-            allocation_tokens: Vec::new(),
-            access_path_facts: Vec::new(),
-            points_to_constraints: Vec::new(),
-            points_to_sets: Vec::new(),
-            alias_answers: Vec::new(),
-            type_store: None,
-            value_store: None,
-            access_path_store: None,
-            points_to_store: None,
-            alias_store: None,
             path_contexts: None,
             changeset: None,
         }
@@ -437,6 +391,176 @@ impl AnalysisDb {
     fn identity_store_mut(&mut self) -> &mut IdentityStore {
         self.fact_store_mut(IDENTITY_STORE_FAMILY)
             .expect("IdentityStore is installed when AnalysisDb is constructed")
+    }
+
+    fn refined_call_store_inner(&self) -> &RefinedCallStore {
+        self.fact_store(REFINED_CALL_STORE_FAMILY)
+            .expect("RefinedCallStore is installed when AnalysisDb is constructed")
+    }
+
+    fn refined_call_store_mut(&mut self) -> &mut RefinedCallStore {
+        self.fact_store_mut(REFINED_CALL_STORE_FAMILY)
+            .expect("RefinedCallStore is installed when AnalysisDb is constructed")
+    }
+
+    fn data_flow_store_inner(&self) -> &DataFlowStore {
+        self.fact_store(DATA_FLOW_STORE_FAMILY)
+            .expect("DataFlowStore is installed when AnalysisDb is constructed")
+    }
+
+    fn data_flow_store_mut(&mut self) -> &mut DataFlowStore {
+        self.fact_store_mut(DATA_FLOW_STORE_FAMILY)
+            .expect("DataFlowStore is installed when AnalysisDb is constructed")
+    }
+
+    fn evidence_store_inner(&self) -> &EvidenceStore {
+        self.fact_store(EVIDENCE_STORE_FAMILY)
+            .expect("EvidenceStore is installed when AnalysisDb is constructed")
+    }
+
+    fn evidence_store_mut(&mut self) -> &mut EvidenceStore {
+        self.fact_store_mut(EVIDENCE_STORE_FAMILY)
+            .expect("EvidenceStore is installed when AnalysisDb is constructed")
+    }
+
+    fn domain_store_inner(&self) -> &DomainStore {
+        self.fact_store(DOMAIN_STORE_FAMILY)
+            .expect("DomainStore is installed when AnalysisDb is constructed")
+    }
+
+    fn domain_store_mut(&mut self) -> &mut DomainStore {
+        self.fact_store_mut(DOMAIN_STORE_FAMILY)
+            .expect("DomainStore is installed when AnalysisDb is constructed")
+    }
+
+    fn summary_store_inner(&self) -> &SummaryStore {
+        self.fact_store(SUMMARY_STORE_FAMILY)
+            .expect("SummaryStore is installed when AnalysisDb is constructed")
+    }
+
+    fn summary_store_mut(&mut self) -> &mut SummaryStore {
+        self.fact_store_mut(SUMMARY_STORE_FAMILY)
+            .expect("SummaryStore is installed when AnalysisDb is constructed")
+    }
+
+    fn entrypoint_store_inner(&self) -> &EntrypointStore {
+        self.fact_store(ENTRYPOINT_STORE_FAMILY)
+            .expect("EntrypointStore is installed when AnalysisDb is constructed")
+    }
+
+    fn entrypoint_store_mut(&mut self) -> &mut EntrypointStore {
+        self.fact_store_mut(ENTRYPOINT_STORE_FAMILY)
+            .expect("EntrypointStore is installed when AnalysisDb is constructed")
+    }
+
+    fn type_store_inner(&self) -> &TypeStore {
+        self.fact_store(TYPE_STORE_FAMILY)
+            .expect("TypeStore is installed when AnalysisDb is constructed")
+    }
+
+    fn type_store_mut(&mut self) -> &mut TypeStore {
+        self.fact_store_mut(TYPE_STORE_FAMILY)
+            .expect("TypeStore is installed when AnalysisDb is constructed")
+    }
+
+    fn value_store_inner(&self) -> &ValueStore {
+        self.fact_store(VALUE_STORE_FAMILY)
+            .expect("ValueStore is installed when AnalysisDb is constructed")
+    }
+
+    fn value_store_mut(&mut self) -> &mut ValueStore {
+        self.fact_store_mut(VALUE_STORE_FAMILY)
+            .expect("ValueStore is installed when AnalysisDb is constructed")
+    }
+
+    fn access_path_store_inner(&self) -> &AccessPathStore {
+        self.fact_store(ACCESS_PATH_STORE_FAMILY)
+            .expect("AccessPathStore is installed when AnalysisDb is constructed")
+    }
+
+    fn access_path_store_mut(&mut self) -> &mut AccessPathStore {
+        self.fact_store_mut(ACCESS_PATH_STORE_FAMILY)
+            .expect("AccessPathStore is installed when AnalysisDb is constructed")
+    }
+
+    fn points_to_store_inner(&self) -> &PointsToStore {
+        self.fact_store(POINTS_TO_STORE_FAMILY)
+            .expect("PointsToStore is installed when AnalysisDb is constructed")
+    }
+
+    fn points_to_store_mut(&mut self) -> &mut PointsToStore {
+        self.fact_store_mut(POINTS_TO_STORE_FAMILY)
+            .expect("PointsToStore is installed when AnalysisDb is constructed")
+    }
+
+    fn alias_store_inner(&self) -> &AliasStore {
+        self.fact_store(ALIAS_STORE_FAMILY)
+            .expect("AliasStore is installed when AnalysisDb is constructed")
+    }
+
+    fn alias_store_mut(&mut self) -> &mut AliasStore {
+        self.fact_store_mut(ALIAS_STORE_FAMILY)
+            .expect("AliasStore is installed when AnalysisDb is constructed")
+    }
+
+    fn extension_store_inner(&self) -> &ExtensionFactStore {
+        self.fact_store(EXTENSION_STORE_FAMILY)
+            .expect("ExtensionFactStore is installed when AnalysisDb is constructed")
+    }
+
+    fn extension_store_mut(&mut self) -> &mut ExtensionFactStore {
+        self.fact_store_mut(EXTENSION_STORE_FAMILY)
+            .expect("ExtensionFactStore is installed when AnalysisDb is constructed")
+    }
+
+    fn adaptation_store_inner(&self) -> &AdaptationFactStore {
+        self.fact_store(ADAPTATION_STORE_FAMILY)
+            .expect("AdaptationFactStore is installed when AnalysisDb is constructed")
+    }
+
+    fn adaptation_store_mut(&mut self) -> &mut AdaptationFactStore {
+        self.fact_store_mut(ADAPTATION_STORE_FAMILY)
+            .expect("AdaptationFactStore is installed when AnalysisDb is constructed")
+    }
+
+    fn reachability_store_inner(&self) -> &ReachabilityStore {
+        self.fact_store(REACHABILITY_STORE_FAMILY)
+            .expect("ReachabilityStore is installed when AnalysisDb is constructed")
+    }
+
+    fn reachability_store_mut(&mut self) -> &mut ReachabilityStore {
+        self.fact_store_mut(REACHABILITY_STORE_FAMILY)
+            .expect("ReachabilityStore is installed when AnalysisDb is constructed")
+    }
+
+    fn semantic_graph_store_inner(&self) -> &SemanticGraphStore {
+        self.fact_store(SEMANTIC_GRAPH_STORE_FAMILY)
+            .expect("SemanticGraphStore is installed when AnalysisDb is constructed")
+    }
+
+    fn semantic_graph_store_mut(&mut self) -> &mut SemanticGraphStore {
+        self.fact_store_mut(SEMANTIC_GRAPH_STORE_FAMILY)
+            .expect("SemanticGraphStore is installed when AnalysisDb is constructed")
+    }
+
+    fn solver_store_inner(&self) -> &SolverStore {
+        self.fact_store(SOLVER_STORE_FAMILY)
+            .expect("SolverStore is installed when AnalysisDb is constructed")
+    }
+
+    fn solver_store_mut(&mut self) -> &mut SolverStore {
+        self.fact_store_mut(SOLVER_STORE_FAMILY)
+            .expect("SolverStore is installed when AnalysisDb is constructed")
+    }
+
+    fn semantic_mir_store_inner(&self) -> &SemanticStore {
+        self.fact_store(SEMANTIC_MIR_STORE_FAMILY)
+            .expect("SemanticStore is installed when AnalysisDb is constructed")
+    }
+
+    fn semantic_mir_store_mut(&mut self) -> &mut SemanticStore {
+        self.fact_store_mut(SEMANTIC_MIR_STORE_FAMILY)
+            .expect("SemanticStore is installed when AnalysisDb is constructed")
     }
 
     /// Typed downcast helper for registry stores. Returns `None` when the family
@@ -738,7 +862,7 @@ impl AnalysisDb {
     }
 
     pub(crate) fn replace_semantic_mir(&mut self, output: MirOutput) -> Result<(), AnalysisError> {
-        self.semantic = Some(SemanticStore::from_output(output)?);
+        *self.semantic_mir_store_mut() = SemanticStore::from_output(output)?;
         self.refresh_semantic_mir_metadata();
         Ok(())
     }
@@ -811,8 +935,7 @@ impl AnalysisDb {
         output: RefinedCallOutput,
     ) -> Result<(), AnalysisError> {
         let store = RefinedCallStore::from_normalized_output(output)?;
-        self.refined_call_edges.clear();
-        self.refined_call_store = Some(store);
+        *self.refined_call_store_mut() = store;
         self.refresh_refined_call_metadata();
         Ok(())
     }
@@ -822,11 +945,7 @@ impl AnalysisDb {
         output: DataFlowOutput,
     ) -> Result<(), AnalysisError> {
         let store = DataFlowStore::from_output(output)?;
-        self.data_flow_nodes = store.nodes().to_vec();
-        self.data_flow_edges = store.edges().to_vec();
-        self.data_flow_models = store.models().to_vec();
-        self.data_flow_budgets = store.budgets().to_vec();
-        self.data_flow_store = Some(store);
+        *self.data_flow_store_mut() = store;
         self.refresh_data_flow_metadata();
         Ok(())
     }
@@ -836,15 +955,7 @@ impl AnalysisDb {
         output: EvidenceOutput,
     ) -> Result<(), AnalysisError> {
         let store = EvidenceStore::from_output(output)?;
-        self.evidence_nodes = store.nodes().to_vec();
-        self.evidence_edges = store.edges().to_vec();
-        self.evidence_bundles = store.bundles().to_vec();
-        self.evidence_paths = store.paths().to_vec();
-        self.evidence_slices = store.slices().to_vec();
-        self.evidence_unknowns = store.unknowns().to_vec();
-        self.evidence_omitted_regions = store.omitted_regions().to_vec();
-        self.evidence_replay_keys = store.replay_keys().to_vec();
-        self.evidence_store = Some(store);
+        *self.evidence_store_mut() = store;
         self.refresh_evidence_metadata();
         Ok(())
     }
@@ -861,7 +972,7 @@ impl AnalysisDb {
     }
 
     fn replace_abstract_domain_store(&mut self, store: DomainStore) {
-        self.abstract_domain_store = Some(store);
+        *self.domain_store_mut() = store;
         self.refresh_abstract_domain_metadata();
     }
 
@@ -932,93 +1043,83 @@ impl AnalysisDb {
     }
 
     pub(crate) fn refined_call_edges(&self) -> &[RefinedCallEdgeFact] {
-        if let Some(store) = &self.refined_call_store {
-            store.edges()
-        } else {
-            &self.refined_call_edges
-        }
+        self.refined_call_store_inner().edges()
     }
 
     #[allow(dead_code)]
     pub(crate) fn refined_call_store(&self) -> Option<&RefinedCallStore> {
-        self.refined_call_store.as_ref()
+        Some(self.refined_call_store_inner())
     }
 
     pub(crate) fn data_flow_nodes(&self) -> &[DataFlowNodeFact] {
-        &self.data_flow_nodes
+        self.data_flow_store_inner().nodes()
     }
 
     pub(crate) fn data_flow_edges(&self) -> &[DataFlowEdgeFact] {
-        &self.data_flow_edges
+        self.data_flow_store_inner().edges()
     }
 
     pub(crate) fn data_flow_models(&self) -> &[DataFlowModelFact] {
-        &self.data_flow_models
+        self.data_flow_store_inner().models()
     }
 
     pub(crate) fn data_flow_budgets(&self) -> &[DataFlowBudgetFact] {
-        &self.data_flow_budgets
+        self.data_flow_store_inner().budgets()
     }
 
     #[allow(dead_code)]
     pub(crate) fn data_flow_store(&self) -> Option<&DataFlowStore> {
-        self.data_flow_store.as_ref()
+        Some(self.data_flow_store_inner())
     }
 
     pub(crate) fn evidence_nodes(&self) -> &[EvidenceNodeFact] {
-        &self.evidence_nodes
+        self.evidence_store_inner().nodes()
     }
 
     pub(crate) fn evidence_edges(&self) -> &[EvidenceEdgeFact] {
-        &self.evidence_edges
+        self.evidence_store_inner().edges()
     }
 
     pub(crate) fn evidence_bundles(&self) -> &[EvidenceBundleFact] {
-        &self.evidence_bundles
+        self.evidence_store_inner().bundles()
     }
 
     pub(crate) fn evidence_paths(&self) -> &[EvidencePathFact] {
-        &self.evidence_paths
+        self.evidence_store_inner().paths()
     }
 
     pub(crate) fn evidence_slices(&self) -> &[EvidenceSliceFact] {
-        &self.evidence_slices
+        self.evidence_store_inner().slices()
     }
 
     pub(crate) fn evidence_unknowns(&self) -> &[EvidenceUnknownFact] {
-        &self.evidence_unknowns
+        self.evidence_store_inner().unknowns()
     }
 
     pub(crate) fn evidence_omitted_regions(&self) -> &[EvidenceOmittedRegionFact] {
-        &self.evidence_omitted_regions
+        self.evidence_store_inner().omitted_regions()
     }
 
     pub(crate) fn evidence_replay_keys(&self) -> &[EvidenceReplayKeyFact] {
-        &self.evidence_replay_keys
+        self.evidence_store_inner().replay_keys()
     }
 
     #[allow(dead_code)]
     pub(crate) fn evidence_store(&self) -> Option<&EvidenceStore> {
-        self.evidence_store.as_ref()
+        Some(self.evidence_store_inner())
     }
 
     pub(crate) fn abstract_domain_observations(&self) -> &[DomainObservationFact] {
-        self.abstract_domain_store
-            .as_ref()
-            .map(DomainStore::observations)
-            .unwrap_or(&[])
+        self.domain_store_inner().observations()
     }
 
     pub(crate) fn abstract_domain_events(&self) -> &[DomainEventFact] {
-        self.abstract_domain_store
-            .as_ref()
-            .map(DomainStore::events)
-            .unwrap_or(&[])
+        self.domain_store_inner().events()
     }
 
     #[allow(dead_code)]
     pub(crate) fn abstract_domain_store(&self) -> Option<&DomainStore> {
-        self.abstract_domain_store.as_ref()
+        Some(self.domain_store_inner())
     }
 
     pub(crate) fn replace_summary_facts(&mut self, output: SummaryOutput) {
@@ -1029,9 +1130,7 @@ impl AnalysisDb {
     pub(crate) fn replace_summary_facts_without_metadata(&mut self, output: SummaryOutput) {
         let store =
             SummaryStore::from_output(output).expect("summary output should produce a valid store");
-        self.summary_facts.clear();
-        self.summary_events.clear();
-        self.summary_store = Some(store);
+        *self.summary_store_mut() = store;
     }
 
     pub(crate) fn merge_summary_facts_without_metadata(
@@ -1039,17 +1138,7 @@ impl AnalysisDb {
         summaries: &[SummaryFact],
         events: &[SummaryEventFact],
     ) {
-        if let Some(store) = &mut self.summary_store {
-            store.merge_updates(summaries, events);
-            self.summary_facts.clear();
-            self.summary_events.clear();
-            return;
-        }
-
-        self.replace_summary_facts_without_metadata(SummaryOutput {
-            summaries: summaries.to_vec(),
-            events: events.to_vec(),
-        });
+        self.summary_store_mut().merge_updates(summaries, events);
     }
 
     pub(crate) fn refresh_summary_metadata_after_bulk_update(&mut self) {
@@ -1062,38 +1151,31 @@ impl AnalysisDb {
     )]
     pub(crate) fn replace_extension_facts(&mut self, output: ExtensionOutput) {
         let output = output.normalized();
-        self.extension_activations = output.activations;
-        self.extension_facts = output.accepted;
-        self.rejected_extension_facts = output.rejected;
+        let store = self.extension_store_mut();
+        store.activations = output.activations;
+        store.accepted = output.accepted;
+        store.rejected = output.rejected;
         self.refresh_extension_metadata();
     }
 
     pub(crate) fn summary_facts(&self) -> &[SummaryFact] {
-        if let Some(store) = &self.summary_store {
-            store.all_summaries()
-        } else {
-            &self.summary_facts
-        }
+        self.summary_store_inner().all_summaries()
     }
     pub(crate) fn summary_events(&self) -> &[SummaryEventFact] {
-        if let Some(store) = &self.summary_store {
-            store.all_events()
-        } else {
-            &self.summary_events
-        }
+        self.summary_store_inner().all_events()
     }
 
     #[allow(dead_code)]
     pub(crate) fn summary_store(&self) -> Option<&SummaryStore> {
-        self.summary_store.as_ref()
+        Some(self.summary_store_inner())
     }
 
     pub(crate) fn extension_facts(&self) -> &[AcceptedExtensionFact] {
-        &self.extension_facts
+        &self.extension_store_inner().accepted
     }
 
     pub(crate) fn extension_activations(&self) -> &[ExtensionActivationRow] {
-        &self.extension_activations
+        &self.extension_store_inner().activations
     }
 
     #[allow(
@@ -1101,7 +1183,7 @@ impl AnalysisDb {
         reason = "Rejected extension audit rows are surfaced by the extension provider/debug wiring in the next plan."
     )]
     pub(crate) fn rejected_extension_facts(&self) -> &[RejectedExtensionFact] {
-        &self.rejected_extension_facts
+        &self.extension_store_inner().rejected
     }
 
     pub(crate) fn replace_adaptation_model_facts(
@@ -1109,13 +1191,14 @@ impl AnalysisDb {
         accepted: Vec<AcceptedModelFact>,
         rejected: Vec<RejectedModelFact>,
     ) {
-        self.adaptation_model_facts = accepted;
-        self.rejected_adaptation_model_facts = rejected;
+        let store = self.adaptation_store_mut();
+        store.accepted = accepted;
+        store.rejected = rejected;
         self.refresh_adaptation_model_metadata();
     }
 
     pub(crate) fn adaptation_model_facts(&self) -> &[AcceptedModelFact] {
-        &self.adaptation_model_facts
+        &self.adaptation_store_inner().accepted
     }
 
     #[allow(
@@ -1123,7 +1206,7 @@ impl AnalysisDb {
         reason = "Rejected adaptation model audit rows are surfaced by eval fixture observation wiring."
     )]
     pub(crate) fn rejected_adaptation_model_facts(&self) -> &[RejectedModelFact] {
-        &self.rejected_adaptation_model_facts
+        &self.adaptation_store_inner().rejected
     }
 
     pub(crate) fn replace_entrypoint_facts(
@@ -1131,17 +1214,13 @@ impl AnalysisDb {
         output: EntrypointOutput,
     ) -> Result<(), AnalysisError> {
         let store = EntrypointStore::from_output(output)?;
-        self.entrypoint_facts = store.entrypoints().to_vec();
-        self.trust_boundary_facts = store.trust_boundaries().to_vec();
-        self.dispatch_edge_facts = store.dispatch_edges().to_vec();
-        self.unresolved_framework_facts = store.unresolved().to_vec();
-        self.entrypoint_store = Some(store);
+        *self.entrypoint_store_mut() = store;
         self.refresh_entrypoint_metadata();
         Ok(())
     }
 
     pub(crate) fn entrypoint_facts(&self) -> &[EntrypointFact] {
-        &self.entrypoint_facts
+        self.entrypoint_store_inner().entrypoints()
     }
 
     #[allow(
@@ -1153,11 +1232,10 @@ impl AnalysisDb {
         output: ReachabilityProviderOutput,
     ) -> Result<(), AnalysisError> {
         let valid_function_ids = self.functions().iter().map(|row| row.id).collect();
-        let valid_entrypoint_ids = self.entrypoint_facts.iter().map(|row| row.id).collect();
+        let valid_entrypoint_ids = self.entrypoint_facts().iter().map(|row| row.id).collect();
         let store =
             ReachabilityStore::from_output(output, &valid_function_ids, &valid_entrypoint_ids)?;
-        self.reachability_roots = store.roots().to_vec();
-        self.reachability_marks = store.marks().to_vec();
+        *self.reachability_store_mut() = store;
         Ok(())
     }
 
@@ -1166,7 +1244,7 @@ impl AnalysisDb {
         reason = "Reachability roots are consumed by validation, debug, and the kernel provider wiring in ."
     )]
     pub(crate) fn reachability_roots(&self) -> &[ReachabilityRootFact] {
-        &self.reachability_roots
+        self.reachability_store_inner().roots()
     }
 
     #[allow(
@@ -1174,7 +1252,7 @@ impl AnalysisDb {
         reason = "Reachability marks are populated by the marking traversal in  and read by debug/eval."
     )]
     pub(crate) fn reachability_marks(&self) -> &[CallReachabilityFact] {
-        &self.reachability_marks
+        self.reachability_store_inner().marks()
     }
 
     /// Stores the normalized semantic-graph nodes/edges/constraints (GRAPH-01),
@@ -1198,23 +1276,20 @@ impl AnalysisDb {
         &mut self,
         output: SemanticGraphOutput,
     ) -> Result<(), AnalysisError> {
-        output.validate_references()?;
-        self.semantic_nodes = output.nodes;
-        self.semantic_edges = output.edges;
-        self.semantic_constraints = output.constraints;
+        *self.semantic_graph_store_mut() = SemanticGraphStore::from_normalized_output(output)?;
         Ok(())
     }
 
     pub(crate) fn semantic_nodes(&self) -> &[SemanticNodeFact] {
-        &self.semantic_nodes
+        self.semantic_graph_store_inner().nodes()
     }
 
     pub(crate) fn semantic_edges(&self) -> &[SemanticEdgeFact] {
-        &self.semantic_edges
+        self.semantic_graph_store_inner().edges()
     }
 
     pub(crate) fn semantic_constraints(&self) -> &[ConstraintFact] {
-        &self.semantic_constraints
+        self.semantic_graph_store_inner().constraints()
     }
 
     /// Stores the private TS object/property/prototype/receiver rows used by the
@@ -1268,10 +1343,7 @@ impl AnalysisDb {
         &mut self,
         output: SolverOutput,
     ) -> Result<(), AnalysisError> {
-        let store = SolverStore::from_output(output)?;
-        self.solver_derived_edges = store.derived_edges().to_vec();
-        self.solver_budget_status = store.budget_status();
-        self.solver_budget_reasons = store.budget_reasons().clone();
+        *self.solver_store_mut() = SolverStore::from_output(output)?;
         Ok(())
     }
 
@@ -1282,17 +1354,17 @@ impl AnalysisDb {
     /// determinism gate observes them).
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn solver_derived_edges(&self) -> &[DerivedEdgeFact] {
-        &self.solver_derived_edges
+        self.solver_store_inner().derived_edges()
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn solver_budget_status(&self) -> BudgetStatus {
-        self.solver_budget_status
+        self.solver_store_inner().budget_status()
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn solver_budget_reasons(&self) -> &BTreeSet<String> {
-        &self.solver_budget_reasons
+        self.solver_store_inner().budget_reasons()
     }
 
     /// Store the Go semantic facts, returning the resilience report (malformed RTA-signal
@@ -1378,15 +1450,20 @@ impl AnalysisDb {
     }
 
     pub(crate) fn trust_boundary_facts(&self) -> &[TrustBoundaryFact] {
-        &self.trust_boundary_facts
+        self.entrypoint_store_inner().trust_boundaries()
     }
 
     pub(crate) fn dispatch_edge_facts(&self) -> &[FrameworkDispatchEdgeFact] {
-        &self.dispatch_edge_facts
+        self.entrypoint_store_inner().dispatch_edges()
     }
 
     pub(crate) fn unresolved_framework_facts(&self) -> &[UnresolvedFrameworkFact] {
-        &self.unresolved_framework_facts
+        self.entrypoint_store_inner().unresolved()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn entrypoint_store(&self) -> Option<&EntrypointStore> {
+        Some(self.entrypoint_store_inner())
     }
 
     #[allow(
@@ -1401,61 +1478,48 @@ impl AnalysisDb {
         &mut self,
         output: TypeValueAliasOutput,
     ) {
-        let type_store = TypeStore::from_normalized_output(output.types);
-        let value_store = ValueStore::from_normalized_output(output.values);
-        let access_path_store = AccessPathStore::from_normalized_output(output.access_paths);
-        let points_to_store = PointsToStore::from_normalized_output(output.points_to);
-        let alias_store = AliasStore::from_normalized_output(output.aliases);
-
-        self.type_facts = type_store.types().to_vec();
-        self.narrowed_type_facts = type_store.narrowed().to_vec();
-        self.value_facts = value_store.values().to_vec();
-        self.allocation_tokens = value_store.allocations().to_vec();
-        self.access_path_facts = access_path_store.access_paths().to_vec();
-        self.points_to_constraints = points_to_store.constraints().to_vec();
-        self.points_to_sets = points_to_store.sets().to_vec();
-        self.alias_answers = alias_store.answers().to_vec();
-        self.type_store = Some(type_store);
-        self.value_store = Some(value_store);
-        self.access_path_store = Some(access_path_store);
-        self.points_to_store = Some(points_to_store);
-        self.alias_store = Some(alias_store);
+        *self.type_store_mut() = TypeStore::from_normalized_output(output.types);
+        *self.value_store_mut() = ValueStore::from_normalized_output(output.values);
+        *self.access_path_store_mut() =
+            AccessPathStore::from_normalized_output(output.access_paths);
+        *self.points_to_store_mut() = PointsToStore::from_normalized_output(output.points_to);
+        *self.alias_store_mut() = AliasStore::from_normalized_output(output.aliases);
         self.refresh_type_value_alias_metadata();
     }
 
     pub(crate) fn type_facts(&self) -> &[TypeFact] {
-        &self.type_facts
+        self.type_store_inner().types()
     }
 
     #[allow(dead_code)]
     pub(crate) fn narrowed_type_facts(&self) -> &[NarrowedTypeFact] {
-        &self.narrowed_type_facts
+        self.type_store_inner().narrowed()
     }
 
     pub(crate) fn value_facts(&self) -> &[ValueFact] {
-        &self.value_facts
+        self.value_store_inner().values()
     }
 
     #[allow(dead_code)]
     pub(crate) fn allocation_tokens(&self) -> &[AllocationTokenFact] {
-        &self.allocation_tokens
+        self.value_store_inner().allocations()
     }
 
     pub(crate) fn access_path_facts(&self) -> &[AccessPathFact] {
-        &self.access_path_facts
+        self.access_path_store_inner().access_paths()
     }
 
     #[allow(dead_code)]
     pub(crate) fn points_to_constraints(&self) -> &[PointsToConstraintFact] {
-        &self.points_to_constraints
+        self.points_to_store_inner().constraints()
     }
 
     pub(crate) fn points_to_sets(&self) -> &[PointsToSetFact] {
-        &self.points_to_sets
+        self.points_to_store_inner().sets()
     }
 
     pub(crate) fn alias_answers(&self) -> &[AliasAnswerFact] {
-        &self.alias_answers
+        self.alias_store_inner().answers()
     }
 
     #[allow(dead_code)]
@@ -1538,23 +1602,10 @@ impl AnalysisDb {
     fn refresh_refined_call_metadata(&mut self) {
         self.fact_meta.remove_family(FactFamily::RefinedCallEdge);
 
-        if let Some(store) = self.refined_call_store.take() {
-            for fact in store.edges() {
-                let run_id = fact.id.0;
-                let metadata = self.refined_call_edge_metadata(fact);
-                self.record_fact_meta(FactFamily::RefinedCallEdge, run_id, metadata);
-            }
-            self.refined_call_store = Some(store);
-            self.finish_fact_meta_insertions(&[FactFamily::RefinedCallEdge]);
-            return;
-        }
-
-        for index in 0..self.refined_call_edges.len() {
-            let (run_id, metadata) = {
-                let fact = &self.refined_call_edges[index];
-                (fact.id.0, self.refined_call_edge_metadata(fact))
-            };
-            self.record_fact_meta(FactFamily::RefinedCallEdge, run_id, metadata);
+        let edges = self.refined_call_edges().to_vec();
+        for fact in &edges {
+            let metadata = self.refined_call_edge_metadata(fact);
+            self.record_fact_meta(FactFamily::RefinedCallEdge, fact.id.0, metadata);
         }
         self.finish_fact_meta_insertions(&[FactFamily::RefinedCallEdge]);
     }
@@ -1565,40 +1616,26 @@ impl AnalysisDb {
         self.fact_meta.remove_family(FactFamily::DataFlowModel);
         self.fact_meta.remove_family(FactFamily::DataFlowBudget);
 
-        let node_metadata = self
-            .data_flow_nodes
-            .iter()
-            .map(|fact| (fact.id.0, self.data_flow_node_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in node_metadata {
-            self.record_fact_meta(FactFamily::DataFlowNode, run_id, metadata);
-        }
+        let nodes = self.data_flow_nodes().to_vec();
+        let edges = self.data_flow_edges().to_vec();
+        let models = self.data_flow_models().to_vec();
+        let budgets = self.data_flow_budgets().to_vec();
 
-        let edge_metadata = self
-            .data_flow_edges
-            .iter()
-            .map(|fact| (fact.id.0, self.data_flow_edge_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in edge_metadata {
-            self.record_fact_meta(FactFamily::DataFlowEdge, run_id, metadata);
+        for fact in &nodes {
+            let metadata = self.data_flow_node_metadata(fact);
+            self.record_fact_meta(FactFamily::DataFlowNode, fact.id.0, metadata);
         }
-
-        let model_metadata = self
-            .data_flow_models
-            .iter()
-            .map(|fact| (fact.id.0, self.data_flow_model_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in model_metadata {
-            self.record_fact_meta(FactFamily::DataFlowModel, run_id, metadata);
+        for fact in &edges {
+            let metadata = self.data_flow_edge_metadata(fact);
+            self.record_fact_meta(FactFamily::DataFlowEdge, fact.id.0, metadata);
         }
-
-        let budget_metadata = self
-            .data_flow_budgets
-            .iter()
-            .map(|fact| (fact.id.0, self.data_flow_budget_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in budget_metadata {
-            self.record_fact_meta(FactFamily::DataFlowBudget, run_id, metadata);
+        for fact in &models {
+            let metadata = self.data_flow_model_metadata(fact);
+            self.record_fact_meta(FactFamily::DataFlowModel, fact.id.0, metadata);
+        }
+        for fact in &budgets {
+            let metadata = self.data_flow_budget_metadata(fact);
+            self.record_fact_meta(FactFamily::DataFlowBudget, fact.id.0, metadata);
         }
 
         self.finish_fact_meta_insertions(&[
@@ -1623,78 +1660,46 @@ impl AnalysisDb {
             self.fact_meta.remove_family(family);
         }
 
-        let node_metadata = self
-            .evidence_nodes
-            .iter()
-            .map(|fact| (fact.id.0, self.evidence_node_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in node_metadata {
-            self.record_fact_meta(FactFamily::EvidenceNode, run_id, metadata);
-        }
+        let nodes = self.evidence_nodes().to_vec();
+        let edges = self.evidence_edges().to_vec();
+        let bundles = self.evidence_bundles().to_vec();
+        let paths = self.evidence_paths().to_vec();
+        let slices = self.evidence_slices().to_vec();
+        let unknowns = self.evidence_unknowns().to_vec();
+        let omitted = self.evidence_omitted_regions().to_vec();
+        let replay_keys = self.evidence_replay_keys().to_vec();
 
-        let edge_metadata = self
-            .evidence_edges
-            .iter()
-            .map(|fact| (fact.id.0, self.evidence_edge_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in edge_metadata {
-            self.record_fact_meta(FactFamily::EvidenceEdge, run_id, metadata);
+        for fact in &nodes {
+            let metadata = self.evidence_node_metadata(fact);
+            self.record_fact_meta(FactFamily::EvidenceNode, fact.id.0, metadata);
         }
-
-        let bundle_metadata = self
-            .evidence_bundles
-            .iter()
-            .map(|fact| (fact.id.0, self.evidence_bundle_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in bundle_metadata {
-            self.record_fact_meta(FactFamily::EvidenceBundle, run_id, metadata);
+        for fact in &edges {
+            let metadata = self.evidence_edge_metadata(fact);
+            self.record_fact_meta(FactFamily::EvidenceEdge, fact.id.0, metadata);
         }
-
-        let path_metadata = self
-            .evidence_paths
-            .iter()
-            .map(|fact| (fact.id.0, self.evidence_path_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in path_metadata {
-            self.record_fact_meta(FactFamily::EvidencePath, run_id, metadata);
+        for fact in &bundles {
+            let metadata = self.evidence_bundle_metadata(fact);
+            self.record_fact_meta(FactFamily::EvidenceBundle, fact.id.0, metadata);
         }
-
-        let slice_metadata = self
-            .evidence_slices
-            .iter()
-            .map(|fact| (fact.id.0, self.evidence_slice_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in slice_metadata {
-            self.record_fact_meta(FactFamily::EvidenceSlice, run_id, metadata);
+        for fact in &paths {
+            let metadata = self.evidence_path_metadata(fact);
+            self.record_fact_meta(FactFamily::EvidencePath, fact.id.0, metadata);
         }
-
-        let unknown_metadata = self
-            .evidence_unknowns
-            .iter()
-            .enumerate()
-            .map(|(index, fact)| (index as u64, self.evidence_unknown_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in unknown_metadata {
-            self.record_fact_meta(FactFamily::EvidenceUnknown, run_id, metadata);
+        for fact in &slices {
+            let metadata = self.evidence_slice_metadata(fact);
+            self.record_fact_meta(FactFamily::EvidenceSlice, fact.id.0, metadata);
         }
-
-        let omitted_metadata = self
-            .evidence_omitted_regions
-            .iter()
-            .map(|fact| (fact.id.0, self.evidence_omitted_region_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in omitted_metadata {
-            self.record_fact_meta(FactFamily::EvidenceOmittedRegion, run_id, metadata);
+        for (index, fact) in unknowns.iter().enumerate() {
+            let metadata = self.evidence_unknown_metadata(fact);
+            self.record_fact_meta(FactFamily::EvidenceUnknown, index as u64, metadata);
         }
-
-        let replay_metadata = self
-            .evidence_replay_keys
-            .iter()
-            .enumerate()
-            .map(|(index, fact)| (index as u64, self.evidence_replay_key_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in replay_metadata {
-            self.record_fact_meta(FactFamily::EvidenceReplayKey, run_id, metadata);
+        for fact in &omitted {
+            let metadata = self.evidence_omitted_region_metadata(fact);
+            self.record_fact_meta(FactFamily::EvidenceOmittedRegion, fact.id.0, metadata);
+        }
+        for (index, fact) in replay_keys.iter().enumerate() {
+            let metadata = self.evidence_replay_key_metadata(fact);
+            self.record_fact_meta(FactFamily::EvidenceReplayKey, index as u64, metadata);
         }
 
         self.finish_fact_meta_insertions(&[
@@ -1712,23 +1717,16 @@ impl AnalysisDb {
         self.fact_meta.remove_family(FactFamily::DomainObservation);
         self.fact_meta.remove_family(FactFamily::DomainEvent);
 
-        let Some(store) = self.abstract_domain_store.take() else {
-            return;
-        };
-
-        for fact in store.observations() {
-            let run_id = fact.id.0;
+        let observations = self.abstract_domain_observations().to_vec();
+        let events = self.abstract_domain_events().to_vec();
+        for fact in &observations {
             let metadata = self.domain_observation_metadata(fact);
-            self.record_fact_meta(FactFamily::DomainObservation, run_id, metadata);
+            self.record_fact_meta(FactFamily::DomainObservation, fact.id.0, metadata);
         }
-
-        for fact in store.events() {
-            let run_id = fact.id.0;
+        for fact in &events {
             let metadata = self.domain_event_metadata(fact);
-            self.record_fact_meta(FactFamily::DomainEvent, run_id, metadata);
+            self.record_fact_meta(FactFamily::DomainEvent, fact.id.0, metadata);
         }
-
-        self.abstract_domain_store = Some(store);
         self.finish_fact_meta_insertions(&[FactFamily::DomainObservation, FactFamily::DomainEvent]);
     }
 
@@ -1739,49 +1737,16 @@ impl AnalysisDb {
         self.fact_meta.remove_family(FactFamily::SummaryTito);
         self.fact_meta.remove_family(FactFamily::SummaryEvent);
 
-        if let Some(store) = self.summary_store.take() {
-            for fact in store.all_summaries() {
-                let family = summary_domain_to_fact_family(fact.domain);
-                let run_id = fact.id.0;
-                let metadata = self.summary_fact_metadata(fact);
-                self.record_fact_meta(family, run_id, metadata);
-            }
-
-            for fact in store.all_events() {
-                let run_id = fact.id.0;
-                let metadata = self.summary_event_metadata(fact);
-                self.record_fact_meta(FactFamily::SummaryEvent, run_id, metadata);
-            }
-
-            self.summary_store = Some(store);
-            self.finish_fact_meta_insertions(&[
-                FactFamily::SummaryControl,
-                FactFamily::SummaryCall,
-                FactFamily::SummaryMemory,
-                FactFamily::SummaryTito,
-                FactFamily::SummaryEvent,
-            ]);
-            return;
+        let summaries = self.summary_facts().to_vec();
+        let events = self.summary_events().to_vec();
+        for fact in &summaries {
+            let family = summary_domain_to_fact_family(fact.domain);
+            let metadata = self.summary_fact_metadata(fact);
+            self.record_fact_meta(family, fact.id.0, metadata);
         }
-
-        for index in 0..self.summary_facts.len() {
-            let (family, run_id, metadata) = {
-                let fact = &self.summary_facts[index];
-                (
-                    summary_domain_to_fact_family(fact.domain),
-                    fact.id.0,
-                    self.summary_fact_metadata(fact),
-                )
-            };
-            self.record_fact_meta(family, run_id, metadata);
-        }
-
-        for index in 0..self.summary_events.len() {
-            let (run_id, metadata) = {
-                let fact = &self.summary_events[index];
-                (fact.id.0, self.summary_event_metadata(fact))
-            };
-            self.record_fact_meta(FactFamily::SummaryEvent, run_id, metadata);
+        for fact in &events {
+            let metadata = self.summary_event_metadata(fact);
+            self.record_fact_meta(FactFamily::SummaryEvent, fact.id.0, metadata);
         }
         self.finish_fact_meta_insertions(&[
             FactFamily::SummaryControl,
@@ -1798,28 +1763,20 @@ impl AnalysisDb {
     )]
     fn refresh_extension_metadata(&mut self) {
         self.fact_meta.remove_family(FactFamily::ExtensionFact);
-        let metadata = self
-            .extension_facts
-            .iter()
-            .enumerate()
-            .map(|(index, fact)| (index as u64, extension_fact_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in metadata {
-            self.record_fact_meta(FactFamily::ExtensionFact, run_id, metadata);
+        let facts = self.extension_facts().to_vec();
+        for (index, fact) in facts.iter().enumerate() {
+            let metadata = extension_fact_metadata(fact);
+            self.record_fact_meta(FactFamily::ExtensionFact, index as u64, metadata);
         }
         self.finish_fact_meta_insertions(&[FactFamily::ExtensionFact]);
     }
 
     fn refresh_adaptation_model_metadata(&mut self) {
         self.fact_meta.remove_family(FactFamily::AdaptationModel);
-        let metadata = self
-            .adaptation_model_facts
-            .iter()
-            .enumerate()
-            .map(|(index, fact)| (index as u64, adaptation_model_fact_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in metadata {
-            self.record_fact_meta(FactFamily::AdaptationModel, run_id, metadata);
+        let facts = self.adaptation_model_facts().to_vec();
+        for (index, fact) in facts.iter().enumerate() {
+            let metadata = adaptation_model_fact_metadata(fact);
+            self.record_fact_meta(FactFamily::AdaptationModel, index as u64, metadata);
         }
         self.finish_fact_meta_insertions(&[FactFamily::AdaptationModel]);
     }
@@ -1831,40 +1788,26 @@ impl AnalysisDb {
         self.fact_meta
             .remove_family(FactFamily::UnresolvedFramework);
 
-        let entrypoint_metadata = self
-            .entrypoint_facts
-            .iter()
-            .map(|fact| (fact.id.0, self.entrypoint_fact_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in entrypoint_metadata {
-            self.record_fact_meta(FactFamily::Entrypoint, run_id, metadata);
-        }
+        let entrypoints = self.entrypoint_facts().to_vec();
+        let trust_boundaries = self.trust_boundary_facts().to_vec();
+        let dispatch_edges = self.dispatch_edge_facts().to_vec();
+        let unresolved = self.unresolved_framework_facts().to_vec();
 
-        let trust_boundary_metadata = self
-            .trust_boundary_facts
-            .iter()
-            .map(|fact| (fact.id.0, self.trust_boundary_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in trust_boundary_metadata {
-            self.record_fact_meta(FactFamily::TrustBoundary, run_id, metadata);
+        for fact in &entrypoints {
+            let metadata = self.entrypoint_fact_metadata(fact);
+            self.record_fact_meta(FactFamily::Entrypoint, fact.id.0, metadata);
         }
-
-        let dispatch_edge_metadata = self
-            .dispatch_edge_facts
-            .iter()
-            .map(|fact| (fact.id.0, self.dispatch_edge_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in dispatch_edge_metadata {
-            self.record_fact_meta(FactFamily::DispatchEdge, run_id, metadata);
+        for fact in &trust_boundaries {
+            let metadata = self.trust_boundary_metadata(fact);
+            self.record_fact_meta(FactFamily::TrustBoundary, fact.id.0, metadata);
         }
-
-        let unresolved_metadata = self
-            .unresolved_framework_facts
-            .iter()
-            .map(|fact| (fact.id.0, self.unresolved_framework_metadata(fact)))
-            .collect::<Vec<_>>();
-        for (run_id, metadata) in unresolved_metadata {
-            self.record_fact_meta(FactFamily::UnresolvedFramework, run_id, metadata);
+        for fact in &dispatch_edges {
+            let metadata = self.dispatch_edge_metadata(fact);
+            self.record_fact_meta(FactFamily::DispatchEdge, fact.id.0, metadata);
+        }
+        for fact in &unresolved {
+            let metadata = self.unresolved_framework_metadata(fact);
+            self.record_fact_meta(FactFamily::UnresolvedFramework, fact.id.0, metadata);
         }
         self.finish_fact_meta_insertions(&[
             FactFamily::Entrypoint,
@@ -1888,68 +1831,46 @@ impl AnalysisDb {
             self.fact_meta.remove_family(family);
         }
 
-        for index in 0..self.type_facts.len() {
-            let (run_id, metadata) = {
-                let fact = &self.type_facts[index];
-                (fact.id.0, self.type_fact_metadata(fact))
-            };
-            self.record_fact_meta(FactFamily::Type, run_id, metadata);
-        }
+        let types = self.type_facts().to_vec();
+        let narrowed = self.narrowed_type_facts().to_vec();
+        let values = self.value_facts().to_vec();
+        let allocations = self.allocation_tokens().to_vec();
+        let access_paths = self.access_path_facts().to_vec();
+        let constraints = self.points_to_constraints().to_vec();
+        let sets = self.points_to_sets().to_vec();
+        let aliases = self.alias_answers().to_vec();
 
-        for index in 0..self.narrowed_type_facts.len() {
-            let (run_id, metadata) = {
-                let fact = &self.narrowed_type_facts[index];
-                (fact.id.0, self.narrowed_type_metadata(fact))
-            };
-            self.record_fact_meta(FactFamily::NarrowedType, run_id, metadata);
+        for fact in &types {
+            let metadata = self.type_fact_metadata(fact);
+            self.record_fact_meta(FactFamily::Type, fact.id.0, metadata);
         }
-
-        for index in 0..self.value_facts.len() {
-            let (run_id, metadata) = {
-                let fact = &self.value_facts[index];
-                (fact.id.0, self.value_fact_metadata(fact))
-            };
-            self.record_fact_meta(FactFamily::Value, run_id, metadata);
+        for fact in &narrowed {
+            let metadata = self.narrowed_type_metadata(fact);
+            self.record_fact_meta(FactFamily::NarrowedType, fact.id.0, metadata);
         }
-
-        for index in 0..self.allocation_tokens.len() {
-            let (run_id, metadata) = {
-                let fact = &self.allocation_tokens[index];
-                (fact.id.0, self.allocation_token_metadata(fact))
-            };
-            self.record_fact_meta(FactFamily::AllocationToken, run_id, metadata);
+        for fact in &values {
+            let metadata = self.value_fact_metadata(fact);
+            self.record_fact_meta(FactFamily::Value, fact.id.0, metadata);
         }
-
-        for index in 0..self.access_path_facts.len() {
-            let (run_id, metadata) = {
-                let fact = &self.access_path_facts[index];
-                (fact.id.0, self.access_path_metadata(fact))
-            };
-            self.record_fact_meta(FactFamily::AccessPath, run_id, metadata);
+        for fact in &allocations {
+            let metadata = self.allocation_token_metadata(fact);
+            self.record_fact_meta(FactFamily::AllocationToken, fact.id.0, metadata);
         }
-
-        for index in 0..self.points_to_constraints.len() {
-            let (run_id, metadata) = {
-                let fact = &self.points_to_constraints[index];
-                (fact.id.0, self.points_to_constraint_metadata(fact))
-            };
-            self.record_fact_meta(FactFamily::PointsToConstraint, run_id, metadata);
+        for fact in &access_paths {
+            let metadata = self.access_path_metadata(fact);
+            self.record_fact_meta(FactFamily::AccessPath, fact.id.0, metadata);
         }
-
-        for index in 0..self.points_to_sets.len() {
-            let (run_id, metadata) = {
-                let fact = &self.points_to_sets[index];
-                (fact.id.0, self.points_to_set_metadata(fact))
-            };
-            self.record_fact_meta(FactFamily::PointsToSet, run_id, metadata);
+        for fact in &constraints {
+            let metadata = self.points_to_constraint_metadata(fact);
+            self.record_fact_meta(FactFamily::PointsToConstraint, fact.id.0, metadata);
         }
-
-        for index in 0..self.alias_answers.len() {
-            let (run_id, metadata) = {
-                let fact = &self.alias_answers[index];
-                (fact.id.0, self.alias_answer_metadata(fact))
-            };
-            self.record_fact_meta(FactFamily::AliasAnswer, run_id, metadata);
+        for fact in &sets {
+            let metadata = self.points_to_set_metadata(fact);
+            self.record_fact_meta(FactFamily::PointsToSet, fact.id.0, metadata);
+        }
+        for fact in &aliases {
+            let metadata = self.alias_answer_metadata(fact);
+            self.record_fact_meta(FactFamily::AliasAnswer, fact.id.0, metadata);
         }
 
         self.finish_fact_meta_insertions(&[
@@ -3202,26 +3123,25 @@ impl AnalysisDb {
         self.semantic_index_store().stable_exports()
     }
 
+    #[allow(dead_code)]
     pub(crate) fn semantic_store(&self) -> Option<&SemanticStore> {
-        self.semantic.as_ref()
+        Some(self.semantic_mir_store_inner())
     }
 
     pub(crate) fn mir_bodies(&self) -> &[MirBody] {
-        self.semantic_store().map_or(&[], SemanticStore::mir_bodies)
+        self.semantic_mir_store_inner().mir_bodies()
     }
 
     pub(crate) fn mir_operations(&self) -> &[MirOperation] {
-        self.semantic_store()
-            .map_or(&[], SemanticStore::mir_operations)
+        self.semantic_mir_store_inner().mir_operations()
     }
 
     pub(crate) fn mir_places(&self) -> &[PlaceFact] {
-        self.semantic_store().map_or(&[], SemanticStore::places)
+        self.semantic_mir_store_inner().places()
     }
 
     pub(crate) fn unsupported_semantics(&self) -> &[UnsupportedSemanticFact] {
-        self.semantic_store()
-            .map_or(&[], SemanticStore::unsupported_semantics)
+        self.semantic_mir_store_inner().unsupported_semantics()
     }
 
     pub(crate) fn cfg_functions(&self) -> &[CfgFunctionFact] {
@@ -4235,7 +4155,7 @@ impl AnalysisDb {
     fn data_flow_node_metadata(&self, fact: &DataFlowNodeFact) -> FactMeta {
         let model = fact
             .model
-            .and_then(|id| self.data_flow_models.iter().find(|model| model.id == id));
+            .and_then(|id| self.data_flow_models().iter().find(|model| model.id == id));
         let (status, data_flow_precision, data_flow_confidence, data_flow_validation, model_key) =
             model.map_or(
                 (

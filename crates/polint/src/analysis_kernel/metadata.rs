@@ -115,6 +115,10 @@ pub(crate) enum FactFamily {
     TsObjectModel,
     /// Registry key for [`crate::analysis::identity::store::IdentityStore`].
     Identity,
+    /// Registry key for [`crate::analysis::reachability::store::ReachabilityStore`].
+    Reachability,
+    /// Registry key for [`crate::analysis::semantic_graph::store::SemanticGraphStore`].
+    SemanticGraph,
 }
 
 impl FactFamily {
@@ -211,6 +215,8 @@ impl FactFamily {
             Self::GoSemantic => "GoSemantic",
             Self::TsObjectModel => "TsObjectModel",
             Self::Identity => "Identity",
+            Self::Reachability => "Reachability",
+            Self::SemanticGraph => "SemanticGraph",
         }
     }
 }

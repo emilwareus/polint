@@ -8,13 +8,32 @@ use std::any::Any;
 use std::collections::BTreeMap;
 use std::fmt;
 
+use crate::analysis::access_paths::store::AccessPathStore;
+use crate::analysis::adaptation::facts::{AcceptedModelFact, RejectedModelFact};
+use crate::analysis::aliases::store::AliasStore;
 use crate::analysis::calls::store::CallStore;
 use crate::analysis::cfg::facts::{
     BasicBlockFact, CfgEdgeFact, CfgFunctionFact, CfgNodeFact, ControlDependenceFact,
     DominatorFact, PostDominatorFact, ReachabilityFact, UnsupportedControlFlowFact,
 };
 use crate::analysis::cfg::store::CfgOutput;
+use crate::analysis::data_flow::store::DataFlowStore;
+use crate::analysis::domains::store::DomainStore;
+use crate::analysis::entrypoints::store::EntrypointStore;
+use crate::analysis::evidence::store::EvidenceStore;
+use crate::analysis::extensions::store::{
+    AcceptedExtensionFact, ExtensionActivationRow, RejectedExtensionFact,
+};
 use crate::analysis::identity::store::IdentityStore;
+use crate::analysis::points_to::store::PointsToStore;
+use crate::analysis::reachability::store::ReachabilityStore;
+use crate::analysis::refined_calls::store::RefinedCallStore;
+use crate::analysis::semantic_graph::store::SemanticGraphStore;
+use crate::analysis::solver::store::SolverStore;
+use crate::analysis::store::SemanticStore;
+use crate::analysis::summaries::store::SummaryStore;
+use crate::analysis::types::store::TypeStore;
+use crate::analysis::values::store::ValueStore;
 use crate::analysis_kernel::FactFamily;
 use crate::core::facts::{
     BranchObligation, ComplexityMetricFact, CoverageFact, DefinitionFact, FileMetricFact,
@@ -940,6 +959,435 @@ impl FactStore for IdentityStore {
 
 /// Registry key used for [`IdentityStore`] in `AnalysisDb::fact_stores`.
 pub(crate) const IDENTITY_STORE_FAMILY: FactFamily = FactFamily::Identity;
+
+impl FactStore for RefinedCallStore {
+    fn family(&self) -> FactFamily {
+        FactFamily::RefinedCallEdge
+    }
+
+    fn clear(&mut self) {
+        *self = RefinedCallStore::default();
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn clone_box(&self) -> Box<dyn FactStore> {
+        Box::new(self.clone())
+    }
+}
+
+/// Registry key used for [`RefinedCallStore`] in `AnalysisDb::fact_stores`.
+pub(crate) const REFINED_CALL_STORE_FAMILY: FactFamily = FactFamily::RefinedCallEdge;
+
+impl FactStore for DataFlowStore {
+    fn family(&self) -> FactFamily {
+        FactFamily::DataFlowNode
+    }
+
+    fn clear(&mut self) {
+        *self = DataFlowStore::default();
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn clone_box(&self) -> Box<dyn FactStore> {
+        Box::new(self.clone())
+    }
+}
+
+/// Registry key used for [`DataFlowStore`] in `AnalysisDb::fact_stores`.
+pub(crate) const DATA_FLOW_STORE_FAMILY: FactFamily = FactFamily::DataFlowNode;
+
+impl FactStore for EvidenceStore {
+    fn family(&self) -> FactFamily {
+        FactFamily::EvidenceNode
+    }
+
+    fn clear(&mut self) {
+        *self = EvidenceStore::default();
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn clone_box(&self) -> Box<dyn FactStore> {
+        Box::new(self.clone())
+    }
+}
+
+/// Registry key used for [`EvidenceStore`] in `AnalysisDb::fact_stores`.
+pub(crate) const EVIDENCE_STORE_FAMILY: FactFamily = FactFamily::EvidenceNode;
+
+impl FactStore for DomainStore {
+    fn family(&self) -> FactFamily {
+        FactFamily::DomainObservation
+    }
+
+    fn clear(&mut self) {
+        *self = DomainStore::default();
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn clone_box(&self) -> Box<dyn FactStore> {
+        Box::new(self.clone())
+    }
+}
+
+/// Registry key used for [`DomainStore`] in `AnalysisDb::fact_stores`.
+pub(crate) const DOMAIN_STORE_FAMILY: FactFamily = FactFamily::DomainObservation;
+
+impl FactStore for SummaryStore {
+    fn family(&self) -> FactFamily {
+        FactFamily::SummaryControl
+    }
+
+    fn clear(&mut self) {
+        *self = SummaryStore::default();
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn clone_box(&self) -> Box<dyn FactStore> {
+        Box::new(self.clone())
+    }
+}
+
+/// Registry key used for [`SummaryStore`] in `AnalysisDb::fact_stores`.
+pub(crate) const SUMMARY_STORE_FAMILY: FactFamily = FactFamily::SummaryControl;
+
+impl FactStore for EntrypointStore {
+    fn family(&self) -> FactFamily {
+        FactFamily::Entrypoint
+    }
+
+    fn clear(&mut self) {
+        *self = EntrypointStore::default();
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn clone_box(&self) -> Box<dyn FactStore> {
+        Box::new(self.clone())
+    }
+}
+
+/// Registry key used for [`EntrypointStore`] in `AnalysisDb::fact_stores`.
+pub(crate) const ENTRYPOINT_STORE_FAMILY: FactFamily = FactFamily::Entrypoint;
+
+impl FactStore for TypeStore {
+    fn family(&self) -> FactFamily {
+        FactFamily::Type
+    }
+
+    fn clear(&mut self) {
+        *self = TypeStore::default();
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn clone_box(&self) -> Box<dyn FactStore> {
+        Box::new(self.clone())
+    }
+}
+
+pub(crate) const TYPE_STORE_FAMILY: FactFamily = FactFamily::Type;
+
+impl FactStore for ValueStore {
+    fn family(&self) -> FactFamily {
+        FactFamily::Value
+    }
+
+    fn clear(&mut self) {
+        *self = ValueStore::default();
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn clone_box(&self) -> Box<dyn FactStore> {
+        Box::new(self.clone())
+    }
+}
+
+pub(crate) const VALUE_STORE_FAMILY: FactFamily = FactFamily::Value;
+
+impl FactStore for AccessPathStore {
+    fn family(&self) -> FactFamily {
+        FactFamily::AccessPath
+    }
+
+    fn clear(&mut self) {
+        *self = AccessPathStore::default();
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn clone_box(&self) -> Box<dyn FactStore> {
+        Box::new(self.clone())
+    }
+}
+
+pub(crate) const ACCESS_PATH_STORE_FAMILY: FactFamily = FactFamily::AccessPath;
+
+impl FactStore for PointsToStore {
+    fn family(&self) -> FactFamily {
+        FactFamily::PointsToSet
+    }
+
+    fn clear(&mut self) {
+        *self = PointsToStore::default();
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn clone_box(&self) -> Box<dyn FactStore> {
+        Box::new(self.clone())
+    }
+}
+
+pub(crate) const POINTS_TO_STORE_FAMILY: FactFamily = FactFamily::PointsToSet;
+
+impl FactStore for AliasStore {
+    fn family(&self) -> FactFamily {
+        FactFamily::AliasAnswer
+    }
+
+    fn clear(&mut self) {
+        *self = AliasStore::default();
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn clone_box(&self) -> Box<dyn FactStore> {
+        Box::new(self.clone())
+    }
+}
+
+pub(crate) const ALIAS_STORE_FAMILY: FactFamily = FactFamily::AliasAnswer;
+
+/// Extension activations and accepted/rejected facts for `polint.extensions`.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ExtensionFactStore {
+    pub(crate) activations: Vec<ExtensionActivationRow>,
+    pub(crate) accepted: Vec<AcceptedExtensionFact>,
+    pub(crate) rejected: Vec<RejectedExtensionFact>,
+}
+
+impl FactStore for ExtensionFactStore {
+    fn family(&self) -> FactFamily {
+        FactFamily::ExtensionFact
+    }
+
+    fn clear(&mut self) {
+        *self = ExtensionFactStore::default();
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn clone_box(&self) -> Box<dyn FactStore> {
+        Box::new(self.clone())
+    }
+}
+
+pub(crate) const EXTENSION_STORE_FAMILY: FactFamily = FactFamily::ExtensionFact;
+
+/// Accepted/rejected adaptation model facts for `polint.adaptation`.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct AdaptationFactStore {
+    pub(crate) accepted: Vec<AcceptedModelFact>,
+    pub(crate) rejected: Vec<RejectedModelFact>,
+}
+
+impl FactStore for AdaptationFactStore {
+    fn family(&self) -> FactFamily {
+        FactFamily::AdaptationModel
+    }
+
+    fn clear(&mut self) {
+        *self = AdaptationFactStore::default();
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn clone_box(&self) -> Box<dyn FactStore> {
+        Box::new(self.clone())
+    }
+}
+
+pub(crate) const ADAPTATION_STORE_FAMILY: FactFamily = FactFamily::AdaptationModel;
+
+impl FactStore for ReachabilityStore {
+    fn family(&self) -> FactFamily {
+        FactFamily::Reachability
+    }
+
+    fn clear(&mut self) {
+        *self = ReachabilityStore::default();
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn clone_box(&self) -> Box<dyn FactStore> {
+        Box::new(self.clone())
+    }
+}
+
+pub(crate) const REACHABILITY_STORE_FAMILY: FactFamily = FactFamily::Reachability;
+
+impl FactStore for SemanticGraphStore {
+    fn family(&self) -> FactFamily {
+        FactFamily::SemanticGraph
+    }
+
+    fn clear(&mut self) {
+        *self = SemanticGraphStore::default();
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn clone_box(&self) -> Box<dyn FactStore> {
+        Box::new(self.clone())
+    }
+}
+
+pub(crate) const SEMANTIC_GRAPH_STORE_FAMILY: FactFamily = FactFamily::SemanticGraph;
+
+impl FactStore for SolverStore {
+    fn family(&self) -> FactFamily {
+        FactFamily::SolverDerivedEdge
+    }
+
+    fn clear(&mut self) {
+        *self = SolverStore::default();
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn clone_box(&self) -> Box<dyn FactStore> {
+        Box::new(self.clone())
+    }
+}
+
+pub(crate) const SOLVER_STORE_FAMILY: FactFamily = FactFamily::SolverDerivedEdge;
+
+impl FactStore for SemanticStore {
+    fn family(&self) -> FactFamily {
+        FactFamily::MirBody
+    }
+
+    fn clear(&mut self) {
+        *self = SemanticStore::default();
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn clone_box(&self) -> Box<dyn FactStore> {
+        Box::new(self.clone())
+    }
+}
+
+pub(crate) const SEMANTIC_MIR_STORE_FAMILY: FactFamily = FactFamily::MirBody;
 
 #[cfg(test)]
 mod tests {
