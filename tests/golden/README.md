@@ -8,6 +8,7 @@ Committed, normalized CLI reports for behavioural lock-in. These are
 | Path | Role |
 |------|------|
 | [`outputs/`](outputs/) | Normalized golden files, one per case |
+| `outputs/<case>.cost.json` | Wall-clock + peak RSS sidecar beside each golden |
 | `crates/polint/tests/golden.rs` | Harness: run real `polint` CLI, normalize, compare |
 
 Cases are derived from [`../golden-corpus/inputs.toml`](../golden-corpus/inputs.toml):
@@ -34,6 +35,14 @@ Before compare or commit, the harness:
    if present
 6. Re-serializes as compact JSON with sorted object keys
 
+## Cost sidecars
+
+Each ran case also records wall-clock ms and peak RSS (bytes) from
+`eval/bench/measure.rs` inside the rules-host process (env
+`POLINT_GOLDEN_COST_PATH`). Committed `*.cost.json` values are the baseline;
+CI fails when measured wall-clock or peak RSS exceeds baseline × 1.20 (with
+absolute noise floors of +50 ms / +16 MiB).
+
 ## Failure output
 
 On mismatch, the harness prints **lost** and **new** diagnostics as a set
@@ -42,12 +51,18 @@ text dump alone.
 
 ## Regenerating
 
-Set `POLINT_UPDATE_GOLDENS=1` and run:
+Rewrite diagnostic goldens:
 
 ```bash
-cargo test -p polint --test golden --locked
+POLINT_UPDATE_GOLDENS=1 cargo test -p polint --test golden --locked
 ```
 
-**CI never sets that variable** (enforced by `ci_workflows_never_set_golden_update_env`).
+Rewrite cost sidecars only (does not touch diagnostic goldens):
+
+```bash
+POLINT_UPDATE_GOLDEN_COSTS=1 cargo test -p polint --test golden --locked
+```
+
+**CI never sets those variables** (enforced by `ci_workflows_never_set_golden_update_env`).
 Treat any golden-file diff as intentional behaviour change requiring a separate,
 justified PR. Without the env flag the harness only compares.

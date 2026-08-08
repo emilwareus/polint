@@ -4,18 +4,30 @@
 //! paired with its parent example directory (`--format json`). Scale suite
 //! checkouts are optional and skip loudly when missing. Set
 //! `POLINT_UPDATE_GOLDENS=1` to rewrite goldens from current behaviour.
+//! Set `POLINT_UPDATE_GOLDEN_COSTS=1` to rewrite cost sidecars only (wall-clock +
+//! peak RSS) without touching diagnostic goldens.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use assert_cmd::Command as AssertCommand;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 const INPUTS_REL: &str = "tests/golden-corpus/inputs.toml";
 const GOLDEN_ROOT_REL: &str = "tests/golden";
 const OUTPUTS_REL: &str = "tests/golden/outputs";
 const UPDATE_ENV: &str = "POLINT_UPDATE_GOLDENS";
+const UPDATE_COSTS_ENV: &str = "POLINT_UPDATE_GOLDEN_COSTS";
+/// Must match `crate::eval::bench::golden_cost::COST_PATH_ENV`.
+const COST_PATH_ENV: &str = "POLINT_GOLDEN_COST_PATH";
+const COST_SCHEMA_VERSION: &str = "polint-golden-cost-1";
+/// Fail when measured wall-clock or peak RSS exceeds committed × this ratio
+/// (unless still within the absolute noise floors below).
+const MAX_COST_RATIO: f64 = 1.20;
+const COST_WALL_ABS_FLOOR_MS: u64 = 50;
+const COST_RSS_ABS_FLOOR_BYTES: u64 = 16 * 1024 * 1024;
 const STRIPPED_VERSION: &str = "<stripped>";
 const FORMAT_JSON: &str = "json";
 const EXPECTED_INPUTS_SCHEMA: &str = "polint-golden-corpus-inputs-1";
@@ -27,6 +39,14 @@ struct GoldenCase {
     format: &'static str,
     /// When true, a missing target directory skips the case with a stderr note.
     optional_target: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct GoldenCostRecord {
+    schema_version: String,
+    wall_clock_ms: u64,
+    peak_rss_bytes: u64,
+    peak_rss_delta_bytes: u64,
 }
 
 fn repo_root() -> PathBuf {
@@ -80,6 +100,10 @@ fn scale_case_id(suite_id: &str, format: &str) -> String {
 
 fn golden_path(root: &Path, case_id: &str) -> PathBuf {
     root.join(OUTPUTS_REL).join(format!("{case_id}.json"))
+}
+
+fn cost_path(root: &Path, case_id: &str) -> PathBuf {
+    root.join(OUTPUTS_REL).join(format!("{case_id}.cost.json"))
 }
 
 fn discover_cases(root: &Path) -> Vec<GoldenCase> {
@@ -142,9 +166,18 @@ fn update_goldens_enabled() -> bool {
     )
 }
 
-fn run_check(target: &Path, format: &str) -> String {
+fn update_costs_enabled() -> bool {
+    update_goldens_enabled()
+        || matches!(
+            std::env::var(UPDATE_COSTS_ENV).as_deref(),
+            Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
+        )
+}
+
+fn run_check(target: &Path, format: &str, cost_out: &Path) -> String {
     let assert = polint_cmd()
         .current_dir(target)
+        .env(COST_PATH_ENV, cost_out)
         .args([
             "check",
             "--format",
@@ -381,7 +414,91 @@ fn ensure_parent(path: &Path) {
     }
 }
 
-fn run_case(root: &Path, case: &GoldenCase, update: bool) {
+fn load_cost_record(path: &Path) -> GoldenCostRecord {
+    let raw = fs::read_to_string(path).unwrap_or_else(|err| {
+        panic!(
+            "missing golden cost at {} ({err}); regenerate with {UPDATE_COSTS_ENV}=1 \
+             (rules-host check must wrap analysis in measure::TimedRun when {COST_PATH_ENV} is set)",
+            path.display()
+        )
+    });
+    let record: GoldenCostRecord = serde_json::from_str(raw.trim_end())
+        .unwrap_or_else(|err| panic!("invalid golden cost JSON at {}: {err}", path.display()));
+    assert_eq!(
+        record.schema_version,
+        COST_SCHEMA_VERSION,
+        "unexpected cost schema in {}",
+        path.display()
+    );
+    assert!(
+        record.peak_rss_bytes > 0,
+        "cost {} must record non-zero peak_rss_bytes",
+        path.display()
+    );
+    record
+}
+
+fn write_cost_record(path: &Path, record: &GoldenCostRecord) {
+    ensure_parent(path);
+    let mut json =
+        serde_json::to_string(record).unwrap_or_else(|err| panic!("serialize cost record: {err}"));
+    json.push('\n');
+    fs::write(path, json).unwrap_or_else(|err| panic!("write {}: {err}", path.display()));
+}
+
+fn cost_within_budget(
+    metric: &str,
+    measured: u64,
+    baseline: u64,
+    abs_floor: u64,
+) -> Result<(), String> {
+    if baseline == 0 {
+        return Err(format!("{metric}: missing baseline (0 denominator)"));
+    }
+    let allowed = (baseline as f64 * MAX_COST_RATIO).max(baseline as f64 + abs_floor as f64);
+    if measured as f64 > allowed {
+        let ratio = measured as f64 / baseline as f64;
+        return Err(format!(
+            "{metric}: measured {measured} exceeds budget (baseline {baseline}, ratio {ratio:.4}, max {MAX_COST_RATIO}, abs floor +{abs_floor})"
+        ));
+    }
+    Ok(())
+}
+
+fn assert_cost_within_budget(
+    case_id: &str,
+    baseline: &GoldenCostRecord,
+    measured: &GoldenCostRecord,
+) {
+    let mut failures = Vec::new();
+    if let Err(err) = cost_within_budget(
+        "wall_clock_ms",
+        measured.wall_clock_ms,
+        baseline.wall_clock_ms,
+        COST_WALL_ABS_FLOOR_MS,
+    ) {
+        failures.push(err);
+    }
+    // Gate the absolute peak RSS high-water mark (same metric W0.2 cost columns
+    // use). Delta is recorded for diagnosis but can be zero on tiny examples
+    // when analysis never raises the process high-water mark.
+    if let Err(err) = cost_within_budget(
+        "peak_rss_bytes",
+        measured.peak_rss_bytes,
+        baseline.peak_rss_bytes,
+        COST_RSS_ABS_FLOOR_BYTES,
+    ) {
+        failures.push(err);
+    }
+    if !failures.is_empty() {
+        panic!(
+            "golden cost budget breached for `{case_id}`:\n  {}\nbaseline={baseline:?}\nmeasured={measured:?}",
+            failures.join("\n  ")
+        );
+    }
+}
+
+fn run_case(root: &Path, case: &GoldenCase, update_diagnostics: bool, update_costs: bool) {
     let target = root.join(&case.target_rel);
     if !target.is_dir() {
         if case.optional_target {
@@ -399,11 +516,50 @@ fn run_case(root: &Path, case: &GoldenCase, update: bool) {
         );
     }
 
-    let raw = run_check(&target, case.format);
+    let measured_cost_path = root
+        .join("target")
+        .join("polint-golden-costs")
+        .join(format!("{}.cost.json", case.id.replace('/', "__")));
+    ensure_parent(&measured_cost_path);
+    let _ = fs::remove_file(&measured_cost_path);
+
+    let raw = run_check(&target, case.format, &measured_cost_path);
     let normalized = normalize_report(&raw, &target, root);
     let path = golden_path(root, &case.id);
+    let committed_cost = cost_path(root, &case.id);
 
-    if update {
+    let require_cost = case.id.starts_with("examples/");
+    if measured_cost_path.is_file() {
+        let measured_cost = load_cost_record(&measured_cost_path);
+        if update_costs {
+            write_cost_record(&committed_cost, &measured_cost);
+        } else if require_cost || committed_cost.is_file() {
+            let baseline = load_cost_record(&committed_cost);
+            assert_cost_within_budget(&case.id, &baseline, &measured_cost);
+        } else {
+            eprintln!(
+                "GOLDEN COST SKIP (loud): case `{}` — no committed cost sidecar at {}",
+                case.id,
+                committed_cost.display()
+            );
+        }
+    } else if require_cost {
+        panic!(
+            "case `{}`: rules host did not write {COST_PATH_ENV} sidecar at {}; \
+             check path must wrap analysis in measure::TimedRun",
+            case.id,
+            measured_cost_path.display()
+        );
+    } else {
+        eprintln!(
+            "GOLDEN COST SKIP (loud): case `{}` — no measured cost at {} \
+             (target may lack a repo-local rules host)",
+            case.id,
+            measured_cost_path.display()
+        );
+    }
+
+    if update_diagnostics {
         ensure_parent(&path);
         fs::write(&path, &normalized)
             .unwrap_or_else(|err| panic!("write golden {}: {err}", path.display()));
@@ -437,7 +593,8 @@ fn characterization_goldens_match_cli() {
         cases.iter().any(|case| case.id.starts_with("scale/")),
         "expected scale characterization cases (optional checkout)"
     );
-    let update = update_goldens_enabled();
+    let update_diagnostics = update_goldens_enabled();
+    let update_costs = update_costs_enabled();
     let mut ran = 0usize;
     let mut skipped = 0usize;
     for case in &cases {
@@ -450,7 +607,7 @@ fn characterization_goldens_match_cli() {
             skipped += 1;
             continue;
         }
-        run_case(&root, case, update);
+        run_case(&root, case, update_diagnostics, update_costs);
         ran += 1;
     }
     assert!(
@@ -570,6 +727,14 @@ fn example_golden_cases_cover_inventory_rule_packs() {
                 path.display()
             );
         }
+        if !update_costs_enabled() {
+            let path = cost_path(&root, &id);
+            assert!(
+                path.is_file(),
+                "committed golden cost missing for `{id}` at {}",
+                path.display()
+            );
+        }
     }
 }
 
@@ -589,15 +754,19 @@ fn scale_cases_are_optional_and_discovered() {
 fn golden_updates_require_explicit_env_flag() {
     // Default CI / developer runs must compare, never rewrite. Only an explicit
     // opt-in rewrites goldens; workflows are scanned below so CI cannot arm it.
-    if std::env::var_os(UPDATE_ENV).is_some() {
+    if std::env::var_os(UPDATE_ENV).is_some() || std::env::var_os(UPDATE_COSTS_ENV).is_some() {
         eprintln!(
-            "note: {UPDATE_ENV} is set in this process; update path is armed for this run only"
+            "note: {UPDATE_ENV} and/or {UPDATE_COSTS_ENV} is set in this process; update path is armed for this run only"
         );
         return;
     }
     assert!(
         !update_goldens_enabled(),
         "{UPDATE_ENV} must be unset (or not a truthy value) for characterization compares"
+    );
+    assert!(
+        !update_costs_enabled(),
+        "{UPDATE_COSTS_ENV} must be unset (or not a truthy value) for cost compares"
     );
 }
 
@@ -623,11 +792,26 @@ fn ci_workflows_never_set_golden_update_env() {
             "{} must not set or mention {UPDATE_ENV}; golden regeneration is opt-in only",
             path.display()
         );
+        assert!(
+            !raw.contains(UPDATE_COSTS_ENV),
+            "{} must not set or mention {UPDATE_COSTS_ENV}; cost regeneration is opt-in only",
+            path.display()
+        );
         scanned += 1;
     }
     assert!(
         scanned > 0,
         "expected to scan at least one workflow under {}",
         workflows.display()
+    );
+}
+
+#[test]
+fn cost_budget_helper_rejects_clear_regression() {
+    let err = cost_within_budget("wall_clock_ms", 200, 100, COST_WALL_ABS_FLOOR_MS).unwrap_err();
+    assert!(err.contains("wall_clock_ms"), "{err}");
+    assert!(
+        cost_within_budget("wall_clock_ms", 110, 100, COST_WALL_ABS_FLOOR_MS).is_ok(),
+        "values inside the absolute floor must pass"
     );
 }
