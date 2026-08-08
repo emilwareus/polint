@@ -102,8 +102,9 @@ use std::sync::Arc;
 use super::fact_store::{
     CALL_STORE_FAMILY, CFG_STORE_FAMILY, CfgFactStore, FactStore, FactStoreEntry,
     GO_SEMANTIC_STORE_FAMILY, GO_SYNTAX_STORE_FAMILY, GoSyntaxStore, MODULE_GRAPH_STORE_FAMILY,
-    MODULE_TOPOLOGY_STORE_FAMILY, ModuleGraphStore, ModuleTopologyStore, SYMBOL_STORE_FAMILY,
-    SymbolStore, TS_SYNTAX_STORE_FAMILY, TsSyntaxStore,
+    MODULE_TOPOLOGY_STORE_FAMILY, ModuleGraphStore, ModuleTopologyStore,
+    SEMANTIC_INDEX_STORE_FAMILY, SYMBOL_STORE_FAMILY, SemanticIndexStore, SymbolStore,
+    TS_SYNTAX_STORE_FAMILY, TsSyntaxStore,
 };
 use super::facts::{
     BranchObligation, CachedFileFacts, ComplexityMetricFact, CoverageFact, DefinitionFact,
@@ -134,20 +135,6 @@ pub struct AnalysisDb {
     pub(crate) fact_meta: FactMetaStore,
     /// Provider-owned stores keyed by primary [`FactFamily`]. Iteration stays ordered.
     pub(crate) fact_stores: BTreeMap<FactFamily, FactStoreEntry>,
-    pub(crate) scopes: Vec<ScopeFact>,
-    pub(crate) semantic_imports: Vec<SemanticImportFact>,
-    pub(crate) exports: Vec<ExportFact>,
-    pub(crate) aliases: Vec<AliasFact>,
-    pub(crate) resolution_facts: Vec<ResolutionFact>,
-    pub(crate) generated_symbols: Vec<GeneratedSymbolFact>,
-    pub(crate) stable_exports: Vec<StableExportIdentity>,
-    pub(crate) scopes_by_id: BTreeMap<ScopeId, usize>,
-    pub(crate) semantic_imports_by_id: BTreeMap<SemanticImportId, usize>,
-    pub(crate) exports_by_id: BTreeMap<ExportId, usize>,
-    pub(crate) aliases_by_id: BTreeMap<AliasId, usize>,
-    pub(crate) resolution_facts_by_id: BTreeMap<ResolutionId, usize>,
-    pub(crate) generated_symbols_by_id: BTreeMap<GeneratedSymbolId, usize>,
-    pub(crate) stable_exports_by_id: BTreeMap<StableExportId, usize>,
     pub(crate) coverage: Vec<CoverageFact>,
     pub(crate) file_metrics: Vec<FileMetricFact>,
     pub(crate) function_metrics: Vec<FunctionMetricFact>,
@@ -282,24 +269,16 @@ impl Default for AnalysisDb {
         let mut symbol_store = SymbolStore::default();
         FactStore::clear(&mut symbol_store);
         fact_stores.insert(SYMBOL_STORE_FAMILY, FactStoreEntry::new(symbol_store));
+        let mut semantic_index = SemanticIndexStore::default();
+        FactStore::clear(&mut semantic_index);
+        fact_stores.insert(
+            SEMANTIC_INDEX_STORE_FAMILY,
+            FactStoreEntry::new(semantic_index),
+        );
         Self {
             files: Vec::new(),
             fact_meta: FactMetaStore::default(),
             fact_stores,
-            scopes: Vec::new(),
-            semantic_imports: Vec::new(),
-            exports: Vec::new(),
-            aliases: Vec::new(),
-            resolution_facts: Vec::new(),
-            generated_symbols: Vec::new(),
-            stable_exports: Vec::new(),
-            scopes_by_id: BTreeMap::new(),
-            semantic_imports_by_id: BTreeMap::new(),
-            exports_by_id: BTreeMap::new(),
-            aliases_by_id: BTreeMap::new(),
-            resolution_facts_by_id: BTreeMap::new(),
-            generated_symbols_by_id: BTreeMap::new(),
-            stable_exports_by_id: BTreeMap::new(),
             coverage: Vec::new(),
             file_metrics: Vec::new(),
             function_metrics: Vec::new(),
@@ -453,6 +432,16 @@ impl AnalysisDb {
     fn symbol_store_mut(&mut self) -> &mut SymbolStore {
         self.fact_store_mut(SYMBOL_STORE_FAMILY)
             .expect("SymbolStore is installed when AnalysisDb is constructed")
+    }
+
+    fn semantic_index_store(&self) -> &SemanticIndexStore {
+        self.fact_store(SEMANTIC_INDEX_STORE_FAMILY)
+            .expect("SemanticIndexStore is installed when AnalysisDb is constructed")
+    }
+
+    fn semantic_index_store_mut(&mut self) -> &mut SemanticIndexStore {
+        self.fact_store_mut(SEMANTIC_INDEX_STORE_FAMILY)
+            .expect("SemanticIndexStore is installed when AnalysisDb is constructed")
     }
 
     /// Typed downcast helper for registry stores. Returns `None` when the family
@@ -740,14 +729,15 @@ impl AnalysisDb {
             }
         }
 
-        self.scopes = scopes;
-        self.semantic_imports = semantic_imports;
-        self.exports = exports;
-        self.aliases = aliases;
-        self.resolution_facts = resolutions;
-        self.generated_symbols = generated_symbols;
-        self.stable_exports = stable_exports;
-        self.rebuild_semantic_index_indexes();
+        self.semantic_index_store_mut().replace(
+            scopes,
+            semantic_imports,
+            exports,
+            aliases,
+            resolutions,
+            generated_symbols,
+            stable_exports,
+        );
         self.refresh_semantic_index_metadata();
     }
 
@@ -2639,8 +2629,15 @@ impl AnalysisDb {
         self.fact_meta.remove_family(FactFamily::GeneratedSymbol);
         self.fact_meta.remove_family(FactFamily::StableExport);
 
-        let scope_metadata = self
-            .scopes
+        let scopes = self.scopes().to_vec();
+        let semantic_imports = self.semantic_imports().to_vec();
+        let exports = self.exports().to_vec();
+        let aliases = self.aliases().to_vec();
+        let resolution_facts = self.resolution_facts().to_vec();
+        let generated_symbols = self.generated_symbols().to_vec();
+        let stable_exports = self.stable_exports().to_vec();
+
+        let scope_metadata = scopes
             .iter()
             .map(|scope| {
                 (
@@ -2653,8 +2650,7 @@ impl AnalysisDb {
             self.record_fact_meta(FactFamily::Scope, run_id, metadata);
         }
 
-        let import_metadata = self
-            .semantic_imports
+        let import_metadata = semantic_imports
             .iter()
             .map(|fact| {
                 (
@@ -2671,8 +2667,7 @@ impl AnalysisDb {
             self.record_fact_meta(FactFamily::SemanticImport, run_id, metadata);
         }
 
-        let export_metadata = self
-            .exports
+        let export_metadata = exports
             .iter()
             .map(|fact| {
                 (
@@ -2685,8 +2680,7 @@ impl AnalysisDb {
             self.record_fact_meta(FactFamily::Export, run_id, metadata);
         }
 
-        let alias_metadata = self
-            .aliases
+        let alias_metadata = aliases
             .iter()
             .map(|fact| {
                 (
@@ -2699,8 +2693,7 @@ impl AnalysisDb {
             self.record_fact_meta(FactFamily::Alias, run_id, metadata);
         }
 
-        let resolution_metadata = self
-            .resolution_facts
+        let resolution_metadata = resolution_facts
             .iter()
             .map(|fact| {
                 (
@@ -2717,8 +2710,7 @@ impl AnalysisDb {
             self.record_fact_meta(FactFamily::Resolution, run_id, metadata);
         }
 
-        let generated_metadata = self
-            .generated_symbols
+        let generated_metadata = generated_symbols
             .iter()
             .map(|fact| {
                 (
@@ -2735,8 +2727,7 @@ impl AnalysisDb {
             self.record_fact_meta(FactFamily::GeneratedSymbol, run_id, metadata);
         }
 
-        let stable_export_metadata = self
-            .stable_exports
+        let stable_export_metadata = stable_exports
             .iter()
             .map(|fact| {
                 (
@@ -2832,38 +2823,6 @@ impl AnalysisDb {
             FactFamily::FunctionMetric,
             FactFamily::ComplexityMetric,
         ]);
-    }
-
-    fn rebuild_semantic_index_indexes(&mut self) {
-        self.scopes_by_id.clear();
-        self.semantic_imports_by_id.clear();
-        self.exports_by_id.clear();
-        self.aliases_by_id.clear();
-        self.resolution_facts_by_id.clear();
-        self.generated_symbols_by_id.clear();
-        self.stable_exports_by_id.clear();
-
-        for (index, scope) in self.scopes.iter().enumerate() {
-            self.scopes_by_id.insert(scope.id, index);
-        }
-        for (index, import) in self.semantic_imports.iter().enumerate() {
-            self.semantic_imports_by_id.insert(import.id, index);
-        }
-        for (index, export) in self.exports.iter().enumerate() {
-            self.exports_by_id.insert(export.id, index);
-        }
-        for (index, alias) in self.aliases.iter().enumerate() {
-            self.aliases_by_id.insert(alias.id, index);
-        }
-        for (index, resolution) in self.resolution_facts.iter().enumerate() {
-            self.resolution_facts_by_id.insert(resolution.id, index);
-        }
-        for (index, generated) in self.generated_symbols.iter().enumerate() {
-            self.generated_symbols_by_id.insert(generated.id, index);
-        }
-        for (index, stable_export) in self.stable_exports.iter().enumerate() {
-            self.stable_exports_by_id.insert(stable_export.id, index);
-        }
     }
 
     pub fn push_ts_component(&mut self, fact: TsComponentFact) {
@@ -3248,31 +3207,31 @@ impl AnalysisDb {
     }
 
     pub(crate) fn scopes(&self) -> &[ScopeFact] {
-        &self.scopes
+        self.semantic_index_store().scopes()
     }
 
     pub(crate) fn semantic_imports(&self) -> &[SemanticImportFact] {
-        &self.semantic_imports
+        self.semantic_index_store().semantic_imports()
     }
 
     pub(crate) fn exports(&self) -> &[ExportFact] {
-        &self.exports
+        self.semantic_index_store().exports()
     }
 
     pub(crate) fn aliases(&self) -> &[AliasFact] {
-        &self.aliases
+        self.semantic_index_store().aliases()
     }
 
     pub(crate) fn resolution_facts(&self) -> &[ResolutionFact] {
-        &self.resolution_facts
+        self.semantic_index_store().resolution_facts()
     }
 
     pub(crate) fn generated_symbols(&self) -> &[GeneratedSymbolFact] {
-        &self.generated_symbols
+        self.semantic_index_store().generated_symbols()
     }
 
     pub(crate) fn stable_exports(&self) -> &[StableExportIdentity] {
-        &self.stable_exports
+        self.semantic_index_store().stable_exports()
     }
 
     pub(crate) fn semantic_store(&self) -> Option<&SemanticStore> {

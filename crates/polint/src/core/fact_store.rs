@@ -5,6 +5,7 @@
 //! later eviction and language-neutral core layout.
 
 use std::any::Any;
+use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::analysis::calls::store::CallStore;
@@ -26,7 +27,11 @@ use crate::module_graph::topology::{
     ResolvedDependencyEdgeFact, SourceSetFact, TopologyOutput, TopologyPackageFact,
     WorkspaceRootFact,
 };
-use std::collections::BTreeMap;
+use crate::symbol_graph::semantic::{
+    AliasFact, AliasId, ExportFact, ExportId, GeneratedSymbolFact, GeneratedSymbolId,
+    ResolutionFact, ResolutionId, ScopeFact, ScopeId, SemanticImportFact, SemanticImportId,
+    StableExportId, StableExportIdentity,
+};
 
 /// Erased provider-owned fact container. Not public — rule authors use SDK views.
 pub(crate) trait FactStore: Any + Send + Sync {
@@ -683,6 +688,136 @@ impl FactStore for SymbolStore {
 
 /// Registry key used for [`SymbolStore`] in `AnalysisDb::fact_stores`.
 pub(crate) const SYMBOL_STORE_FAMILY: FactFamily = FactFamily::Symbol;
+
+/// Semantic-index facts and by-id indexes produced by the symbol-graph semantic layer.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SemanticIndexStore {
+    pub(crate) scopes: Vec<ScopeFact>,
+    pub(crate) semantic_imports: Vec<SemanticImportFact>,
+    pub(crate) exports: Vec<ExportFact>,
+    pub(crate) aliases: Vec<AliasFact>,
+    pub(crate) resolution_facts: Vec<ResolutionFact>,
+    pub(crate) generated_symbols: Vec<GeneratedSymbolFact>,
+    pub(crate) stable_exports: Vec<StableExportIdentity>,
+    pub(crate) scopes_by_id: BTreeMap<ScopeId, usize>,
+    pub(crate) semantic_imports_by_id: BTreeMap<SemanticImportId, usize>,
+    pub(crate) exports_by_id: BTreeMap<ExportId, usize>,
+    pub(crate) aliases_by_id: BTreeMap<AliasId, usize>,
+    pub(crate) resolution_facts_by_id: BTreeMap<ResolutionId, usize>,
+    pub(crate) generated_symbols_by_id: BTreeMap<GeneratedSymbolId, usize>,
+    pub(crate) stable_exports_by_id: BTreeMap<StableExportId, usize>,
+}
+
+impl SemanticIndexStore {
+    pub(crate) fn scopes(&self) -> &[ScopeFact] {
+        &self.scopes
+    }
+
+    pub(crate) fn semantic_imports(&self) -> &[SemanticImportFact] {
+        &self.semantic_imports
+    }
+
+    pub(crate) fn exports(&self) -> &[ExportFact] {
+        &self.exports
+    }
+
+    pub(crate) fn aliases(&self) -> &[AliasFact] {
+        &self.aliases
+    }
+
+    pub(crate) fn resolution_facts(&self) -> &[ResolutionFact] {
+        &self.resolution_facts
+    }
+
+    pub(crate) fn generated_symbols(&self) -> &[GeneratedSymbolFact] {
+        &self.generated_symbols
+    }
+
+    pub(crate) fn stable_exports(&self) -> &[StableExportIdentity] {
+        &self.stable_exports
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "semantic index replacement accepts every internal semantic row family explicitly"
+    )]
+    pub(crate) fn replace(
+        &mut self,
+        scopes: Vec<ScopeFact>,
+        semantic_imports: Vec<SemanticImportFact>,
+        exports: Vec<ExportFact>,
+        aliases: Vec<AliasFact>,
+        resolution_facts: Vec<ResolutionFact>,
+        generated_symbols: Vec<GeneratedSymbolFact>,
+        stable_exports: Vec<StableExportIdentity>,
+    ) {
+        self.scopes = scopes;
+        self.semantic_imports = semantic_imports;
+        self.exports = exports;
+        self.aliases = aliases;
+        self.resolution_facts = resolution_facts;
+        self.generated_symbols = generated_symbols;
+        self.stable_exports = stable_exports;
+        self.rebuild_indexes();
+    }
+
+    fn rebuild_indexes(&mut self) {
+        self.scopes_by_id.clear();
+        self.semantic_imports_by_id.clear();
+        self.exports_by_id.clear();
+        self.aliases_by_id.clear();
+        self.resolution_facts_by_id.clear();
+        self.generated_symbols_by_id.clear();
+        self.stable_exports_by_id.clear();
+
+        for (index, scope) in self.scopes.iter().enumerate() {
+            self.scopes_by_id.insert(scope.id, index);
+        }
+        for (index, import) in self.semantic_imports.iter().enumerate() {
+            self.semantic_imports_by_id.insert(import.id, index);
+        }
+        for (index, export) in self.exports.iter().enumerate() {
+            self.exports_by_id.insert(export.id, index);
+        }
+        for (index, alias) in self.aliases.iter().enumerate() {
+            self.aliases_by_id.insert(alias.id, index);
+        }
+        for (index, resolution) in self.resolution_facts.iter().enumerate() {
+            self.resolution_facts_by_id.insert(resolution.id, index);
+        }
+        for (index, generated) in self.generated_symbols.iter().enumerate() {
+            self.generated_symbols_by_id.insert(generated.id, index);
+        }
+        for (index, stable_export) in self.stable_exports.iter().enumerate() {
+            self.stable_exports_by_id.insert(stable_export.id, index);
+        }
+    }
+}
+
+impl FactStore for SemanticIndexStore {
+    fn family(&self) -> FactFamily {
+        FactFamily::Scope
+    }
+
+    fn clear(&mut self) {
+        *self = SemanticIndexStore::default();
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn clone_box(&self) -> Box<dyn FactStore> {
+        Box::new(self.clone())
+    }
+}
+
+/// Registry key used for [`SemanticIndexStore`] in `AnalysisDb::fact_stores`.
+pub(crate) const SEMANTIC_INDEX_STORE_FAMILY: FactFamily = FactFamily::Scope;
 
 #[cfg(test)]
 mod tests {
