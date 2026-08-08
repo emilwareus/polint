@@ -3299,7 +3299,7 @@ fn collect_ignore_report(root: &Path, args: &IgnoresArgs) -> Result<crate::ignor
     // ignore-directive scanning, which is limited to the configured rule scopes
     // plus any files diagnostics actually landed in.
     let rule_scope = config_rule_scope_globset(&config, enabled.as_ref());
-    let mut db = load_analysis_files_scoped(&config, rule_scope.as_ref())?;
+    let (mut db, _) = load_analysis_files_scoped(&config, rule_scope.as_ref())?;
     backfill_diagnostic_files(&mut db, &diagnostics, root);
     Ok(apply_ignores(&db, diagnostics, &config.config.ignores).report)
 }
@@ -3533,7 +3533,7 @@ fn collect_diagnostics_for_baseline(
         }
         // Same scope narrowing as `check_local_rule_hosts`.
         let rule_scope = config_rule_scope_globset(&config, enabled.as_ref());
-        let mut loaded_db = load_analysis_files_scoped(&config, rule_scope.as_ref())?;
+        let (mut loaded_db, _) = load_analysis_files_scoped(&config, rule_scope.as_ref())?;
         backfill_diagnostic_files(&mut loaded_db, &diagnostics, root);
         apply_ignores(&loaded_db, diagnostics, &config.config.ignores).diagnostics
     };
@@ -3722,14 +3722,14 @@ fn check_local_rule_hosts(root: &Path, args: &CheckArgs, manifests: &[PathBuf]) 
     // still apply.
     let rule_scope = config_rule_scope_globset(&config, enabled.as_ref());
     if args.ignore_comments && !child_applies_ignores {
-        let mut loaded_db = load_analysis_files_scoped(&config, rule_scope.as_ref())?;
+        let (mut loaded_db, _) = load_analysis_files_scoped(&config, rule_scope.as_ref())?;
         backfill_diagnostic_files(&mut loaded_db, &diagnostics, root);
         let ignore_application = apply_ignores(&loaded_db, diagnostics, &config.config.ignores);
         diagnostics = ignore_application.diagnostics;
         ignore_report = Some(ignore_application.report);
         db = Some(loaded_db);
     } else if should_render_check_stats(args) {
-        let mut loaded_db = load_analysis_files_scoped(&config, rule_scope.as_ref())?;
+        let (mut loaded_db, _) = load_analysis_files_scoped(&config, rule_scope.as_ref())?;
         backfill_diagnostic_files(&mut loaded_db, &diagnostics, root);
         db = Some(loaded_db);
     }
@@ -3852,7 +3852,7 @@ fn review(root: PathBuf, args: &ReviewArgs) -> Result<u8> {
 
     if check_args.ignore_comments && !child_applies_ignores {
         let rule_scope = config_rule_scope_globset(&config, enabled.as_ref());
-        let mut loaded_db = load_analysis_files_scoped(&config, rule_scope.as_ref())?;
+        let (mut loaded_db, _) = load_analysis_files_scoped(&config, rule_scope.as_ref())?;
         backfill_diagnostic_files(&mut loaded_db, &diagnostics, &root);
         diagnostics = apply_ignores(&loaded_db, diagnostics, &config.config.ignores).diagnostics;
     }

@@ -1,14 +1,21 @@
 use crate::config::LoadedConfig;
 use crate::core::{AnalysisDb, Language};
+use crate::diagnostics::{Diagnostic, TextRange};
 use crate::path_context::PathContextIndex;
-use anyhow::{Context, Result};
+use crate::repo_fs::{self, RepoFileReadError};
+use anyhow::{Result, anyhow};
 use globset::GlobSet;
 use ignore::WalkBuilder;
 use rayon::prelude::*;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use thiserror::Error;
+
+/// Hard ceiling for a single source file loaded into the analysis DB.
+///
+/// Oversized files are skipped with a `polint/capability` diagnostic instead of
+/// being read whole. Matches other bounded repo reads (cache / baseline / lockfiles).
+pub(crate) const SOURCE_FILE_MAX_BYTES: u64 = 16 * 1_048_576;
 
 #[derive(Debug, Error)]
 pub(crate) enum FsError {
@@ -82,7 +89,7 @@ pub(crate) fn discover_files_scoped(
 pub struct LoadSourcesTimings {
     /// `ignore` walk, language filter, glob include/exclude, stable sort.
     pub discover: Duration,
-    /// Parallel `read_to_string` for all discovered paths.
+    /// Parallel bounded source reads for all discovered paths.
     pub read_parallel: Duration,
     /// Sequential `AnalysisDb::add_file` (content hash + file records).
     pub fingerprint_and_push: Duration,
@@ -98,15 +105,20 @@ impl LoadSourcesTimings {
 
 #[cfg(test)]
 pub(crate) fn load_analysis_files(config: &LoadedConfig) -> Result<AnalysisDb> {
-    Ok(load_analysis_files_with_timings(config)?.0)
+    let (db, _) = load_analysis_files_with_timings(config)?;
+    Ok(db)
 }
 
 /// Load files narrowed to an extra `scope` glob set (see [`discover_files_scoped`]).
+///
+/// Oversized sources are omitted from the DB and reported as `polint/capability`
+/// diagnostics instead of being read into memory.
 pub(crate) fn load_analysis_files_scoped(
     config: &LoadedConfig,
     scope: Option<&GlobSet>,
-) -> Result<AnalysisDb> {
-    Ok(load_analysis_files_with_timings_scoped(config, scope)?.0)
+) -> Result<(AnalysisDb, Vec<Diagnostic>)> {
+    let (db, _, diagnostics) = load_analysis_files_with_timings_scoped(config, scope)?;
+    Ok((db, diagnostics))
 }
 
 /// Same as in-module `load_analysis_files`, plus per-subphase timings (for profiling).
@@ -115,13 +127,14 @@ pub(crate) fn load_analysis_files_scoped(
 pub fn load_analysis_files_with_timings(
     config: &LoadedConfig,
 ) -> Result<(AnalysisDb, LoadSourcesTimings)> {
-    load_analysis_files_with_timings_scoped(config, None)
+    let (db, timings, _) = load_analysis_files_with_timings_scoped(config, None)?;
+    Ok((db, timings))
 }
 
 fn load_analysis_files_with_timings_scoped(
     config: &LoadedConfig,
     scope: Option<&GlobSet>,
-) -> Result<(AnalysisDb, LoadSourcesTimings)> {
+) -> Result<(AnalysisDb, LoadSourcesTimings, Vec<Diagnostic>)> {
     let mut timings = LoadSourcesTimings::default();
 
     let t0 = Instant::now();
@@ -129,20 +142,22 @@ fn load_analysis_files_with_timings_scoped(
     timings.discover = t0.elapsed();
 
     let t1 = Instant::now();
-    let loaded = discovered
+    let outcomes = discovered
         .into_par_iter()
-        .map(|file| {
-            let source = fs::read_to_string(&file.path)
-                .with_context(|| format!("failed to read {}", file.path.display()))?;
-            Ok((file, source))
-        })
+        .map(read_discovered_source)
         .collect::<Result<Vec<_>>>()?;
     timings.read_parallel = t1.elapsed();
 
     let t2 = Instant::now();
     let mut db = AnalysisDb::new();
-    for (file, source) in loaded {
-        db.add_file(file.path, file.relative_path, source);
+    let mut diagnostics = Vec::new();
+    for outcome in outcomes {
+        match outcome {
+            SourceReadOutcome::Loaded { file, source } => {
+                db.add_file(file.path, file.relative_path, source);
+            }
+            SourceReadOutcome::Skipped(diagnostic) => diagnostics.push(*diagnostic),
+        }
     }
     let rel_paths: Vec<String> = db.files().iter().map(|f| f.relative_path.clone()).collect();
     let path_ix = PathContextIndex::build(&config.config.path_contexts, &rel_paths);
@@ -151,18 +166,58 @@ fn load_analysis_files_with_timings_scoped(
     }
     timings.fingerprint_and_push = t2.elapsed();
 
-    Ok((db, timings))
+    Ok((db, timings, diagnostics))
+}
+
+enum SourceReadOutcome {
+    Loaded {
+        file: DiscoveredFile,
+        source: String,
+    },
+    Skipped(Box<Diagnostic>),
+}
+
+fn read_discovered_source(file: DiscoveredFile) -> Result<SourceReadOutcome> {
+    match repo_fs::read_file_to_string_with_limit(&file.path, SOURCE_FILE_MAX_BYTES) {
+        Ok(source) => Ok(SourceReadOutcome::Loaded { file, source }),
+        Err(RepoFileReadError::TooLarge { max_bytes }) => Ok(SourceReadOutcome::Skipped(Box::new(
+            oversized_source_diagnostic(&file.relative_path, max_bytes),
+        ))),
+        Err(error) => Err(anyhow!("failed to read {}: {error}", file.path.display())),
+    }
+}
+
+fn oversized_source_diagnostic(relative_path: &str, max_bytes: u64) -> Diagnostic {
+    Diagnostic::error(
+        "polint/capability",
+        relative_path,
+        TextRange::point(1, 1),
+        format!(
+            "Source file `{relative_path}` exceeds the {max_bytes}-byte read limit and was skipped."
+        ),
+    )
+    .with_evidence("capability", "source")
+    .with_evidence("status", "unsupported")
+    .with_evidence("reason", "file-exceeds-source-read-size-limit")
+    .with_evidence("max_bytes", max_bytes.to_string())
+    .with_help(format!(
+        "Exclude oversized generated files from workspace include patterns, or split the file; polint refuses to load sources larger than {max_bytes} bytes."
+    ))
 }
 
 #[cfg(test)]
-fn load_analysis_files_sequential(config: &LoadedConfig) -> Result<AnalysisDb> {
+fn load_analysis_files_sequential(config: &LoadedConfig) -> Result<(AnalysisDb, Vec<Diagnostic>)> {
     let mut db = AnalysisDb::new();
+    let mut diagnostics = Vec::new();
     for file in discover_files(config)? {
-        let source = fs::read_to_string(&file.path)
-            .with_context(|| format!("failed to read {}", file.path.display()))?;
-        db.add_file(file.path, file.relative_path, source);
+        match read_discovered_source(file)? {
+            SourceReadOutcome::Loaded { file, source } => {
+                db.add_file(file.path, file.relative_path, source);
+            }
+            SourceReadOutcome::Skipped(diagnostic) => diagnostics.push(*diagnostic),
+        }
     }
-    Ok(db)
+    Ok((db, diagnostics))
 }
 
 #[derive(Debug, Clone)]
@@ -195,6 +250,7 @@ mod tests {
     use super::*;
     use crate::config::load_config;
     use proptest::prelude::*;
+    use std::fs;
 
     #[test]
     fn detects_language_from_path() {
@@ -367,7 +423,7 @@ exclude = ["src/excluded.tsx", "src/vendor/**"]
 
         let config = load_config(temp.path()).unwrap();
         let parallel = load_analysis_files(&config).unwrap();
-        let sequential = load_analysis_files_sequential(&config).unwrap();
+        let (sequential, _) = load_analysis_files_sequential(&config).unwrap();
         let parallel_paths = parallel
             .files()
             .iter()
@@ -380,6 +436,43 @@ exclude = ["src/excluded.tsx", "src/vendor/**"]
             .collect::<Vec<_>>();
 
         assert_eq!(parallel_paths, sequential_paths);
+    }
+
+    #[test]
+    fn oversized_source_file_is_skipped_with_capability_diagnostic() {
+        let temp = tempfile::tempdir().unwrap();
+        write_file(temp.path().join("ok.go"), "package main\n");
+        let oversized = temp.path().join("huge.go");
+        {
+            let file = fs::File::create(&oversized).unwrap();
+            file.set_len(SOURCE_FILE_MAX_BYTES + 1).unwrap();
+        }
+
+        let config = load_config(temp.path()).unwrap();
+        let (db, diagnostics) = load_analysis_files_scoped(&config, None).unwrap();
+
+        assert_eq!(
+            db.files()
+                .iter()
+                .map(|file| file.relative_path.as_str())
+                .collect::<Vec<_>>(),
+            ["ok.go"]
+        );
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].rule_id, "polint/capability");
+        assert_eq!(diagnostics[0].file, "huge.go");
+        assert!(
+            diagnostics[0]
+                .evidence
+                .iter()
+                .any(|evidence| evidence.label == "reason"
+                    && evidence.value == "file-exceeds-source-read-size-limit")
+        );
+        assert!(
+            !diagnostics[0].message.contains("topology"),
+            "source-skip message must not reuse topology wording: {}",
+            diagnostics[0].message
+        );
     }
 
     fn write_file(path: impl AsRef<Path>, contents: &str) {

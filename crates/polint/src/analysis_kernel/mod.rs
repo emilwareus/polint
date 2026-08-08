@@ -136,7 +136,8 @@ impl AnalysisKernel {
             "analysis kernel pipeline gate"
         );
 
-        let mut db = crate::fs::load_analysis_files_scoped(input.loaded, rule_scope.as_ref())?;
+        let (mut db, load_diagnostics) =
+            crate::fs::load_analysis_files_scoped(input.loaded, rule_scope.as_ref())?;
         // Source-load summary: the corpus actually read into memory is the dominant
         // memory cost on large repos, so log its size/shape when info tracing is on.
         // Guarded by `enabled!` so it costs nothing in normal (un-instrumented) runs.
@@ -179,7 +180,7 @@ impl AnalysisKernel {
             input.plan.digest(),
             Self::provider_manifests(),
         );
-        let mut diagnostics = Vec::new();
+        let mut diagnostics = load_diagnostics;
         let mut provider_outputs = Vec::new();
 
         provider_outputs.push(Self::provider_output_for(
@@ -2907,6 +2908,55 @@ function setup() {
         assert!(
             error.to_string().contains("invalid glob"),
             "unexpected error: {error:?}"
+        );
+    }
+
+    #[test]
+    fn run_surfaces_oversized_source_as_capability_diagnostic() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(temp.path().join("ok.go"), "package main\n").expect("write ok.go");
+        let oversized = temp.path().join("huge.go");
+        {
+            let file = std::fs::File::create(&oversized).expect("create huge.go");
+            file.set_len(crate::fs::SOURCE_FILE_MAX_BYTES + 1)
+                .expect("set oversized length");
+        }
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let cache = Cache::new("", false);
+        let plan = AnalysisPlan::empty();
+
+        let output = AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("kernel should continue after skipping oversized sources");
+
+        assert_eq!(
+            output
+                .db
+                .files()
+                .iter()
+                .map(|file| file.relative_path.as_str())
+                .collect::<Vec<_>>(),
+            ["ok.go"]
+        );
+        let diagnostic = output
+            .diagnostics
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.rule_id == "polint/capability" && diagnostic.file == "huge.go"
+            })
+            .expect("kernel must surface the load-time capability diagnostic");
+        assert!(
+            diagnostic.evidence.iter().any(|evidence| {
+                evidence.label == "reason"
+                    && evidence.value == "file-exceeds-source-read-size-limit"
+            }),
+            "missing oversized-source evidence: {diagnostic:?}"
         );
     }
 
