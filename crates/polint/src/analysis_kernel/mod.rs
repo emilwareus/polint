@@ -21,10 +21,10 @@ pub(crate) use metadata::{
 pub(crate) use provider::ProviderKind;
 use provider::scheduled_order;
 pub(crate) use provider::{
-    CachePolicy, CfgProvider, GoSyntaxProvider, LanguageScope, ModuleGraphProvider,
-    ModuleTopologyProvider, PrecisionCeiling, Provider, ProviderCtx, ProviderManifest,
-    ProviderRunResult, SchemaVersion, SemanticMirProvider, SourceProvider, SymbolGraphProvider,
-    TsSyntaxProvider,
+    AbstractDomainsProvider, CachePolicy, CallsProvider, CfgProvider, GoSemanticProvider,
+    GoSyntaxProvider, IdentityProvider, LanguageScope, ModuleGraphProvider, ModuleTopologyProvider,
+    PrecisionCeiling, Provider, ProviderCtx, ProviderManifest, ProviderRunResult, SchemaVersion,
+    SemanticMirProvider, SourceProvider, SymbolGraphProvider, TsSyntaxProvider,
 };
 pub(crate) use store::StoreStatus;
 
@@ -209,6 +209,9 @@ impl AnalysisKernel {
                 parallel: input.parallel,
                 upstream_digests: &upstream_digests,
                 capability_support: &mut capability_support,
+                run_semantic_pipeline,
+                run_cfg_call_pipeline,
+                compact_domain_materialization,
             };
             SourceProvider.run(&mut ctx)
         };
@@ -231,6 +234,9 @@ impl AnalysisKernel {
                 parallel: input.parallel,
                 upstream_digests: &upstream_digests,
                 capability_support: &mut capability_support,
+                run_semantic_pipeline,
+                run_cfg_call_pipeline,
+                compact_domain_materialization,
             };
             GoSyntaxProvider.run(&mut ctx)
         };
@@ -259,6 +265,9 @@ impl AnalysisKernel {
                 parallel: input.parallel,
                 upstream_digests: &upstream_digests,
                 capability_support: &mut capability_support,
+                run_semantic_pipeline,
+                run_cfg_call_pipeline,
+                compact_domain_materialization,
             };
             TsSyntaxProvider.run(&mut ctx)
         };
@@ -293,6 +302,9 @@ impl AnalysisKernel {
                 parallel: input.parallel,
                 upstream_digests: &upstream_digests,
                 capability_support: &mut capability_support,
+                run_semantic_pipeline,
+                run_cfg_call_pipeline,
+                compact_domain_materialization,
             };
             ModuleGraphProvider.run(&mut ctx)
         };
@@ -322,6 +334,9 @@ impl AnalysisKernel {
                 parallel: input.parallel,
                 upstream_digests: &upstream_digests,
                 capability_support: &mut capability_support,
+                run_semantic_pipeline,
+                run_cfg_call_pipeline,
+                compact_domain_materialization,
             };
             SymbolGraphProvider.run(&mut ctx)
         };
@@ -356,6 +371,9 @@ impl AnalysisKernel {
                 parallel: input.parallel,
                 upstream_digests: &upstream_digests,
                 capability_support: &mut capability_support,
+                run_semantic_pipeline,
+                run_cfg_call_pipeline,
+                compact_domain_materialization,
             };
             ModuleTopologyProvider.run(&mut ctx)
         } else {
@@ -397,6 +415,9 @@ impl AnalysisKernel {
                 parallel: input.parallel,
                 upstream_digests: &upstream_digests,
                 capability_support: &mut capability_support,
+                run_semantic_pipeline,
+                run_cfg_call_pipeline,
+                compact_domain_materialization,
             };
             SemanticMirProvider.run(&mut ctx)
         } else {
@@ -438,6 +459,9 @@ impl AnalysisKernel {
                 parallel: input.parallel,
                 upstream_digests: &upstream_digests,
                 capability_support: &mut capability_support,
+                run_semantic_pipeline,
+                run_cfg_call_pipeline,
+                compact_domain_materialization,
             };
             CfgProvider.run(&mut ctx)
         } else {
@@ -463,40 +487,32 @@ impl AnalysisKernel {
         let cfg_dependency_output_digest = cfg_output_digest.unwrap_or_else(|| {
             incremental::Digest::absent(incremental::DigestKind::ProviderOutput, "polint.cfg")
         });
-        let calls = if run_cfg_call_pipeline {
-            crate::analysis::calls::provider::derive_calls_with_cache_stats(
-                &mut db,
-                &input_snapshot,
-                Self::provider_manifest("polint.calls"),
-                semantic_mir_dependency_output_digest.clone(),
-                cfg_dependency_output_digest.clone(),
-                symbol_dependency_output_digest.clone(),
-                module_topology_dependency_output_digest.clone(),
-                vec![
-                    go_dependency_output_digest.clone(),
-                    ts_dependency_output_digest.clone(),
-                ],
-            )
-        } else if run_semantic_pipeline {
-            crate::analysis::calls::provider::derive_call_sites_with_cache_stats(
-                &mut db,
-                &input_snapshot,
-                Self::provider_manifest("polint.calls"),
-                semantic_mir_dependency_output_digest.clone(),
-                cfg_dependency_output_digest.clone(),
-                vec![
-                    go_dependency_output_digest.clone(),
-                    ts_dependency_output_digest.clone(),
-                ],
-            )
-        } else {
-            Default::default()
+        let calls = {
+            let mut ctx = ProviderCtx {
+                db: &mut db,
+                cache: input.cache,
+                loaded: input.loaded,
+                input_snapshot: &input_snapshot,
+                config_digest: input.config_digest,
+                rule_digest: input.rule_digest,
+                plan: input.plan,
+                parallel: input.parallel,
+                upstream_digests: &upstream_digests,
+                capability_support: &mut capability_support,
+                run_semantic_pipeline,
+                run_cfg_call_pipeline,
+                compact_domain_materialization,
+            };
+            CallsProvider.run(&mut ctx)
         };
         let polint_calls_cache_stats = calls.cache_stats.clone();
         let calls_output_digest = calls.output_digest.clone();
+        if let Some(digest) = calls_output_digest.clone() {
+            upstream_digests.insert(CallsProvider.manifest().id, digest);
+        }
         diagnostics.extend(calls.diagnostics);
         provider_outputs.push(Self::provider_output_for_with_optional_digest(
-            "polint.calls",
+            CallsProvider.manifest().id,
             &db,
             polint_calls_cache_stats,
             calls_output_digest.clone(),
@@ -507,21 +523,37 @@ impl AnalysisKernel {
         });
 
         let go_semantic = if run_full_refinement_pipeline {
-            crate::go::semantic::provider::derive_go_semantic_with_cache_stats(
-                &mut db,
-                input.loaded,
-                &input_snapshot,
-                Self::provider_manifest("polint.go.semantic"),
-                go_dependency_output_digest.clone(),
-            )
+            let mut ctx = ProviderCtx {
+                db: &mut db,
+                cache: input.cache,
+                loaded: input.loaded,
+                input_snapshot: &input_snapshot,
+                config_digest: input.config_digest,
+                rule_digest: input.rule_digest,
+                plan: input.plan,
+                parallel: input.parallel,
+                upstream_digests: &upstream_digests,
+                capability_support: &mut capability_support,
+                run_semantic_pipeline,
+                run_cfg_call_pipeline,
+                compact_domain_materialization,
+            };
+            GoSemanticProvider.run(&mut ctx)
         } else {
-            Default::default()
+            ProviderRunResult {
+                diagnostics: Vec::new(),
+                cache_stats: incremental::CacheStats::default(),
+                output_digest: None,
+            }
         };
         let polint_go_semantic_cache_stats = go_semantic.cache_stats.clone();
         let go_semantic_output_digest = go_semantic.output_digest.clone();
+        if let Some(digest) = go_semantic_output_digest.clone() {
+            upstream_digests.insert(GoSemanticProvider.manifest().id, digest);
+        }
         diagnostics.extend(go_semantic.diagnostics);
         provider_outputs.push(Self::provider_output_for_with_optional_digest(
-            "polint.go.semantic",
+            GoSemanticProvider.manifest().id,
             &db,
             polint_go_semantic_cache_stats,
             go_semantic_output_digest.clone(),
@@ -534,21 +566,37 @@ impl AnalysisKernel {
         });
 
         let identity = if run_full_refinement_pipeline {
-            crate::analysis::identity::provider::derive_identity_with_cache_stats(
-                &mut db,
-                &input_snapshot,
-                Self::provider_manifest("polint.identity"),
-                calls_dependency_output_digest.clone(),
-                go_semantic_dependency_output_digest.clone(),
-            )
+            let mut ctx = ProviderCtx {
+                db: &mut db,
+                cache: input.cache,
+                loaded: input.loaded,
+                input_snapshot: &input_snapshot,
+                config_digest: input.config_digest,
+                rule_digest: input.rule_digest,
+                plan: input.plan,
+                parallel: input.parallel,
+                upstream_digests: &upstream_digests,
+                capability_support: &mut capability_support,
+                run_semantic_pipeline,
+                run_cfg_call_pipeline,
+                compact_domain_materialization,
+            };
+            IdentityProvider.run(&mut ctx)
         } else {
-            Default::default()
+            ProviderRunResult {
+                diagnostics: Vec::new(),
+                cache_stats: incremental::CacheStats::default(),
+                output_digest: None,
+            }
         };
         let polint_identity_cache_stats = identity.cache_stats.clone();
         let identity_output_digest = identity.output_digest;
+        if let Some(digest) = identity_output_digest.clone() {
+            upstream_digests.insert(IdentityProvider.manifest().id, digest);
+        }
         diagnostics.extend(identity.diagnostics);
         provider_outputs.push(Self::provider_output_for_with_optional_digest(
-            "polint.identity",
+            IdentityProvider.manifest().id,
             &db,
             polint_identity_cache_stats,
             identity_output_digest.clone(),
@@ -557,44 +605,38 @@ impl AnalysisKernel {
             incremental::Digest::absent(incremental::DigestKind::ProviderOutput, "polint.identity")
         });
 
-        let abstract_domains = if run_full_refinement_pipeline && compact_domain_materialization {
-            crate::analysis::domains::provider::derive_summary_input_abstract_domains_with_cache_stats(
-                &mut db,
-                &input_snapshot,
-                Self::provider_manifest("polint.abstract_domains"),
-                semantic_mir_dependency_output_digest.clone(),
-                cfg_dependency_output_digest.clone(),
-                calls_dependency_output_digest.clone(),
-                symbol_dependency_output_digest.clone(),
-                module_topology_dependency_output_digest.clone(),
-                vec![
-                    go_dependency_output_digest.clone(),
-                    ts_dependency_output_digest.clone(),
-                ],
-            )
-        } else if run_full_refinement_pipeline {
-            crate::analysis::domains::provider::derive_abstract_domains_with_cache_stats(
-                &mut db,
-                &input_snapshot,
-                Self::provider_manifest("polint.abstract_domains"),
-                semantic_mir_dependency_output_digest.clone(),
-                cfg_dependency_output_digest.clone(),
-                calls_dependency_output_digest.clone(),
-                symbol_dependency_output_digest.clone(),
-                module_topology_dependency_output_digest.clone(),
-                vec![
-                    go_dependency_output_digest.clone(),
-                    ts_dependency_output_digest.clone(),
-                ],
-            )
+        let abstract_domains = if run_full_refinement_pipeline {
+            let mut ctx = ProviderCtx {
+                db: &mut db,
+                cache: input.cache,
+                loaded: input.loaded,
+                input_snapshot: &input_snapshot,
+                config_digest: input.config_digest,
+                rule_digest: input.rule_digest,
+                plan: input.plan,
+                parallel: input.parallel,
+                upstream_digests: &upstream_digests,
+                capability_support: &mut capability_support,
+                run_semantic_pipeline,
+                run_cfg_call_pipeline,
+                compact_domain_materialization,
+            };
+            AbstractDomainsProvider.run(&mut ctx)
         } else {
-            Default::default()
+            ProviderRunResult {
+                diagnostics: Vec::new(),
+                cache_stats: incremental::CacheStats::default(),
+                output_digest: None,
+            }
         };
         let polint_abstract_domains_cache_stats = abstract_domains.cache_stats.clone();
         let abstract_domains_output_digest = abstract_domains.output_digest;
+        if let Some(digest) = abstract_domains_output_digest.clone() {
+            upstream_digests.insert(AbstractDomainsProvider.manifest().id, digest);
+        }
         diagnostics.extend(abstract_domains.diagnostics);
         provider_outputs.push(Self::provider_output_for_with_optional_digest(
-            "polint.abstract_domains",
+            AbstractDomainsProvider.manifest().id,
             &db,
             polint_abstract_domains_cache_stats,
             abstract_domains_output_digest.clone(),
