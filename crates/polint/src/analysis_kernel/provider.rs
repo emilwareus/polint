@@ -1,7 +1,8 @@
-use super::incremental::{CacheStats, Digest};
+use super::incremental::{CacheStats, Digest, DigestKind, InputSnapshot};
 use crate::analysis_plan::AnalysisPlan;
 use crate::cache::Cache;
-use crate::core::AnalysisDb;
+use crate::config::LoadedConfig;
+use crate::core::{AnalysisDb, CapabilitySupportView};
 use crate::diagnostics::Diagnostic;
 use std::collections::BTreeMap;
 
@@ -32,12 +33,25 @@ pub(crate) trait Provider: Send + Sync {
 pub(crate) struct ProviderCtx<'a> {
     pub(crate) db: &'a mut AnalysisDb,
     pub(crate) cache: &'a Cache,
+    pub(crate) loaded: &'a LoadedConfig,
+    pub(crate) input_snapshot: &'a InputSnapshot,
     pub(crate) config_digest: &'a str,
     pub(crate) rule_digest: &'a str,
     pub(crate) plan: &'a AnalysisPlan,
     pub(crate) parallel: bool,
     /// Output digests of already-run providers, keyed by provider id.
     pub(crate) upstream_digests: &'a BTreeMap<&'static str, Digest>,
+    /// Accumulated capability support overrides from providers that emit them.
+    pub(crate) capability_support: &'a mut CapabilitySupportView,
+}
+
+impl ProviderCtx<'_> {
+    pub(crate) fn dependency_digest(&self, provider_id: &'static str) -> Digest {
+        self.upstream_digests
+            .get(provider_id)
+            .cloned()
+            .unwrap_or_else(|| Digest::absent(DigestKind::ProviderOutput, provider_id))
+    }
 }
 
 fn manifest_by_id(id: &'static str) -> &'static ProviderManifest {
@@ -105,13 +119,152 @@ impl Provider for TsSyntaxProvider {
     }
 }
 
+pub(crate) struct ModuleGraphProvider;
+
+impl Provider for ModuleGraphProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.module_graph")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let derivation = crate::module_graph::derive_requested_module_graph_with_cache_stats(
+            ctx.db,
+            ctx.loaded,
+            ctx.plan,
+            ctx.cache,
+            ctx.input_snapshot,
+            self.manifest(),
+            vec![
+                ctx.dependency_digest("polint.go.syntax"),
+                ctx.dependency_digest("polint.ts.syntax"),
+            ],
+        );
+        let updated = derivation.support_view(ctx.capability_support);
+        *ctx.capability_support = updated;
+        ProviderRunResult {
+            diagnostics: derivation.diagnostics,
+            cache_stats: derivation.cache_stats,
+            output_digest: derivation.output_digest,
+        }
+    }
+}
+
+pub(crate) struct SymbolGraphProvider;
+
+impl Provider for SymbolGraphProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.symbol_graph")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let derivation = crate::symbol_graph::derive_requested_symbols_with_cache_stats(
+            ctx.db,
+            ctx.loaded,
+            ctx.plan,
+            ctx.cache,
+            ctx.input_snapshot,
+            self.manifest(),
+            ctx.dependency_digest("polint.module_graph"),
+            vec![
+                ctx.dependency_digest("polint.go.syntax"),
+                ctx.dependency_digest("polint.ts.syntax"),
+            ],
+        );
+        let updated = derivation.support_view(ctx.capability_support);
+        *ctx.capability_support = updated;
+        ProviderRunResult {
+            diagnostics: derivation.diagnostics,
+            cache_stats: derivation.cache_stats,
+            output_digest: derivation.output_digest,
+        }
+    }
+}
+
+pub(crate) struct ModuleTopologyProvider;
+
+impl Provider for ModuleTopologyProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.module_topology")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let derivation = crate::module_graph::derive_module_topology_with_cache_stats(
+            ctx.db,
+            ctx.cache,
+            ctx.input_snapshot,
+            self.manifest(),
+            ctx.dependency_digest("polint.module_graph"),
+            ctx.dependency_digest("polint.symbol_graph"),
+        );
+        ProviderRunResult {
+            diagnostics: derivation.diagnostics,
+            cache_stats: derivation.cache_stats,
+            output_digest: derivation.output_digest,
+        }
+    }
+}
+
+pub(crate) struct SemanticMirProvider;
+
+impl Provider for SemanticMirProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.semantic_mir")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let derivation = crate::analysis::provider::derive_semantic_mir_with_cache_stats(
+            ctx.db,
+            ctx.input_snapshot,
+            self.manifest(),
+            ctx.dependency_digest("polint.module_topology"),
+            ctx.dependency_digest("polint.symbol_graph"),
+            vec![
+                ctx.dependency_digest("polint.go.syntax"),
+                ctx.dependency_digest("polint.ts.syntax"),
+            ],
+        );
+        ProviderRunResult {
+            diagnostics: derivation.diagnostics,
+            cache_stats: derivation.cache_stats,
+            output_digest: derivation.output_digest,
+        }
+    }
+}
+
+pub(crate) struct CfgProvider;
+
+impl Provider for CfgProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.cfg")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let derivation = crate::analysis::cfg::provider::derive_cfg_with_cache_stats(
+            ctx.db,
+            ctx.input_snapshot,
+            self.manifest(),
+            ctx.dependency_digest("polint.semantic_mir"),
+            vec![
+                ctx.dependency_digest("polint.go.syntax"),
+                ctx.dependency_digest("polint.ts.syntax"),
+            ],
+        );
+        ProviderRunResult {
+            diagnostics: derivation.diagnostics,
+            cache_stats: derivation.cache_stats,
+            output_digest: derivation.output_digest,
+        }
+    }
+}
+
 /// Topological schedule of `PROVIDER_MANIFESTS` with ties broken by declaration index.
 ///
 /// Edge: provider P depends on Q when any string in `P.inputs` appears in `Q.outputs`.
 /// External inputs with no producer (e.g. `workspace_config`) create no edges.
 ///
-/// Driven by the step-4 order test today; `AnalysisKernel::run` switches to this in step 6.
-#[cfg_attr(not(test), allow(dead_code))]
+/// Order is asserted against the declared manifest sequence; the kernel switches
+/// execution onto this schedule once capability-closure gating replaces the
+/// hand-rolled boolean pipeline flags.
 pub(crate) fn scheduled_order() -> Vec<&'static str> {
     use std::cmp::Reverse;
     use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
