@@ -115,10 +115,15 @@ regeneration PR. Their implementation PRs run in parallel; only the regeneration
 **M2 GATE — all merged, §5 green, and: `AnalysisDb` ≤ 30 fields; retained bytes/LOC < 2 KB (from
 W0.A4 records); module cycles < 5; the W2.6 acceptance test shows ≤ 2 edits to add a frontend.**
 
-### M3 / M4 — NOT DISPATCHABLE
+### M3 / M4 — DISPATCHABLE after binding specs (human override 2026-08-08)
 
-The orchestrator **must not** create tasks for M3 or M4. They have no specs, by design. On reaching
-the M2 gate, the orchestrator halts and writes `.swarm/M2-COMPLETE.md`. A human resumes.
+Human binding: `.swarm/HUMAN-BINDING-2026-08-08-M3-M4.md`. Finish **M3 and M4 on this
+integration branch** (migrate existing Go/TS only; no new languages; no LoC gates; interning
+follow-up). Specs: `docs/architecture-review/specs/M3-OVERVIEW.md`, `W3.1`–`W3.5`,
+`M4-OVERVIEW.md` (+ per-task `W4.*` before each dispatch).
+
+On M2 structural tip ready: write/update `.swarm/M2-COMPLETE.md`, then **dispatch M3** (do not
+halt). Never merge to `main` from swarm.
 
 ---
 

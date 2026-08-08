@@ -578,8 +578,8 @@
       "done_at": "2026-08-08T16:28:48+02:00"
     },
     "W2.4": {
-      "state": "CLAIMED",
-      "note": "PARTIAL: step1 ProviderRunResult MERGED@1a589446; step2 Source+GoSyntax@24ed2b07; steps3+4 TsSyntax+scheduled_order topo==manifests MERGED@8fd7c456. Next: wrap remaining providers (\u22645/PR), then capability-closure (step5), then switch run() (step6).",
+      "state": "MERGED",
+      "note": "MERGED on integration (reconciled 2026-08-08; was stale CLAIMED)",
       "branch": "swarm/W2.4",
       "worktree": "/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.4",
       "source_commit": "8fd7c456945dceefeb930c55cde612f54308df4c",
@@ -613,7 +613,8 @@
           "topo": "PASS",
           "landed": true
         }
-      }
+      },
+      "reconciled_at": "2026-08-08T20:27:05+02:00"
     },
     "W2.5": {
       "state": "MERGED",
@@ -650,15 +651,64 @@
       "commit": "acde3818e93deb605e8611552bff1973a623fd04",
       "merged_at": "2026-08-08T19:11:03+02:00",
       "done_at": "2026-08-08T19:11:03+02:00"
+    },
+    "W2.6": {
+      "state": "MERGED",
+      "note": "MERGED LanguageFrontend registry (reconciled)",
+      "reconciled_at": "2026-08-08T20:27:05+02:00"
+    },
+    "W3.1": {
+      "state": "CLAIMED",
+      "spec": "docs/architecture-review/specs/W3.1-mir-blocks-terminators.md",
+      "depends_on": [],
+      "created_at": "2026-08-08T20:27:05+02:00",
+      "branch": "swarm/W3.1",
+      "dispatched_at": "2026-08-08T20:27:09+02:00",
+      "attempts": 1
+    },
+    "W3.2": {
+      "state": "BLOCKED",
+      "spec": "docs/architecture-review/specs/W3.2-mir-effects.md",
+      "depends_on": [
+        "W3.1"
+      ],
+      "created_at": "2026-08-08T20:27:05+02:00"
+    },
+    "W3.3": {
+      "state": "BLOCKED",
+      "spec": "docs/architecture-review/specs/W3.3-mir-ops-and-types.md",
+      "depends_on": [
+        "W3.1"
+      ],
+      "created_at": "2026-08-08T20:27:05+02:00"
+    },
+    "W3.4": {
+      "state": "BLOCKED",
+      "spec": "docs/architecture-review/specs/W3.4-delete-cfg-source-lowerers.md",
+      "depends_on": [
+        "W3.1",
+        "W3.2"
+      ],
+      "created_at": "2026-08-08T20:27:05+02:00"
+    },
+    "W3.5": {
+      "state": "BLOCKED",
+      "spec": "docs/architecture-review/specs/W3.5-fold-ts-value-flows.md",
+      "depends_on": [
+        "W3.3"
+      ],
+      "created_at": "2026-08-08T20:27:05+02:00"
     }
   },
   "locks": {
     "golden": null,
     "fact_family": {}
   },
-  "milestone": "M2",
+  "milestone": "M3",
   "READY": [],
-  "IN_FLIGHT": [],
+  "IN_FLIGHT": [
+    "W3.1"
+  ],
   "IN_REVIEW": [],
   "MERGED": [
     "W0.A1",
@@ -691,12 +741,12 @@
   "dispatch_allowed": true,
   "halt": {
     "active": false,
-    "cleared_at": "2026-08-08T10:50:00+02:00",
-    "reason": "human binding decisions drained all holds"
+    "cleared_at": "2026-08-08T20:27:05+02:00",
+    "reason": "human authorized M3+M4"
   },
   "integration_branch": "static-analysis-architecture-review",
   "never_merge_to_main": true,
-  "integration_head": "acde3818e93deb605e8611552bff1973a623fd04",
+  "integration_head": "cad6c8fa",
   "m0_gate": {
     "status": "PASS",
     "completed_at": "2026-08-08T11:52:00+02:00",
@@ -745,7 +795,11 @@
     "2026-08-08T16:18:17+02:00: W2.3 step1 ESCALATE @ 7f988fc5 (dense RTA no measurable win; measurement doc landed FF; product go_rta unchanged; main untouched; W2.5 must not assume interning)",
     "2026-08-08T16:28:48+02:00: W2.3 MERGED-NOOP (ESCALATE no RTA win); W2.4 steps1-4 landed @ 8fd7c456; tip advanced; W2.5 blocked (interning model wrong); main untouched",
     "2026-08-08T18:54:16+02:00: W2.5 progress tip 8a42a69d; AnalysisDb fields 102\u219259; no ts_/go_semantic_ flats; main untouched",
-    "2026-08-08T18:57:24+02:00: W2.5 IdentityStore landed @ 85a316fb; AnalysisDb fields=57; main untouched"
+    "2026-08-08T18:57:24+02:00: W2.5 IdentityStore landed @ 85a316fb; AnalysisDb fields=57; main untouched",
+    {
+      "at": "2026-08-08T20:27:05+02:00",
+      "text": "M3+M4 authorized; W3.1 READY"
+    }
   ],
   "m1_gate": {
     "status": "PASS",
@@ -807,5 +861,10 @@
     "2026-08-08T19:11:03+02:00: W2.5 MERGED FF @acde3818; AnalysisDb fields=5; fact_family locks cleared; main untouched"
   ],
   "ready": [],
-  "BLOCKED": []
+  "BLOCKED": [],
+  "m2_gate": {
+    "status": "STRUCTURAL_DONE",
+    "note": "LoC gates waived by human; M3 authorized"
+  },
+  "human_binding": ".swarm/HUMAN-BINDING-2026-08-08-M3-M4.md"
 }
