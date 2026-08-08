@@ -658,29 +658,38 @@
       "reconciled_at": "2026-08-08T20:27:05+02:00"
     },
     "W3.1": {
-      "state": "CLAIMED",
+      "state": "MERGED",
       "spec": "docs/architecture-review/specs/W3.1-mir-blocks-terminators.md",
       "depends_on": [],
       "created_at": "2026-08-08T20:27:05+02:00",
       "branch": "swarm/W3.1",
       "dispatched_at": "2026-08-08T20:27:09+02:00",
-      "attempts": 1
+      "attempts": 1,
+      "commit": "5173934e",
+      "merged_at": "2026-08-08T20:48:49+02:00",
+      "note": "MIR blocks+terminators; CFG terminator-only; no dual paths"
     },
     "W3.2": {
-      "state": "BLOCKED",
+      "state": "CLAIMED",
       "spec": "docs/architecture-review/specs/W3.2-mir-effects.md",
       "depends_on": [
         "W3.1"
       ],
-      "created_at": "2026-08-08T20:27:05+02:00"
+      "created_at": "2026-08-08T20:27:05+02:00",
+      "branch": "swarm/W3.2",
+      "dispatched_at": "2026-08-08T20:48:57+02:00",
+      "attempts": 1
     },
     "W3.3": {
-      "state": "BLOCKED",
+      "state": "CLAIMED",
       "spec": "docs/architecture-review/specs/W3.3-mir-ops-and-types.md",
       "depends_on": [
         "W3.1"
       ],
-      "created_at": "2026-08-08T20:27:05+02:00"
+      "created_at": "2026-08-08T20:27:05+02:00",
+      "branch": "swarm/W3.3",
+      "dispatched_at": "2026-08-08T20:48:57+02:00",
+      "attempts": 1
     },
     "W3.4": {
       "state": "BLOCKED",
@@ -707,32 +716,34 @@
   "milestone": "M3",
   "READY": [],
   "IN_FLIGHT": [
-    "W3.1"
+    "W3.2",
+    "W3.3"
   ],
   "IN_REVIEW": [],
   "MERGED": [
-    "W0.A1",
-    "W0.1",
-    "W0.A3",
-    "W0.A2",
-    "W0.2",
-    "W0.4",
-    "W0.A5",
-    "W0.3",
-    "W0.5",
-    "W0.A4",
-    "W1.8",
-    "W1.4",
-    "W1.6",
-    "W1.7",
-    "W1.9",
-    "W1.5",
-    "W1.3",
-    "W1.1",
-    "W1.2",
-    "W2.1",
     "W2.2",
-    "W2.3"
+    "W0.A4",
+    "W2.3",
+    "W1.4",
+    "W0.A5",
+    "W0.4",
+    "W1.5",
+    "W1.7",
+    "W0.A3",
+    "W1.8",
+    "W1.6",
+    "W1.2",
+    "W0.A2",
+    "W1.3",
+    "W0.3",
+    "W0.2",
+    "W0.A1",
+    "W0.5",
+    "W0.1",
+    "W3.1",
+    "W1.1",
+    "W1.9",
+    "W2.1"
   ],
   "HELD": [
     "W2.3"
@@ -746,7 +757,7 @@
   },
   "integration_branch": "static-analysis-architecture-review",
   "never_merge_to_main": true,
-  "integration_head": "cad6c8fa",
+  "integration_head": "d596315d",
   "m0_gate": {
     "status": "PASS",
     "completed_at": "2026-08-08T11:52:00+02:00",
