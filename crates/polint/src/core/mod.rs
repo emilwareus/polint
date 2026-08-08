@@ -144,6 +144,21 @@ pub type RuleConfigValue = toml::Value;
 #[non_exhaustive]
 pub struct FileId(pub u32);
 
+impl FileId {
+    /// Construct a file id from its raw integer.
+    ///
+    /// `#[non_exhaustive]` blocks `FileId(n)` from outside this crate; rule packs
+    /// and tests that need a sentinel span should call this instead.
+    pub const fn from_raw(raw: u32) -> Self {
+        Self(raw)
+    }
+
+    /// Borrow the raw integer identity.
+    pub const fn raw(self) -> u32 {
+        self.0
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct NodeId(pub u64);
