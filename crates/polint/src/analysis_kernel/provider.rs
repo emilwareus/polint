@@ -408,6 +408,119 @@ impl Provider for AbstractDomainsProvider {
     }
 }
 
+pub(crate) struct DirectSummariesProvider;
+
+impl Provider for DirectSummariesProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.direct_summaries")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let derivation =
+            crate::analysis::summaries::provider::derive_direct_summaries_with_cache_stats(
+                ctx.db,
+                ctx.input_snapshot,
+                self.manifest(),
+                ctx.dependency_digest("polint.semantic_mir"),
+                ctx.dependency_digest("polint.cfg"),
+                ctx.dependency_digest("polint.calls"),
+                ctx.dependency_digest("polint.abstract_domains"),
+                ctx.dependency_digest("polint.symbol_graph"),
+                ctx.dependency_digest("polint.module_topology"),
+                vec![
+                    ctx.dependency_digest("polint.go.syntax"),
+                    ctx.dependency_digest("polint.ts.syntax"),
+                ],
+            );
+        ProviderRunResult {
+            diagnostics: derivation.diagnostics,
+            cache_stats: derivation.cache_stats,
+            output_digest: derivation.output_digest,
+        }
+    }
+}
+
+pub(crate) struct EntrypointsProvider;
+
+impl Provider for EntrypointsProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.entrypoints")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let derivation =
+            crate::analysis::entrypoints::provider::derive_entrypoints_with_cache_stats(
+                ctx.db,
+                ctx.input_snapshot,
+                self.manifest(),
+                ctx.dependency_digest("polint.semantic_mir"),
+                ctx.dependency_digest("polint.cfg"),
+                ctx.dependency_digest("polint.calls"),
+                ctx.dependency_digest("polint.symbol_graph"),
+                ctx.dependency_digest("polint.module_topology"),
+                vec![
+                    ctx.dependency_digest("polint.go.syntax"),
+                    ctx.dependency_digest("polint.ts.syntax"),
+                ],
+            );
+        ProviderRunResult {
+            diagnostics: derivation.diagnostics,
+            cache_stats: derivation.cache_stats,
+            output_digest: derivation.output_digest,
+        }
+    }
+}
+
+pub(crate) struct ReachabilityProvider;
+
+impl Provider for ReachabilityProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.reachability")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let derivation =
+            crate::analysis::reachability::provider::derive_reachability_with_cache_stats(
+                ctx.db,
+                ctx.input_snapshot,
+                self.manifest(),
+                &ctx.loaded.config.reachability.roots,
+                ctx.dependency_digest("polint.calls"),
+                ctx.dependency_digest("polint.entrypoints"),
+                ctx.dependency_digest("polint.identity"),
+                ctx.dependency_digest("polint.symbol_graph"),
+                ctx.dependency_digest("polint.module_topology"),
+            );
+        ProviderRunResult {
+            diagnostics: derivation.diagnostics,
+            cache_stats: derivation.cache_stats,
+            output_digest: derivation.output_digest,
+        }
+    }
+}
+
+pub(crate) struct ExtensionsProvider;
+
+impl Provider for ExtensionsProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.extensions")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let derivation = crate::analysis::extensions::provider::derive_extension_provider_outputs_with_cache_stats(
+            ctx.db,
+            &ctx.loaded.root,
+            ctx.input_snapshot,
+            self.manifest(),
+        );
+        ProviderRunResult {
+            diagnostics: derivation.diagnostics,
+            cache_stats: derivation.cache_stats,
+            output_digest: derivation.output_digest,
+        }
+    }
+}
+
 /// Topological schedule of `PROVIDER_MANIFESTS` with ties broken by declaration index.
 ///
 /// Edge: provider P depends on Q when any string in `P.inputs` appears in `Q.outputs`.
