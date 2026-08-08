@@ -616,11 +616,33 @@
       }
     },
     "W2.5": {
-      "state": "BLOCKED",
-      "note": "Blocked/caution: W2.3 HELD (no-measurable-win on RTA dense ids). Do not assume StableKeyId interning is coming. Re-plan store migration independently of W2.3.",
-      "blocked_by": [
-        "W2.3-HELD"
-      ]
+      "state": "IN_FLIGHT",
+      "branch": "swarm/W2.5",
+      "worktree": "/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.5",
+      "tip": "85a316fbe6975207d4384b149e8bb26b0d53ae7e",
+      "analysis_db_fields": 57,
+      "target_fields": 30,
+      "note": "Independent of W2.3 StableKeyId; symbols_by_name stays String-keyed. Landed through IdentityStore. Remaining: more Option+flat collapses (refined_call, data_flow, evidence, summary, entrypoint, type/value/\u2026), dead_code cleanup. Target \u226430.",
+      "landed_slices": [
+        "FactStore+GoSyntax",
+        "TsSyntax",
+        "Cfg",
+        "CallStore",
+        "GoSemantic",
+        "ModuleGraph+Topology",
+        "SymbolStore",
+        "SemanticIndexStore",
+        "MetricsStore",
+        "TsObjectModelStore",
+        "IdentityStore"
+      ],
+      "gates": {
+        "G4": "PASS",
+        "G5": "PASS",
+        "G7": "PASS",
+        "R1": "PASS"
+      },
+      "no_StableKeyId": true
     }
   },
   "locks": {
@@ -630,7 +652,7 @@
   "milestone": "M2",
   "READY": [],
   "IN_FLIGHT": [
-    "W2.4"
+    "W2.5"
   ],
   "IN_REVIEW": [],
   "MERGED": [
@@ -669,7 +691,7 @@
   },
   "integration_branch": "static-analysis-architecture-review",
   "never_merge_to_main": true,
-  "integration_head": "8fd7c456945dceefeb930c55cde612f54308df4c",
+  "integration_head": "85a316fbe6975207d4384b149e8bb26b0d53ae7e",
   "m0_gate": {
     "status": "PASS",
     "completed_at": "2026-08-08T11:52:00+02:00",
@@ -716,7 +738,9 @@
     "2026-08-08T14:57:39+02:00: follow-up after W2.1 land @ 8d6b7fa1; integration_head synced; W2.2 still CLAIMED (worker stalled with uncommitted core split)",
     "2026-08-08T15:17:50+02:00: W2.1 MERGED @ 8d6b7fa1; W2.2d+e+f-review landed FF @ d7c28ebc; core/mod.rs ~8703; main untouched; W2.3/W2.4 blocked until W2.2 complete",
     "2026-08-08T16:18:17+02:00: W2.3 step1 ESCALATE @ 7f988fc5 (dense RTA no measurable win; measurement doc landed FF; product go_rta unchanged; main untouched; W2.5 must not assume interning)",
-    "2026-08-08T16:28:48+02:00: W2.3 MERGED-NOOP (ESCALATE no RTA win); W2.4 steps1-4 landed @ 8fd7c456; tip advanced; W2.5 blocked (interning model wrong); main untouched"
+    "2026-08-08T16:28:48+02:00: W2.3 MERGED-NOOP (ESCALATE no RTA win); W2.4 steps1-4 landed @ 8fd7c456; tip advanced; W2.5 blocked (interning model wrong); main untouched",
+    "2026-08-08T18:54:16+02:00: W2.5 progress tip 8a42a69d; AnalysisDb fields 102\u219259; no ts_/go_semantic_ flats; main untouched",
+    "2026-08-08T18:57:24+02:00: W2.5 IdentityStore landed @ 85a316fb; AnalysisDb fields=57; main untouched"
   ],
   "m1_gate": {
     "status": "PASS",
@@ -754,7 +778,9 @@
       ]
     },
     "2026-08-08T16:19:49+02:00: W2.3 ESCALATE confirmed HELD (no-measurable-win); measurement @ 7f988fc5 on tip; FF integration to fae8e614; W2.5 must not assume interning; W2.4 continues; main untouched",
-    "2026-08-08T16:28:48+02:00: W2.3 MERGED-NOOP (ESCALATE no RTA win); W2.4 steps1-4 landed @ 8fd7c456; tip advanced; W2.5 blocked (interning model wrong); main untouched"
+    "2026-08-08T16:28:48+02:00: W2.3 MERGED-NOOP (ESCALATE no RTA win); W2.4 steps1-4 landed @ 8fd7c456; tip advanced; W2.5 blocked (interning model wrong); main untouched",
+    "2026-08-08T18:54:16+02:00: W2.5 progress tip 8a42a69d; AnalysisDb fields 102\u219259; no ts_/go_semantic_ flats; main untouched",
+    "2026-08-08T18:57:24+02:00: W2.5 IdentityStore landed @ 85a316fb; AnalysisDb fields=57; main untouched"
   ],
   "events": [
     "2026-08-08T15:10:20+02:00: W2.2d+e landed FF @271ccd15; core/mod.rs 8739 LOC; capability+rule extracted; main untouched",
@@ -771,10 +797,9 @@
     "2026-08-08T15:56:09+02:00: W2.2n-methods-6 MERGED FF @48b39bc2; mod 3842; main untouched",
     "2026-08-08T16:01:12+02:00: W2.2o-methods-final MERGED FF @d43b371f; methods done; tests remain in mod (3425); main untouched",
     "2026-08-08T16:01:26+02:00: W2.2 MERGED @d43b371f; AnalysisDb extracted; mod barrel+tests; READY W2.3+W2.4; main untouched",
-    "2026-08-08T16:28:48+02:00: W2.3 MERGED-NOOP (ESCALATE no RTA win); W2.4 steps1-4 landed @ 8fd7c456; tip advanced; W2.5 blocked (interning model wrong); main untouched"
+    "2026-08-08T16:28:48+02:00: W2.3 MERGED-NOOP (ESCALATE no RTA win); W2.4 steps1-4 landed @ 8fd7c456; tip advanced; W2.5 blocked (interning model wrong); main untouched",
+    "2026-08-08T18:54:16+02:00: W2.5 progress tip 8a42a69d; AnalysisDb fields 102\u219259; no ts_/go_semantic_ flats; main untouched"
   ],
   "ready": [],
-  "BLOCKED": [
-    "W2.5"
-  ]
+  "BLOCKED": []
 }

@@ -14,6 +14,7 @@ use crate::analysis::cfg::facts::{
     DominatorFact, PostDominatorFact, ReachabilityFact, UnsupportedControlFlowFact,
 };
 use crate::analysis::cfg::store::CfgOutput;
+use crate::analysis::identity::store::IdentityStore;
 use crate::analysis_kernel::FactFamily;
 use crate::core::facts::{
     BranchObligation, ComplexityMetricFact, CoverageFact, DefinitionFact, FileMetricFact,
@@ -914,6 +915,31 @@ impl FactStore for TsObjectModelStore {
 
 /// Registry key used for [`TsObjectModelStore`] in `AnalysisDb::fact_stores`.
 pub(crate) const TS_OBJECT_MODEL_STORE_FAMILY: FactFamily = FactFamily::TsObjectModel;
+
+impl FactStore for IdentityStore {
+    fn family(&self) -> FactFamily {
+        FactFamily::Identity
+    }
+
+    fn clear(&mut self) {
+        *self = IdentityStore::default();
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn clone_box(&self) -> Box<dyn FactStore> {
+        Box::new(self.clone())
+    }
+}
+
+/// Registry key used for [`IdentityStore`] in `AnalysisDb::fact_stores`.
+pub(crate) const IDENTITY_STORE_FAMILY: FactFamily = FactFamily::Identity;
 
 #[cfg(test)]
 mod tests {

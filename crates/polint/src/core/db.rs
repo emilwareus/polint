@@ -101,10 +101,11 @@ use std::sync::Arc;
 
 use super::fact_store::{
     CALL_STORE_FAMILY, CFG_STORE_FAMILY, CfgFactStore, FactStore, FactStoreEntry,
-    GO_SEMANTIC_STORE_FAMILY, GO_SYNTAX_STORE_FAMILY, GoSyntaxStore, METRICS_STORE_FAMILY,
-    MODULE_GRAPH_STORE_FAMILY, MODULE_TOPOLOGY_STORE_FAMILY, MetricsStore, ModuleGraphStore,
-    ModuleTopologyStore, SEMANTIC_INDEX_STORE_FAMILY, SYMBOL_STORE_FAMILY, SemanticIndexStore,
-    SymbolStore, TS_OBJECT_MODEL_STORE_FAMILY, TS_SYNTAX_STORE_FAMILY, TsSyntaxStore,
+    GO_SEMANTIC_STORE_FAMILY, GO_SYNTAX_STORE_FAMILY, GoSyntaxStore, IDENTITY_STORE_FAMILY,
+    METRICS_STORE_FAMILY, MODULE_GRAPH_STORE_FAMILY, MODULE_TOPOLOGY_STORE_FAMILY, MetricsStore,
+    ModuleGraphStore, ModuleTopologyStore, SEMANTIC_INDEX_STORE_FAMILY, SYMBOL_STORE_FAMILY,
+    SemanticIndexStore, SymbolStore, TS_OBJECT_MODEL_STORE_FAMILY, TS_SYNTAX_STORE_FAMILY,
+    TsSyntaxStore,
 };
 use super::facts::{
     BranchObligation, CachedFileFacts, ComplexityMetricFact, CoverageFact, DefinitionFact,
@@ -136,8 +137,6 @@ pub struct AnalysisDb {
     /// Provider-owned stores keyed by primary [`FactFamily`]. Iteration stays ordered.
     pub(crate) fact_stores: BTreeMap<FactFamily, FactStoreEntry>,
     pub(crate) semantic: Option<SemanticStore>,
-    pub(crate) identity_records: Vec<IdentityRecord>,
-    pub(crate) identity_store: Option<IdentityStore>,
     pub(crate) refined_call_edges: Vec<RefinedCallEdgeFact>,
     pub(crate) refined_call_store: Option<RefinedCallStore>,
     pub(crate) data_flow_nodes: Vec<DataFlowNodeFact>,
@@ -250,13 +249,14 @@ impl Default for AnalysisDb {
             TS_OBJECT_MODEL_STORE_FAMILY,
             FactStoreEntry::new(ts_object_model),
         );
+        let mut identity = IdentityStore::default();
+        FactStore::clear(&mut identity);
+        fact_stores.insert(IDENTITY_STORE_FAMILY, FactStoreEntry::new(identity));
         Self {
             files: Vec::new(),
             fact_meta: FactMetaStore::default(),
             fact_stores,
             semantic: None,
-            identity_records: Vec::new(),
-            identity_store: None,
             refined_call_edges: Vec::new(),
             refined_call_store: None,
             data_flow_nodes: Vec::new(),
@@ -427,6 +427,16 @@ impl AnalysisDb {
     fn ts_object_model_store_mut(&mut self) -> &mut TsObjectModelStore {
         self.fact_store_mut(TS_OBJECT_MODEL_STORE_FAMILY)
             .expect("TsObjectModelStore is installed when AnalysisDb is constructed")
+    }
+
+    fn identity_store_inner(&self) -> &IdentityStore {
+        self.fact_store(IDENTITY_STORE_FAMILY)
+            .expect("IdentityStore is installed when AnalysisDb is constructed")
+    }
+
+    fn identity_store_mut(&mut self) -> &mut IdentityStore {
+        self.fact_store_mut(IDENTITY_STORE_FAMILY)
+            .expect("IdentityStore is installed when AnalysisDb is constructed")
     }
 
     /// Typed downcast helper for registry stores. Returns `None` when the family
@@ -762,13 +772,12 @@ impl AnalysisDb {
             .map(|target| target.id)
             .collect::<BTreeSet<_>>();
         let store = IdentityStore::from_output(output, &valid_sites, &valid_targets)?;
-        self.identity_records = store.records().to_vec();
-        self.identity_store = Some(store);
+        *self.identity_store_mut() = store;
         Ok(())
     }
 
     pub(crate) fn identity_records(&self) -> &[IdentityRecord] {
-        &self.identity_records
+        self.identity_store_inner().records()
     }
 
     /// Injects identity records directly, bypassing store-level reference
@@ -776,13 +785,14 @@ impl AnalysisDb {
     /// exercised even for records that the store would have rejected.
     #[cfg(test)]
     pub(crate) fn set_identity_records_for_test(&mut self, records: Vec<IdentityRecord>) {
-        self.identity_records = records;
-        self.identity_store = None;
+        let mut store = IdentityStore::default();
+        store.records = records;
+        *self.identity_store_mut() = store;
     }
 
     #[allow(dead_code)]
     pub(crate) fn identity_store(&self) -> Option<&IdentityStore> {
-        self.identity_store.as_ref()
+        Some(self.identity_store_inner())
     }
 
     #[allow(
