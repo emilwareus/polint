@@ -670,7 +670,7 @@
       "note": "MIR blocks+terminators; CFG terminator-only; no dual paths"
     },
     "W3.2": {
-      "state": "CLAIMED",
+      "state": "MERGED",
       "spec": "docs/architecture-review/specs/W3.2-mir-effects.md",
       "depends_on": [
         "W3.1"
@@ -678,7 +678,10 @@
       "created_at": "2026-08-08T20:27:05+02:00",
       "branch": "swarm/W3.2",
       "dispatched_at": "2026-08-08T20:48:57+02:00",
-      "attempts": 1
+      "attempts": 1,
+      "commit": "0d8e03f1",
+      "merged_at": "2026-08-08T21:05:57+02:00",
+      "note": "Throw/Call unwind/Suspend terminators; string CFG recovery deleted"
     },
     "W3.3": {
       "state": "CLAIMED",
@@ -698,7 +701,8 @@
         "W3.1",
         "W3.2"
       ],
-      "created_at": "2026-08-08T20:27:05+02:00"
+      "created_at": "2026-08-08T20:27:05+02:00",
+      "blocked_reason": "wait for W3.3 land to avoid cfg conflict"
     },
     "W3.5": {
       "state": "BLOCKED",
@@ -716,7 +720,6 @@
   "milestone": "M3",
   "READY": [],
   "IN_FLIGHT": [
-    "W3.2",
     "W3.3"
   ],
   "IN_REVIEW": [],
@@ -743,7 +746,8 @@
     "W3.1",
     "W1.1",
     "W1.9",
-    "W2.1"
+    "W2.1",
+    "W3.2"
   ],
   "HELD": [
     "W2.3"
@@ -757,7 +761,7 @@
   },
   "integration_branch": "static-analysis-architecture-review",
   "never_merge_to_main": true,
-  "integration_head": "d596315d",
+  "integration_head": "0d8e03f1",
   "m0_gate": {
     "status": "PASS",
     "completed_at": "2026-08-08T11:52:00+02:00",
