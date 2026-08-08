@@ -244,7 +244,7 @@ fn build_external_suite_report_for_test<A: BenchmarkAdapter>(
             bool,
         );
         let mut case_outcome: Option<anyhow::Result<CaseOutcome>> = None;
-        let timing = crate::eval::bench::measure::TimedRun::measure(|| {
+        let timing = crate::measure::TimedRun::measure(|| {
             case_outcome = Some((|| {
                 let prepared = adapter.prepare_case_with_scratch(manifest, case, scratch.path())?;
                 let observed = if plan.should_run_polint_analysis {

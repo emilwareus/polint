@@ -1222,7 +1222,7 @@ fn observe_fixture_runtime_budget(
         .budget
         .as_ref()
         .expect("observe_fixture_runtime_budget requires a fixture budget");
-    let peak_rss_bytes = crate::eval::bench::measure::peak_rss_bytes();
+    let peak_rss_bytes = crate::measure::peak_rss_bytes();
     let runtime_ms = saturating_millis(elapsed);
     let runtime_ok = runtime_ms <= budget.max_runtime_ms;
     let rss_ok = budget

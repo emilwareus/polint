@@ -1,11 +1,12 @@
-//! OS peak-RSS capture and cold/warm wall-clock timing (BENCH-01).
+//! OS peak-RSS capture and cold/warm wall-clock timing.
 //!
-//! Populates the real measurement that `RuntimeStatsSummary.peak_rss_bytes`
-//! (see `crate::eval::performance`) has always declared but never set in
-//! production. Peak RSS is read from the process high-water mark the host OS
-//! exposes: `getrusage(RUSAGE_SELF).ru_maxrss` on Unix (normalized to bytes)
-//! and `PeakWorkingSetSize` (already bytes) via `K32GetProcessMemoryInfo` on
+//! Peak RSS is read from the process high-water mark the host OS exposes:
+//! `getrusage(RUSAGE_SELF).ru_maxrss` on Unix (normalized to bytes) and
+//! `PeakWorkingSetSize` (already bytes) via `K32GetProcessMemoryInfo` on
 //! Windows. Both are monotonic non-decreasing across a process lifetime.
+//!
+//! Lives at crate root (not under `eval`) so the rules-host golden-cost path
+//! can measure without compiling the eval harness.
 
 use std::time::Instant;
 
@@ -142,6 +143,7 @@ impl TimedRun {
 /// Cold-then-warm measurement of a repeatable closure. The closure is executed
 /// twice: the first run is the cold measurement (nothing warmed yet) and the
 /// second is the warm measurement (caches/allocations primed by the cold run).
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ColdWarm {
     pub(crate) cold_ms: u64,
@@ -160,6 +162,7 @@ pub(crate) struct ColdWarm {
 /// Run `run` twice and report cold (first) and warm (second) wall-clock millis,
 /// the absolute overall peak RSS (reporting), and the run-attributable peak-RSS
 /// delta (the gated metric).
+#[cfg(test)]
 pub(crate) fn cold_then_warm<F: FnMut()>(mut run: F) -> ColdWarm {
     let cold = TimedRun::measure(&mut run);
     let warm = TimedRun::measure(&mut run);

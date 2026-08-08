@@ -12,7 +12,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::eval::bench::measure::TimedRun;
+use crate::measure::TimedRun;
 
 /// Env var naming the JSON file overwritten with one cost record for a check.
 pub(crate) const COST_PATH_ENV: &str = "POLINT_GOLDEN_COST_PATH";

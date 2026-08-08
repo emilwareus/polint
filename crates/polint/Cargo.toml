@@ -40,7 +40,7 @@ tracing-subscriber.workspace = true
 tree-sitter.workspace = true
 tree-sitter-go.workspace = true
 
-# Unix-only: src/eval/bench/measure.rs reads getrusage(RUSAGE_SELF).ru_maxrss for
+# Unix-only: src/measure.rs reads getrusage(RUSAGE_SELF).ru_maxrss for
 # peak RSS. Windows uses K32GetProcessMemoryInfo (kernel32) with no crate dependency.
 # Direct promotion of an already-vetted transitive dep (present in Cargo.lock).
 [target.'cfg(unix)'.dependencies]
@@ -62,7 +62,7 @@ tempfile.workspace = true
 toml.workspace = true
 
 # polint owns its lint table (instead of `[lints] workspace = true`) so that the
-# single audited `getrusage` FFI in src/eval/bench/measure.rs can opt in via a
+# single audited `getrusage` FFI in src/measure.rs can opt in via a
 # per-item `#[allow(unsafe_code)]`. Every workspace lint is mirrored verbatim;
 # ONLY `unsafe_code` is downgraded `forbid` -> `deny`, so unsafe stays denied
 # crate-wide and any use must carry an explicit, greppable allow. See

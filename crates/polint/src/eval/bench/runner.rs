@@ -22,7 +22,7 @@ use std::path::Path;
 use crate::analysis_kernel::{AnalysisKernel, KernelInput, KernelOutput};
 use crate::core::AnalysisDb;
 use crate::eval::bench::curve::{BudgetExhaustionCounters, CurvePoint, StoreSizeBytes};
-use crate::eval::bench::measure;
+use crate::measure;
 
 /// Measure a single [`CurvePoint`] for `repo_root`.
 ///

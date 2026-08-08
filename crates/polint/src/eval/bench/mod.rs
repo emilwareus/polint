@@ -1,14 +1,12 @@
-//! Benchmark measurement substrate (BENCH-01).
+//! Benchmark curves, gates, and runners that consume crate-private measurement
+//! primitives from [`crate::measure`].
 //!
-//! Crate-private measurement primitives that later plans (curves,
-//! report, baselines, regression gates) consume. This module measures real OS
-//! peak RSS and cold/warm wall-clock, and defines the curve-point telemetry
-//! types keyed by repo size and diff size. Nothing here is public/SDK/CLI
-//! surface — everything stays `pub(crate)` under `eval`.
+//! Peak RSS and cold/warm wall-clock live in `crate::measure` so the rules-host
+//! golden-cost path can use them without compiling the eval harness. Nothing
+//! here is public/SDK/CLI surface — everything stays `pub(crate)` under `eval`.
 
 pub(crate) mod curve;
 pub(crate) mod gate;
-pub(crate) mod measure;
 pub(crate) mod report;
 pub(crate) mod retained_bytes;
 pub(crate) mod runner;

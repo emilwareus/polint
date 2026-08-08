@@ -38,7 +38,7 @@ Before compare or commit, the harness:
 ## Cost sidecars
 
 Each ran case also records wall-clock ms and peak RSS (bytes) from
-`eval/bench/measure.rs` inside the rules-host process (env
+`crates/polint/src/measure.rs` inside the rules-host process (env
 `POLINT_GOLDEN_COST_PATH`). Committed `*.cost.json` values are the baseline;
 CI fails when measured wall-clock or peak RSS exceeds baseline × 1.20 (with
 absolute noise floors of +50 ms / +16 MiB).

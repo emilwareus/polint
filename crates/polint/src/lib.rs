@@ -31,6 +31,7 @@ pub(crate) mod golden_cost;
 #[cfg(test)]
 pub(crate) mod graph;
 pub(crate) mod ignores;
+pub(crate) mod measure;
 pub(crate) mod metrics;
 pub(crate) mod module_graph;
 pub(crate) mod path_context;

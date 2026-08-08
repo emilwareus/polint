@@ -60,7 +60,7 @@ pub(crate) struct RuntimeObservation {
     pub(crate) budget_passed: bool,
     pub(crate) observed_runtime_ms: Option<u64>,
     /// Peak resident-set size in bytes, captured via
-    /// [`crate::eval::bench::measure::peak_rss_bytes`] on the iteration that
+    /// [`crate::measure::peak_rss_bytes`] on the iteration that
     /// produced this case. Absent on older reports and on paths that have not
     /// yet wired OS RSS measurement.
     #[serde(default)]
