@@ -9,8 +9,10 @@
 //!
 //! Absent checkouts fail the regenerator loudly when `POLINT_REQUIRE_BENCH_CORPUS`
 //! is set. The committed artifact under
-//! `research/evaluation-harness/baselines/scale-corpus-run.json` is what later
-//! memory-budget work consumes.
+//! `research/evaluation-harness/baselines/scale-corpus-run.json` is what the
+//! retained-bytes-per-LOC CI gate (`retained_bytes`) consumes: successful rows
+//! supply peak-RSS/LOC samples; an artifact with no `ok` rows fails that gate
+//! closed rather than claiming the memory ceiling is met.
 
 #![cfg(test)]
 
@@ -192,7 +194,7 @@ impl ScaleCorpusRun {
     }
 }
 
-fn workspace_root() -> PathBuf {
+pub(crate) fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
@@ -261,7 +263,7 @@ fn load_scale_manifests() -> anyhow::Result<Vec<(String, SuiteManifest)>> {
     Ok(loaded)
 }
 
-fn expected_suite_ids() -> anyhow::Result<Vec<String>> {
+pub(crate) fn expected_suite_ids() -> anyhow::Result<Vec<String>> {
     Ok(load_scale_manifests()?
         .into_iter()
         .map(|(_, manifest)| manifest.id.0)

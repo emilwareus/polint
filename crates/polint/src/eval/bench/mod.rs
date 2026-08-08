@@ -10,6 +10,7 @@ pub(crate) mod curve;
 pub(crate) mod gate;
 pub(crate) mod measure;
 pub(crate) mod report;
+pub(crate) mod retained_bytes;
 pub(crate) mod runner;
 pub(crate) mod scale_corpus;
 pub(crate) mod sweep;
