@@ -1,6 +1,7 @@
 pub(crate) mod adaptation;
 pub(crate) mod adapter;
 pub(crate) mod baseline;
+#[path = "../../../polint-eval/src/harness/bench/mod.rs"]
 pub(crate) mod bench;
 pub(crate) mod competitors;
 pub(crate) mod delta;
