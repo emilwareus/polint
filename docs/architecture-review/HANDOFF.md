@@ -106,9 +106,11 @@ Clear inputs, clear acceptance, no design judgment required.
 
 | Task | Scope | Done when |
 |---|---|---|
-| **W0.A1–A5** Golden corpus + harness | New test infrastructure only | See §5 — spec'd in full |
-| **W0.1** Accuracy gate | `crates/polint/src/eval/external/mod.rs:27-29` + baseline JSON | Benchmark fails CI on an F1 drop; skipping is loud, not silent |
-| **W0.3** Layering rule | New rule in `.polint/rules/` + CI wiring | CI fails when a new wrong-direction module edge is introduced |
+| **W0.A1–A5** Golden corpus + harness | New test infrastructure only | See §5 — binding decisions + acceptance |
+| **W0.1** Accuracy gate | `crates/polint/src/eval/external/mod.rs` + baseline JSON | Benchmark fails CI on an F1 drop; skipping is loud, not silent |
+| **W0.2** Cost columns | Same external-suite path + baseline cost fields | Runtime + peak RSS recorded; budget breach fails; coexists with W0.1 |
+| **W0.3** Layering dogfood | **MERGED-NOOP** (no Rust frontend) | Deferred to Rust adapter / W2.6 — see §5 binding table |
+| **W0.4** Scale corpus | Isolated perf + published artifact | LOC + RSS + wall-clock for completers; OOM recorded loudly |
 | **W1.1** Parse-error honesty | See [`specs/W1.1`](specs/W1.1-parse-error-honesty.md) — doc 02's "12 sites drop errors" is imprecise | Recoverable syntax errors record an `unsupported` fact instead of silently analysing a partial AST |
 | **W1.4** O(F²) scans | `ts/adapter.rs:337-341`, `go/adapter.rs:298-302`, `cfg/lower_ts.rs:352` | Linear-scan `.find()` replaced by an index; **golden output byte-identical**; timing improves on the corpus |
 | **W1.6** Gate `validate_fact_metadata` | `analysis_kernel/mod.rs:942` | Validators run under a flag/`debug_assertions`, not on every production run; golden output unchanged |
@@ -163,15 +165,28 @@ wrong invalidates every later verification.
 **Purpose:** answer one question, forever, cheaply — *given this repository, does polint still find
 exactly the same things, in the same time, using the same memory?*
 
-### Inputs
-- The 17 rule packs under `examples/*/.polint/rules/`
-- The 27 fixture trees under `tests/eval-fixtures/`
-- The 3 scale repositories declared in `research/evaluation-harness/suites/` — **pinned by commit
-  SHA**, cloned by a `make` target, never floating
+### Binding decisions (human-authorized 2026-08-08)
 
-### Output shape
-For each `(target × rule pack × format)`: run the **real CLI binary** — not an internal API — and
-commit the normalized result as a golden file.
+These override earlier draft wording in this section and in PLAN.md M0 where they conflict. No dual
+systems — implement exactly this.
+
+| Task | Binding decision |
+|---|---|
+| **W0.A2** | Characterization cases = **example self-pairs only**: each `examples/<name>/` with its own `.polint/rules`, format **`json` only**. Eval-fixtures are **not** in the golden cartesian (capability matrix covers capability; goldens cover example CLI output). Scale repos: **optional loud-skip** when not fetched; no committed scale goldens required for W0.A2. |
+| **W0.2** | Accuracy F1 gate **and** cost-column asserts **both stay**. One coherent test path + one baseline JSON on the integration branch (measured F1 fields plus `runtime_ms` / `peak_rss_bytes` cost columns). |
+| **W0.3** | **MERGED-NOOP.** Do **not** invent a Rust frontend. Layering dogfood waits on a Rust language adapter (M2 / W2.6 territory). Document the deferral; M0 does not pretend layering is enforced. |
+| **W0.4** | Do **not** require `full_pipeline` on Grafana-scale for M0. Publish LOC + wall-clock + peak RSS for suites that complete under a documented ceiling; suites that OOM **record the failure loudly** in the published artifact (not silent skip) with LOC attempted. Prefer the lightest honest in-tree measurement surface; stop after first OOM rather than continuing to larger suites. |
+| **Integration** | Whole refactor lands only on `static-analysis-architecture-review`. Never merge to `main`. |
+
+### Inputs
+- The 17 rule packs under `examples/*/.polint/rules/` — **these are the W0.A2 golden targets**
+- The 27 fixture trees under `tests/eval-fixtures/` — inventory / capability-matrix inputs; **not** golden cartesian cases
+- The 3 scale repositories declared in `research/evaluation-harness/suites/` — **pinned by commit
+  SHA**, cloned by a `make` target, never floating; scale goldens optional loud-skip; scale *measurement* is W0.4
+
+### Output shape (W0.A2)
+For each **example self-pair** (`examples/<name>/` × its own rule pack × **`json`**): run the **real
+CLI binary** — not an internal API — and commit the normalized result as a golden file.
 
 **Normalization is the load-bearing part.** Before comparison, you must:
 - Sort diagnostics by `stable_fingerprint` (it already exists on `Diagnostic`)
@@ -189,14 +204,14 @@ refactor that silently drops Go symbol resolution produces a golden diff that lo
 output change — the matrix makes it unambiguous.
 
 ### Cost record (W0.A4)
-Wall-clock and peak RSS per case, committed beside the output, with per-case budgets.
+Wall-clock and peak RSS per golden case, committed beside the output, with per-case budgets.
 `crates/polint/src/eval/bench/measure.rs` already has RSS instrumentation — wire it, do not rewrite it.
 Budgets should be generous initially (fail on > 20% regression); tighten once the numbers are stable.
 
 ### Acceptance
-- `cargo test -p polint --test golden --locked` passes from a clean checkout
+- `cargo test -p polint --test golden --locked` passes from a clean checkout (G7)
 - Deliberately breaking one analysis produces a **readable** failure naming the lost diagnostics
-- Regenerating requires an env flag CI never sets (W0.A5)
+- Regenerating requires an env flag CI never sets (W0.A5: `POLINT_UPDATE_GOLDENS`)
 - Every prelude fact view has ≥ 1 capability-matrix fixture per language claiming support
 
 ### Explicitly NOT in scope

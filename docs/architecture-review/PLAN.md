@@ -10,6 +10,11 @@ should be. This says *in what order, and how you'll know it worked.*
 questions that matter are *what must precede what*, *what can run in parallel*, and *what proves a
 milestone is done*.
 
+**One branch for the whole refactor.** All swarm work for this track lands only on
+`static-analysis-architecture-review`. Do not merge that branch into `main` as part of orchestration
+or milestone completion — `main` stays untouched until a human explicitly ships. See
+[ORCHESTRATION.md](ORCHESTRATION.md) (Integration branch).
+
 ---
 
 ## 0. What "fantastic" means
@@ -69,17 +74,19 @@ artifacts did not mean a healthy phase."*
 
 These rules exist so it doesn't happen twice:
 
-1. **Hard PR budget: ≤ 1,500 changed lines, ≤ 25 files.** If a task exceeds it, split *before*
+1. **One integration branch; never auto-merge to `main`.** All work for this track lands on
+   `static-analysis-architecture-review` only. Milestone gates do not imply a merge to `main`.
+2. **Hard PR budget: ≤ 1,500 changed lines, ≤ 25 files.** If a task exceeds it, split *before*
    continuing, not after. This is a stop condition, not a guideline.
-2. **No abstraction merges without a product-path caller** *and* a test that fails if the caller
+3. **No abstraction merges without a product-path caller** *and* a test that fails if the caller
    stops using it. This is the direct antidote to the built-not-wired pattern that produced
    `slicing/` (2,027 LOC, zero references), a store with one table, and 746 LOC of ungated gates.
-3. **Every PR green on all M0 gates.** No "fix the benchmark later."
-4. **Every accuracy change records runtime and peak RSS.** The Jelly benchmark went 110× slower while
+4. **Every PR green on all M0 gates.** No "fix the benchmark later."
+5. **Every accuracy change records runtime and peak RSS.** The Jelly benchmark went 110× slower while
    F1 improved, and the runtime column was deleted at iteration 57. Never again.
-5. **One-way doors get a written decision.** On-disk schemas, public SDK types, and the wire protocol
+6. **One-way doors get a written decision.** On-disk schemas, public SDK types, and the wire protocol
    are one-way. Everything else can be revisited.
-6. **Comments explain enduring behaviour, never delivery history.** "D-07" / "CR-01" / "FINDING 7"
+7. **Comments explain enduring behaviour, never delivery history.** "D-07" / "CR-01" / "FINDING 7"
    are unresolvable to any future reader — including future you.
 
 ---
@@ -126,25 +133,26 @@ accidentally erase, and the one that catches a silent capability loss.
 | # | Work | Depends on |
 |---|---|---|
 | W0.A1 | **Golden corpus.** Assemble the analysis targets: the 17 example rule packs, the 27 `tests/eval-fixtures/` trees, and the 3 declared-but-never-fetched scale repos (pinned by commit). This is the input surface. | — |
-| W0.A2 | **Characterization harness.** For each `(target × rule pack × output format)`, run the real CLI, normalize the JSON (sort diagnostics by stable fingerprint; strip absolute paths, timings, versions), and record it as a committed golden file. **These are not correctness assertions — they are no-unintended-change assertions.** Generate them from current behaviour; do not hand-author them. | W0.A1 |
+| W0.A2 | **Characterization harness.** Example self-pairs only: each `examples/<name>/` with its own `.polint/rules`, format **`json` only**. Run the real CLI, normalize (sort by stable fingerprint; strip absolute paths, timings, versions), commit goldens. Eval-fixtures are **not** in the golden cartesian. Scale checkouts: optional loud-skip. **No-unintended-change** assertions — generate from current behaviour; do not hand-author. Binding: HANDOFF §5. | W0.A1 |
 | W0.A3 | **Capability matrix.** One fixture per `(fact view × language)` across the full prelude, asserting the view returns non-empty, well-formed data. This pins *capability* rather than *output*, and it is what catches "the refactor quietly dropped Go symbol resolution." | W0.A1 |
 | W0.A4 | **Per-case cost record.** Wall-clock and peak RSS for every golden case, committed alongside the output, with a per-case regression budget. Wire the existing `eval/bench/measure.rs` RSS instrumentation. | W0.A2 |
-| W0.A5 | **Baseline-acceptance discipline.** Golden updates require an explicit opt-in env flag that **CI never sets**, plus a human-readable diff in the PR. See the agent-fleet rule below. | W0.A2 |
+| W0.A5 | **Baseline-acceptance discipline.** Golden updates require an explicit opt-in env flag (`POLINT_UPDATE_GOLDENS`) that **CI never sets**, plus a human-readable diff in the PR. See the agent-fleet rule below. | W0.A2 |
 
 #### M0.B — Gates
 
 | # | Work | Depends on |
 |---|---|---|
 | W0.1 | **Accuracy gate.** Replace the silent `return` at `eval/external/mod.rs:27-29`; regenerate the `null` baseline with the real numbers; `assert!(f1 >= baseline - 0.005)`. | — |
-| W0.2 | **Cost columns.** Record runtime + peak RSS on every benchmark iteration; fail the build on a budget breach. Restore what was dropped at Jelly iteration 57. | — |
-| W0.3 | **Layering rule — dogfood.** A repo-local polint rule over `module_graph` + `resolved_imports` that fails CI on new wrong-direction module edges. Baseline today's 155 edges / 26 cycles. | — |
-| W0.4 | **Scale corpus run.** Execute the pinned scale repos. Publish LOC, peak RSS, wall-clock. | W0.A1 |
+| W0.2 | **Cost columns.** Record runtime + peak RSS on every benchmark iteration; fail the build on a budget breach. **Coexists with W0.1** in one test path and one baseline JSON (F1 + cost columns). Binding: HANDOFF §5. | — |
+| W0.3 | **Layering dogfood — MERGED-NOOP for M0.** Do not invent a Rust frontend. Deferred until a Rust language adapter exists (W2.6). Written rationale in HANDOFF §5; M0 gate treats this as closed without claiming layering is enforced. | — |
+| W0.4 | **Scale corpus run.** Measure what fits under a documented ceiling; publish LOC + peak RSS + wall-clock. Suites that OOM record the failure **loudly** in the artifact (with LOC attempted). No Grafana `full_pipeline` requirement for M0. Binding: HANDOFF §5. | W0.A1 |
 | W0.5 | **Memory metric.** Retained-bytes-per-LOC in CI, with a ceiling. | W0.4 |
 
 **Exit gate:** CI fails on **any change to the golden diagnostic set**, a per-case time or RSS
-regression, an F1 drop, a new module cycle, or a scale-corpus OOM. Every capability in the prelude has
-at least one fixture proving it produces data for every language that claims to support it.
-**polint has published its first real numbers on a real repository.**
+regression, an F1 drop, or a silent scale-corpus measurement loss (OOM must be recorded, not skipped).
+Layering dogfood is deferred (W0.3 MERGED-NOOP) until a Rust frontend exists. Every capability in the
+prelude has at least one fixture proving it produces data for every language that claims to support
+it. **polint has published its first real numbers on a real repository.**
 
 #### The agent-fleet rule
 
