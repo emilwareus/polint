@@ -48,5 +48,6 @@ Set `POLINT_UPDATE_GOLDENS=1` and run:
 cargo test -p polint --test golden --locked
 ```
 
-CI must not set that variable. Treat any golden-file diff as intentional
-behaviour change requiring a separate, justified PR.
+**CI never sets that variable** (enforced by `ci_workflows_never_set_golden_update_env`).
+Treat any golden-file diff as intentional behaviour change requiring a separate,
+justified PR. Without the env flag the harness only compares.

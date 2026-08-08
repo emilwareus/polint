@@ -584,3 +584,50 @@ fn scale_cases_are_optional_and_discovered() {
     assert_eq!(scale.len(), 3, "expected three scale suite cases");
     assert!(scale.iter().all(|case| case.optional_target));
 }
+
+#[test]
+fn golden_updates_require_explicit_env_flag() {
+    // Default CI / developer runs must compare, never rewrite. Only an explicit
+    // opt-in rewrites goldens; workflows are scanned below so CI cannot arm it.
+    if std::env::var_os(UPDATE_ENV).is_some() {
+        eprintln!(
+            "note: {UPDATE_ENV} is set in this process; update path is armed for this run only"
+        );
+        return;
+    }
+    assert!(
+        !update_goldens_enabled(),
+        "{UPDATE_ENV} must be unset (or not a truthy value) for characterization compares"
+    );
+}
+
+#[test]
+fn ci_workflows_never_set_golden_update_env() {
+    let workflows = repo_root().join(".github/workflows");
+    let entries = fs::read_dir(&workflows).unwrap_or_else(|err| {
+        panic!("read {}: {err}", workflows.display());
+    });
+    let mut scanned = 0usize;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("yml")
+            && path.extension().and_then(|ext| ext.to_str()) != Some("yaml")
+        {
+            continue;
+        }
+        let raw = fs::read_to_string(&path).unwrap_or_else(|err| {
+            panic!("read {}: {err}", path.display());
+        });
+        assert!(
+            !raw.contains(UPDATE_ENV),
+            "{} must not set or mention {UPDATE_ENV}; golden regeneration is opt-in only",
+            path.display()
+        );
+        scanned += 1;
+    }
+    assert!(
+        scanned > 0,
+        "expected to scan at least one workflow under {}",
+        workflows.display()
+    );
+}
