@@ -21,7 +21,7 @@ pub(crate) use metadata::{
 pub(crate) use provider::ProviderKind;
 pub(crate) use provider::{
     CachePolicy, GoSyntaxProvider, LanguageScope, PrecisionCeiling, Provider, ProviderCtx,
-    ProviderManifest, ProviderRunResult, SchemaVersion, SourceProvider,
+    ProviderManifest, ProviderRunResult, SchemaVersion, SourceProvider, TsSyntaxProvider,
 };
 pub(crate) use store::StoreStatus;
 
@@ -226,19 +226,23 @@ impl AnalysisKernel {
             go_output_digest.clone(),
         ));
 
-        let ts_output = crate::ts::analyze_with_plan_options_and_cache_stats(
-            &mut db,
-            input.cache,
-            input.config_digest,
-            input.rule_digest,
-            input.plan,
-            input.parallel,
-        );
+        let ts_output = {
+            let mut ctx = ProviderCtx {
+                db: &mut db,
+                cache: input.cache,
+                config_digest: input.config_digest,
+                rule_digest: input.rule_digest,
+                plan: input.plan,
+                parallel: input.parallel,
+                upstream_digests: &upstream_digests,
+            };
+            TsSyntaxProvider.run(&mut ctx)
+        };
         let ts_output_digest = ts_output.output_digest.clone();
         tracing::info!(target: "polint::kernel", "phase: ts.syntax done");
         diagnostics.extend(ts_output.diagnostics);
         provider_outputs.push(Self::provider_output_for_with_optional_digest(
-            "polint.ts.syntax",
+            TsSyntaxProvider.manifest().id,
             &db,
             ts_output.cache_stats,
             ts_output_digest.clone(),

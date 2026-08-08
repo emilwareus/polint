@@ -86,6 +86,92 @@ impl Provider for GoSyntaxProvider {
     }
 }
 
+pub(crate) struct TsSyntaxProvider;
+
+impl Provider for TsSyntaxProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.ts.syntax")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        crate::ts::analyze_with_plan_options_and_cache_stats(
+            ctx.db,
+            ctx.cache,
+            ctx.config_digest,
+            ctx.rule_digest,
+            ctx.plan,
+            ctx.parallel,
+        )
+    }
+}
+
+/// Topological schedule of `PROVIDER_MANIFESTS` with ties broken by declaration index.
+///
+/// Edge: provider P depends on Q when any string in `P.inputs` appears in `Q.outputs`.
+/// External inputs with no producer (e.g. `workspace_config`) create no edges.
+///
+/// Driven by the step-4 order test today; `AnalysisKernel::run` switches to this in step 6.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn scheduled_order() -> Vec<&'static str> {
+    use std::cmp::Reverse;
+    use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
+
+    let manifests = provider_manifests();
+    let n = manifests.len();
+
+    let mut producers: BTreeMap<&'static str, Vec<usize>> = BTreeMap::new();
+    for (index, manifest) in manifests.iter().enumerate() {
+        for &output in manifest.outputs {
+            producers.entry(output).or_default().push(index);
+        }
+    }
+
+    let mut indegree = vec![0usize; n];
+    let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (index, manifest) in manifests.iter().enumerate() {
+        let mut preds = BTreeSet::new();
+        for &input in manifest.inputs {
+            if let Some(qs) = producers.get(input) {
+                for &q in qs {
+                    if q != index {
+                        preds.insert(q);
+                    }
+                }
+            }
+        }
+        indegree[index] = preds.len();
+        for &q in &preds {
+            dependents[q].push(index);
+        }
+    }
+
+    // Tie-break by manifest declaration index (not id/name).
+    let mut ready: BinaryHeap<Reverse<usize>> = BinaryHeap::new();
+    for (index, &degree) in indegree.iter().enumerate() {
+        if degree == 0 {
+            ready.push(Reverse(index));
+        }
+    }
+
+    let mut order = Vec::with_capacity(n);
+    while let Some(Reverse(index)) = ready.pop() {
+        order.push(manifests[index].id);
+        for &dependent in &dependents[index] {
+            indegree[dependent] -= 1;
+            if indegree[dependent] == 0 {
+                ready.push(Reverse(dependent));
+            }
+        }
+    }
+    assert_eq!(
+        order.len(),
+        n,
+        "provider DAG must be acyclic; scheduled {} of {n}",
+        order.len()
+    );
+    order
+}
+
 impl ProviderManifest {
     pub(crate) fn provider_version(&self) -> &'static str {
         env!("CARGO_PKG_VERSION")
@@ -979,6 +1065,16 @@ mod tests {
             let _cache_policy = manifest.cache_policy;
             let _precision_ceiling = manifest.precision_ceiling;
         }
+    }
+
+    #[test]
+    fn topological_order_matches_declared_manifest_order() {
+        let scheduled = scheduled_order();
+        let declared: Vec<&str> = provider_manifests().iter().map(|m| m.id).collect();
+        assert_eq!(
+            scheduled, declared,
+            "DAG topo (manifest-index tie-break) must reproduce PROVIDER_MANIFESTS order"
+        );
     }
 
     #[test]
