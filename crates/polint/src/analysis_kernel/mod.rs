@@ -19,52 +19,165 @@ pub(crate) use metadata::{
 };
 #[cfg(test)]
 pub(crate) use provider::ProviderKind;
-use provider::scheduled_order;
 pub(crate) use provider::{
-    AbstractDomainsProvider, CachePolicy, CallsProvider, CfgProvider, DataFlowProvider,
-    DirectSummariesProvider, EntrypointsProvider, EvidenceProvider, ExtensionsProvider,
-    GoSemanticProvider, GoSyntaxProvider, IdentityProvider, LanguageScope, MetricsProvider,
-    ModuleGraphProvider, ModuleTopologyProvider, PrecisionCeiling, Provider, ProviderCtx,
-    ProviderManifest, ProviderRunResult, ReachabilityProvider, RefinedCallsProvider, SchemaVersion,
-    SemanticGraphProvider, SemanticMirProvider, SolverProvider, SourceProvider,
-    SymbolGraphProvider, TsSyntaxProvider, TypeValueAliasProvider,
+    CachePolicy, LanguageScope, PrecisionCeiling, ProviderCtx, ProviderManifest, ProviderRunResult,
+    SchemaVersion, providers_enabled_by_boolean_gates, providers_enabled_by_capability_closure,
+    run_named_provider, scheduled_order, scheduled_order_for,
 };
 pub(crate) use store::StoreStatus;
 
-/// Capabilities that require whole-repo discovery even when the deep semantic
-/// pipeline is skipped. Resolved imports, module graph, symbols, and references
-/// are cross-file facts, so file-scoped source loading would change their
-/// meaning.
-const CROSS_FILE_ANALYSIS_TRIGGER_CAPABILITIES: &[&str] = &[
-    "resolved_imports",
-    "module_graph",
-    "symbols",
-    "references",
-    "calls",
-    "control_flow",
-    "dataflow",
-];
+fn requested_trigger_capabilities(plan: &AnalysisPlan) -> std::collections::BTreeSet<&str> {
+    const CANDIDATES: &[&str] = &[
+        "resolved_imports",
+        "module_graph",
+        "symbols",
+        "references",
+        "calls",
+        "control_flow",
+        "dataflow",
+        "file_metrics",
+        "function_metrics",
+        "complexity_metrics",
+    ];
+    CANDIDATES
+        .iter()
+        .copied()
+        .filter(|capability| plan.requests_capability(capability))
+        .collect()
+}
 
-/// Capabilities whose facts need local semantic lowering: `semantic_mir` and
-/// direct call-site facts.
-const SEMANTIC_PIPELINE_TRIGGER_CAPABILITIES: &[&str] = &["calls", "control_flow", "dataflow"];
+fn log_loaded_source_files(db: &AnalysisDb) {
+    if !tracing::enabled!(target: "polint::kernel", tracing::Level::INFO) {
+        return;
+    }
+    let files = db.files();
+    let total_bytes: usize = files.iter().map(|f| f.source.len()).sum();
+    let (mut go, mut ts, mut go_bytes, mut ts_bytes) = (0usize, 0usize, 0usize, 0usize);
+    for f in files.iter() {
+        match f.language {
+            crate::core::Language::Go => {
+                go += 1;
+                go_bytes += f.source.len();
+            }
+            crate::core::Language::TypeScript
+            | crate::core::Language::Tsx
+            | crate::core::Language::JavaScript
+            | crate::core::Language::Jsx => {
+                ts += 1;
+                ts_bytes += f.source.len();
+            }
+            _ => {}
+        }
+    }
+    tracing::info!(
+        target: "polint::kernel",
+        files = files.len(),
+        total_mb = total_bytes / 1_048_576,
+        go,
+        go_mb = go_bytes / 1_048_576,
+        ts,
+        ts_mb = ts_bytes / 1_048_576,
+        "phase: source files loaded"
+    );
+}
 
-/// Capabilities whose facts need CFG, call targets, and the refined-call
-/// projection. `ControlFlow` consumes these same-function facts directly.
-const CFG_CALL_PIPELINE_TRIGGER_CAPABILITIES: &[&str] = &["calls", "control_flow", "dataflow"];
+fn skipped_direct_summaries_result(
+    db: &AnalysisDb,
+    input_snapshot: &incremental::InputSnapshot,
+    upstream_digests: &std::collections::BTreeMap<&'static str, incremental::Digest>,
+) -> ProviderRunResult {
+    // Historical run() still recorded an empty post-SCC digest when the deep
+    // refinement stack was gated off.
+    let absent = |id: &'static str| {
+        upstream_digests.get(id).cloned().unwrap_or_else(|| {
+            incremental::Digest::absent(incremental::DigestKind::ProviderOutput, id)
+        })
+    };
+    let go_ts = [absent("polint.go.syntax"), absent("polint.ts.syntax")];
+    let final_output = crate::analysis::summaries::store::SummaryOutput {
+        summaries: db.summary_facts().to_vec(),
+        events: db.summary_events().to_vec(),
+    };
+    let output_digest = crate::analysis::summaries::provider::direct_summaries_output_digest(
+        AnalysisKernel::provider_manifest("polint.direct_summaries"),
+        input_snapshot,
+        &absent("polint.semantic_mir"),
+        &absent("polint.cfg"),
+        &absent("polint.calls"),
+        &absent("polint.abstract_domains"),
+        &absent("polint.symbol_graph"),
+        &absent("polint.module_topology"),
+        &go_ts,
+        &crate::analysis::summaries::provider::callable_stable_key_map(db),
+        &final_output,
+    );
+    ProviderRunResult {
+        diagnostics: Vec::new(),
+        cache_stats: incremental::CacheStats::default(),
+        output_digest: Some(output_digest),
+    }
+}
 
-/// Capabilities whose facts need the expensive interprocedural refinement stack
-/// downstream of calls: Go semantic facts, identity, abstract domains,
-/// summaries, entrypoints/reachability, extensions, type/value aliases,
-/// semantic graph, and solver output. Control-flow policies consume the
-/// resulting refined call graph, so they must preserve the same target
-/// precision as call-graph policies.
-const FULL_REFINEMENT_PIPELINE_TRIGGER_CAPABILITIES: &[&str] =
-    &["calls", "control_flow", "dataflow"];
-
-/// Capabilities that need the data-flow and evidence projections. Reachability
-/// and same-function control-flow policies do not consume these facts.
-const DATA_FLOW_PIPELINE_TRIGGER_CAPABILITIES: &[&str] = &["dataflow"];
+fn run_scheduled_providers<'a>(
+    db: &'a mut AnalysisDb,
+    input: &KernelInput<'a>,
+    input_snapshot: &'a incremental::InputSnapshot,
+    enabled_providers: &std::collections::BTreeSet<&'static str>,
+    diagnostics: &mut Vec<Diagnostic>,
+    provider_outputs: &mut Vec<incremental::ProviderOutputMeta>,
+) -> (
+    CapabilitySupportView,
+    Option<crate::analysis::summaries::provider::SccClosureProviderOutput>,
+) {
+    let mut upstream_digests = std::collections::BTreeMap::new();
+    let mut capability_support = input.plan.support_view().clone();
+    let mut scc_closure = None;
+    // Emit a provider_outputs row for every manifest entry (historical identity),
+    // but only execute providers selected by capability closure.
+    for provider_id in scheduled_order() {
+        let result = if enabled_providers.contains(provider_id) {
+            let mut ctx = ProviderCtx {
+                db: &mut *db,
+                cache: input.cache,
+                loaded: input.loaded,
+                input_snapshot,
+                config_digest: input.config_digest,
+                rule_digest: input.rule_digest,
+                plan: input.plan,
+                parallel: input.parallel,
+                upstream_digests: &upstream_digests,
+                capability_support: &mut capability_support,
+                scc_closure: &mut scc_closure,
+            };
+            run_named_provider(provider_id, &mut ctx)
+        } else if provider_id == "polint.direct_summaries" {
+            skipped_direct_summaries_result(db, input_snapshot, &upstream_digests)
+        } else {
+            ProviderRunResult {
+                diagnostics: Vec::new(),
+                cache_stats: incremental::CacheStats::default(),
+                output_digest: None,
+            }
+        };
+        if provider_id == "polint.go.syntax" {
+            tracing::info!(target: "polint::kernel", "phase: go.syntax done");
+        } else if provider_id == "polint.ts.syntax" {
+            tracing::info!(target: "polint::kernel", "phase: ts.syntax done");
+        }
+        diagnostics.extend(result.diagnostics);
+        let output_digest = result.output_digest;
+        if let Some(digest) = output_digest.clone() {
+            upstream_digests.insert(provider_id, digest);
+        }
+        provider_outputs.push(AnalysisKernel::provider_output_for_with_optional_digest(
+            provider_id,
+            db,
+            result.cache_stats,
+            output_digest,
+        ));
+    }
+    (capability_support, scc_closure)
+}
 
 pub(crate) struct AnalysisKernel;
 
@@ -97,35 +210,19 @@ impl AnalysisKernel {
     }
 
     pub(crate) fn run(input: KernelInput<'_>) -> anyhow::Result<KernelOutput> {
-        // Gate provider work in slices. Cross-file facts keep whole-repo
-        // discovery, but deeper semantic providers only run when a requested
-        // view consumes their outputs. Syntactic rule sets skip all of this,
-        // which is the dominant memory and CPU cost on large repos.
-        let run_cross_file_analysis = input
-            .plan
-            .requests_any_capability(CROSS_FILE_ANALYSIS_TRIGGER_CAPABILITIES);
-        let run_semantic_pipeline = input
-            .plan
-            .requests_any_capability(SEMANTIC_PIPELINE_TRIGGER_CAPABILITIES);
-        let run_cfg_call_pipeline = input
-            .plan
-            .requests_any_capability(CFG_CALL_PIPELINE_TRIGGER_CAPABILITIES);
-        let run_full_refinement_pipeline = input
-            .plan
-            .requests_any_capability(FULL_REFINEMENT_PIPELINE_TRIGGER_CAPABILITIES);
-        let run_data_flow_pipeline = input
-            .plan
-            .requests_any_capability(DATA_FLOW_PIPELINE_TRIGGER_CAPABILITIES);
-        let compact_domain_materialization =
-            Self::directly_requests_any_capability(input.plan, &["control_flow"])
-                && !Self::directly_requests_any_capability(input.plan, &["calls", "dataflow"]);
-
-        // When cross-file analysis is skipped, the only consumers of a file are
-        // the rules scoped to it and the syntactic providers feeding those
-        // rules. A file matched by no enabled rule's `files` scope cannot
-        // produce any diagnostic, so we never read or parse it. Cross-file facts
-        // need the full workspace, so they keep unscoped discovery without
-        // forcing the deep semantic provider slices.
+        let requested_capabilities = requested_trigger_capabilities(input.plan);
+        let run_cross_file_analysis = requested_capabilities.iter().any(|capability| {
+            matches!(
+                *capability,
+                "resolved_imports"
+                    | "module_graph"
+                    | "symbols"
+                    | "references"
+                    | "calls"
+                    | "control_flow"
+                    | "dataflow"
+            )
+        });
         let rule_scope = if run_cross_file_analysis {
             None
         } else {
@@ -133,52 +230,15 @@ impl AnalysisKernel {
         };
         tracing::info!(
             target: "polint::kernel",
-            run_cross_file_analysis,
-            run_semantic_pipeline,
-            run_cfg_call_pipeline,
-            run_full_refinement_pipeline,
-            run_data_flow_pipeline,
-            compact_domain_materialization,
+            ?requested_capabilities,
             rule_scoped = rule_scope.is_some(),
             "analysis kernel pipeline gate"
         );
 
         let (mut db, load_diagnostics) =
             crate::fs::load_analysis_files_scoped(input.loaded, rule_scope.as_ref())?;
-        // Source-load summary: the corpus actually read into memory is the dominant
-        // memory cost on large repos, so log its size/shape when info tracing is on.
-        // Guarded by `enabled!` so it costs nothing in normal (un-instrumented) runs.
-        if tracing::enabled!(target: "polint::kernel", tracing::Level::INFO) {
-            let files = db.files();
-            let total_bytes: usize = files.iter().map(|f| f.source.len()).sum();
-            let (mut go, mut ts, mut go_bytes, mut ts_bytes) = (0usize, 0usize, 0usize, 0usize);
-            for f in files.iter() {
-                match f.language {
-                    crate::core::Language::Go => {
-                        go += 1;
-                        go_bytes += f.source.len();
-                    }
-                    crate::core::Language::TypeScript
-                    | crate::core::Language::Tsx
-                    | crate::core::Language::JavaScript
-                    | crate::core::Language::Jsx => {
-                        ts += 1;
-                        ts_bytes += f.source.len();
-                    }
-                    _ => {}
-                }
-            }
-            tracing::info!(
-                target: "polint::kernel",
-                files = files.len(),
-                total_mb = total_bytes / 1_048_576,
-                go,
-                go_mb = go_bytes / 1_048_576,
-                ts,
-                ts_mb = ts_bytes / 1_048_576,
-                "phase: source files loaded"
-            );
-        }
+        log_loaded_source_files(&db);
+
         let input_snapshot = incremental::InputSnapshot::from_run_inputs(
             input.loaded,
             &db,
@@ -189,8 +249,7 @@ impl AnalysisKernel {
         );
         let mut diagnostics = load_diagnostics;
         let mut provider_outputs = Vec::new();
-        let mut upstream_digests = std::collections::BTreeMap::new();
-        let mut capability_support = input.plan.support_view().clone();
+        let enabled_providers = providers_enabled_by_capability_closure(&requested_capabilities);
         debug_assert_eq!(
             scheduled_order(),
             Self::provider_manifests()
@@ -199,918 +258,51 @@ impl AnalysisKernel {
                 .collect::<Vec<_>>(),
             "scheduled provider order must match declared manifest order"
         );
-        let empty_caps = std::collections::BTreeSet::new();
-        let _ = provider::scheduled_order_for(&empty_caps);
         debug_assert_eq!(
-            provider::providers_enabled_by_capability_closure(&empty_caps),
-            provider::providers_enabled_by_boolean_gates(&empty_caps),
-            "empty-capability closure must match boolean gates"
+            enabled_providers,
+            providers_enabled_by_boolean_gates(&requested_capabilities),
+            "capability closure must match boolean gates for {requested_capabilities:?}"
+        );
+        debug_assert_eq!(
+            scheduled_order_for(&requested_capabilities),
+            scheduled_order()
+                .into_iter()
+                .filter(|id| enabled_providers.contains(id))
+                .collect::<Vec<_>>(),
         );
 
-        let source_result = {
-            let mut ctx = ProviderCtx {
-                db: &mut db,
-                cache: input.cache,
-                loaded: input.loaded,
-                input_snapshot: &input_snapshot,
-                config_digest: input.config_digest,
-                rule_digest: input.rule_digest,
-                plan: input.plan,
-                parallel: input.parallel,
-                upstream_digests: &upstream_digests,
-                capability_support: &mut capability_support,
-                run_semantic_pipeline,
-                run_cfg_call_pipeline,
-                compact_domain_materialization,
-            };
-            SourceProvider.run(&mut ctx)
-        };
-        diagnostics.extend(source_result.diagnostics);
-        provider_outputs.push(Self::provider_output_for(
-            SourceProvider.manifest().id,
-            &db,
-            source_result.cache_stats,
-        ));
-
-        let go_output = {
-            let mut ctx = ProviderCtx {
-                db: &mut db,
-                cache: input.cache,
-                loaded: input.loaded,
-                input_snapshot: &input_snapshot,
-                config_digest: input.config_digest,
-                rule_digest: input.rule_digest,
-                plan: input.plan,
-                parallel: input.parallel,
-                upstream_digests: &upstream_digests,
-                capability_support: &mut capability_support,
-                run_semantic_pipeline,
-                run_cfg_call_pipeline,
-                compact_domain_materialization,
-            };
-            GoSyntaxProvider.run(&mut ctx)
-        };
-        let go_output_digest = go_output.output_digest.clone();
-        if let Some(digest) = go_output_digest.clone() {
-            upstream_digests.insert(GoSyntaxProvider.manifest().id, digest);
-        }
-        tracing::info!(target: "polint::kernel", "phase: go.syntax done");
-        diagnostics.extend(go_output.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
-            GoSyntaxProvider.manifest().id,
-            &db,
-            go_output.cache_stats,
-            go_output_digest.clone(),
-        ));
-
-        let ts_output = {
-            let mut ctx = ProviderCtx {
-                db: &mut db,
-                cache: input.cache,
-                loaded: input.loaded,
-                input_snapshot: &input_snapshot,
-                config_digest: input.config_digest,
-                rule_digest: input.rule_digest,
-                plan: input.plan,
-                parallel: input.parallel,
-                upstream_digests: &upstream_digests,
-                capability_support: &mut capability_support,
-                run_semantic_pipeline,
-                run_cfg_call_pipeline,
-                compact_domain_materialization,
-            };
-            TsSyntaxProvider.run(&mut ctx)
-        };
-        let ts_output_digest = ts_output.output_digest.clone();
-        if let Some(digest) = ts_output_digest.clone() {
-            upstream_digests.insert(TsSyntaxProvider.manifest().id, digest);
-        }
-        tracing::info!(target: "polint::kernel", "phase: ts.syntax done");
-        diagnostics.extend(ts_output.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
-            TsSyntaxProvider.manifest().id,
-            &db,
-            ts_output.cache_stats,
-            ts_output_digest.clone(),
-        ));
-
-        let go_dependency_output_digest = go_output_digest.unwrap_or_else(|| {
-            incremental::Digest::absent(incremental::DigestKind::ProviderOutput, "polint.go.syntax")
-        });
-        let ts_dependency_output_digest = ts_output_digest.unwrap_or_else(|| {
-            incremental::Digest::absent(incremental::DigestKind::ProviderOutput, "polint.ts.syntax")
-        });
-        let module_graph = {
-            let mut ctx = ProviderCtx {
-                db: &mut db,
-                cache: input.cache,
-                loaded: input.loaded,
-                input_snapshot: &input_snapshot,
-                config_digest: input.config_digest,
-                rule_digest: input.rule_digest,
-                plan: input.plan,
-                parallel: input.parallel,
-                upstream_digests: &upstream_digests,
-                capability_support: &mut capability_support,
-                run_semantic_pipeline,
-                run_cfg_call_pipeline,
-                compact_domain_materialization,
-            };
-            ModuleGraphProvider.run(&mut ctx)
-        };
-        // Keep polint.module_graph cache_stats internal to KernelRunReport.
-        let polint_module_graph_cache_stats = module_graph.cache_stats.clone();
-        let module_output_digest = module_graph.output_digest.clone();
-        if let Some(digest) = module_output_digest.clone() {
-            upstream_digests.insert(ModuleGraphProvider.manifest().id, digest);
-        }
-        diagnostics.extend(module_graph.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
-            ModuleGraphProvider.manifest().id,
-            &db,
-            polint_module_graph_cache_stats,
-            module_output_digest,
-        ));
-
-        let symbol_graph = {
-            let mut ctx = ProviderCtx {
-                db: &mut db,
-                cache: input.cache,
-                loaded: input.loaded,
-                input_snapshot: &input_snapshot,
-                config_digest: input.config_digest,
-                rule_digest: input.rule_digest,
-                plan: input.plan,
-                parallel: input.parallel,
-                upstream_digests: &upstream_digests,
-                capability_support: &mut capability_support,
-                run_semantic_pipeline,
-                run_cfg_call_pipeline,
-                compact_domain_materialization,
-            };
-            SymbolGraphProvider.run(&mut ctx)
-        };
-        let polint_symbol_graph_cache_stats = symbol_graph.cache_stats.clone();
-        let symbol_output_digest = symbol_graph.output_digest.clone();
-        if let Some(digest) = symbol_output_digest.clone() {
-            upstream_digests.insert(SymbolGraphProvider.manifest().id, digest);
-        }
-        diagnostics.extend(symbol_graph.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
-            SymbolGraphProvider.manifest().id,
-            &db,
-            polint_symbol_graph_cache_stats,
-            symbol_output_digest.clone(),
-        ));
-
-        let symbol_dependency_output_digest = symbol_output_digest.unwrap_or_else(|| {
-            incremental::Digest::absent(
-                incremental::DigestKind::ProviderOutput,
-                "polint.symbol_graph",
-            )
-        });
-        let module_topology = if run_cfg_call_pipeline {
-            let mut ctx = ProviderCtx {
-                db: &mut db,
-                cache: input.cache,
-                loaded: input.loaded,
-                input_snapshot: &input_snapshot,
-                config_digest: input.config_digest,
-                rule_digest: input.rule_digest,
-                plan: input.plan,
-                parallel: input.parallel,
-                upstream_digests: &upstream_digests,
-                capability_support: &mut capability_support,
-                run_semantic_pipeline,
-                run_cfg_call_pipeline,
-                compact_domain_materialization,
-            };
-            ModuleTopologyProvider.run(&mut ctx)
-        } else {
-            ProviderRunResult {
-                diagnostics: Vec::new(),
-                cache_stats: incremental::CacheStats::default(),
-                output_digest: None,
-            }
-        };
-        let polint_module_topology_cache_stats = module_topology.cache_stats.clone();
-        let module_topology_output_digest = module_topology.output_digest.clone();
-        if let Some(digest) = module_topology_output_digest.clone() {
-            upstream_digests.insert(ModuleTopologyProvider.manifest().id, digest);
-        }
-        diagnostics.extend(module_topology.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
-            ModuleTopologyProvider.manifest().id,
-            &db,
-            polint_module_topology_cache_stats,
-            module_topology_output_digest.clone(),
-        ));
-
-        let module_topology_dependency_output_digest = module_topology_output_digest
-            .unwrap_or_else(|| {
-                incremental::Digest::absent(
-                    incremental::DigestKind::ProviderOutput,
-                    "polint.module_topology",
-                )
-            });
-        let semantic_mir = if run_semantic_pipeline {
-            let mut ctx = ProviderCtx {
-                db: &mut db,
-                cache: input.cache,
-                loaded: input.loaded,
-                input_snapshot: &input_snapshot,
-                config_digest: input.config_digest,
-                rule_digest: input.rule_digest,
-                plan: input.plan,
-                parallel: input.parallel,
-                upstream_digests: &upstream_digests,
-                capability_support: &mut capability_support,
-                run_semantic_pipeline,
-                run_cfg_call_pipeline,
-                compact_domain_materialization,
-            };
-            SemanticMirProvider.run(&mut ctx)
-        } else {
-            ProviderRunResult {
-                diagnostics: Vec::new(),
-                cache_stats: incremental::CacheStats::default(),
-                output_digest: None,
-            }
-        };
-        let polint_semantic_mir_cache_stats = semantic_mir.cache_stats.clone();
-        let semantic_mir_output_digest = semantic_mir.output_digest.clone();
-        if let Some(digest) = semantic_mir_output_digest.clone() {
-            upstream_digests.insert(SemanticMirProvider.manifest().id, digest);
-        }
-        diagnostics.extend(semantic_mir.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
-            SemanticMirProvider.manifest().id,
-            &db,
-            polint_semantic_mir_cache_stats,
-            semantic_mir_output_digest.clone(),
-        ));
-
-        let semantic_mir_dependency_output_digest =
-            semantic_mir_output_digest.unwrap_or_else(|| {
-                incremental::Digest::absent(
-                    incremental::DigestKind::ProviderOutput,
-                    "polint.semantic_mir",
-                )
-            });
-        let cfg = if run_cfg_call_pipeline {
-            let mut ctx = ProviderCtx {
-                db: &mut db,
-                cache: input.cache,
-                loaded: input.loaded,
-                input_snapshot: &input_snapshot,
-                config_digest: input.config_digest,
-                rule_digest: input.rule_digest,
-                plan: input.plan,
-                parallel: input.parallel,
-                upstream_digests: &upstream_digests,
-                capability_support: &mut capability_support,
-                run_semantic_pipeline,
-                run_cfg_call_pipeline,
-                compact_domain_materialization,
-            };
-            CfgProvider.run(&mut ctx)
-        } else {
-            ProviderRunResult {
-                diagnostics: Vec::new(),
-                cache_stats: incremental::CacheStats::default(),
-                output_digest: None,
-            }
-        };
-        let polint_cfg_cache_stats = cfg.cache_stats.clone();
-        let cfg_output_digest = cfg.output_digest.clone();
-        if let Some(digest) = cfg_output_digest.clone() {
-            upstream_digests.insert(CfgProvider.manifest().id, digest);
-        }
-        diagnostics.extend(cfg.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
-            CfgProvider.manifest().id,
-            &db,
-            polint_cfg_cache_stats,
-            cfg_output_digest.clone(),
-        ));
-
-        let cfg_dependency_output_digest = cfg_output_digest.unwrap_or_else(|| {
-            incremental::Digest::absent(incremental::DigestKind::ProviderOutput, "polint.cfg")
-        });
-        let calls = {
-            let mut ctx = ProviderCtx {
-                db: &mut db,
-                cache: input.cache,
-                loaded: input.loaded,
-                input_snapshot: &input_snapshot,
-                config_digest: input.config_digest,
-                rule_digest: input.rule_digest,
-                plan: input.plan,
-                parallel: input.parallel,
-                upstream_digests: &upstream_digests,
-                capability_support: &mut capability_support,
-                run_semantic_pipeline,
-                run_cfg_call_pipeline,
-                compact_domain_materialization,
-            };
-            CallsProvider.run(&mut ctx)
-        };
-        let polint_calls_cache_stats = calls.cache_stats.clone();
-        let calls_output_digest = calls.output_digest.clone();
-        if let Some(digest) = calls_output_digest.clone() {
-            upstream_digests.insert(CallsProvider.manifest().id, digest);
-        }
-        diagnostics.extend(calls.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
-            CallsProvider.manifest().id,
-            &db,
-            polint_calls_cache_stats,
-            calls_output_digest.clone(),
-        ));
-
-        let calls_dependency_output_digest = calls_output_digest.unwrap_or_else(|| {
-            incremental::Digest::absent(incremental::DigestKind::ProviderOutput, "polint.calls")
-        });
-
-        let go_semantic = if run_full_refinement_pipeline {
-            let mut ctx = ProviderCtx {
-                db: &mut db,
-                cache: input.cache,
-                loaded: input.loaded,
-                input_snapshot: &input_snapshot,
-                config_digest: input.config_digest,
-                rule_digest: input.rule_digest,
-                plan: input.plan,
-                parallel: input.parallel,
-                upstream_digests: &upstream_digests,
-                capability_support: &mut capability_support,
-                run_semantic_pipeline,
-                run_cfg_call_pipeline,
-                compact_domain_materialization,
-            };
-            GoSemanticProvider.run(&mut ctx)
-        } else {
-            ProviderRunResult {
-                diagnostics: Vec::new(),
-                cache_stats: incremental::CacheStats::default(),
-                output_digest: None,
-            }
-        };
-        let polint_go_semantic_cache_stats = go_semantic.cache_stats.clone();
-        let go_semantic_output_digest = go_semantic.output_digest.clone();
-        if let Some(digest) = go_semantic_output_digest.clone() {
-            upstream_digests.insert(GoSemanticProvider.manifest().id, digest);
-        }
-        diagnostics.extend(go_semantic.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
-            GoSemanticProvider.manifest().id,
-            &db,
-            polint_go_semantic_cache_stats,
-            go_semantic_output_digest,
-        ));
-
-        let identity = if run_full_refinement_pipeline {
-            let mut ctx = ProviderCtx {
-                db: &mut db,
-                cache: input.cache,
-                loaded: input.loaded,
-                input_snapshot: &input_snapshot,
-                config_digest: input.config_digest,
-                rule_digest: input.rule_digest,
-                plan: input.plan,
-                parallel: input.parallel,
-                upstream_digests: &upstream_digests,
-                capability_support: &mut capability_support,
-                run_semantic_pipeline,
-                run_cfg_call_pipeline,
-                compact_domain_materialization,
-            };
-            IdentityProvider.run(&mut ctx)
-        } else {
-            ProviderRunResult {
-                diagnostics: Vec::new(),
-                cache_stats: incremental::CacheStats::default(),
-                output_digest: None,
-            }
-        };
-        let polint_identity_cache_stats = identity.cache_stats.clone();
-        let identity_output_digest = identity.output_digest;
-        if let Some(digest) = identity_output_digest.clone() {
-            upstream_digests.insert(IdentityProvider.manifest().id, digest);
-        }
-        diagnostics.extend(identity.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
-            IdentityProvider.manifest().id,
-            &db,
-            polint_identity_cache_stats,
-            identity_output_digest,
-        ));
-
-        let abstract_domains = if run_full_refinement_pipeline {
-            let mut ctx = ProviderCtx {
-                db: &mut db,
-                cache: input.cache,
-                loaded: input.loaded,
-                input_snapshot: &input_snapshot,
-                config_digest: input.config_digest,
-                rule_digest: input.rule_digest,
-                plan: input.plan,
-                parallel: input.parallel,
-                upstream_digests: &upstream_digests,
-                capability_support: &mut capability_support,
-                run_semantic_pipeline,
-                run_cfg_call_pipeline,
-                compact_domain_materialization,
-            };
-            AbstractDomainsProvider.run(&mut ctx)
-        } else {
-            ProviderRunResult {
-                diagnostics: Vec::new(),
-                cache_stats: incremental::CacheStats::default(),
-                output_digest: None,
-            }
-        };
-        let polint_abstract_domains_cache_stats = abstract_domains.cache_stats.clone();
-        let abstract_domains_output_digest = abstract_domains.output_digest;
-        if let Some(digest) = abstract_domains_output_digest.clone() {
-            upstream_digests.insert(AbstractDomainsProvider.manifest().id, digest);
-        }
-        diagnostics.extend(abstract_domains.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
-            AbstractDomainsProvider.manifest().id,
-            &db,
-            polint_abstract_domains_cache_stats,
-            abstract_domains_output_digest.clone(),
-        ));
-
-        let abstract_domains_dependency_output_digest = abstract_domains_output_digest
-            .unwrap_or_else(|| {
-                incremental::Digest::absent(
-                    incremental::DigestKind::ProviderOutput,
-                    "polint.abstract_domains",
-                )
-            });
-        let entrypoints_semantic_mir_digest = semantic_mir_dependency_output_digest;
-        let entrypoints_cfg_digest = cfg_dependency_output_digest;
-        let entrypoints_calls_digest = calls_dependency_output_digest;
-        let entrypoints_symbol_digest = symbol_dependency_output_digest;
-        let entrypoints_topology_digest = module_topology_dependency_output_digest;
-        let direct_summaries = if run_full_refinement_pipeline {
-            let mut ctx = ProviderCtx {
-                db: &mut db,
-                cache: input.cache,
-                loaded: input.loaded,
-                input_snapshot: &input_snapshot,
-                config_digest: input.config_digest,
-                rule_digest: input.rule_digest,
-                plan: input.plan,
-                parallel: input.parallel,
-                upstream_digests: &upstream_digests,
-                capability_support: &mut capability_support,
-                run_semantic_pipeline,
-                run_cfg_call_pipeline,
-                compact_domain_materialization,
-            };
-            DirectSummariesProvider.run(&mut ctx)
-        } else {
-            ProviderRunResult {
-                diagnostics: Vec::new(),
-                cache_stats: incremental::CacheStats::default(),
-                output_digest: None,
-            }
-        };
-        let polint_direct_summaries_cache_stats = direct_summaries.cache_stats.clone();
-        diagnostics.extend(direct_summaries.diagnostics);
-
-        // SCC closure: interprocedural summary improvement over SCCs.
-        // Runs after direct summaries so callee summaries are available.
-        let scc_closure = if run_full_refinement_pipeline {
-            crate::analysis::summaries::provider::run_scc_closure_with_cache(
-                &mut db,
-                input.cache,
-                input.config_digest,
-                input.rule_digest,
-                input.plan.digest(),
-            )
-        } else {
-            Default::default()
-        };
-        #[cfg(test)]
-        let scc_closure_debug = scc_closure.debug_snapshot;
-        diagnostics.extend(scc_closure.diagnostics);
-        let final_direct_summaries_output = crate::analysis::summaries::store::SummaryOutput {
-            summaries: db.summary_facts().to_vec(),
-            events: db.summary_events().to_vec(),
-        };
-        let direct_summaries_output_digest =
-            crate::analysis::summaries::provider::direct_summaries_output_digest(
-                Self::provider_manifest("polint.direct_summaries"),
-                &input_snapshot,
-                &entrypoints_semantic_mir_digest,
-                &entrypoints_cfg_digest,
-                &entrypoints_calls_digest,
-                &abstract_domains_dependency_output_digest,
-                &entrypoints_symbol_digest,
-                &entrypoints_topology_digest,
-                &[go_dependency_output_digest, ts_dependency_output_digest],
-                &crate::analysis::summaries::provider::callable_stable_key_map(&db),
-                &final_direct_summaries_output,
-            );
-        upstream_digests.insert(
-            DirectSummariesProvider.manifest().id,
-            direct_summaries_output_digest.clone(),
+        let (capability_support, scc_closure) = run_scheduled_providers(
+            &mut db,
+            &input,
+            &input_snapshot,
+            &enabled_providers,
+            &mut diagnostics,
+            &mut provider_outputs,
         );
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
-            DirectSummariesProvider.manifest().id,
-            &db,
-            polint_direct_summaries_cache_stats,
-            Some(direct_summaries_output_digest),
-        ));
-
-        let entrypoints = if run_full_refinement_pipeline {
-            let mut ctx = ProviderCtx {
-                db: &mut db,
-                cache: input.cache,
-                loaded: input.loaded,
-                input_snapshot: &input_snapshot,
-                config_digest: input.config_digest,
-                rule_digest: input.rule_digest,
-                plan: input.plan,
-                parallel: input.parallel,
-                upstream_digests: &upstream_digests,
-                capability_support: &mut capability_support,
-                run_semantic_pipeline,
-                run_cfg_call_pipeline,
-                compact_domain_materialization,
-            };
-            EntrypointsProvider.run(&mut ctx)
-        } else {
-            ProviderRunResult {
-                diagnostics: Vec::new(),
-                cache_stats: incremental::CacheStats::default(),
-                output_digest: None,
-            }
-        };
-        let polint_entrypoints_cache_stats = entrypoints.cache_stats.clone();
-        let entrypoints_output_digest = entrypoints.output_digest.clone();
-        if let Some(digest) = entrypoints_output_digest.clone() {
-            upstream_digests.insert(EntrypointsProvider.manifest().id, digest);
-        }
-        diagnostics.extend(entrypoints.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
-            EntrypointsProvider.manifest().id,
-            &db,
-            polint_entrypoints_cache_stats,
-            entrypoints_output_digest,
-        ));
-
-        // polint.reachability runs immediately after polint.entrypoints (D-19),
-        // consuming the calls/entrypoints/identity/symbol/topology output digests.
-        let reachability = if run_full_refinement_pipeline {
-            let mut ctx = ProviderCtx {
-                db: &mut db,
-                cache: input.cache,
-                loaded: input.loaded,
-                input_snapshot: &input_snapshot,
-                config_digest: input.config_digest,
-                rule_digest: input.rule_digest,
-                plan: input.plan,
-                parallel: input.parallel,
-                upstream_digests: &upstream_digests,
-                capability_support: &mut capability_support,
-                run_semantic_pipeline,
-                run_cfg_call_pipeline,
-                compact_domain_materialization,
-            };
-            ReachabilityProvider.run(&mut ctx)
-        } else {
-            ProviderRunResult {
-                diagnostics: Vec::new(),
-                cache_stats: incremental::CacheStats::default(),
-                output_digest: None,
-            }
-        };
-        let polint_reachability_cache_stats = reachability.cache_stats.clone();
-        let reachability_output_digest = reachability.output_digest;
-        if let Some(digest) = reachability_output_digest.clone() {
-            upstream_digests.insert(ReachabilityProvider.manifest().id, digest);
-        }
-        diagnostics.extend(reachability.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
-            ReachabilityProvider.manifest().id,
-            &db,
-            polint_reachability_cache_stats,
-            reachability_output_digest,
-        ));
-
-        let extensions = if run_full_refinement_pipeline {
-            let mut ctx = ProviderCtx {
-                db: &mut db,
-                cache: input.cache,
-                loaded: input.loaded,
-                input_snapshot: &input_snapshot,
-                config_digest: input.config_digest,
-                rule_digest: input.rule_digest,
-                plan: input.plan,
-                parallel: input.parallel,
-                upstream_digests: &upstream_digests,
-                capability_support: &mut capability_support,
-                run_semantic_pipeline,
-                run_cfg_call_pipeline,
-                compact_domain_materialization,
-            };
-            ExtensionsProvider.run(&mut ctx)
-        } else {
-            ProviderRunResult {
-                diagnostics: Vec::new(),
-                cache_stats: incremental::CacheStats::default(),
-                output_digest: None,
-            }
-        };
-        let polint_extensions_cache_stats = extensions.cache_stats.clone();
-        let extensions_output_digest = extensions.output_digest.clone();
-        if let Some(digest) = extensions_output_digest.clone() {
-            upstream_digests.insert(ExtensionsProvider.manifest().id, digest);
-        }
-        diagnostics.extend(extensions.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
-            ExtensionsProvider.manifest().id,
-            &db,
-            polint_extensions_cache_stats,
-            extensions_output_digest,
-        ));
-
-        let type_value_alias = if run_full_refinement_pipeline {
-            let mut ctx = ProviderCtx {
-                db: &mut db,
-                cache: input.cache,
-                loaded: input.loaded,
-                input_snapshot: &input_snapshot,
-                config_digest: input.config_digest,
-                rule_digest: input.rule_digest,
-                plan: input.plan,
-                parallel: input.parallel,
-                upstream_digests: &upstream_digests,
-                capability_support: &mut capability_support,
-                run_semantic_pipeline,
-                run_cfg_call_pipeline,
-                compact_domain_materialization,
-            };
-            TypeValueAliasProvider.run(&mut ctx)
-        } else {
-            ProviderRunResult {
-                diagnostics: Vec::new(),
-                cache_stats: incremental::CacheStats::default(),
-                output_digest: None,
-            }
-        };
-        let polint_type_value_alias_cache_stats = type_value_alias.cache_stats.clone();
-        let type_value_alias_output_digest = type_value_alias.output_digest.clone();
-        if let Some(digest) = type_value_alias_output_digest.clone() {
-            upstream_digests.insert(TypeValueAliasProvider.manifest().id, digest);
-        }
-        diagnostics.extend(type_value_alias.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
-            TypeValueAliasProvider.manifest().id,
-            &db,
-            polint_type_value_alias_cache_stats,
-            type_value_alias_output_digest,
-        ));
-
-        let semantic_graph = if run_full_refinement_pipeline {
-            let mut ctx = ProviderCtx {
-                db: &mut db,
-                cache: input.cache,
-                loaded: input.loaded,
-                input_snapshot: &input_snapshot,
-                config_digest: input.config_digest,
-                rule_digest: input.rule_digest,
-                plan: input.plan,
-                parallel: input.parallel,
-                upstream_digests: &upstream_digests,
-                capability_support: &mut capability_support,
-                run_semantic_pipeline,
-                run_cfg_call_pipeline,
-                compact_domain_materialization,
-            };
-            SemanticGraphProvider.run(&mut ctx)
-        } else {
-            ProviderRunResult {
-                diagnostics: Vec::new(),
-                cache_stats: incremental::CacheStats::default(),
-                output_digest: None,
-            }
-        };
-        let polint_semantic_graph_cache_stats = semantic_graph.cache_stats.clone();
-        let semantic_graph_output_digest = semantic_graph.output_digest.clone();
-        if let Some(digest) = semantic_graph_output_digest.clone() {
-            upstream_digests.insert(SemanticGraphProvider.manifest().id, digest);
-        }
-        diagnostics.extend(semantic_graph.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
-            SemanticGraphProvider.manifest().id,
-            &db,
-            polint_semantic_graph_cache_stats,
-            semantic_graph_output_digest,
-        ));
-
-        let solver = if run_full_refinement_pipeline {
-            let mut ctx = ProviderCtx {
-                db: &mut db,
-                cache: input.cache,
-                loaded: input.loaded,
-                input_snapshot: &input_snapshot,
-                config_digest: input.config_digest,
-                rule_digest: input.rule_digest,
-                plan: input.plan,
-                parallel: input.parallel,
-                upstream_digests: &upstream_digests,
-                capability_support: &mut capability_support,
-                run_semantic_pipeline,
-                run_cfg_call_pipeline,
-                compact_domain_materialization,
-            };
-            SolverProvider.run(&mut ctx)
-        } else {
-            ProviderRunResult {
-                diagnostics: Vec::new(),
-                cache_stats: incremental::CacheStats::default(),
-                output_digest: None,
-            }
-        };
-        let polint_solver_cache_stats = solver.cache_stats.clone();
-        let solver_output_digest = solver.output_digest.clone();
-        if let Some(digest) = solver_output_digest.clone() {
-            upstream_digests.insert(SolverProvider.manifest().id, digest);
-        }
-        diagnostics.extend(solver.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
-            SolverProvider.manifest().id,
-            &db,
-            polint_solver_cache_stats,
-            solver_output_digest,
-        ));
-
-        let refined_calls = if run_cfg_call_pipeline {
-            let mut ctx = ProviderCtx {
-                db: &mut db,
-                cache: input.cache,
-                loaded: input.loaded,
-                input_snapshot: &input_snapshot,
-                config_digest: input.config_digest,
-                rule_digest: input.rule_digest,
-                plan: input.plan,
-                parallel: input.parallel,
-                upstream_digests: &upstream_digests,
-                capability_support: &mut capability_support,
-                run_semantic_pipeline,
-                run_cfg_call_pipeline,
-                compact_domain_materialization,
-            };
-            RefinedCallsProvider.run(&mut ctx)
-        } else {
-            ProviderRunResult {
-                diagnostics: Vec::new(),
-                cache_stats: incremental::CacheStats::default(),
-                output_digest: None,
-            }
-        };
-        let polint_refined_calls_cache_stats = refined_calls.cache_stats.clone();
-        let refined_calls_output_digest = refined_calls.output_digest.clone();
-        if let Some(digest) = refined_calls_output_digest.clone() {
-            upstream_digests.insert(RefinedCallsProvider.manifest().id, digest);
-        }
-        diagnostics.extend(refined_calls.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
-            RefinedCallsProvider.manifest().id,
-            &db,
-            polint_refined_calls_cache_stats,
-            refined_calls_output_digest,
-        ));
-
-        let data_flow = if run_data_flow_pipeline {
-            let mut ctx = ProviderCtx {
-                db: &mut db,
-                cache: input.cache,
-                loaded: input.loaded,
-                input_snapshot: &input_snapshot,
-                config_digest: input.config_digest,
-                rule_digest: input.rule_digest,
-                plan: input.plan,
-                parallel: input.parallel,
-                upstream_digests: &upstream_digests,
-                capability_support: &mut capability_support,
-                run_semantic_pipeline,
-                run_cfg_call_pipeline,
-                compact_domain_materialization,
-            };
-            DataFlowProvider.run(&mut ctx)
-        } else {
-            ProviderRunResult {
-                diagnostics: Vec::new(),
-                cache_stats: incremental::CacheStats::default(),
-                output_digest: None,
-            }
-        };
-        let polint_data_flow_cache_stats = data_flow.cache_stats.clone();
-        let data_flow_output_digest = data_flow.output_digest.clone();
-        if let Some(digest) = data_flow_output_digest.clone() {
-            upstream_digests.insert(DataFlowProvider.manifest().id, digest);
-        }
-        diagnostics.extend(data_flow.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
-            DataFlowProvider.manifest().id,
-            &db,
-            polint_data_flow_cache_stats,
-            data_flow_output_digest,
-        ));
-
-        let evidence = if run_data_flow_pipeline {
-            let mut ctx = ProviderCtx {
-                db: &mut db,
-                cache: input.cache,
-                loaded: input.loaded,
-                input_snapshot: &input_snapshot,
-                config_digest: input.config_digest,
-                rule_digest: input.rule_digest,
-                plan: input.plan,
-                parallel: input.parallel,
-                upstream_digests: &upstream_digests,
-                capability_support: &mut capability_support,
-                run_semantic_pipeline,
-                run_cfg_call_pipeline,
-                compact_domain_materialization,
-            };
-            EvidenceProvider.run(&mut ctx)
-        } else {
-            ProviderRunResult {
-                diagnostics: Vec::new(),
-                cache_stats: incremental::CacheStats::default(),
-                output_digest: None,
-            }
-        };
-        let polint_evidence_cache_stats = evidence.cache_stats.clone();
-        let evidence_output_digest = evidence.output_digest;
-        if let Some(digest) = evidence_output_digest.clone() {
-            upstream_digests.insert(EvidenceProvider.manifest().id, digest);
-        }
-        diagnostics.extend(evidence.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
-            EvidenceProvider.manifest().id,
-            &db,
-            polint_evidence_cache_stats,
-            evidence_output_digest,
-        ));
-
-        let metrics = {
-            let mut ctx = ProviderCtx {
-                db: &mut db,
-                cache: input.cache,
-                loaded: input.loaded,
-                input_snapshot: &input_snapshot,
-                config_digest: input.config_digest,
-                rule_digest: input.rule_digest,
-                plan: input.plan,
-                parallel: input.parallel,
-                upstream_digests: &upstream_digests,
-                capability_support: &mut capability_support,
-                run_semantic_pipeline,
-                run_cfg_call_pipeline,
-                compact_domain_materialization,
-            };
-            MetricsProvider.run(&mut ctx)
-        };
-        let polint_metrics_cache_stats = metrics.cache_stats.clone();
-        let metrics_output_digest = metrics.output_digest;
-        diagnostics.extend(metrics.diagnostics);
-        provider_outputs.push(Self::provider_output_for_with_optional_digest(
-            MetricsProvider.manifest().id,
-            &db,
-            polint_metrics_cache_stats,
-            metrics_output_digest,
-        ));
         tracing::info!(target: "polint::kernel", "phase: metrics + derived done");
-        // Whole-DB fact-metadata validation is an assertion pass, not analysis.
-        // Debug builds keep it on; release production skips it unless
-        // POLINT_VALIDATE_FACTS is set.
+
         if validation::fact_metadata_validation_enabled() {
             let validation_diagnostics =
                 validation::validate_fact_metadata(&db, Self::provider_manifests());
             diagnostics.extend(validation_diagnostics);
         }
         db.finish_all_fact_meta_insertions();
-        // Persistence is deliberately last: store availability must not change
-        // provider execution, validated facts, diagnostics, or capability
-        // support. Only this private maintenance status is stored.
         let store_config = store::StoreConfig::new(
             input.cache.semantic_store_path(),
             input.cache.semantic_store_enabled(),
         );
         let store_status = store::SemanticStore::maintain(&store_config);
+        #[cfg(test)]
+        let scc_closure_debug = scc_closure
+            .as_ref()
+            .and_then(|output| output.debug_snapshot.clone());
+        let demand_query_trace = scc_closure
+            .map(|output| output.demand_query_trace)
+            .unwrap_or_default();
         let run_report = incremental::KernelRunReport::new(
             input_snapshot,
             provider_outputs,
-            scc_closure.demand_query_trace,
+            demand_query_trace,
             store_status,
         );
         #[cfg(test)]
@@ -1161,14 +353,6 @@ impl AnalysisKernel {
     #[cfg(test)]
     pub(crate) fn semantic_store_schema_is_current_for_test(path: &std::path::Path) -> bool {
         store::current_schema_is_valid_for_test(path)
-    }
-
-    fn provider_output_for(
-        provider_id: &'static str,
-        db: &AnalysisDb,
-        cache_stats: incremental::CacheStats,
-    ) -> incremental::ProviderOutputMeta {
-        Self::provider_output_for_with_optional_digest(provider_id, db, cache_stats, None)
     }
 
     fn provider_output_for_with_optional_digest(
@@ -1222,14 +406,6 @@ impl AnalysisKernel {
             .iter()
             .find(|manifest| manifest.id == provider_id)
             .unwrap_or_else(|| panic!("missing provider manifest {provider_id}"))
-    }
-
-    fn directly_requests_any_capability(plan: &AnalysisPlan, capabilities: &[&str]) -> bool {
-        plan.rules().iter().any(|rule| {
-            rule.requested_capabilities
-                .iter()
-                .any(|requested| capabilities.contains(&requested.as_str()))
-        })
     }
 }
 
@@ -2259,8 +1435,7 @@ mod tests {
         // With an empty plan no rule requests a graph capability, so the
         // interprocedural/semantic pipeline (semantic_mir and everything
         // downstream) is gated off and never recomputes. Its provider row is still
-        // emitted with a deterministic empty-summary output digest. See
-        // `SEMANTIC_PIPELINE_TRIGGER_CAPABILITIES`.
+        // emitted with a deterministic synthesized output digest.
         let semantic_mir = provider_output(&output, "polint.semantic_mir");
         assert_eq!(semantic_mir.cache_stats.recomputes, 0);
         assert!(!semantic_mir.output_digest.value.is_empty());

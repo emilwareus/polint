@@ -330,8 +330,8 @@ impl AnalysisPlan {
     /// pipeline (module/symbol graphs + the interprocedural/semantic stages + the
     /// metric stages). Use this in tests and eval fixtures that assert on deep
     /// facts (call graph, points-to, reachability, semantic graph, RTA, …) so the
-    /// kernel's `run_semantic_pipeline` gate stays enabled. Mirrors what a rule
-    /// requesting a graph capability would trigger in production.
+    /// kernel's capability-closure schedule includes the deep providers. Mirrors
+    /// what a rule requesting a graph capability would trigger in production.
     #[cfg(test)]
     pub(crate) fn full_pipeline_for_test() -> Self {
         Self::from_capability_names_for_test(&[
