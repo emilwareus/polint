@@ -727,7 +727,7 @@
       "note": "Deleted ts_value_flows + calls/js_points_to Oxc pipeline; shared solver remains"
     },
     "W4.1": {
-      "state": "CLAIMED",
+      "state": "MERGED",
       "spec": "docs/architecture-review/specs/W4.1-points-to-primary.md",
       "depends_on": [
         "W3.5"
@@ -735,16 +735,22 @@
       "created_at": "2026-08-08T21:24:54+02:00",
       "branch": "swarm/W4.1",
       "dispatched_at": "2026-08-08T21:24:54+02:00",
-      "attempts": 1
+      "attempts": 1,
+      "commit": "445ad367",
+      "merged_at": "2026-08-08T21:46:52+02:00",
+      "note": "points-to sole TS resolver; ts_tokens+ts_object_model deleted"
     },
     "W4.2": {
-      "state": "BLOCKED",
-      "spec": "docs/architecture-review/specs/M4-OVERVIEW.md",
+      "state": "CLAIMED",
+      "spec": "docs/architecture-review/specs/W4.2-ifds-icfg.md",
       "depends_on": [
         "W3.4",
         "W4.1"
       ],
-      "created_at": "2026-08-08T21:24:54+02:00"
+      "created_at": "2026-08-08T21:24:54+02:00",
+      "branch": "swarm/W4.2",
+      "dispatched_at": "2026-08-08T21:46:52+02:00",
+      "attempts": 1
     },
     "W4.3": {
       "state": "BLOCKED",
@@ -779,7 +785,7 @@
   "milestone": "M4",
   "READY": [],
   "IN_FLIGHT": [
-    "W4.1"
+    "W4.2"
   ],
   "IN_REVIEW": [],
   "MERGED": [
@@ -808,7 +814,8 @@
     "W2.1",
     "W3.2",
     "W3.3",
-    "W3.5"
+    "W3.5",
+    "W4.1"
   ],
   "HELD": [
     "W2.3"
@@ -822,7 +829,7 @@
   },
   "integration_branch": "static-analysis-architecture-review",
   "never_merge_to_main": true,
-  "integration_head": "5b037543",
+  "integration_head": "445ad367",
   "m0_gate": {
     "status": "PASS",
     "completed_at": "2026-08-08T11:52:00+02:00",
