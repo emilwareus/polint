@@ -92,14 +92,7 @@ impl Provider for GoSyntaxProvider {
     }
 
     fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
-        crate::go::analyze_with_plan_options_and_cache_stats(
-            ctx.db,
-            ctx.cache,
-            ctx.config_digest,
-            ctx.rule_digest,
-            ctx.plan,
-            ctx.parallel,
-        )
+        run_registered_frontend_syntax(ctx, "go")
     }
 }
 
@@ -111,15 +104,53 @@ impl Provider for TsSyntaxProvider {
     }
 
     fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
-        crate::ts::analyze_with_plan_options_and_cache_stats(
-            ctx.db,
-            ctx.cache,
-            ctx.config_digest,
-            ctx.rule_digest,
-            ctx.plan,
-            ctx.parallel,
-        )
+        run_registered_frontend_syntax(ctx, "ts")
     }
+}
+
+fn run_registered_frontend_syntax(
+    ctx: &mut ProviderCtx<'_>,
+    frontend_name: &'static str,
+) -> ProviderRunResult {
+    let registry = crate::frontend::frontend_registry();
+    let frontend = registry
+        .by_name(frontend_name)
+        .unwrap_or_else(|| panic!("missing language frontend {frontend_name}"));
+    let frontend_id = frontend.id();
+    if frontend.profile().name != frontend_name {
+        panic!(
+            "frontend profile name {} != requested {frontend_name}",
+            frontend.profile().name
+        );
+    }
+    let _ = (
+        frontend.profile().family,
+        frontend.profile().produces,
+        frontend.profile().precision_ceiling,
+        frontend_id.to_public_language(),
+    );
+    // Clone matching files so AnalysisUnit does not borrow `ctx.db` across `analyze`.
+    let owned: Vec<crate::core::SourceFile> = ctx
+        .db
+        .files()
+        .iter()
+        .filter(|file| file.language.id() == frontend_id)
+        .cloned()
+        .collect();
+    debug_assert!(
+        owned.iter().all(|file| registry
+            .scheduled_for(&file.path)
+            .iter()
+            .any(|candidate| candidate.id() == frontend_id)),
+        "Language::id selection must agree with scheduled_for"
+    );
+    let files: Vec<&crate::core::SourceFile> = owned.iter().collect();
+    let root = ctx.loaded.root.clone();
+    let unit = crate::frontend::AnalysisUnit {
+        files: &files,
+        root: &root,
+    };
+    frontend.analyze(ctx, &unit)
 }
 
 pub(crate) struct ModuleGraphProvider;

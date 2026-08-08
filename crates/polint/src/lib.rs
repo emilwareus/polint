@@ -26,6 +26,7 @@ pub(crate) mod diagnostics;
 #[cfg(test)]
 #[path = "../../polint-eval/src/harness/mod.rs"]
 pub(crate) mod eval;
+pub(crate) mod frontend;
 pub(crate) mod fs;
 pub(crate) mod git;
 pub(crate) mod go;

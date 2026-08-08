@@ -13,4 +13,7 @@ pub use adapter::analyze_with_options;
 #[cfg(test)]
 pub(crate) use adapter::{analyze, analyze_with_cache};
 #[allow(unused_imports)]
-pub(crate) use adapter::{analyze_with_plan_options, analyze_with_plan_options_and_cache_stats};
+pub(crate) use adapter::{
+    analyze_files_with_plan_options_and_cache_stats, analyze_with_plan_options,
+    analyze_with_plan_options_and_cache_stats,
+};

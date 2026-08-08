@@ -109,12 +109,34 @@ pub(crate) fn analyze_with_plan_options_and_cache_stats(
     plan: &AnalysisPlan,
     parallel: bool,
 ) -> ProviderRunResult {
-    let files: Vec<&SourceFile> = db
+    // Clone so file refs do not borrow `db` across mutation in analyze_files.
+    let owned: Vec<SourceFile> = db
         .files()
         .iter()
         .filter(|file| file.language.is_ts_family())
+        .cloned()
         .collect();
+    let files: Vec<&SourceFile> = owned.iter().collect();
+    analyze_files_with_plan_options_and_cache_stats(
+        db,
+        &files,
+        cache,
+        config_hash,
+        rule_hash,
+        plan,
+        parallel,
+    )
+}
 
+pub(crate) fn analyze_files_with_plan_options_and_cache_stats(
+    db: &mut AnalysisDb,
+    files: &[&SourceFile],
+    cache: &crate::cache::Cache,
+    config_hash: &str,
+    rule_hash: &str,
+    plan: &AnalysisPlan,
+    parallel: bool,
+) -> ProviderRunResult {
     let mut cache_stats = CacheStats::default();
     if files.is_empty() {
         return ProviderRunResult {
@@ -125,11 +147,11 @@ pub(crate) fn analyze_with_plan_options_and_cache_stats(
     }
 
     let layer_store = cache.layer_cache_store();
-    let layer_key = ts_syntax_layer_key(&files, config_hash);
+    let layer_key = ts_syntax_layer_key(files, config_hash);
     let read = layer_store.read_json_validated::<SyntaxLayerPayload, _>(
         &layer_key,
         |payload, manifest| {
-            validate_syntax_layer_payload(payload, manifest, TS_SYNTAX_LAYER_SCHEMA, &files)
+            validate_syntax_layer_payload(payload, manifest, TS_SYNTAX_LAYER_SCHEMA, files)
         },
     );
 
@@ -149,14 +171,8 @@ pub(crate) fn analyze_with_plan_options_and_cache_stats(
         LayerCacheReadStatus::BypassedDisabled => {
             cache_stats.record_disabled_bypass();
             cache_stats.record_recompute();
-            let payload = parse_ts_syntax_layer_payload(
-                &files,
-                cache,
-                config_hash,
-                rule_hash,
-                plan,
-                parallel,
-            );
+            let payload =
+                parse_ts_syntax_layer_payload(files, cache, config_hash, rule_hash, plan, parallel);
             ProviderRunResult {
                 diagnostics: restore_syntax_layer_payload(db, payload),
                 cache_stats,
@@ -170,14 +186,8 @@ pub(crate) fn analyze_with_plan_options_and_cache_stats(
                 cache_stats.record_invalid_evicted_read();
             }
             cache_stats.record_recompute();
-            let payload = parse_ts_syntax_layer_payload(
-                &files,
-                cache,
-                config_hash,
-                rule_hash,
-                plan,
-                parallel,
-            );
+            let payload =
+                parse_ts_syntax_layer_payload(files, cache, config_hash, rule_hash, plan, parallel);
             let mut write_diagnostics = Vec::new();
             let output_digest = write_syntax_layer_payload(
                 &layer_store,
