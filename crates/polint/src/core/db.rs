@@ -104,7 +104,7 @@ use super::fact_store::{
     GO_SEMANTIC_STORE_FAMILY, GO_SYNTAX_STORE_FAMILY, GoSyntaxStore, METRICS_STORE_FAMILY,
     MODULE_GRAPH_STORE_FAMILY, MODULE_TOPOLOGY_STORE_FAMILY, MetricsStore, ModuleGraphStore,
     ModuleTopologyStore, SEMANTIC_INDEX_STORE_FAMILY, SYMBOL_STORE_FAMILY, SemanticIndexStore,
-    SymbolStore, TS_SYNTAX_STORE_FAMILY, TsSyntaxStore,
+    SymbolStore, TS_OBJECT_MODEL_STORE_FAMILY, TS_SYNTAX_STORE_FAMILY, TsSyntaxStore,
 };
 use super::facts::{
     BranchObligation, CachedFileFacts, ComplexityMetricFact, CoverageFact, DefinitionFact,
@@ -177,36 +177,6 @@ pub struct AnalysisDb {
     pub(crate) semantic_nodes: Vec<SemanticNodeFact>,
     pub(crate) semantic_edges: Vec<SemanticEdgeFact>,
     pub(crate) semantic_constraints: Vec<ConstraintFact>,
-    #[allow(
-        dead_code,
-        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
-    )]
-    pub(crate) ts_object_allocations: Vec<TsObjectAllocationFact>,
-    #[allow(
-        dead_code,
-        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
-    )]
-    pub(crate) ts_property_writes: Vec<TsPropertyWriteFact>,
-    #[allow(
-        dead_code,
-        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
-    )]
-    pub(crate) ts_property_reads: Vec<TsPropertyReadFact>,
-    #[allow(
-        dead_code,
-        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
-    )]
-    pub(crate) ts_receiver_bindings: Vec<TsReceiverBindingFact>,
-    #[allow(
-        dead_code,
-        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
-    )]
-    pub(crate) ts_prototype_links: Vec<TsPrototypeLinkFact>,
-    #[allow(
-        dead_code,
-        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
-    )]
-    pub(crate) ts_object_model_store: Option<TsObjectModelStore>,
     pub(crate) solver_derived_edges: Vec<DerivedEdgeFact>,
     pub(crate) solver_budget_status: BudgetStatus,
     pub(crate) solver_budget_reasons: BTreeSet<String>,
@@ -274,6 +244,12 @@ impl Default for AnalysisDb {
         let mut metrics = MetricsStore::default();
         FactStore::clear(&mut metrics);
         fact_stores.insert(METRICS_STORE_FAMILY, FactStoreEntry::new(metrics));
+        let mut ts_object_model = TsObjectModelStore::default();
+        FactStore::clear(&mut ts_object_model);
+        fact_stores.insert(
+            TS_OBJECT_MODEL_STORE_FAMILY,
+            FactStoreEntry::new(ts_object_model),
+        );
         Self {
             files: Vec::new(),
             fact_meta: FactMetaStore::default(),
@@ -316,12 +292,6 @@ impl Default for AnalysisDb {
             semantic_nodes: Vec::new(),
             semantic_edges: Vec::new(),
             semantic_constraints: Vec::new(),
-            ts_object_allocations: Vec::new(),
-            ts_property_writes: Vec::new(),
-            ts_property_reads: Vec::new(),
-            ts_receiver_bindings: Vec::new(),
-            ts_prototype_links: Vec::new(),
-            ts_object_model_store: None,
             solver_derived_edges: Vec::new(),
             solver_budget_status: BudgetStatus::NotRun,
             solver_budget_reasons: BTreeSet::new(),
@@ -447,6 +417,16 @@ impl AnalysisDb {
     fn metrics_store_mut(&mut self) -> &mut MetricsStore {
         self.fact_store_mut(METRICS_STORE_FAMILY)
             .expect("MetricsStore is installed when AnalysisDb is constructed")
+    }
+
+    fn ts_object_model_store_inner(&self) -> &TsObjectModelStore {
+        self.fact_store(TS_OBJECT_MODEL_STORE_FAMILY)
+            .expect("TsObjectModelStore is installed when AnalysisDb is constructed")
+    }
+
+    fn ts_object_model_store_mut(&mut self) -> &mut TsObjectModelStore {
+        self.fact_store_mut(TS_OBJECT_MODEL_STORE_FAMILY)
+            .expect("TsObjectModelStore is installed when AnalysisDb is constructed")
     }
 
     /// Typed downcast helper for registry stores. Returns `None` when the family
@@ -1231,70 +1211,41 @@ impl AnalysisDb {
     /// current semantic-graph lowering. Construction runs through
     /// [`TsObjectModelStore::try_from_output`], which preserves deterministic
     /// normalization and rejects duplicate stable keys before stale rows are replaced.
-    #[allow(
-        dead_code,
-        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
-    )]
     pub(crate) fn replace_ts_object_model_facts(
         &mut self,
         output: TsObjectModelOutput,
     ) -> Result<(), AnalysisError> {
         let store = TsObjectModelStore::try_from_output(output)?;
-        self.ts_object_allocations = store.allocations().to_vec();
-        self.ts_property_writes = store.property_writes().to_vec();
-        self.ts_property_reads = store.property_reads().to_vec();
-        self.ts_receiver_bindings = store.receiver_bindings().to_vec();
-        self.ts_prototype_links = store.prototype_links().to_vec();
-        self.ts_object_model_store = Some(store);
+        *self.ts_object_model_store_mut() = store;
         Ok(())
     }
 
-    #[allow(
-        dead_code,
-        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
-    )]
     pub(crate) fn ts_object_allocations(&self) -> &[TsObjectAllocationFact] {
-        &self.ts_object_allocations
+        self.ts_object_model_store_inner().allocations()
     }
 
-    #[allow(
-        dead_code,
-        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
-    )]
     pub(crate) fn ts_property_writes(&self) -> &[TsPropertyWriteFact] {
-        &self.ts_property_writes
+        self.ts_object_model_store_inner().property_writes()
     }
 
-    #[allow(
-        dead_code,
-        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
-    )]
     pub(crate) fn ts_property_reads(&self) -> &[TsPropertyReadFact] {
-        &self.ts_property_reads
+        self.ts_object_model_store_inner().property_reads()
     }
 
-    #[allow(
-        dead_code,
-        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
-    )]
     pub(crate) fn ts_receiver_bindings(&self) -> &[TsReceiverBindingFact] {
-        &self.ts_receiver_bindings
+        self.ts_object_model_store_inner().receiver_bindings()
     }
 
-    #[allow(
-        dead_code,
-        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
-    )]
     pub(crate) fn ts_prototype_links(&self) -> &[TsPrototypeLinkFact] {
-        &self.ts_prototype_links
+        self.ts_object_model_store_inner().prototype_links()
     }
 
     #[allow(
         dead_code,
-        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
+        reason = "object-model store queries are exercised by storage/regression tests"
     )]
     pub(crate) fn ts_object_model_store(&self) -> Option<&TsObjectModelStore> {
-        self.ts_object_model_store.as_ref()
+        Some(self.ts_object_model_store_inner())
     }
 
     /// Stores the normalized solver-derived edges (GRAPH-03/GRAPH-04), mirroring

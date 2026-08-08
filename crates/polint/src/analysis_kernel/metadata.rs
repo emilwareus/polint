@@ -111,6 +111,8 @@ pub(crate) enum FactFamily {
     UnsupportedSemantic,
     /// Registry key for [`crate::go::semantic::store::GoSemanticStore`].
     GoSemantic,
+    /// Registry key for [`crate::ts::object_model::store::TsObjectModelStore`].
+    TsObjectModel,
 }
 
 impl FactFamily {
@@ -205,6 +207,7 @@ impl FactFamily {
             Self::MirTerminator => "MirTerminator",
             Self::UnsupportedSemantic => "UnsupportedSemantic",
             Self::GoSemantic => "GoSemantic",
+            Self::TsObjectModel => "TsObjectModel",
         }
     }
 }

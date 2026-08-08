@@ -33,6 +33,7 @@ use crate::symbol_graph::semantic::{
     ResolutionFact, ResolutionId, ScopeFact, ScopeId, SemanticImportFact, SemanticImportId,
     StableExportId, StableExportIdentity,
 };
+use crate::ts::object_model::store::TsObjectModelStore;
 
 /// Erased provider-owned fact container. Not public — rule authors use SDK views.
 pub(crate) trait FactStore: Any + Send + Sync {
@@ -888,6 +889,31 @@ impl FactStore for MetricsStore {
 
 /// Registry key used for [`MetricsStore`] in `AnalysisDb::fact_stores`.
 pub(crate) const METRICS_STORE_FAMILY: FactFamily = FactFamily::FileMetric;
+
+impl FactStore for TsObjectModelStore {
+    fn family(&self) -> FactFamily {
+        FactFamily::TsObjectModel
+    }
+
+    fn clear(&mut self) {
+        *self = TsObjectModelStore::default();
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn clone_box(&self) -> Box<dyn FactStore> {
+        Box::new(self.clone())
+    }
+}
+
+/// Registry key used for [`TsObjectModelStore`] in `AnalysisDb::fact_stores`.
+pub(crate) const TS_OBJECT_MODEL_STORE_FAMILY: FactFamily = FactFamily::TsObjectModel;
 
 #[cfg(test)]
 mod tests {
