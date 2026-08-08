@@ -811,6 +811,137 @@ pub(crate) fn scheduled_order() -> Vec<&'static str> {
     order
 }
 
+/// Providers always present in today's `run()` schedule (graphs + metrics).
+const BASELINE_PROVIDER_SEEDS: &[&str] = &[
+    "polint.module_graph",
+    "polint.symbol_graph",
+    "polint.metrics",
+];
+
+/// Seeds that pull the deep semantic/CFG/refinement stack through dependency closure.
+const DEEP_PROVIDER_SEEDS: &[&str] = &[
+    "polint.calls",
+    "polint.direct_summaries",
+    "polint.reachability",
+    "polint.refined_calls",
+    "polint.solver",
+];
+
+const DEEP_TRIGGER_CAPABILITIES: &[&str] = &["calls", "control_flow", "dataflow"];
+
+/// Provider set enabled by the historical boolean pipeline gates for `requested`.
+pub(crate) fn providers_enabled_by_boolean_gates(
+    requested: &std::collections::BTreeSet<&str>,
+) -> std::collections::BTreeSet<&'static str> {
+    let mut enabled = std::collections::BTreeSet::from([
+        "polint.source",
+        "polint.go.syntax",
+        "polint.ts.syntax",
+        "polint.module_graph",
+        "polint.symbol_graph",
+        "polint.metrics",
+    ]);
+    let deep = DEEP_TRIGGER_CAPABILITIES
+        .iter()
+        .any(|capability| requested.contains(capability));
+    if deep {
+        enabled.extend([
+            "polint.module_topology",
+            "polint.semantic_mir",
+            "polint.cfg",
+            "polint.calls",
+            "polint.go.semantic",
+            "polint.identity",
+            "polint.abstract_domains",
+            "polint.direct_summaries",
+            "polint.entrypoints",
+            "polint.reachability",
+            "polint.extensions",
+            "polint.type_value_alias",
+            "polint.semantic_graph",
+            "polint.solver",
+            "polint.refined_calls",
+        ]);
+    }
+    if requested.contains("dataflow") {
+        enabled.extend(["polint.data_flow", "polint.evidence"]);
+    }
+    enabled
+}
+
+fn seed_providers_for_capability(capability: &str) -> &'static [&'static str] {
+    match capability {
+        "resolved_imports" | "module_graph" => &["polint.module_graph"],
+        "symbols" | "references" => &["polint.symbol_graph"],
+        "calls" | "control_flow" => DEEP_PROVIDER_SEEDS,
+        "dataflow" => {
+            const DATAFLOW_SEEDS: &[&str] = &[
+                "polint.calls",
+                "polint.direct_summaries",
+                "polint.reachability",
+                "polint.refined_calls",
+                "polint.solver",
+                "polint.data_flow",
+                "polint.evidence",
+            ];
+            DATAFLOW_SEEDS
+        }
+        "file_metrics" | "function_metrics" | "complexity_metrics" => &["polint.metrics"],
+        _ => &[],
+    }
+}
+
+/// Provider set derived by seeding from requested capabilities and closing over
+/// manifest dependency edges (input fact produced by provider).
+pub(crate) fn providers_enabled_by_capability_closure(
+    requested: &std::collections::BTreeSet<&str>,
+) -> std::collections::BTreeSet<&'static str> {
+    use std::collections::{BTreeMap, BTreeSet, VecDeque};
+
+    let manifests = provider_manifests();
+    let mut producers: BTreeMap<&str, Vec<&'static str>> = BTreeMap::new();
+    for manifest in manifests {
+        for &output in manifest.outputs {
+            producers.entry(output).or_default().push(manifest.id);
+        }
+    }
+
+    let mut seeds: BTreeSet<&'static str> = BASELINE_PROVIDER_SEEDS.iter().copied().collect();
+    for &capability in requested {
+        seeds.extend(seed_providers_for_capability(capability).iter().copied());
+    }
+
+    let mut enabled = seeds.clone();
+    let mut queue: VecDeque<&'static str> = seeds.into_iter().collect();
+    while let Some(provider_id) = queue.pop_front() {
+        let Some(manifest) = manifests.iter().find(|manifest| manifest.id == provider_id) else {
+            continue;
+        };
+        for &input in manifest.inputs {
+            let Some(producers_for_input) = producers.get(input) else {
+                continue;
+            };
+            for &producer in producers_for_input {
+                if enabled.insert(producer) {
+                    queue.push_back(producer);
+                }
+            }
+        }
+    }
+    enabled
+}
+
+/// Topological provider order restricted to the capability-closure set for `requested`.
+pub(crate) fn scheduled_order_for(
+    requested: &std::collections::BTreeSet<&str>,
+) -> Vec<&'static str> {
+    let enabled = providers_enabled_by_capability_closure(requested);
+    scheduled_order()
+        .into_iter()
+        .filter(|id| enabled.contains(id))
+        .collect()
+}
+
 impl ProviderManifest {
     pub(crate) fn provider_version(&self) -> &'static str {
         env!("CARGO_PKG_VERSION")
@@ -1714,6 +1845,34 @@ mod tests {
             scheduled, declared,
             "DAG topo (manifest-index tie-break) must reproduce PROVIDER_MANIFESTS order"
         );
+    }
+
+    #[test]
+    fn capability_closure_matches_boolean_pipeline_gates() {
+        let capabilities = [
+            "resolved_imports",
+            "module_graph",
+            "symbols",
+            "references",
+            "calls",
+            "control_flow",
+            "dataflow",
+        ];
+        let n = capabilities.len();
+        for mask in 0..(1usize << n) {
+            let requested: BTreeSet<&str> = capabilities
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| mask & (1usize << index) != 0)
+                .map(|(_, capability)| *capability)
+                .collect();
+            let via_booleans = providers_enabled_by_boolean_gates(&requested);
+            let via_closure = providers_enabled_by_capability_closure(&requested);
+            assert_eq!(via_closure, via_booleans, "{requested:?}");
+            let scheduled = scheduled_order_for(&requested);
+            let scheduled_set: BTreeSet<&str> = scheduled.iter().copied().collect();
+            assert_eq!(scheduled_set, via_closure, "order filter {requested:?}");
+        }
     }
 
     #[test]

@@ -199,6 +199,13 @@ impl AnalysisKernel {
                 .collect::<Vec<_>>(),
             "scheduled provider order must match declared manifest order"
         );
+        let empty_caps = std::collections::BTreeSet::new();
+        let _ = provider::scheduled_order_for(&empty_caps);
+        debug_assert_eq!(
+            provider::providers_enabled_by_capability_closure(&empty_caps),
+            provider::providers_enabled_by_boolean_gates(&empty_caps),
+            "empty-capability closure must match boolean gates"
+        );
 
         let source_result = {
             let mut ctx = ProviderCtx {
