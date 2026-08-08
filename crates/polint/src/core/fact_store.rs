@@ -7,6 +7,11 @@
 use std::any::Any;
 use std::fmt;
 
+use crate::analysis::cfg::facts::{
+    BasicBlockFact, CfgEdgeFact, CfgFunctionFact, CfgNodeFact, ControlDependenceFact,
+    DominatorFact, PostDominatorFact, ReachabilityFact, UnsupportedControlFlowFact,
+};
+use crate::analysis::cfg::store::CfgOutput;
 use crate::analysis_kernel::FactFamily;
 use crate::core::facts::{
     BranchObligation, FunctionFact, ImportFact, JsxAttributeFact, PackageFact, StringLiteralFact,
@@ -229,6 +234,79 @@ impl FactStore for TsSyntaxStore {
 
 /// Registry key used for [`TsSyntaxStore`] in `AnalysisDb::fact_stores`.
 pub(crate) const TS_SYNTAX_STORE_FAMILY: FactFamily = FactFamily::TsComponent;
+
+/// CFG facts produced by `polint.cfg`.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct CfgFactStore {
+    output: CfgOutput,
+}
+
+impl CfgFactStore {
+    pub(crate) fn replace(&mut self, output: CfgOutput) {
+        self.output = output;
+    }
+
+    pub(crate) fn functions(&self) -> &[CfgFunctionFact] {
+        &self.output.functions
+    }
+
+    pub(crate) fn nodes(&self) -> &[CfgNodeFact] {
+        &self.output.nodes
+    }
+
+    pub(crate) fn blocks(&self) -> &[BasicBlockFact] {
+        &self.output.blocks
+    }
+
+    pub(crate) fn edges(&self) -> &[CfgEdgeFact] {
+        &self.output.edges
+    }
+
+    pub(crate) fn reachability(&self) -> &[ReachabilityFact] {
+        &self.output.reachability
+    }
+
+    pub(crate) fn dominators(&self) -> &[DominatorFact] {
+        &self.output.dominators
+    }
+
+    pub(crate) fn postdominators(&self) -> &[PostDominatorFact] {
+        &self.output.postdominators
+    }
+
+    pub(crate) fn control_dependence(&self) -> &[ControlDependenceFact] {
+        &self.output.control_dependence
+    }
+
+    pub(crate) fn unsupported(&self) -> &[UnsupportedControlFlowFact] {
+        &self.output.unsupported
+    }
+}
+
+impl FactStore for CfgFactStore {
+    fn family(&self) -> FactFamily {
+        FactFamily::CfgFunction
+    }
+
+    fn clear(&mut self) {
+        self.output = CfgOutput::empty();
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn clone_box(&self) -> Box<dyn FactStore> {
+        Box::new(self.clone())
+    }
+}
+
+/// Registry key used for [`CfgFactStore`] in `AnalysisDb::fact_stores`.
+pub(crate) const CFG_STORE_FAMILY: FactFamily = FactFamily::CfgFunction;
 
 #[cfg(test)]
 mod tests {

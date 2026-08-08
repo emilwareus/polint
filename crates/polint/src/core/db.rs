@@ -100,8 +100,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::fact_store::{
-    FactStore, FactStoreEntry, GO_SYNTAX_STORE_FAMILY, GoSyntaxStore, TS_SYNTAX_STORE_FAMILY,
-    TsSyntaxStore,
+    CFG_STORE_FAMILY, CfgFactStore, FactStore, FactStoreEntry, GO_SYNTAX_STORE_FAMILY,
+    GoSyntaxStore, TS_SYNTAX_STORE_FAMILY, TsSyntaxStore,
 };
 use super::facts::{
     BranchObligation, CachedFileFacts, ComplexityMetricFact, CoverageFact, DefinitionFact,
@@ -170,15 +170,6 @@ pub struct AnalysisDb {
     pub(crate) function_metrics: Vec<FunctionMetricFact>,
     pub(crate) complexity_metrics: Vec<ComplexityMetricFact>,
     pub(crate) semantic: Option<SemanticStore>,
-    pub(crate) cfg_functions: Vec<CfgFunctionFact>,
-    pub(crate) cfg_nodes: Vec<CfgNodeFact>,
-    pub(crate) cfg_blocks: Vec<BasicBlockFact>,
-    pub(crate) cfg_edges: Vec<CfgEdgeFact>,
-    pub(crate) cfg_reachability: Vec<ReachabilityFact>,
-    pub(crate) cfg_dominators: Vec<DominatorFact>,
-    pub(crate) cfg_postdominators: Vec<PostDominatorFact>,
-    pub(crate) cfg_control_dependence: Vec<ControlDependenceFact>,
-    pub(crate) unsupported_control_flow: Vec<UnsupportedControlFlowFact>,
     pub(crate) call_sites: Vec<CallSiteFact>,
     pub(crate) call_targets: Vec<CallTargetFact>,
     pub(crate) unresolved_calls: Vec<UnresolvedCallFact>,
@@ -300,6 +291,9 @@ impl Default for AnalysisDb {
         let mut ts_syntax = TsSyntaxStore::default();
         FactStore::clear(&mut ts_syntax);
         fact_stores.insert(TS_SYNTAX_STORE_FAMILY, FactStoreEntry::new(ts_syntax));
+        let mut cfg_store = CfgFactStore::default();
+        FactStore::clear(&mut cfg_store);
+        fact_stores.insert(CFG_STORE_FAMILY, FactStoreEntry::new(cfg_store));
         Self {
             files: Vec::new(),
             fact_meta: FactMetaStore::default(),
@@ -342,15 +336,6 @@ impl Default for AnalysisDb {
             function_metrics: Vec::new(),
             complexity_metrics: Vec::new(),
             semantic: None,
-            cfg_functions: Vec::new(),
-            cfg_nodes: Vec::new(),
-            cfg_blocks: Vec::new(),
-            cfg_edges: Vec::new(),
-            cfg_reachability: Vec::new(),
-            cfg_dominators: Vec::new(),
-            cfg_postdominators: Vec::new(),
-            cfg_control_dependence: Vec::new(),
-            unsupported_control_flow: Vec::new(),
             call_sites: Vec::new(),
             call_targets: Vec::new(),
             unresolved_calls: Vec::new(),
@@ -452,6 +437,16 @@ impl AnalysisDb {
     fn ts_syntax_store_mut(&mut self) -> &mut TsSyntaxStore {
         self.fact_store_mut(TS_SYNTAX_STORE_FAMILY)
             .expect("TsSyntaxStore is installed when AnalysisDb is constructed")
+    }
+
+    fn cfg_store(&self) -> &CfgFactStore {
+        self.fact_store(CFG_STORE_FAMILY)
+            .expect("CfgFactStore is installed when AnalysisDb is constructed")
+    }
+
+    fn cfg_store_mut(&mut self) -> &mut CfgFactStore {
+        self.fact_store_mut(CFG_STORE_FAMILY)
+            .expect("CfgFactStore is installed when AnalysisDb is constructed")
     }
 
     /// Typed downcast helper for registry stores. Returns `None` when the family
@@ -766,15 +761,7 @@ impl AnalysisDb {
 
     pub(crate) fn replace_cfg_facts(&mut self, output: CfgOutput) -> Result<(), AnalysisError> {
         let output = output.normalized();
-        self.cfg_functions = output.functions;
-        self.cfg_nodes = output.nodes;
-        self.cfg_blocks = output.blocks;
-        self.cfg_edges = output.edges;
-        self.cfg_reachability = output.reachability;
-        self.cfg_dominators = output.dominators;
-        self.cfg_postdominators = output.postdominators;
-        self.cfg_control_dependence = output.control_dependence;
-        self.unsupported_control_flow = output.unsupported;
+        self.cfg_store_mut().replace(output);
         self.refresh_cfg_metadata();
         Ok(())
     }
@@ -2372,76 +2359,59 @@ impl AnalysisDb {
         self.fact_meta
             .remove_family(FactFamily::UnsupportedControlFlow);
 
-        for index in 0..self.cfg_functions.len() {
-            let (run_id, metadata) = {
-                let fact = &self.cfg_functions[index];
-                (fact.id.0, self.cfg_function_metadata(fact))
-            };
-            self.record_fact_meta(FactFamily::CfgFunction, run_id, metadata);
+        let cfg_functions = self.cfg_functions().to_vec();
+        let cfg_nodes = self.cfg_nodes().to_vec();
+        let cfg_blocks = self.cfg_blocks().to_vec();
+        let cfg_edges = self.cfg_edges().to_vec();
+        let cfg_reachability = self.cfg_reachability().to_vec();
+        let cfg_dominators = self.cfg_dominators().to_vec();
+        let cfg_postdominators = self.cfg_postdominators().to_vec();
+        let cfg_control_dependence = self.cfg_control_dependence().to_vec();
+        let unsupported_control_flow = self.unsupported_control_flow().to_vec();
+
+        for fact in &cfg_functions {
+            let metadata = self.cfg_function_metadata(fact);
+            self.record_fact_meta(FactFamily::CfgFunction, fact.id.0, metadata);
         }
 
-        for index in 0..self.cfg_nodes.len() {
-            let (run_id, metadata) = {
-                let fact = &self.cfg_nodes[index];
-                (fact.id.0, self.cfg_node_metadata(fact))
-            };
-            self.record_fact_meta(FactFamily::CfgNode, run_id, metadata);
+        for fact in &cfg_nodes {
+            let metadata = self.cfg_node_metadata(fact);
+            self.record_fact_meta(FactFamily::CfgNode, fact.id.0, metadata);
         }
 
-        for index in 0..self.cfg_blocks.len() {
-            let (run_id, metadata) = {
-                let fact = &self.cfg_blocks[index];
-                (fact.id.0, self.cfg_block_metadata(fact))
-            };
-            self.record_fact_meta(FactFamily::BasicBlock, run_id, metadata);
+        for fact in &cfg_blocks {
+            let metadata = self.cfg_block_metadata(fact);
+            self.record_fact_meta(FactFamily::BasicBlock, fact.id.0, metadata);
         }
 
-        for index in 0..self.cfg_edges.len() {
-            let (run_id, metadata) = {
-                let fact = &self.cfg_edges[index];
-                (fact.id.0, self.cfg_edge_metadata(fact))
-            };
-            self.record_fact_meta(FactFamily::CfgEdge, run_id, metadata);
+        for fact in &cfg_edges {
+            let metadata = self.cfg_edge_metadata(fact);
+            self.record_fact_meta(FactFamily::CfgEdge, fact.id.0, metadata);
         }
 
-        for index in 0..self.cfg_reachability.len() {
-            let (run_id, metadata) = {
-                let fact = &self.cfg_reachability[index];
-                (fact.id.0, self.cfg_reachability_metadata(fact))
-            };
-            self.record_fact_meta(FactFamily::CfgReachability, run_id, metadata);
+        for fact in &cfg_reachability {
+            let metadata = self.cfg_reachability_metadata(fact);
+            self.record_fact_meta(FactFamily::CfgReachability, fact.id.0, metadata);
         }
 
-        for index in 0..self.cfg_dominators.len() {
-            let (run_id, metadata) = {
-                let fact = &self.cfg_dominators[index];
-                (fact.id.0, self.cfg_dominator_metadata(fact))
-            };
-            self.record_fact_meta(FactFamily::CfgDominator, run_id, metadata);
+        for fact in &cfg_dominators {
+            let metadata = self.cfg_dominator_metadata(fact);
+            self.record_fact_meta(FactFamily::CfgDominator, fact.id.0, metadata);
         }
 
-        for index in 0..self.cfg_postdominators.len() {
-            let (run_id, metadata) = {
-                let fact = &self.cfg_postdominators[index];
-                (fact.id.0, self.cfg_postdominator_metadata(fact))
-            };
-            self.record_fact_meta(FactFamily::CfgPostDominator, run_id, metadata);
+        for fact in &cfg_postdominators {
+            let metadata = self.cfg_postdominator_metadata(fact);
+            self.record_fact_meta(FactFamily::CfgPostDominator, fact.id.0, metadata);
         }
 
-        for index in 0..self.cfg_control_dependence.len() {
-            let (run_id, metadata) = {
-                let fact = &self.cfg_control_dependence[index];
-                (fact.id.0, self.cfg_control_dependence_metadata(fact))
-            };
-            self.record_fact_meta(FactFamily::CfgControlDependence, run_id, metadata);
+        for fact in &cfg_control_dependence {
+            let metadata = self.cfg_control_dependence_metadata(fact);
+            self.record_fact_meta(FactFamily::CfgControlDependence, fact.id.0, metadata);
         }
 
-        for index in 0..self.unsupported_control_flow.len() {
-            let (run_id, metadata) = {
-                let fact = &self.unsupported_control_flow[index];
-                (fact.id.0, self.unsupported_control_flow_metadata(fact))
-            };
-            self.record_fact_meta(FactFamily::UnsupportedControlFlow, run_id, metadata);
+        for fact in &unsupported_control_flow {
+            let metadata = self.unsupported_control_flow_metadata(fact);
+            self.record_fact_meta(FactFamily::UnsupportedControlFlow, fact.id.0, metadata);
         }
 
         self.finish_fact_meta_insertions(&[
@@ -3436,39 +3406,39 @@ impl AnalysisDb {
     }
 
     pub(crate) fn cfg_functions(&self) -> &[CfgFunctionFact] {
-        &self.cfg_functions
+        self.cfg_store().functions()
     }
 
     pub(crate) fn cfg_nodes(&self) -> &[CfgNodeFact] {
-        &self.cfg_nodes
+        self.cfg_store().nodes()
     }
 
     pub(crate) fn cfg_blocks(&self) -> &[BasicBlockFact] {
-        &self.cfg_blocks
+        self.cfg_store().blocks()
     }
 
     pub(crate) fn cfg_edges(&self) -> &[CfgEdgeFact] {
-        &self.cfg_edges
+        self.cfg_store().edges()
     }
 
     pub(crate) fn cfg_reachability(&self) -> &[ReachabilityFact] {
-        &self.cfg_reachability
+        self.cfg_store().reachability()
     }
 
     pub(crate) fn cfg_dominators(&self) -> &[DominatorFact] {
-        &self.cfg_dominators
+        self.cfg_store().dominators()
     }
 
     pub(crate) fn cfg_postdominators(&self) -> &[PostDominatorFact] {
-        &self.cfg_postdominators
+        self.cfg_store().postdominators()
     }
 
     pub(crate) fn cfg_control_dependence(&self) -> &[ControlDependenceFact] {
-        &self.cfg_control_dependence
+        self.cfg_store().control_dependence()
     }
 
     pub(crate) fn unsupported_control_flow(&self) -> &[UnsupportedControlFlowFact] {
-        &self.unsupported_control_flow
+        self.cfg_store().unsupported()
     }
 
     pub fn symbols(&self) -> &[SymbolFact] {
