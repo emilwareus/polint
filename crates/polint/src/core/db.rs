@@ -70,7 +70,8 @@ use crate::analysis::values::facts::{AllocationTokenFact, ValueFact};
 use crate::analysis::values::store::ValueStore;
 use crate::analysis_kernel::{
     FactConfidence, FactFamily, FactMeta, FactMetaStore, FactPrecision, FactRef, MissingFactMeta,
-    ValidationStatus, resolution_metadata, resolution_status_metadata, symbol_metadata,
+    ValidationStatus, resolution_metadata, resolution_status_metadata, stable_key_from_parts,
+    symbol_metadata,
 };
 use crate::diagnostics::fingerprint;
 use crate::go::semantic::facts::{
@@ -111,14 +112,14 @@ use super::ids::{
 use super::labels::*;
 use super::lang::Language;
 use super::metadata::*;
-use super::option_file_path;
 use super::review::ReviewChangeset;
 use super::span::Span;
 use super::{
-    CALLS_PROVIDER_ID, CYCLOMATIC_COMPLEXITY_METRIC_NAME, ENTRYPOINTS_PROVIDER_ID,
+    CALLS_PROVIDER_ID, CFG_PROVIDER_ID, CYCLOMATIC_COMPLEXITY_METRIC_NAME, ENTRYPOINTS_PROVIDER_ID,
     FUNCTION_SIZE_METRIC_NAME, GO_SYNTAX_PROVIDER_ID, METRICS_PROVIDER_ID,
-    MODULE_GRAPH_PROVIDER_ID, MODULE_TOPOLOGY_PROVIDER_ID, POLINT_DIRECT_SUMMARIES_PROVIDER_ID,
-    SEMANTIC_MIR_PROVIDER_ID, SYMBOL_GRAPH_PROVIDER_ID,
+    MODULE_GRAPH_PROVIDER_ID, MODULE_TOPOLOGY_PROVIDER_ID, POLINT_ABSTRACT_DOMAINS_PROVIDER_ID,
+    POLINT_DIRECT_SUMMARIES_PROVIDER_ID, SEMANTIC_MIR_PROVIDER_ID, SYMBOL_GRAPH_PROVIDER_ID,
+    TS_SYNTAX_PROVIDER_ID,
 };
 
 #[derive(Debug, Clone)]
@@ -4859,4 +4860,411 @@ impl AnalysisDb {
             ]),
         )
     }
+}
+
+impl AnalysisDb {
+    fn unresolved_call_metadata(&self, fact: &UnresolvedCallFact) -> FactMeta {
+        let (precision, confidence) = call_status_metadata(fact.status, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::UnresolvedCall,
+            CALLS_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", call_status_label(fact.status).to_string()),
+                (
+                    "precision",
+                    call_precision_label(fact.precision).to_string(),
+                ),
+                (
+                    "algorithm",
+                    call_algorithm_label(fact.algorithm).to_string(),
+                ),
+                (
+                    "reason",
+                    call_unresolved_reason_label(fact.reason).to_string(),
+                ),
+                (
+                    "site_key",
+                    self.fact_stable_key(FactFamily::CallSite, fact.site.0),
+                ),
+                (
+                    "caller_key",
+                    self.fact_stable_key(FactFamily::Function, fact.caller.0),
+                ),
+            ]),
+        )
+    }
+
+    fn domain_observation_metadata(&self, fact: &DomainObservationFact) -> FactMeta {
+        let (precision, confidence) = domain_status_metadata(fact.status, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::DomainObservation,
+            POLINT_ABSTRACT_DOMAINS_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", fact.status.as_str().to_string()),
+                ("precision", fact.precision.as_str().to_string()),
+                ("slot", fact.slot.as_str().to_string()),
+                ("location", fact.location.as_str().to_string()),
+                (
+                    "body_key",
+                    self.fact_stable_key(FactFamily::MirBody, fact.body.0),
+                ),
+                (
+                    "block",
+                    fact.block
+                        .map(|block| block.0.to_string())
+                        .unwrap_or_else(none_value),
+                ),
+                (
+                    "operation_key",
+                    fact.operation
+                        .map(|operation| {
+                            self.fact_stable_key(FactFamily::MirOperation, operation.0)
+                        })
+                        .unwrap_or_else(none_value),
+                ),
+                (
+                    "place_key",
+                    fact.place
+                        .map(|place| self.fact_stable_key(FactFamily::Place, place.0))
+                        .unwrap_or_else(none_value),
+                ),
+                ("value", fact.value.stable_parts().join("\n")),
+            ]),
+        )
+    }
+
+    fn domain_event_metadata(&self, fact: &DomainEventFact) -> FactMeta {
+        let (precision, confidence) = domain_status_metadata(fact.status, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::DomainEvent,
+            POLINT_ABSTRACT_DOMAINS_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", fact.status.as_str().to_string()),
+                ("precision", fact.precision.as_str().to_string()),
+                (
+                    "slot",
+                    fact.slot
+                        .map(|slot| slot.as_str().to_string())
+                        .unwrap_or_else(none_value),
+                ),
+                ("reason", fact.reason.clone()),
+                (
+                    "body_key",
+                    self.fact_stable_key(FactFamily::MirBody, fact.body.0),
+                ),
+                (
+                    "block",
+                    fact.block
+                        .map(|block| block.0.to_string())
+                        .unwrap_or_else(none_value),
+                ),
+                (
+                    "operation_key",
+                    fact.operation
+                        .map(|operation| {
+                            self.fact_stable_key(FactFamily::MirOperation, operation.0)
+                        })
+                        .unwrap_or_else(none_value),
+                ),
+            ]),
+        )
+    }
+
+    fn cfg_function_metadata(&self, fact: &CfgFunctionFact) -> FactMeta {
+        let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::CfgFunction,
+            CFG_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", cfg_status_label(fact.status).to_string()),
+                ("precision", cfg_precision_label(fact.precision).to_string()),
+                (
+                    "body_key",
+                    self.fact_stable_key(FactFamily::MirBody, fact.body.0),
+                ),
+                ("language", language_label(fact.language).to_string()),
+                ("path", self.path_for(fact.file)),
+                ("span", span_metadata_value(&fact.span)),
+            ]),
+        )
+    }
+
+    fn cfg_node_metadata(&self, fact: &CfgNodeFact) -> FactMeta {
+        let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::CfgNode,
+            CFG_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", cfg_status_label(fact.status).to_string()),
+                ("precision", cfg_precision_label(fact.precision).to_string()),
+                ("kind", cfg_node_kind_label(fact.kind).to_string()),
+                (
+                    "function_key",
+                    self.fact_stable_key(FactFamily::CfgFunction, fact.cfg_function.0),
+                ),
+                ("operation_ordinal", fact.operation_ordinal.to_string()),
+                ("span", option_span_metadata_value(fact.span.as_ref())),
+            ]),
+        )
+    }
+
+    fn cfg_block_metadata(&self, fact: &BasicBlockFact) -> FactMeta {
+        let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::BasicBlock,
+            CFG_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", cfg_status_label(fact.status).to_string()),
+                ("precision", cfg_precision_label(fact.precision).to_string()),
+                ("kind", basic_block_kind_label(fact.kind).to_string()),
+                (
+                    "function_key",
+                    self.fact_stable_key(FactFamily::CfgFunction, fact.cfg_function.0),
+                ),
+                ("reachable", fact.reachable.to_string()),
+                ("reverse_postorder", fact.reverse_postorder.to_string()),
+            ]),
+        )
+    }
+
+    fn cfg_edge_metadata(&self, fact: &CfgEdgeFact) -> FactMeta {
+        let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::CfgEdge,
+            CFG_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", cfg_status_label(fact.status).to_string()),
+                ("precision", cfg_precision_label(fact.precision).to_string()),
+                ("view", cfg_view_label(fact.view).to_string()),
+                ("kind", cfg_edge_kind_label(fact.kind).to_string()),
+                (
+                    "function_key",
+                    self.fact_stable_key(FactFamily::CfgFunction, fact.cfg_function.0),
+                ),
+                ("from_block", fact.from_block.0.to_string()),
+                ("to_block", fact.to_block.0.to_string()),
+            ]),
+        )
+    }
+
+    fn cfg_reachability_metadata(&self, fact: &ReachabilityFact) -> FactMeta {
+        let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::CfgReachability,
+            CFG_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", cfg_status_label(fact.status).to_string()),
+                ("precision", cfg_precision_label(fact.precision).to_string()),
+                ("view", cfg_view_label(fact.view).to_string()),
+                ("block", fact.block.0.to_string()),
+                ("reachable", fact.reachable.to_string()),
+            ]),
+        )
+    }
+
+    fn cfg_dominator_metadata(&self, fact: &DominatorFact) -> FactMeta {
+        let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::CfgDominator,
+            CFG_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", cfg_status_label(fact.status).to_string()),
+                ("precision", cfg_precision_label(fact.precision).to_string()),
+                ("view", cfg_view_label(fact.view).to_string()),
+                ("dominator", fact.dominator.0.to_string()),
+                ("dominated", fact.dominated.0.to_string()),
+                ("immediate", fact.immediate.to_string()),
+            ]),
+        )
+    }
+
+    fn cfg_postdominator_metadata(&self, fact: &PostDominatorFact) -> FactMeta {
+        let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::CfgPostDominator,
+            CFG_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", cfg_status_label(fact.status).to_string()),
+                ("precision", cfg_precision_label(fact.precision).to_string()),
+                ("view", cfg_view_label(fact.view).to_string()),
+                ("postdominator", fact.postdominator.0.to_string()),
+                ("postdominated", fact.postdominated.0.to_string()),
+                ("immediate", fact.immediate.to_string()),
+            ]),
+        )
+    }
+
+    fn cfg_control_dependence_metadata(&self, fact: &ControlDependenceFact) -> FactMeta {
+        let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::CfgControlDependence,
+            CFG_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", cfg_status_label(fact.status).to_string()),
+                ("precision", cfg_precision_label(fact.precision).to_string()),
+                ("view", cfg_view_label(fact.view).to_string()),
+                ("edge", fact.controlling_edge.0.to_string()),
+                (
+                    "edge_kind",
+                    cfg_edge_kind_label(fact.controlling_edge_kind).to_string(),
+                ),
+                ("controlled_block", fact.controlled_block.0.to_string()),
+            ]),
+        )
+    }
+
+    fn unsupported_control_flow_metadata(&self, fact: &UnsupportedControlFlowFact) -> FactMeta {
+        let (precision, confidence) = cfg_status_metadata(fact.status, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::UnsupportedControlFlow,
+            CFG_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", cfg_status_label(fact.status).to_string()),
+                ("precision", cfg_precision_label(fact.precision).to_string()),
+                ("language", language_label(fact.language).to_string()),
+                ("path", self.path_for(fact.file)),
+                ("span", span_metadata_value(&fact.span)),
+                ("construct", fact.construct.clone()),
+                ("source_evidence", fact.source_evidence.clone()),
+            ]),
+        )
+    }
+
+    fn fact_stable_key(&self, family: FactFamily, run_id: u64) -> String {
+        self.metadata_for(FactRef::new(family, run_id))
+            .map(|metadata| metadata.stable_key.clone())
+            .unwrap_or_else(|| format!("<missing:{}:{run_id}>", family.label()))
+    }
+
+    fn source_file_key(&self, file: FileId) -> String {
+        self.metadata_for(FactRef::new(FactFamily::SourceFile, u64::from(file.0)))
+            .map(|metadata| metadata.stable_key.clone())
+            .unwrap_or_else(|| self.path_for(file).replace('\\', "/"))
+    }
+
+    fn option_source_file_key(&self, file: Option<FileId>) -> String {
+        file.map(|file| self.source_file_key(file))
+            .unwrap_or_else(none_value)
+    }
+
+    fn function_key(&self, function: FunctionId, name: &str, span: &Span) -> String {
+        self.metadata_for(FactRef::new(FactFamily::Function, function.0))
+            .map(|metadata| metadata.stable_key.clone())
+            .unwrap_or_else(|| {
+                stable_key_from_parts(
+                    FactFamily::Function,
+                    &[
+                        ("path", self.path_for(span.file)),
+                        ("name", name.to_string()),
+                        ("span", span_metadata_value(span)),
+                    ],
+                )
+            })
+    }
+
+    fn ts_component_metadata(&self, fact: &TsComponentFact) -> FactMeta {
+        fact_meta_from_parts(
+            FactFamily::TsComponent,
+            TS_SYNTAX_PROVIDER_ID,
+            FactPrecision::Heuristic,
+            FactConfidence::Medium,
+            stable_parts([
+                ("path", self.path_for(fact.file)),
+                ("name", fact.name.clone()),
+                ("span", span_metadata_value(&fact.span)),
+            ]),
+            stable_parts([("function", option_function_id(fact.function))]),
+        )
+    }
+
+    fn ts_class_metadata(&self, fact: &TsClassFact) -> FactMeta {
+        fact_meta_from_parts(
+            FactFamily::TsClass,
+            TS_SYNTAX_PROVIDER_ID,
+            FactPrecision::Syntax,
+            FactConfidence::High,
+            stable_parts([
+                ("path", self.path_for(fact.file)),
+                ("name", fact.name.clone()),
+                ("span", span_metadata_value(&fact.span)),
+            ]),
+            stable_parts([
+                ("is_exported", fact.is_exported.to_string()),
+                ("is_component_like", fact.is_component_like.to_string()),
+            ]),
+        )
+    }
+
+    fn string_literal_metadata(&self, fact: &StringLiteralFact) -> FactMeta {
+        fact_meta_from_parts(
+            FactFamily::StringLiteral,
+            syntax_provider_for_language(fact.language),
+            FactPrecision::Syntax,
+            FactConfidence::High,
+            stable_parts([
+                ("path", self.path_for(fact.file)),
+                ("language", language_label(fact.language).to_string()),
+                ("value", fact.value.clone()),
+                ("span", span_metadata_value(&fact.span)),
+            ]),
+            stable_parts([]),
+        )
+    }
+
+    fn jsx_attribute_metadata(&self, fact: &JsxAttributeFact) -> FactMeta {
+        fact_meta_from_parts(
+            FactFamily::JsxAttribute,
+            TS_SYNTAX_PROVIDER_ID,
+            FactPrecision::Syntax,
+            FactConfidence::High,
+            stable_parts([
+                ("path", self.path_for(fact.file)),
+                ("name", fact.name.clone()),
+                ("value", option_string(fact.value.as_deref())),
+                ("span", span_metadata_value(&fact.span)),
+            ]),
+            stable_parts([]),
+        )
+    }
+}
+
+fn option_file_path(db: &AnalysisDb, file: Option<FileId>) -> String {
+    file.map(|file| db.path_for(file))
+        .unwrap_or_else(none_value)
 }
