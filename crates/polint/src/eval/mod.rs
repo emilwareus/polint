@@ -5,6 +5,7 @@ pub(crate) mod bench;
 pub(crate) mod competitors;
 pub(crate) mod delta;
 pub(crate) mod determinism_gate;
+#[path = "../../../polint-eval/src/harness/external/mod.rs"]
 pub(crate) mod external;
 pub(crate) mod fixtures;
 pub(crate) mod gates;
