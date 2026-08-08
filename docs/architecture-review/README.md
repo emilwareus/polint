@@ -3,6 +3,9 @@
 A deep review of polint's architecture against the goal of becoming the world's most capable static
 analysis engine. Base commit `1263208a`, branch `static-analysis-architecture-review`.
 
+**Shipping rule:** the whole re-architecture stays on that one branch until a human merges to `main`.
+The swarm lands worker slices onto the integration branch only — never onto `main`.
+
 **Start here: [00-TARGET-ARCHITECTURE.md](00-TARGET-ARCHITECTURE.md)** — the verdict, the seven
 inversions, and the target crate graph.
 **Then: [PLAN.md](PLAN.md)** — the executable sequence, milestone gates, and the scoreboard.

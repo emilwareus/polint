@@ -6,13 +6,26 @@ not read this file.
 **Model:** one orchestrator, N workers. No human in the merge loop. Humans drain the hold queue
 asynchronously and never block progress.
 
+### Integration branch — binding
+
+The entire re-architecture (M0–M2 and any continuation on this track) lives on **one** branch:
+
+`static-analysis-architecture-review`
+
+- **`MERGED` in `.swarm/state.json` means landed on that integration branch only** — never on `main`.
+- The orchestrator **must not** merge the integration branch into `main`, fast-forward `main`, open a
+  PR targeting `main`, or push to `main`. A human does that when they choose to.
+- Workers branch worktrees from the **current tip of the integration branch**, not from `origin/main`.
+- Mechanical R1–R6 diffs are against the integration tip the worker branched from, not against `main`
+  (otherwise every mid-refactor PR looks over budget).
+
 ---
 
 ## 1. Roles
 
 **Orchestrator** — owns the task graph, dependency resolution, lock arbitration, gate verification,
-merge decisions, and holds. Writes no product code. Never implements a task itself, never
-"fixes up" a worker's PR, never resolves an escalation.
+land-on-integration decisions, and holds. Writes no product code. Never implements a task itself,
+never "fixes up" a worker's PR, never resolves an escalation. Never touches `main`.
 
 **Worker** — claims exactly one task, works in an isolated git worktree, produces one PR-sized branch,
 reports `DONE` or `ESCALATE`. Never merges. Never claims a second task while holding one. Never talks
@@ -162,21 +175,22 @@ cargo deny check --all-features
 ### Mechanical rule checks — run on the diff, not the tree
 
 ```bash
+# BASE = integration tip the worker branched from (static-analysis-architecture-review), NOT main
 # R1  PR budget  (HANDOFF §2.1)
-git diff --stat origin/main...HEAD | tail -1     # ≤ 1500 insertions+deletions, ≤ 25 files
+git diff --stat "$BASE"...HEAD | tail -1     # ≤ 1500 insertions+deletions, ≤ 25 files
 
 # R2  no new suppressions  (HANDOFF §2.4)
-git diff origin/main...HEAD | grep -E '^\+.*#!?\[(allow|expect)\(' && echo FAIL
+git diff "$BASE"...HEAD | grep -E '^\+.*#!?\[(allow|expect)\(' && echo FAIL
 
 # R3  no golden edits outside a sanctioned regeneration PR  (HANDOFF §2.3)
-git diff --name-only origin/main...HEAD | grep -q 'tests/golden/' && echo "REQUIRES GOLDEN LOCK"
+git diff --name-only "$BASE"...HEAD | grep -q 'tests/golden/' && echo "REQUIRES GOLDEN LOCK"
 
 # R4  no deleted or ignored tests  (HANDOFF §2.5)
-git diff origin/main...HEAD | grep -E '^\+.*#\[ignore\]' && echo FAIL
-git diff origin/main...HEAD | grep -E '^-.*#\[test\]' && echo REVIEW
+git diff "$BASE"...HEAD | grep -E '^\+.*#\[ignore\]' && echo FAIL
+git diff "$BASE"...HEAD | grep -E '^-.*#\[test\]' && echo REVIEW
 
 # R5  no delivery-history references in source  (HANDOFF §2.9)
-git diff origin/main...HEAD | grep -E '^\+.*(Phase [0-9]|D-[0-9]{2}|CR-[0-9]{2}|FINDING [0-9])' && echo FAIL
+git diff "$BASE"...HEAD | grep -E '^\+.*(Phase [0-9]|D-[0-9]{2}|CR-[0-9]{2}|FINDING [0-9])' && echo FAIL
 
 # R6  structure-or-behaviour, not both  (HANDOFF §2.2)
 # If R3 fires AND the diff touches >3 non-test source files → FAIL, tell the worker to split.
@@ -204,7 +218,7 @@ Worker reports, or a gate fails. Look it up. Do not reason beyond the table.
 
 | Situation | Action |
 |---|---|
-| All gates + R1–R7 green | **MERGE**. Release locks. Recompute `READY` set. Dispatch. |
+| All gates + R1–R7 green | **LAND on integration branch** (`static-analysis-architecture-review` only — never `main`). Release locks. Recompute `READY` set. Dispatch. |
 | G1/G2/G8 fail (fmt, lint, doc) | **RETURN to same worker**, verbatim compiler output. Max 2 returns, then hold. |
 | G3/G6 fail (tests) | **RETURN to same worker** once. If the second attempt also fails → **HOLD**. |
 | **G4 fails (public surface)** | **HOLD immediately.** Product contract. Never auto-retry. |
@@ -219,8 +233,8 @@ Worker reports, or a gate fails. Look it up. Do not reason beyond the table.
 | Worker silent / exceeds wall-clock | Kill, release locks, reset task to `READY`, `attempts += 1`. At `attempts == 3` → hold. |
 | Two workers conflict on merge | Second worker rebases and re-runs all gates. If conflict is semantic, not textual → hold both. |
 
-**Merge order is arbitrary among green PRs. Always re-run the full gate set after rebase — never
-merge on stale results.**
+**Land order is arbitrary among green worker branches onto the integration branch. Always re-run the
+full gate set after rebase — never land on stale results. Never land onto `main`.**
 
 ---
 
@@ -262,7 +276,7 @@ Each worker gets exactly this, and nothing else:
 TASK:        <id>
 SPEC:        docs/architecture-review/specs/<file>.md   (or HANDOFF §4 row for table-only tasks)
 RULES:       docs/architecture-review/HANDOFF.md        (read §1 errata, §2 rules, §3 wiring — all binding)
-BRANCH:      swarm/<id>            (worktree, branched from origin/main)
+BRANCH:      swarm/<id>            (worktree, branched from static-analysis-architecture-review)
 LOCKS HELD:  <golden | fact_family:<name> | none>
 
 You own one task. Read the spec end-to-end before writing code.
@@ -289,7 +303,8 @@ resolve your own escalation.
 The orchestrator runs once, and halts on any failure:
 
 ```bash
-git fetch origin && git rev-parse origin/main
+git fetch origin && git rev-parse origin/static-analysis-architecture-review
+# Preflight runs on the integration branch tip — not on main.
 cargo build --workspace --locked          # tree builds
 cargo fmt --all -- --check                # G1 clean at HEAD
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings   # G2 clean
@@ -302,5 +317,5 @@ cargo test -p polint --lib eval::determinism_gate --locked                      
 already broken. Record the baseline durations of G3 — they become the regression reference until
 W0.A4 lands.
 
-G7 (golden) does not exist yet. **W0.A1 → W0.A2 create it. Until W0.A2 merges, no structural task may
-be dispatched** — that is the whole reason M0 precedes everything.
+G7 (golden) does not exist yet. **W0.A1 → W0.A2 create it. Until W0.A2 lands on the integration
+branch, no structural task may be dispatched** — that is the whole reason M0 precedes everything.
