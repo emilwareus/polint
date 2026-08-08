@@ -618,7 +618,7 @@ mod tests {
         CallSiteId, CallTargetId, DataFlowNodeId, MirBodyId, MirOpId, PlaceId, RefinedCallEdgeId,
         SummaryId,
     };
-    use crate::analysis::ifds::{DataFlowPathStatus, DataFlowSearchBudget, find_paths};
+    use crate::analysis::ifds::{DataFlowPathStatus, DataFlowSearchBudget, find_taint_paths};
     use crate::analysis::refined_calls::facts::{
         RefinedCallEdgeFact, RefinedCallTier, RefinedCallValidation,
     };
@@ -802,11 +802,12 @@ mod tests {
             .find(|node| node.place == Some(PlaceId(30)))
             .expect("return node")
             .id;
-        let paths = find_paths(
+        let paths = find_taint_paths(
             &db,
             &store,
             source,
             sink,
+            &std::collections::BTreeSet::new(),
             DataFlowSearchBudget {
                 max_depth: 8,
                 max_paths: 4,
@@ -878,11 +879,12 @@ mod tests {
             .find(|node| node.place == Some(PlaceId(30)))
             .expect("return node")
             .id;
-        let paths = find_paths(
+        let paths = find_taint_paths(
             &db,
             &store,
             unrelated_argument,
             sink,
+            &std::collections::BTreeSet::new(),
             DataFlowSearchBudget {
                 max_depth: 8,
                 max_paths: 4,
@@ -945,21 +947,23 @@ mod tests {
             .expect("return node")
             .id;
 
-        let receiver_paths = find_paths(
+        let receiver_paths = find_taint_paths(
             &db,
             &store,
             receiver,
             sink,
+            &std::collections::BTreeSet::new(),
             DataFlowSearchBudget {
                 max_depth: 8,
                 max_paths: 4,
             },
         );
-        let argument_paths = find_paths(
+        let argument_paths = find_taint_paths(
             &db,
             &store,
             first_argument,
             sink,
+            &std::collections::BTreeSet::new(),
             DataFlowSearchBudget {
                 max_depth: 8,
                 max_paths: 4,
@@ -1015,11 +1019,12 @@ mod tests {
             .find(|node| node.place == Some(PlaceId(30)))
             .expect("return node")
             .id;
-        let paths = find_paths(
+        let paths = find_taint_paths(
             &db,
             &store,
             source,
             sink,
+            &std::collections::BTreeSet::new(),
             DataFlowSearchBudget {
                 max_depth: 8,
                 max_paths: 4,
@@ -1086,21 +1091,23 @@ mod tests {
             .expect("second result node")
             .id;
 
-        let same_call_paths = find_paths(
+        let same_call_paths = find_taint_paths(
             &db,
             &store,
             first_argument,
             first_result,
+            &std::collections::BTreeSet::new(),
             DataFlowSearchBudget {
                 max_depth: 8,
                 max_paths: 4,
             },
         );
-        let cross_call_paths = find_paths(
+        let cross_call_paths = find_taint_paths(
             &db,
             &store,
             first_argument,
             second_result,
+            &std::collections::BTreeSet::new(),
             DataFlowSearchBudget {
                 max_depth: 8,
                 max_paths: 4,

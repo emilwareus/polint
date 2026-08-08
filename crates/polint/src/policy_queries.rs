@@ -5,7 +5,9 @@ use crate::analysis::data_flow::facts::{
 };
 use crate::analysis::data_flow::store::DataFlowStore;
 use crate::analysis::ids::{CallSiteId, DataFlowNodeId, MirBodyId, MirOpId, PlaceId};
-use crate::analysis::ifds::{DataFlowPath, DataFlowPathStatus, DataFlowSearchBudget, find_paths};
+use crate::analysis::ifds::{
+    DataFlowPath, DataFlowPathStatus, DataFlowSearchBudget, find_taint_paths,
+};
 use crate::analysis::places::{PlaceFact, PlaceProjection, PlaceRoot};
 use crate::analysis::reachability::facts::{ReachabilityRootFact, RootKind};
 use crate::analysis::refined_calls::facts::{RefinedCallConfidence, RefinedCallEdgeFact};
@@ -66,6 +68,7 @@ fn forbidden_data_flows(
     };
 
     let site_by_id = call_sites_by_id(db);
+    let sanitizer_sites = matching_sanitizer_sites(db, &site_by_id, &query.barriers);
     let sources = matching_flow_sources(db, store, &query.source);
     let sinks = matching_flow_sinks(db, store, &query.sink, &site_by_id);
     if sources.is_empty() || sinks.is_empty() {
@@ -81,13 +84,11 @@ fn forbidden_data_flows(
 
     'sources: for source in &sources {
         for sink in &sinks {
-            let paths = find_paths(db, store, source.node, sink.node, budget);
+            let paths =
+                find_taint_paths(db, store, source.node, sink.node, &sanitizer_sites, budget);
             for path in paths {
                 match path.status {
                     DataFlowPathStatus::Found => {
-                        if barrier_covers_path(db, store, &site_by_id, &path, &query.barriers) {
-                            continue;
-                        }
                         let key = flow_result_key(source, sink, &path);
                         if emitted.insert(key) {
                             let violation =
@@ -679,23 +680,19 @@ fn call_name_matches(candidate: &str, value: &str) -> bool {
             .is_some_and(|(_, tail)| tail == value)
 }
 
-fn barrier_covers_path(
+fn matching_sanitizer_sites(
     db: &AnalysisDb,
-    store: &DataFlowStore,
     site_by_id: &BTreeMap<CallSiteId, &CallSiteFact>,
-    path: &DataFlowPath,
     barrier: &BarrierPattern,
-) -> bool {
+) -> BTreeSet<CallSiteId> {
     match barrier.kind() {
-        BarrierPatternKind::None => false,
-        BarrierPatternKind::CallAny => path.edges.iter().any(|edge_id| {
-            store
-                .edges()
-                .iter()
-                .find(|edge| edge.id == *edge_id)
-                .and_then(edge_call_site)
-                .is_some_and(|site| barrier_matches_call_site(db, site_by_id, site, barrier))
-        }),
+        BarrierPatternKind::None => BTreeSet::new(),
+        BarrierPatternKind::CallAny => db
+            .call_sites()
+            .iter()
+            .map(|site| site.id)
+            .filter(|site| barrier_matches_call_site(db, site_by_id, *site, barrier))
+            .collect(),
     }
 }
 
@@ -727,17 +724,6 @@ fn barrier_matches_call_site(
     syntax.sort();
     syntax.dedup();
     explicit_values_match_preferred(barrier.values(), &semantic, &syntax)
-}
-
-fn edge_call_site(edge: &DataFlowEdgeFact) -> Option<CallSiteId> {
-    edge.call_site.or_else(|| {
-        edge.evidence.iter().find_map(|evidence| {
-            evidence
-                .strip_prefix("call_site=")
-                .and_then(|value| value.parse::<u64>().ok())
-                .map(CallSiteId)
-        })
-    })
 }
 
 fn flow_violation(
@@ -3246,6 +3232,15 @@ mod tests {
             ],
         })
         .expect("valid refined call facts");
+        let mut sanitizer_edge = data_flow_edge(
+            1,
+            1,
+            2,
+            DataFlowEdgeKind::CallArgumentToReturn,
+            DataFlowStatus::Present,
+            Vec::new(),
+        );
+        sanitizer_edge.call_site = Some(validate_site.id);
         db.replace_data_flow_facts(DataFlowOutput {
             nodes: data_flow_nodes(file, handler),
             edges: vec![
@@ -3257,14 +3252,7 @@ mod tests {
                     DataFlowStatus::Present,
                     Vec::new(),
                 ),
-                data_flow_edge(
-                    1,
-                    1,
-                    2,
-                    DataFlowEdgeKind::CallArgumentToReturn,
-                    DataFlowStatus::Present,
-                    vec!["call_site=2".to_string()],
-                ),
+                sanitizer_edge,
             ],
             models: vec![source_model()],
             budgets: Vec::new(),

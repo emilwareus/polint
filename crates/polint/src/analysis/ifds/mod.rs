@@ -6,7 +6,8 @@ use crate::analysis::calls::facts::{CallSiteFact, CallTargetStatus};
 use crate::analysis::cfg::facts::{CfgEdgeFact, CfgFunctionFact, CfgNodeFact};
 use crate::analysis::cfg::ids::CfgNodeId;
 use crate::analysis::data_flow::facts::{
-    DataFlowBudgetReason, DataFlowEdgeFact, DataFlowEdgeKind, DataFlowNodeKind, DataFlowStatus,
+    DataFlowBudgetReason, DataFlowEdgeFact, DataFlowEdgeKind, DataFlowModelKind, DataFlowNodeKind,
+    DataFlowStatus,
 };
 use crate::analysis::data_flow::store::DataFlowStore;
 use crate::analysis::ids::{
@@ -178,30 +179,33 @@ impl Icfg {
     }
 }
 
-pub(crate) fn find_paths(
+pub(crate) fn find_taint_paths(
     db: &AnalysisDb,
     store: &DataFlowStore,
     source: DataFlowNodeId,
     sink: DataFlowNodeId,
+    sanitizer_sites: &BTreeSet<CallSiteId>,
     budget: DataFlowSearchBudget,
 ) -> Vec<DataFlowPath> {
-    IfdsReachabilitySolver::new(db, store, source, sink, budget).solve()
+    IfdsTaintSolver::new(db, store, source, sink, sanitizer_sites, budget).solve()
 }
 
-struct IfdsReachabilitySolver<'a> {
+struct IfdsTaintSolver<'a> {
     icfg: Icfg,
     store: &'a DataFlowStore,
     source: DataFlowNodeId,
     sink: DataFlowNodeId,
+    sanitizer_sites: &'a BTreeSet<CallSiteId>,
     budget: DataFlowSearchBudget,
 }
 
-impl<'a> IfdsReachabilitySolver<'a> {
+impl<'a> IfdsTaintSolver<'a> {
     fn new(
         db: &AnalysisDb,
         store: &'a DataFlowStore,
         source: DataFlowNodeId,
         sink: DataFlowNodeId,
+        sanitizer_sites: &'a BTreeSet<CallSiteId>,
         budget: DataFlowSearchBudget,
     ) -> Self {
         Self {
@@ -209,6 +213,7 @@ impl<'a> IfdsReachabilitySolver<'a> {
             store,
             source,
             sink,
+            sanitizer_sites,
             budget,
         }
     }
@@ -224,7 +229,7 @@ impl<'a> IfdsReachabilitySolver<'a> {
 
         let initial_state = ExplodedState {
             node: self.source,
-            fact: IfdsFact::Reachable,
+            fact: IfdsFact::Tainted,
             call_stack: Vec::new(),
         };
         let mut queue = VecDeque::from([PathFrame {
@@ -349,6 +354,9 @@ impl<'a> IfdsReachabilitySolver<'a> {
     }
 
     fn transfer(&self, state: &ExplodedState, edge: &DataFlowEdgeFact) -> Option<ExplodedState> {
+        if self.kills_taint(edge) {
+            return None;
+        }
         let mut call_stack = state.call_stack.clone();
         match boundary(edge, self.store) {
             Boundary::Local => {}
@@ -370,6 +378,42 @@ impl<'a> IfdsReachabilitySolver<'a> {
             node: edge.to,
             fact: state.fact,
             call_stack,
+        })
+    }
+
+    fn kills_taint(&self, edge: &DataFlowEdgeFact) -> bool {
+        if edge.status != DataFlowStatus::Present {
+            return false;
+        }
+        if matches!(
+            edge.kind,
+            DataFlowEdgeKind::Sanitizer | DataFlowEdgeKind::Barrier
+        ) {
+            return true;
+        }
+        if edge
+            .call_site
+            .is_some_and(|site| self.sanitizer_sites.contains(&site))
+        {
+            return true;
+        }
+        if edge.model.is_some_and(|id| {
+            self.store.models().iter().any(|model| {
+                model.id == id
+                    && matches!(
+                        model.kind,
+                        DataFlowModelKind::Sanitizer | DataFlowModelKind::Barrier
+                    )
+            })
+        }) {
+            return true;
+        }
+        self.store.nodes().iter().any(|node| {
+            node.id == edge.to
+                && matches!(
+                    node.kind,
+                    DataFlowNodeKind::Sanitizer | DataFlowNodeKind::Barrier
+                )
         })
     }
 
@@ -400,7 +444,7 @@ struct ExplodedState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum IfdsFact {
-    Reachable,
+    Tainted,
 }
 
 #[derive(Debug, Clone)]
@@ -529,11 +573,12 @@ mod tests {
         })
         .expect("valid data-flow store");
 
-        let paths = find_paths(
+        let paths = find_taint_paths(
             &db,
             &store,
             DataFlowNodeId(0),
             DataFlowNodeId(3),
+            &BTreeSet::new(),
             DataFlowSearchBudget::default(),
         );
 
@@ -555,15 +600,75 @@ mod tests {
         })
         .expect("valid data-flow store");
 
-        let paths = find_paths(
+        let paths = find_taint_paths(
             &db,
             &store,
             DataFlowNodeId(0),
             DataFlowNodeId(3),
+            &BTreeSet::new(),
             DataFlowSearchBudget::default(),
         );
 
         assert_eq!(paths[0].status, DataFlowPathStatus::Found);
+    }
+
+    #[test]
+    fn solver_kills_only_paths_crossing_a_configured_sanitizer() {
+        let db = AnalysisDb::default();
+        let mut sanitizer = local_edge(0, 0, 1);
+        sanitizer.kind = DataFlowEdgeKind::CallArgumentToReturn;
+        sanitizer.call_site = Some(CallSiteId(7));
+        let store = DataFlowStore::from_output(DataFlowOutput {
+            nodes: (0..4).map(node).collect(),
+            edges: vec![
+                sanitizer,
+                local_edge(1, 1, 2),
+                local_edge(2, 0, 3),
+                local_edge(3, 3, 2),
+            ],
+            models: Vec::new(),
+            budgets: Vec::new(),
+        })
+        .expect("valid data-flow store");
+
+        let paths = find_taint_paths(
+            &db,
+            &store,
+            DataFlowNodeId(0),
+            DataFlowNodeId(2),
+            &BTreeSet::from([CallSiteId(7)]),
+            DataFlowSearchBudget::default(),
+        );
+
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].status, DataFlowPathStatus::Found);
+        assert_eq!(paths[0].edges, vec![DataFlowEdgeId(2), DataFlowEdgeId(3)]);
+    }
+
+    #[test]
+    fn solver_reports_not_found_when_sanitizer_kills_every_tainted_path() {
+        let db = AnalysisDb::default();
+        let mut sanitizer = local_edge(0, 0, 1);
+        sanitizer.kind = DataFlowEdgeKind::CallArgumentToReturn;
+        sanitizer.call_site = Some(CallSiteId(7));
+        let store = DataFlowStore::from_output(DataFlowOutput {
+            nodes: (0..3).map(node).collect(),
+            edges: vec![sanitizer, local_edge(1, 1, 2)],
+            models: Vec::new(),
+            budgets: Vec::new(),
+        })
+        .expect("valid data-flow store");
+
+        let paths = find_taint_paths(
+            &db,
+            &store,
+            DataFlowNodeId(0),
+            DataFlowNodeId(2),
+            &BTreeSet::from([CallSiteId(7)]),
+            DataFlowSearchBudget::default(),
+        );
+
+        assert_eq!(paths[0].status, DataFlowPathStatus::NotFound);
     }
 
     fn call_graph() -> AnalysisDb {

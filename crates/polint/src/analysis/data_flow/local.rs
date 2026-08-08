@@ -139,7 +139,6 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
                     }
                 }
                 MirOperationKind::Call {
-                    site,
                     arguments,
                     return_place,
                     ..
@@ -159,10 +158,7 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
                                 validation: DataFlowValidation::ReferentiallyValidated,
                                 provenance: DataFlowProvenance::Native,
                                 budget: None,
-                                evidence: vec![
-                                    format!("local_call_argument_index={index}"),
-                                    format!("call_site={}", site.0),
-                                ],
+                                evidence: vec![format!("local_call_argument_index={index}")],
                                 input_stable_keys: vec![
                                     self.place_key(*argument),
                                     self.place_key(*return_place),
@@ -425,6 +421,14 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
     }
 
     fn push_edge(&mut self, draft: EdgeDraft<'_>) {
+        let call_site = match &draft.operation.kind {
+            MirOperationKind::Call { site, .. }
+                if draft.kind == DataFlowEdgeKind::CallArgumentToReturn =>
+            {
+                Some(*site)
+            }
+            _ => None,
+        };
         let stable_key = stable_key_from_parts(
             FactFamily::DataFlowEdge,
             &[
@@ -459,7 +463,7 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
                 DataFlowConfidence::Low
             },
             provenance: draft.provenance,
-            call_site: None,
+            call_site,
             call_target: None,
             refined_call: None,
             model: None,
@@ -609,7 +613,7 @@ pub(crate) fn node_from_place(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::ids::{MirBodyId, MirOpId, MirPredicateId, PlaceId};
+    use crate::analysis::ids::{CallSiteId, MirBodyId, MirOpId, MirPredicateId, PlaceId};
     use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
     use crate::analysis::mir::op::{AssignMode, MirOperation, MirOperationKind, MirValue};
     use crate::analysis::places::{PlaceFact, PlaceProjection, PlaceRoot, PlaceStatus};
@@ -675,6 +679,58 @@ mod tests {
                 .iter()
                 .any(|edge| edge.kind == DataFlowEdgeKind::ReturnValue)
         );
+    }
+
+    #[test]
+    fn call_argument_to_return_edge_carries_typed_call_site() {
+        let mut db = AnalysisDb::default();
+        db.replace_semantic_mir(MirOutput {
+            bodies: vec![body()],
+            places: vec![
+                place(
+                    0,
+                    PlaceRoot::Parameter {
+                        function: FunctionId(1),
+                        index: 0,
+                        name: Some("input".to_string()),
+                    },
+                    Vec::new(),
+                ),
+                place(
+                    1,
+                    PlaceRoot::Local {
+                        function: FunctionId(1),
+                        name: "result".to_string(),
+                    },
+                    Vec::new(),
+                ),
+            ],
+            operations: vec![op(
+                0,
+                MirOperationKind::Call {
+                    site: CallSiteId(7),
+                    callee: MirValue::Unknown {
+                        evidence: "test call".to_string(),
+                    },
+                    arguments: vec![PlaceId(0)],
+                    return_place: PlaceId(1),
+                },
+            )],
+            unsupported: Vec::new(),
+            ..MirOutput::default()
+        })
+        .expect("valid MIR");
+        let mut output = DataFlowOutput::empty();
+        push_place_nodes(&db, &mut output);
+
+        derive_local_value_flow(&db, &mut output);
+
+        let edge = output
+            .edges
+            .iter()
+            .find(|edge| edge.kind == DataFlowEdgeKind::CallArgumentToReturn)
+            .expect("call argument-to-return edge");
+        assert_eq!(edge.call_site, Some(CallSiteId(7)));
     }
 
     #[test]
