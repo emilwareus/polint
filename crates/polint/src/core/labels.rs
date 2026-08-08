@@ -2,6 +2,10 @@
 //!
 //! Extracted from the core monolith without behaviour changes.
 
+use super::facts::SourceFile;
+use super::ids::FunctionId;
+use super::lang::Language;
+use super::{GO_SYNTAX_PROVIDER_ID, SOURCE_PROVIDER_ID, TS_SYNTAX_PROVIDER_ID};
 use crate::analysis::aliases::facts::{AliasPrecision, AliasStatus};
 use crate::analysis::calls::facts::{
     CallAlgorithm, CallEdgeKind, CallPrecision, CallSyntaxKind, CallTargetStatus,
@@ -14,6 +18,8 @@ use crate::analysis::data_flow::facts::{
 use crate::analysis::evidence::facts::{
     EvidenceConfidence, EvidencePrecision, EvidenceProvenance, EvidenceStatus, EvidenceValidation,
 };
+use crate::analysis::mir::body::MirStatus;
+use crate::analysis::places::PlaceStatus;
 use crate::analysis::points_to::facts::{PointsToPrecision, PointsToStatus};
 use crate::analysis::refined_calls::facts::{
     RefinedCallConfidence, RefinedCallTier, RefinedCallValidation,
@@ -22,6 +28,8 @@ use crate::analysis::summaries::facts::{SummaryDomainKind, SummaryPrecision, Sum
 use crate::analysis::types::facts::{TypeConfidence, TypePrecision, TypeStatus};
 use crate::analysis::values::facts::{ValuePrecision, ValueStatus};
 use crate::analysis_kernel::{FactConfidence, FactFamily, FactPrecision, ValidationStatus};
+use crate::module_graph::topology::TopologyPrecision;
+use crate::symbol_graph::semantic::SemanticStatus;
 
 pub(super) fn type_metadata_precision(
     status: TypeStatus,
@@ -625,4 +633,86 @@ pub(super) fn cfg_edge_kind_label(kind: crate::analysis::cfg::facts::CfgEdgeKind
         CfgEdgeKind::Synthetic => "synthetic",
         CfgEdgeKind::Extension => "extension",
     }
+}
+
+pub(super) fn topology_precision_metadata(
+    precision: TopologyPrecision,
+) -> (FactPrecision, FactConfidence) {
+    match precision {
+        TopologyPrecision::ExactStatic | TopologyPrecision::ExactLockfile => {
+            (FactPrecision::SetupAware, FactConfidence::High)
+        }
+        TopologyPrecision::Heuristic => (FactPrecision::Heuristic, FactConfidence::Medium),
+        TopologyPrecision::Unknown => (FactPrecision::Unresolved, FactConfidence::Low),
+        TopologyPrecision::Unsupported => (FactPrecision::Unsupported, FactConfidence::Low),
+    }
+}
+
+pub(super) fn semantic_status_label(status: SemanticStatus) -> &'static str {
+    match status {
+        SemanticStatus::Resolved => "resolved",
+        SemanticStatus::Ambiguous => "ambiguous",
+        SemanticStatus::Unresolved => "unresolved",
+        SemanticStatus::Cycle => "cycle",
+        SemanticStatus::Generated => "generated",
+        SemanticStatus::Dynamic => "dynamic",
+        SemanticStatus::External => "external",
+        SemanticStatus::SetupMissing => "setup_missing",
+        SemanticStatus::Unsupported => "unsupported",
+    }
+}
+
+pub(super) fn mir_status_label(status: MirStatus) -> &'static str {
+    match status {
+        MirStatus::Resolved => "resolved",
+        MirStatus::Partial => "partial",
+        MirStatus::Unknown => "unknown",
+        MirStatus::Unsupported => "unsupported",
+    }
+}
+
+pub(super) fn place_status_label(status: PlaceStatus) -> &'static str {
+    match status {
+        PlaceStatus::Resolved => "resolved",
+        PlaceStatus::Partial => "partial",
+        PlaceStatus::Unknown => "unknown",
+        PlaceStatus::Unsupported => "unsupported",
+    }
+}
+
+pub(super) fn syntax_provider_for_language(language: Language) -> &'static str {
+    if language.is_ts_family() {
+        TS_SYNTAX_PROVIDER_ID
+    } else if language == Language::Go {
+        GO_SYNTAX_PROVIDER_ID
+    } else {
+        SOURCE_PROVIDER_ID
+    }
+}
+
+pub(super) fn syntax_provider_for_file(file: Option<&SourceFile>) -> &'static str {
+    file.map(|file| syntax_provider_for_language(file.language))
+        .unwrap_or(GO_SYNTAX_PROVIDER_ID)
+}
+
+pub(super) fn option_function_id(function: Option<FunctionId>) -> String {
+    function
+        .map(|function| function.0.to_string())
+        .unwrap_or_else(|| "none".to_string())
+}
+
+pub(super) fn none_value() -> String {
+    "<none>".to_string()
+}
+
+pub(super) fn option_bool(value: Option<bool>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+pub(super) fn option_string(value: Option<&str>) -> String {
+    value
+        .map(|value| format!("some:{value}"))
+        .unwrap_or_else(|| "none".to_string())
 }

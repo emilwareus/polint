@@ -40,9 +40,9 @@ use crate::analysis::identity::facts::IdentityRecord;
 use crate::analysis::identity::provider::valid_call_site_ids;
 use crate::analysis::identity::store::{IdentityProviderOutput, IdentityStore};
 use crate::analysis::ids::CallSiteId;
-use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
+use crate::analysis::mir::body::{MirBody, MirOutput};
 use crate::analysis::mir::op::{MirOperation, UnsupportedSemanticFact};
-use crate::analysis::places::{PlaceFact, PlaceStatus};
+use crate::analysis::places::PlaceFact;
 use crate::analysis::points_to::facts::{PointsToConstraintFact, PointsToSetFact};
 use crate::analysis::points_to::store::PointsToStore;
 use crate::analysis::reachability::facts::{CallReachabilityFact, ReachabilityRootFact};
@@ -79,7 +79,7 @@ use crate::go::semantic::store::{GoSemanticFactsOutput, GoSemanticStore, GoSeman
 use crate::module_graph::topology::{
     DependencyRequirementFact, ImportToPackageFact, RepoTopologyOverlayFact,
     ResolvedDependencyEdgeFact, SourceSetFact, TopologyOutput, TopologyPackageFact,
-    TopologyPrecision, WorkspaceRootFact,
+    WorkspaceRootFact,
 };
 use crate::symbol_graph::semantic::{
     AliasFact, AliasId, ExportFact, ExportId, GeneratedSymbolFact, GeneratedSymbolId,
@@ -95,9 +95,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-const SOURCE_PROVIDER_ID: &str = "polint.source";
-const GO_SYNTAX_PROVIDER_ID: &str = "polint.go.syntax";
-const TS_SYNTAX_PROVIDER_ID: &str = "polint.ts.syntax";
+pub(super) const SOURCE_PROVIDER_ID: &str = "polint.source";
+pub(super) const GO_SYNTAX_PROVIDER_ID: &str = "polint.go.syntax";
+pub(super) const TS_SYNTAX_PROVIDER_ID: &str = "polint.ts.syntax";
 const MODULE_GRAPH_PROVIDER_ID: &str = "polint.module_graph";
 const MODULE_TOPOLOGY_PROVIDER_ID: &str = "polint.module_topology";
 const SYMBOL_GRAPH_PROVIDER_ID: &str = "polint.symbol_graph";
@@ -5288,89 +5288,9 @@ impl AnalysisDb {
     }
 }
 
-fn topology_precision_metadata(precision: TopologyPrecision) -> (FactPrecision, FactConfidence) {
-    match precision {
-        TopologyPrecision::ExactStatic | TopologyPrecision::ExactLockfile => {
-            (FactPrecision::SetupAware, FactConfidence::High)
-        }
-        TopologyPrecision::Heuristic => (FactPrecision::Heuristic, FactConfidence::Medium),
-        TopologyPrecision::Unknown => (FactPrecision::Unresolved, FactConfidence::Low),
-        TopologyPrecision::Unsupported => (FactPrecision::Unsupported, FactConfidence::Low),
-    }
-}
-
-fn semantic_status_label(status: SemanticStatus) -> &'static str {
-    match status {
-        SemanticStatus::Resolved => "resolved",
-        SemanticStatus::Ambiguous => "ambiguous",
-        SemanticStatus::Unresolved => "unresolved",
-        SemanticStatus::Cycle => "cycle",
-        SemanticStatus::Generated => "generated",
-        SemanticStatus::Dynamic => "dynamic",
-        SemanticStatus::External => "external",
-        SemanticStatus::SetupMissing => "setup_missing",
-        SemanticStatus::Unsupported => "unsupported",
-    }
-}
-
-fn mir_status_label(status: MirStatus) -> &'static str {
-    match status {
-        MirStatus::Resolved => "resolved",
-        MirStatus::Partial => "partial",
-        MirStatus::Unknown => "unknown",
-        MirStatus::Unsupported => "unsupported",
-    }
-}
-
-fn place_status_label(status: PlaceStatus) -> &'static str {
-    match status {
-        PlaceStatus::Resolved => "resolved",
-        PlaceStatus::Partial => "partial",
-        PlaceStatus::Unknown => "unknown",
-        PlaceStatus::Unsupported => "unsupported",
-    }
-}
-
-fn syntax_provider_for_language(language: Language) -> &'static str {
-    if language.is_ts_family() {
-        TS_SYNTAX_PROVIDER_ID
-    } else if language == Language::Go {
-        GO_SYNTAX_PROVIDER_ID
-    } else {
-        SOURCE_PROVIDER_ID
-    }
-}
-
-fn syntax_provider_for_file(file: Option<&SourceFile>) -> &'static str {
-    file.map(|file| syntax_provider_for_language(file.language))
-        .unwrap_or(GO_SYNTAX_PROVIDER_ID)
-}
-
-fn option_function_id(function: Option<FunctionId>) -> String {
-    function
-        .map(|function| function.0.to_string())
-        .unwrap_or_else(|| "none".to_string())
-}
-
 fn option_file_path(db: &AnalysisDb, file: Option<FileId>) -> String {
     file.map(|file| db.path_for(file))
         .unwrap_or_else(none_value)
-}
-
-fn none_value() -> String {
-    "<none>".to_string()
-}
-
-fn option_bool(value: Option<bool>) -> String {
-    value
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| "unknown".to_string())
-}
-
-fn option_string(value: Option<&str>) -> String {
-    value
-        .map(|value| format!("some:{value}"))
-        .unwrap_or_else(|| "none".to_string())
 }
 
 #[cfg(test)]

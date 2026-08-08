@@ -3,13 +3,14 @@
 //! Free helpers used by `AnalysisDb` metadata methods; extracted from the core
 //! monolith without behaviour changes.
 
+use super::SOURCE_PROVIDER_ID;
 use super::facts::{
     ModuleEdgeKind, ModuleNodeKind, ResolutionPrecision, ResolutionStatus, SymbolPrecision,
     SymbolResolutionStatus, UnresolvedReason,
 };
+use super::labels::{none_value, topology_precision_metadata};
 use super::lang::Language;
 use super::span::Span;
-use super::{SOURCE_PROVIDER_ID, none_value, topology_precision_metadata};
 use crate::analysis::adaptation::facts::AcceptedModelFact;
 use crate::analysis::calls::facts::{CallPrecision, CallTargetStatus};
 use crate::analysis::cfg::facts::{CfgPrecision, CfgStatus};
