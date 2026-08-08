@@ -15,11 +15,16 @@ use crate::analysis::cfg::facts::{
 use crate::analysis::cfg::store::CfgOutput;
 use crate::analysis_kernel::FactFamily;
 use crate::core::facts::{
-    BranchObligation, FunctionFact, ImportFact, JsxAttributeFact, PackageFact, StringLiteralFact,
-    TestFact, TsClassFact, TsComponentFact,
+    BranchObligation, FunctionFact, ImportFact, JsxAttributeFact, ModuleEdge, ModuleNode,
+    PackageFact, ResolvedImportFact, StringLiteralFact, TestFact, TsClassFact, TsComponentFact,
 };
 use crate::core::ids::{BranchId, FunctionId, ImportId, PackageId};
 use crate::go::semantic::store::GoSemanticStore;
+use crate::module_graph::topology::{
+    DependencyRequirementFact, ImportToPackageFact, RepoTopologyOverlayFact,
+    ResolvedDependencyEdgeFact, SourceSetFact, TopologyOutput, TopologyPackageFact,
+    WorkspaceRootFact,
+};
 
 /// Erased provider-owned fact container. Not public — rule authors use SDK views.
 pub(crate) trait FactStore: Any + Send + Sync {
@@ -359,6 +364,133 @@ impl FactStore for GoSemanticStore {
 
 /// Registry key used for [`GoSemanticStore`] in `AnalysisDb::fact_stores`.
 pub(crate) const GO_SEMANTIC_STORE_FAMILY: FactFamily = FactFamily::GoSemantic;
+
+/// Module-graph facts produced by `polint.module_graph`.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ModuleGraphStore {
+    pub(crate) resolved_imports: Vec<ResolvedImportFact>,
+    pub(crate) module_nodes: Vec<ModuleNode>,
+    pub(crate) module_edges: Vec<ModuleEdge>,
+}
+
+impl ModuleGraphStore {
+    pub(crate) fn resolved_imports(&self) -> &[ResolvedImportFact] {
+        &self.resolved_imports
+    }
+
+    pub(crate) fn module_nodes(&self) -> &[ModuleNode] {
+        &self.module_nodes
+    }
+
+    pub(crate) fn module_edges(&self) -> &[ModuleEdge] {
+        &self.module_edges
+    }
+
+    pub(crate) fn replace(
+        &mut self,
+        resolved_imports: Vec<ResolvedImportFact>,
+        module_nodes: Vec<ModuleNode>,
+        module_edges: Vec<ModuleEdge>,
+    ) {
+        self.resolved_imports = resolved_imports;
+        self.module_nodes = module_nodes;
+        self.module_edges = module_edges;
+    }
+}
+
+impl FactStore for ModuleGraphStore {
+    fn family(&self) -> FactFamily {
+        FactFamily::ResolvedImport
+    }
+
+    fn clear(&mut self) {
+        *self = ModuleGraphStore::default();
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn clone_box(&self) -> Box<dyn FactStore> {
+        Box::new(self.clone())
+    }
+}
+
+/// Registry key used for [`ModuleGraphStore`] in `AnalysisDb::fact_stores`.
+pub(crate) const MODULE_GRAPH_STORE_FAMILY: FactFamily = FactFamily::ResolvedImport;
+
+/// Topology facts produced by `polint.module_topology`.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ModuleTopologyStore {
+    output: TopologyOutput,
+}
+
+impl ModuleTopologyStore {
+    pub(crate) fn from_output(output: TopologyOutput) -> Self {
+        Self { output }
+    }
+
+    pub(crate) fn workspace_roots(&self) -> &[WorkspaceRootFact] {
+        &self.output.workspace_roots
+    }
+
+    pub(crate) fn topology_packages(&self) -> &[TopologyPackageFact] {
+        &self.output.packages
+    }
+
+    pub(crate) fn source_sets(&self) -> &[SourceSetFact] {
+        &self.output.source_sets
+    }
+
+    pub(crate) fn dependency_requirements(&self) -> &[DependencyRequirementFact] {
+        &self.output.dependency_requirements
+    }
+
+    pub(crate) fn resolved_dependency_edges(&self) -> &[ResolvedDependencyEdgeFact] {
+        &self.output.resolved_dependency_edges
+    }
+
+    pub(crate) fn import_to_package_edges(&self) -> &[ImportToPackageFact] {
+        &self.output.import_to_package_edges
+    }
+
+    pub(crate) fn repo_topology_overlays(&self) -> &[RepoTopologyOverlayFact] {
+        &self.output.overlays
+    }
+
+    pub(crate) fn replace_import_to_package_edges(&mut self, edges: Vec<ImportToPackageFact>) {
+        self.output.import_to_package_edges = edges;
+    }
+}
+
+impl FactStore for ModuleTopologyStore {
+    fn family(&self) -> FactFamily {
+        FactFamily::WorkspaceRoot
+    }
+
+    fn clear(&mut self) {
+        *self = ModuleTopologyStore::default();
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn clone_box(&self) -> Box<dyn FactStore> {
+        Box::new(self.clone())
+    }
+}
+
+/// Registry key used for [`ModuleTopologyStore`] in `AnalysisDb::fact_stores`.
+pub(crate) const MODULE_TOPOLOGY_STORE_FAMILY: FactFamily = FactFamily::WorkspaceRoot;
 
 #[cfg(test)]
 mod tests {

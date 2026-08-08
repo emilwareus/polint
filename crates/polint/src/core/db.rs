@@ -101,7 +101,8 @@ use std::sync::Arc;
 
 use super::fact_store::{
     CALL_STORE_FAMILY, CFG_STORE_FAMILY, CfgFactStore, FactStore, FactStoreEntry,
-    GO_SEMANTIC_STORE_FAMILY, GO_SYNTAX_STORE_FAMILY, GoSyntaxStore, TS_SYNTAX_STORE_FAMILY,
+    GO_SEMANTIC_STORE_FAMILY, GO_SYNTAX_STORE_FAMILY, GoSyntaxStore, MODULE_GRAPH_STORE_FAMILY,
+    MODULE_TOPOLOGY_STORE_FAMILY, ModuleGraphStore, ModuleTopologyStore, TS_SYNTAX_STORE_FAMILY,
     TsSyntaxStore,
 };
 use super::facts::{
@@ -133,16 +134,6 @@ pub struct AnalysisDb {
     pub(crate) fact_meta: FactMetaStore,
     /// Provider-owned stores keyed by primary [`FactFamily`]. Iteration stays ordered.
     pub(crate) fact_stores: BTreeMap<FactFamily, FactStoreEntry>,
-    pub(crate) resolved_imports: Vec<ResolvedImportFact>,
-    pub(crate) module_nodes: Vec<ModuleNode>,
-    pub(crate) module_edges: Vec<ModuleEdge>,
-    pub(crate) workspace_roots: Vec<WorkspaceRootFact>,
-    pub(crate) topology_packages: Vec<TopologyPackageFact>,
-    pub(crate) source_sets: Vec<SourceSetFact>,
-    pub(crate) dependency_requirements: Vec<DependencyRequirementFact>,
-    pub(crate) resolved_dependency_edges: Vec<ResolvedDependencyEdgeFact>,
-    pub(crate) import_to_package_edges: Vec<ImportToPackageFact>,
-    pub(crate) repo_topology_overlays: Vec<RepoTopologyOverlayFact>,
     pub(crate) scopes: Vec<ScopeFact>,
     pub(crate) semantic_imports: Vec<SemanticImportFact>,
     pub(crate) exports: Vec<ExportFact>,
@@ -288,20 +279,19 @@ impl Default for AnalysisDb {
         let mut go_semantic = GoSemanticStore::default();
         FactStore::clear(&mut go_semantic);
         fact_stores.insert(GO_SEMANTIC_STORE_FAMILY, FactStoreEntry::new(go_semantic));
+        let mut module_graph = ModuleGraphStore::default();
+        FactStore::clear(&mut module_graph);
+        fact_stores.insert(MODULE_GRAPH_STORE_FAMILY, FactStoreEntry::new(module_graph));
+        let mut module_topology = ModuleTopologyStore::default();
+        FactStore::clear(&mut module_topology);
+        fact_stores.insert(
+            MODULE_TOPOLOGY_STORE_FAMILY,
+            FactStoreEntry::new(module_topology),
+        );
         Self {
             files: Vec::new(),
             fact_meta: FactMetaStore::default(),
             fact_stores,
-            resolved_imports: Vec::new(),
-            module_nodes: Vec::new(),
-            module_edges: Vec::new(),
-            workspace_roots: Vec::new(),
-            topology_packages: Vec::new(),
-            source_sets: Vec::new(),
-            dependency_requirements: Vec::new(),
-            resolved_dependency_edges: Vec::new(),
-            import_to_package_edges: Vec::new(),
-            repo_topology_overlays: Vec::new(),
             scopes: Vec::new(),
             semantic_imports: Vec::new(),
             exports: Vec::new(),
@@ -448,6 +438,26 @@ impl AnalysisDb {
     fn go_semantic_store_mut(&mut self) -> &mut GoSemanticStore {
         self.fact_store_mut(GO_SEMANTIC_STORE_FAMILY)
             .expect("GoSemanticStore is installed when AnalysisDb is constructed")
+    }
+
+    fn module_graph_store(&self) -> &ModuleGraphStore {
+        self.fact_store(MODULE_GRAPH_STORE_FAMILY)
+            .expect("ModuleGraphStore is installed when AnalysisDb is constructed")
+    }
+
+    fn module_graph_store_mut(&mut self) -> &mut ModuleGraphStore {
+        self.fact_store_mut(MODULE_GRAPH_STORE_FAMILY)
+            .expect("ModuleGraphStore is installed when AnalysisDb is constructed")
+    }
+
+    fn module_topology_store(&self) -> &ModuleTopologyStore {
+        self.fact_store(MODULE_TOPOLOGY_STORE_FAMILY)
+            .expect("ModuleTopologyStore is installed when AnalysisDb is constructed")
+    }
+
+    fn module_topology_store_mut(&mut self) -> &mut ModuleTopologyStore {
+        self.fact_store_mut(MODULE_TOPOLOGY_STORE_FAMILY)
+            .expect("ModuleTopologyStore is installed when AnalysisDb is constructed")
     }
 
     /// Typed downcast helper for registry stores. Returns `None` when the family
@@ -625,21 +635,14 @@ impl AnalysisDb {
             }
         }
 
-        self.resolved_imports = resolved_imports;
-        self.module_nodes = module_nodes;
-        self.module_edges = module_edges;
+        self.module_graph_store_mut()
+            .replace(resolved_imports, module_nodes, module_edges);
         self.refresh_module_graph_metadata();
     }
 
     pub(crate) fn replace_topology_facts(&mut self, output: TopologyOutput) {
         let output = output.normalized();
-        self.workspace_roots = output.workspace_roots;
-        self.topology_packages = output.packages;
-        self.source_sets = output.source_sets;
-        self.dependency_requirements = output.dependency_requirements;
-        self.resolved_dependency_edges = output.resolved_dependency_edges;
-        self.import_to_package_edges = output.import_to_package_edges;
-        self.repo_topology_overlays = output.overlays;
+        *self.module_topology_store_mut() = ModuleTopologyStore::from_output(output);
         self.refresh_topology_metadata();
     }
 
@@ -649,7 +652,8 @@ impl AnalysisDb {
             ..TopologyOutput::default()
         }
         .normalized();
-        self.import_to_package_edges = output.import_to_package_edges;
+        self.module_topology_store_mut()
+            .replace_import_to_package_edges(output.import_to_package_edges);
         self.refresh_import_to_package_metadata();
     }
 
@@ -2440,8 +2444,11 @@ impl AnalysisDb {
         self.fact_meta.remove_family(FactFamily::ResolvedImport);
         self.fact_meta.remove_family(FactFamily::ModuleEdge);
 
-        let node_metadata = self
-            .module_nodes
+        let module_nodes = self.module_nodes().to_vec();
+        let resolved_imports = self.resolved_imports().to_vec();
+        let module_edges = self.module_edges().to_vec();
+
+        let node_metadata = module_nodes
             .iter()
             .map(|node| (node.id.0, self.module_node_metadata(node)))
             .collect::<Vec<_>>();
@@ -2449,8 +2456,7 @@ impl AnalysisDb {
             self.record_fact_meta(FactFamily::ModuleNode, run_id, metadata);
         }
 
-        let resolved_metadata = self
-            .resolved_imports
+        let resolved_metadata = resolved_imports
             .iter()
             .map(|fact| (fact.id.0, self.resolved_import_metadata(fact)))
             .collect::<Vec<_>>();
@@ -2458,8 +2464,7 @@ impl AnalysisDb {
             self.record_fact_meta(FactFamily::ResolvedImport, run_id, metadata);
         }
 
-        let edge_metadata = self
-            .module_edges
+        let edge_metadata = module_edges
             .iter()
             .map(|edge| (edge.id.0, self.module_edge_metadata(edge)))
             .collect::<Vec<_>>();
@@ -2486,7 +2491,7 @@ impl AnalysisDb {
         self.refresh_import_to_package_metadata();
 
         let root_metadata = self
-            .workspace_roots
+            .workspace_roots()
             .iter()
             .map(|fact| {
                 (
@@ -2505,7 +2510,7 @@ impl AnalysisDb {
         }
 
         let package_metadata = self
-            .topology_packages
+            .topology_packages()
             .iter()
             .map(|fact| {
                 (
@@ -2524,7 +2529,7 @@ impl AnalysisDb {
         }
 
         let source_set_metadata = self
-            .source_sets
+            .source_sets()
             .iter()
             .map(|fact| {
                 (
@@ -2543,7 +2548,7 @@ impl AnalysisDb {
         }
 
         let requirement_metadata = self
-            .dependency_requirements
+            .dependency_requirements()
             .iter()
             .map(|fact| {
                 (
@@ -2562,7 +2567,7 @@ impl AnalysisDb {
         }
 
         let resolved_metadata = self
-            .resolved_dependency_edges
+            .resolved_dependency_edges()
             .iter()
             .map(|fact| {
                 (
@@ -2581,7 +2586,7 @@ impl AnalysisDb {
         }
 
         let overlay_metadata = self
-            .repo_topology_overlays
+            .repo_topology_overlays()
             .iter()
             .map(|fact| {
                 (
@@ -2612,7 +2617,7 @@ impl AnalysisDb {
         self.fact_meta.remove_family(FactFamily::ImportToPackage);
 
         let metadata = self
-            .import_to_package_edges
+            .import_to_package_edges()
             .iter()
             .map(|fact| {
                 (
@@ -3275,43 +3280,43 @@ impl AnalysisDb {
     }
 
     pub fn resolved_imports(&self) -> &[ResolvedImportFact] {
-        &self.resolved_imports
+        self.module_graph_store().resolved_imports()
     }
 
     pub fn module_nodes(&self) -> &[ModuleNode] {
-        &self.module_nodes
+        self.module_graph_store().module_nodes()
     }
 
     pub fn module_edges(&self) -> &[ModuleEdge] {
-        &self.module_edges
+        self.module_graph_store().module_edges()
     }
 
     pub(crate) fn workspace_roots(&self) -> &[WorkspaceRootFact] {
-        &self.workspace_roots
+        self.module_topology_store().workspace_roots()
     }
 
     pub(crate) fn topology_packages(&self) -> &[TopologyPackageFact] {
-        &self.topology_packages
+        self.module_topology_store().topology_packages()
     }
 
     pub(crate) fn source_sets(&self) -> &[SourceSetFact] {
-        &self.source_sets
+        self.module_topology_store().source_sets()
     }
 
     pub(crate) fn dependency_requirements(&self) -> &[DependencyRequirementFact] {
-        &self.dependency_requirements
+        self.module_topology_store().dependency_requirements()
     }
 
     pub(crate) fn resolved_dependency_edges(&self) -> &[ResolvedDependencyEdgeFact] {
-        &self.resolved_dependency_edges
+        self.module_topology_store().resolved_dependency_edges()
     }
 
     pub(crate) fn import_to_package_edges(&self) -> &[ImportToPackageFact] {
-        &self.import_to_package_edges
+        self.module_topology_store().import_to_package_edges()
     }
 
     pub(crate) fn repo_topology_overlays(&self) -> &[RepoTopologyOverlayFact] {
-        &self.repo_topology_overlays
+        self.module_topology_store().repo_topology_overlays()
     }
 
     pub(crate) fn scopes(&self) -> &[ScopeFact] {
