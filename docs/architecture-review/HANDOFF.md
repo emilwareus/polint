@@ -131,7 +131,7 @@ exact acceptance commands, anti-goals, and escalation triggers.
 | [`specs/W1.1-parse-error-honesty.md`](specs/W1.1-parse-error-honesty.md) | The correctness bug. Note: it **corrects** doc 02's framing — read the spec, not the doc |
 | [`specs/W1.2-ship-evidence.md`](specs/W1.2-ship-evidence.md) | Make provenance reach users |
 | [`specs/W1.3-rule-telemetry.md`](specs/W1.3-rule-telemetry.md) | Make silent rules diagnosable |
-| [`specs/W1.5-parse-cache.md`](specs/W1.5-parse-cache.md) | Stop re-parsing. **Has a mandatory measure-first checkpoint** |
+| [`specs/W1.5-parse-cache.md`](specs/W1.5-parse-cache.md) | **MERGED-NOOP** — measure-first said not-worth-doing; see [`W1.5-STEP1-MEASUREMENT.md`](W1.5-STEP1-MEASUREMENT.md) |
 | [`specs/W2.3-interning.md`](specs/W2.3-interning.md) | `StableKeyId`. Go RTA fixpoint proves it first |
 | [`specs/W2.4-provider-trait-and-scheduler.md`](specs/W2.4-provider-trait-and-scheduler.md) | Execute the manifest DAG |
 | [`specs/W2.5-fact-store.md`](specs/W2.5-fact-store.md) | Decompose `AnalysisDb` |

@@ -182,7 +182,7 @@ M2. Buys credibility and momentum before the hard part.
 | [W1.2](specs/W1.2-ship-evidence.md) | **Un-strip evidence.** Delete the null-out at `diagnostics/mod.rs:1136-1140` for query families that already produce it; make `StructuredEvidenceV1` public and versioned. | — |
 | [W1.3](specs/W1.3-rule-telemetry.md) | **Rule-execution telemetry.** Emit `{rule_id, planned, capabilities_ok, files_in_scope, diagnostics_emitted}` per planned rule. | — |
 | W1.4 | **Kill the O(F²) scans** (`ts/adapter.rs:338`, `go/adapter.rs:299`, `cfg/lower_ts.rs:346`). `FileId` is dense; these are index lookups written as linear scans. | — |
-| [W1.5](specs/W1.5-parse-cache.md) | **Per-`FileId` parse cache.** The TS corpus is parsed up to 12× serially per run. Largest wall-clock win available. | — |
+| [W1.5](specs/W1.5-parse-cache.md) | **MERGED-NOOP** — measure-first: parse ~6.23% of run (~1 parse/file); do not invent a cache. Evidence: [`W1.5-STEP1-MEASUREMENT.md`](W1.5-STEP1-MEASUREMENT.md). | — |
 | W1.6 | **Gate `validate_fact_metadata`** behind a flag instead of running 5,780 LOC of validators on every user invocation. | — |
 | W1.7 | **Bound source reads** through the `repo_fs` helper that already exists. One 2 GB generated file currently gets read whole. | — |
 | W1.8 | **`#[non_exhaustive]` on SDK prelude types and `Language`.** Free before 1.0, impossible after. | — |
