@@ -3,11 +3,9 @@ use crate::analysis::data_flow::facts::{
     DataFlowConfidence, DataFlowEdgeFact, DataFlowEdgeKind, DataFlowNodeFact, DataFlowNodeKind,
     DataFlowPrecision,
 };
-use crate::analysis::data_flow::query::{
-    DataFlowPath, DataFlowPathStatus, DataFlowSearchBudget, find_paths,
-};
 use crate::analysis::data_flow::store::DataFlowStore;
 use crate::analysis::ids::{CallSiteId, DataFlowNodeId, MirBodyId, MirOpId, PlaceId};
+use crate::analysis::ifds::{DataFlowPath, DataFlowPathStatus, DataFlowSearchBudget, find_paths};
 use crate::analysis::places::{PlaceFact, PlaceProjection, PlaceRoot};
 use crate::analysis::reachability::facts::{ReachabilityRootFact, RootKind};
 use crate::analysis::refined_calls::facts::{RefinedCallConfidence, RefinedCallEdgeFact};
@@ -83,7 +81,7 @@ fn forbidden_data_flows(
 
     'sources: for source in &sources {
         for sink in &sinks {
-            let paths = find_paths(store, source.node, sink.node, budget);
+            let paths = find_paths(db, store, source.node, sink.node, budget);
             for path in paths {
                 match path.status {
                     DataFlowPathStatus::Found => {

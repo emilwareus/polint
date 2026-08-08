@@ -613,12 +613,12 @@ mod tests {
         CallSyntaxKind, UnresolvedCallReason,
     };
     use crate::analysis::calls::store::CallOutput;
-    use crate::analysis::data_flow::query::{DataFlowPathStatus, DataFlowSearchBudget, find_paths};
     use crate::analysis::data_flow::store::DataFlowStore;
     use crate::analysis::ids::{
         CallSiteId, CallTargetId, DataFlowNodeId, MirBodyId, MirOpId, PlaceId, RefinedCallEdgeId,
         SummaryId,
     };
+    use crate::analysis::ifds::{DataFlowPathStatus, DataFlowSearchBudget, find_paths};
     use crate::analysis::refined_calls::facts::{
         RefinedCallEdgeFact, RefinedCallTier, RefinedCallValidation,
     };
@@ -803,6 +803,7 @@ mod tests {
             .expect("return node")
             .id;
         let paths = find_paths(
+            &db,
             &store,
             source,
             sink,
@@ -878,6 +879,7 @@ mod tests {
             .expect("return node")
             .id;
         let paths = find_paths(
+            &db,
             &store,
             unrelated_argument,
             sink,
@@ -944,6 +946,7 @@ mod tests {
             .id;
 
         let receiver_paths = find_paths(
+            &db,
             &store,
             receiver,
             sink,
@@ -953,6 +956,7 @@ mod tests {
             },
         );
         let argument_paths = find_paths(
+            &db,
             &store,
             first_argument,
             sink,
@@ -1012,6 +1016,7 @@ mod tests {
             .expect("return node")
             .id;
         let paths = find_paths(
+            &db,
             &store,
             source,
             sink,
@@ -1082,6 +1087,7 @@ mod tests {
             .id;
 
         let same_call_paths = find_paths(
+            &db,
             &store,
             first_argument,
             first_result,
@@ -1091,6 +1097,7 @@ mod tests {
             },
         );
         let cross_call_paths = find_paths(
+            &db,
             &store,
             first_argument,
             second_result,

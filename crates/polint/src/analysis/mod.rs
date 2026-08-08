@@ -21,6 +21,7 @@ pub(crate) mod evidence;
 pub(crate) mod extensions;
 pub(crate) mod identity;
 pub(crate) mod ids;
+pub(crate) mod ifds;
 pub(crate) mod mir;
 pub(crate) mod places;
 pub(crate) mod points_to;
