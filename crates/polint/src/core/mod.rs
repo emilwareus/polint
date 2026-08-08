@@ -141,46 +141,60 @@ const CYCLOMATIC_COMPLEXITY_METRIC_NAME: &str = "cyclomatic_complexity";
 pub type RuleConfigValue = toml::Value;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct FileId(pub u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct NodeId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct FunctionId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PackageId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct BranchId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ImportId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ResolvedImportId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ModuleNodeId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ModuleEdgeId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SymbolId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct DefinitionId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ReferenceId(pub u64);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct RuleId(pub String);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum Language {
     Go,
     TypeScript,
@@ -215,12 +229,14 @@ impl Language {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TextRange {
     pub start_byte: u32,
     pub end_byte: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Span {
     pub file: FileId,
     pub start_byte: u32,
@@ -255,6 +271,7 @@ impl Span {
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct SourceFile {
     pub id: FileId,
     pub path: PathBuf,
@@ -265,6 +282,7 @@ pub struct SourceFile {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct FunctionFact {
     pub id: FunctionId,
     pub file: FileId,
@@ -285,6 +303,7 @@ pub(crate) fn is_synthetic_ts_js_module_function(function: &FunctionFact) -> boo
 
 /// Source-file size and aggregate function metrics derived from parsed facts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct FileMetricFact {
     pub file: FileId,
     pub language: Language,
@@ -296,6 +315,7 @@ pub struct FileMetricFact {
 
 /// Function-size metrics derived once per function and shared by requesting rules.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct FunctionMetricFact {
     pub function: FunctionId,
     pub file: FileId,
@@ -308,6 +328,7 @@ pub struct FunctionMetricFact {
 
 /// Function complexity metrics derived once per function and shared by requesting rules.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ComplexityMetricFact {
     pub function: FunctionId,
     pub file: FileId,
@@ -318,6 +339,7 @@ pub struct ComplexityMetricFact {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PackageFact {
     pub id: PackageId,
     pub file: FileId,
@@ -327,6 +349,7 @@ pub struct PackageFact {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ImportFact {
     pub id: ImportId,
     pub file: FileId,
@@ -338,6 +361,7 @@ pub struct ImportFact {
 
 /// File, package, module, or external target participating in the module graph.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ModuleNode {
     pub id: ModuleNodeId,
     pub kind: ModuleNodeKind,
@@ -349,6 +373,7 @@ pub struct ModuleNode {
 
 /// Relationship edge between two module graph nodes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ModuleEdge {
     pub id: ModuleEdgeId,
     pub from: ModuleNodeId,
@@ -361,6 +386,7 @@ pub struct ModuleEdge {
 
 /// Setup-aware resolution result for one syntactic import fact.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ResolvedImportFact {
     pub id: ResolvedImportId,
     pub import: ImportId,
@@ -507,6 +533,7 @@ pub enum SymbolResolutionStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SymbolFact {
     pub id: SymbolId,
     pub language: Language,
@@ -525,6 +552,7 @@ pub struct SymbolFact {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct DefinitionFact {
     pub id: DefinitionId,
     pub symbol: SymbolId,
@@ -545,6 +573,7 @@ pub struct DefinitionFact {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ReferenceFact {
     pub id: ReferenceId,
     pub language: Language,
@@ -565,6 +594,7 @@ pub struct ReferenceFact {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct BranchObligation {
     pub id: BranchId,
     pub function: Option<FunctionId>,
@@ -580,6 +610,7 @@ pub struct BranchObligation {
 ///
 /// See the polint repository's `docs/facts/go-tests.md` for field semantics and harvester limits.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TestFact {
     pub file: FileId,
     pub function: Option<FunctionId>,
@@ -594,6 +625,7 @@ pub struct TestFact {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct CoverageFact {
     pub branch: BranchId,
     pub covered: Option<bool>,
@@ -601,6 +633,7 @@ pub struct CoverageFact {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TsComponentFact {
     pub file: FileId,
     pub function: Option<FunctionId>,
@@ -609,6 +642,7 @@ pub struct TsComponentFact {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TsClassFact {
     pub file: FileId,
     pub name: String,
@@ -618,6 +652,7 @@ pub struct TsClassFact {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct StringLiteralFact {
     pub file: FileId,
     pub value: String,
@@ -626,6 +661,7 @@ pub struct StringLiteralFact {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct JsxAttributeFact {
     pub file: FileId,
     pub name: String,
@@ -7105,6 +7141,7 @@ fn option_string(value: Option<&str>) -> String {
 /// How a path changed relative to the target ref, in a `polint review` diff.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ChangeStatus {
     /// The file is new on the working side.
     Added,
@@ -7386,6 +7423,7 @@ impl Capabilities {
 
 /// Support state for a requested capability in the resolved analysis plan.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum CapabilitySupportStatus {
     /// The host can provide this capability for the current plan.
     Supported,
@@ -7397,6 +7435,7 @@ pub enum CapabilitySupportStatus {
 
 /// Read-only support information for one capability row.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct CapabilitySupport {
     /// Stable capability name, such as `imports` or `cfg`.
     pub capability: String,
@@ -7416,6 +7455,7 @@ pub struct CapabilitySupport {
 
 /// Read-only capability support rows exposed to rules.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct CapabilitySupportView {
     entries: Vec<CapabilitySupport>,
 }
@@ -7457,6 +7497,7 @@ type RuleRunFn = dyn Fn(&AnalysisDb, &mut RuleCtx<'_>) -> RuleResult + Send + Sy
 /// not a trait: repo-local rules must be written in the analyzable macro shape so
 /// capabilities come from typed fact-view parameters.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct Rule {
     meta: Arc<RuleMetaFn>,
     capabilities: Arc<RuleCapabilitiesFn>,
@@ -7526,6 +7567,7 @@ impl Rule {
 /// [`RuleCtx::options`] to apply severity overrides, file filters, thresholds,
 /// denied values, or import-boundary settings.
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct RuleOptions {
     /// Severity override from config, if any.
     pub severity: Option<Severity>,
@@ -7550,6 +7592,7 @@ pub struct RuleOptions {
 /// The context owns reporting, options, path lookup, and support metadata.
 /// Analysis facts are exposed through typed SDK fact views requested in a
 /// `#[polint::rule]` function signature.
+#[non_exhaustive]
 pub struct RuleCtx<'a> {
     db: &'a AnalysisDb,
     diagnostics: Vec<Diagnostic>,

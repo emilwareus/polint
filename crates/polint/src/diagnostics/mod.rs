@@ -70,6 +70,7 @@ const EVIDENCE_EXPANSION_STATES: &[&str] = &["none", "expandable", "opaque", "ex
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum Severity {
     Info,
     Warn,
@@ -93,6 +94,7 @@ impl fmt::Display for Severity {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TextRange {
     pub start_line: u32,
     pub start_col: u32,
@@ -999,6 +1001,7 @@ fn bounded_extension_summary(summary: &str) -> String {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum OutputFormat {
     Human,
     Github,
@@ -1009,6 +1012,7 @@ pub enum OutputFormat {
 
 /// Metadata embedded in `--format json` output (`PolintReport.tool`).
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct JsonReportMeta<'a> {
     pub tool_name: &'a str,
     pub tool_version: &'a str,
@@ -1016,6 +1020,7 @@ pub struct JsonReportMeta<'a> {
 
 /// When to emit ANSI colors for `--format human` (honors `NO_COLOR` when [`ColorChoice::Auto`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum ColorChoice {
     #[default]
     Auto,
@@ -1036,6 +1041,7 @@ impl ColorChoice {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct RenderOpts<'a> {
     pub json: JsonReportMeta<'a>,
     pub color: ColorChoice,
@@ -1045,6 +1051,7 @@ pub struct RenderOpts<'a> {
 
 /// Tool identity in a [`PolintReport`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PolintToolInfo {
     pub name: String,
     pub version: String,
@@ -1052,6 +1059,7 @@ pub struct PolintToolInfo {
 
 /// Versioned JSON report for `--format json` and repo-local rule host subprocesses.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PolintReport {
     pub version: u32,
     pub tool: PolintToolInfo,

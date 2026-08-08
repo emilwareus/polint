@@ -19,6 +19,7 @@ use crate::symbol_graph::query;
 
 /// Public source-file view. Requesting this view maps to the `syntax` capability.
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub struct SourceFiles<'a> {
     db: &'a AnalysisDb,
 }
@@ -52,6 +53,7 @@ impl<'a> SourceFiles<'a> {
 
 /// Package fact view. Requesting this view maps to the `syntax` capability.
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub struct Packages<'a> {
     db: &'a AnalysisDb,
 }
@@ -70,6 +72,7 @@ impl<'a> Packages<'a> {
 
 /// Function fact view. Requesting this view maps to the `syntax` capability.
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub struct Functions<'a> {
     db: &'a AnalysisDb,
 }
@@ -96,6 +99,7 @@ impl<'a> Functions<'a> {
 
 /// Source-file metric view. Requesting this view maps to the `file_metrics` capability.
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub struct FileMetrics<'a> {
     db: &'a AnalysisDb,
 }
@@ -154,6 +158,7 @@ impl<'a> FileMetrics<'a> {
 
 /// Function-size metric view. Requesting this view maps to the `function_metrics` capability.
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub struct FunctionMetrics<'a> {
     db: &'a AnalysisDb,
 }
@@ -204,6 +209,7 @@ impl<'a> FunctionMetrics<'a> {
 
 /// Complexity metric view. Requesting this view maps to the `complexity_metrics` capability.
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub struct ComplexityMetrics<'a> {
     db: &'a AnalysisDb,
 }
@@ -251,6 +257,7 @@ impl<'a> ComplexityMetrics<'a> {
 
 /// Import fact view. Requesting this view maps to the `imports` capability.
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub struct Imports<'a> {
     db: &'a AnalysisDb,
 }
@@ -285,6 +292,7 @@ impl<'a> Imports<'a> {
 
 /// Resolved import fact view. Requesting this view maps to the `resolved_imports` capability.
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub struct ResolvedImports<'a> {
     db: &'a AnalysisDb,
 }
@@ -373,6 +381,7 @@ impl<'a> ResolvedImports<'a> {
 
 /// Module relationship graph fact view. Requesting this view maps to the `module_graph` capability.
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub struct ModuleGraphFacts<'a> {
     db: &'a AnalysisDb,
 }
@@ -484,6 +493,7 @@ impl<'a> ModuleGraphFacts<'a> {
 
 /// Symbol and definition fact view. Requesting this view maps to the `symbols` capability.
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub struct Symbols<'a> {
     db: &'a AnalysisDb,
 }
@@ -556,6 +566,7 @@ impl<'a> Symbols<'a> {
 
 /// Reference fact view. Requesting this view maps to the `references` capability.
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub struct References<'a> {
     db: &'a AnalysisDb,
 }
@@ -632,6 +643,7 @@ impl<'a> References<'a> {
 
 /// Branch obligation fact view. Requesting this view maps to the `branch_obligations` capability.
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub struct BranchObligations<'a> {
     db: &'a AnalysisDb,
 }
@@ -666,6 +678,7 @@ impl<'a> BranchObligations<'a> {
 
 /// Go test fact view. Requesting this view maps to the `go_tests` capability.
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub struct GoTests<'a> {
     db: &'a AnalysisDb,
 }
@@ -732,6 +745,7 @@ impl<'a> GoTests<'a> {
 
 /// TS/JS component fact view. Requesting this view maps to the `ts_components` capability.
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub struct TsComponents<'a> {
     db: &'a AnalysisDb,
 }
@@ -758,6 +772,7 @@ impl<'a> TsComponents<'a> {
 
 /// TS/JS class fact view. Requesting this view maps to the `ts_classes` capability.
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub struct TsClasses<'a> {
     db: &'a AnalysisDb,
 }
@@ -784,6 +799,7 @@ impl<'a> TsClasses<'a> {
 
 /// String-literal fact view. Requesting this view maps to the `string_literals` capability.
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub struct StringLiterals<'a> {
     db: &'a AnalysisDb,
 }
@@ -810,6 +826,7 @@ impl<'a> StringLiterals<'a> {
 
 /// JSX attribute fact view. Requesting this view maps to the `jsx_attributes` capability.
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub struct JsxAttributes<'a> {
     db: &'a AnalysisDb,
 }
@@ -836,18 +853,21 @@ impl<'a> JsxAttributes<'a> {
 
 /// Reserved CFG fact view. Requesting this view currently maps to unsupported `cfg`.
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub struct Cfg<'a> {
     _db: &'a AnalysisDb,
 }
 
 /// Reserved call-graph fact view. Requesting this view currently maps to unsupported `call_graph`.
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub struct CallGraph<'a> {
     _db: &'a AnalysisDb,
 }
 
 /// Preview event policy view. Requesting this view maps to lightweight `events`.
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub struct Events<'a> {
     db: &'a AnalysisDb,
 }
@@ -865,6 +885,7 @@ impl<'a> Events<'a> {
 
 /// Preview calls policy view. Requesting this view maps to provider-backed `calls`.
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub struct Calls<'a> {
     db: &'a AnalysisDb,
 }
@@ -881,6 +902,7 @@ impl<'a> Calls<'a> {
 
 /// Preview control-flow policy view. Requesting this view maps to `control_flow`.
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub struct ControlFlow<'a> {
     db: &'a AnalysisDb,
 }
@@ -909,6 +931,7 @@ impl<'a> ControlFlow<'a> {
 
 /// Preview data-flow policy view. Requesting this view maps to provider-backed `dataflow`.
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub struct DataFlow<'a> {
     db: &'a AnalysisDb,
 }
@@ -925,6 +948,7 @@ impl<'a> DataFlow<'a> {
 
 /// Reserved coverage fact view. Requesting this view currently maps to unsupported `coverage_facts`.
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub struct CoverageFacts<'a> {
     db: &'a AnalysisDb,
 }
@@ -943,6 +967,7 @@ impl<'a> CoverageFacts<'a> {
 
 /// Reserved test-suite metric view. Requesting this view currently maps to unsupported `test_suite_metrics`.
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub struct TestSuiteMetrics<'a> {
     _db: &'a AnalysisDb,
 }
@@ -954,6 +979,7 @@ pub struct TestSuiteMetrics<'a> {
 /// `polint review <ref>` runs, so a review rule can target changed paths and
 /// changed line ranges as ordinary Rust code.
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub struct ChangedFiles<'a> {
     db: &'a AnalysisDb,
 }

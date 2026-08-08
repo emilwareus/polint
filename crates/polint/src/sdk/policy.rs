@@ -34,6 +34,7 @@ impl PolicyOperation {
 
 /// Result status for a policy-query match.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PolicyStatus {
     /// The query result is exact for the supported scope.
     Exact,
@@ -49,6 +50,7 @@ pub enum PolicyStatus {
 
 /// Precision level attached to a policy-query result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PolicyPrecision {
     /// Exact semantic evidence.
     Exact,
@@ -66,6 +68,7 @@ pub enum PolicyPrecision {
 
 /// Confidence level attached to a policy-query result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PolicyConfidence {
     /// High-confidence evidence from resolved or validated facts.
     High,
@@ -77,6 +80,7 @@ pub enum PolicyConfidence {
 
 /// Preview violation returned by policy-query views.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PolicyViolation {
     query: PolicyOperation,
     query_digest: String,
@@ -167,6 +171,7 @@ impl PolicyViolation {
 
 /// Query for reachable event/call policies.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ReachQuery {
     /// Target event that must not be reachable.
     pub target: EventPattern,
@@ -220,6 +225,7 @@ impl ReachQuery {
 
 /// Query for missing guard policies.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct GuardQuery {
     /// Sensitive event that requires a guard.
     pub event: EventPattern,
@@ -262,6 +268,7 @@ impl GuardQuery {
 
 /// Query for resource lifecycle policies.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct LifecycleQuery {
     /// Event that acquires or opens a resource.
     pub start: EventPattern,
@@ -308,6 +315,7 @@ impl LifecycleQuery {
 
 /// Query for source-to-sink data-flow policies.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct FlowQuery {
     /// Required source pattern.
     pub source: SourcePattern,
@@ -354,6 +362,7 @@ impl FlowQuery {
 
 /// Pattern for semantic events such as calls or field writes.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct EventPattern {
     kind: EventPatternKind,
     values: Vec<String>,
@@ -394,6 +403,7 @@ impl EventPattern {
 
 /// Pattern for data-flow sources.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct SourcePattern {
     kind: SourcePatternKind,
     values: Vec<String>,
@@ -431,6 +441,7 @@ impl SourcePattern {
 
 /// Pattern for data-flow sinks.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct SinkPattern {
     kind: SinkPatternKind,
     values: Vec<String>,
@@ -464,6 +475,7 @@ impl SinkPattern {
 
 /// Pattern for guard checks.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct GuardPattern {
     kind: GuardPatternKind,
     values: Vec<String>,
@@ -493,6 +505,7 @@ impl GuardPattern {
 
 /// Pattern for data-flow barriers or sanitizers.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct BarrierPattern {
     kind: BarrierPatternKind,
     values: Vec<String>,

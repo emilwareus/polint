@@ -28,7 +28,7 @@
 //   3. Did the probe crate's dependency on polint break? Restore the probe's
 //      `#![no_implicit_prelude]` and single `use ::polint::sdk::prelude::*;` import.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -629,4 +629,122 @@ fn allowlist_has_no_duplicates_and_expected_count() {
         "ALLOWED_PRELUDE count changed — update this assertion ONLY alongside a sanctioned \
          API promotion record"
     );
+}
+
+/// Prelude-exported structs and enums must stay `#[non_exhaustive]` so adding a
+/// field or variant is not a silent semver break for rule packs.
+///
+/// Type aliases, free functions, and consts in `ALLOWED_PRELUDE` are skipped.
+/// `DiagnosticRange` is the prelude alias for diagnostics `TextRange`.
+#[test]
+fn prelude_structs_and_language_are_non_exhaustive() {
+    let root = repo_root();
+    let sources = [
+        root.join("crates/polint/src/core/mod.rs"),
+        root.join("crates/polint/src/diagnostics/mod.rs"),
+        root.join("crates/polint/src/sdk/facts.rs"),
+        root.join("crates/polint/src/sdk/policy.rs"),
+        root.join("crates/polint/src/rule_error.rs"),
+    ];
+
+    let skip: BTreeSet<&str> = [
+        "RuleConfigValue",
+        "RuleResult",
+        "POLINT_REPORT_JSON_SCHEMA_V1_URL",
+        "collect_go_tests",
+        "diagnostics_from_json_report",
+        "file_in_scope",
+        "file_matches_globs",
+        "glob_matches",
+        // Alias of diagnostics::TextRange — covered under TextRange below.
+        "DiagnosticRange",
+    ]
+    .into_iter()
+    .collect();
+
+    let mut defs: BTreeMap<String, Vec<(PathBuf, usize, bool)>> = BTreeMap::new();
+    for path in &sources {
+        let text = std::fs::read_to_string(path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+        let lines: Vec<&str> = text.lines().collect();
+        for (idx, line) in lines.iter().enumerate() {
+            let trimmed = line.trim_start();
+            let Some(rest) = trimmed
+                .strip_prefix("pub struct ")
+                .or_else(|| trimmed.strip_prefix("pub enum "))
+            else {
+                continue;
+            };
+            let name = rest
+                .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                .next()
+                .unwrap_or("");
+            if name.is_empty() {
+                continue;
+            }
+            let has_ne = preceding_item_attrs_include_non_exhaustive(&lines, idx);
+            defs.entry(name.to_string())
+                .or_default()
+                .push((path.clone(), idx + 1, has_ne));
+        }
+    }
+
+    let mut missing = Vec::new();
+    for &name in ALLOWED_PRELUDE {
+        if skip.contains(name) {
+            continue;
+        }
+        let Some(sites) = defs.get(name) else {
+            missing.push(format!("{name}: definition not found in SDK source scan"));
+            continue;
+        };
+        // TextRange appears in both core and diagnostics; every definition must
+        // carry the attribute. Other names should be unique.
+        for (path, line, has_ne) in sites {
+            if !has_ne {
+                missing.push(format!(
+                    "{name} at {}:{} lacks #[non_exhaustive]",
+                    path.display(),
+                    line
+                ));
+            }
+        }
+    }
+
+    assert!(
+        missing.is_empty(),
+        "prelude-exported structs/enums must be #[non_exhaustive] (Language included).\n\
+         Missing:\n  {}",
+        missing.join("\n  ")
+    );
+
+    let language = defs
+        .get("Language")
+        .expect("Language must remain a prelude-exported enum");
+    assert!(
+        language.iter().any(|(_, _, has_ne)| *has_ne),
+        "Language must be #[non_exhaustive]"
+    );
+}
+
+fn preceding_item_attrs_include_non_exhaustive(lines: &[&str], item_idx: usize) -> bool {
+    let mut j = item_idx;
+    while j > 0 {
+        j -= 1;
+        let s = lines[j].trim();
+        if s.is_empty() {
+            continue;
+        }
+        if s.starts_with("///") || s.starts_with("//!") {
+            continue;
+        }
+        if s.starts_with("#[") {
+            if s.contains("non_exhaustive") {
+                return true;
+            }
+            continue;
+        }
+        break;
+    }
+    false
 }
