@@ -11,7 +11,10 @@ use std::sync::OnceLock;
 use crate::analysis_kernel::{PrecisionCeiling, ProviderCtx, ProviderRunResult};
 use crate::core::{Language, SourceFile};
 
-pub(crate) use registry::{FrontendRegistry, LanguageId, build_default_registry};
+pub(crate) use registry::{
+    FrontendRegistry, LANGUAGE_IDS_GO, LANGUAGE_IDS_GO_AND_TS, LANGUAGE_IDS_NONE, LANGUAGE_IDS_TS,
+    LanguageId, build_default_registry,
+};
 
 pub(crate) const FAMILY_GO: &str = "go";
 pub(crate) const FAMILY_TYPESCRIPT_JAVASCRIPT: &str = "typescript_javascript";

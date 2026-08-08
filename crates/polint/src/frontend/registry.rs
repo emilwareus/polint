@@ -9,7 +9,16 @@ pub(crate) struct LanguageId(u16);
 impl LanguageId {
     /// Sentinel for public languages with no registered frontend (e.g. Unknown).
     pub(crate) const UNREGISTERED: Self = Self(u16::MAX);
+    /// Stable id matching default registration order for Go.
+    pub(crate) const GO: Self = Self(0);
+    /// Stable id matching default registration order for TypeScript/JavaScript.
+    pub(crate) const TS: Self = Self(1);
 }
+
+pub(crate) const LANGUAGE_IDS_NONE: &[LanguageId] = &[];
+pub(crate) const LANGUAGE_IDS_GO: &[LanguageId] = &[LanguageId::GO];
+pub(crate) const LANGUAGE_IDS_TS: &[LanguageId] = &[LanguageId::TS];
+pub(crate) const LANGUAGE_IDS_GO_AND_TS: &[LanguageId] = &[LanguageId::GO, LanguageId::TS];
 
 /// Composition root for language frontends.
 pub(crate) struct FrontendRegistry {
@@ -90,5 +99,7 @@ pub(crate) fn build_default_registry() -> FrontendRegistry {
     let mut registry = FrontendRegistry::new();
     registry.register(|id| Box::new(GoFrontend::new(id)));
     registry.register(|id| Box::new(TsJsFrontend::new(id)));
+    debug_assert_eq!(registry.by_name("go").map(|f| f.id()), Some(LanguageId::GO));
+    debug_assert_eq!(registry.by_name("ts").map(|f| f.id()), Some(LanguageId::TS));
     registry
 }

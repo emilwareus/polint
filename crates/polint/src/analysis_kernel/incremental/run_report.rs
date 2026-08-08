@@ -174,7 +174,7 @@ mod tests {
     use super::*;
     use crate::analysis_kernel::incremental::{CacheStats, DigestKind, PrecisionTier};
     use crate::analysis_kernel::{
-        CachePolicy, LanguageScope, PrecisionCeiling, ProviderKind, ProviderManifest, SchemaVersion,
+        CachePolicy, PrecisionCeiling, ProviderKind, ProviderManifest, SchemaVersion,
     };
 
     #[test]
@@ -278,13 +278,13 @@ mod tests {
             kind: ProviderKind::LanguageSyntax,
             inputs: &["source_files"],
             outputs: &["example_facts"],
-            language_scope: LanguageScope::Go,
+            language_ids: crate::frontend::LANGUAGE_IDS_GO,
             cache_policy: CachePolicy::NoCache,
             schema_versions: SCHEMAS,
             precision_ceiling: PrecisionCeiling::Syntax,
         };
         let scope_changed = ProviderManifest {
-            language_scope: LanguageScope::TypeScriptJavaScript,
+            language_ids: crate::frontend::LANGUAGE_IDS_TS,
             ..base
         };
         let policy_changed = ProviderManifest {

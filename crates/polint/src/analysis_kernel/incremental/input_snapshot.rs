@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{Digest, DigestKind};
 use crate::analysis::extensions::discovery::{DiscoveredExtension, discover_local_extensions};
-use crate::analysis_kernel::{CachePolicy, LanguageScope, PrecisionCeiling, ProviderManifest};
+use crate::analysis_kernel::{CachePolicy, PrecisionCeiling, ProviderManifest};
 use crate::config::LoadedConfig;
 use crate::core::{AnalysisDb, Language, SourceFile};
 use crate::module_graph::paths::{
@@ -294,7 +294,7 @@ impl InputComponent {
 impl ProviderSchemaSnapshot {
     fn from_manifest(manifest: &ProviderManifest) -> Self {
         let schema_versions = sorted_schema_labels(manifest.schema_versions);
-        let language_scope = language_scope_label(manifest.language_scope).to_string();
+        let language_scope = manifest.language_scope_label().to_string();
         let cache_policy = cache_policy_label(manifest.cache_policy);
         let precision_ceiling = precision_ceiling_label(manifest.precision_ceiling).to_string();
         let sorted_inputs = sorted_static_strings(manifest.inputs);
@@ -1091,15 +1091,6 @@ fn stable_hash_bytes(bytes: &[u8]) -> String {
     format!("{hash:016x}")
 }
 
-fn language_scope_label(scope: LanguageScope) -> &'static str {
-    match scope {
-        LanguageScope::Workspace => "workspace",
-        LanguageScope::Go => "go",
-        LanguageScope::TypeScriptJavaScript => "typescript_javascript",
-        LanguageScope::MultiLanguage => "multi_language",
-    }
-}
-
 fn cache_policy_label(policy: CachePolicy) -> String {
     match policy {
         CachePolicy::NoCache => "no_cache".to_string(),
@@ -1144,7 +1135,7 @@ fn extension_activation_status_label(
 mod source_config_rule_model_extension {
     use super::*;
     use crate::analysis_kernel::{
-        CachePolicy, LanguageScope, PrecisionCeiling, ProviderKind, ProviderManifest, SchemaVersion,
+        CachePolicy, PrecisionCeiling, ProviderKind, ProviderManifest, SchemaVersion,
     };
     use crate::config::{LoadedConfig, PolintConfig};
     use crate::core::AnalysisDb;
@@ -1367,13 +1358,13 @@ mod source_config_rule_model_extension {
             kind: ProviderKind::LanguageSyntax,
             inputs: &["source_files", "config"],
             outputs: &["facts"],
-            language_scope: LanguageScope::Go,
+            language_ids: crate::frontend::LANGUAGE_IDS_GO,
             cache_policy: CachePolicy::NoCache,
             schema_versions: SCHEMAS,
             precision_ceiling: PrecisionCeiling::Syntax,
         };
         let scope_changed = ProviderManifest {
-            language_scope: LanguageScope::TypeScriptJavaScript,
+            language_ids: crate::frontend::LANGUAGE_IDS_TS,
             ..base
         };
         let policy_changed = ProviderManifest {

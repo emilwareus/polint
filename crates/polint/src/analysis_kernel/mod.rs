@@ -20,8 +20,8 @@ pub(crate) use metadata::{
 #[cfg(test)]
 pub(crate) use provider::ProviderKind;
 pub(crate) use provider::{
-    CachePolicy, LanguageScope, PrecisionCeiling, ProviderCtx, ProviderManifest, ProviderRunResult,
-    SchemaVersion, providers_enabled_by_boolean_gates, providers_enabled_by_capability_closure,
+    CachePolicy, PrecisionCeiling, ProviderCtx, ProviderManifest, ProviderRunResult, SchemaVersion,
+    providers_enabled_by_boolean_gates, providers_enabled_by_capability_closure,
     run_named_provider, scheduled_order, scheduled_order_for,
 };
 pub(crate) use store::StoreStatus;

@@ -12,7 +12,7 @@ pub(crate) struct ProviderManifest {
     pub(crate) kind: ProviderKind,
     pub(crate) inputs: &'static [&'static str],
     pub(crate) outputs: &'static [&'static str],
-    pub(crate) language_scope: LanguageScope,
+    pub(crate) language_ids: &'static [crate::frontend::LanguageId],
     pub(crate) cache_policy: CachePolicy,
     pub(crate) schema_versions: &'static [SchemaVersion],
     pub(crate) precision_ceiling: PrecisionCeiling,
@@ -1037,11 +1037,11 @@ impl ProviderManifest {
     }
 
     pub(crate) fn language_scope_label(&self) -> &'static str {
-        match self.language_scope {
-            LanguageScope::Workspace => "workspace",
-            LanguageScope::Go => "go",
-            LanguageScope::TypeScriptJavaScript => "typescript_javascript",
-            LanguageScope::MultiLanguage => "multi_language",
+        match self.language_ids {
+            [] => "workspace",
+            [id] if *id == crate::frontend::LanguageId::GO => "go",
+            [id] if *id == crate::frontend::LanguageId::TS => "typescript_javascript",
+            _ => "multi_language",
         }
     }
 
@@ -1062,14 +1062,6 @@ pub(crate) enum ProviderKind {
     LanguageSyntax,
     WholeRepoDerived,
     MetricsDerived,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LanguageScope {
-    Workspace,
-    Go,
-    TypeScriptJavaScript,
-    MultiLanguage,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1111,7 +1103,7 @@ pub(crate) fn provider_order_report_for_test() -> Vec<ProviderOrderRow> {
         .map(|manifest| ProviderOrderRow {
             id: manifest.id,
             kind: provider_kind_label(manifest.kind),
-            language_scope: language_scope_label(manifest.language_scope),
+            language_scope: manifest.language_scope_label(),
             inputs: manifest.inputs.to_vec(),
             outputs: manifest.outputs.to_vec(),
         })
@@ -1135,16 +1127,6 @@ fn provider_kind_label(kind: ProviderKind) -> &'static str {
         ProviderKind::LanguageSyntax => "language_syntax",
         ProviderKind::WholeRepoDerived => "whole_repo_derived",
         ProviderKind::MetricsDerived => "metrics_derived",
-    }
-}
-
-#[cfg(test)]
-fn language_scope_label(scope: LanguageScope) -> &'static str {
-    match scope {
-        LanguageScope::Workspace => "workspace",
-        LanguageScope::Go => "go",
-        LanguageScope::TypeScriptJavaScript => "typescript_javascript",
-        LanguageScope::MultiLanguage => "multi_language",
     }
 }
 
@@ -1269,7 +1251,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
         kind: ProviderKind::SourceDiscovery,
         inputs: &["workspace_config", "file_discovery"],
         outputs: &["source_files"],
-        language_scope: LanguageScope::Workspace,
+        language_ids: crate::frontend::LANGUAGE_IDS_NONE,
         cache_policy: CachePolicy::NoCache,
         schema_versions: SOURCE_SCHEMA,
         precision_ceiling: PrecisionCeiling::Exact,
@@ -1285,7 +1267,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "go_tests",
             "branch_obligations",
         ],
-        language_scope: LanguageScope::Go,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO,
         cache_policy: CachePolicy::ExistingFileFactCache {
             schema: "go-facts-v2",
         },
@@ -1304,7 +1286,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "string_literals",
             "jsx_attributes",
         ],
-        language_scope: LanguageScope::TypeScriptJavaScript,
+        language_ids: crate::frontend::LANGUAGE_IDS_TS,
         cache_policy: CachePolicy::ExistingFileFactCache {
             schema: "ts-facts-v5",
         },
@@ -1326,7 +1308,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "resolved_dependency_edges",
             "repo_topology_overlays",
         ],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: MODULE_GRAPH_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -1355,7 +1337,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "generated_symbols",
             "stable_exports",
         ],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: SYMBOL_GRAPH_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -1377,7 +1359,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "semantic_imports",
         ],
         outputs: &["import_to_package_edges"],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: MODULE_TOPOLOGY_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -1400,7 +1382,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "places",
             "unsupported_semantics",
         ],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: SEMANTIC_MIR_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -1427,7 +1409,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "cfg_control_dependence",
             "unsupported_control_flow",
         ],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: CFG_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -1451,7 +1433,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "cfg_edges",
         ],
         outputs: &["call_sites", "call_targets", "unresolved_calls"],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: CALLS_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -1480,7 +1462,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "go_semantic_rta_edges",
             "go_semantic_package_errors",
         ],
-        language_scope: LanguageScope::Go,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: GO_SEMANTIC_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -1497,7 +1479,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "go_semantic_packages",
         ],
         outputs: &["identity_records"],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: IDENTITY_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -1520,7 +1502,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "unresolved_calls",
         ],
         outputs: &["domain_observations", "domain_events"],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: ABSTRACT_DOMAINS_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -1551,7 +1533,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "summary_tito",
             "summary_events",
         ],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: DIRECT_SUMMARIES_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -1580,7 +1562,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "dispatch_edges",
             "unresolved_framework",
         ],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: ENTRYPOINTS_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -1601,7 +1583,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "exports",
         ],
         outputs: &["reachability_roots", "call_reachability"],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: REACHABILITY_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -1621,7 +1603,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "extension.providers",
         ],
         outputs: &["extension_facts", "extension_rejections"],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: EXTENSIONS_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -1669,7 +1651,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "points_to_sets",
             "alias_answers",
         ],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: TYPE_VALUE_ALIAS_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -1722,7 +1704,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "semantic_edges",
             "semantic_constraints",
         ],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: SEMANTIC_GRAPH_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -1765,7 +1747,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "solver_budget_status",
             "solver_budget_reasons",
         ],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: SOLVER_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -1796,7 +1778,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "solver_derived_edges",
         ],
         outputs: &["refined_call_edges"],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: REFINED_CALLS_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -1831,7 +1813,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "data_flow_models",
             "data_flow_budgets",
         ],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: DATA_FLOW_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -1877,7 +1859,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
             "evidence_omitted_regions",
             "evidence_replay_keys",
         ],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: EVIDENCE_SCHEMA,
         precision_ceiling: PrecisionCeiling::SetupAware,
@@ -1887,7 +1869,7 @@ const PROVIDER_MANIFESTS: &[ProviderManifest] = &[
         kind: ProviderKind::MetricsDerived,
         inputs: &["source_files", "functions"],
         outputs: &["file_metrics", "function_metrics", "complexity_metrics"],
-        language_scope: LanguageScope::MultiLanguage,
+        language_ids: crate::frontend::LANGUAGE_IDS_GO_AND_TS,
         cache_policy: CachePolicy::InMemoryDerived,
         schema_versions: METRICS_SCHEMA,
         precision_ceiling: PrecisionCeiling::Syntax,
@@ -1910,7 +1892,7 @@ mod tests {
             );
             assert!(!manifest.outputs.is_empty());
             assert!(!manifest.schema_versions.is_empty());
-            let _language_scope = manifest.language_scope;
+            let _language_ids = manifest.language_ids;
             let _cache_policy = manifest.cache_policy;
             let _precision_ceiling = manifest.precision_ceiling;
         }
@@ -2761,7 +2743,10 @@ mod tests {
             .expect("semantic MIR manifest should exist");
 
         assert_eq!(manifest.primary_schema_label(), "semantic-mir-facts-1:1");
-        assert_eq!(manifest.language_scope, LanguageScope::MultiLanguage);
+        assert_eq!(
+            manifest.language_ids,
+            crate::frontend::LANGUAGE_IDS_GO_AND_TS
+        );
         assert_eq!(manifest.cache_policy, CachePolicy::InMemoryDerived);
         assert_eq!(manifest.precision_ceiling, PrecisionCeiling::SetupAware);
         assert!(manifest.inputs.contains(&"functions"));
@@ -2784,7 +2769,10 @@ mod tests {
             .expect("calls manifest should exist");
 
         assert_eq!(manifest.primary_schema_label(), "calls-facts-1:1");
-        assert_eq!(manifest.language_scope, LanguageScope::MultiLanguage);
+        assert_eq!(
+            manifest.language_ids,
+            crate::frontend::LANGUAGE_IDS_GO_AND_TS
+        );
         assert_eq!(manifest.cache_policy, CachePolicy::InMemoryDerived);
         assert_eq!(manifest.precision_ceiling, PrecisionCeiling::SetupAware);
         for input in [
@@ -2953,7 +2941,10 @@ mod tests {
             .expect("direct summaries manifest should exist");
 
         assert_eq!(manifest.primary_schema_label(), "direct-summary-facts-1:1");
-        assert_eq!(manifest.language_scope, LanguageScope::MultiLanguage);
+        assert_eq!(
+            manifest.language_ids,
+            crate::frontend::LANGUAGE_IDS_GO_AND_TS
+        );
         assert_eq!(manifest.cache_policy, CachePolicy::InMemoryDerived);
         assert_eq!(manifest.precision_ceiling, PrecisionCeiling::SetupAware);
         for input in [
