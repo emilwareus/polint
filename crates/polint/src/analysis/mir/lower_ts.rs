@@ -18,13 +18,14 @@ use crate::analysis::mir::body::{
     MirTerminatorKind, SuspendKind,
 };
 use crate::analysis::mir::op::{
-    AssignMode, ConservativeAction, MirOperation, MirOperationKind, MirValue, UnsupportedDomain,
-    UnsupportedPrecision, UnsupportedSemanticFact,
+    AssignMode, ConservativeAction, MirAggregateField, MirAggregateKind, MirOperation,
+    MirOperationKind, MirValue, UnsupportedDomain, UnsupportedPrecision, UnsupportedSemanticFact,
 };
 use crate::analysis::places::{
     PlaceInsert, PlaceProjection, PlaceRoot, PlaceStableContext, PlaceStatus, PlaceTableBuilder,
 };
 use crate::analysis::stable_key::semantic_stable_key;
+use crate::analysis::types::facts::TypeShape;
 use crate::analysis_kernel::FactFamily;
 use crate::core::{
     AnalysisDb, FileId, FunctionFact, FunctionId, Language, SourceFile, Span,
@@ -51,7 +52,7 @@ pub(crate) fn lower_ts_mir(db: &AnalysisDb) -> MirOutput {
         lowering.lower_file(db, file);
     }
 
-    let places = lowering.places.clone().finish();
+    let (places, place_types) = lowering.places.clone().finish_with_types();
     let place_ids = places
         .iter()
         .map(|place| (place.stable_key.clone(), place.id))
@@ -93,6 +94,7 @@ pub(crate) fn lower_ts_mir(db: &AnalysisDb) -> MirOutput {
         statements,
         terminators,
         places,
+        place_types,
         operations,
         unsupported,
     }
@@ -389,24 +391,6 @@ impl TsMirLowering {
                     conservative_action: ConservativeAction::StopLowering,
                 }));
         }
-        if let Some(module_function) = matching_module_function(db, file.id, file.language) {
-            let span = crate::core::span_from_byte_range(
-                file.id,
-                file.source.as_ref(),
-                0,
-                file.source.len(),
-            );
-            let body = self.push_body(db, file, module_function, span);
-            let mut module_lowering =
-                FunctionLowering::new(file, file.source.as_ref(), module_function.id, &body);
-            module_lowering.lower_statements(
-                &parsed.program().body,
-                &mut self.places,
-                &mut self.operations,
-                &mut self.unsupported,
-            );
-        }
-
         let mut functions = Vec::new();
         collect_functions(file.source.as_ref(), parsed.program(), &mut functions);
         functions.sort_by(|left, right| {
@@ -428,16 +412,58 @@ impl TsMirLowering {
         // method is lowered once (a duplicate MIR body would duplicate call sites).
         functions.dedup_by(|left, right| left.span == right.span && left.name == right.name);
 
+        let mut prepared = Vec::new();
         for function in functions {
             let span = span_from_oxc(file.id, file.source.as_ref(), function.span);
             let Some(function_fact) =
                 matching_function(db, file.id, file.language, &function.name, &span)
+                    .or_else(|| enclosing_function(db, file.id, file.language, &span))
             else {
                 continue;
             };
             let body = self.push_body(db, file, function_fact, span);
-            let mut function_lowering =
-                FunctionLowering::new(file, file.source.as_ref(), function_fact.id, &body);
+            prepared.push((function, function_fact.id, body));
+        }
+        let closure_bodies = prepared
+            .iter()
+            .map(|(function, _, body)| ((function.span.start, function.span.end), body.id))
+            .collect::<BTreeMap<_, _>>();
+        let closure_capture_names =
+            closure_capture_names(db, file.id, file.source.as_ref(), &prepared);
+
+        if let Some(module_function) = matching_module_function(db, file.id, file.language) {
+            let span = crate::core::span_from_byte_range(
+                file.id,
+                file.source.as_ref(),
+                0,
+                file.source.len(),
+            );
+            let body = self.push_body(db, file, module_function, span);
+            let mut module_lowering = FunctionLowering::new(
+                file,
+                file.source.as_ref(),
+                module_function.id,
+                &body,
+                closure_bodies.clone(),
+                closure_capture_names.clone(),
+            );
+            module_lowering.lower_statements(
+                &parsed.program().body,
+                &mut self.places,
+                &mut self.operations,
+                &mut self.unsupported,
+            );
+        }
+
+        for (function, function_id, body) in prepared {
+            let mut function_lowering = FunctionLowering::new(
+                file,
+                file.source.as_ref(),
+                function_id,
+                &body,
+                closure_bodies.clone(),
+                closure_capture_names.clone(),
+            );
             function_lowering.lower_parameters(&function.parameters, &mut self.places);
             match function.body {
                 CandidateBody::Statements(statements) => function_lowering.lower_statements(
@@ -453,6 +479,20 @@ impl TsMirLowering {
                         &mut self.operations,
                         &mut self.unsupported,
                         false,
+                    );
+                }
+                CandidateBody::ReturnExpression(expression) => {
+                    let value = function_lowering.lower_value(
+                        expression,
+                        &mut self.places,
+                        &mut self.operations,
+                        &mut self.unsupported,
+                    );
+                    function_lowering.push_operation(
+                        &mut self.operations,
+                        expression.span(),
+                        OperationKindDraft::Return { value },
+                        MirStatus::Partial,
                     );
                 }
             }
@@ -531,6 +571,60 @@ struct TsFunctionCandidate<'ast> {
     body: CandidateBody<'ast>,
 }
 
+fn closure_capture_names(
+    db: &AnalysisDb,
+    file: FileId,
+    source: &str,
+    functions: &[(TsFunctionCandidate<'_>, FunctionId, MirBody)],
+) -> BTreeMap<(u32, u32), Vec<String>> {
+    functions
+        .iter()
+        .map(|(function, _, _)| {
+            let mut names = db
+                .references_for_file(file)
+                .filter(|reference| {
+                    reference.primary_span.as_ref().is_some_and(|span| {
+                        span.start_byte >= function.span.start && span.end_byte <= function.span.end
+                    })
+                })
+                .filter_map(|reference| {
+                    let target = reference.target?;
+                    let definition = db.definition_for_symbol(target)?;
+                    let definition_span = definition.primary_span.as_ref()?;
+                    (definition_span.start_byte < function.span.start
+                        || definition_span.end_byte > function.span.end)
+                        .then(|| reference.name.clone())
+                })
+                .collect::<BTreeSet<_>>();
+            if let Some(body_source) =
+                source.get(function.span.start as usize..function.span.end as usize)
+            {
+                names.extend(identifier_tokens(body_source));
+            }
+            for parameter in &function.parameters {
+                names.remove(parameter);
+            }
+            (
+                (function.span.start, function.span.end),
+                names.into_iter().collect(),
+            )
+        })
+        .collect()
+}
+
+fn identifier_tokens(source: &str) -> impl Iterator<Item = String> + '_ {
+    source
+        .split(|character: char| {
+            !(character == '_' || character == '$' || character.is_alphanumeric())
+        })
+        .filter(|token| {
+            token.chars().next().is_some_and(|character| {
+                character == '_' || character == '$' || character.is_alphabetic()
+            })
+        })
+        .map(str::to_string)
+}
+
 /// What a [`TsFunctionCandidate`] lowers. Function/arrow bodies and class static
 /// blocks are statement lists; class field initializers (`x = <expr>`) are a
 /// single expression, lowered the same way an expression statement would be so
@@ -540,6 +634,16 @@ struct TsFunctionCandidate<'ast> {
 enum CandidateBody<'ast> {
     Statements(&'ast [Statement<'ast>]),
     Expression(&'ast Expression<'ast>),
+    ReturnExpression(&'ast Expression<'ast>),
+}
+
+fn arrow_candidate_body<'ast>(
+    function: &'ast oxc_ast::ast::ArrowFunctionExpression<'ast>,
+) -> CandidateBody<'ast> {
+    function.get_expression().map_or_else(
+        || CandidateBody::Statements(&function.body.statements),
+        CandidateBody::ReturnExpression,
+    )
 }
 
 fn collect_functions<'ast>(
@@ -606,6 +710,9 @@ fn collect_declaration_functions<'ast>(
             if let Some(name) = function.id.as_ref().map(|id| id.name.to_string()) {
                 collect_function(name, function.span, function, functions);
             }
+            if let Some(body) = function.body.as_deref() {
+                collect_anonymous_functions_from_body(body, functions);
+            }
         }
         Declaration::VariableDeclaration(variable) => {
             for declarator in &variable.declarations {
@@ -637,7 +744,7 @@ fn collect_variable_function<'ast>(
                 name: name.name.to_string(),
                 span: function.span,
                 parameters: parameter_names(&function.params),
-                body: CandidateBody::Statements(&function.body.statements),
+                body: arrow_candidate_body(function),
             });
         }
         Expression::FunctionExpression(function) => {
@@ -897,7 +1004,7 @@ fn collect_anonymous_functions_from_expression<'ast>(
                     name: anonymous_callable_name(function.span.start, function.span.end),
                     span: function.span,
                     parameters: parameter_names(&function.params),
-                    body: CandidateBody::Statements(&function.body.statements),
+                    body: arrow_candidate_body(function),
                 });
             }
             collect_anonymous_functions_from_body(&function.body, functions);
@@ -1084,7 +1191,7 @@ fn collect_anonymous_functions_from_argument<'ast>(
                 name: anonymous_callable_name(function.span.start, function.span.end),
                 span: function.span,
                 parameters: parameter_names(&function.params),
-                body: CandidateBody::Statements(&function.body.statements),
+                body: arrow_candidate_body(function),
             });
             collect_anonymous_functions_from_body(&function.body, functions);
         }
@@ -1118,6 +1225,14 @@ fn method_name(method: &MethodDefinition<'_>) -> Option<String> {
     }
 }
 
+fn constant_property_key(key: &PropertyKey<'_>) -> Option<String> {
+    match key {
+        PropertyKey::StaticIdentifier(identifier) => Some(identifier.name.to_string()),
+        PropertyKey::StringLiteral(literal) => Some(literal.value.to_string()),
+        _ => constant_property_key_expression(key.to_expression()),
+    }
+}
+
 fn constant_property_key_expression(expression: &Expression<'_>) -> Option<String> {
     match expression {
         Expression::StringLiteral(literal) => Some(literal.value.to_string()),
@@ -1132,6 +1247,39 @@ fn constant_property_key_expression(expression: &Expression<'_>) -> Option<Strin
             constant_property_key_expression(&expression.expression)
         }
         _ => None,
+    }
+}
+
+fn binary_operator_text(source: &str, binary: &oxc_ast::ast::BinaryExpression<'_>) -> String {
+    source
+        .get(binary.left.span().end as usize..binary.right.span().start as usize)
+        .map(str::trim)
+        .filter(|operator| !operator.is_empty())
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+fn type_shape_for_ts_expression(expression: &Expression<'_>) -> TypeShape {
+    match expression {
+        Expression::StringLiteral(_) => TypeShape::Primitive("string".to_string()),
+        Expression::NumericLiteral(_) => TypeShape::Primitive("number".to_string()),
+        Expression::BooleanLiteral(_) => TypeShape::Primitive("boolean".to_string()),
+        Expression::NullLiteral(_) => TypeShape::Nullish("null".to_string()),
+        Expression::ObjectExpression(_) => TypeShape::Object { shape_id: None },
+        Expression::ArrayExpression(_) => TypeShape::Structural {
+            shape_id: "array".to_string(),
+        },
+        Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_) => {
+            TypeShape::Callable {
+                signature: "closure".to_string(),
+            }
+        }
+        Expression::ParenthesizedExpression(expression) => {
+            type_shape_for_ts_expression(&expression.expression)
+        }
+        _ => TypeShape::Unknown {
+            reason: "ts/js expression".to_string(),
+        },
     }
 }
 
@@ -1165,12 +1313,21 @@ struct FunctionLowering<'source> {
     function: FunctionId,
     body: MirBodyId,
     stable_context: PlaceStableContext,
+    closure_bodies: BTreeMap<(u32, u32), MirBodyId>,
+    closure_capture_names: BTreeMap<(u32, u32), Vec<String>>,
     parameters: BTreeMap<String, PlaceRoot>,
     locals: BTreeMap<String, PlaceRoot>,
 }
 
 impl<'source> FunctionLowering<'source> {
-    fn new(file: &SourceFile, source: &'source str, function: FunctionId, body: &MirBody) -> Self {
+    fn new(
+        file: &SourceFile,
+        source: &'source str,
+        function: FunctionId,
+        body: &MirBody,
+        closure_bodies: BTreeMap<(u32, u32), MirBodyId>,
+        closure_capture_names: BTreeMap<(u32, u32), Vec<String>>,
+    ) -> Self {
         Self {
             language: file.language,
             file: file.id,
@@ -1182,6 +1339,8 @@ impl<'source> FunctionLowering<'source> {
                 body.owner_stable_key.clone(),
                 body.stable_key.clone(),
             ),
+            closure_bodies,
+            closure_capture_names,
             parameters: BTreeMap::new(),
             locals: BTreeMap::new(),
         }
@@ -1486,7 +1645,14 @@ impl<'source> FunctionLowering<'source> {
             );
             return;
         };
-        let key = self.insert_local(places, &name);
+        let key = self.insert_local_typed(
+            places,
+            &name,
+            declarator
+                .init
+                .as_ref()
+                .map(|init| type_shape_for_ts_expression(init)),
+        );
         let value = declarator
             .init
             .as_ref()
@@ -1599,6 +1765,78 @@ impl<'source> FunctionLowering<'source> {
             Expression::NullLiteral(_) => Some(ValueDraft::Literal {
                 value: "null".to_string(),
             }),
+            Expression::BinaryExpression(binary) => Some(ValueDraft::BinOp {
+                op: binary_operator_text(self.source, binary),
+                lhs: Box::new(
+                    self.lower_value(&binary.left, places, operations, unsupported)
+                        .unwrap_or_else(|| ValueDraft::Unknown {
+                            evidence: "binary left operand".to_string(),
+                        }),
+                ),
+                rhs: Box::new(
+                    self.lower_value(&binary.right, places, operations, unsupported)
+                        .unwrap_or_else(|| ValueDraft::Unknown {
+                            evidence: "binary right operand".to_string(),
+                        }),
+                ),
+            }),
+            Expression::ObjectExpression(object) => Some(ValueDraft::Aggregate {
+                kind: MirAggregateKind::Object,
+                fields: object
+                    .properties
+                    .iter()
+                    .map(|property| match property {
+                        ObjectPropertyKind::ObjectProperty(property) => (
+                            constant_property_key(&property.key),
+                            self.lower_value(&property.value, places, operations, unsupported)
+                                .unwrap_or_else(|| ValueDraft::Unknown {
+                                    evidence: "object property value".to_string(),
+                                }),
+                        ),
+                        ObjectPropertyKind::SpreadProperty(spread) => (
+                            None,
+                            self.lower_value(&spread.argument, places, operations, unsupported)
+                                .unwrap_or_else(|| ValueDraft::Unknown {
+                                    evidence: "object spread value".to_string(),
+                                }),
+                        ),
+                    })
+                    .collect(),
+            }),
+            Expression::ArrayExpression(array) => Some(ValueDraft::Aggregate {
+                kind: MirAggregateKind::Array,
+                fields: array
+                    .elements
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, element)| match element {
+                        oxc_ast::ast::ArrayExpressionElement::Elision(_) => None,
+                        oxc_ast::ast::ArrayExpressionElement::SpreadElement(spread) => Some((
+                            Some(index.to_string()),
+                            self.lower_value(&spread.argument, places, operations, unsupported)
+                                .unwrap_or_else(|| ValueDraft::Unknown {
+                                    evidence: "array spread value".to_string(),
+                                }),
+                        )),
+                        _ => Some((
+                            Some(index.to_string()),
+                            self.lower_value(
+                                element.to_expression(),
+                                places,
+                                operations,
+                                unsupported,
+                            )
+                            .unwrap_or_else(|| ValueDraft::Unknown {
+                                evidence: "array element value".to_string(),
+                            }),
+                        )),
+                    })
+                    .collect(),
+            }),
+            Expression::ArrowFunctionExpression(function) => {
+                self.closure_value(function.span, places)
+            }
+            Expression::FunctionExpression(function) => self.closure_value(function.span, places),
             Expression::CallExpression(call) => self
                 .lower_call(call, places, operations, unsupported)
                 .map(ValueDraft::PlaceKey),
@@ -1606,6 +1844,30 @@ impl<'source> FunctionLowering<'source> {
                 .lower_expression(expression, places, operations, unsupported, false)
                 .map(|shape| ValueDraft::PlaceKey(shape.key)),
         }
+    }
+
+    fn closure_value(
+        &self,
+        span: oxc_span::Span,
+        places: &mut PlaceTableBuilder,
+    ) -> Option<ValueDraft> {
+        let key = (span.start, span.end);
+        let body = *self.closure_bodies.get(&key)?;
+        let capture_keys = self
+            .closure_capture_names
+            .get(&key)
+            .into_iter()
+            .flatten()
+            .filter_map(|name| {
+                self.locals
+                    .get(name)
+                    .or_else(|| self.parameters.get(name))
+                    .map(|root| {
+                        self.insert_place(places, root.clone(), Vec::new(), PlaceStatus::Resolved)
+                    })
+            })
+            .collect();
+        Some(ValueDraft::Closure { body, capture_keys })
     }
 
     fn lower_expression(
@@ -1717,7 +1979,11 @@ impl<'source> FunctionLowering<'source> {
                         }
                     }
                 }
-                Some(self.temporary_shape(places, expression.span()))
+                Some(self.temporary_shape_typed(
+                    places,
+                    expression.span(),
+                    TypeShape::Object { shape_id: None },
+                ))
             }
             Expression::ArrayExpression(array) => {
                 for element in &array.elements {
@@ -1751,7 +2017,13 @@ impl<'source> FunctionLowering<'source> {
                         }
                     }
                 }
-                Some(self.temporary_shape(places, expression.span()))
+                Some(self.temporary_shape_typed(
+                    places,
+                    expression.span(),
+                    TypeShape::Structural {
+                        shape_id: "array".to_string(),
+                    },
+                ))
             }
             Expression::ParenthesizedExpression(parenthesized) => self.lower_expression(
                 &parenthesized.expression,
@@ -1804,7 +2076,13 @@ impl<'source> FunctionLowering<'source> {
             Expression::BinaryExpression(binary) => {
                 self.lower_expression(&binary.left, places, operations, unsupported, false);
                 self.lower_expression(&binary.right, places, operations, unsupported, false);
-                Some(self.temporary_shape(places, binary.span))
+                Some(self.temporary_shape_typed(
+                    places,
+                    binary.span,
+                    TypeShape::Unknown {
+                        reason: format!("binary {}", binary_operator_text(self.source, binary)),
+                    },
+                ))
             }
             Expression::UnaryExpression(unary) => {
                 self.lower_expression(&unary.argument, places, operations, unsupported, false);
@@ -1950,26 +2228,40 @@ impl<'source> FunctionLowering<'source> {
                 Some(self.temporary_shape(places, private_in.span))
             }
             Expression::ArrowFunctionExpression(function) => {
-                self.push_unsupported(
-                    operations,
-                    unsupported,
+                let value = self.closure_value(function.span, places)?;
+                let shape = self.temporary_shape_typed(
+                    places,
                     function.span,
-                    "function expression",
-                    Vec::new(),
-                    ConservativeAction::HavocAffectedPlaces,
+                    TypeShape::Callable {
+                        signature: "closure".to_string(),
+                    },
                 );
-                Some(self.temporary_shape(places, function.span))
+                self.push_assign(
+                    operations,
+                    function.span,
+                    shape.key.clone(),
+                    value,
+                    AssignMode::Overwrite,
+                );
+                Some(shape)
             }
             Expression::FunctionExpression(function) => {
-                self.push_unsupported(
-                    operations,
-                    unsupported,
+                let value = self.closure_value(function.span, places)?;
+                let shape = self.temporary_shape_typed(
+                    places,
                     function.span,
-                    "function expression",
-                    Vec::new(),
-                    ConservativeAction::HavocAffectedPlaces,
+                    TypeShape::Callable {
+                        signature: "closure".to_string(),
+                    },
                 );
-                Some(self.temporary_shape(places, function.span))
+                self.push_assign(
+                    operations,
+                    function.span,
+                    shape.key.clone(),
+                    value,
+                    AssignMode::Overwrite,
+                );
+                Some(shape)
             }
             Expression::ClassExpression(class) => {
                 self.push_unsupported(
@@ -2483,20 +2775,50 @@ impl<'source> FunctionLowering<'source> {
     }
 
     fn insert_local(&mut self, places: &mut PlaceTableBuilder, name: &str) -> String {
+        self.insert_local_typed(places, name, None)
+    }
+
+    fn insert_local_typed(
+        &mut self,
+        places: &mut PlaceTableBuilder,
+        name: &str,
+        ty: Option<TypeShape>,
+    ) -> String {
         let root = PlaceRoot::Local {
             function: self.function,
             name: name.to_string(),
         };
         self.locals.insert(name.to_string(), root.clone());
-        self.insert_place(places, root, Vec::new(), PlaceStatus::Resolved)
+        self.insert_typed_place(places, root, Vec::new(), ty, PlaceStatus::Resolved)
     }
 
     fn temporary_shape(&self, places: &mut PlaceTableBuilder, span: oxc_span::Span) -> PlaceShape {
+        self.temporary_shape_typed(
+            places,
+            span,
+            TypeShape::Unknown {
+                reason: "ts/js temporary".to_string(),
+            },
+        )
+    }
+
+    fn temporary_shape_typed(
+        &self,
+        places: &mut PlaceTableBuilder,
+        span: oxc_span::Span,
+        ty: TypeShape,
+    ) -> PlaceShape {
         let root = PlaceRoot::Temporary {
             body: self.body,
             ordinal: span.start,
         };
-        let key = self.insert_place(places, root.clone(), Vec::new(), PlaceStatus::Partial);
+        let key = self.insert_typed_place(
+            places,
+            root.clone(),
+            Vec::new(),
+            Some(ty),
+            PlaceStatus::Partial,
+        );
         PlaceShape {
             root,
             projections: Vec::new(),
@@ -2538,7 +2860,18 @@ impl<'source> FunctionLowering<'source> {
         projections: Vec<PlaceProjection>,
         status: PlaceStatus,
     ) -> String {
-        places.insert_with_context(
+        self.insert_typed_place(places, root, projections, None, status)
+    }
+
+    fn insert_typed_place(
+        &self,
+        places: &mut PlaceTableBuilder,
+        root: PlaceRoot,
+        projections: Vec<PlaceProjection>,
+        ty: Option<TypeShape>,
+        status: PlaceStatus,
+    ) -> String {
+        places.insert_typed_with_context(
             &self.stable_context,
             PlaceInsert {
                 language: self.language,
@@ -2548,6 +2881,7 @@ impl<'source> FunctionLowering<'source> {
                 projections,
                 status,
             },
+            ty,
         )
     }
 
@@ -3082,8 +3416,25 @@ impl OperationKindDraft {
 #[derive(Debug, Clone)]
 enum ValueDraft {
     PlaceKey(String),
-    Literal { value: String },
-    Unknown { evidence: String },
+    Literal {
+        value: String,
+    },
+    BinOp {
+        op: String,
+        lhs: Box<ValueDraft>,
+        rhs: Box<ValueDraft>,
+    },
+    Aggregate {
+        kind: MirAggregateKind,
+        fields: Vec<(Option<String>, ValueDraft)>,
+    },
+    Closure {
+        body: MirBodyId,
+        capture_keys: Vec<String>,
+    },
+    Unknown {
+        evidence: String,
+    },
 }
 
 impl ValueDraft {
@@ -3101,6 +3452,28 @@ impl ValueDraft {
             Self::Literal { value } => MirValue::Literal {
                 value: value.trim().to_string(),
             },
+            Self::BinOp { op, lhs, rhs } => MirValue::BinOp {
+                op: op.clone(),
+                lhs: Box::new(lhs.to_value(place_ids)),
+                rhs: Box::new(rhs.to_value(place_ids)),
+            },
+            Self::Aggregate { kind, fields } => MirValue::Aggregate {
+                kind: *kind,
+                fields: fields
+                    .iter()
+                    .map(|(name, value)| MirAggregateField {
+                        name: name.clone(),
+                        value: value.to_value(place_ids),
+                    })
+                    .collect(),
+            },
+            Self::Closure { body, capture_keys } => MirValue::Closure {
+                body: *body,
+                captures: capture_keys
+                    .iter()
+                    .filter_map(|key| place_ids.get(key).copied())
+                    .collect(),
+            },
             Self::Unknown { evidence } => MirValue::Unknown {
                 evidence: evidence.clone(),
             },
@@ -3110,6 +3483,16 @@ impl ValueDraft {
     fn place_keys(&self) -> Vec<String> {
         match self {
             Self::PlaceKey(key) => vec![key.clone()],
+            Self::BinOp { lhs, rhs, .. } => {
+                let mut keys = lhs.place_keys();
+                keys.extend(rhs.place_keys());
+                keys
+            }
+            Self::Aggregate { fields, .. } => fields
+                .iter()
+                .flat_map(|(_, value)| value.place_keys())
+                .collect(),
+            Self::Closure { capture_keys, .. } => capture_keys.clone(),
             Self::Literal { .. } | Self::Unknown { .. } => Vec::new(),
         }
     }
@@ -3231,7 +3614,6 @@ fn unsupported_domains_for(construct: &str) -> Vec<UnsupportedDomain> {
         | "dynamic import"
         | "private field"
         | "private in"
-        | "function expression"
         | "class expression"
         | "v8 intrinsic"
         | "unhandled expression" => vec![
@@ -3386,6 +3768,23 @@ fn matching_module_function(
             && function.language == language
             && is_synthetic_ts_js_module_function(function)
     })
+}
+
+fn enclosing_function<'db>(
+    db: &'db AnalysisDb,
+    file: FileId,
+    language: Language,
+    span: &Span,
+) -> Option<&'db FunctionFact> {
+    db.functions()
+        .iter()
+        .filter(|function| {
+            function.file == file
+                && function.language == language
+                && span_contains(&function.span, span)
+                && !is_synthetic_ts_js_module_function(function)
+        })
+        .min_by_key(|function| function.span.end_byte - function.span.start_byte)
 }
 
 fn span_contains(outer: &Span, inner: &Span) -> bool {
@@ -3596,6 +3995,58 @@ export function render(user, index) {
                     matches!(projection, PlaceProjection::IndexUnknown { evidence } if evidence == "index")
                 })
         }));
+    }
+
+    #[test]
+    fn ts_lowerer_constructs_structured_values_closure_captures_and_place_types() {
+        let output = lower(
+            "src/values.ts",
+            r#"
+export function make(seed: number) {
+  const count = 1;
+  const callback = () => seed + count;
+  const record = { value: count };
+  return callback;
+}
+"#,
+        );
+
+        let closure = output
+            .operations
+            .iter()
+            .find_map(|operation| match &operation.kind {
+                MirOperationKind::Assign {
+                    value: MirValue::Closure { body, captures },
+                    ..
+                } => Some((*body, captures)),
+                _ => None,
+            });
+        let (closure_body, captures) =
+            closure.unwrap_or_else(|| panic!("closure assignment missing: {output:#?}"));
+        assert!(output.bodies.iter().any(|body| body.id == closure_body));
+        assert_eq!(captures.len(), 2);
+        assert!(output.operations.iter().any(|operation| matches!(
+            operation.kind,
+            MirOperationKind::Return {
+                value: Some(MirValue::BinOp { .. })
+            }
+        )));
+        assert!(output.operations.iter().any(|operation| matches!(
+            operation.kind,
+            MirOperationKind::Assign {
+                value: MirValue::Aggregate {
+                    kind: MirAggregateKind::Object,
+                    ..
+                },
+                ..
+            }
+        )));
+        assert!(
+            output
+                .place_types
+                .iter()
+                .any(|fact| matches!(fact.ty, TypeShape::Callable { .. }))
+        );
     }
 
     #[test]

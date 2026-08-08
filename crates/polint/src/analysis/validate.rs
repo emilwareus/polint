@@ -498,6 +498,41 @@ fn validate_mir_value(
             check_place_ref(diagnostics, ids, stable_key, "MirValue::Place", *place);
         }
         MirValue::Temporary(_) | MirValue::CallReturn(_) => {}
+        MirValue::BinOp { op, lhs, rhs } => {
+            check_nonempty(
+                diagnostics,
+                FactFamily::MirOperation,
+                stable_key,
+                "MirValue::BinOp.op",
+                op,
+            );
+            validate_mir_value(lhs, ids, diagnostics, stable_key);
+            validate_mir_value(rhs, ids, diagnostics, stable_key);
+        }
+        MirValue::Aggregate { fields, .. } => {
+            for field in fields {
+                validate_mir_value(&field.value, ids, diagnostics, stable_key);
+            }
+        }
+        MirValue::Closure { body, captures } => {
+            check_ref(
+                diagnostics,
+                &ids.bodies,
+                FactFamily::MirOperation,
+                stable_key,
+                "MirValue::Closure.body",
+                *body,
+            );
+            for capture in captures {
+                check_place_ref(
+                    diagnostics,
+                    ids,
+                    stable_key,
+                    "MirValue::Closure.captures",
+                    *capture,
+                );
+            }
+        }
         MirValue::Unknown { evidence } => check_nonempty(
             diagnostics,
             FactFamily::MirOperation,

@@ -5,7 +5,7 @@ use crate::analysis::ids::{
     UnsupportedId,
 };
 use crate::analysis::mir::op::{MirOperation, MirValue, UnsupportedSemanticFact};
-use crate::analysis::places::PlaceFact;
+use crate::analysis::places::{PlaceFact, PlaceTypeFact};
 use crate::core::{FileId, FunctionId, Language, ModuleNodeId, PackageId, Span};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -112,6 +112,7 @@ pub(crate) struct MirOutput {
     pub(crate) statements: Vec<MirStatement>,
     pub(crate) terminators: Vec<MirTerminator>,
     pub(crate) places: Vec<PlaceFact>,
+    pub(crate) place_types: Vec<PlaceTypeFact>,
     pub(crate) operations: Vec<MirOperation>,
     pub(crate) unsupported: Vec<UnsupportedSemanticFact>,
 }
@@ -143,6 +144,7 @@ impl MirOutput {
         });
         self.places
             .sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+        self.place_types.sort_by_key(|fact| fact.place);
         self.operations.sort_by(|left, right| {
             (left.body, left.ordinal, left.stable_key.as_str()).cmp(&(
                 right.body,
@@ -312,6 +314,7 @@ mod tests {
                 },
             ],
             places: vec![place(2, "place:z"), place(1, "place:a")],
+            place_types: Vec::new(),
             operations: vec![
                 operation(2, 2, "op:z"),
                 operation(1, 2, "op:b"),

@@ -8,7 +8,7 @@ use crate::analysis::mir::body::{
     MirBlock, MirBlockId, MirBody, MirOutput, MirStatement, MirTerminator, MirTerminatorKind,
 };
 use crate::analysis::mir::op::{MirOperation, MirOperationKind, MirValue, UnsupportedSemanticFact};
-use crate::analysis::places::{PlaceFact, PlaceRoot};
+use crate::analysis::places::{PlaceFact, PlaceRoot, PlaceTypeFact};
 use crate::core::SEMANTIC_MIR_PROVIDER_ID;
 
 #[derive(Debug, Default, Clone)]
@@ -19,6 +19,7 @@ pub(crate) struct SemanticStore {
     mir_terminators: Vec<MirTerminator>,
     mir_operations: Vec<MirOperation>,
     places: Vec<PlaceFact>,
+    place_types: Vec<PlaceTypeFact>,
     unsupported_semantics: Vec<UnsupportedSemanticFact>,
     mir_bodies_by_id: BTreeMap<MirBodyId, usize>,
     mir_operations_by_id: BTreeMap<MirOpId, usize>,
@@ -31,6 +32,7 @@ impl SemanticStore {
         let output = output.normalized();
         let (mir_bodies, body_ids) = normalize_bodies(output.bodies);
         let (places, place_ids) = normalize_places(output.places, &body_ids)?;
+        let place_types = normalize_place_types(output.place_types, &place_ids)?;
         let unsupported_ids = unsupported_id_map(&output.unsupported);
         let (mir_operations, operation_ids) =
             normalize_operations(output.operations, &body_ids, &place_ids, &unsupported_ids)?;
@@ -88,6 +90,7 @@ impl SemanticStore {
             mir_terminators,
             mir_operations,
             places,
+            place_types,
             unsupported_semantics,
         })
     }
@@ -114,6 +117,10 @@ impl SemanticStore {
 
     pub(crate) fn places(&self) -> &[PlaceFact] {
         &self.places
+    }
+
+    pub(crate) fn place_types(&self) -> &[PlaceTypeFact] {
+        &self.place_types
     }
 
     pub(crate) fn unsupported_semantics(&self) -> &[UnsupportedSemanticFact] {
@@ -146,6 +153,17 @@ impl SemanticStore {
             .get(&id)
             .and_then(|index| self.unsupported_semantics.get(*index))
     }
+}
+
+fn normalize_place_types(
+    mut place_types: Vec<PlaceTypeFact>,
+    place_ids: &BTreeMap<PlaceId, PlaceId>,
+) -> Result<Vec<PlaceTypeFact>, AnalysisError> {
+    for fact in &mut place_types {
+        fact.place = remap_place_id(fact.place, place_ids, "dangling typed place")?;
+    }
+    place_types.sort_by_key(|fact| fact.place);
+    Ok(place_types)
 }
 
 fn normalize_bodies(mut bodies: Vec<MirBody>) -> (Vec<MirBody>, BTreeMap<MirBodyId, MirBodyId>) {
@@ -187,7 +205,7 @@ fn normalize_operations(
         operation_ids.insert(operation.id, new_id);
         operation.id = new_id;
         operation.body = remap_body_id(operation.body, body_ids, "dangling MIR operation body")?;
-        remap_operation_kind(&mut operation.kind, place_ids, unsupported_ids)?;
+        remap_operation_kind(&mut operation.kind, body_ids, place_ids, unsupported_ids)?;
     }
     Ok((operations, operation_ids))
 }
@@ -241,7 +259,13 @@ fn normalize_terminators(
     for row in &mut rows {
         row.id = remap_id(row.id, terminator_ids, "dangling MIR terminator id")?;
         row.body = remap_body_id(row.body, body_ids, "dangling MIR terminator body")?;
-        remap_terminator_kind(&mut row.kind, block_ids, place_ids, unsupported_ids)?;
+        remap_terminator_kind(
+            &mut row.kind,
+            body_ids,
+            block_ids,
+            place_ids,
+            unsupported_ids,
+        )?;
     }
     Ok(rows)
 }
@@ -271,6 +295,7 @@ fn normalize_blocks(
 
 fn remap_terminator_kind(
     kind: &mut MirTerminatorKind,
+    body_ids: &BTreeMap<MirBodyId, MirBodyId>,
     block_ids: &BTreeMap<MirBlockId, MirBlockId>,
     place_ids: &BTreeMap<PlaceId, PlaceId>,
     unsupported_ids: &BTreeMap<UnsupportedId, UnsupportedId>,
@@ -296,9 +321,9 @@ fn remap_terminator_kind(
             cases,
             otherwise,
         } => {
-            remap_value(discriminant, place_ids)?;
+            remap_value(discriminant, body_ids, place_ids)?;
             for (value, target) in cases {
-                remap_value(value, place_ids)?;
+                remap_value(value, body_ids, place_ids)?;
                 *target = remap_id(*target, block_ids, "dangling MIR switch case target")?;
             }
             *otherwise = remap_id(
@@ -309,12 +334,12 @@ fn remap_terminator_kind(
         }
         MirTerminatorKind::Return { value } => {
             if let Some(value) = value {
-                remap_value(value, place_ids)?;
+                remap_value(value, body_ids, place_ids)?;
             }
         }
         MirTerminatorKind::Throw { value, unwind } => {
             if let Some(value) = value {
-                remap_value(value, place_ids)?;
+                remap_value(value, body_ids, place_ids)?;
             }
             *unwind = remap_id(*unwind, block_ids, "dangling MIR throw unwind target")?;
         }
@@ -326,7 +351,7 @@ fn remap_terminator_kind(
             unwind,
             ..
         } => {
-            remap_value(callee, place_ids)?;
+            remap_value(callee, body_ids, place_ids)?;
             for argument in arguments {
                 *argument =
                     remap_place_id(*argument, place_ids, "dangling MIR call argument place")?;
@@ -340,7 +365,7 @@ fn remap_terminator_kind(
         }
         MirTerminatorKind::Suspend { value, resume, .. } => {
             if let Some(value) = value {
-                remap_value(value, place_ids)?;
+                remap_value(value, body_ids, place_ids)?;
             }
             *resume = remap_id(*resume, block_ids, "dangling MIR suspend resume target")?;
         }
@@ -419,6 +444,7 @@ fn remap_place_root(
 
 fn remap_operation_kind(
     kind: &mut MirOperationKind,
+    body_ids: &BTreeMap<MirBodyId, MirBodyId>,
     place_ids: &BTreeMap<PlaceId, PlaceId>,
     unsupported_ids: &BTreeMap<UnsupportedId, UnsupportedId>,
 ) -> Result<(), AnalysisError> {
@@ -430,7 +456,7 @@ fn remap_operation_kind(
         | MirOperationKind::Assign { place, value, .. }
         | MirOperationKind::Write { place, value } => {
             *place = remap_place_id(*place, place_ids, "dangling MIR operation place")?;
-            remap_value(value, place_ids)?;
+            remap_value(value, body_ids, place_ids)?;
         }
         MirOperationKind::Branch { .. } => {}
         MirOperationKind::Call {
@@ -439,7 +465,7 @@ fn remap_operation_kind(
             return_place,
             ..
         } => {
-            remap_value(callee, place_ids)?;
+            remap_value(callee, body_ids, place_ids)?;
             for argument in arguments {
                 *argument =
                     remap_place_id(*argument, place_ids, "dangling MIR call argument place")?;
@@ -449,7 +475,7 @@ fn remap_operation_kind(
         }
         MirOperationKind::Return { value } => {
             if let Some(value) = value {
-                remap_value(value, place_ids)?;
+                remap_value(value, body_ids, place_ids)?;
             }
         }
         MirOperationKind::Unsupported { unsupported } => {
@@ -465,10 +491,32 @@ fn remap_operation_kind(
 
 fn remap_value(
     value: &mut MirValue,
+    body_ids: &BTreeMap<MirBodyId, MirBodyId>,
     place_ids: &BTreeMap<PlaceId, PlaceId>,
 ) -> Result<(), AnalysisError> {
-    if let MirValue::Place(place) = value {
-        *place = remap_place_id(*place, place_ids, "dangling MIR value place")?;
+    match value {
+        MirValue::Place(place) => {
+            *place = remap_place_id(*place, place_ids, "dangling MIR value place")?;
+        }
+        MirValue::BinOp { lhs, rhs, .. } => {
+            remap_value(lhs, body_ids, place_ids)?;
+            remap_value(rhs, body_ids, place_ids)?;
+        }
+        MirValue::Aggregate { fields, .. } => {
+            for field in fields {
+                remap_value(&mut field.value, body_ids, place_ids)?;
+            }
+        }
+        MirValue::Closure { body, captures } => {
+            *body = remap_body_id(*body, body_ids, "dangling MIR closure body")?;
+            for capture in captures {
+                *capture = remap_place_id(*capture, place_ids, "dangling MIR closure capture")?;
+            }
+        }
+        MirValue::Literal { .. }
+        | MirValue::Temporary(_)
+        | MirValue::CallReturn(_)
+        | MirValue::Unknown { .. } => {}
     }
     Ok(())
 }

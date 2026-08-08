@@ -288,7 +288,14 @@ fn assign_value(state: &mut ProductState, place: PlaceId, value: &MirValue) {
             }
             mark_initialized(state, place);
         }
-        MirValue::Temporary(_) | MirValue::CallReturn(_) | MirValue::Unknown { .. } => {
+        MirValue::Aggregate { .. } | MirValue::Closure { .. } => {
+            clear_place_facts(state, place);
+            mark_initialized(state, place);
+        }
+        MirValue::Temporary(_)
+        | MirValue::CallReturn(_)
+        | MirValue::BinOp { .. }
+        | MirValue::Unknown { .. } => {
             clear_place_facts(state, place);
             state.mark_place_top(place, TopReason::UnknownValue);
         }

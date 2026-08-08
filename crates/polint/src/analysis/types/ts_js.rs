@@ -9,7 +9,9 @@ use crate::analysis::ids::{
     TypeSetId, ValueFactId,
 };
 use crate::analysis::mir::body::MirBody;
-use crate::analysis::mir::op::{MirOperation, MirOperationKind, MirValue, UnsupportedPrecision};
+use crate::analysis::mir::op::{
+    MirAggregateKind, MirOperation, MirOperationKind, MirValue, UnsupportedPrecision,
+};
 use crate::analysis::places::{PlaceFact, PlaceProjection, PlaceRoot, PlaceStatus};
 use crate::analysis::stable_key::semantic_stable_key;
 use crate::analysis::types::facts::{
@@ -50,6 +52,11 @@ pub(crate) fn derive_ts_js_type_value_alias(db: &AnalysisDb) -> TypeValueAliasOu
         .map(|file| (file.id, file))
         .collect::<BTreeMap<_, _>>();
     let root_place_by_key = root_place_by_key(db);
+    let place_types = db
+        .mir_place_types()
+        .iter()
+        .map(|fact| (fact.place, &fact.ty))
+        .collect::<BTreeMap<_, _>>();
 
     let mut types = Vec::new();
     let mut narrowed = Vec::new();
@@ -63,7 +70,12 @@ pub(crate) fn derive_ts_js_type_value_alias(db: &AnalysisDb) -> TypeValueAliasOu
         .filter(|place| place.language.is_ts_family())
     {
         let body = body_for_place(place, &body_by_id, &body_by_function);
-        types.push(type_fact_for_place(types.len() as u64, place, body));
+        types.push(type_fact_for_place(
+            types.len() as u64,
+            place,
+            body,
+            place_types.get(&place.id).copied(),
+        ));
         access_paths.push(access_path_for_place(
             access_paths.len() as u64,
             place,
@@ -159,21 +171,26 @@ fn body_for_place<'db>(
         })
 }
 
-fn type_fact_for_place(id: u64, place: &PlaceFact, body: Option<&MirBody>) -> TypeFact {
+fn type_fact_for_place(
+    id: u64,
+    place: &PlaceFact,
+    body: Option<&MirBody>,
+    ty: Option<&TypeShape>,
+) -> TypeFact {
     let (status, phase, precision, confidence, shape) = match place.status {
         PlaceStatus::Resolved => (
             TypeStatus::Unknown,
             TypePhase::Inferred,
             TypePrecision::SetupAware,
             TypeConfidence::Medium,
-            type_shape_for_place(place),
+            type_shape_for_place(place, ty),
         ),
         PlaceStatus::Partial => (
             TypeStatus::Unknown,
             TypePhase::Inferred,
             TypePrecision::Conservative,
             TypeConfidence::Low,
-            type_shape_for_place(place),
+            type_shape_for_place(place, ty),
         ),
         PlaceStatus::Unknown => (
             TypeStatus::Unknown,
@@ -223,7 +240,10 @@ fn type_fact_for_place(id: u64, place: &PlaceFact, body: Option<&MirBody>) -> Ty
     }
 }
 
-fn type_shape_for_place(place: &PlaceFact) -> TypeShape {
+fn type_shape_for_place(place: &PlaceFact, ty: Option<&TypeShape>) -> TypeShape {
+    if let Some(ty) = ty {
+        return ty.clone();
+    }
     match &place.root {
         PlaceRoot::Parameter { index, name, .. } => TypeShape::Unknown {
             reason: format!(
@@ -432,6 +452,49 @@ fn push_value_for_mir_value(
             ValueStatus::Unknown,
             ValuePrecision::Conservative,
         ),
+        MirValue::BinOp { op, .. } => (
+            ValueKind::Unknown {
+                evidence: format!("binary:{op}"),
+            },
+            ValueStatus::Present,
+            ValuePrecision::Conservative,
+        ),
+        MirValue::Aggregate { kind, .. } => {
+            let (allocation_kind, label) = match kind {
+                MirAggregateKind::Array => (AllocationKind::ArrayLiteral, "array_literal"),
+                MirAggregateKind::Object => (AllocationKind::ObjectLiteral, "object_literal"),
+                MirAggregateKind::Composite => {
+                    (AllocationKind::CompositeLiteral, "composite_literal")
+                }
+            };
+            let token = push_allocation(
+                operation,
+                allocation_kind,
+                label,
+                operation_language,
+                allocations,
+            );
+            let kind = match kind {
+                MirAggregateKind::Array => ValueKind::Array(token),
+                MirAggregateKind::Object => ValueKind::Object(token),
+                MirAggregateKind::Composite => ValueKind::CompositeLiteral(token),
+            };
+            (kind, ValueStatus::Present, ValuePrecision::ExactLocal)
+        }
+        MirValue::Closure { .. } => {
+            let _ = push_allocation(
+                operation,
+                AllocationKind::Closure,
+                "closure",
+                operation_language,
+                allocations,
+            );
+            (
+                ValueKind::FunctionObject,
+                ValueStatus::Present,
+                ValuePrecision::ExactLocal,
+            )
+        }
         MirValue::Unknown { evidence } => (
             ValueKind::Unknown {
                 evidence: evidence.clone(),

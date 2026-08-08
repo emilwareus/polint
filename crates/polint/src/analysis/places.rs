@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::analysis::ids::{CallSiteId, MirBodyId, PlaceId};
 use crate::analysis::stable_key::semantic_stable_key;
+use crate::analysis::types::facts::TypeShape;
 use crate::analysis_kernel::FactFamily;
 use crate::core::{FileId, FunctionId, Language, SymbolId};
 
@@ -17,6 +18,12 @@ pub(crate) struct PlaceFact {
     pub(crate) projections: Vec<PlaceProjection>,
     pub(crate) stable_key: String,
     pub(crate) status: PlaceStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct PlaceTypeFact {
+    pub(crate) place: PlaceId,
+    pub(crate) ty: TypeShape,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -144,8 +151,18 @@ impl PlaceTableBuilder {
         context: &PlaceStableContext,
         place: PlaceInsert,
     ) -> String {
+        self.insert_typed_with_context(context, place, None)
+    }
+
+    pub(crate) fn insert_typed_with_context(
+        &mut self,
+        context: &PlaceStableContext,
+        place: PlaceInsert,
+        ty: Option<TypeShape>,
+    ) -> String {
         let stable_key = stable_key_for(place.language, context, &place.root, &place.projections);
-        self.places
+        let draft = self
+            .places
             .entry(stable_key.clone())
             .or_insert_with(|| PlaceDraft {
                 language: place.language,
@@ -153,26 +170,43 @@ impl PlaceTableBuilder {
                 function: place.function,
                 root: place.root,
                 projections: place.projections,
+                ty: ty.clone(),
                 status: place.status,
             });
+        if draft.ty.is_none() {
+            draft.ty = ty;
+        }
         stable_key
     }
 
     pub(crate) fn finish(self) -> Vec<PlaceFact> {
-        self.places
+        self.finish_with_types().0
+    }
+
+    pub(crate) fn finish_with_types(self) -> (Vec<PlaceFact>, Vec<PlaceTypeFact>) {
+        let mut place_types = Vec::new();
+        let places = self
+            .places
             .into_iter()
             .enumerate()
-            .map(|(index, (stable_key, draft))| PlaceFact {
-                id: PlaceId(index as u64),
-                language: draft.language,
-                file: draft.file,
-                function: draft.function,
-                root: draft.root,
-                projections: draft.projections,
-                stable_key,
-                status: draft.status,
+            .map(|(index, (stable_key, draft))| {
+                let id = PlaceId(index as u64);
+                if let Some(ty) = draft.ty {
+                    place_types.push(PlaceTypeFact { place: id, ty });
+                }
+                PlaceFact {
+                    id,
+                    language: draft.language,
+                    file: draft.file,
+                    function: draft.function,
+                    root: draft.root,
+                    projections: draft.projections,
+                    stable_key,
+                    status: draft.status,
+                }
             })
-            .collect()
+            .collect();
+        (places, place_types)
     }
 }
 
@@ -183,6 +217,7 @@ struct PlaceDraft {
     function: Option<FunctionId>,
     root: PlaceRoot,
     projections: Vec<PlaceProjection>,
+    ty: Option<TypeShape>,
     status: PlaceStatus,
 }
 

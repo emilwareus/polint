@@ -157,6 +157,22 @@ fn call_callee(
             format!("call_return:{}", site.0),
         ),
         MirValue::Unknown { evidence } => evidence_callee(evidence, language),
+        MirValue::Closure { body, .. } => (
+            CallCallee::Unknown {
+                reason: UnresolvedCallReason::FunctionValue,
+            },
+            None,
+            CallSyntaxKind::FunctionValue,
+            format!("closure:{}", body.0),
+        ),
+        MirValue::BinOp { .. } | MirValue::Aggregate { .. } => (
+            CallCallee::Unknown {
+                reason: UnresolvedCallReason::UnsupportedSyntax,
+            },
+            None,
+            CallSyntaxKind::Unknown,
+            "structured-value".to_string(),
+        ),
         MirValue::Literal { value } => (
             CallCallee::Unknown {
                 reason: UnresolvedCallReason::UnsupportedSyntax,

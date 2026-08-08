@@ -103,6 +103,7 @@ fn append_language_output(merged: &mut MirOutput, mut output: MirOutput) {
         terminator.body = offset_body_id(terminator.body, body_offset);
         offset_terminator_kind_refs(
             &mut terminator.kind,
+            body_offset,
             block_offset,
             place_offset,
             unsupported_offset,
@@ -114,10 +115,18 @@ fn append_language_output(merged: &mut MirOutput, mut output: MirOutput) {
             *body = offset_body_id(*body, body_offset);
         }
     }
+    for place_type in &mut output.place_types {
+        place_type.place = offset_place_id(place_type.place, place_offset);
+    }
     for operation in &mut output.operations {
         operation.id = offset_operation_id(operation.id, operation_offset);
         operation.body = offset_body_id(operation.body, body_offset);
-        offset_operation_kind_refs(&mut operation.kind, place_offset, unsupported_offset);
+        offset_operation_kind_refs(
+            &mut operation.kind,
+            body_offset,
+            place_offset,
+            unsupported_offset,
+        );
     }
     for row in &mut output.unsupported {
         row.id = offset_unsupported_id(row.id, unsupported_offset);
@@ -135,12 +144,14 @@ fn append_language_output(merged: &mut MirOutput, mut output: MirOutput) {
     merged.statements.extend(output.statements);
     merged.terminators.extend(output.terminators);
     merged.places.extend(output.places);
+    merged.place_types.extend(output.place_types);
     merged.operations.extend(output.operations);
     merged.unsupported.extend(output.unsupported);
 }
 
 fn offset_terminator_kind_refs(
     kind: &mut MirTerminatorKind,
+    body_offset: u64,
     block_offset: u64,
     place_offset: u64,
     unsupported_offset: u64,
@@ -166,21 +177,21 @@ fn offset_terminator_kind_refs(
             cases,
             otherwise,
         } => {
-            offset_value_ref(discriminant, place_offset);
+            offset_value_ref(discriminant, body_offset, place_offset);
             for (value, target) in cases {
-                offset_value_ref(value, place_offset);
+                offset_value_ref(value, body_offset, place_offset);
                 *target = offset_block_id(*target, block_offset);
             }
             *otherwise = offset_block_id(*otherwise, block_offset);
         }
         MirTerminatorKind::Return { value } => {
             if let Some(value) = value {
-                offset_value_ref(value, place_offset);
+                offset_value_ref(value, body_offset, place_offset);
             }
         }
         MirTerminatorKind::Throw { value, unwind } => {
             if let Some(value) = value {
-                offset_value_ref(value, place_offset);
+                offset_value_ref(value, body_offset, place_offset);
             }
             *unwind = offset_block_id(*unwind, block_offset);
         }
@@ -192,7 +203,7 @@ fn offset_terminator_kind_refs(
             unwind,
             ..
         } => {
-            offset_value_ref(callee, place_offset);
+            offset_value_ref(callee, body_offset, place_offset);
             for argument in arguments {
                 *argument = offset_place_id(*argument, place_offset);
             }
@@ -204,7 +215,7 @@ fn offset_terminator_kind_refs(
         }
         MirTerminatorKind::Suspend { value, resume, .. } => {
             if let Some(value) = value {
-                offset_value_ref(value, place_offset);
+                offset_value_ref(value, body_offset, place_offset);
             }
             *resume = offset_block_id(*resume, block_offset);
         }
@@ -217,6 +228,7 @@ fn offset_terminator_kind_refs(
 
 fn offset_operation_kind_refs(
     kind: &mut MirOperationKind,
+    body_offset: u64,
     place_offset: u64,
     unsupported_offset: u64,
 ) {
@@ -228,7 +240,7 @@ fn offset_operation_kind_refs(
         | MirOperationKind::Assign { place, value, .. }
         | MirOperationKind::Write { place, value } => {
             *place = offset_place_id(*place, place_offset);
-            offset_value_ref(value, place_offset);
+            offset_value_ref(value, body_offset, place_offset);
         }
         MirOperationKind::Branch {
             predicate_place, ..
@@ -243,7 +255,7 @@ fn offset_operation_kind_refs(
             return_place,
             ..
         } => {
-            offset_value_ref(callee, place_offset);
+            offset_value_ref(callee, body_offset, place_offset);
             for argument in arguments {
                 *argument = offset_place_id(*argument, place_offset);
             }
@@ -251,7 +263,7 @@ fn offset_operation_kind_refs(
         }
         MirOperationKind::Return { value } => {
             if let Some(value) = value {
-                offset_value_ref(value, place_offset);
+                offset_value_ref(value, body_offset, place_offset);
             }
         }
         MirOperationKind::Unsupported { unsupported } => {
@@ -260,9 +272,28 @@ fn offset_operation_kind_refs(
     }
 }
 
-fn offset_value_ref(value: &mut MirValue, place_offset: u64) {
-    if let MirValue::Place(place) = value {
-        *place = offset_place_id(*place, place_offset);
+fn offset_value_ref(value: &mut MirValue, body_offset: u64, place_offset: u64) {
+    match value {
+        MirValue::Place(place) => *place = offset_place_id(*place, place_offset),
+        MirValue::BinOp { lhs, rhs, .. } => {
+            offset_value_ref(lhs, body_offset, place_offset);
+            offset_value_ref(rhs, body_offset, place_offset);
+        }
+        MirValue::Aggregate { fields, .. } => {
+            for field in fields {
+                offset_value_ref(&mut field.value, body_offset, place_offset);
+            }
+        }
+        MirValue::Closure { body, captures } => {
+            *body = offset_body_id(*body, body_offset);
+            for capture in captures {
+                *capture = offset_place_id(*capture, place_offset);
+            }
+        }
+        MirValue::Literal { .. }
+        | MirValue::Temporary(_)
+        | MirValue::CallReturn(_)
+        | MirValue::Unknown { .. } => {}
     }
 }
 
@@ -508,6 +539,29 @@ fn value_fragment(value: &MirValue) -> String {
         MirValue::Literal { value } => format!("literal:{value}"),
         MirValue::Temporary(value) => format!("temporary:{value:?}"),
         MirValue::CallReturn(call) => format!("call_return:{call:?}"),
+        MirValue::BinOp { op, lhs, rhs } => {
+            format!("binop:{op}:{}:{}", value_fragment(lhs), value_fragment(rhs))
+        }
+        MirValue::Aggregate { kind, fields } => format!(
+            "aggregate:{kind:?}:{}",
+            fields
+                .iter()
+                .map(|field| format!(
+                    "{}={}",
+                    field.name.as_deref().unwrap_or_default(),
+                    value_fragment(&field.value)
+                ))
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        MirValue::Closure { body, captures } => format!(
+            "closure:{body:?}:{}",
+            captures
+                .iter()
+                .map(|capture| capture.0.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
         MirValue::Unknown { evidence } => format!("unknown:{evidence}"),
     }
 }

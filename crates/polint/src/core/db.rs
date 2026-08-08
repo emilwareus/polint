@@ -3152,6 +3152,10 @@ impl AnalysisDb {
         self.semantic_mir_store_inner().places()
     }
 
+    pub(crate) fn mir_place_types(&self) -> &[crate::analysis::places::PlaceTypeFact] {
+        self.semantic_mir_store_inner().place_types()
+    }
+
     pub(crate) fn unsupported_semantics(&self) -> &[UnsupportedSemanticFact] {
         self.semantic_mir_store_inner().unsupported_semantics()
     }

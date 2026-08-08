@@ -68,11 +68,41 @@ pub(crate) enum AssignMode {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum MirValue {
-    Literal { value: String },
+    Literal {
+        value: String,
+    },
     Place(PlaceId),
     Temporary(MirValueId),
     CallReturn(CallSiteId),
-    Unknown { evidence: String },
+    BinOp {
+        op: String,
+        lhs: Box<MirValue>,
+        rhs: Box<MirValue>,
+    },
+    Aggregate {
+        kind: MirAggregateKind,
+        fields: Vec<MirAggregateField>,
+    },
+    Closure {
+        body: MirBodyId,
+        captures: Vec<PlaceId>,
+    },
+    Unknown {
+        evidence: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) enum MirAggregateKind {
+    Array,
+    Object,
+    Composite,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct MirAggregateField {
+    pub(crate) name: Option<String>,
+    pub(crate) value: MirValue,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

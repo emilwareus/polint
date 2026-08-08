@@ -11,13 +11,14 @@ use crate::analysis::mir::body::{
     MirTerminatorKind, SuspendKind,
 };
 use crate::analysis::mir::op::{
-    AssignMode, ConservativeAction, MirOperation, MirOperationKind, MirValue, UnsupportedDomain,
-    UnsupportedPrecision, UnsupportedSemanticFact,
+    AssignMode, ConservativeAction, MirAggregateField, MirAggregateKind, MirOperation,
+    MirOperationKind, MirValue, UnsupportedDomain, UnsupportedPrecision, UnsupportedSemanticFact,
 };
 use crate::analysis::places::{
     PlaceInsert, PlaceProjection, PlaceRoot, PlaceStableContext, PlaceStatus, PlaceTableBuilder,
 };
 use crate::analysis::stable_key::semantic_stable_key;
+use crate::analysis::types::facts::TypeShape;
 use crate::analysis_kernel::FactFamily;
 use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, Language, SourceFile, Span};
 
@@ -34,7 +35,7 @@ pub(crate) fn lower_go_mir(db: &AnalysisDb) -> MirOutput {
         lowering.lower_file(db, file);
     }
 
-    let places = lowering.places.clone().finish();
+    let (places, place_types) = lowering.places.clone().finish_with_types();
     let place_ids = places
         .iter()
         .map(|place| (place.stable_key.clone(), place.id))
@@ -76,6 +77,7 @@ pub(crate) fn lower_go_mir(db: &AnalysisDb) -> MirOutput {
         statements,
         terminators,
         places,
+        place_types,
         operations,
         unsupported,
     }
@@ -368,8 +370,46 @@ impl GoMirLowering {
                 continue;
             };
             let body = self.push_body(db, file, function, span);
-            let mut function_lowering =
-                FunctionLowering::new(file, file.source.as_ref(), function.id, &body);
+            let mut literals = Vec::new();
+            visit_named_descendants(body_node, &mut |node| {
+                if node.kind() == "func_literal" {
+                    literals.push(node);
+                }
+            });
+            literals.sort_by_key(|node| (node.start_byte(), node.end_byte()));
+            let closure_bodies = literals
+                .iter()
+                .map(|node| {
+                    let closure_body = self.push_body(
+                        db,
+                        file,
+                        function,
+                        node_span(file.id, file.source.as_ref(), *node),
+                    );
+                    (
+                        (node.start_byte() as u32, node.end_byte() as u32),
+                        closure_body,
+                    )
+                })
+                .collect::<BTreeMap<_, _>>();
+            let closure_capture_names = go_closure_capture_names(
+                db,
+                file.id,
+                file.source.as_ref(),
+                closure_bodies.keys().copied(),
+            );
+            let closure_body_ids = closure_bodies
+                .iter()
+                .map(|(span, body)| (*span, body.id))
+                .collect::<BTreeMap<_, _>>();
+            let mut function_lowering = FunctionLowering::new(
+                file,
+                file.source.as_ref(),
+                function.id,
+                &body,
+                closure_body_ids.clone(),
+                closure_capture_names.clone(),
+            );
             function_lowering.lower_parameters(node, &mut self.places);
             function_lowering.lower_body(
                 body_node,
@@ -377,6 +417,31 @@ impl GoMirLowering {
                 &mut self.operations,
                 &mut self.unsupported,
             );
+            for literal in literals {
+                let Some(closure_body) =
+                    closure_bodies.get(&(literal.start_byte() as u32, literal.end_byte() as u32))
+                else {
+                    continue;
+                };
+                let Some(closure_block) = literal.child_by_field_name("body") else {
+                    continue;
+                };
+                let mut closure_lowering = FunctionLowering::new(
+                    file,
+                    file.source.as_ref(),
+                    function.id,
+                    closure_body,
+                    closure_body_ids.clone(),
+                    closure_capture_names.clone(),
+                );
+                closure_lowering.lower_parameters(literal, &mut self.places);
+                closure_lowering.lower_body(
+                    closure_block,
+                    &mut self.places,
+                    &mut self.operations,
+                    &mut self.unsupported,
+                );
+            }
             self.lower_parser_errors(file, body.id, &body.stable_key, body_node);
         }
     }
@@ -484,18 +549,74 @@ impl GoMirLowering {
     }
 }
 
+fn go_closure_capture_names(
+    db: &AnalysisDb,
+    file: FileId,
+    source: &str,
+    spans: impl IntoIterator<Item = (u32, u32)>,
+) -> BTreeMap<(u32, u32), Vec<String>> {
+    spans
+        .into_iter()
+        .map(|span| {
+            let mut names = db
+                .references_for_file(file)
+                .filter(|reference| {
+                    reference
+                        .primary_span
+                        .as_ref()
+                        .is_some_and(|reference_span| {
+                            reference_span.start_byte >= span.0 && reference_span.end_byte <= span.1
+                        })
+                })
+                .filter_map(|reference| {
+                    let target = reference.target?;
+                    let definition = db.definition_for_symbol(target)?;
+                    let definition_span = definition.primary_span.as_ref()?;
+                    (definition_span.start_byte < span.0 || definition_span.end_byte > span.1)
+                        .then(|| reference.name.clone())
+                })
+                .collect::<BTreeSet<_>>();
+            if let Some(body_source) = source.get(span.0 as usize..span.1 as usize) {
+                names.extend(identifier_tokens(body_source));
+            }
+            (span, names.into_iter().collect())
+        })
+        .collect()
+}
+
+fn identifier_tokens(source: &str) -> impl Iterator<Item = String> + '_ {
+    source
+        .split(|character: char| !(character == '_' || character.is_alphanumeric()))
+        .filter(|token| {
+            token
+                .chars()
+                .next()
+                .is_some_and(|character| character == '_' || character.is_alphabetic())
+        })
+        .map(str::to_string)
+}
+
 struct FunctionLowering<'source> {
     file: FileId,
     source: &'source str,
     function: FunctionId,
     body: MirBodyId,
     stable_context: PlaceStableContext,
+    closure_bodies: BTreeMap<(u32, u32), MirBodyId>,
+    closure_capture_names: BTreeMap<(u32, u32), Vec<String>>,
     parameters: BTreeMap<String, PlaceRoot>,
     locals: BTreeMap<String, PlaceRoot>,
 }
 
 impl<'source> FunctionLowering<'source> {
-    fn new(file: &SourceFile, source: &'source str, function: FunctionId, body: &MirBody) -> Self {
+    fn new(
+        file: &SourceFile,
+        source: &'source str,
+        function: FunctionId,
+        body: &MirBody,
+        closure_bodies: BTreeMap<(u32, u32), MirBodyId>,
+        closure_capture_names: BTreeMap<(u32, u32), Vec<String>>,
+    ) -> Self {
         Self {
             file: file.id,
             source,
@@ -506,6 +627,8 @@ impl<'source> FunctionLowering<'source> {
                 body.owner_stable_key.clone(),
                 body.stable_key.clone(),
             ),
+            closure_bodies,
+            closure_capture_names,
             parameters: BTreeMap::new(),
             locals: BTreeMap::new(),
         }
@@ -566,14 +689,18 @@ impl<'source> FunctionLowering<'source> {
         self.lower_unsupported(statement, operations, unsupported);
         match statement.kind() {
             "short_var_declaration" => {
-                let value = statement
-                    .child_by_field_name("right")
+                let right = statement.child_by_field_name("right");
+                let value = right
                     .and_then(|right| self.lower_value(right, places, operations, unsupported))
                     .unwrap_or_else(|| ValueDraft::Unknown {
                         evidence: "short declaration initializer".to_string(),
                     });
                 for name in assignment_left_names(self.source, statement) {
-                    let key = self.insert_local(places, &name);
+                    let key = self.insert_local_typed(
+                        places,
+                        &name,
+                        right.map(type_shape_for_go_expression),
+                    );
                     self.push_assign(
                         operations,
                         statement,
@@ -758,12 +885,21 @@ impl<'source> FunctionLowering<'source> {
     }
 
     fn insert_local(&mut self, places: &mut PlaceTableBuilder, name: &str) -> String {
+        self.insert_local_typed(places, name, None)
+    }
+
+    fn insert_local_typed(
+        &mut self,
+        places: &mut PlaceTableBuilder,
+        name: &str,
+        ty: Option<TypeShape>,
+    ) -> String {
         let root = PlaceRoot::Local {
             function: self.function,
             name: name.to_string(),
         };
         self.locals.insert(name.to_string(), root.clone());
-        self.insert_place(places, root, Vec::new(), PlaceStatus::Resolved)
+        self.insert_typed_place(places, root, Vec::new(), ty, PlaceStatus::Resolved)
     }
 
     fn lower_value(
@@ -774,6 +910,9 @@ impl<'source> FunctionLowering<'source> {
         unsupported: &mut Vec<UnsupportedDraft>,
     ) -> Option<ValueDraft> {
         match node.kind() {
+            "expression_list" if node.named_child_count() == 1 => {
+                self.lower_value(node.named_child(0)?, places, operations, unsupported)
+            }
             "interpreted_string_literal"
             | "raw_string_literal"
             | "int_literal"
@@ -784,12 +923,68 @@ impl<'source> FunctionLowering<'source> {
             | "nil" => Some(ValueDraft::Literal {
                 value: node_text(self.source, node).unwrap_or_default().to_string(),
             }),
-            "composite_literal" | "func_literal" => {
-                self.lower_expression_children(node, places, operations, unsupported, false);
-                Some(ValueDraft::Literal {
-                    value: node_text(self.source, node).unwrap_or_default().to_string(),
+            "binary_expression" => {
+                let left = node
+                    .child_by_field_name("left")
+                    .or_else(|| node.named_child(0))?;
+                let right = node
+                    .child_by_field_name("right")
+                    .or_else(|| node.named_child(1))?;
+                Some(ValueDraft::BinOp {
+                    op: go_binary_operator_text(self.source, left, right),
+                    lhs: Box::new(
+                        self.lower_value(left, places, operations, unsupported)
+                            .unwrap_or_else(|| ValueDraft::Unknown {
+                                evidence: "binary left operand".to_string(),
+                            }),
+                    ),
+                    rhs: Box::new(
+                        self.lower_value(right, places, operations, unsupported)
+                            .unwrap_or_else(|| ValueDraft::Unknown {
+                                evidence: "binary right operand".to_string(),
+                            }),
+                    ),
                 })
             }
+            "composite_literal" => {
+                let literal = node.child_by_field_name("body").or_else(|| {
+                    (0..node.named_child_count() as u32)
+                        .filter_map(|index| node.named_child(index))
+                        .find(|child| child.kind() == "literal_value")
+                })?;
+                let mut fields = Vec::new();
+                for index in 0..literal.named_child_count() as u32 {
+                    let Some(element) = literal.named_child(index) else {
+                        continue;
+                    };
+                    let (name, value_node) = if element.kind() == "keyed_element" {
+                        let key = element
+                            .child_by_field_name("key")
+                            .or_else(|| element.named_child(0));
+                        let value = element
+                            .child_by_field_name("value")
+                            .or_else(|| element.named_child(1));
+                        (
+                            key.and_then(|key| node_text(self.source, key))
+                                .map(str::to_string),
+                            value,
+                        )
+                    } else {
+                        (None, Some(element))
+                    };
+                    let value = value_node
+                        .and_then(|value| self.lower_value(value, places, operations, unsupported))
+                        .unwrap_or_else(|| ValueDraft::Unknown {
+                            evidence: "composite element value".to_string(),
+                        });
+                    fields.push((name, value));
+                }
+                Some(ValueDraft::Aggregate {
+                    kind: MirAggregateKind::Composite,
+                    fields,
+                })
+            }
+            "func_literal" => self.closure_value(node, places),
             "call_expression" => self
                 .lower_call(node, places, operations, unsupported)
                 .map(ValueDraft::PlaceKey),
@@ -797,6 +992,26 @@ impl<'source> FunctionLowering<'source> {
                 .lower_expression(node, places, operations, unsupported, false)
                 .map(|shape| ValueDraft::PlaceKey(shape.key)),
         }
+    }
+
+    fn closure_value(&self, node: Node<'_>, places: &mut PlaceTableBuilder) -> Option<ValueDraft> {
+        let span = (node.start_byte() as u32, node.end_byte() as u32);
+        let body = *self.closure_bodies.get(&span)?;
+        let capture_keys = self
+            .closure_capture_names
+            .get(&span)
+            .into_iter()
+            .flatten()
+            .filter_map(|name| {
+                self.locals
+                    .get(name)
+                    .or_else(|| self.parameters.get(name))
+                    .map(|root| {
+                        self.insert_place(places, root.clone(), Vec::new(), PlaceStatus::Resolved)
+                    })
+            })
+            .collect();
+        Some(ValueDraft::Closure { body, capture_keys })
     }
 
     fn lower_expression(
@@ -855,6 +1070,27 @@ impl<'source> FunctionLowering<'source> {
                         status: PlaceStatus::Partial,
                         key,
                     })
+            }
+            "func_literal" => {
+                let value = self.closure_value(node, places)?;
+                let key = self.insert_temporary_typed(
+                    places,
+                    node,
+                    PlaceStatus::Partial,
+                    TypeShape::Callable {
+                        signature: "closure".to_string(),
+                    },
+                );
+                self.push_assign(operations, node, key.clone(), value, AssignMode::Overwrite);
+                Some(PlaceShape {
+                    root: PlaceRoot::Temporary {
+                        body: self.body,
+                        ordinal: node.start_byte() as u32,
+                    },
+                    projections: Vec::new(),
+                    status: PlaceStatus::Partial,
+                    key,
+                })
             }
             "interpreted_string_literal"
             | "raw_string_literal"
@@ -1211,13 +1447,31 @@ impl<'source> FunctionLowering<'source> {
         node: Node<'_>,
         status: PlaceStatus,
     ) -> String {
-        self.insert_place(
+        self.insert_temporary_typed(
+            places,
+            node,
+            status,
+            TypeShape::Unknown {
+                reason: "go temporary".to_string(),
+            },
+        )
+    }
+
+    fn insert_temporary_typed(
+        &self,
+        places: &mut PlaceTableBuilder,
+        node: Node<'_>,
+        status: PlaceStatus,
+        ty: TypeShape,
+    ) -> String {
+        self.insert_typed_place(
             places,
             PlaceRoot::Temporary {
                 body: self.body,
                 ordinal: node.start_byte() as u32,
             },
             Vec::new(),
+            Some(ty),
             status,
         )
     }
@@ -1238,7 +1492,18 @@ impl<'source> FunctionLowering<'source> {
         projections: Vec<PlaceProjection>,
         status: PlaceStatus,
     ) -> String {
-        places.insert_with_context(
+        self.insert_typed_place(places, root, projections, None, status)
+    }
+
+    fn insert_typed_place(
+        &self,
+        places: &mut PlaceTableBuilder,
+        root: PlaceRoot,
+        projections: Vec<PlaceProjection>,
+        ty: Option<TypeShape>,
+        status: PlaceStatus,
+    ) -> String {
+        places.insert_typed_with_context(
             &self.stable_context,
             PlaceInsert {
                 language: Language::Go,
@@ -1248,6 +1513,7 @@ impl<'source> FunctionLowering<'source> {
                 projections,
                 status,
             },
+            ty,
         )
     }
 }
@@ -1462,9 +1728,26 @@ impl OperationKindDraft {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ValueDraft {
-    Literal { value: String },
+    Literal {
+        value: String,
+    },
     PlaceKey(String),
-    Unknown { evidence: String },
+    BinOp {
+        op: String,
+        lhs: Box<ValueDraft>,
+        rhs: Box<ValueDraft>,
+    },
+    Aggregate {
+        kind: MirAggregateKind,
+        fields: Vec<(Option<String>, ValueDraft)>,
+    },
+    Closure {
+        body: MirBodyId,
+        capture_keys: Vec<String>,
+    },
+    Unknown {
+        evidence: String,
+    },
 }
 
 impl ValueDraft {
@@ -1482,6 +1765,28 @@ impl ValueDraft {
                 .unwrap_or_else(|| MirValue::Unknown {
                     evidence: key.clone(),
                 }),
+            Self::BinOp { op, lhs, rhs } => MirValue::BinOp {
+                op: op.clone(),
+                lhs: Box::new(lhs.to_value(place_ids)),
+                rhs: Box::new(rhs.to_value(place_ids)),
+            },
+            Self::Aggregate { kind, fields } => MirValue::Aggregate {
+                kind: *kind,
+                fields: fields
+                    .iter()
+                    .map(|(name, value)| MirAggregateField {
+                        name: name.clone(),
+                        value: value.to_value(place_ids),
+                    })
+                    .collect(),
+            },
+            Self::Closure { body, capture_keys } => MirValue::Closure {
+                body: *body,
+                captures: capture_keys
+                    .iter()
+                    .filter_map(|key| place_ids.get(key).copied())
+                    .collect(),
+            },
             Self::Unknown { evidence } => MirValue::Unknown {
                 evidence: evidence.clone(),
             },
@@ -1491,6 +1796,16 @@ impl ValueDraft {
     fn place_keys(&self) -> Vec<String> {
         match self {
             Self::PlaceKey(key) => vec![key.clone()],
+            Self::BinOp { lhs, rhs, .. } => {
+                let mut keys = lhs.place_keys();
+                keys.extend(rhs.place_keys());
+                keys
+            }
+            Self::Aggregate { fields, .. } => fields
+                .iter()
+                .flat_map(|(_, value)| value.place_keys())
+                .collect(),
+            Self::Closure { capture_keys, .. } => capture_keys.clone(),
             Self::Literal { .. } | Self::Unknown { .. } => Vec::new(),
         }
     }
@@ -1692,6 +2007,41 @@ fn node_span(file: FileId, source: &str, node: Node<'_>) -> Span {
 
 fn node_text<'source>(source: &'source str, node: Node<'_>) -> Option<&'source str> {
     source.get(node.start_byte()..node.end_byte())
+}
+
+fn go_binary_operator_text(source: &str, left: Node<'_>, right: Node<'_>) -> String {
+    source
+        .get(left.end_byte()..right.start_byte())
+        .map(str::trim)
+        .filter(|operator| !operator.is_empty())
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+fn type_shape_for_go_expression(node: Node<'_>) -> TypeShape {
+    if node.kind() == "expression_list"
+        && node.named_child_count() == 1
+        && let Some(expression) = node.named_child(0)
+    {
+        return type_shape_for_go_expression(expression);
+    }
+    match node.kind() {
+        "interpreted_string_literal" | "raw_string_literal" => {
+            TypeShape::Primitive("string".to_string())
+        }
+        "int_literal" => TypeShape::Primitive("int".to_string()),
+        "float_literal" => TypeShape::Primitive("float64".to_string()),
+        "rune_literal" => TypeShape::Primitive("rune".to_string()),
+        "true" | "false" => TypeShape::Primitive("bool".to_string()),
+        "nil" => TypeShape::Nullish("nil".to_string()),
+        "composite_literal" => TypeShape::Object { shape_id: None },
+        "func_literal" => TypeShape::Callable {
+            signature: "closure".to_string(),
+        },
+        _ => TypeShape::Unknown {
+            reason: "go expression".to_string(),
+        },
+    }
 }
 
 fn function_name(source: &str, node: Node<'_>) -> Option<String> {
@@ -1975,6 +2325,62 @@ func authorize(user User, index int) func() string {
                     matches!(projection, PlaceProjection::IndexUnknown { evidence } if evidence == "index")
                 })
         }));
+    }
+
+    #[test]
+    fn go_lowerer_constructs_structured_values_closure_captures_and_place_types() {
+        let output = lower(
+            r#"
+package auth
+
+type Pair struct { Value int }
+
+func make(seed int) func() int {
+    count := 1
+    callback := func() int { return seed + count }
+    record := Pair{Value: count}
+    _ = record
+    return callback
+}
+"#,
+        );
+
+        let closure = output
+            .operations
+            .iter()
+            .find_map(|operation| match &operation.kind {
+                MirOperationKind::Assign {
+                    value: MirValue::Closure { body, captures },
+                    ..
+                } => Some((*body, captures)),
+                _ => None,
+            });
+        let (closure_body, captures) =
+            closure.unwrap_or_else(|| panic!("closure assignment missing: {output:#?}"));
+        assert!(output.bodies.iter().any(|body| body.id == closure_body));
+        assert_eq!(captures.len(), 2);
+        assert!(output.operations.iter().any(|operation| matches!(
+            operation.kind,
+            MirOperationKind::Return {
+                value: Some(MirValue::BinOp { .. })
+            }
+        )));
+        assert!(output.operations.iter().any(|operation| matches!(
+            operation.kind,
+            MirOperationKind::Assign {
+                value: MirValue::Aggregate {
+                    kind: MirAggregateKind::Composite,
+                    ..
+                },
+                ..
+            }
+        )));
+        assert!(
+            output
+                .place_types
+                .iter()
+                .any(|fact| matches!(fact.ty, TypeShape::Callable { .. }))
+        );
     }
 
     #[test]

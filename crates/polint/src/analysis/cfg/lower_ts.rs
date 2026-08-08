@@ -669,6 +669,7 @@ mod tests {
                 status: MirStatus::Partial,
             }],
             places: vec![place(1, "x"), place(2, "ret")],
+            place_types: Vec::new(),
             operations,
             unsupported,
         })

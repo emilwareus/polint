@@ -356,6 +356,21 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
                 DataFlowNodeKind::Synthetic,
                 format!("unknown:{evidence}:{}", operation.stable_key),
             )),
+            MirValue::BinOp { op, .. } => Some(self.operation_node(
+                operation,
+                DataFlowNodeKind::Value,
+                format!("binop:{op}:{}", operation.stable_key),
+            )),
+            MirValue::Aggregate { kind, .. } => Some(self.operation_node(
+                operation,
+                DataFlowNodeKind::Value,
+                format!("aggregate:{kind:?}:{}", operation.stable_key),
+            )),
+            MirValue::Closure { body, .. } => Some(self.operation_node(
+                operation,
+                DataFlowNodeKind::Value,
+                format!("closure:{}:{}", body.0, operation.stable_key),
+            )),
             MirValue::Literal { .. } => None,
         }
     }
@@ -542,6 +557,11 @@ fn value_evidence(value: &MirValue) -> String {
         MirValue::Place(place) => format!("source_place={}", place.0),
         MirValue::Temporary(value) => format!("temporary={}", value.0),
         MirValue::CallReturn(site) => format!("call_return={}", site.0),
+        MirValue::BinOp { op, .. } => format!("binop={op}"),
+        MirValue::Aggregate { kind, .. } => format!("aggregate={kind:?}"),
+        MirValue::Closure { body, captures } => {
+            format!("closure={} captures={}", body.0, captures.len())
+        }
         MirValue::Unknown { evidence } => format!("unknown={evidence}"),
     }
 }
