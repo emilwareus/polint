@@ -40,7 +40,9 @@ use crate::analysis::identity::facts::IdentityRecord;
 use crate::analysis::identity::provider::valid_call_site_ids;
 use crate::analysis::identity::store::{IdentityProviderOutput, IdentityStore};
 use crate::analysis::ids::CallSiteId;
-use crate::analysis::mir::body::MirOutput;
+use crate::analysis::mir::body::{MirBody, MirOutput};
+use crate::analysis::mir::op::{MirOperation, UnsupportedSemanticFact};
+use crate::analysis::places::PlaceFact;
 use crate::analysis::points_to::facts::{PointsToConstraintFact, PointsToSetFact};
 use crate::analysis::points_to::store::PointsToStore;
 use crate::analysis::reachability::facts::{CallReachabilityFact, ReachabilityRootFact};
@@ -62,7 +64,8 @@ use crate::analysis::types::store::{TypeStore, TypeValueAliasOutput};
 use crate::analysis::values::facts::{AllocationTokenFact, ValueFact};
 use crate::analysis::values::store::ValueStore;
 use crate::analysis_kernel::{
-    FactConfidence, FactFamily, FactMeta, FactMetaStore, FactPrecision, FactRef, ValidationStatus,
+    FactConfidence, FactFamily, FactMeta, FactMetaStore, FactPrecision, FactRef, MissingFactMeta,
+    ValidationStatus,
 };
 use crate::diagnostics::fingerprint;
 use crate::go::semantic::facts::{
@@ -3008,5 +3011,559 @@ impl AnalysisDb {
 
     pub(crate) fn metadata_for(&self, fact_ref: FactRef) -> Option<&FactMeta> {
         self.fact_meta().get(fact_ref)
+    }
+}
+
+impl AnalysisDb {
+    pub(crate) fn missing_fact_metadata(&self) -> Vec<MissingFactMeta> {
+        let mut missing = Vec::new();
+
+        for file in self.files() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::SourceFile,
+                u64::from(file.id.0),
+            );
+        }
+        for package in self.packages() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::Package, package.id.0);
+        }
+        for function in self.functions() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::Function, function.id.0);
+        }
+        for import in self.imports() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::Import, import.id.0);
+        }
+        for resolved_import in self.resolved_imports() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::ResolvedImport,
+                resolved_import.id.0,
+            );
+        }
+        for module_node in self.module_nodes() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::ModuleNode, module_node.id.0);
+        }
+        for module_edge in self.module_edges() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::ModuleEdge, module_edge.id.0);
+        }
+        for root in self.workspace_roots() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::WorkspaceRoot, root.id.0);
+        }
+        for package in self.topology_packages() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::TopologyPackage,
+                package.id.0,
+            );
+        }
+        for source_set in self.source_sets() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::SourceSet, source_set.id.0);
+        }
+        for requirement in self.dependency_requirements() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::DependencyRequirement,
+                requirement.id.0,
+            );
+        }
+        for edge in self.resolved_dependency_edges() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::ResolvedDependencyEdge,
+                edge.id.0,
+            );
+        }
+        for edge in self.import_to_package_edges() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::ImportToPackage, edge.id.0);
+        }
+        for overlay in self.repo_topology_overlays() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::RepoTopologyOverlay,
+                overlay.id.0,
+            );
+        }
+        for scope in self.scopes() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::Scope, scope.id.0);
+        }
+        for import in self.semantic_imports() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::SemanticImport, import.id.0);
+        }
+        for export in self.exports() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::Export, export.id.0);
+        }
+        for alias in self.aliases() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::Alias, alias.id.0);
+        }
+        for resolution in self.resolution_facts() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::Resolution, resolution.id.0);
+        }
+        for generated in self.generated_symbols() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::GeneratedSymbol,
+                generated.id.0,
+            );
+        }
+        for stable_export in self.stable_exports() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::StableExport,
+                stable_export.id.0,
+            );
+        }
+        for body in self.mir_bodies() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::MirBody, body.id.0);
+        }
+        for operation in self.mir_operations() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::MirOperation, operation.id.0);
+        }
+        for place in self.mir_places() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::Place, place.id.0);
+        }
+        for row in self.unsupported_semantics() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::UnsupportedSemantic,
+                row.id.0,
+            );
+        }
+        for site in self.call_sites() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::CallSite, site.id.0);
+        }
+        for target in self.call_targets() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::CallTarget, target.id.0);
+        }
+        for (run_id, _unresolved) in self.unresolved_calls().iter().enumerate() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::UnresolvedCall,
+                run_id as u64,
+            );
+        }
+        for edge in self.refined_call_edges() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::RefinedCallEdge, edge.id.0);
+        }
+        for node in self.data_flow_nodes() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::DataFlowNode, node.id.0);
+        }
+        for edge in self.data_flow_edges() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::DataFlowEdge, edge.id.0);
+        }
+        for model in self.data_flow_models() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::DataFlowModel, model.id.0);
+        }
+        for budget in self.data_flow_budgets() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::DataFlowBudget, budget.id.0);
+        }
+        for node in self.evidence_nodes() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::EvidenceNode, node.id.0);
+        }
+        for edge in self.evidence_edges() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::EvidenceEdge, edge.id.0);
+        }
+        for bundle in self.evidence_bundles() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::EvidenceBundle, bundle.id.0);
+        }
+        for path in self.evidence_paths() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::EvidencePath, path.id.0);
+        }
+        for slice in self.evidence_slices() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::EvidenceSlice, slice.id.0);
+        }
+        for (run_id, _unknown) in self.evidence_unknowns().iter().enumerate() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::EvidenceUnknown,
+                run_id as u64,
+            );
+        }
+        for omitted in self.evidence_omitted_regions() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::EvidenceOmittedRegion,
+                omitted.id.0,
+            );
+        }
+        for (run_id, _replay) in self.evidence_replay_keys().iter().enumerate() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::EvidenceReplayKey,
+                run_id as u64,
+            );
+        }
+        for symbol in self.symbols() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::Symbol, symbol.id.0);
+        }
+        for definition in self.definitions() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::Definition, definition.id.0);
+        }
+        for reference in self.references() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::Reference, reference.id.0);
+        }
+        for branch in self.branches() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::BranchObligation,
+                branch.id.0,
+            );
+        }
+        for (run_id, _test) in self.tests().iter().enumerate() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::Test, run_id as u64);
+        }
+        for (run_id, _coverage) in self.coverage().iter().enumerate() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::Coverage, run_id as u64);
+        }
+        for (run_id, _file_metric) in self.file_metrics().iter().enumerate() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::FileMetric, run_id as u64);
+        }
+        for (run_id, _function_metric) in self.function_metrics().iter().enumerate() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::FunctionMetric,
+                run_id as u64,
+            );
+        }
+        for (run_id, _complexity_metric) in self.complexity_metrics().iter().enumerate() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::ComplexityMetric,
+                run_id as u64,
+            );
+        }
+        for (run_id, _component) in self.ts_components().iter().enumerate() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::TsComponent, run_id as u64);
+        }
+        for (run_id, _class) in self.ts_classes().iter().enumerate() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::TsClass, run_id as u64);
+        }
+        for (run_id, _literal) in self.string_literals().iter().enumerate() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::StringLiteral, run_id as u64);
+        }
+        for (run_id, _attribute) in self.jsx_attributes().iter().enumerate() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::JsxAttribute, run_id as u64);
+        }
+        for (run_id, _fact) in self.extension_facts().iter().enumerate() {
+            self.push_missing_fact_metadata(&mut missing, FactFamily::ExtensionFact, run_id as u64);
+        }
+        for (run_id, _fact) in self.adaptation_model_facts().iter().enumerate() {
+            self.push_missing_fact_metadata(
+                &mut missing,
+                FactFamily::AdaptationModel,
+                run_id as u64,
+            );
+        }
+
+        missing.sort_by(|left, right| {
+            (left.family.label(), left.run_id).cmp(&(right.family.label(), right.run_id))
+        });
+        missing
+    }
+
+    fn push_missing_fact_metadata(
+        &self,
+        missing: &mut Vec<MissingFactMeta>,
+        family: FactFamily,
+        run_id: u64,
+    ) {
+        if self.metadata_for(FactRef::new(family, run_id)).is_none() {
+            missing.push(MissingFactMeta { family, run_id });
+        }
+    }
+
+    pub fn file(&self, id: FileId) -> Option<&SourceFile> {
+        self.files.get(id.0 as usize)
+    }
+
+    pub(crate) fn set_path_contexts(&mut self, index: crate::path_context::PathContextIndex) {
+        self.path_contexts = Some(index);
+    }
+
+    /// Repo-relative paths paired with `relative_path` (see `.polint.toml` `[path_contexts]`).
+    pub fn path_context_related(&self, pair_name: &str, relative_path: &str) -> Vec<String> {
+        self.path_contexts
+            .as_ref()
+            .map(|ix| ix.related_paths(pair_name, relative_path))
+            .unwrap_or_default()
+    }
+
+    pub fn files(&self) -> &[SourceFile] {
+        &self.files
+    }
+
+    /// Relative paths as in diagnostics (`SourceFile.relative_path`) → full source text.
+    pub fn sources_by_relative_path(&self) -> BTreeMap<String, Arc<str>> {
+        self.files
+            .iter()
+            .map(|file| (file.relative_path.clone(), Arc::clone(&file.source)))
+            .collect()
+    }
+
+    pub fn packages(&self) -> &[PackageFact] {
+        &self.packages
+    }
+
+    pub fn functions(&self) -> &[FunctionFact] {
+        &self.functions
+    }
+
+    pub fn imports(&self) -> &[ImportFact] {
+        &self.imports
+    }
+
+    pub fn resolved_imports(&self) -> &[ResolvedImportFact] {
+        &self.resolved_imports
+    }
+
+    pub fn module_nodes(&self) -> &[ModuleNode] {
+        &self.module_nodes
+    }
+
+    pub fn module_edges(&self) -> &[ModuleEdge] {
+        &self.module_edges
+    }
+
+    pub(crate) fn workspace_roots(&self) -> &[WorkspaceRootFact] {
+        &self.workspace_roots
+    }
+
+    pub(crate) fn topology_packages(&self) -> &[TopologyPackageFact] {
+        &self.topology_packages
+    }
+
+    pub(crate) fn source_sets(&self) -> &[SourceSetFact] {
+        &self.source_sets
+    }
+
+    pub(crate) fn dependency_requirements(&self) -> &[DependencyRequirementFact] {
+        &self.dependency_requirements
+    }
+
+    pub(crate) fn resolved_dependency_edges(&self) -> &[ResolvedDependencyEdgeFact] {
+        &self.resolved_dependency_edges
+    }
+
+    pub(crate) fn import_to_package_edges(&self) -> &[ImportToPackageFact] {
+        &self.import_to_package_edges
+    }
+
+    pub(crate) fn repo_topology_overlays(&self) -> &[RepoTopologyOverlayFact] {
+        &self.repo_topology_overlays
+    }
+
+    pub(crate) fn scopes(&self) -> &[ScopeFact] {
+        &self.scopes
+    }
+
+    pub(crate) fn semantic_imports(&self) -> &[SemanticImportFact] {
+        &self.semantic_imports
+    }
+
+    pub(crate) fn exports(&self) -> &[ExportFact] {
+        &self.exports
+    }
+
+    pub(crate) fn aliases(&self) -> &[AliasFact] {
+        &self.aliases
+    }
+
+    pub(crate) fn resolution_facts(&self) -> &[ResolutionFact] {
+        &self.resolution_facts
+    }
+
+    pub(crate) fn generated_symbols(&self) -> &[GeneratedSymbolFact] {
+        &self.generated_symbols
+    }
+
+    pub(crate) fn stable_exports(&self) -> &[StableExportIdentity] {
+        &self.stable_exports
+    }
+
+    pub(crate) fn semantic_store(&self) -> Option<&SemanticStore> {
+        self.semantic.as_ref()
+    }
+
+    pub(crate) fn mir_bodies(&self) -> &[MirBody] {
+        self.semantic_store().map_or(&[], SemanticStore::mir_bodies)
+    }
+
+    pub(crate) fn mir_operations(&self) -> &[MirOperation] {
+        self.semantic_store()
+            .map_or(&[], SemanticStore::mir_operations)
+    }
+
+    pub(crate) fn mir_places(&self) -> &[PlaceFact] {
+        self.semantic_store().map_or(&[], SemanticStore::places)
+    }
+
+    pub(crate) fn unsupported_semantics(&self) -> &[UnsupportedSemanticFact] {
+        self.semantic_store()
+            .map_or(&[], SemanticStore::unsupported_semantics)
+    }
+
+    pub(crate) fn cfg_functions(&self) -> &[CfgFunctionFact] {
+        &self.cfg_functions
+    }
+
+    pub(crate) fn cfg_nodes(&self) -> &[CfgNodeFact] {
+        &self.cfg_nodes
+    }
+
+    pub(crate) fn cfg_blocks(&self) -> &[BasicBlockFact] {
+        &self.cfg_blocks
+    }
+
+    pub(crate) fn cfg_edges(&self) -> &[CfgEdgeFact] {
+        &self.cfg_edges
+    }
+
+    pub(crate) fn cfg_reachability(&self) -> &[ReachabilityFact] {
+        &self.cfg_reachability
+    }
+
+    pub(crate) fn cfg_dominators(&self) -> &[DominatorFact] {
+        &self.cfg_dominators
+    }
+
+    pub(crate) fn cfg_postdominators(&self) -> &[PostDominatorFact] {
+        &self.cfg_postdominators
+    }
+
+    pub(crate) fn cfg_control_dependence(&self) -> &[ControlDependenceFact] {
+        &self.cfg_control_dependence
+    }
+
+    pub(crate) fn unsupported_control_flow(&self) -> &[UnsupportedControlFlowFact] {
+        &self.unsupported_control_flow
+    }
+
+    pub fn symbols(&self) -> &[SymbolFact] {
+        &self.symbols
+    }
+
+    pub fn definitions(&self) -> &[DefinitionFact] {
+        &self.definitions
+    }
+
+    pub fn references(&self) -> &[ReferenceFact] {
+        &self.references
+    }
+
+    pub(crate) fn symbol_by_id(&self, id: SymbolId) -> Option<&SymbolFact> {
+        self.symbols_by_id
+            .get(&id)
+            .and_then(|index| self.symbols.get(*index))
+    }
+
+    pub(crate) fn symbols_for_file(&self, file: FileId) -> impl Iterator<Item = &SymbolFact> + '_ {
+        self.symbols_by_file
+            .get(&file)
+            .into_iter()
+            .flat_map(|indexes| indexes.iter().filter_map(|index| self.symbols.get(*index)))
+    }
+
+    pub(crate) fn symbols_by_name(&self, name: &str) -> impl Iterator<Item = &SymbolFact> + '_ {
+        self.symbols_by_name
+            .get(name)
+            .into_iter()
+            .flat_map(|indexes| indexes.iter().filter_map(|index| self.symbols.get(*index)))
+    }
+
+    pub(crate) fn definition_for_symbol(&self, symbol: SymbolId) -> Option<&DefinitionFact> {
+        let mut definitions = self.definitions_for_symbol(symbol);
+        let first = definitions.next();
+        first
+            .filter(|definition| definition.is_primary)
+            .or_else(|| definitions.find(|definition| definition.is_primary))
+            .or(first)
+    }
+
+    pub(crate) fn definitions_for_symbol(
+        &self,
+        symbol: SymbolId,
+    ) -> impl Iterator<Item = &DefinitionFact> + '_ {
+        self.definitions_by_symbol
+            .get(&symbol)
+            .into_iter()
+            .flat_map(|indexes| {
+                indexes
+                    .iter()
+                    .filter_map(|index| self.definitions.get(*index))
+            })
+    }
+
+    pub(crate) fn references_to_symbol(
+        &self,
+        symbol: SymbolId,
+    ) -> impl Iterator<Item = &ReferenceFact> + '_ {
+        self.references_by_target
+            .get(&symbol)
+            .into_iter()
+            .flat_map(|indexes| {
+                indexes
+                    .iter()
+                    .filter_map(|index| self.references.get(*index))
+            })
+    }
+
+    pub(crate) fn references_for_file(
+        &self,
+        file: FileId,
+    ) -> impl Iterator<Item = &ReferenceFact> + '_ {
+        self.references_by_file
+            .get(&file)
+            .into_iter()
+            .flat_map(|indexes| {
+                indexes
+                    .iter()
+                    .filter_map(|index| self.references.get(*index))
+            })
+    }
+
+    pub fn branches(&self) -> &[BranchObligation] {
+        &self.branches
+    }
+
+    pub fn tests(&self) -> &[TestFact] {
+        &self.tests
+    }
+
+    pub fn coverage(&self) -> &[CoverageFact] {
+        &self.coverage
+    }
+
+    pub fn file_metrics(&self) -> &[FileMetricFact] {
+        &self.file_metrics
+    }
+
+    pub fn function_metrics(&self) -> &[FunctionMetricFact] {
+        &self.function_metrics
+    }
+
+    pub fn complexity_metrics(&self) -> &[ComplexityMetricFact] {
+        &self.complexity_metrics
+    }
+
+    pub fn ts_components(&self) -> &[TsComponentFact] {
+        &self.ts_components
+    }
+
+    pub fn ts_classes(&self) -> &[TsClassFact] {
+        &self.ts_classes
+    }
+
+    pub fn string_literals(&self) -> &[StringLiteralFact] {
+        &self.string_literals
+    }
+
+    pub fn jsx_attributes(&self) -> &[JsxAttributeFact] {
+        &self.jsx_attributes
+    }
+
+    pub fn path_for(&self, file: FileId) -> String {
+        self.file(file)
+            .map(|file| file.relative_path.clone())
+            .unwrap_or_else(|| "<unknown>".to_string())
     }
 }
