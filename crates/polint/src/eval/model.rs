@@ -521,6 +521,10 @@ mod tests {
         let lib_rs =
             std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs")).unwrap();
 
+        assert!(
+            lib_rs.contains("#[cfg(test)]\npub(crate) mod eval;"),
+            "eval module should stay test-only and crate-private:\n{lib_rs}"
+        );
         assert_eq!(lib_rs.matches("pub(crate) mod eval;").count(), 1);
         assert!(!lib_rs.contains("pub mod eval"));
     }

@@ -1,11 +1,3 @@
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = " defines the internal eval schema before later harness plans consume it"
-    )
-)]
-
 pub(crate) mod adaptation;
 pub(crate) mod adapter;
 pub(crate) mod baseline;

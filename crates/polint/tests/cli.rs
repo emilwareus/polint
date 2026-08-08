@@ -2579,8 +2579,8 @@ fn assert_eval_module_is_crate_private() {
         .unwrap_or_else(|error| panic!("read {}: {error}", lib_rs_path.display()));
 
     assert!(
-        lib_rs.contains("pub(crate) mod eval;"),
-        "eval module should stay crate-private:\n{lib_rs}"
+        lib_rs.contains("#[cfg(test)]\npub(crate) mod eval;"),
+        "eval module should stay test-only and crate-private:\n{lib_rs}"
     );
     assert!(
         !lib_rs.contains("pub mod eval"),
