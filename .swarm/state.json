@@ -770,7 +770,7 @@
       "note": "IFDS taint + sanitizer kills; post-solve barrier filter deleted"
     },
     "W4.4": {
-      "state": "CLAIMED",
+      "state": "MERGED",
       "spec": "docs/architecture-review/specs/W4.4-retire-precision-theater.md",
       "depends_on": [
         "W4.1",
@@ -779,7 +779,10 @@
       "created_at": "2026-08-08T21:24:54+02:00",
       "branch": "swarm/W4.4",
       "dispatched_at": "2026-08-08T22:22:53+02:00",
-      "attempts": 1
+      "attempts": 1,
+      "commit": "477ac54a",
+      "merged_at": "2026-08-08T22:41:16+02:00",
+      "note": "retired reachability precision theater"
     },
     "W4.5": {
       "state": "MERGED",
@@ -802,9 +805,7 @@
   },
   "milestone": "M4",
   "READY": [],
-  "IN_FLIGHT": [
-    "W4.4"
-  ],
+  "IN_FLIGHT": [],
   "IN_REVIEW": [],
   "MERGED": [
     "W2.2",
@@ -836,7 +837,8 @@
     "W4.1",
     "W4.2",
     "W4.3",
-    "W4.5"
+    "W4.5",
+    "W4.4"
   ],
   "HELD": [
     "W2.3"
@@ -845,12 +847,12 @@
   "dispatch_allowed": true,
   "halt": {
     "active": false,
-    "cleared_at": "2026-08-08T20:27:05+02:00",
-    "reason": "human authorized M3+M4"
+    "cleared_at": "2026-08-08T22:41:16+02:00",
+    "reason": "M3+M4 task set complete; human ship decision"
   },
   "integration_branch": "static-analysis-architecture-review",
   "never_merge_to_main": true,
-  "integration_head": "844f8287",
+  "integration_head": "477ac54a",
   "m0_gate": {
     "status": "PASS",
     "completed_at": "2026-08-08T11:52:00+02:00",
@@ -975,5 +977,9 @@
     "status": "COMPLETE",
     "at": "2026-08-08T21:24:54+02:00",
     "note": "W3.1-W3.5 MERGED"
+  },
+  "m4_gate": {
+    "status": "COMPLETE",
+    "at": "2026-08-08T22:41:16+02:00"
   }
 }
