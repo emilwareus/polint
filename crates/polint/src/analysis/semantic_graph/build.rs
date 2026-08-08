@@ -20,9 +20,8 @@ use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 use oxc_allocator::Allocator;
 use oxc_ast::AstKind;
 use oxc_ast::ast::{Argument, BindingPattern, Expression, Function, Statement, VariableDeclarator};
-use oxc_parser::Parser;
 use oxc_semantic::{AstNodes, NodeId, SemanticBuilder};
-use oxc_span::{GetSpan, SourceType};
+use oxc_span::GetSpan;
 
 use crate::analysis::adaptation::store::AdaptationModelStore;
 use crate::analysis::ids::{ObjectTokenId, PlaceId, SemanticNodeId};
@@ -42,15 +41,20 @@ use crate::ts::binding::direct::{
 };
 use crate::ts::binding::facts::{TsDirectBindingFact, TsDirectBindingKind, TsDirectBindingStatus};
 use crate::ts::binding::store::TsDirectBindingOutput;
-use crate::ts::inventory::extract::{extract_ts_inventory, extract_ts_inventory_from_program};
+use crate::ts::inventory::extract::{
+    extract_ts_inventory, extract_ts_inventory_from_program, mark_inventory_partial_ast,
+};
 use crate::ts::inventory::store::TsInventoryOutput;
-use crate::ts::object_model::extract::extract_ts_object_model_from_program;
+use crate::ts::object_model::extract::{
+    extract_ts_object_model_from_program, mark_object_model_partial_ast,
+};
 use crate::ts::object_model::facts::{
     TsObjectModelStatus, TsPropertyKey, TsPropertyReadFact, TsPropertyWriteFact,
     TsReceiverBindingFact,
 };
 use crate::ts::object_model::store::TsObjectModelOutput;
-use crate::ts::scope::extract::extract_ts_scope_from_program;
+use crate::ts::parse::parse_ts_file;
+use crate::ts::scope::extract::{extract_ts_scope_from_program, mark_scope_partial_ast};
 use crate::ts::scope::store::TsScopeOutput;
 
 /// Projects a real-but-minimal semantic graph from already-stored v1.2 facts.
@@ -232,9 +236,9 @@ fn collect_ts_file_analyses(db: &AnalysisDb) -> Vec<TsFileAnalysis> {
 fn analyze_ts_file(file: &SourceFile) -> TsFileAnalysis {
     let source = file.source.as_ref();
     let allocator = Allocator::default();
-    let parsed = Parser::new(&allocator, source, parse_source_type(&file.path)).parse();
+    let parsed = parse_ts_file(&allocator, file);
 
-    if parsed.panicked && parsed.program.body.is_empty() {
+    if parsed.is_catastrophic() {
         return TsFileAnalysis {
             file: file.id,
             inventory: TsInventoryOutput::default(),
@@ -244,21 +248,26 @@ fn analyze_ts_file(file: &SourceFile) -> TsFileAnalysis {
         };
     }
 
-    let semantic = SemanticBuilder::new().build(&parsed.program).semantic;
+    let semantic = SemanticBuilder::new().build(parsed.program()).semantic;
     let nodes = semantic.nodes();
-    let inventory =
-        extract_ts_inventory_from_program(file, source, &parsed.program, nodes).normalized();
-    let scope =
-        extract_ts_scope_from_program(file, source, &parsed.program, semantic.scoping(), nodes)
+    let mut inventory =
+        extract_ts_inventory_from_program(file, source, parsed.program(), nodes).normalized();
+    let mut scope =
+        extract_ts_scope_from_program(file, source, parsed.program(), semantic.scoping(), nodes)
             .normalized();
-    let object_model = extract_ts_object_model_from_program(
+    let mut object_model = extract_ts_object_model_from_program(
         file,
         source,
-        &parsed.program,
+        parsed.program(),
         semantic.scoping(),
         nodes,
         &inventory,
     );
+    if !parsed.fully_parsed {
+        mark_inventory_partial_ast(&mut inventory);
+        mark_scope_partial_ast(&mut scope);
+        mark_object_model_partial_ast(&mut object_model);
+    }
     let token_source_flows = collect_ts_token_source_flows_from_nodes(file, &inventory, nodes);
 
     TsFileAnalysis {
@@ -281,9 +290,9 @@ fn collect_ts_binding_file_analyses(db: &AnalysisDb) -> Vec<TsBindingFileAnalysi
 fn analyze_ts_binding_file(file: &SourceFile) -> TsBindingFileAnalysis {
     let source = file.source.as_ref();
     let allocator = Allocator::default();
-    let parsed = Parser::new(&allocator, source, parse_source_type(&file.path)).parse();
+    let parsed = parse_ts_file(&allocator, file);
 
-    if parsed.panicked && parsed.program.body.is_empty() {
+    if parsed.is_catastrophic() {
         return TsBindingFileAnalysis {
             file: file.id,
             inventory: TsInventoryOutput::default(),
@@ -291,13 +300,17 @@ fn analyze_ts_binding_file(file: &SourceFile) -> TsBindingFileAnalysis {
         };
     }
 
-    let semantic = SemanticBuilder::new().build(&parsed.program).semantic;
+    let semantic = SemanticBuilder::new().build(parsed.program()).semantic;
     let nodes = semantic.nodes();
-    let inventory =
-        extract_ts_inventory_from_program(file, source, &parsed.program, nodes).normalized();
-    let scope =
-        extract_ts_scope_from_program(file, source, &parsed.program, semantic.scoping(), nodes)
+    let mut inventory =
+        extract_ts_inventory_from_program(file, source, parsed.program(), nodes).normalized();
+    let mut scope =
+        extract_ts_scope_from_program(file, source, parsed.program(), semantic.scoping(), nodes)
             .normalized();
+    if !parsed.fully_parsed {
+        mark_inventory_partial_ast(&mut inventory);
+        mark_scope_partial_ast(&mut scope);
+    }
 
     TsBindingFileAnalysis {
         file: file.id,
@@ -947,15 +960,14 @@ fn collect_ts_token_source_flows_with_inventory(
     file: &SourceFile,
     inventory: &TsInventoryOutput,
 ) -> Vec<TsTokenSourceFlow> {
-    let source = file.source.as_ref();
     let allocator = Allocator::default();
-    let parsed = Parser::new(&allocator, source, parse_source_type(&file.path)).parse();
+    let parsed = parse_ts_file(&allocator, file);
 
-    if parsed.panicked && parsed.program.body.is_empty() {
+    if parsed.is_catastrophic() {
         return Vec::new();
     }
 
-    let semantic = SemanticBuilder::new().build(&parsed.program).semantic;
+    let semantic = SemanticBuilder::new().build(parsed.program()).semantic;
     collect_ts_token_source_flows_from_nodes(file, inventory, semantic.nodes())
 }
 
@@ -1466,10 +1478,6 @@ fn expression_identifier_name(expression: &Expression<'_>) -> Option<String> {
         }
         _ => None,
     }
-}
-
-fn parse_source_type(path: &std::path::Path) -> SourceType {
-    SourceType::from_path(path).unwrap_or_default()
 }
 
 fn matching_core_function<'a>(

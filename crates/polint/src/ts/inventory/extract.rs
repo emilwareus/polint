@@ -6,10 +6,8 @@ use oxc_ast::ast::{
     Argument, BinaryOperator, BindingPattern, Expression, FunctionType, MethodDefinition,
     MethodDefinitionKind, Program, PropertyKey, VariableDeclarator,
 };
-use oxc_parser::Parser;
 use oxc_semantic::{AstNodes, NodeId, SemanticBuilder};
-use oxc_span::{GetSpan, SourceType};
-use std::path::Path;
+use oxc_span::GetSpan;
 
 use crate::analysis::ids::{TsInventoryCallsiteId, TsInventoryFunctionId};
 use crate::core::{SourceFile, Span, span_from_byte_range};
@@ -18,18 +16,38 @@ use crate::ts::inventory::facts::{
     TsInventoryFunctionFact, TsInventoryStatus,
 };
 use crate::ts::inventory::store::TsInventoryOutput;
+use crate::ts::parse::{PARTIAL_AST_REASON, parse_ts_file};
 
 pub(crate) fn extract_ts_inventory(file: &SourceFile) -> TsInventoryOutput {
     let source = file.source.as_ref();
     let allocator = Allocator::default();
-    let parsed = Parser::new(&allocator, source, parse_source_type(&file.path)).parse();
+    let parsed = parse_ts_file(&allocator, file);
 
-    if parsed.panicked && parsed.program.body.is_empty() {
+    if parsed.is_catastrophic() {
         return TsInventoryOutput::default();
     }
 
-    let semantic = SemanticBuilder::new().build(&parsed.program).semantic;
-    extract_ts_inventory_from_program(file, source, &parsed.program, semantic.nodes()).normalized()
+    let semantic = SemanticBuilder::new().build(parsed.program()).semantic;
+    let mut output =
+        extract_ts_inventory_from_program(file, source, parsed.program(), semantic.nodes())
+            .normalized();
+    if !parsed.fully_parsed {
+        mark_inventory_partial_ast(&mut output);
+    }
+    output
+}
+
+pub(crate) fn mark_inventory_partial_ast(output: &mut TsInventoryOutput) {
+    for function in &mut output.functions {
+        if matches!(function.status, TsInventoryStatus::Resolved) {
+            function.status = TsInventoryStatus::unsupported(PARTIAL_AST_REASON);
+        }
+    }
+    for callsite in &mut output.callsites {
+        if matches!(callsite.status, TsInventoryStatus::Resolved) {
+            callsite.status = TsInventoryStatus::unsupported(PARTIAL_AST_REASON);
+        }
+    }
 }
 
 pub(crate) fn extract_ts_inventory_from_program(
@@ -419,10 +437,6 @@ fn stable_inventory_key(prefix: &str, parts: &[(&str, String)]) -> String {
 
 fn length_prefixed(value: &str) -> String {
     format!("{}:{}", value.len(), value)
-}
-
-fn parse_source_type(path: &Path) -> SourceType {
-    SourceType::from_path(path).unwrap_or_default()
 }
 
 fn span_from_oxc(file: crate::core::FileId, source: &str, span: oxc_span::Span) -> Span {

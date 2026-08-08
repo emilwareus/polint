@@ -76,6 +76,7 @@ pub(crate) fn graph_engine_unknowns_with_diagnostics(
     let mut rows = Vec::new();
     rows.extend(go_semantic_unknowns(db));
     rows.extend(go_semantic_diagnostic_unknowns(diagnostics));
+    rows.extend(unsupported_semantic_unknowns(db));
     rows.extend(solver_unknowns(db));
     rows.extend(refined_call_unknowns(db));
     rows.extend(adaptation_unknowns(db));
@@ -243,6 +244,28 @@ fn go_semantic_diagnostic_unknowns(diagnostics: &[Diagnostic]) -> Vec<UnknownRow
                 suggested_artifact: Some("go_setup".to_string()),
                 source_stable_key: Some(diagnostic.stable_fingerprint.clone()),
             }))
+        })
+        .collect()
+}
+
+fn unsupported_semantic_unknowns(db: &AnalysisDb) -> Vec<UnknownRow> {
+    db.unsupported_semantics()
+        .iter()
+        .map(|row| {
+            UnknownRow::new(UnknownRowInput {
+                category: UnknownCategory::UnsupportedSemantic,
+                capability: Some("semantic_mir".to_string()),
+                family: Some("UnsupportedSemantic".to_string()),
+                provider: "polint.semantic_mir".to_string(),
+                file: db.path_for(row.file),
+                span: Some(UnknownSpan::from_span(&row.span)),
+                status: "unsupported".to_string(),
+                reason: Some(row.construct.clone()),
+                precision: Some("unsupported".to_string()),
+                docs_path: Some("docs/facts/capability-plans.md".to_string()),
+                suggested_artifact: Some("provider".to_string()),
+                source_stable_key: Some(row.stable_key.clone()),
+            })
         })
         .collect()
 }

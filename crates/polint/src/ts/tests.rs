@@ -670,28 +670,28 @@ fn parses_ts_source_from_shared_arc_without_full_source_clone() {
     let production_only = include_str!("adapter.rs");
     assert!(
         production_only.contains("Arc::clone(&file.source)"),
-        "parse_ts_file should refcount Arc<str> (O(1)) instead of copying the buffer"
+        "extract_ts_file_facts should refcount Arc<str> (O(1)) instead of copying the buffer"
     );
     let forbidden = concat!("file.source", ".to_string()");
     assert!(
         !production_only.contains(forbidden),
-        "parse_ts_file should not allocate a full String copy of the source"
+        "extract_ts_file_facts should not allocate a full String copy of the source"
     );
 }
 
 #[test]
 fn source_type_comes_from_file_path_for_ts_family() {
-    let production_source = include_str!("adapter.rs");
-    let helper_signature = ["fn parse_source_type", "(path: &Path) -> SourceType"].concat();
+    let production_source = include_str!("parse.rs");
+    let helper_signature = ["fn source_type", "(path: &Path) -> SourceType"].concat();
     let source_type_from_path = ["SourceType::from_path", "(path).unwrap_or_default()"].concat();
 
     assert!(
         production_source.contains(&helper_signature),
-        "expected parse_source_type helper"
+        "expected crate::ts::source_type helper"
     );
     assert!(
         production_source.contains(&source_type_from_path),
-        "parse_source_type should derive SourceType from the file path"
+        "source_type should derive SourceType from the file path"
     );
 }
 

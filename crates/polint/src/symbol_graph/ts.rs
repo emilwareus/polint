@@ -18,6 +18,7 @@ use crate::symbol_graph::semantic::{
     StableExportIdentity,
 };
 use crate::symbol_graph::stable_id::{StableReferenceKey, StableSymbolKey};
+use crate::ts::parse::parse_ts_file;
 use oxc_allocator::Allocator;
 use oxc_ast::AstKind;
 use oxc_ast::ast::{
@@ -25,14 +26,12 @@ use oxc_ast::ast::{
     ExportDefaultDeclarationKind, Expression, ImportDeclarationSpecifier, ImportOrExportKind,
     ModuleExportName, Program, Statement,
 };
-use oxc_parser::Parser;
 use oxc_semantic::{
     AstNodes, Reference, ReferenceFlags, ReferenceId as OxcReferenceId, Scoping, SemanticBuilder,
     SymbolFlags, SymbolId as OxcSymbolId,
 };
-use oxc_span::{GetSpan, SourceType};
+use oxc_span::GetSpan;
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
 
 const TS_SYMBOL_GRAPH_CAPABILITIES: &[&str] = &["symbols", "references"];
 const SYMBOL_FACTS_DOCS_PATH: &str = "docs/facts/symbols-and-references.md";
@@ -159,25 +158,22 @@ fn derive_ts_file_symbols(
 ) -> TsFileSymbolSummary {
     let source = file.source.as_ref();
     let allocator = Allocator::default();
-    let parsed = Parser::new(&allocator, source, parse_source_type(&file.path)).parse();
-    output
-        .diagnostics
-        .extend(oxc_diagnostics(file, &parsed.errors, "parser/ts"));
+    let parsed = parse_ts_file(&allocator, file);
+    // Parser diagnostics are emitted only by the primary ts adapter.
 
-    if parsed.panicked && parsed.program.body.is_empty() {
-        output.diagnostics.push(Diagnostic::error(
-            "parser/ts",
-            file.relative_path.clone(),
-            TextRange::point(1, 1),
-            "TS/JS parser reported a syntax error",
-        ));
+    if parsed.is_catastrophic() {
         return TsFileSymbolSummary::new(file.id);
     }
+    let symbol_precision = if parsed.fully_parsed {
+        SymbolPrecision::ExactLocal
+    } else {
+        SymbolPrecision::Unsupported
+    };
 
-    let import_aliases = collect_import_aliases(file, source, &parsed.program);
+    let import_aliases = collect_import_aliases(file, source, parsed.program());
     let semantic_return = SemanticBuilder::new()
         .with_check_syntax_error(true)
-        .build(&parsed.program);
+        .build(parsed.program());
     output.diagnostics.extend(oxc_diagnostics(
         file,
         &semantic_return.errors,
@@ -190,12 +186,12 @@ fn derive_ts_file_symbols(
     output.semantic.extend(derive_ts_semantic_index(
         file,
         source,
-        &parsed.program,
+        parsed.program(),
         scoping,
         nodes,
         requests_references,
     ));
-    let export_names = collect_export_names(&parsed.program, scoping);
+    let export_names = collect_export_names(parsed.program(), scoping);
     let parameter_symbols = collect_parameter_symbols(nodes);
     let mut summary = TsFileSymbolSummary {
         file: file.id,
@@ -247,7 +243,7 @@ fn derive_ts_file_symbols(
             owner_chain,
             primary_span: Some(primary_span),
             is_exported,
-            precision: SymbolPrecision::ExactLocal,
+            precision: symbol_precision,
         });
         symbol_ids.insert(oxc_symbol, symbol);
         if let Some(names) = export_names.get(&oxc_symbol) {
@@ -2148,10 +2144,6 @@ fn module_export_name_text(name: &ModuleExportName<'_>) -> String {
     }
 }
 
-fn parse_source_type(path: &Path) -> SourceType {
-    SourceType::from_path(path).unwrap_or_default()
-}
-
 fn span_from_oxc(file: crate::core::FileId, source: &str, span: oxc_span::Span) -> Span {
     span_from_byte_range(file, source, span.start as usize, span.end as usize)
 }
@@ -2667,12 +2659,12 @@ export const used = missing;
 
 #[cfg(test)]
 mod semantic_scopes {
-    use super::{derive_ts_semantic_index, parse_source_type, reference_scope_stable_key};
+    use super::{derive_ts_semantic_index, reference_scope_stable_key};
     use crate::core::{FileId, Language, SourceFile};
     use crate::symbol_graph::semantic::ScopeKind;
+    use crate::ts::parse_ts_file;
     use oxc_allocator::Allocator;
     use oxc_ast::AstKind;
-    use oxc_parser::Parser;
     use oxc_semantic::SemanticBuilder;
     use std::path::PathBuf;
 
@@ -2714,13 +2706,13 @@ class Widget {
 "#;
         let file = source_file(source);
         let allocator = Allocator::default();
-        let parsed = Parser::new(&allocator, source, parse_source_type(&file.path)).parse();
-        let semantic = SemanticBuilder::new().build(&parsed.program).semantic;
+        let parsed = parse_ts_file(&allocator, &file);
+        let semantic = SemanticBuilder::new().build(parsed.program()).semantic;
 
         let output = derive_ts_semantic_index(
             &file,
             source,
-            &parsed.program,
+            parsed.program(),
             semantic.scoping(),
             semantic.nodes(),
             false,
@@ -2754,8 +2746,8 @@ function outer(value: number) {
 "#;
         let file = source_file(source);
         let allocator = Allocator::default();
-        let parsed = Parser::new(&allocator, source, parse_source_type(&file.path)).parse();
-        let semantic = SemanticBuilder::new().build(&parsed.program).semantic;
+        let parsed = parse_ts_file(&allocator, &file);
+        let semantic = SemanticBuilder::new().build(parsed.program()).semantic;
         let reference = semantic
             .nodes()
             .iter()
@@ -2779,11 +2771,11 @@ function outer(value: number) {
 
 #[cfg(test)]
 mod semantic_imports_exports {
-    use super::{derive_ts_semantic_index, parse_source_type};
+    use super::derive_ts_semantic_index;
     use crate::core::{FileId, Language, SourceFile};
     use crate::symbol_graph::semantic::{ExportKind, SemanticImportKind, SemanticStatus};
+    use crate::ts::parse_ts_file;
     use oxc_allocator::Allocator;
-    use oxc_parser::Parser;
     use oxc_semantic::SemanticBuilder;
     use std::collections::BTreeSet;
     use std::path::PathBuf;
@@ -2798,13 +2790,13 @@ mod semantic_imports_exports {
             content_hash: "test-hash".to_string(),
         };
         let allocator = Allocator::default();
-        let parsed = Parser::new(&allocator, source, parse_source_type(&file.path)).parse();
-        let semantic = SemanticBuilder::new().build(&parsed.program).semantic;
+        let parsed = parse_ts_file(&allocator, &file);
+        let semantic = SemanticBuilder::new().build(parsed.program()).semantic;
 
         derive_ts_semantic_index(
             &file,
             source,
-            &parsed.program,
+            parsed.program(),
             semantic.scoping(),
             semantic.nodes(),
             false,
@@ -2930,12 +2922,12 @@ const lazy = import(moduleName);
 
 #[cfg(test)]
 mod semantic_resolution {
-    use super::{derive_ts_file_symbols, derive_ts_semantic_index, parse_source_type};
+    use super::{derive_ts_file_symbols, derive_ts_semantic_index};
     use crate::core::{FileId, Language, SourceFile, SymbolFact};
     use crate::symbol_graph::semantic::{ResolutionStepKind, SemanticIndexOutput, SemanticStatus};
     use crate::symbol_graph::{LanguageSymbolOutput, model::SymbolGraphBuilder};
+    use crate::ts::parse_ts_file;
     use oxc_allocator::Allocator;
-    use oxc_parser::Parser;
     use oxc_semantic::SemanticBuilder;
     use std::path::PathBuf;
 
@@ -2949,13 +2941,13 @@ mod semantic_resolution {
             content_hash: "test-hash".to_string(),
         };
         let allocator = Allocator::default();
-        let parsed = Parser::new(&allocator, source, parse_source_type(&file.path)).parse();
-        let semantic = SemanticBuilder::new().build(&parsed.program).semantic;
+        let parsed = parse_ts_file(&allocator, &file);
+        let semantic = SemanticBuilder::new().build(parsed.program()).semantic;
 
         derive_ts_semantic_index(
             &file,
             source,
-            &parsed.program,
+            parsed.program(),
             semantic.scoping(),
             semantic.nodes(),
             true,

@@ -6,10 +6,13 @@ mod adapter;
 pub(crate) mod binding;
 pub(crate) mod inventory;
 pub(crate) mod object_model;
+pub(crate) mod parse;
 pub(crate) mod scope;
 pub(crate) mod spans;
 #[cfg(test)]
 mod tests;
+
+pub(crate) use parse::{PARSER_RECOVERY_CONSTRUCT, parse_ts_file};
 
 /// Re-export for `polint::_bench::ts`; production callers use the crate-internal plan-aware entrypoint.
 #[allow(unreachable_pub, unused_imports)]

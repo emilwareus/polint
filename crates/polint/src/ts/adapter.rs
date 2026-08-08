@@ -21,13 +21,13 @@ use oxc_ast::ast::{
     ObjectPropertyKind, Program, PropertyKey, RegExpLiteral, Statement, TemplateLiteral,
     VariableDeclarator,
 };
-use oxc_parser::Parser;
-use oxc_span::{GetSpan, SourceType};
+use oxc_span::GetSpan;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
-use std::path::Path;
 use std::sync::Arc;
+
+use crate::ts::parse::{parse_ts_source, source_type};
 
 const TS_CACHE_SCHEMA: &str = "ts-facts-v15";
 const TS_PROVIDER_ID: &str = "polint.ts.syntax";
@@ -258,7 +258,7 @@ fn parser_parameter_digest(files: &[&SourceFile]) -> Digest {
                 "{}={:?}:{:?}",
                 file.relative_path,
                 file.language,
-                parse_source_type(&file.path)
+                source_type(&file.path)
             )
         })
         .collect::<Vec<_>>();
@@ -441,7 +441,7 @@ fn analyze_ts_source_file(
         Arc::clone(&file.source),
         file.content_hash.clone(),
     );
-    let mut diagnostics = match parse_ts_file(&mut local_db, local_file) {
+    let mut diagnostics = match extract_ts_file_facts(&mut local_db, local_file) {
         Ok(file_diagnostics) => file_diagnostics,
         Err(error) => {
             return TsFileAnalysis {
@@ -483,42 +483,33 @@ fn cache_write_diagnostic(path: &str, error: anyhow::Error) -> Diagnostic {
     )
 }
 
-fn parse_ts_file(db: &mut AnalysisDb, file_id: FileId) -> Result<Vec<Diagnostic>> {
+fn extract_ts_file_facts(db: &mut AnalysisDb, file_id: FileId) -> Result<Vec<Diagnostic>> {
     let (source, language, path) = {
         let file = db.file(file_id).context("missing source file")?;
         (Arc::clone(&file.source), file.language, file.path.clone())
     };
     let source = source.as_ref();
     let allocator = Allocator::default();
-    let source_type = parse_source_type(&path);
-    let parsed = Parser::new(&allocator, source, source_type).parse();
+    let parsed = parse_ts_source(&allocator, &path, source);
     let mut diagnostics = Vec::new();
 
     for error in &parsed.errors {
-        let range = error
-            .labels
-            .as_ref()
-            .and_then(|labels| labels.first())
-            .map(|label| {
-                span_from_byte_range(
-                    file_id,
-                    source,
-                    label.offset(),
-                    label.offset() + label.len(),
-                )
-                .diagnostic_range()
-            })
-            .unwrap_or_else(|| TextRange::point(1, 1));
+        let range = match (error.start_byte, error.end_byte) {
+            (Some(start), Some(end)) => {
+                span_from_byte_range(file_id, source, start, end).diagnostic_range()
+            }
+            _ => TextRange::point(1, 1),
+        };
 
         diagnostics.push(Diagnostic::error(
             "parser/ts",
             db.path_for(file_id),
             range,
-            format!("TS/JS parser reported a syntax error: {error}"),
+            format!("TS/JS parser reported a syntax error: {}", error.message),
         ));
     }
 
-    if parsed.panicked && parsed.program.body.is_empty() && diagnostics.is_empty() {
+    if parsed.is_catastrophic() && diagnostics.is_empty() {
         diagnostics.push(Diagnostic::error(
             "parser/ts",
             db.path_for(file_id),
@@ -528,9 +519,10 @@ fn parse_ts_file(db: &mut AnalysisDb, file_id: FileId) -> Result<Vec<Diagnostic>
     }
 
     let import_count = db.imports().len();
-    extract_from_program(db, file_id, source, language, &parsed.program);
+    extract_from_program(db, file_id, source, language, parsed.program());
     if db.imports().len() == import_count {
         let mut module_requests = parsed
+            .raw
             .module_record
             .requested_modules
             .iter()
@@ -553,10 +545,6 @@ fn parse_ts_file(db: &mut AnalysisDb, file_id: FileId) -> Result<Vec<Diagnostic>
         }
     }
     Ok(diagnostics)
-}
-
-fn parse_source_type(path: &Path) -> SourceType {
-    SourceType::from_path(path).unwrap_or_default()
 }
 
 fn extract_from_program(

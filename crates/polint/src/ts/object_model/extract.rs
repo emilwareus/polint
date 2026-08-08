@@ -1,7 +1,6 @@
 #![allow(dead_code, reason = "kept for private internal consumers")]
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use oxc_allocator::Allocator;
 use oxc_ast::AstKind;
@@ -10,9 +9,8 @@ use oxc_ast::ast::{
     MethodDefinition, MethodDefinitionKind, ObjectPropertyKind, Program, PropertyKey,
     VariableDeclarator,
 };
-use oxc_parser::Parser;
 use oxc_semantic::{AstNodes, NodeId, Scoping, SemanticBuilder, SymbolId as OxcSymbolId};
-use oxc_span::{GetSpan, SourceType};
+use oxc_span::GetSpan;
 
 use crate::core::{SourceFile, Span, span_from_byte_range};
 use crate::ts::inventory::extract::extract_ts_inventory_from_program;
@@ -24,28 +22,62 @@ use crate::ts::object_model::facts::{
     TsReceiverBindingFact, TsReceiverBindingId, TsReceiverBindingKind,
 };
 use crate::ts::object_model::store::TsObjectModelOutput;
+use crate::ts::parse::{PARTIAL_AST_REASON, parse_ts_file};
 
 pub(crate) fn extract_ts_object_model(file: &SourceFile) -> TsObjectModelOutput {
     let source = file.source.as_ref();
     let allocator = Allocator::default();
-    let parsed = Parser::new(&allocator, source, parse_source_type(&file.path)).parse();
+    let parsed = parse_ts_file(&allocator, file);
 
-    if parsed.panicked && parsed.program.body.is_empty() {
+    if parsed.is_catastrophic() {
         return TsObjectModelOutput::default();
     }
 
-    let semantic = SemanticBuilder::new().build(&parsed.program).semantic;
+    let semantic = SemanticBuilder::new().build(parsed.program()).semantic;
     let inventory =
-        extract_ts_inventory_from_program(file, source, &parsed.program, semantic.nodes())
+        extract_ts_inventory_from_program(file, source, parsed.program(), semantic.nodes())
             .normalized();
-    extract_ts_object_model_from_program(
+    let mut output = extract_ts_object_model_from_program(
         file,
         source,
-        &parsed.program,
+        parsed.program(),
         semantic.scoping(),
         semantic.nodes(),
         &inventory,
-    )
+    );
+    if !parsed.fully_parsed {
+        mark_object_model_partial_ast(&mut output);
+    }
+    output
+}
+
+pub(crate) fn mark_object_model_partial_ast(output: &mut TsObjectModelOutput) {
+    let unsupported = TsObjectModelStatus::unsupported(PARTIAL_AST_REASON);
+    for row in &mut output.allocations {
+        if matches!(row.status, TsObjectModelStatus::Resolved) {
+            row.status = unsupported.clone();
+        }
+    }
+    for row in &mut output.property_writes {
+        if matches!(row.status, TsObjectModelStatus::Resolved) {
+            row.status = unsupported.clone();
+        }
+    }
+    for row in &mut output.property_reads {
+        if matches!(row.status, TsObjectModelStatus::Resolved) {
+            row.status = unsupported.clone();
+        }
+    }
+    for row in &mut output.receiver_bindings {
+        if matches!(row.status, TsObjectModelStatus::Resolved) {
+            row.status = unsupported.clone();
+        }
+    }
+    for row in &mut output.prototype_links {
+        if matches!(row.status, TsObjectModelStatus::Resolved) {
+            row.status = unsupported.clone();
+        }
+    }
 }
 
 pub(crate) fn extract_ts_object_model_from_program(
@@ -1326,10 +1358,6 @@ fn stable_object_key(prefix: &str, parts: &[(&str, String)]) -> String {
 
 fn length_prefixed(value: &str) -> String {
     format!("{}:{}", value.len(), value)
-}
-
-fn parse_source_type(path: &Path) -> SourceType {
-    SourceType::from_path(path).unwrap_or_default()
 }
 
 fn span_from_oxc(file: crate::core::FileId, source: &str, span: oxc_span::Span) -> Span {

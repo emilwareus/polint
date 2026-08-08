@@ -9,8 +9,7 @@ use oxc_ast::ast::{
     MethodDefinitionKind, ModuleExportName, ObjectProperty, ObjectPropertyKind, Program,
     PropertyKey, PropertyKind, Statement, VariableDeclaration, VariableDeclarator,
 };
-use oxc_parser::Parser;
-use oxc_span::{GetSpan, SourceType};
+use oxc_span::GetSpan;
 
 use crate::analysis::calls::facts::{
     CallAlgorithm, CallCallee, CallEdgeKind, CallPrecision, CallProvenance, CallSiteFact,
@@ -22,6 +21,7 @@ use crate::analysis_kernel::FactFamily;
 use crate::core::{
     AnalysisDb, FileId, FunctionFact, FunctionId, SourceFile, TS_JS_MODULE_FUNCTION_NAME,
 };
+use crate::ts::parse_ts_file;
 
 /// Maximum bounded rounds for the cross-module export-summary fixpoint. Each
 /// round lets a module's `require`/`import` targets observe the previous
@@ -61,13 +61,8 @@ pub(crate) fn resolve_ts_value_flow_targets(
             continue;
         };
         let allocator = Allocator::default();
-        let parsed = Parser::new(
-            &allocator,
-            file.source.as_ref(),
-            SourceType::from_path(&file.path).unwrap_or_default(),
-        )
-        .parse();
-        if parsed.panicked && parsed.program.body.is_empty() {
+        let parsed = parse_ts_file(&allocator, file);
+        if parsed.is_catastrophic() {
             continue;
         }
         let mut collector = TsValueFlowCollector {
@@ -94,7 +89,7 @@ pub(crate) fn resolve_ts_value_flow_targets(
             rows: Vec::new(),
             next_id,
         };
-        collector.collect_program(&parsed.program);
+        collector.collect_program(parsed.program());
         next_id += collector.rows.len() as u64;
         rows.extend(collector.rows);
     }
@@ -321,13 +316,8 @@ fn compute_module_export_summaries(
                 continue;
             };
             let allocator = Allocator::default();
-            let parsed = Parser::new(
-                &allocator,
-                file.source.as_ref(),
-                SourceType::from_path(&file.path).unwrap_or_default(),
-            )
-            .parse();
-            if parsed.panicked && parsed.program.body.is_empty() {
+            let parsed = parse_ts_file(&allocator, file);
+            if parsed.is_catastrophic() {
                 continue;
             }
             let mut collector = TsValueFlowCollector {
@@ -354,7 +344,7 @@ fn compute_module_export_summaries(
                 rows: Vec::new(),
                 next_id: 0,
             };
-            collector.collect_program(&parsed.program);
+            collector.collect_program(parsed.program());
             if !collector.exports.is_empty() {
                 next.insert(file.id, collector.exports);
             }
@@ -393,13 +383,8 @@ fn compute_function_return_summaries(
             continue;
         };
         let allocator = Allocator::default();
-        let parsed = Parser::new(
-            &allocator,
-            file.source.as_ref(),
-            SourceType::from_path(&file.path).unwrap_or_default(),
-        )
-        .parse();
-        if parsed.panicked && parsed.program.body.is_empty() {
+        let parsed = parse_ts_file(&allocator, file);
+        if parsed.is_catastrophic() {
             continue;
         }
         let mut collector = TsValueFlowCollector {
@@ -426,7 +411,7 @@ fn compute_function_return_summaries(
             rows: Vec::new(),
             next_id: 0,
         };
-        collector.collect_return_summaries(&parsed.program, &mut returns);
+        collector.collect_return_summaries(parsed.program(), &mut returns);
     }
     returns
 }

@@ -11,8 +11,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use oxc_allocator::Allocator;
-use oxc_parser::Parser;
-use oxc_span::SourceType;
 
 use crate::analysis::calls::facts::{
     CallAlgorithm, CallCallee, CallEdgeKind, CallPrecision, CallProvenance, CallSiteFact,
@@ -20,6 +18,7 @@ use crate::analysis::calls::facts::{
 };
 use crate::analysis::ids::CallTargetId;
 use crate::core::{AnalysisDb, FileId, FunctionId};
+use crate::ts::parse_ts_file;
 
 use super::harvest::{CalleeHint, Harvester};
 use super::solver::PointsToBudget;
@@ -58,16 +57,13 @@ pub(crate) fn resolve_js_points_to_targets(
         .filter(|file| file.language.is_ts_family())
     {
         let allocator = Allocator::default();
-        let parsed = Parser::new(
-            &allocator,
-            file.source.as_ref(),
-            SourceType::from_path(&file.path).unwrap_or_default(),
-        )
-        .parse();
-        if parsed.panicked && parsed.program.body.is_empty() {
+        let parsed = parse_ts_file(&allocator, file);
+        if parsed.is_catastrophic() {
             continue;
         }
-        harvester.harvest_file(file.id, &parsed.program);
+        // Partial ASTs are declared by MIR `parser recovery` unsupported facts;
+        // this harvest still runs so points-to can use recovered structure.
+        harvester.harvest_file(file.id, parsed.program());
         // `allocator` drops here; the harvester retains no AST references (its
         // constraints own their strings), so this is safe.
     }

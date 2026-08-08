@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
@@ -8,8 +7,7 @@ use oxc_ast::ast::{
     LogicalOperator, MethodDefinition, ObjectPropertyKind, Program, PropertyKey, Statement,
     VariableDeclarator,
 };
-use oxc_parser::Parser;
-use oxc_span::{GetSpan, SourceType};
+use oxc_span::GetSpan;
 
 use crate::analysis::ids::{
     CallSiteId, MirBodyId, MirOpId, MirPredicateId, PlaceId, UnsupportedId,
@@ -29,7 +27,7 @@ use crate::core::{
     is_synthetic_ts_js_module_function,
 };
 use crate::ts::{
-    anonymous_callable_name, class_callable_name,
+    PARSER_RECOVERY_CONSTRUCT, anonymous_callable_name, class_callable_name, parse_ts_file,
     spans::{
         normalized_call_expression_span, normalized_new_expression_span,
         normalized_tagged_template_span,
@@ -77,26 +75,14 @@ struct TsMirLowering {
 impl TsMirLowering {
     fn lower_file(&mut self, db: &AnalysisDb, file: &SourceFile) {
         let allocator = Allocator::default();
-        let parsed = Parser::new(
-            &allocator,
-            file.source.as_ref(),
-            parse_source_type(&file.path),
-        )
-        .parse();
+        let parsed = parse_ts_file(&allocator, file);
         for error in &parsed.errors {
-            let span = error
-                .labels
-                .as_ref()
-                .and_then(|labels| labels.first())
-                .map(|label| {
-                    crate::core::span_from_byte_range(
-                        file.id,
-                        file.source.as_ref(),
-                        label.offset(),
-                        label.offset() + label.len(),
-                    )
-                })
-                .unwrap_or_else(|| Span::point(file.id, 1, 1));
+            let span = match (error.start_byte, error.end_byte) {
+                (Some(start), Some(end)) => {
+                    crate::core::span_from_byte_range(file.id, file.source.as_ref(), start, end)
+                }
+                _ => Span::point(file.id, 1, 1),
+            };
             self.unsupported
                 .push(UnsupportedDraft::new(UnsupportedDraftInput {
                     id: UnsupportedId(self.unsupported.len() as u64),
@@ -106,10 +92,18 @@ impl TsMirLowering {
                     file_key: file.relative_path.clone(),
                     file: file.id,
                     span,
-                    construct: "parser recovery".to_string(),
-                    source_evidence: error.to_string(),
+                    construct: PARSER_RECOVERY_CONSTRUCT.to_string(),
+                    source_evidence: error.message.clone(),
                     affected_place_keys: Vec::new(),
-                    affected_domains: vec![UnsupportedDomain::Mir, UnsupportedDomain::Cfg],
+                    affected_domains: vec![
+                        UnsupportedDomain::Mir,
+                        UnsupportedDomain::Cfg,
+                        UnsupportedDomain::Calls,
+                        UnsupportedDomain::Domains,
+                        UnsupportedDomain::DataFlow,
+                        UnsupportedDomain::Aliases,
+                        UnsupportedDomain::Summaries,
+                    ],
                     conservative_action: ConservativeAction::StopLowering,
                 }));
         }
@@ -124,7 +118,7 @@ impl TsMirLowering {
             let mut module_lowering =
                 FunctionLowering::new(file, file.source.as_ref(), module_function.id, &body);
             module_lowering.lower_statements(
-                &parsed.program.body,
+                &parsed.program().body,
                 &mut self.places,
                 &mut self.operations,
                 &mut self.unsupported,
@@ -132,7 +126,7 @@ impl TsMirLowering {
         }
 
         let mut functions = Vec::new();
-        collect_functions(file.source.as_ref(), &parsed.program, &mut functions);
+        collect_functions(file.source.as_ref(), parsed.program(), &mut functions);
         functions.sort_by(|left, right| {
             (
                 file.relative_path.as_str(),
@@ -2938,7 +2932,15 @@ fn unsupported_domains_for(construct: &str) -> Vec<UnsupportedDomain> {
             UnsupportedDomain::Domains,
             UnsupportedDomain::DataFlow,
         ],
-        "parser recovery" => vec![UnsupportedDomain::Mir, UnsupportedDomain::Cfg],
+        "parser recovery" => vec![
+            UnsupportedDomain::Mir,
+            UnsupportedDomain::Cfg,
+            UnsupportedDomain::Calls,
+            UnsupportedDomain::Domains,
+            UnsupportedDomain::DataFlow,
+            UnsupportedDomain::Aliases,
+            UnsupportedDomain::Summaries,
+        ],
         _ => vec![UnsupportedDomain::Mir],
     }
 }
@@ -3104,10 +3106,6 @@ fn call_site_for_span(span: oxc_span::Span) -> CallSiteId {
     CallSiteId(((span.start as u64) << 32) | span.end as u64)
 }
 
-fn parse_source_type(path: &Path) -> SourceType {
-    SourceType::from_path(path).unwrap_or_default()
-}
-
 fn language_label(language: Language) -> &'static str {
     match language {
         Language::TypeScript => "typescript",
@@ -3131,6 +3129,93 @@ mod places {
         let diagnostics = crate::ts::analyze(&mut db);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         lower_ts_mir(&db)
+    }
+
+    fn lower_allowing_parser_diagnostics(path: &str, source: &str) -> (AnalysisDb, MirOutput) {
+        let mut db = AnalysisDb::new();
+        db.add_file(PathBuf::from(path), path.to_string(), source.to_string());
+        let _diagnostics = crate::ts::analyze(&mut db);
+        let output = lower_ts_mir(&db);
+        (db, output)
+    }
+
+    #[test]
+    fn a_recoverable_syntax_error_is_recorded_as_unsupported_not_ignored() {
+        let mut db = AnalysisDb::new();
+        db.add_file(
+            PathBuf::from("ok.ts"),
+            "ok.ts".to_string(),
+            "export function ok(value: number) { return value + 1; }".to_string(),
+        );
+        db.add_file(
+            PathBuf::from("broken.tsx"),
+            "broken.tsx".to_string(),
+            "const x = <div></span>;".to_string(),
+        );
+        let diagnostics = crate::ts::analyze(&mut db);
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.rule_id == "parser/ts"
+                    && diagnostic.file == "broken.tsx"),
+            "primary adapter must still emit parser/ts for the broken file: {diagnostics:?}"
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.file != "ok.ts" || diagnostic.rule_id != "parser/ts"),
+            "valid file must stay free of parser/ts diagnostics"
+        );
+
+        db.replace_semantic_mir(lower_ts_mir(&db))
+            .expect("store MIR unsupported rows");
+
+        let rows = crate::analysis::unknown_taxonomy::collect::graph_engine_unknowns(&db);
+        assert!(
+            rows.iter().any(|row| {
+                row.family.as_deref() == Some("UnsupportedSemantic")
+                    && row.file == "broken.tsx"
+                    && row.reason.as_deref() == Some(crate::ts::PARSER_RECOVERY_CONSTRUCT)
+            }),
+            "inspect unknowns must surface parser-recovery unsupported rows: {rows:?}"
+        );
+        assert!(
+            rows.iter().all(|row| row.file != "ok.ts"),
+            "valid file must not gain parser-recovery unknowns: {rows:?}"
+        );
+        assert!(
+            db.functions()
+                .iter()
+                .any(|function| function.name == "ok" && db.path_for(function.file) == "ok.ts"),
+            "valid file analysis must remain intact"
+        );
+    }
+
+    #[test]
+    fn catastrophic_and_recoverable_fixtures_both_record_parser_recovery() {
+        let (_db, recoverable) =
+            lower_allowing_parser_diagnostics("recoverable.tsx", "const x = <div></span>;");
+        assert!(
+            recoverable
+                .unsupported
+                .iter()
+                .any(|row| row.construct == crate::ts::PARSER_RECOVERY_CONSTRUCT),
+            "recoverable syntax error must record parser recovery: {:?}",
+            recoverable.unsupported
+        );
+
+        let (_db, catastrophic) = lower_allowing_parser_diagnostics(
+            "catastrophic.ts",
+            "import x from \"./x\";\nconst value = ;",
+        );
+        assert!(
+            catastrophic
+                .unsupported
+                .iter()
+                .any(|row| row.construct == crate::ts::PARSER_RECOVERY_CONSTRUCT),
+            "catastrophic syntax error must record parser recovery: {:?}",
+            catastrophic.unsupported
+        );
     }
 
     #[test]

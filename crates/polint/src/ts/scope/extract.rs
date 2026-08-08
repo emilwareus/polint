@@ -1,7 +1,6 @@
 #![allow(dead_code, reason = "kept for private internal consumers")]
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use oxc_allocator::Allocator;
 use oxc_ast::AstKind;
@@ -10,14 +9,14 @@ use oxc_ast::ast::{
     Expression, FunctionType, ImportDeclarationSpecifier, ImportOrExportKind, ModuleExportName,
     ObjectPropertyKind, Program, PropertyKey, Statement, VariableDeclarationKind,
 };
-use oxc_parser::Parser;
 use oxc_semantic::{
     AstNodes, ScopeId as OxcScopeId, Scoping, SemanticBuilder, SymbolFlags, SymbolId as OxcSymbolId,
 };
-use oxc_span::{GetSpan, SourceType};
+use oxc_span::GetSpan;
 
 use crate::analysis::ids::{TsBindingId, TsScopeId};
 use crate::core::{FileId, SourceFile, Span, span_from_byte_range};
+use crate::ts::parse::{PARTIAL_AST_REASON, parse_ts_file};
 use crate::ts::scope::facts::{
     TsBindingFact, TsBindingKind, TsBindingStatus, TsDeclarationKind, TsImportExportKind,
     TsScopeFact, TsScopeKind,
@@ -27,21 +26,35 @@ use crate::ts::scope::store::TsScopeOutput;
 pub(crate) fn extract_ts_scope(file: &SourceFile) -> TsScopeOutput {
     let source = file.source.as_ref();
     let allocator = Allocator::default();
-    let parsed = Parser::new(&allocator, source, parse_source_type(&file.path)).parse();
+    let parsed = parse_ts_file(&allocator, file);
 
-    if parsed.panicked && parsed.program.body.is_empty() {
+    if parsed.is_catastrophic() {
         return TsScopeOutput::default();
     }
 
-    let semantic = SemanticBuilder::new().build(&parsed.program).semantic;
-    extract_ts_scope_from_program(
+    let semantic = SemanticBuilder::new().build(parsed.program()).semantic;
+    let mut output = extract_ts_scope_from_program(
         file,
         source,
-        &parsed.program,
+        parsed.program(),
         semantic.scoping(),
         semantic.nodes(),
     )
-    .normalized()
+    .normalized();
+    if !parsed.fully_parsed {
+        mark_scope_partial_ast(&mut output);
+    }
+    output
+}
+
+pub(crate) fn mark_scope_partial_ast(output: &mut TsScopeOutput) {
+    for binding in &mut output.bindings {
+        if matches!(binding.status, TsBindingStatus::Present) {
+            binding.status = TsBindingStatus::unsupported_dynamic(PARTIAL_AST_REASON);
+            binding.binding_kind = TsBindingKind::UnsupportedDynamic;
+            binding.declaration_kind = TsDeclarationKind::UnsupportedDynamic;
+        }
+    }
 }
 
 pub(crate) fn extract_ts_scope_from_program(
@@ -1318,10 +1331,6 @@ fn stable_key(prefix: &str, parts: &[(&str, String)]) -> String {
 
 fn length_prefixed(value: &str) -> String {
     format!("{}:{}", value.len(), value)
-}
-
-fn parse_source_type(path: &Path) -> SourceType {
-    SourceType::from_path(path).unwrap_or_default()
 }
 
 fn span_from_oxc(file: FileId, source: &str, span: oxc_span::Span) -> Span {
