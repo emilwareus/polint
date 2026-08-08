@@ -99,6 +99,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use super::fact_store::{FactStore, FactStoreEntry, GO_SYNTAX_STORE_FAMILY, GoSyntaxStore};
 use super::facts::{
     BranchObligation, CachedFileFacts, ComplexityMetricFact, CoverageFact, DefinitionFact,
     FileMetricFact, FunctionFact, FunctionMetricFact, ImportFact, JsxAttributeFact, ModuleEdge,
@@ -126,9 +127,8 @@ use super::{
 pub struct AnalysisDb {
     pub(crate) files: Vec<SourceFile>,
     pub(crate) fact_meta: FactMetaStore,
-    pub(crate) packages: Vec<PackageFact>,
-    pub(crate) functions: Vec<FunctionFact>,
-    pub(crate) imports: Vec<ImportFact>,
+    /// Provider-owned stores keyed by primary [`FactFamily`]. Iteration stays ordered.
+    pub(crate) fact_stores: BTreeMap<FactFamily, FactStoreEntry>,
     pub(crate) resolved_imports: Vec<ResolvedImportFact>,
     pub(crate) module_nodes: Vec<ModuleNode>,
     pub(crate) module_edges: Vec<ModuleEdge>,
@@ -162,8 +162,6 @@ pub struct AnalysisDb {
     pub(crate) symbols_by_file: BTreeMap<FileId, Vec<usize>>,
     pub(crate) references_by_file: BTreeMap<FileId, Vec<usize>>,
     pub(crate) symbols_by_name: BTreeMap<String, Vec<usize>>,
-    pub(crate) branches: Vec<BranchObligation>,
-    pub(crate) tests: Vec<TestFact>,
     pub(crate) coverage: Vec<CoverageFact>,
     pub(crate) file_metrics: Vec<FileMetricFact>,
     pub(crate) function_metrics: Vec<FunctionMetricFact>,
@@ -294,12 +292,16 @@ pub struct AnalysisDb {
 
 impl Default for AnalysisDb {
     fn default() -> Self {
+        let mut fact_stores = BTreeMap::new();
+        let mut go_syntax = GoSyntaxStore::default();
+        // Trait method is part of the store contract (eviction later). Calling on an
+        // empty store at construction keeps the method on the product path.
+        FactStore::clear(&mut go_syntax);
+        fact_stores.insert(GO_SYNTAX_STORE_FAMILY, FactStoreEntry::new(go_syntax));
         Self {
             files: Vec::new(),
             fact_meta: FactMetaStore::default(),
-            packages: Vec::new(),
-            functions: Vec::new(),
-            imports: Vec::new(),
+            fact_stores,
             resolved_imports: Vec::new(),
             module_nodes: Vec::new(),
             module_edges: Vec::new(),
@@ -333,8 +335,6 @@ impl Default for AnalysisDb {
             symbols_by_file: BTreeMap::new(),
             references_by_file: BTreeMap::new(),
             symbols_by_name: BTreeMap::new(),
-            branches: Vec::new(),
-            tests: Vec::new(),
             coverage: Vec::new(),
             file_metrics: Vec::new(),
             function_metrics: Vec::new(),
@@ -436,6 +436,31 @@ impl AnalysisDb {
         Self::default()
     }
 
+    fn go_syntax_store(&self) -> &GoSyntaxStore {
+        self.fact_store(GO_SYNTAX_STORE_FAMILY)
+            .expect("GoSyntaxStore is installed when AnalysisDb is constructed")
+    }
+
+    fn go_syntax_store_mut(&mut self) -> &mut GoSyntaxStore {
+        self.fact_store_mut(GO_SYNTAX_STORE_FAMILY)
+            .expect("GoSyntaxStore is installed when AnalysisDb is constructed")
+    }
+
+    /// Typed downcast helper for registry stores. Returns `None` when the family
+    /// is absent or holds a different concrete store type.
+    pub(crate) fn fact_store<T: 'static>(&self, family: FactFamily) -> Option<&T> {
+        self.fact_stores
+            .get(&family)
+            .and_then(|entry| entry.as_store().as_any().downcast_ref::<T>())
+    }
+
+    /// Mutable typed downcast helper for registry stores.
+    pub(crate) fn fact_store_mut<T: 'static>(&mut self, family: FactFamily) -> Option<&mut T> {
+        self.fact_stores
+            .get_mut(&family)
+            .and_then(|entry| entry.as_store_mut().as_any_mut().downcast_mut::<T>())
+    }
+
     /// Injects diff-to-target-ref facts for `polint review`.
     ///
     /// Called by the host runner after the kernel runs and before rules
@@ -497,45 +522,40 @@ impl AnalysisDb {
     }
 
     pub fn push_package(&mut self, mut fact: PackageFact) -> PackageId {
-        let id = PackageId(self.packages.len() as u64);
-        fact.id = id;
+        fact.id = PackageId(self.go_syntax_store().packages().len() as u64);
         let metadata = self.package_metadata(&fact);
-        self.packages.push(fact);
+        let id = self.go_syntax_store_mut().push_package(fact);
         self.record_fact_meta(FactFamily::Package, id.0, metadata);
         id
     }
 
     pub fn push_function(&mut self, mut fact: FunctionFact) -> FunctionId {
-        let id = FunctionId(self.functions.len() as u64);
-        fact.id = id;
+        fact.id = FunctionId(self.go_syntax_store().functions().len() as u64);
         let metadata = self.function_metadata(&fact);
-        self.functions.push(fact);
+        let id = self.go_syntax_store_mut().push_function(fact);
         self.record_fact_meta(FactFamily::Function, id.0, metadata);
         id
     }
 
     pub fn push_import(&mut self, mut fact: ImportFact) -> ImportId {
-        let id = ImportId(self.imports.len() as u64);
-        fact.id = id;
+        fact.id = ImportId(self.go_syntax_store().imports().len() as u64);
         let metadata = self.import_metadata(&fact);
-        self.imports.push(fact);
+        let id = self.go_syntax_store_mut().push_import(fact);
         self.record_fact_meta(FactFamily::Import, id.0, metadata);
         id
     }
 
     pub fn push_branch(&mut self, mut fact: BranchObligation) -> BranchId {
-        let id = BranchId(self.branches.len() as u64);
-        fact.id = id;
+        fact.id = BranchId(self.go_syntax_store().branches().len() as u64);
         let metadata = self.branch_metadata(&fact);
-        self.branches.push(fact);
+        let id = self.go_syntax_store_mut().push_branch(fact);
         self.record_fact_meta(FactFamily::BranchObligation, id.0, metadata);
         id
     }
 
     pub fn push_test(&mut self, fact: TestFact) {
-        let run_id = self.tests.len() as u64;
         let metadata = self.test_metadata(&fact);
-        self.tests.push(fact);
+        let run_id = self.go_syntax_store_mut().push_test(fact);
         self.record_fact_meta(FactFamily::Test, run_id, metadata);
     }
 
@@ -875,7 +895,7 @@ impl AnalysisDb {
         }
 
         let function_symbols = self
-            .functions
+            .functions()
             .iter()
             .filter_map(|function| {
                 let symbol = self
@@ -1157,7 +1177,7 @@ impl AnalysisDb {
         &mut self,
         output: ReachabilityProviderOutput,
     ) -> Result<(), AnalysisError> {
-        let valid_function_ids = self.functions.iter().map(|row| row.id).collect();
+        let valid_function_ids = self.functions().iter().map(|row| row.id).collect();
         let valid_entrypoint_ids = self.entrypoint_facts.iter().map(|row| row.id).collect();
         let store =
             ReachabilityStore::from_output(output, &valid_function_ids, &valid_entrypoint_ids)?;
@@ -3310,15 +3330,15 @@ impl AnalysisDb {
     }
 
     pub fn packages(&self) -> &[PackageFact] {
-        &self.packages
+        self.go_syntax_store().packages()
     }
 
     pub fn functions(&self) -> &[FunctionFact] {
-        &self.functions
+        self.go_syntax_store().functions()
     }
 
     pub fn imports(&self) -> &[ImportFact] {
-        &self.imports
+        self.go_syntax_store().imports()
     }
 
     pub fn resolved_imports(&self) -> &[ResolvedImportFact] {
@@ -3531,11 +3551,11 @@ impl AnalysisDb {
     }
 
     pub fn branches(&self) -> &[BranchObligation] {
-        &self.branches
+        self.go_syntax_store().branches()
     }
 
     pub fn tests(&self) -> &[TestFact] {
-        &self.tests
+        self.go_syntax_store().tests()
     }
 
     pub fn coverage(&self) -> &[CoverageFact] {
@@ -3580,38 +3600,38 @@ impl AnalysisDb {
 impl AnalysisDb {
     pub fn facts_for_file(&self, file: FileId) -> CachedFileFacts {
         let branch_ids = self
-            .branches
+            .branches()
             .iter()
             .filter(|branch| branch.file == file)
             .map(|branch| branch.id)
             .collect::<BTreeSet<_>>();
         CachedFileFacts {
             packages: self
-                .packages
+                .packages()
                 .iter()
                 .filter(|fact| fact.file == file)
                 .cloned()
                 .collect(),
             functions: self
-                .functions
+                .functions()
                 .iter()
                 .filter(|fact| fact.file == file)
                 .cloned()
                 .collect(),
             imports: self
-                .imports
+                .imports()
                 .iter()
                 .filter(|fact| fact.file == file)
                 .cloned()
                 .collect(),
             branches: self
-                .branches
+                .branches()
                 .iter()
                 .filter(|fact| fact.file == file)
                 .cloned()
                 .collect(),
             tests: self
-                .tests
+                .tests()
                 .iter()
                 .filter(|fact| fact.file == file)
                 .cloned()
@@ -3846,7 +3866,10 @@ impl AnalysisDb {
     }
 
     fn coverage_metadata(&self, fact: &CoverageFact) -> FactMeta {
-        let branch = self.branches.iter().find(|branch| branch.id == fact.branch);
+        let branch = self
+            .branches()
+            .iter()
+            .find(|branch| branch.id == fact.branch);
         let (path, branch_fingerprint, precision, confidence) = if let Some(branch) = branch {
             (
                 self.path_for(branch.file),

@@ -54,6 +54,7 @@ use metadata::*;
 
 mod capability;
 mod db;
+mod fact_store;
 mod facts;
 mod ids;
 mod labels;
