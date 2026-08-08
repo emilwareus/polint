@@ -21,19 +21,19 @@ use crate::analysis::stable_key::semantic_stable_key;
 use crate::analysis_kernel::FactFamily;
 use crate::core::{AnalysisDb, Language};
 
-pub(crate) fn lower_ts_cfg(db: &AnalysisDb) -> CfgOutput {
-    let mut lowering = TsCfgLowering::new(db);
+pub(crate) fn lower_cfg(db: &AnalysisDb) -> CfgOutput {
+    let mut lowering = CfgLowering::new(db);
     lowering.lower();
     lowering.finish()
 }
 
-struct TsCfgLowering<'db> {
+struct CfgLowering<'db> {
     db: &'db AnalysisDb,
     builder: CfgBuilder,
     body_to_function: BTreeMap<MirBodyId, CfgFunctionId>,
 }
 
-impl<'db> TsCfgLowering<'db> {
+impl<'db> CfgLowering<'db> {
     fn new(db: &'db AnalysisDb) -> Self {
         Self {
             db,
@@ -43,12 +43,7 @@ impl<'db> TsCfgLowering<'db> {
     }
 
     fn lower(&mut self) {
-        let mut bodies = self
-            .db
-            .mir_bodies()
-            .iter()
-            .filter(|body| body.language.is_ts_family())
-            .collect::<Vec<_>>();
+        let mut bodies = self.db.mir_bodies().iter().collect::<Vec<_>>();
         bodies.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
 
         for body in bodies {
@@ -64,7 +59,7 @@ impl<'db> TsCfgLowering<'db> {
                     )
             }) || self
                 .unsupported_for_body(body.id)
-                .any(|row| matches!(row.construct.as_str(), "try" | "parser recovery"));
+                .any(|row| matches!(row.construct.as_str(), "try" | "parser recovery" | "ERROR"));
             let function = self.builder.start_function(body, has_exceptional_control);
             self.body_to_function.insert(body.id, function);
             self.lower_body(body.id);
@@ -340,6 +335,42 @@ impl<'db> TsCfgLowering<'db> {
             .unsupported_by_id(unsupported)
             .map(|row| row.construct.as_str())
         {
+            Some("go_statement") => UnsupportedShape {
+                node_kind: CfgNodeKind::CallSite,
+                boundary_edges: vec![CfgEdgeKind::Spawn],
+                to_exceptional_exit: false,
+                stop_lowering: false,
+            },
+            Some("defer_statement") => UnsupportedShape {
+                node_kind: CfgNodeKind::Defer,
+                boundary_edges: vec![CfgEdgeKind::Defer],
+                to_exceptional_exit: false,
+                stop_lowering: false,
+            },
+            Some("select_statement") => UnsupportedShape {
+                node_kind: CfgNodeKind::Unsupported,
+                boundary_edges: vec![CfgEdgeKind::Unknown],
+                to_exceptional_exit: false,
+                stop_lowering: false,
+            },
+            Some("ERROR") => UnsupportedShape {
+                node_kind: CfgNodeKind::Unsupported,
+                boundary_edges: vec![CfgEdgeKind::Unknown],
+                to_exceptional_exit: false,
+                stop_lowering: true,
+            },
+            Some("fallthrough") => UnsupportedShape {
+                node_kind: CfgNodeKind::Goto,
+                boundary_edges: vec![CfgEdgeKind::Unknown],
+                to_exceptional_exit: false,
+                stop_lowering: false,
+            },
+            Some("goto") => UnsupportedShape {
+                node_kind: CfgNodeKind::Goto,
+                boundary_edges: vec![CfgEdgeKind::Goto],
+                to_exceptional_exit: false,
+                stop_lowering: false,
+            },
             Some("break") => UnsupportedShape {
                 node_kind: CfgNodeKind::Break,
                 boundary_edges: vec![CfgEdgeKind::Break],
@@ -399,7 +430,7 @@ impl<'db> TsCfgLowering<'db> {
         self.db
             .unsupported_semantics()
             .iter()
-            .find(|row| row.id == id && row.language.is_ts_family())
+            .find(|row| row.id == id)
     }
 
     fn unsupported_for_body(
@@ -407,9 +438,7 @@ impl<'db> TsCfgLowering<'db> {
         body: MirBodyId,
     ) -> impl Iterator<Item = &'db UnsupportedSemanticFact> + '_ {
         self.db.unsupported_semantics().iter().filter(move |row| {
-            row.language.is_ts_family()
-                && row.body == Some(body)
-                && row.affected_domains.contains(&UnsupportedDomain::Cfg)
+            row.body == Some(body) && row.affected_domains.contains(&UnsupportedDomain::Cfg)
         })
     }
 
@@ -420,10 +449,7 @@ impl<'db> TsCfgLowering<'db> {
         let mut unsupported = db
             .unsupported_semantics()
             .iter()
-            .filter(|row| {
-                row.language.is_ts_family()
-                    && row.affected_domains.contains(&UnsupportedDomain::Cfg)
-            })
+            .filter(|row| row.affected_domains.contains(&UnsupportedDomain::Cfg))
             .enumerate()
             .map(|(index, row)| unsupported_control_flow_fact(index, row, &body_to_function))
             .collect::<Vec<_>>();
@@ -607,10 +633,10 @@ mod tests {
         }
     }
 
-    fn place(id: u64, name: &str) -> PlaceFact {
+    fn place(id: u64, name: &str, language: Language) -> PlaceFact {
         PlaceFact {
             id: PlaceId(id),
-            language: Language::TypeScript,
+            language,
             file: Some(FileId(1)),
             function: Some(FunctionId(1)),
             root: PlaceRoot::Local {
@@ -624,6 +650,7 @@ mod tests {
     }
 
     fn db_with(
+        language: Language,
         operations: Vec<MirOperation>,
         unsupported: Vec<UnsupportedSemanticFact>,
     ) -> AnalysisDb {
@@ -648,7 +675,7 @@ mod tests {
         });
         let mut db = AnalysisDb::new();
         db.replace_semantic_mir(MirOutput {
-            bodies: vec![body(Language::TypeScript)],
+            bodies: vec![body(language)],
             blocks: vec![MirBlock {
                 id: MirBlockId(0),
                 body: MirBodyId(0),
@@ -668,7 +695,7 @@ mod tests {
                 stable_key: "terminator:0".to_string(),
                 status: MirStatus::Partial,
             }],
-            places: vec![place(1, "x"), place(2, "ret")],
+            places: vec![place(1, "x", language), place(2, "ret", language)],
             place_types: Vec::new(),
             operations,
             unsupported,
@@ -678,9 +705,13 @@ mod tests {
     }
 
     #[test]
-    fn ts_cfg_lowers_straight_line_return_without_derived_rows() {
-        let db = db_with(vec![assign(1, 1), return_op(2, 2)], Vec::new());
-        let output = lower_ts_cfg(&db);
+    fn cfg_lowers_straight_line_return_without_derived_rows() {
+        let db = db_with(
+            Language::TypeScript,
+            vec![assign(1, 1), return_op(2, 2)],
+            Vec::new(),
+        );
+        let output = lower_cfg(&db);
 
         assert!(
             output
@@ -698,9 +729,9 @@ mod tests {
     }
 
     #[test]
-    fn ts_cfg_connects_explicit_mir_return_to_normal_exit() {
-        let db = db_with(vec![assign(1, 1)], Vec::new());
-        let output = lower_ts_cfg(&db);
+    fn cfg_connects_explicit_mir_return_to_normal_exit() {
+        let db = db_with(Language::TypeScript, vec![assign(1, 1)], Vec::new());
+        let output = lower_cfg(&db);
         let exit = output
             .blocks
             .iter()
@@ -713,6 +744,21 @@ mod tests {
                 .edges
                 .iter()
                 .any(|edge| { edge.to_block == exit && edge.kind == CfgEdgeKind::Return })
+        );
+    }
+
+    #[test]
+    fn cfg_lowers_go_body_without_language_dispatch() {
+        let db = db_with(Language::Go, vec![assign(1, 1)], Vec::new());
+        let output = lower_cfg(&db);
+
+        assert_eq!(output.functions.len(), 1);
+        assert_eq!(output.functions[0].language, Language::Go);
+        assert!(
+            output
+                .edges
+                .iter()
+                .any(|edge| edge.kind == CfgEdgeKind::Return)
         );
     }
 
@@ -730,7 +776,7 @@ mod tests {
         db.replace_semantic_mir(mir)
             .expect("MIR output should store");
 
-        let edge_kinds = lower_ts_cfg(&db)
+        let edge_kinds = lower_cfg(&db)
             .edges
             .into_iter()
             .map(|edge| edge.kind)
@@ -754,7 +800,7 @@ mod tests {
         let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
         db.replace_semantic_mir(mir)
             .expect("MIR output should store");
-        let output = lower_ts_cfg(&db);
+        let output = lower_cfg(&db);
         let unreachable_blocks = output
             .blocks
             .iter()
@@ -806,7 +852,7 @@ export function* values(value) { yield value; }
         let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
         db.replace_semantic_mir(mir)
             .expect("MIR output should store");
-        let output = lower_ts_cfg(&db);
+        let output = lower_cfg(&db);
         let edge_kinds = output
             .edges
             .iter()
@@ -830,7 +876,7 @@ export function* values(value) { yield value; }
     }
 
     #[test]
-    fn ts_unsupported_control_flow_key_uses_source_stable_identity() {
+    fn unsupported_control_flow_key_uses_source_stable_identity() {
         let mut first = unsupported(1, Some(MirOpId(1)), "throw");
         let mut second = unsupported(2, Some(MirOpId(99)), "throw");
         first.body = Some(MirBodyId(7));
