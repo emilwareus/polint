@@ -7,7 +7,9 @@ use crate::analysis::access_paths::store::AccessPathStore;
 use crate::analysis::adaptation::facts::{AcceptedModelFact, RejectedModelFact};
 use crate::analysis::aliases::facts::AliasAnswerFact;
 use crate::analysis::aliases::store::AliasStore;
-use crate::analysis::calls::facts::{CallSiteFact, CallTargetFact, UnresolvedCallFact};
+use crate::analysis::calls::facts::{
+    CallSiteFact, CallTargetFact, CallTargetStatus, UnresolvedCallFact, UnresolvedCallReason,
+};
 use crate::analysis::calls::store::{CallOutput, CallStore};
 use crate::analysis::cfg::facts::{
     BasicBlockFact, CfgEdgeFact, CfgFunctionFact, CfgNodeFact, ControlDependenceFact,
@@ -23,7 +25,7 @@ use crate::analysis::domains::store::{DomainOutput, DomainStore};
 use crate::analysis::entrypoints::facts::{
     EntrypointFact, FrameworkDispatchEdgeFact, TrustBoundaryFact, UnresolvedFrameworkFact,
 };
-use crate::analysis::entrypoints::store::EntrypointStore;
+use crate::analysis::entrypoints::store::{EntrypointOutput, EntrypointStore};
 use crate::analysis::error::AnalysisError;
 use crate::analysis::evidence::facts::{
     EvidenceBundleFact, EvidenceEdgeFact, EvidenceNodeFact, EvidenceOmittedRegionFact,
@@ -36,21 +38,25 @@ use crate::analysis::extensions::store::{
 use crate::analysis::identity::facts::IdentityRecord;
 use crate::analysis::identity::provider::valid_call_site_ids;
 use crate::analysis::identity::store::{IdentityProviderOutput, IdentityStore};
+use crate::analysis::ids::CallSiteId;
 use crate::analysis::mir::body::MirOutput;
 use crate::analysis::points_to::facts::{PointsToConstraintFact, PointsToSetFact};
 use crate::analysis::points_to::store::PointsToStore;
 use crate::analysis::reachability::facts::{CallReachabilityFact, ReachabilityRootFact};
+use crate::analysis::reachability::store::{ReachabilityProviderOutput, ReachabilityStore};
 use crate::analysis::refined_calls::facts::RefinedCallEdgeFact;
 use crate::analysis::refined_calls::store::{RefinedCallOutput, RefinedCallStore};
 use crate::analysis::semantic_graph::constraints::ConstraintFact;
 use crate::analysis::semantic_graph::facts::{SemanticEdgeFact, SemanticNodeFact};
+use crate::analysis::semantic_graph::store::SemanticGraphOutput;
 use crate::analysis::solver::budget::BudgetStatus;
 use crate::analysis::solver::facts::DerivedEdgeFact;
+use crate::analysis::solver::store::{SolverOutput, SolverStore};
 use crate::analysis::store::SemanticStore;
 use crate::analysis::summaries::facts::{SummaryEventFact, SummaryFact};
 use crate::analysis::summaries::store::{SummaryOutput, SummaryStore};
 use crate::analysis::types::facts::{NarrowedTypeFact, TypeFact};
-use crate::analysis::types::store::TypeStore;
+use crate::analysis::types::store::{TypeStore, TypeValueAliasOutput};
 use crate::analysis::values::facts::{AllocationTokenFact, ValueFact};
 use crate::analysis::values::store::ValueStore;
 use crate::analysis_kernel::{FactFamily, FactMetaStore};
@@ -60,6 +66,7 @@ use crate::go::semantic::facts::{
     GoSemanticFunctionFact, GoSemanticInstantiatedTypeFact, GoSemanticMethodSetFact,
     GoSemanticPackageErrorFact, GoSemanticPackageFact, GoSemanticRtaEdgeFact,
 };
+use crate::go::semantic::store::{GoSemanticFactsOutput, GoSemanticStore, GoSemanticStoreReport};
 use crate::module_graph::topology::{
     DependencyRequirementFact, ImportToPackageFact, RepoTopologyOverlayFact,
     ResolvedDependencyEdgeFact, SourceSetFact, TopologyOutput, TopologyPackageFact,
@@ -74,7 +81,7 @@ use crate::ts::object_model::facts::{
     TsObjectAllocationFact, TsPropertyReadFact, TsPropertyWriteFact, TsPrototypeLinkFact,
     TsReceiverBindingFact,
 };
-use crate::ts::object_model::store::TsObjectModelStore;
+use crate::ts::object_model::store::{TsObjectModelOutput, TsObjectModelStore};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -1051,5 +1058,705 @@ impl AnalysisDb {
         } else {
             &self.summary_facts
         }
+    }
+    pub(crate) fn summary_events(&self) -> &[SummaryEventFact] {
+        if let Some(store) = &self.summary_store {
+            store.all_events()
+        } else {
+            &self.summary_events
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn summary_store(&self) -> Option<&SummaryStore> {
+        self.summary_store.as_ref()
+    }
+
+    pub(crate) fn extension_facts(&self) -> &[AcceptedExtensionFact] {
+        &self.extension_facts
+    }
+
+    pub(crate) fn extension_activations(&self) -> &[ExtensionActivationRow] {
+        &self.extension_activations
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Rejected extension audit rows are surfaced by the extension provider/debug wiring in the next plan."
+    )]
+    pub(crate) fn rejected_extension_facts(&self) -> &[RejectedExtensionFact] {
+        &self.rejected_extension_facts
+    }
+
+    pub(crate) fn replace_adaptation_model_facts(
+        &mut self,
+        accepted: Vec<AcceptedModelFact>,
+        rejected: Vec<RejectedModelFact>,
+    ) {
+        self.adaptation_model_facts = accepted;
+        self.rejected_adaptation_model_facts = rejected;
+        self.refresh_adaptation_model_metadata();
+    }
+
+    pub(crate) fn adaptation_model_facts(&self) -> &[AcceptedModelFact] {
+        &self.adaptation_model_facts
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Rejected adaptation model audit rows are surfaced by eval fixture observation wiring."
+    )]
+    pub(crate) fn rejected_adaptation_model_facts(&self) -> &[RejectedModelFact] {
+        &self.rejected_adaptation_model_facts
+    }
+
+    pub(crate) fn replace_entrypoint_facts(
+        &mut self,
+        output: EntrypointOutput,
+    ) -> Result<(), AnalysisError> {
+        let store = EntrypointStore::from_output(output)?;
+        self.entrypoint_facts = store.entrypoints().to_vec();
+        self.trust_boundary_facts = store.trust_boundaries().to_vec();
+        self.dispatch_edge_facts = store.dispatch_edges().to_vec();
+        self.unresolved_framework_facts = store.unresolved().to_vec();
+        self.entrypoint_store = Some(store);
+        self.refresh_entrypoint_metadata();
+        Ok(())
+    }
+
+    pub(crate) fn entrypoint_facts(&self) -> &[EntrypointFact] {
+        &self.entrypoint_facts
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Reachability fact replacement is wired into the kernel provider in the next  task (provider/kernel splice)."
+    )]
+    pub(crate) fn replace_reachability_facts(
+        &mut self,
+        output: ReachabilityProviderOutput,
+    ) -> Result<(), AnalysisError> {
+        let valid_function_ids = self.functions.iter().map(|row| row.id).collect();
+        let valid_entrypoint_ids = self.entrypoint_facts.iter().map(|row| row.id).collect();
+        let store =
+            ReachabilityStore::from_output(output, &valid_function_ids, &valid_entrypoint_ids)?;
+        self.reachability_roots = store.roots().to_vec();
+        self.reachability_marks = store.marks().to_vec();
+        Ok(())
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Reachability roots are consumed by validation, debug, and the kernel provider wiring in ."
+    )]
+    pub(crate) fn reachability_roots(&self) -> &[ReachabilityRootFact] {
+        &self.reachability_roots
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Reachability marks are populated by the marking traversal in  and read by debug/eval."
+    )]
+    pub(crate) fn reachability_marks(&self) -> &[CallReachabilityFact] {
+        &self.reachability_marks
+    }
+
+    /// Stores the normalized semantic-graph nodes/edges/constraints (GRAPH-01),
+    /// mirroring [`Self::replace_reachability_facts`]. Construction runs through
+    /// [`SemanticGraphStore::from_output`], which normalizes (stable-key sort + dense
+    /// ID assignment) and referentially validates every edge endpoint and constraint
+    /// node reference — a dangling reference returns [`AnalysisError::InvalidFact`] so
+    /// the db is never left holding a malformed graph.
+    #[allow(
+        dead_code,
+        reason = "Provider hot paths pass normalized output directly; tests and compatibility callers still use the normalizing entry point."
+    )]
+    pub(crate) fn replace_semantic_graph_facts(
+        &mut self,
+        output: SemanticGraphOutput,
+    ) -> Result<(), AnalysisError> {
+        self.replace_normalized_semantic_graph_facts(output.normalized())
+    }
+
+    pub(crate) fn replace_normalized_semantic_graph_facts(
+        &mut self,
+        output: SemanticGraphOutput,
+    ) -> Result<(), AnalysisError> {
+        output.validate_references()?;
+        self.semantic_nodes = output.nodes;
+        self.semantic_edges = output.edges;
+        self.semantic_constraints = output.constraints;
+        Ok(())
+    }
+
+    pub(crate) fn semantic_nodes(&self) -> &[SemanticNodeFact] {
+        &self.semantic_nodes
+    }
+
+    pub(crate) fn semantic_edges(&self) -> &[SemanticEdgeFact] {
+        &self.semantic_edges
+    }
+
+    pub(crate) fn semantic_constraints(&self) -> &[ConstraintFact] {
+        &self.semantic_constraints
+    }
+
+    /// Stores the private TS object/property/prototype/receiver rows used by the
+    /// current semantic-graph lowering. Construction runs through
+    /// [`TsObjectModelStore::try_from_output`], which preserves deterministic
+    /// normalization and rejects duplicate stable keys before stale rows are replaced.
+    #[allow(
+        dead_code,
+        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
+    )]
+    pub(crate) fn replace_ts_object_model_facts(
+        &mut self,
+        output: TsObjectModelOutput,
+    ) -> Result<(), AnalysisError> {
+        let store = TsObjectModelStore::try_from_output(output)?;
+        self.ts_object_allocations = store.allocations().to_vec();
+        self.ts_property_writes = store.property_writes().to_vec();
+        self.ts_property_reads = store.property_reads().to_vec();
+        self.ts_receiver_bindings = store.receiver_bindings().to_vec();
+        self.ts_prototype_links = store.prototype_links().to_vec();
+        self.ts_object_model_store = Some(store);
+        Ok(())
+    }
+
+    #[allow(
+        dead_code,
+        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
+    )]
+    pub(crate) fn ts_object_allocations(&self) -> &[TsObjectAllocationFact] {
+        &self.ts_object_allocations
+    }
+
+    #[allow(
+        dead_code,
+        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
+    )]
+    pub(crate) fn ts_property_writes(&self) -> &[TsPropertyWriteFact] {
+        &self.ts_property_writes
+    }
+
+    #[allow(
+        dead_code,
+        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
+    )]
+    pub(crate) fn ts_property_reads(&self) -> &[TsPropertyReadFact] {
+        &self.ts_property_reads
+    }
+
+    #[allow(
+        dead_code,
+        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
+    )]
+    pub(crate) fn ts_receiver_bindings(&self) -> &[TsReceiverBindingFact] {
+        &self.ts_receiver_bindings
+    }
+
+    #[allow(
+        dead_code,
+        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
+    )]
+    pub(crate) fn ts_prototype_links(&self) -> &[TsPrototypeLinkFact] {
+        &self.ts_prototype_links
+    }
+
+    #[allow(
+        dead_code,
+        reason = " stores TS object-model rows before semantic-graph lowering consumes them."
+    )]
+    pub(crate) fn ts_object_model_store(&self) -> Option<&TsObjectModelStore> {
+        self.ts_object_model_store.as_ref()
+    }
+
+    /// Stores the normalized solver-derived edges (GRAPH-03/GRAPH-04), mirroring
+    /// [`Self::replace_semantic_graph_facts`]. Construction runs through
+    /// [`SolverStore::from_output`], which normalizes (stable-key sort + dense ID
+    /// assignment) and referentially validates duplicate stable keys + the precision
+    /// ceiling (D-06) — a malformed row returns [`AnalysisError::InvalidFact`] so the
+    /// db is never left holding a malformed solver output.
+    pub(crate) fn replace_solver_facts(
+        &mut self,
+        output: SolverOutput,
+    ) -> Result<(), AnalysisError> {
+        let store = SolverStore::from_output(output)?;
+        self.solver_derived_edges = store.derived_edges().to_vec();
+        self.solver_budget_status = store.budget_status();
+        self.solver_budget_reasons = store.budget_reasons().clone();
+        Ok(())
+    }
+
+    /// The stored solver-derived edges. Consumed by the provider tests today and by
+    /// the GRAPH-05 refined_calls rework (which projects over solver output);
+    /// no production read exists yet, so the accessor is dead-code in a non-test build
+    /// until that consumer lands (the facts are stored unconditionally so the
+    /// determinism gate observes them).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn solver_derived_edges(&self) -> &[DerivedEdgeFact] {
+        &self.solver_derived_edges
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn solver_budget_status(&self) -> BudgetStatus {
+        self.solver_budget_status
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn solver_budget_reasons(&self) -> &BTreeSet<String> {
+        &self.solver_budget_reasons
+    }
+
+    /// Store the Go semantic facts, returning the resilience report (malformed RTA-signal
+    /// harvest rows dropped, FIX 3; plus duplicate structural rows collapsed keep-first,
+    /// FIX-08) so the provider can surface observable diagnostics. All counts are zero on a
+    /// clean frontend run.
+    pub(crate) fn replace_go_semantic_facts(
+        &mut self,
+        output: GoSemanticFactsOutput,
+    ) -> Result<GoSemanticStoreReport, AnalysisError> {
+        let store = GoSemanticStore::from_output(output)?;
+        self.go_semantic_packages = store.output().packages.clone();
+        self.go_semantic_functions = store.output().functions.clone();
+        self.go_semantic_callsites = store.output().callsites.clone();
+        self.go_semantic_method_sets = store.output().method_sets.clone();
+        self.go_semantic_address_taken = store.output().address_taken.clone();
+        self.go_semantic_instantiated_types = store.output().instantiated_types.clone();
+        self.go_semantic_dynamic_dispatch = store.output().dynamic_dispatch.clone();
+        self.go_semantic_rta_edges = store.output().rta_edges.clone();
+        self.go_semantic_package_errors = store.output().package_errors.clone();
+        Ok(store.report())
+    }
+
+    /// The normalized Go semantic output currently stored in the database.
+    ///
+    /// Used by the provider after `replace_go_semantic_facts` so its output digest certifies
+    /// the rows that survived store-time resilience passes (invalid harvest-row drops and
+    /// duplicate structural-key collapse), not the raw sidecar/lowering rows.
+    pub(crate) fn go_semantic_facts_output(&self) -> GoSemanticFactsOutput {
+        GoSemanticFactsOutput {
+            packages: self.go_semantic_packages.clone(),
+            functions: self.go_semantic_functions.clone(),
+            callsites: self.go_semantic_callsites.clone(),
+            method_sets: self.go_semantic_method_sets.clone(),
+            address_taken: self.go_semantic_address_taken.clone(),
+            instantiated_types: self.go_semantic_instantiated_types.clone(),
+            dynamic_dispatch: self.go_semantic_dynamic_dispatch.clone(),
+            rta_edges: self.go_semantic_rta_edges.clone(),
+            package_errors: self.go_semantic_package_errors.clone(),
+        }
+    }
+
+    pub(crate) fn go_semantic_packages(&self) -> &[GoSemanticPackageFact] {
+        &self.go_semantic_packages
+    }
+
+    pub(crate) fn go_semantic_functions(&self) -> &[GoSemanticFunctionFact] {
+        &self.go_semantic_functions
+    }
+
+    pub(crate) fn go_semantic_callsites(&self) -> &[GoSemanticCallsiteFact] {
+        &self.go_semantic_callsites
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Method-set facts are stored privately for receiver/RTA expansion."
+    )]
+    pub(crate) fn go_semantic_method_sets(&self) -> &[GoSemanticMethodSetFact] {
+        &self.go_semantic_method_sets
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Address-taken facts are stored privately for the Plan 2 go_rta dispatch-candidate set (GO-05)."
+    )]
+    pub(crate) fn go_semantic_address_taken(&self) -> &[GoSemanticAddressTakenFact] {
+        &self.go_semantic_address_taken
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Instantiated-type facts are stored privately for the Plan 2 go_rta rapid-type filter (GO-05)."
+    )]
+    pub(crate) fn go_semantic_instantiated_types(&self) -> &[GoSemanticInstantiatedTypeFact] {
+        &self.go_semantic_instantiated_types
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Dynamic-dispatch detail is stored privately for the Plan 2 go_rta method-set matching (GO-05)."
+    )]
+    pub(crate) fn go_semantic_dynamic_dispatch(&self) -> &[GoSemanticDynamicDispatchFact] {
+        &self.go_semantic_dynamic_dispatch
+    }
+
+    #[cfg(test)]
+    pub(crate) fn go_semantic_rta_edges(
+        &self,
+    ) -> &[crate::go::semantic::facts::GoSemanticRtaEdgeFact] {
+        &self.go_semantic_rta_edges
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Package-load errors are stored privately for capability diagnostics once the provider is kernel-wired."
+    )]
+    pub(crate) fn go_semantic_package_errors(&self) -> &[GoSemanticPackageErrorFact] {
+        &self.go_semantic_package_errors
+    }
+
+    pub(crate) fn trust_boundary_facts(&self) -> &[TrustBoundaryFact] {
+        &self.trust_boundary_facts
+    }
+
+    pub(crate) fn dispatch_edge_facts(&self) -> &[FrameworkDispatchEdgeFact] {
+        &self.dispatch_edge_facts
+    }
+
+    pub(crate) fn unresolved_framework_facts(&self) -> &[UnresolvedFrameworkFact] {
+        &self.unresolved_framework_facts
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Compatibility callers can still pass unnormalized aggregate output; providers use the normalized fast path."
+    )]
+    pub(crate) fn replace_type_value_alias_facts(&mut self, output: TypeValueAliasOutput) {
+        self.replace_normalized_type_value_alias_facts(output.normalized());
+    }
+
+    pub(crate) fn replace_normalized_type_value_alias_facts(
+        &mut self,
+        output: TypeValueAliasOutput,
+    ) {
+        let type_store = TypeStore::from_normalized_output(output.types);
+        let value_store = ValueStore::from_normalized_output(output.values);
+        let access_path_store = AccessPathStore::from_normalized_output(output.access_paths);
+        let points_to_store = PointsToStore::from_normalized_output(output.points_to);
+        let alias_store = AliasStore::from_normalized_output(output.aliases);
+
+        self.type_facts = type_store.types().to_vec();
+        self.narrowed_type_facts = type_store.narrowed().to_vec();
+        self.value_facts = value_store.values().to_vec();
+        self.allocation_tokens = value_store.allocations().to_vec();
+        self.access_path_facts = access_path_store.access_paths().to_vec();
+        self.points_to_constraints = points_to_store.constraints().to_vec();
+        self.points_to_sets = points_to_store.sets().to_vec();
+        self.alias_answers = alias_store.answers().to_vec();
+        self.type_store = Some(type_store);
+        self.value_store = Some(value_store);
+        self.access_path_store = Some(access_path_store);
+        self.points_to_store = Some(points_to_store);
+        self.alias_store = Some(alias_store);
+        self.refresh_type_value_alias_metadata();
+    }
+
+    pub(crate) fn type_facts(&self) -> &[TypeFact] {
+        &self.type_facts
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn narrowed_type_facts(&self) -> &[NarrowedTypeFact] {
+        &self.narrowed_type_facts
+    }
+
+    pub(crate) fn value_facts(&self) -> &[ValueFact] {
+        &self.value_facts
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn allocation_tokens(&self) -> &[AllocationTokenFact] {
+        &self.allocation_tokens
+    }
+
+    pub(crate) fn access_path_facts(&self) -> &[AccessPathFact] {
+        &self.access_path_facts
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn points_to_constraints(&self) -> &[PointsToConstraintFact] {
+        &self.points_to_constraints
+    }
+
+    pub(crate) fn points_to_sets(&self) -> &[PointsToSetFact] {
+        &self.points_to_sets
+    }
+
+    pub(crate) fn alias_answers(&self) -> &[AliasAnswerFact] {
+        &self.alias_answers
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn call_sites_by_caller(&self, caller: FunctionId) -> Vec<&CallSiteFact> {
+        self.call_store
+            .as_ref()
+            .map_or_else(Vec::new, |store| store.sites_by_caller(caller))
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn call_targets_by_site(&self, site: CallSiteId) -> Vec<&CallTargetFact> {
+        self.call_store
+            .as_ref()
+            .map_or_else(Vec::new, |store| store.targets_by_site(site))
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn outgoing_calls_by_function(&self, caller: FunctionId) -> Vec<&CallTargetFact> {
+        self.call_store
+            .as_ref()
+            .map_or_else(Vec::new, |store| store.outgoing_by_function(caller))
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn outgoing_calls_by_symbol(&self, caller: SymbolId) -> Vec<&CallTargetFact> {
+        self.call_store
+            .as_ref()
+            .map_or_else(Vec::new, |store| store.outgoing_by_symbol(caller))
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn incoming_calls_by_symbol(&self, target: SymbolId) -> Vec<&CallTargetFact> {
+        self.call_store
+            .as_ref()
+            .map_or_else(Vec::new, |store| store.incoming_by_symbol(target))
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn incoming_calls_by_function(&self, target: FunctionId) -> Vec<&CallTargetFact> {
+        self.call_store
+            .as_ref()
+            .map_or_else(Vec::new, |store| store.incoming_by_function(target))
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn unresolved_calls_by_reason(
+        &self,
+        reason: UnresolvedCallReason,
+    ) -> Vec<&UnresolvedCallFact> {
+        self.call_store
+            .as_ref()
+            .map_or_else(Vec::new, |store| store.unresolved_by_reason(reason))
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn unresolved_calls_by_status(
+        &self,
+        status: CallTargetStatus,
+    ) -> Vec<&UnresolvedCallFact> {
+        self.call_store
+            .as_ref()
+            .map_or_else(Vec::new, |store| store.unresolved_by_status(status))
+    }
+
+    fn refresh_call_metadata(&mut self) {
+        self.fact_meta.remove_family(FactFamily::CallSite);
+        self.fact_meta.remove_family(FactFamily::CallTarget);
+        self.fact_meta.remove_family(FactFamily::UnresolvedCall);
+
+        for index in 0..self.call_sites.len() {
+            let (run_id, metadata) = {
+                let fact = &self.call_sites[index];
+                (fact.id.0, self.call_site_metadata(fact))
+            };
+            self.record_fact_meta(FactFamily::CallSite, run_id, metadata);
+        }
+
+        for index in 0..self.call_targets.len() {
+            let (run_id, metadata) = {
+                let fact = &self.call_targets[index];
+                (fact.id.0, self.call_target_metadata(fact))
+            };
+            self.record_fact_meta(FactFamily::CallTarget, run_id, metadata);
+        }
+
+        for index in 0..self.unresolved_calls.len() {
+            let (run_id, metadata) = {
+                let fact = &self.unresolved_calls[index];
+                (index as u64, self.unresolved_call_metadata(fact))
+            };
+            self.record_fact_meta(FactFamily::UnresolvedCall, run_id, metadata);
+        }
+
+        self.finish_fact_meta_insertions(&[
+            FactFamily::CallSite,
+            FactFamily::CallTarget,
+            FactFamily::UnresolvedCall,
+        ]);
+    }
+
+    fn refresh_refined_call_metadata(&mut self) {
+        self.fact_meta.remove_family(FactFamily::RefinedCallEdge);
+
+        if let Some(store) = self.refined_call_store.take() {
+            for fact in store.edges() {
+                let run_id = fact.id.0;
+                let metadata = self.refined_call_edge_metadata(fact);
+                self.record_fact_meta(FactFamily::RefinedCallEdge, run_id, metadata);
+            }
+            self.refined_call_store = Some(store);
+            self.finish_fact_meta_insertions(&[FactFamily::RefinedCallEdge]);
+            return;
+        }
+
+        for index in 0..self.refined_call_edges.len() {
+            let (run_id, metadata) = {
+                let fact = &self.refined_call_edges[index];
+                (fact.id.0, self.refined_call_edge_metadata(fact))
+            };
+            self.record_fact_meta(FactFamily::RefinedCallEdge, run_id, metadata);
+        }
+        self.finish_fact_meta_insertions(&[FactFamily::RefinedCallEdge]);
+    }
+
+    fn refresh_data_flow_metadata(&mut self) {
+        self.fact_meta.remove_family(FactFamily::DataFlowNode);
+        self.fact_meta.remove_family(FactFamily::DataFlowEdge);
+        self.fact_meta.remove_family(FactFamily::DataFlowModel);
+        self.fact_meta.remove_family(FactFamily::DataFlowBudget);
+
+        let node_metadata = self
+            .data_flow_nodes
+            .iter()
+            .map(|fact| (fact.id.0, self.data_flow_node_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in node_metadata {
+            self.record_fact_meta(FactFamily::DataFlowNode, run_id, metadata);
+        }
+
+        let edge_metadata = self
+            .data_flow_edges
+            .iter()
+            .map(|fact| (fact.id.0, self.data_flow_edge_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in edge_metadata {
+            self.record_fact_meta(FactFamily::DataFlowEdge, run_id, metadata);
+        }
+
+        let model_metadata = self
+            .data_flow_models
+            .iter()
+            .map(|fact| (fact.id.0, self.data_flow_model_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in model_metadata {
+            self.record_fact_meta(FactFamily::DataFlowModel, run_id, metadata);
+        }
+
+        let budget_metadata = self
+            .data_flow_budgets
+            .iter()
+            .map(|fact| (fact.id.0, self.data_flow_budget_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in budget_metadata {
+            self.record_fact_meta(FactFamily::DataFlowBudget, run_id, metadata);
+        }
+
+        self.finish_fact_meta_insertions(&[
+            FactFamily::DataFlowNode,
+            FactFamily::DataFlowEdge,
+            FactFamily::DataFlowModel,
+            FactFamily::DataFlowBudget,
+        ]);
+    }
+
+    fn refresh_evidence_metadata(&mut self) {
+        for family in [
+            FactFamily::EvidenceNode,
+            FactFamily::EvidenceEdge,
+            FactFamily::EvidenceBundle,
+            FactFamily::EvidencePath,
+            FactFamily::EvidenceSlice,
+            FactFamily::EvidenceUnknown,
+            FactFamily::EvidenceOmittedRegion,
+            FactFamily::EvidenceReplayKey,
+        ] {
+            self.fact_meta.remove_family(family);
+        }
+
+        let node_metadata = self
+            .evidence_nodes
+            .iter()
+            .map(|fact| (fact.id.0, self.evidence_node_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in node_metadata {
+            self.record_fact_meta(FactFamily::EvidenceNode, run_id, metadata);
+        }
+
+        let edge_metadata = self
+            .evidence_edges
+            .iter()
+            .map(|fact| (fact.id.0, self.evidence_edge_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in edge_metadata {
+            self.record_fact_meta(FactFamily::EvidenceEdge, run_id, metadata);
+        }
+
+        let bundle_metadata = self
+            .evidence_bundles
+            .iter()
+            .map(|fact| (fact.id.0, self.evidence_bundle_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in bundle_metadata {
+            self.record_fact_meta(FactFamily::EvidenceBundle, run_id, metadata);
+        }
+
+        let path_metadata = self
+            .evidence_paths
+            .iter()
+            .map(|fact| (fact.id.0, self.evidence_path_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in path_metadata {
+            self.record_fact_meta(FactFamily::EvidencePath, run_id, metadata);
+        }
+
+        let slice_metadata = self
+            .evidence_slices
+            .iter()
+            .map(|fact| (fact.id.0, self.evidence_slice_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in slice_metadata {
+            self.record_fact_meta(FactFamily::EvidenceSlice, run_id, metadata);
+        }
+
+        let unknown_metadata = self
+            .evidence_unknowns
+            .iter()
+            .enumerate()
+            .map(|(index, fact)| (index as u64, self.evidence_unknown_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in unknown_metadata {
+            self.record_fact_meta(FactFamily::EvidenceUnknown, run_id, metadata);
+        }
+
+        let omitted_metadata = self
+            .evidence_omitted_regions
+            .iter()
+            .map(|fact| (fact.id.0, self.evidence_omitted_region_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in omitted_metadata {
+            self.record_fact_meta(FactFamily::EvidenceOmittedRegion, run_id, metadata);
+        }
+
+        let replay_metadata = self
+            .evidence_replay_keys
+            .iter()
+            .enumerate()
+            .map(|(index, fact)| (index as u64, self.evidence_replay_key_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in replay_metadata {
+            self.record_fact_meta(FactFamily::EvidenceReplayKey, run_id, metadata);
+        }
+
+        self.finish_fact_meta_insertions(&[
+            FactFamily::EvidenceNode,
+            FactFamily::EvidenceEdge,
+            FactFamily::EvidenceBundle,
+            FactFamily::EvidencePath,
+            FactFamily::EvidenceSlice,
+            FactFamily::EvidenceUnknown,
+            FactFamily::EvidenceOmittedRegion,
+            FactFamily::EvidenceReplayKey,
+        ]);
     }
 }
