@@ -102,8 +102,8 @@ use std::sync::Arc;
 use super::fact_store::{
     CALL_STORE_FAMILY, CFG_STORE_FAMILY, CfgFactStore, FactStore, FactStoreEntry,
     GO_SEMANTIC_STORE_FAMILY, GO_SYNTAX_STORE_FAMILY, GoSyntaxStore, MODULE_GRAPH_STORE_FAMILY,
-    MODULE_TOPOLOGY_STORE_FAMILY, ModuleGraphStore, ModuleTopologyStore, TS_SYNTAX_STORE_FAMILY,
-    TsSyntaxStore,
+    MODULE_TOPOLOGY_STORE_FAMILY, ModuleGraphStore, ModuleTopologyStore, SYMBOL_STORE_FAMILY,
+    SymbolStore, TS_SYNTAX_STORE_FAMILY, TsSyntaxStore,
 };
 use super::facts::{
     BranchObligation, CachedFileFacts, ComplexityMetricFact, CoverageFact, DefinitionFact,
@@ -148,15 +148,6 @@ pub struct AnalysisDb {
     pub(crate) resolution_facts_by_id: BTreeMap<ResolutionId, usize>,
     pub(crate) generated_symbols_by_id: BTreeMap<GeneratedSymbolId, usize>,
     pub(crate) stable_exports_by_id: BTreeMap<StableExportId, usize>,
-    pub(crate) symbols: Vec<SymbolFact>,
-    pub(crate) definitions: Vec<DefinitionFact>,
-    pub(crate) references: Vec<ReferenceFact>,
-    pub(crate) symbols_by_id: BTreeMap<SymbolId, usize>,
-    pub(crate) definitions_by_symbol: BTreeMap<SymbolId, Vec<usize>>,
-    pub(crate) references_by_target: BTreeMap<SymbolId, Vec<usize>>,
-    pub(crate) symbols_by_file: BTreeMap<FileId, Vec<usize>>,
-    pub(crate) references_by_file: BTreeMap<FileId, Vec<usize>>,
-    pub(crate) symbols_by_name: BTreeMap<String, Vec<usize>>,
     pub(crate) coverage: Vec<CoverageFact>,
     pub(crate) file_metrics: Vec<FileMetricFact>,
     pub(crate) function_metrics: Vec<FunctionMetricFact>,
@@ -288,6 +279,9 @@ impl Default for AnalysisDb {
             MODULE_TOPOLOGY_STORE_FAMILY,
             FactStoreEntry::new(module_topology),
         );
+        let mut symbol_store = SymbolStore::default();
+        FactStore::clear(&mut symbol_store);
+        fact_stores.insert(SYMBOL_STORE_FAMILY, FactStoreEntry::new(symbol_store));
         Self {
             files: Vec::new(),
             fact_meta: FactMetaStore::default(),
@@ -306,15 +300,6 @@ impl Default for AnalysisDb {
             resolution_facts_by_id: BTreeMap::new(),
             generated_symbols_by_id: BTreeMap::new(),
             stable_exports_by_id: BTreeMap::new(),
-            symbols: Vec::new(),
-            definitions: Vec::new(),
-            references: Vec::new(),
-            symbols_by_id: BTreeMap::new(),
-            definitions_by_symbol: BTreeMap::new(),
-            references_by_target: BTreeMap::new(),
-            symbols_by_file: BTreeMap::new(),
-            references_by_file: BTreeMap::new(),
-            symbols_by_name: BTreeMap::new(),
             coverage: Vec::new(),
             file_metrics: Vec::new(),
             function_metrics: Vec::new(),
@@ -458,6 +443,16 @@ impl AnalysisDb {
     fn module_topology_store_mut(&mut self) -> &mut ModuleTopologyStore {
         self.fact_store_mut(MODULE_TOPOLOGY_STORE_FAMILY)
             .expect("ModuleTopologyStore is installed when AnalysisDb is constructed")
+    }
+
+    fn symbol_store(&self) -> &SymbolStore {
+        self.fact_store(SYMBOL_STORE_FAMILY)
+            .expect("SymbolStore is installed when AnalysisDb is constructed")
+    }
+
+    fn symbol_store_mut(&mut self) -> &mut SymbolStore {
+        self.fact_store_mut(SYMBOL_STORE_FAMILY)
+            .expect("SymbolStore is installed when AnalysisDb is constructed")
     }
 
     /// Typed downcast helper for registry stores. Returns `None` when the family
@@ -663,10 +658,8 @@ impl AnalysisDb {
         definitions: Vec<DefinitionFact>,
         references: Vec<ReferenceFact>,
     ) {
-        self.symbols = symbols;
-        self.definitions = definitions;
-        self.references = references;
-        self.rebuild_symbol_graph_indexes();
+        self.symbol_store_mut()
+            .replace(symbols, definitions, references);
         self.refresh_symbol_graph_metadata();
     }
 
@@ -896,7 +889,7 @@ impl AnalysisDb {
             .iter()
             .filter_map(|function| {
                 let symbol = self
-                    .symbols
+                    .symbols()
                     .iter()
                     .find(|symbol| {
                         symbol.file == Some(function.file)
@@ -907,7 +900,7 @@ impl AnalysisDb {
                     })
                     .map(|symbol| symbol.id)
                     .or_else(|| {
-                        self.definitions
+                        self.definitions()
                             .iter()
                             .find(|definition| {
                                 definition.file == Some(function.file)
@@ -2775,28 +2768,23 @@ impl AnalysisDb {
         self.fact_meta.remove_family(FactFamily::Definition);
         self.fact_meta.remove_family(FactFamily::Reference);
 
-        for index in 0..self.symbols.len() {
-            let (run_id, metadata) = {
-                let symbol = &self.symbols[index];
-                (symbol.id.0, self.symbol_fact_metadata(symbol))
-            };
-            self.record_fact_meta(FactFamily::Symbol, run_id, metadata);
+        let symbols = self.symbols().to_vec();
+        let definitions = self.definitions().to_vec();
+        let references = self.references().to_vec();
+
+        for symbol in &symbols {
+            let metadata = self.symbol_fact_metadata(symbol);
+            self.record_fact_meta(FactFamily::Symbol, symbol.id.0, metadata);
         }
 
-        for index in 0..self.definitions.len() {
-            let (run_id, metadata) = {
-                let definition = &self.definitions[index];
-                (definition.id.0, self.definition_fact_metadata(definition))
-            };
-            self.record_fact_meta(FactFamily::Definition, run_id, metadata);
+        for definition in &definitions {
+            let metadata = self.definition_fact_metadata(definition);
+            self.record_fact_meta(FactFamily::Definition, definition.id.0, metadata);
         }
 
-        for index in 0..self.references.len() {
-            let (run_id, metadata) = {
-                let reference = &self.references[index];
-                (reference.id.0, self.reference_fact_metadata(reference))
-            };
-            self.record_fact_meta(FactFamily::Reference, run_id, metadata);
+        for reference in &references {
+            let metadata = self.reference_fact_metadata(reference);
+            self.record_fact_meta(FactFamily::Reference, reference.id.0, metadata);
         }
         self.finish_fact_meta_insertions(&[
             FactFamily::Symbol,
@@ -2844,66 +2832,6 @@ impl AnalysisDb {
             FactFamily::FunctionMetric,
             FactFamily::ComplexityMetric,
         ]);
-    }
-
-    fn rebuild_symbol_graph_indexes(&mut self) {
-        self.symbols_by_id.clear();
-        self.definitions_by_symbol.clear();
-        self.references_by_target.clear();
-        self.symbols_by_file.clear();
-        self.references_by_file.clear();
-        self.symbols_by_name.clear();
-
-        for (index, symbol) in self.symbols.iter().enumerate() {
-            self.symbols_by_id.insert(symbol.id, index);
-            if let Some(file) = symbol.file {
-                self.symbols_by_file.entry(file).or_default().push(index);
-            }
-            self.symbols_by_name
-                .entry(symbol.name.clone())
-                .or_default()
-                .push(index);
-        }
-
-        for (index, definition) in self.definitions.iter().enumerate() {
-            self.definitions_by_symbol
-                .entry(definition.symbol)
-                .or_default()
-                .push(index);
-        }
-
-        for (index, reference) in self.references.iter().enumerate() {
-            if let Some(target) = reference.target {
-                self.references_by_target
-                    .entry(target)
-                    .or_default()
-                    .push(index);
-            }
-            if let Some(file) = reference.file {
-                self.references_by_file.entry(file).or_default().push(index);
-            }
-        }
-
-        let symbols = &self.symbols;
-        for indexes in self.symbols_by_file.values_mut() {
-            indexes.sort_by_key(|index| symbols[*index].id);
-        }
-        for indexes in self.symbols_by_name.values_mut() {
-            indexes.sort_by_key(|index| symbols[*index].id);
-        }
-
-        let definitions = &self.definitions;
-        for indexes in self.definitions_by_symbol.values_mut() {
-            indexes.sort_by_key(|index| definitions[*index].id);
-        }
-
-        let references = &self.references;
-        for indexes in self.references_by_target.values_mut() {
-            indexes.sort_by_key(|index| references[*index].id);
-        }
-        for indexes in self.references_by_file.values_mut() {
-            indexes.sort_by_key(|index| references[*index].id);
-        }
     }
 
     fn rebuild_semantic_index_indexes(&mut self) {
@@ -3406,35 +3334,27 @@ impl AnalysisDb {
     }
 
     pub fn symbols(&self) -> &[SymbolFact] {
-        &self.symbols
+        self.symbol_store().symbols()
     }
 
     pub fn definitions(&self) -> &[DefinitionFact] {
-        &self.definitions
+        self.symbol_store().definitions()
     }
 
     pub fn references(&self) -> &[ReferenceFact] {
-        &self.references
+        self.symbol_store().references()
     }
 
     pub(crate) fn symbol_by_id(&self, id: SymbolId) -> Option<&SymbolFact> {
-        self.symbols_by_id
-            .get(&id)
-            .and_then(|index| self.symbols.get(*index))
+        self.symbol_store().symbol_by_id(id)
     }
 
     pub(crate) fn symbols_for_file(&self, file: FileId) -> impl Iterator<Item = &SymbolFact> + '_ {
-        self.symbols_by_file
-            .get(&file)
-            .into_iter()
-            .flat_map(|indexes| indexes.iter().filter_map(|index| self.symbols.get(*index)))
+        self.symbol_store().symbols_for_file(file)
     }
 
     pub(crate) fn symbols_by_name(&self, name: &str) -> impl Iterator<Item = &SymbolFact> + '_ {
-        self.symbols_by_name
-            .get(name)
-            .into_iter()
-            .flat_map(|indexes| indexes.iter().filter_map(|index| self.symbols.get(*index)))
+        self.symbol_store().symbols_by_name(name)
     }
 
     pub(crate) fn definition_for_symbol(&self, symbol: SymbolId) -> Option<&DefinitionFact> {
@@ -3450,42 +3370,21 @@ impl AnalysisDb {
         &self,
         symbol: SymbolId,
     ) -> impl Iterator<Item = &DefinitionFact> + '_ {
-        self.definitions_by_symbol
-            .get(&symbol)
-            .into_iter()
-            .flat_map(|indexes| {
-                indexes
-                    .iter()
-                    .filter_map(|index| self.definitions.get(*index))
-            })
+        self.symbol_store().definitions_for_symbol(symbol)
     }
 
     pub(crate) fn references_to_symbol(
         &self,
         symbol: SymbolId,
     ) -> impl Iterator<Item = &ReferenceFact> + '_ {
-        self.references_by_target
-            .get(&symbol)
-            .into_iter()
-            .flat_map(|indexes| {
-                indexes
-                    .iter()
-                    .filter_map(|index| self.references.get(*index))
-            })
+        self.symbol_store().references_to_symbol(symbol)
     }
 
     pub(crate) fn references_for_file(
         &self,
         file: FileId,
     ) -> impl Iterator<Item = &ReferenceFact> + '_ {
-        self.references_by_file
-            .get(&file)
-            .into_iter()
-            .flat_map(|indexes| {
-                indexes
-                    .iter()
-                    .filter_map(|index| self.references.get(*index))
-            })
+        self.symbol_store().references_for_file(file)
     }
 
     pub fn branches(&self) -> &[BranchObligation] {

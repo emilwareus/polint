@@ -15,16 +15,18 @@ use crate::analysis::cfg::facts::{
 use crate::analysis::cfg::store::CfgOutput;
 use crate::analysis_kernel::FactFamily;
 use crate::core::facts::{
-    BranchObligation, FunctionFact, ImportFact, JsxAttributeFact, ModuleEdge, ModuleNode,
-    PackageFact, ResolvedImportFact, StringLiteralFact, TestFact, TsClassFact, TsComponentFact,
+    BranchObligation, DefinitionFact, FunctionFact, ImportFact, JsxAttributeFact, ModuleEdge,
+    ModuleNode, PackageFact, ReferenceFact, ResolvedImportFact, StringLiteralFact, SymbolFact,
+    TestFact, TsClassFact, TsComponentFact,
 };
-use crate::core::ids::{BranchId, FunctionId, ImportId, PackageId};
+use crate::core::ids::{BranchId, FileId, FunctionId, ImportId, PackageId, SymbolId};
 use crate::go::semantic::store::GoSemanticStore;
 use crate::module_graph::topology::{
     DependencyRequirementFact, ImportToPackageFact, RepoTopologyOverlayFact,
     ResolvedDependencyEdgeFact, SourceSetFact, TopologyOutput, TopologyPackageFact,
     WorkspaceRootFact,
 };
+use std::collections::BTreeMap;
 
 /// Erased provider-owned fact container. Not public — rule authors use SDK views.
 pub(crate) trait FactStore: Any + Send + Sync {
@@ -491,6 +493,196 @@ impl FactStore for ModuleTopologyStore {
 
 /// Registry key used for [`ModuleTopologyStore`] in `AnalysisDb::fact_stores`.
 pub(crate) const MODULE_TOPOLOGY_STORE_FAMILY: FactFamily = FactFamily::WorkspaceRoot;
+
+/// Symbol-graph facts and derived indexes produced by `polint.symbol_graph`.
+///
+/// `symbols_by_name` stays keyed by `String` (not StableKeyId) until a later
+/// coordinated interning change.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SymbolStore {
+    pub(crate) symbols: Vec<SymbolFact>,
+    pub(crate) definitions: Vec<DefinitionFact>,
+    pub(crate) references: Vec<ReferenceFact>,
+    pub(crate) symbols_by_id: BTreeMap<SymbolId, usize>,
+    pub(crate) definitions_by_symbol: BTreeMap<SymbolId, Vec<usize>>,
+    pub(crate) references_by_target: BTreeMap<SymbolId, Vec<usize>>,
+    pub(crate) symbols_by_file: BTreeMap<FileId, Vec<usize>>,
+    pub(crate) references_by_file: BTreeMap<FileId, Vec<usize>>,
+    pub(crate) symbols_by_name: BTreeMap<String, Vec<usize>>,
+}
+
+impl SymbolStore {
+    pub(crate) fn symbols(&self) -> &[SymbolFact] {
+        &self.symbols
+    }
+
+    pub(crate) fn definitions(&self) -> &[DefinitionFact] {
+        &self.definitions
+    }
+
+    pub(crate) fn references(&self) -> &[ReferenceFact] {
+        &self.references
+    }
+
+    pub(crate) fn replace(
+        &mut self,
+        symbols: Vec<SymbolFact>,
+        definitions: Vec<DefinitionFact>,
+        references: Vec<ReferenceFact>,
+    ) {
+        self.symbols = symbols;
+        self.definitions = definitions;
+        self.references = references;
+        self.rebuild_indexes();
+    }
+
+    pub(crate) fn symbol_by_id(&self, id: SymbolId) -> Option<&SymbolFact> {
+        self.symbols_by_id
+            .get(&id)
+            .and_then(|index| self.symbols.get(*index))
+    }
+
+    pub(crate) fn symbols_for_file(&self, file: FileId) -> impl Iterator<Item = &SymbolFact> + '_ {
+        self.symbols_by_file
+            .get(&file)
+            .into_iter()
+            .flat_map(|indexes| indexes.iter().filter_map(|index| self.symbols.get(*index)))
+    }
+
+    pub(crate) fn symbols_by_name(&self, name: &str) -> impl Iterator<Item = &SymbolFact> + '_ {
+        self.symbols_by_name
+            .get(name)
+            .into_iter()
+            .flat_map(|indexes| indexes.iter().filter_map(|index| self.symbols.get(*index)))
+    }
+
+    pub(crate) fn definitions_for_symbol(
+        &self,
+        symbol: SymbolId,
+    ) -> impl Iterator<Item = &DefinitionFact> + '_ {
+        self.definitions_by_symbol
+            .get(&symbol)
+            .into_iter()
+            .flat_map(|indexes| {
+                indexes
+                    .iter()
+                    .filter_map(|index| self.definitions.get(*index))
+            })
+    }
+
+    pub(crate) fn references_to_symbol(
+        &self,
+        symbol: SymbolId,
+    ) -> impl Iterator<Item = &ReferenceFact> + '_ {
+        self.references_by_target
+            .get(&symbol)
+            .into_iter()
+            .flat_map(|indexes| {
+                indexes
+                    .iter()
+                    .filter_map(|index| self.references.get(*index))
+            })
+    }
+
+    pub(crate) fn references_for_file(
+        &self,
+        file: FileId,
+    ) -> impl Iterator<Item = &ReferenceFact> + '_ {
+        self.references_by_file
+            .get(&file)
+            .into_iter()
+            .flat_map(|indexes| {
+                indexes
+                    .iter()
+                    .filter_map(|index| self.references.get(*index))
+            })
+    }
+
+    fn rebuild_indexes(&mut self) {
+        self.symbols_by_id.clear();
+        self.definitions_by_symbol.clear();
+        self.references_by_target.clear();
+        self.symbols_by_file.clear();
+        self.references_by_file.clear();
+        self.symbols_by_name.clear();
+
+        for (index, symbol) in self.symbols.iter().enumerate() {
+            self.symbols_by_id.insert(symbol.id, index);
+            if let Some(file) = symbol.file {
+                self.symbols_by_file.entry(file).or_default().push(index);
+            }
+            self.symbols_by_name
+                .entry(symbol.name.clone())
+                .or_default()
+                .push(index);
+        }
+
+        for (index, definition) in self.definitions.iter().enumerate() {
+            self.definitions_by_symbol
+                .entry(definition.symbol)
+                .or_default()
+                .push(index);
+        }
+
+        for (index, reference) in self.references.iter().enumerate() {
+            if let Some(target) = reference.target {
+                self.references_by_target
+                    .entry(target)
+                    .or_default()
+                    .push(index);
+            }
+            if let Some(file) = reference.file {
+                self.references_by_file.entry(file).or_default().push(index);
+            }
+        }
+
+        let symbols = &self.symbols;
+        for indexes in self.symbols_by_file.values_mut() {
+            indexes.sort_by_key(|index| symbols[*index].id);
+        }
+        for indexes in self.symbols_by_name.values_mut() {
+            indexes.sort_by_key(|index| symbols[*index].id);
+        }
+
+        let definitions = &self.definitions;
+        for indexes in self.definitions_by_symbol.values_mut() {
+            indexes.sort_by_key(|index| definitions[*index].id);
+        }
+
+        let references = &self.references;
+        for indexes in self.references_by_target.values_mut() {
+            indexes.sort_by_key(|index| references[*index].id);
+        }
+        for indexes in self.references_by_file.values_mut() {
+            indexes.sort_by_key(|index| references[*index].id);
+        }
+    }
+}
+
+impl FactStore for SymbolStore {
+    fn family(&self) -> FactFamily {
+        FactFamily::Symbol
+    }
+
+    fn clear(&mut self) {
+        *self = SymbolStore::default();
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn clone_box(&self) -> Box<dyn FactStore> {
+        Box::new(self.clone())
+    }
+}
+
+/// Registry key used for [`SymbolStore`] in `AnalysisDb::fact_stores`.
+pub(crate) const SYMBOL_STORE_FAMILY: FactFamily = FactFamily::Symbol;
 
 #[cfg(test)]
 mod tests {
