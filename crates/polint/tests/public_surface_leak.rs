@@ -641,6 +641,10 @@ fn prelude_structs_and_language_are_non_exhaustive() {
     let root = repo_root();
     let sources = [
         root.join("crates/polint/src/core/mod.rs"),
+        root.join("crates/polint/src/core/ids.rs"),
+        root.join("crates/polint/src/core/lang.rs"),
+        root.join("crates/polint/src/core/span.rs"),
+        root.join("crates/polint/src/core/facts.rs"),
         root.join("crates/polint/src/diagnostics/mod.rs"),
         root.join("crates/polint/src/sdk/facts.rs"),
         root.join("crates/polint/src/sdk/policy.rs"),
