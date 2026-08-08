@@ -1786,20 +1786,41 @@ impl<'source> FunctionLowering<'source> {
                     .properties
                     .iter()
                     .map(|property| match property {
-                        ObjectPropertyKind::ObjectProperty(property) => (
-                            constant_property_key(&property.key),
-                            self.lower_value(&property.value, places, operations, unsupported)
-                                .unwrap_or_else(|| ValueDraft::Unknown {
-                                    evidence: "object property value".to_string(),
-                                }),
-                        ),
-                        ObjectPropertyKind::SpreadProperty(spread) => (
-                            None,
-                            self.lower_value(&spread.argument, places, operations, unsupported)
-                                .unwrap_or_else(|| ValueDraft::Unknown {
-                                    evidence: "object spread value".to_string(),
-                                }),
-                        ),
+                        ObjectPropertyKind::ObjectProperty(property) => {
+                            if property.computed {
+                                self.lower_expression(
+                                    property.key.to_expression(),
+                                    places,
+                                    operations,
+                                    unsupported,
+                                    false,
+                                );
+                            }
+                            (
+                                constant_property_key(&property.key),
+                                self.lower_value(&property.value, places, operations, unsupported)
+                                    .unwrap_or_else(|| ValueDraft::Unknown {
+                                        evidence: "object property value".to_string(),
+                                    }),
+                            )
+                        }
+                        ObjectPropertyKind::SpreadProperty(spread) => {
+                            self.push_unsupported(
+                                operations,
+                                unsupported,
+                                spread.span,
+                                "spread",
+                                Vec::new(),
+                                ConservativeAction::HavocAffectedPlaces,
+                            );
+                            (
+                                None,
+                                self.lower_value(&spread.argument, places, operations, unsupported)
+                                    .unwrap_or_else(|| ValueDraft::Unknown {
+                                        evidence: "object spread value".to_string(),
+                                    }),
+                            )
+                        }
                     })
                     .collect(),
             }),
@@ -1811,13 +1832,23 @@ impl<'source> FunctionLowering<'source> {
                     .enumerate()
                     .filter_map(|(index, element)| match element {
                         oxc_ast::ast::ArrayExpressionElement::Elision(_) => None,
-                        oxc_ast::ast::ArrayExpressionElement::SpreadElement(spread) => Some((
-                            Some(index.to_string()),
-                            self.lower_value(&spread.argument, places, operations, unsupported)
-                                .unwrap_or_else(|| ValueDraft::Unknown {
-                                    evidence: "array spread value".to_string(),
-                                }),
-                        )),
+                        oxc_ast::ast::ArrayExpressionElement::SpreadElement(spread) => {
+                            self.push_unsupported(
+                                operations,
+                                unsupported,
+                                spread.span,
+                                "spread",
+                                Vec::new(),
+                                ConservativeAction::HavocAffectedPlaces,
+                            );
+                            Some((
+                                Some(index.to_string()),
+                                self.lower_value(&spread.argument, places, operations, unsupported)
+                                    .unwrap_or_else(|| ValueDraft::Unknown {
+                                        evidence: "array spread value".to_string(),
+                                    }),
+                            ))
+                        }
                         _ => Some((
                             Some(index.to_string()),
                             self.lower_value(
