@@ -508,6 +508,7 @@ mod tests {
             places: (0..3).map(test_place).collect(),
             operations: Vec::new(),
             unsupported: Vec::new(),
+            ..MirOutput::default()
         })
         .expect("semantic MIR fixture should be valid");
         db.replace_call_facts(CallOutput {

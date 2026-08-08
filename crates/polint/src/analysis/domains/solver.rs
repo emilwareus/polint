@@ -772,6 +772,7 @@ mod tests {
                 places: vec![place],
                 operations,
                 unsupported: Vec::new(),
+                ..MirOutput::default()
             }
         }
 

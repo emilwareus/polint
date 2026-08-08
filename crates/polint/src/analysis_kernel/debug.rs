@@ -3216,7 +3216,8 @@ mod semantic_mir_debug_json {
                 status: MirStatus::Unsupported,
                 stable_key: "unsupported:dynamic-write".to_string(),
             }],
-        })
+            ..MirOutput::default()
+})
         .expect("store semantic MIR rows");
 
         let report = AnalysisKernel::metadata_debug_json_for_test(&db);
@@ -3719,7 +3720,8 @@ mod abstract_domains_debug_json {
                 status: MirStatus::Partial,
             }],
             unsupported: Vec::new(),
-        })
+            ..MirOutput::default()
+})
         .expect("semantic MIR rows should store");
         db
     }

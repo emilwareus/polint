@@ -209,7 +209,8 @@
                     "op:first",
                 )],
                 unsupported: vec![test_unsupported("unsupported:first")],
-            };
+                ..MirOutput::default()
+};
             let second = MirOutput {
                 bodies: vec![test_mir_body(4, file, "body:second")],
                 places: vec![test_place(4, file, "place:second")],
@@ -221,7 +222,8 @@
                     "op:second",
                 )],
                 unsupported: Vec::new(),
-            };
+                ..MirOutput::default()
+};
 
             db.replace_semantic_mir(first).expect("first MIR replace");
             db.replace_semantic_mir(second).expect("second MIR replace");
@@ -263,7 +265,8 @@
                     test_unsupported("unsupported:z"),
                     test_unsupported("unsupported:a"),
                 ],
-            };
+                ..MirOutput::default()
+};
 
             db.replace_semantic_mir(output)
                 .expect("semantic MIR replace");
@@ -348,7 +351,8 @@
                     "op:dangling",
                 )],
                 unsupported: Vec::new(),
-            };
+                ..MirOutput::default()
+};
 
             let error = db
                 .replace_semantic_mir(output)
@@ -373,7 +377,8 @@
                     "op:metadata",
                 )],
                 unsupported: vec![test_unsupported("unsupported:metadata")],
-            })
+                ..MirOutput::default()
+})
             .expect("semantic MIR replace");
         }
 
@@ -464,7 +469,8 @@
                 places: vec![place],
                 operations: Vec::new(),
                 unsupported: vec![test_unsupported("unsupported:metadata")],
-            })
+                ..MirOutput::default()
+})
             .expect("semantic MIR replace");
 
             assert_eq!(

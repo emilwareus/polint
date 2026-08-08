@@ -1220,6 +1220,7 @@ export function narrow(user, value, dynamicKey) {
                 status: MirStatus::Unsupported,
                 stable_key: "ts:unsupported:dynamic-key".to_string(),
             }],
+            ..MirOutput::default()
         })
         .expect("semantic MIR replacement");
         db

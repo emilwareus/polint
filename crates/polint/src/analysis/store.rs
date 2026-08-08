@@ -1,8 +1,12 @@
 use std::collections::BTreeMap;
 
 use crate::analysis::error::AnalysisError;
-use crate::analysis::ids::{MirBodyId, MirOpId, PlaceId, UnsupportedId};
-use crate::analysis::mir::body::{MirBody, MirOutput};
+use crate::analysis::ids::{
+    MirBodyId, MirOpId, MirStatementId, MirTerminatorId, PlaceId, UnsupportedId,
+};
+use crate::analysis::mir::body::{
+    MirBlock, MirBlockId, MirBody, MirOutput, MirStatement, MirTerminator, MirTerminatorKind,
+};
 use crate::analysis::mir::op::{MirOperation, MirOperationKind, MirValue, UnsupportedSemanticFact};
 use crate::analysis::places::{PlaceFact, PlaceRoot};
 use crate::core::SEMANTIC_MIR_PROVIDER_ID;
@@ -10,6 +14,9 @@ use crate::core::SEMANTIC_MIR_PROVIDER_ID;
 #[derive(Debug, Default, Clone)]
 pub(crate) struct SemanticStore {
     mir_bodies: Vec<MirBody>,
+    mir_blocks: Vec<MirBlock>,
+    mir_statements: Vec<MirStatement>,
+    mir_terminators: Vec<MirTerminator>,
     mir_operations: Vec<MirOperation>,
     places: Vec<PlaceFact>,
     unsupported_semantics: Vec<UnsupportedSemanticFact>,
@@ -27,6 +34,41 @@ impl SemanticStore {
         let unsupported_ids = unsupported_id_map(&output.unsupported);
         let (mir_operations, operation_ids) =
             normalize_operations(output.operations, &body_ids, &place_ids, &unsupported_ids)?;
+        let block_ids = stable_id_map(
+            &output.blocks,
+            |row| &row.stable_key,
+            |row| row.id,
+            MirBlockId,
+        );
+        let statement_ids = stable_id_map(
+            &output.statements,
+            |row| &row.stable_key,
+            |row| row.id,
+            MirStatementId,
+        );
+        let terminator_ids = stable_id_map(
+            &output.terminators,
+            |row| &row.stable_key,
+            |row| row.id,
+            MirTerminatorId,
+        );
+        let mir_statements =
+            normalize_statements(output.statements, &body_ids, &operation_ids, &statement_ids)?;
+        let mir_terminators = normalize_terminators(
+            output.terminators,
+            &body_ids,
+            &block_ids,
+            &place_ids,
+            &unsupported_ids,
+            &terminator_ids,
+        )?;
+        let mir_blocks = normalize_blocks(
+            output.blocks,
+            &body_ids,
+            &block_ids,
+            &statement_ids,
+            &terminator_ids,
+        )?;
         let unsupported_semantics = normalize_unsupported_with_ids(
             output.unsupported,
             &body_ids,
@@ -41,6 +83,9 @@ impl SemanticStore {
             places_by_id: index_by_id(&places, |place| place.id),
             unsupported_semantics_by_id: index_by_id(&unsupported_semantics, |row| row.id),
             mir_bodies,
+            mir_blocks,
+            mir_statements,
+            mir_terminators,
             mir_operations,
             places,
             unsupported_semantics,
@@ -53,6 +98,18 @@ impl SemanticStore {
 
     pub(crate) fn mir_operations(&self) -> &[MirOperation] {
         &self.mir_operations
+    }
+
+    pub(crate) fn mir_blocks(&self) -> &[MirBlock] {
+        &self.mir_blocks
+    }
+
+    pub(crate) fn mir_statements(&self) -> &[MirStatement] {
+        &self.mir_statements
+    }
+
+    pub(crate) fn mir_terminators(&self) -> &[MirTerminator] {
+        &self.mir_terminators
     }
 
     pub(crate) fn places(&self) -> &[PlaceFact] {
@@ -133,6 +190,138 @@ fn normalize_operations(
         remap_operation_kind(&mut operation.kind, place_ids, unsupported_ids)?;
     }
     Ok((operations, operation_ids))
+}
+
+fn stable_id_map<T, Id: Copy + Ord>(
+    rows: &[T],
+    stable_key: impl Fn(&T) -> &str,
+    old_id: impl Fn(&T) -> Id,
+    make_id: impl Fn(u64) -> Id,
+) -> BTreeMap<Id, Id> {
+    let mut sorted = rows
+        .iter()
+        .map(|row| (stable_key(row), row))
+        .collect::<Vec<_>>();
+    sorted.sort_by(|left, right| left.0.cmp(right.0));
+    sorted
+        .into_iter()
+        .enumerate()
+        .map(|(index, (_, row))| (old_id(row), make_id(index as u64)))
+        .collect()
+}
+
+fn normalize_statements(
+    mut rows: Vec<MirStatement>,
+    body_ids: &BTreeMap<MirBodyId, MirBodyId>,
+    operation_ids: &BTreeMap<MirOpId, MirOpId>,
+    statement_ids: &BTreeMap<MirStatementId, MirStatementId>,
+) -> Result<Vec<MirStatement>, AnalysisError> {
+    rows.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    for row in &mut rows {
+        row.id = remap_id(row.id, statement_ids, "dangling MIR statement id")?;
+        row.body = remap_body_id(row.body, body_ids, "dangling MIR statement body")?;
+        row.operation = remap_id(
+            row.operation,
+            operation_ids,
+            "dangling MIR statement operation",
+        )?;
+    }
+    Ok(rows)
+}
+
+fn normalize_terminators(
+    mut rows: Vec<MirTerminator>,
+    body_ids: &BTreeMap<MirBodyId, MirBodyId>,
+    block_ids: &BTreeMap<MirBlockId, MirBlockId>,
+    place_ids: &BTreeMap<PlaceId, PlaceId>,
+    unsupported_ids: &BTreeMap<UnsupportedId, UnsupportedId>,
+    terminator_ids: &BTreeMap<MirTerminatorId, MirTerminatorId>,
+) -> Result<Vec<MirTerminator>, AnalysisError> {
+    rows.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    for row in &mut rows {
+        row.id = remap_id(row.id, terminator_ids, "dangling MIR terminator id")?;
+        row.body = remap_body_id(row.body, body_ids, "dangling MIR terminator body")?;
+        remap_terminator_kind(&mut row.kind, block_ids, place_ids, unsupported_ids)?;
+    }
+    Ok(rows)
+}
+
+fn normalize_blocks(
+    mut rows: Vec<MirBlock>,
+    body_ids: &BTreeMap<MirBodyId, MirBodyId>,
+    block_ids: &BTreeMap<MirBlockId, MirBlockId>,
+    statement_ids: &BTreeMap<MirStatementId, MirStatementId>,
+    terminator_ids: &BTreeMap<MirTerminatorId, MirTerminatorId>,
+) -> Result<Vec<MirBlock>, AnalysisError> {
+    rows.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    for row in &mut rows {
+        row.id = remap_id(row.id, block_ids, "dangling MIR block id")?;
+        row.body = remap_body_id(row.body, body_ids, "dangling MIR block body")?;
+        for statement in &mut row.statements {
+            *statement = remap_id(*statement, statement_ids, "dangling MIR block statement")?;
+        }
+        row.terminator = remap_id(
+            row.terminator,
+            terminator_ids,
+            "dangling MIR block terminator",
+        )?;
+    }
+    Ok(rows)
+}
+
+fn remap_terminator_kind(
+    kind: &mut MirTerminatorKind,
+    block_ids: &BTreeMap<MirBlockId, MirBlockId>,
+    place_ids: &BTreeMap<PlaceId, PlaceId>,
+    unsupported_ids: &BTreeMap<UnsupportedId, UnsupportedId>,
+) -> Result<(), AnalysisError> {
+    match kind {
+        MirTerminatorKind::Goto { target } => {
+            *target = remap_id(*target, block_ids, "dangling MIR goto target")?;
+        }
+        MirTerminatorKind::Branch {
+            predicate_place,
+            then_target,
+            else_target,
+            ..
+        } => {
+            *then_target = remap_id(*then_target, block_ids, "dangling MIR branch then target")?;
+            *else_target = remap_id(*else_target, block_ids, "dangling MIR branch else target")?;
+            if let Some(place) = predicate_place {
+                *place = remap_place_id(*place, place_ids, "dangling MIR predicate place")?;
+            }
+        }
+        MirTerminatorKind::Switch {
+            discriminant,
+            cases,
+            otherwise,
+        } => {
+            remap_value(discriminant, place_ids)?;
+            for (value, target) in cases {
+                remap_value(value, place_ids)?;
+                *target = remap_id(*target, block_ids, "dangling MIR switch case target")?;
+            }
+            *otherwise = remap_id(
+                *otherwise,
+                block_ids,
+                "dangling MIR switch otherwise target",
+            )?;
+        }
+        MirTerminatorKind::Return { value } => {
+            if let Some(value) = value {
+                remap_value(value, place_ids)?;
+            }
+        }
+        MirTerminatorKind::Unreachable => {}
+        MirTerminatorKind::Unsupported { unsupported } => {
+            *unsupported = remap_unsupported_id(
+                *unsupported,
+                unsupported_ids,
+                "dangling MIR unsupported terminator",
+            )?;
+        }
+    }
+    Ok(())
 }
 
 fn normalize_unsupported_with_ids(
@@ -261,6 +450,14 @@ fn remap_body_id(
         .get(&id)
         .copied()
         .ok_or_else(|| invalid_fact(reason))
+}
+
+fn remap_id<Id: Copy + Ord>(
+    id: Id,
+    ids: &BTreeMap<Id, Id>,
+    reason: &'static str,
+) -> Result<Id, AnalysisError> {
+    ids.get(&id).copied().ok_or_else(|| invalid_fact(reason))
 }
 
 fn remap_place_id(
@@ -396,6 +593,7 @@ mod tests {
                 unsupported(0, "unsupported:z", MirOpId(0)),
                 unsupported(1, "unsupported:a", MirOpId(0)),
             ],
+            ..MirOutput::default()
         };
 
         let store = SemanticStore::from_output(output).expect("store normalizes");

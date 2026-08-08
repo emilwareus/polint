@@ -2963,6 +2963,7 @@ mod tests {
             places: Vec::new(),
             operations,
             unsupported: Vec::new(),
+            ..MirOutput::default()
         })
         .expect("valid semantic MIR facts");
         db.replace_call_facts(CallOutput {
@@ -3038,6 +3039,7 @@ mod tests {
             places: Vec::new(),
             operations,
             unsupported: Vec::new(),
+            ..MirOutput::default()
         })
         .expect("valid semantic MIR facts");
         db.replace_cfg_facts(CfgOutput {

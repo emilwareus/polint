@@ -1299,6 +1299,7 @@ mod abstract_domains {
                 status: MirStatus::Partial,
             }],
             unsupported: Vec::new(),
+            ..MirOutput::default()
         })
         .expect("semantic MIR rows should store");
         db.replace_cfg_facts(CfgOutput {
@@ -1753,6 +1754,7 @@ mod semantic_mir {
                 status: MirStatus::Unsupported,
                 stable_key: "unsupported:bad".to_string(),
             }],
+            ..MirOutput::default()
         })
         .expect("semantic rows should store for validation");
 
@@ -1787,6 +1789,7 @@ mod semantic_mir {
             places: Vec::new(),
             operations: Vec::new(),
             unsupported: Vec::new(),
+            ..MirOutput::default()
         })
         .expect("semantic rows should store");
         db.fact_meta_mut_for_test()

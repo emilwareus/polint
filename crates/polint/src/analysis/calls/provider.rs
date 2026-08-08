@@ -635,6 +635,7 @@ mod calls_provider {
                 status: MirStatus::Partial,
             }],
             unsupported: Vec::new(),
+            ..MirOutput::default()
         })
         .expect("semantic MIR should store");
         db

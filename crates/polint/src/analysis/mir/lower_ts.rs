@@ -10,9 +10,13 @@ use oxc_ast::ast::{
 use oxc_span::GetSpan;
 
 use crate::analysis::ids::{
-    CallSiteId, MirBodyId, MirOpId, MirPredicateId, PlaceId, UnsupportedId,
+    CallSiteId, MirBodyId, MirOpId, MirPredicateId, MirStatementId, MirTerminatorId, PlaceId,
+    UnsupportedId,
 };
-use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
+use crate::analysis::mir::body::{
+    MirBlock, MirBlockId, MirBody, MirOutput, MirStatement, MirStatus, MirTerminator,
+    MirTerminatorKind,
+};
 use crate::analysis::mir::op::{
     AssignMode, ConservativeAction, MirOperation, MirOperationKind, MirValue, UnsupportedDomain,
     UnsupportedPrecision, UnsupportedSemanticFact,
@@ -54,14 +58,201 @@ pub(crate) fn lower_ts_mir(db: &AnalysisDb) -> MirOutput {
         .collect::<BTreeMap<_, _>>();
     let operations = lowering.finish_operations(&place_ids);
     let unsupported = lowering.finish_unsupported(&place_ids);
+    let control_shapes = lowering
+        .operations
+        .iter()
+        .filter_map(|operation| match operation.kind {
+            OperationKindDraft::Branch { shape, .. } => Some((operation.id, shape)),
+            _ => None,
+        })
+        .collect::<BTreeMap<_, _>>();
+    let (blocks, statements, terminators) =
+        lower_control_flow(&lowering.bodies, &operations, &control_shapes);
 
     MirOutput {
         bodies: lowering.bodies,
+        blocks,
+        statements,
+        terminators,
         places,
         operations,
         unsupported,
     }
     .normalized()
+}
+
+fn lower_control_flow(
+    bodies: &[MirBody],
+    operations: &[MirOperation],
+    control_shapes: &BTreeMap<MirOpId, ControlShape>,
+) -> (Vec<MirBlock>, Vec<MirStatement>, Vec<MirTerminator>) {
+    let mut blocks = Vec::new();
+    let mut statements = Vec::new();
+    let mut terminators = Vec::new();
+
+    for body in bodies {
+        let mut body_operations = operations
+            .iter()
+            .filter(|operation| operation.body == body.id)
+            .collect::<Vec<_>>();
+        body_operations.sort_by(|left, right| {
+            (left.ordinal, left.stable_key.as_str())
+                .cmp(&(right.ordinal, right.stable_key.as_str()))
+        });
+        let mut drafts = vec![BlockDraft::new(MirBlockId(blocks.len() as u64), body.id, 0)];
+        let mut current = push_block_draft(&mut drafts, blocks.len(), body.id);
+        drafts[0].terminator = Some(MirTerminatorKind::Goto {
+            target: drafts[current].id,
+        });
+        let operation_count = body_operations.len();
+
+        for (operation_index, operation) in body_operations.into_iter().enumerate() {
+            let statement = MirStatement {
+                id: MirStatementId(statements.len() as u64),
+                body: body.id,
+                ordinal: operation.ordinal,
+                operation: operation.id,
+                stable_key: format!("{}:statement", operation.stable_key),
+                status: operation.status,
+            };
+            drafts[current].statements.push(statement.id);
+            statements.push(statement);
+
+            match &operation.kind {
+                MirOperationKind::Branch {
+                    predicate,
+                    predicate_place,
+                } => {
+                    let shape = control_shapes
+                        .get(&operation.id)
+                        .copied()
+                        .unwrap_or(ControlShape::Conditional);
+                    let first = push_block_draft(&mut drafts, blocks.len(), body.id);
+                    let second = push_block_draft(&mut drafts, blocks.len(), body.id);
+                    let join = push_block_draft(&mut drafts, blocks.len(), body.id);
+                    drafts[current].terminator = Some(match shape {
+                        ControlShape::Conditional => MirTerminatorKind::Branch {
+                            predicate: *predicate,
+                            predicate_place: *predicate_place,
+                            then_target: drafts[first].id,
+                            else_target: drafts[second].id,
+                        },
+                        ControlShape::Loop => MirTerminatorKind::Branch {
+                            predicate: *predicate,
+                            predicate_place: *predicate_place,
+                            then_target: drafts[first].id,
+                            else_target: drafts[join].id,
+                        },
+                        ControlShape::Switch => MirTerminatorKind::Switch {
+                            discriminant: MirValue::Unknown {
+                                evidence: operation.stable_key.clone(),
+                            },
+                            cases: vec![(
+                                MirValue::Unknown {
+                                    evidence: "case".to_string(),
+                                },
+                                drafts[first].id,
+                            )],
+                            otherwise: drafts[second].id,
+                        },
+                    });
+                    drafts[first].terminator = Some(MirTerminatorKind::Goto {
+                        target: if shape == ControlShape::Loop {
+                            drafts[current].id
+                        } else {
+                            drafts[join].id
+                        },
+                    });
+                    drafts[second].terminator = Some(MirTerminatorKind::Goto {
+                        target: drafts[join].id,
+                    });
+                    current = join;
+                }
+                MirOperationKind::Return { value } => {
+                    drafts[current].terminator = Some(MirTerminatorKind::Return {
+                        value: value.clone(),
+                    });
+                    if operation_index + 1 < operation_count {
+                        current = push_block_draft(&mut drafts, blocks.len(), body.id);
+                        drafts[current].terminator = Some(MirTerminatorKind::Unreachable);
+                    }
+                }
+                MirOperationKind::Unsupported { unsupported }
+                    if operation_index + 1 == operation_count =>
+                {
+                    drafts[current].terminator = Some(MirTerminatorKind::Unsupported {
+                        unsupported: *unsupported,
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        if drafts[current].terminator.is_none() {
+            drafts[current].terminator = Some(MirTerminatorKind::Return { value: None });
+        }
+        for draft in drafts {
+            let kind = draft
+                .terminator
+                .expect("every lowered MIR block must have a terminator");
+            let terminator = MirTerminator {
+                id: MirTerminatorId(terminators.len() as u64),
+                body: draft.body,
+                ordinal: draft.ordinal,
+                stable_key: format!("{}:terminator:{}", body.stable_key, draft.ordinal),
+                status: body.status,
+                kind,
+            };
+            blocks.push(MirBlock {
+                id: draft.id,
+                body: draft.body,
+                ordinal: draft.ordinal,
+                statements: draft.statements,
+                terminator: terminator.id,
+                stable_key: format!("{}:block:{}", body.stable_key, draft.ordinal),
+            });
+            terminators.push(terminator);
+        }
+    }
+
+    (blocks, statements, terminators)
+}
+
+struct BlockDraft {
+    id: MirBlockId,
+    body: MirBodyId,
+    ordinal: u32,
+    statements: Vec<MirStatementId>,
+    terminator: Option<MirTerminatorKind>,
+}
+
+impl BlockDraft {
+    fn new(id: MirBlockId, body: MirBodyId, ordinal: u32) -> Self {
+        Self {
+            id,
+            body,
+            ordinal,
+            statements: Vec::new(),
+            terminator: None,
+        }
+    }
+}
+
+fn push_block_draft(drafts: &mut Vec<BlockDraft>, base: usize, body: MirBodyId) -> usize {
+    let index = drafts.len();
+    drafts.push(BlockDraft::new(
+        MirBlockId((base + index) as u64),
+        body,
+        index as u32,
+    ));
+    index
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ControlShape {
+    Conditional,
+    Loop,
+    Switch,
 }
 
 #[derive(Debug, Default)]
@@ -1009,7 +1200,7 @@ impl<'source> FunctionLowering<'source> {
                 );
             }
             Statement::IfStatement(statement) => {
-                self.push_branch(operations, statement.span);
+                self.push_branch(operations, statement.span, ControlShape::Conditional);
                 self.lower_expression(&statement.test, places, operations, unsupported, false);
                 self.lower_statement(&statement.consequent, places, operations, unsupported);
                 if let Some(alternate) = &statement.alternate {
@@ -1017,7 +1208,7 @@ impl<'source> FunctionLowering<'source> {
                 }
             }
             Statement::WhileStatement(statement) => {
-                self.push_branch(operations, statement.span);
+                self.push_branch(operations, statement.span, ControlShape::Loop);
                 self.lower_expression(&statement.test, places, operations, unsupported, false);
                 self.lower_statement(&statement.body, places, operations, unsupported);
             }
@@ -1030,7 +1221,7 @@ impl<'source> FunctionLowering<'source> {
                     Vec::new(),
                     ConservativeAction::HavocAffectedPlaces,
                 );
-                self.push_branch(operations, statement.span);
+                self.push_branch(operations, statement.span, ControlShape::Loop);
                 self.lower_statement(&statement.body, places, operations, unsupported);
                 self.lower_expression(&statement.test, places, operations, unsupported, false);
             }
@@ -1039,7 +1230,7 @@ impl<'source> FunctionLowering<'source> {
                     self.lower_for_statement_init(init, places, operations, unsupported);
                 }
                 if let Some(test) = &statement.test {
-                    self.push_branch(operations, test.span());
+                    self.push_branch(operations, test.span(), ControlShape::Loop);
                     self.lower_expression(test, places, operations, unsupported, false);
                 }
                 if let Some(update) = &statement.update {
@@ -1086,7 +1277,7 @@ impl<'source> FunctionLowering<'source> {
                     Vec::new(),
                     ConservativeAction::HavocAffectedPlaces,
                 );
-                self.push_branch(operations, statement.span);
+                self.push_branch(operations, statement.span, ControlShape::Switch);
                 self.lower_expression(
                     &statement.discriminant,
                     places,
@@ -1096,7 +1287,7 @@ impl<'source> FunctionLowering<'source> {
                 );
                 for case in &statement.cases {
                     if let Some(test) = &case.test {
-                        self.push_branch(operations, test.span());
+                        self.push_branch(operations, test.span(), ControlShape::Conditional);
                         self.lower_expression(test, places, operations, unsupported, false);
                     }
                     for statement in &case.consequent {
@@ -1556,7 +1747,7 @@ impl<'source> FunctionLowering<'source> {
                 Some(self.temporary_shape(places, unary.span))
             }
             Expression::ConditionalExpression(conditional) => {
-                self.push_branch(operations, conditional.span);
+                self.push_branch(operations, conditional.span, ControlShape::Conditional);
                 self.lower_expression(&conditional.test, places, operations, unsupported, false);
                 self.lower_expression(
                     &conditional.consequent,
@@ -1578,7 +1769,7 @@ impl<'source> FunctionLowering<'source> {
                     logical.operator,
                     LogicalOperator::And | LogicalOperator::Or | LogicalOperator::Coalesce
                 ) {
-                    self.push_branch(operations, logical.span);
+                    self.push_branch(operations, logical.span, ControlShape::Conditional);
                 }
                 self.lower_expression(&logical.left, places, operations, unsupported, false);
                 self.lower_expression(&logical.right, places, operations, unsupported, false)
@@ -2520,13 +2711,19 @@ impl<'source> FunctionLowering<'source> {
         }
     }
 
-    fn push_branch(&self, operations: &mut Vec<OperationDraft>, span: oxc_span::Span) {
+    fn push_branch(
+        &self,
+        operations: &mut Vec<OperationDraft>,
+        span: oxc_span::Span,
+        shape: ControlShape,
+    ) {
         self.push_operation(
             operations,
             span,
             OperationKindDraft::Branch {
                 predicate: MirPredicateId(span.start as u64),
                 predicate_place_key: None,
+                shape,
             },
             MirStatus::Partial,
         );
@@ -2659,6 +2856,7 @@ enum OperationKindDraft {
     Branch {
         predicate: MirPredicateId,
         predicate_place_key: Option<String>,
+        shape: ControlShape,
     },
     Call {
         site: CallSiteId,
@@ -2692,6 +2890,7 @@ impl OperationKindDraft {
             Self::Branch {
                 predicate,
                 predicate_place_key,
+                ..
             } => Some(MirOperationKind::Branch {
                 predicate: *predicate,
                 predicate_place: predicate_place_key
@@ -3440,6 +3639,26 @@ export function flow(user, index, enabled) {
                 .unsupported
                 .iter()
                 .any(|row| row.construct.contains("destructur") && row.is_complete())
+        );
+        assert!(!output.blocks.is_empty());
+        assert_eq!(output.blocks.len(), output.terminators.len());
+        assert!(
+            output
+                .terminators
+                .iter()
+                .any(|terminator| matches!(terminator.kind, MirTerminatorKind::Branch { .. }))
+        );
+        assert!(
+            output
+                .terminators
+                .iter()
+                .any(|terminator| matches!(terminator.kind, MirTerminatorKind::Goto { .. }))
+        );
+        assert!(
+            output
+                .terminators
+                .iter()
+                .any(|terminator| matches!(terminator.kind, MirTerminatorKind::Return { .. }))
         );
     }
 

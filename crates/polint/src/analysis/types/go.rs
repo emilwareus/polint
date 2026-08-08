@@ -824,6 +824,7 @@ mod tests {
                 status: MirStatus::Unsupported,
                 stable_key: "go:unsupported:unsafe".to_string(),
             }],
+            ..MirOutput::default()
         })
         .expect("semantic MIR replacement");
         db

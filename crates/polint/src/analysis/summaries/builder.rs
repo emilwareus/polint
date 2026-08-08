@@ -1041,6 +1041,7 @@ mod tests {
                 status: MirStatus::Resolved,
             }],
             unsupported: Vec::new(),
+            ..MirOutput::default()
         })
         .expect("MIR should store");
 
@@ -1082,6 +1083,7 @@ mod tests {
                 status: MirStatus::Resolved,
             }],
             unsupported: Vec::new(),
+            ..MirOutput::default()
         })
         .expect("MIR should store");
 
@@ -1225,6 +1227,7 @@ mod tests {
                 },
             ],
             unsupported: Vec::new(),
+            ..MirOutput::default()
         })
         .expect("MIR should store");
         db
@@ -1304,6 +1307,7 @@ mod tests {
                 status: MirStatus::Resolved,
             }],
             unsupported: Vec::new(),
+            ..MirOutput::default()
         })
         .expect("MIR should store");
 
@@ -1433,6 +1437,7 @@ mod tests {
                 },
             ],
             unsupported: Vec::new(),
+            ..MirOutput::default()
         })
         .expect("MIR should store");
 
@@ -1538,6 +1543,7 @@ mod tests {
                 },
             ],
             unsupported: Vec::new(),
+            ..MirOutput::default()
         })
         .expect("MIR should store");
 
@@ -1650,6 +1656,7 @@ mod tests {
                 },
             ],
             unsupported: Vec::new(),
+            ..MirOutput::default()
         })
         .expect("MIR should store");
 
@@ -1697,6 +1704,7 @@ mod tests {
                 status: MirStatus::Resolved,
             }],
             unsupported: Vec::new(),
+            ..MirOutput::default()
         })
         .expect("MIR should store");
 

@@ -12,14 +12,14 @@ use crate::analysis::cfg::store::CfgOutput;
 #[cfg(test)]
 use crate::analysis::ids::MirOpId;
 use crate::analysis::ids::{MirBodyId, UnsupportedId};
-use crate::analysis::mir::body::MirStatus;
+use crate::analysis::mir::body::{MirBlockId, MirStatus, MirTerminatorKind};
 use crate::analysis::mir::op::{
-    ConservativeAction, MirOperation, MirOperationKind, UnsupportedDomain, UnsupportedPrecision,
+    ConservativeAction, MirOperationKind, UnsupportedDomain, UnsupportedPrecision,
     UnsupportedSemanticFact,
 };
 use crate::analysis::stable_key::semantic_stable_key;
 use crate::analysis_kernel::FactFamily;
-use crate::core::{AnalysisDb, Language, SourceFile, Span};
+use crate::core::{AnalysisDb, Language};
 
 pub(crate) fn lower_ts_cfg(db: &AnalysisDb) -> CfgOutput {
     let mut lowering = TsCfgLowering::new(db);
@@ -66,203 +66,186 @@ impl<'db> TsCfgLowering<'db> {
     }
 
     fn lower_body(&mut self, body: MirBodyId) {
-        let mut operations = self
+        let mut blocks = self
             .db
-            .mir_operations()
+            .mir_blocks()
             .iter()
-            .filter(|operation| operation.body == body)
+            .filter(|block| block.body == body)
             .collect::<Vec<_>>();
-        operations.sort_by(|left, right| {
+        blocks.sort_by(|left, right| {
             (left.ordinal, left.stable_key.as_str())
                 .cmp(&(right.ordinal, right.stable_key.as_str()))
         });
-
-        let mut terminated = false;
-        for operation in operations {
-            if terminated {
-                let block = self.builder.start_block(BasicBlockKind::Unreachable);
-                self.builder.mark_unreachable(block);
-            }
-
-            match &operation.kind {
-                MirOperationKind::Branch { .. } => {
-                    self.lower_branch(operation);
-                    terminated = false;
-                }
-                MirOperationKind::Return { .. } => {
-                    self.builder.append_operation_node(
-                        Some(operation),
-                        CfgNodeKind::Return,
-                        Some(operation.span.clone()),
-                    );
-                    let current = self.builder.current_block();
-                    let exit = self.builder.normal_exit_block();
-                    self.builder.add_edge(current, exit, CfgEdgeKind::Return);
-                    terminated = true;
-                }
-                MirOperationKind::Call { .. } => {
-                    self.builder.append_operation_node(
-                        Some(operation),
-                        CfgNodeKind::CallSite,
-                        Some(operation.span.clone()),
-                    );
-                    terminated = false;
-                }
-                MirOperationKind::Unsupported { unsupported } => {
-                    let shape = self.unsupported_shape(*unsupported);
-                    self.builder.append_operation_node(
-                        Some(operation),
-                        shape.node_kind,
-                        Some(operation.span.clone()),
-                    );
-                    if !shape.boundary_edges.is_empty() {
-                        let current = self.builder.current_block();
-                        let next = if shape.to_exceptional_exit {
-                            self.builder
-                                .exceptional_exit_block()
-                                .unwrap_or_else(|| self.builder.normal_exit_block())
-                        } else {
-                            let next = self.builder.start_block(BasicBlockKind::Synthetic);
-                            self.builder.append_operation_node(
-                                None,
-                                CfgNodeKind::Synthetic,
-                                Some(operation.span.clone()),
-                            );
-                            next
-                        };
-                        for edge_kind in shape.boundary_edges {
-                            self.builder.add_edge(current, next, edge_kind);
-                        }
-                    }
-                    terminated = shape.stop_lowering;
-                }
-                MirOperationKind::StorageLive { .. }
-                | MirOperationKind::Bind { .. }
-                | MirOperationKind::Assign { .. }
-                | MirOperationKind::Read { .. }
-                | MirOperationKind::Write { .. } => {
-                    self.builder.append_operation_node(
-                        Some(operation),
-                        CfgNodeKind::Operation,
-                        Some(operation.span.clone()),
-                    );
-                    terminated = false;
-                }
-            }
-        }
-        if !terminated {
+        if blocks.is_empty() {
             let current = self.builder.current_block();
             let exit = self.builder.normal_exit_block();
-            if current != exit {
-                self.builder.add_edge(current, exit, CfgEdgeKind::Normal);
-            }
+            self.builder.add_edge(current, exit, CfgEdgeKind::Normal);
+            return;
         }
-    }
 
-    fn lower_branch(&mut self, operation: &MirOperation) {
-        let shape = self.branch_shape(operation);
-        self.builder.append_operation_node(
-            Some(operation),
-            CfgNodeKind::Condition,
-            Some(operation.span.clone()),
+        let entry = self.builder.current_block();
+        let mut cfg_blocks = BTreeMap::new();
+        for block in &blocks {
+            let terminator = self
+                .db
+                .mir_terminators()
+                .iter()
+                .find(|terminator| terminator.id == block.terminator)
+                .expect("MIR block terminator must exist");
+            let kind = match terminator.kind {
+                MirTerminatorKind::Branch { .. } | MirTerminatorKind::Switch { .. } => {
+                    BasicBlockKind::Branch
+                }
+                MirTerminatorKind::Unreachable => BasicBlockKind::Unreachable,
+                _ => BasicBlockKind::StraightLine,
+            };
+            let cfg_block = self.builder.start_block(kind);
+            if matches!(terminator.kind, MirTerminatorKind::Unreachable) {
+                self.builder.mark_unreachable(cfg_block);
+            }
+            for (index, statement_id) in block.statements.iter().enumerate() {
+                let statement = self
+                    .db
+                    .mir_statements()
+                    .iter()
+                    .find(|statement| statement.id == *statement_id)
+                    .expect("MIR block statement must exist");
+                let operation = self
+                    .db
+                    .mir_operations()
+                    .iter()
+                    .find(|operation| operation.id == statement.operation)
+                    .expect("MIR statement operation must exist");
+                let node_kind = if index + 1 == block.statements.len()
+                    && matches!(
+                        terminator.kind,
+                        MirTerminatorKind::Branch { .. } | MirTerminatorKind::Switch { .. }
+                    ) {
+                    CfgNodeKind::Condition
+                } else {
+                    match &operation.kind {
+                        MirOperationKind::Return { .. } => CfgNodeKind::Return,
+                        MirOperationKind::Call { .. } => CfgNodeKind::CallSite,
+                        MirOperationKind::Unsupported { unsupported } => {
+                            self.unsupported_shape(*unsupported).node_kind
+                        }
+                        _ => CfgNodeKind::Operation,
+                    }
+                };
+                self.builder.append_operation_node(
+                    Some(operation),
+                    node_kind,
+                    Some(operation.span.clone()),
+                );
+            }
+            if block.statements.is_empty() {
+                self.builder
+                    .append_operation_node(None, CfgNodeKind::Synthetic, None);
+            }
+            cfg_blocks.insert(block.id, cfg_block);
+        }
+        self.builder.add_edge(
+            entry,
+            *cfg_blocks
+                .get(&blocks[0].id)
+                .expect("first MIR block must have a CFG block"),
+            CfgEdgeKind::Normal,
         );
-        let condition = self.builder.current_block();
 
-        match shape {
-            BranchShape::Loop => {
-                let body = self.builder.start_block(BasicBlockKind::LoopBody);
-                self.builder.append_operation_node(
-                    None,
-                    CfgNodeKind::Synthetic,
-                    Some(operation.span.clone()),
-                );
-                self.builder
-                    .add_edge(condition, body, CfgEdgeKind::LoopEnter);
-
-                let join = self.builder.start_block(BasicBlockKind::Join);
-                self.builder.append_operation_node(
-                    None,
-                    CfgNodeKind::Synthetic,
-                    Some(operation.span.clone()),
-                );
-                self.builder
-                    .add_edge(condition, join, CfgEdgeKind::LoopExit);
-                self.builder
-                    .add_edge(body, condition, CfgEdgeKind::LoopBack);
+        for block in blocks {
+            let from = *cfg_blocks
+                .get(&block.id)
+                .expect("MIR block must have a CFG block");
+            let mut stop_lowering = false;
+            for statement_id in &block.statements {
+                let statement = self
+                    .db
+                    .mir_statements()
+                    .iter()
+                    .find(|statement| statement.id == *statement_id)
+                    .expect("MIR block statement must exist");
+                let operation = self
+                    .db
+                    .mir_operations()
+                    .iter()
+                    .find(|operation| operation.id == statement.operation)
+                    .expect("MIR statement operation must exist");
+                let MirOperationKind::Unsupported { unsupported } = &operation.kind else {
+                    continue;
+                };
+                let shape = self.unsupported_shape(*unsupported);
+                if !shape.boundary_edges.is_empty() {
+                    let target = if shape.to_exceptional_exit {
+                        self.builder
+                            .exceptional_exit_block()
+                            .unwrap_or_else(|| self.builder.normal_exit_block())
+                    } else {
+                        let target = self.builder.start_block(BasicBlockKind::Synthetic);
+                        self.builder.append_operation_node(
+                            None,
+                            CfgNodeKind::Synthetic,
+                            Some(operation.span.clone()),
+                        );
+                        target
+                    };
+                    for edge_kind in &shape.boundary_edges {
+                        self.builder.add_edge(from, target, *edge_kind);
+                    }
+                }
+                stop_lowering |= shape.stop_lowering;
             }
-            BranchShape::ShortCircuit(edge_kind) => {
-                let evaluate_right = self.builder.start_block(BasicBlockKind::Branch);
-                self.builder.append_operation_node(
-                    None,
-                    CfgNodeKind::Synthetic,
-                    Some(operation.span.clone()),
-                );
-                self.builder
-                    .add_edge(condition, evaluate_right, CfgEdgeKind::True);
-
-                let join = self.builder.start_block(BasicBlockKind::Join);
-                self.builder.append_operation_node(
-                    None,
-                    CfgNodeKind::Synthetic,
-                    Some(operation.span.clone()),
-                );
-                self.builder.add_edge(condition, join, edge_kind);
-                self.builder
-                    .add_edge(evaluate_right, join, CfgEdgeKind::Normal);
+            if stop_lowering {
+                continue;
             }
-            BranchShape::Conditional => {
-                let then_block = self.builder.start_block(BasicBlockKind::Branch);
-                self.builder.append_operation_node(
-                    None,
-                    CfgNodeKind::Synthetic,
-                    Some(operation.span.clone()),
-                );
-                self.builder
-                    .add_edge(condition, then_block, CfgEdgeKind::True);
-
-                let else_block = self.builder.start_block(BasicBlockKind::Branch);
-                self.builder.append_operation_node(
-                    None,
-                    CfgNodeKind::Synthetic,
-                    Some(operation.span.clone()),
-                );
-                self.builder
-                    .add_edge(condition, else_block, CfgEdgeKind::False);
-
-                let join = self.builder.start_block(BasicBlockKind::Join);
-                self.builder.append_operation_node(
-                    None,
-                    CfgNodeKind::Synthetic,
-                    Some(operation.span.clone()),
-                );
-                self.builder.add_edge(then_block, join, CfgEdgeKind::Normal);
-                self.builder.add_edge(else_block, join, CfgEdgeKind::Normal);
+            let terminator = self
+                .db
+                .mir_terminators()
+                .iter()
+                .find(|terminator| terminator.id == block.terminator)
+                .expect("MIR block terminator must exist");
+            match &terminator.kind {
+                MirTerminatorKind::Goto { target } => {
+                    self.add_mir_edge(from, *target, &cfg_blocks, CfgEdgeKind::Normal);
+                }
+                MirTerminatorKind::Branch {
+                    then_target,
+                    else_target,
+                    ..
+                } => {
+                    self.add_mir_edge(from, *then_target, &cfg_blocks, CfgEdgeKind::True);
+                    self.add_mir_edge(from, *else_target, &cfg_blocks, CfgEdgeKind::False);
+                }
+                MirTerminatorKind::Switch {
+                    cases, otherwise, ..
+                } => {
+                    for (_, target) in cases {
+                        self.add_mir_edge(from, *target, &cfg_blocks, CfgEdgeKind::SwitchCase);
+                    }
+                    self.add_mir_edge(from, *otherwise, &cfg_blocks, CfgEdgeKind::DefaultCase);
+                }
+                MirTerminatorKind::Return { .. } => {
+                    self.builder.add_edge(
+                        from,
+                        self.builder.normal_exit_block(),
+                        CfgEdgeKind::Return,
+                    );
+                }
+                MirTerminatorKind::Unreachable | MirTerminatorKind::Unsupported { .. } => {}
             }
         }
     }
 
-    fn branch_shape(&self, operation: &MirOperation) -> BranchShape {
-        let evidence = self.operation_evidence(operation);
-        if contains_token(
-            &evidence,
-            &[
-                "for ",
-                "while",
-                "do while",
-                "for-of",
-                "for-in",
-                "for await",
-                "for_statement",
-            ],
-        ) {
-            BranchShape::Loop
-        } else if contains_token(&evidence, &["??", "Nullish"]) {
-            BranchShape::ShortCircuit(CfgEdgeKind::Nullish)
-        } else if contains_token(&evidence, &["&&", "||", "ShortCircuit", "logical"]) {
-            BranchShape::ShortCircuit(CfgEdgeKind::ShortCircuit)
-        } else {
-            BranchShape::Conditional
-        }
+    fn add_mir_edge(
+        &mut self,
+        from: crate::analysis::cfg::ids::BasicBlockId,
+        target: MirBlockId,
+        blocks: &BTreeMap<MirBlockId, crate::analysis::cfg::ids::BasicBlockId>,
+        kind: CfgEdgeKind,
+    ) {
+        let to = *blocks
+            .get(&target)
+            .expect("MIR terminator target must exist in its body");
+        self.builder.add_edge(from, to, kind);
     }
 
     fn unsupported_shape(&self, unsupported: UnsupportedId) -> UnsupportedShape {
@@ -343,16 +326,6 @@ impl<'db> TsCfgLowering<'db> {
         }
     }
 
-    fn operation_evidence(&self, operation: &MirOperation) -> String {
-        self.source_text(operation.span.clone())
-            .map_or_else(|| operation.stable_key.clone(), ToString::to_string)
-    }
-
-    fn source_text(&self, span: Span) -> Option<&str> {
-        let file = self.db.file(span.file)?;
-        source_slice(file, &span)
-    }
-
     fn unsupported_by_id(&self, id: UnsupportedId) -> Option<&UnsupportedSemanticFact> {
         self.db
             .unsupported_semantics()
@@ -388,13 +361,6 @@ impl<'db> TsCfgLowering<'db> {
         output.unsupported.append(&mut unsupported);
         output.normalized()
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BranchShape {
-    Conditional,
-    Loop,
-    ShortCircuit(CfgEdgeKind),
 }
 
 struct UnsupportedShape {
@@ -468,21 +434,6 @@ fn cfg_precision(precision: UnsupportedPrecision) -> CfgPrecision {
     }
 }
 
-fn source_slice<'source>(file: &'source SourceFile, span: &Span) -> Option<&'source str> {
-    let source = file.source.as_ref();
-    let start = span.start_byte as usize;
-    let end = span.end_byte as usize;
-    if start <= end && end <= source.len() {
-        source.get(start..end)
-    } else {
-        None
-    }
-}
-
-fn contains_token(evidence: &str, tokens: &[&str]) -> bool {
-    tokens.iter().any(|token| evidence.contains(token))
-}
-
 fn language_label(language: Language) -> &'static str {
     match language {
         Language::TypeScript => "ts",
@@ -497,8 +448,10 @@ fn language_label(language: Language) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::ids::{CallSiteId, MirPredicateId, PlaceId};
-    use crate::analysis::mir::body::{MirBody, MirOutput};
+    use crate::analysis::ids::{CallSiteId, MirStatementId, MirTerminatorId, PlaceId};
+    use crate::analysis::mir::body::{
+        MirBlock, MirBlockId, MirBody, MirOutput, MirStatement, MirTerminator, MirTerminatorKind,
+    };
     use crate::analysis::mir::op::{
         AssignMode, MirOperation, MirOperationKind, MirValue, UnsupportedDomain,
         UnsupportedSemanticFact,
@@ -545,21 +498,6 @@ mod tests {
                 mode: AssignMode::Overwrite,
             },
             stable_key: format!("ts:assign:{ordinal}"),
-            status: MirStatus::Partial,
-        }
-    }
-
-    fn branch(id: u64, ordinal: u32, evidence: &str) -> MirOperation {
-        MirOperation {
-            id: MirOpId(id),
-            body: MirBodyId(0),
-            ordinal,
-            span: span(ordinal as usize, ordinal as usize + 1),
-            kind: MirOperationKind::Branch {
-                predicate: MirPredicateId(u64::from(ordinal)),
-                predicate_place: None,
-            },
-            stable_key: evidence.to_string(),
             status: MirStatus::Partial,
         }
     }
@@ -653,9 +591,47 @@ mod tests {
         operations: Vec<MirOperation>,
         unsupported: Vec<UnsupportedSemanticFact>,
     ) -> AnalysisDb {
+        let statements = operations
+            .iter()
+            .enumerate()
+            .map(|(index, operation)| MirStatement {
+                id: MirStatementId(index as u64),
+                body: MirBodyId(0),
+                ordinal: operation.ordinal,
+                operation: operation.id,
+                stable_key: format!("statement:{index}"),
+                status: operation.status,
+            })
+            .collect::<Vec<_>>();
+        let value = operations.iter().rev().find_map(|operation| {
+            if let MirOperationKind::Return { value } = &operation.kind {
+                Some(value.clone())
+            } else {
+                None
+            }
+        });
         let mut db = AnalysisDb::new();
         db.replace_semantic_mir(MirOutput {
             bodies: vec![body(Language::TypeScript)],
+            blocks: vec![MirBlock {
+                id: MirBlockId(0),
+                body: MirBodyId(0),
+                ordinal: 0,
+                statements: statements.iter().map(|statement| statement.id).collect(),
+                terminator: MirTerminatorId(0),
+                stable_key: "block:0".to_string(),
+            }],
+            statements,
+            terminators: vec![MirTerminator {
+                id: MirTerminatorId(0),
+                body: MirBodyId(0),
+                ordinal: 0,
+                kind: MirTerminatorKind::Return {
+                    value: value.flatten(),
+                },
+                stable_key: "terminator:0".to_string(),
+                status: MirStatus::Partial,
+            }],
             places: vec![place(1, "x"), place(2, "ret")],
             operations,
             unsupported,
@@ -685,7 +661,7 @@ mod tests {
     }
 
     #[test]
-    fn ts_cfg_connects_implicit_fallthrough_to_normal_exit() {
+    fn ts_cfg_connects_explicit_mir_return_to_normal_exit() {
         let db = db_with(vec![assign(1, 1)], Vec::new());
         let output = lower_ts_cfg(&db);
         let exit = output
@@ -699,34 +675,34 @@ mod tests {
             output
                 .edges
                 .iter()
-                .any(|edge| { edge.to_block == exit && edge.kind == CfgEdgeKind::Normal })
+                .any(|edge| { edge.to_block == exit && edge.kind == CfgEdgeKind::Return })
         );
     }
 
     #[test]
-    fn ts_cfg_lowers_branch_loop_short_circuit_and_nullish_edges() {
-        let db = db_with(
-            vec![
-                branch(1, 1, "if_statement"),
-                branch(2, 2, "while_statement"),
-                branch(3, 3, "a && b"),
-                branch(4, 4, "a ?? b"),
-            ],
-            Vec::new(),
+    fn ts_cfg_lowers_edges_from_production_mir_terminators() {
+        let mut db = AnalysisDb::new();
+        db.add_file(
+            std::path::PathBuf::from("flow.ts"),
+            "flow.ts".to_string(),
+            "export function flow(x) { if (x) {} while (x) {} switch (x) { case true: break; } }"
+                .to_string(),
         );
-        let output = lower_ts_cfg(&db);
-        let edge_kinds = output
+        assert!(crate::ts::analyze(&mut db).is_empty());
+        let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
+        db.replace_semantic_mir(mir)
+            .expect("MIR output should store");
+
+        let edge_kinds = lower_ts_cfg(&db)
             .edges
-            .iter()
+            .into_iter()
             .map(|edge| edge.kind)
             .collect::<BTreeSet<_>>();
-
         assert!(edge_kinds.contains(&CfgEdgeKind::True));
         assert!(edge_kinds.contains(&CfgEdgeKind::False));
-        assert!(edge_kinds.contains(&CfgEdgeKind::LoopEnter));
-        assert!(edge_kinds.contains(&CfgEdgeKind::LoopBack));
-        assert!(edge_kinds.contains(&CfgEdgeKind::ShortCircuit));
-        assert!(edge_kinds.contains(&CfgEdgeKind::Nullish));
+        assert!(edge_kinds.contains(&CfgEdgeKind::SwitchCase));
+        assert!(edge_kinds.contains(&CfgEdgeKind::DefaultCase));
+        assert!(edge_kinds.contains(&CfgEdgeKind::Normal));
     }
 
     #[test]

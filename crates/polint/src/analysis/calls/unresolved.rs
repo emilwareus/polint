@@ -333,6 +333,7 @@ mod tests {
                 status: MirStatus::Partial,
             }],
             unsupported: rows,
+            ..MirOutput::default()
         })
         .expect("semantic MIR should store");
     }

@@ -44,7 +44,7 @@ use crate::analysis::identity::facts::IdentityRecord;
 use crate::analysis::identity::provider::valid_call_site_ids;
 use crate::analysis::identity::store::{IdentityProviderOutput, IdentityStore};
 use crate::analysis::ids::CallSiteId;
-use crate::analysis::mir::body::{MirBody, MirOutput};
+use crate::analysis::mir::body::{MirBlock, MirBody, MirOutput, MirStatement, MirTerminator};
 use crate::analysis::mir::op::{MirOperation, UnsupportedSemanticFact};
 use crate::analysis::places::PlaceFact;
 use crate::analysis::points_to::facts::{PointsToConstraintFact, PointsToSetFact};
@@ -3134,6 +3134,18 @@ impl AnalysisDb {
 
     pub(crate) fn mir_operations(&self) -> &[MirOperation] {
         self.semantic_mir_store_inner().mir_operations()
+    }
+
+    pub(crate) fn mir_blocks(&self) -> &[MirBlock] {
+        self.semantic_mir_store_inner().mir_blocks()
+    }
+
+    pub(crate) fn mir_statements(&self) -> &[MirStatement] {
+        self.semantic_mir_store_inner().mir_statements()
+    }
+
+    pub(crate) fn mir_terminators(&self) -> &[MirTerminator] {
+        self.semantic_mir_store_inner().mir_terminators()
     }
 
     pub(crate) fn mir_places(&self) -> &[PlaceFact] {

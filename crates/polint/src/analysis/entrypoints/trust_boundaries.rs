@@ -486,6 +486,7 @@ mod tests {
             ],
             operations: Vec::new(),
             unsupported: Vec::new(),
+            ..MirOutput::default()
         })
         .expect("valid MIR places");
 

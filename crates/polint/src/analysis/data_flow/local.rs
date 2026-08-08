@@ -635,6 +635,7 @@ mod tests {
                 ),
             ],
             unsupported: Vec::new(),
+            ..MirOutput::default()
         })
         .expect("valid MIR");
         let mut output = DataFlowOutput::empty();
@@ -688,6 +689,7 @@ mod tests {
                 },
             )],
             unsupported: Vec::new(),
+            ..MirOutput::default()
         })
         .expect("valid MIR");
         let mut output = DataFlowOutput::empty();
@@ -731,6 +733,7 @@ mod tests {
                 },
             )],
             unsupported: Vec::new(),
+            ..MirOutput::default()
         })
         .expect("valid MIR");
         let mut output = DataFlowOutput::empty();
@@ -771,6 +774,7 @@ mod tests {
                 },
             )],
             unsupported: Vec::new(),
+            ..MirOutput::default()
         })
         .expect("valid MIR");
         let mut output = DataFlowOutput::empty();
@@ -834,6 +838,7 @@ mod tests {
                 ),
             ],
             unsupported: Vec::new(),
+            ..MirOutput::default()
         })
         .expect("valid MIR");
         let mut output = DataFlowOutput::empty();
@@ -915,6 +920,7 @@ mod tests {
                 ),
             ],
             unsupported: Vec::new(),
+            ..MirOutput::default()
         })
         .expect("valid MIR");
         let mut output = DataFlowOutput::empty();

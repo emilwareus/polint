@@ -3,9 +3,12 @@ use serde::{Deserialize, Serialize};
 use crate::analysis::ids::{
     MirBodyId, MirOpId, MirPredicateId, MirStatementId, MirTerminatorId, UnsupportedId,
 };
-use crate::analysis::mir::op::{MirOperation, UnsupportedSemanticFact};
+use crate::analysis::mir::op::{MirOperation, MirValue, UnsupportedSemanticFact};
 use crate::analysis::places::PlaceFact;
 use crate::core::{FileId, FunctionId, Language, ModuleNodeId, PackageId, Span};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) struct MirBlockId(pub(crate) u64);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct MirBody {
@@ -22,13 +25,6 @@ pub(crate) struct MirBody {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(
-    test,
-    expect(
-        dead_code,
-        reason = "Statement rows are part of the private MIR contract before lowering populates them."
-    )
-)]
 pub(crate) struct MirStatement {
     pub(crate) id: MirStatementId,
     pub(crate) body: MirBodyId,
@@ -39,13 +35,6 @@ pub(crate) struct MirStatement {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(
-    test,
-    expect(
-        dead_code,
-        reason = "Terminator rows are part of the private MIR contract before CFG lowering consumes them."
-    )
-)]
 pub(crate) struct MirTerminator {
     pub(crate) id: MirTerminatorId,
     pub(crate) body: MirBodyId,
@@ -57,14 +46,45 @@ pub(crate) struct MirTerminator {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum MirTerminatorKind {
-    Branch { predicate: MirPredicateId },
-    Return,
-    Unsupported { unsupported: UnsupportedId },
+    Goto {
+        target: MirBlockId,
+    },
+    Branch {
+        predicate: MirPredicateId,
+        predicate_place: Option<crate::analysis::ids::PlaceId>,
+        then_target: MirBlockId,
+        else_target: MirBlockId,
+    },
+    Switch {
+        discriminant: MirValue,
+        cases: Vec<(MirValue, MirBlockId)>,
+        otherwise: MirBlockId,
+    },
+    Return {
+        value: Option<MirValue>,
+    },
+    Unreachable,
+    Unsupported {
+        unsupported: UnsupportedId,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct MirBlock {
+    pub(crate) id: MirBlockId,
+    pub(crate) body: MirBodyId,
+    pub(crate) ordinal: u32,
+    pub(crate) statements: Vec<MirStatementId>,
+    pub(crate) terminator: MirTerminatorId,
+    pub(crate) stable_key: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct MirOutput {
     pub(crate) bodies: Vec<MirBody>,
+    pub(crate) blocks: Vec<MirBlock>,
+    pub(crate) statements: Vec<MirStatement>,
+    pub(crate) terminators: Vec<MirTerminator>,
     pub(crate) places: Vec<PlaceFact>,
     pub(crate) operations: Vec<MirOperation>,
     pub(crate) unsupported: Vec<UnsupportedSemanticFact>,
@@ -74,6 +94,27 @@ impl MirOutput {
     pub(crate) fn normalized(mut self) -> Self {
         self.bodies
             .sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+        self.blocks.sort_by(|left, right| {
+            (left.body, left.ordinal, left.stable_key.as_str()).cmp(&(
+                right.body,
+                right.ordinal,
+                right.stable_key.as_str(),
+            ))
+        });
+        self.statements.sort_by(|left, right| {
+            (left.body, left.ordinal, left.stable_key.as_str()).cmp(&(
+                right.body,
+                right.ordinal,
+                right.stable_key.as_str(),
+            ))
+        });
+        self.terminators.sort_by(|left, right| {
+            (left.body, left.ordinal, left.stable_key.as_str()).cmp(&(
+                right.body,
+                right.ordinal,
+                right.stable_key.as_str(),
+            ))
+        });
         self.places
             .sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
         self.operations.sort_by(|left, right| {
@@ -190,6 +231,60 @@ mod tests {
     fn mir_output_normalized_sorts_all_fact_rows_deterministically() {
         let output = MirOutput {
             bodies: vec![body(2, "body:z"), body(1, "body:a")],
+            blocks: vec![
+                MirBlock {
+                    id: MirBlockId(2),
+                    body: MirBodyId(2),
+                    ordinal: 2,
+                    statements: vec![MirStatementId(2)],
+                    terminator: MirTerminatorId(2),
+                    stable_key: "block:z".to_string(),
+                },
+                MirBlock {
+                    id: MirBlockId(1),
+                    body: MirBodyId(1),
+                    ordinal: 1,
+                    statements: vec![MirStatementId(1)],
+                    terminator: MirTerminatorId(1),
+                    stable_key: "block:a".to_string(),
+                },
+            ],
+            statements: vec![
+                MirStatement {
+                    id: MirStatementId(2),
+                    body: MirBodyId(2),
+                    ordinal: 2,
+                    operation: MirOpId(2),
+                    stable_key: "statement:z".to_string(),
+                    status: MirStatus::Resolved,
+                },
+                MirStatement {
+                    id: MirStatementId(1),
+                    body: MirBodyId(1),
+                    ordinal: 1,
+                    operation: MirOpId(1),
+                    stable_key: "statement:a".to_string(),
+                    status: MirStatus::Resolved,
+                },
+            ],
+            terminators: vec![
+                MirTerminator {
+                    id: MirTerminatorId(2),
+                    body: MirBodyId(2),
+                    ordinal: 2,
+                    kind: MirTerminatorKind::Return { value: None },
+                    stable_key: "terminator:z".to_string(),
+                    status: MirStatus::Resolved,
+                },
+                MirTerminator {
+                    id: MirTerminatorId(1),
+                    body: MirBodyId(1),
+                    ordinal: 1,
+                    kind: MirTerminatorKind::Return { value: None },
+                    stable_key: "terminator:a".to_string(),
+                    status: MirStatus::Resolved,
+                },
+            ],
             places: vec![place(2, "place:z"), place(1, "place:a")],
             operations: vec![
                 operation(2, 2, "op:z"),
@@ -217,6 +312,9 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["place:a", "place:z"]
         );
+        assert_eq!(output.blocks[0].stable_key, "block:a");
+        assert_eq!(output.statements[0].stable_key, "statement:a");
+        assert_eq!(output.terminators[0].stable_key, "terminator:a");
         assert_eq!(
             output
                 .operations

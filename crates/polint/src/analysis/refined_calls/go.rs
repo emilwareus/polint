@@ -548,6 +548,7 @@ mod tests {
                 status: PlaceStatus::Resolved,
             }],
             unsupported: Vec::new(),
+            ..crate::analysis::mir::body::MirOutput::default()
         })
         .expect("valid MIR");
         db

@@ -482,6 +482,7 @@ mod tests {
             places: vec![parameter_place(file, function)],
             operations: Vec::new(),
             unsupported: Vec::new(),
+            ..MirOutput::default()
         })
         .expect("valid MIR");
         db.replace_entrypoint_facts(EntrypointOutput {
@@ -540,6 +541,7 @@ mod tests {
             ],
             operations: Vec::new(),
             unsupported: Vec::new(),
+            ..MirOutput::default()
         })
         .expect("valid MIR");
         let mut boundary = trust_boundary(file, function);

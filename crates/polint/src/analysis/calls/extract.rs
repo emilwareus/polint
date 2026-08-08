@@ -659,6 +659,7 @@ mod tests {
                 vec![PlaceId(2)],
             )],
             unsupported: Vec::new(),
+            ..MirOutput::default()
         })
         .expect("semantic MIR should store");
 
@@ -713,6 +714,7 @@ mod tests {
                 Vec::new(),
             )],
             unsupported: Vec::new(),
+            ..MirOutput::default()
         })
         .expect("semantic MIR should store");
 
@@ -764,6 +766,7 @@ mod tests {
                 Vec::new(),
             )],
             unsupported: Vec::new(),
+            ..MirOutput::default()
         })
         .expect("semantic MIR should store");
 
@@ -822,6 +825,7 @@ mod tests {
                 call_op(1, 0, file, 10, MirValue::Place(PlaceId(1)), Vec::new()),
             ],
             unsupported: Vec::new(),
+            ..MirOutput::default()
         };
         first
             .replace_semantic_mir(output.clone())
