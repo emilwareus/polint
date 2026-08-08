@@ -3942,13 +3942,17 @@ export const value = answer();
         ]
         .join("\n");
 
+        // Keep provenance/metadata module names out of the supported rule-author
+        // surface. Do not use the bare token `validation` — evidence_v1 JSON uses
+        // that field name for renderer status, which is intentional public schema.
         for forbidden in [
             "FactMeta",
             "FactMetaStore",
             "metadata_debug_json_for_test",
             "producer_id",
             "layer_id",
-            "validation",
+            "analysis_kernel::validation",
+            "pub mod validation",
             "provenance metadata",
         ] {
             assert!(
