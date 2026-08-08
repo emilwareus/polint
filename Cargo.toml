@@ -2,6 +2,7 @@
 members = [
     "crates/polint",
     "crates/polint-bench",
+    "crates/polint-eval",
     "crates/polint-macros",
     "examples/basic/.polint/rules",
     "examples/comment-ignores/.polint/rules",

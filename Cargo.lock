@@ -1199,6 +1199,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "polint-eval"
+version = "0.1.17"
+
+[[package]]
 name = "polint-example-basic-rule"
 version = "0.1.17"
 dependencies = [

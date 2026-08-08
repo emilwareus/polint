@@ -1,0 +1,15 @@
+[package]
+name = "polint-eval"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+publish = false
+description = "Internal evaluation harness sources (compiled into polint under cfg(test) only)"
+
+[lib]
+path = "src/lib.rs"
+
+[lints]
+workspace = true
