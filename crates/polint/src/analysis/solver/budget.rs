@@ -88,66 +88,6 @@ impl Default for GoRtaSubBudget {
     }
 }
 
-/// Per-sub-domain budget knobs for the JS/TS function-token driver (JS-04).
-///
-/// These caps bound the private `analysis::solver::ts_tokens` fixpoint. They are
-/// intentionally crate-private: rule authors consume the final
-/// derived facts through SDK views, not these internal propagation controls.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct JsTokensSubBudget {
-    pub(crate) max_tokens_per_var: usize,
-    pub(crate) max_candidates_per_callsite: usize,
-    pub(crate) max_token_worklist_steps: usize,
-}
-
-impl Default for JsTokensSubBudget {
-    fn default() -> Self {
-        // Finite, strictly-positive defaults: large enough for ordinary first-party
-        // higher-order flows, bounded enough that pathological token fan-out reports
-        // BudgetExceeded instead of running unbounded.
-        Self {
-            max_tokens_per_var: 128,
-            max_candidates_per_callsite: 256,
-            max_token_worklist_steps: 10_000,
-        }
-    }
-}
-
-/// Per-sub-domain budget knobs for the JS/TS object/property/prototype/`this`
-/// driver (JS-05).
-///
-/// This is intentionally separate from [`JsTokensSubBudget`]: object modeling has
-/// property buckets, prototype traversal, receiver fan-out, and its own worklist
-/// ceiling. The model remains disabled by default through
-/// [`SolverBudget::object_model_enabled`] until benchmark promotion gates approve it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct JsObjectModelSubBudget {
-    pub(crate) max_objects_per_place: usize,
-    pub(crate) max_properties_per_object: usize,
-    pub(crate) max_tokens_per_property: usize,
-    pub(crate) max_computed_buckets_per_object: usize,
-    pub(crate) max_prototype_depth: usize,
-    pub(crate) max_receiver_candidates_per_callsite: usize,
-    pub(crate) max_object_worklist_steps: usize,
-}
-
-impl Default for JsObjectModelSubBudget {
-    fn default() -> Self {
-        // Finite, strictly-positive defaults. They are sized to admit ordinary local
-        // object/property flows while bounding fan-out; benchmark gates decide
-        // whether this model should be on by default.
-        Self {
-            max_objects_per_place: 128,
-            max_properties_per_object: 128,
-            max_tokens_per_property: 128,
-            max_computed_buckets_per_object: 8,
-            max_prototype_depth: 8,
-            max_receiver_candidates_per_callsite: 64,
-            max_object_worklist_steps: 10_000,
-        }
-    }
-}
-
 /// Unified solver budget generalizing `PointsToBudget` (D-05).
 ///
 /// Cross-domain knobs: `max_steps` (per-step worklist cap, mirrors the points-to
@@ -160,9 +100,6 @@ pub(crate) struct SolverBudget {
     pub(crate) max_outer_iterations: usize,
     pub(crate) points_to: PointsToSubBudget,
     pub(crate) go: GoRtaSubBudget,
-    pub(crate) js: JsTokensSubBudget,
-    pub(crate) object_model_enabled: bool,
-    pub(crate) object: JsObjectModelSubBudget,
     pub(crate) adaptation: AdaptationModelBudget,
 }
 
@@ -181,13 +118,6 @@ impl Default for SolverBudget {
             // existing fields' values — `solver_budget_default_matches_points_to_defaults`
             // pins 10_000 / 64 / points-to defaults byte-identically.
             go: GoRtaSubBudget::default(),
-            // JS token sub-budget (JS-04). Adding this field MUST NOT perturb
-            // any existing cross-domain, points-to, or Go default.
-            js: JsTokensSubBudget::default(),
-            // JS object/property/prototype/receiver model (JS-05). It is
-            // explicitly opt-in until benchmark gates approve default enablement.
-            object_model_enabled: false,
-            object: JsObjectModelSubBudget::default(),
             // Repo-local adaptation model caps (ADAPT-01). Appending this field keeps
             // existing solver defaults byte-identical while making model expansion
             // budgeted before graph lowering lands.
@@ -259,16 +189,6 @@ pub(crate) enum BudgetReason {
     GoMaxCandidatesPerCallsite,
     GoMaxRtaRounds,
     GoMaxWorklistSteps,
-    JsMaxTokensPerVar,
-    JsMaxCandidatesPerCallsite,
-    JsMaxTokenWorklistSteps,
-    ObjectMaxObjectsPerPlace,
-    ObjectMaxPropertiesPerObject,
-    ObjectMaxTokensPerProperty,
-    ObjectMaxComputedBucketsPerObject,
-    ObjectMaxPrototypeDepth,
-    ObjectMaxReceiverCandidatesPerCallsite,
-    ObjectMaxObjectWorklistSteps,
     AdaptationMaxModelFiles,
     AdaptationMaxModelFacts,
     AdaptationMaxExpansionsPerModel,
@@ -287,18 +207,6 @@ impl BudgetReason {
             Self::GoMaxCandidatesPerCallsite => "go.max_candidates_per_callsite",
             Self::GoMaxRtaRounds => "go.max_rta_rounds",
             Self::GoMaxWorklistSteps => "go.max_worklist_steps",
-            Self::JsMaxTokensPerVar => "js.max_tokens_per_var",
-            Self::JsMaxCandidatesPerCallsite => "js.max_candidates_per_callsite",
-            Self::JsMaxTokenWorklistSteps => "js.max_token_worklist_steps",
-            Self::ObjectMaxObjectsPerPlace => "object.max_objects_per_place",
-            Self::ObjectMaxPropertiesPerObject => "object.max_properties_per_object",
-            Self::ObjectMaxTokensPerProperty => "object.max_tokens_per_property",
-            Self::ObjectMaxComputedBucketsPerObject => "object.max_computed_buckets_per_object",
-            Self::ObjectMaxPrototypeDepth => "object.max_prototype_depth",
-            Self::ObjectMaxReceiverCandidatesPerCallsite => {
-                "object.max_receiver_candidates_per_callsite"
-            }
-            Self::ObjectMaxObjectWorklistSteps => "object.max_object_worklist_steps",
             Self::AdaptationMaxModelFiles => "adaptation.max_model_files",
             Self::AdaptationMaxModelFacts => "adaptation.max_model_facts",
             Self::AdaptationMaxExpansionsPerModel => "adaptation.max_expansions_per_model",
@@ -317,16 +225,6 @@ impl BudgetReason {
             Self::GoMaxCandidatesPerCallsite,
             Self::GoMaxRtaRounds,
             Self::GoMaxWorklistSteps,
-            Self::JsMaxTokensPerVar,
-            Self::JsMaxCandidatesPerCallsite,
-            Self::JsMaxTokenWorklistSteps,
-            Self::ObjectMaxObjectsPerPlace,
-            Self::ObjectMaxPropertiesPerObject,
-            Self::ObjectMaxTokensPerProperty,
-            Self::ObjectMaxComputedBucketsPerObject,
-            Self::ObjectMaxPrototypeDepth,
-            Self::ObjectMaxReceiverCandidatesPerCallsite,
-            Self::ObjectMaxObjectWorklistSteps,
             Self::AdaptationMaxModelFiles,
             Self::AdaptationMaxModelFacts,
             Self::AdaptationMaxExpansionsPerModel,
@@ -371,46 +269,6 @@ mod tests {
         assert_eq!(budget.max_steps, 10_000);
         assert_eq!(budget.max_outer_iterations, 64);
         assert_eq!(budget.points_to, PointsToSubBudget::default());
-    }
-
-    #[test]
-    fn solver_budget_default_js_sub_budget_matches_js_defaults() {
-        // The `js` sub-budget defaults are strictly-positive bounded caps for the
-        // private TS token driver. Adding the field must not perturb existing defaults.
-        let budget = SolverBudget::default();
-        assert_eq!(budget.js, JsTokensSubBudget::default());
-        assert_eq!(budget.js.max_tokens_per_var, 128);
-        assert_eq!(budget.js.max_candidates_per_callsite, 256);
-        assert_eq!(budget.js.max_token_worklist_steps, 10_000);
-        assert_eq!(budget.max_steps, 10_000);
-        assert_eq!(budget.max_outer_iterations, 64);
-        assert_eq!(budget.points_to, PointsToSubBudget::default());
-        assert_eq!(budget.go, GoRtaSubBudget::default());
-    }
-
-    #[test]
-    fn solver_budget_default_object_model_is_disabled() {
-        let budget = SolverBudget::default();
-        assert!(!budget.object_model_enabled);
-        assert_eq!(budget.object, JsObjectModelSubBudget::default());
-        assert_eq!(budget.max_steps, 10_000);
-        assert_eq!(budget.max_outer_iterations, 64);
-        assert_eq!(budget.points_to, PointsToSubBudget::default());
-        assert_eq!(budget.go, GoRtaSubBudget::default());
-        assert_eq!(budget.js, JsTokensSubBudget::default());
-        assert_eq!(budget.adaptation, AdaptationModelBudget::default());
-    }
-
-    #[test]
-    fn solver_budget_default_object_sub_budget_matches_object_defaults() {
-        let budget = SolverBudget::default();
-        assert_eq!(budget.object.max_objects_per_place, 128);
-        assert_eq!(budget.object.max_properties_per_object, 128);
-        assert_eq!(budget.object.max_tokens_per_property, 128);
-        assert_eq!(budget.object.max_computed_buckets_per_object, 8);
-        assert_eq!(budget.object.max_prototype_depth, 8);
-        assert_eq!(budget.object.max_receiver_candidates_per_callsite, 64);
-        assert_eq!(budget.object.max_object_worklist_steps, 10_000);
     }
 
     #[test]
@@ -501,16 +359,6 @@ mod tests {
                 "go.max_candidates_per_callsite",
                 "go.max_rta_rounds",
                 "go.max_worklist_steps",
-                "js.max_tokens_per_var",
-                "js.max_candidates_per_callsite",
-                "js.max_token_worklist_steps",
-                "object.max_objects_per_place",
-                "object.max_properties_per_object",
-                "object.max_tokens_per_property",
-                "object.max_computed_buckets_per_object",
-                "object.max_prototype_depth",
-                "object.max_receiver_candidates_per_callsite",
-                "object.max_object_worklist_steps",
                 "adaptation.max_model_files",
                 "adaptation.max_model_facts",
                 "adaptation.max_expansions_per_model",

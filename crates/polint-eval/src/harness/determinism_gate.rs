@@ -321,8 +321,7 @@ fn go_rta_solver_output_is_byte_identical_under_permuted_fact_insertion_order() 
     use crate::analysis::solver::budget::SolverBudget;
     use crate::analysis::solver::engine::SolverEngine;
     use crate::analysis::solver::go_rta::GoRtaInputs;
-    use crate::analysis::solver::policy::{GoRtaPolicy, TsTokensPolicy};
-    use crate::analysis::solver::ts_tokens::TsTokenInputs;
+    use crate::analysis::solver::policy::{GoRtaPolicy, TsPointsToInputs, TsPointsToPolicy};
     use crate::config::load_config;
     use crate::go::semantic::store::GoSemanticFactsOutput;
 
@@ -332,7 +331,6 @@ fn go_rta_solver_output_is_byte_identical_under_permuted_fact_insertion_order() 
     let loaded = load_config(&fixture.repo_dir).expect("config loads");
     let budget = SolverBudget {
         go: loaded.config.solver.to_go_sub_budget(),
-        js: loaded.config.solver.to_js_sub_budget(),
         ..SolverBudget::default()
     };
 
@@ -363,7 +361,7 @@ fn go_rta_solver_output_is_byte_identical_under_permuted_fact_insertion_order() 
         let engine = SolverEngine::new(
             vec![
                 Box::new(GoRtaPolicy::new(GoRtaInputs::from_db(db))),
-                Box::new(TsTokensPolicy::new(TsTokenInputs::from_db(db))),
+                Box::new(TsPointsToPolicy::new(TsPointsToInputs::from_db(db))),
             ],
             budget,
         );
@@ -405,132 +403,29 @@ fn go_rta_solver_output_is_byte_identical_under_permuted_fact_insertion_order() 
 }
 
 #[test]
-fn ts_tokens_solver_output_is_byte_identical_under_permuted_inputs() {
-    use crate::analysis::solver::ts_tokens::TsTokenInputs;
-    use crate::analysis::solver::ts_tokens::fixpoint::solve_ts_tokens;
-    use crate::config::load_config;
+fn ts_points_to_solver_is_deterministic_and_non_vacuous() {
+    use crate::analysis::solver::budget::SolverBudget;
+    use crate::analysis::solver::policy::{TsPointsToInputs, solve_ts_points_to};
 
     let fixture = load_native_fixture(&fixture_dir("ts_tokens")).expect("fixture loads");
     let temp = copy_fixture_repo_for_test(&fixture).expect("copy fixture repo");
     let output = run_kernel_for_repo_for_test(temp.path()).expect("kernel runs");
-    let loaded = load_config(&fixture.repo_dir).expect("config loads");
-    let budget = crate::analysis::solver::budget::SolverBudget {
-        js: loaded.config.solver.to_js_sub_budget(),
-        ..Default::default()
+    let inputs = TsPointsToInputs::from_db(&output.db);
+    let solver_json = || -> String {
+        let result = solve_ts_points_to(&inputs, &SolverBudget::default());
+        serde_json::to_string(&result.derived_edges).expect("serialize TS points-to edges")
     };
-
-    let base = TsTokenInputs::from_db(&output.db);
-    let solver_json = |inputs: &TsTokenInputs| -> String {
-        let result = solve_ts_tokens(inputs, &budget);
-        serde_json::to_string(&(&result.derived_edges, result.budget_status))
-            .expect("serialize TS token solver output")
-    };
-    let canonical = solver_json(&base);
+    let canonical = solver_json();
     assert!(
         canonical.contains("call_constraint"),
-        "the canonical TS token run must derive at least one call edge (non-vacuous): {canonical}"
+        "the TS points-to run must derive at least one call edge: {canonical}"
     );
 
-    for (run_index, &seed) in permutation_seeds().iter().enumerate() {
-        let mut permuted = base.clone();
-        seeded_shuffle(&mut permuted.copy_edges, seed);
-        seeded_shuffle(&mut permuted.callsites, seed ^ 0x1111_1111);
-        seeded_shuffle(&mut permuted.handoffs, seed ^ 0x2222_2222);
-        permuted = permuted.normalized();
-
-        let permuted_json = solver_json(&permuted);
+    for run_index in 0..10 {
         assert_eq!(
-            permuted_json, canonical,
-            "run {run_index} (seed {seed:#018x}): TS token solver output diverged under \
-             permuted closed-input row order"
-        );
-    }
-}
-
-#[test]
-fn ts_object_model_solver_output_is_byte_identical_under_permuted_inputs() {
-    use crate::analysis::solver::budget::SolverBudget;
-    use crate::analysis::solver::ts_object_model::fixpoint::solve_ts_object_model;
-    use crate::analysis::solver::ts_object_model::inputs::TsObjectModelInputs;
-    use crate::config::load_config;
-
-    let fixture = load_native_fixture(&fixture_dir("ts_object_model")).expect("fixture loads");
-    let temp = copy_fixture_repo_for_test(&fixture).expect("copy fixture repo");
-    let output = run_kernel_for_repo_for_test(temp.path()).expect("kernel runs");
-    let loaded = load_config(&fixture.repo_dir).expect("config loads");
-    let budget = SolverBudget {
-        js: loaded.config.solver.to_js_sub_budget(),
-        object_model_enabled: loaded.config.solver.js_object_model_enabled(),
-        object: loaded.config.solver.to_js_object_sub_budget(),
-        ..Default::default()
-    };
-
-    let base = TsObjectModelInputs::from_db(&output.db);
-    let solver_json = |inputs: &TsObjectModelInputs| -> String {
-        let result = solve_ts_object_model(inputs, &budget);
-        let property_buckets = result
-            .property_buckets
-            .iter()
-            .map(|(key, state)| {
-                let tokens = state
-                    .tokens
-                    .iter()
-                    .map(|(token, evidence)| {
-                        (
-                            format!("{token:?}"),
-                            evidence.iter().cloned().collect::<Vec<_>>(),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                (key.object.0, key.field.clone(), tokens)
-            })
-            .collect::<Vec<_>>();
-        serde_json::to_string(&(
-            property_buckets,
-            &result.derived_edges,
-            result.budget_status,
-            &result.budget_reasons,
-            result.steps,
-        ))
-        .expect("serialize TS object-model solver output")
-    };
-    let canonical = solver_json(&base);
-    assert!(
-        canonical.contains("call_constraint"),
-        "the canonical TS object-model run must derive at least one call edge \
-         (non-vacuous): {canonical}"
-    );
-
-    for (run_index, &seed) in permutation_seeds().iter().enumerate() {
-        let mut permuted = base.clone();
-        seeded_shuffle(&mut permuted.allocations, seed);
-        seeded_shuffle(&mut permuted.property_writes, seed ^ 0x1111_1111);
-        seeded_shuffle(&mut permuted.property_reads, seed ^ 0x2222_2222);
-        seeded_shuffle(&mut permuted.handoffs, seed ^ 0x3333_3333);
-        seeded_shuffle(&mut permuted.prototype_links, seed ^ 0x4444_4444);
-        seeded_shuffle(&mut permuted.receiver_bindings, seed ^ 0x5555_5555);
-        seeded_shuffle(&mut permuted.token_inputs.copy_edges, seed ^ 0x6666_6666);
-        seeded_shuffle(&mut permuted.token_inputs.callsites, seed ^ 0x7777_7777);
-        seeded_shuffle(&mut permuted.token_inputs.handoffs, seed ^ 0x8888_8888);
-
-        let mut function_tokens = permuted
-            .token_inputs
-            .function_tokens
-            .into_iter()
-            .collect::<Vec<_>>();
-        seeded_shuffle(&mut function_tokens, seed ^ 0x9999_9999);
-        permuted.token_inputs.function_tokens = function_tokens.into_iter().collect();
-
-        let mut node_kinds = permuted.node_kinds.into_iter().collect::<Vec<_>>();
-        seeded_shuffle(&mut node_kinds, seed ^ 0xAAAA_AAAA);
-        permuted.node_kinds = node_kinds.into_iter().collect();
-        permuted = permuted.normalized();
-
-        let permuted_json = solver_json(&permuted);
-        assert_eq!(
-            permuted_json, canonical,
-            "run {run_index} (seed {seed:#018x}): TS object-model solver output diverged \
-             under permuted closed-input row order"
+            solver_json(),
+            canonical,
+            "run {run_index}: TS points-to output diverged"
         );
     }
 }

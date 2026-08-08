@@ -43,14 +43,7 @@ pub(crate) fn solver_provider_parameter_digest(budget: &SolverBudget) -> Digest 
         // reachability ⊗ instantiated-types ⊗ dispatch derivation bumps this and
         // deterministically invalidates the solver cache.
         "go_rta_fixpoint_v1",
-        // TS function-token fixpoint algorithm version (JS-04): a change
-        // to token propagation, callable-token admission, or token-to-call derivation
-        // bumps this and deterministically invalidates the solver cache.
-        "ts_tokens_fixpoint_v1",
-        // TS object/property/prototype/receiver model algorithm version (
-        // JS-05): the control plane is present before the real policy lands, so the
-        // future driver cannot reuse a pre-object-model solver cache.
-        "ts_object_model_fixpoint_v3",
+        "ts_points_to_projection_v1",
         // Repo-local adaptation model facts (ADAPT-01): accepted facts and
         // budget knobs affect future model-derived solver edges.
         "adaptation_model_v1",
@@ -65,16 +58,21 @@ pub(crate) fn solver_provider_parameter_digest(budget: &SolverBudget) -> Digest 
 
 /// The active [`SolverBudget`] knobs, rendered as ordered digest parts (D-15).
 ///
-/// Only knobs observable by the production solver participate. Inactive sub-domain
-/// knobs are intentionally excluded: changing points-to caps cannot affect
-/// `polint.solver` because production no longer registers `PointsToPolicy`, and
-/// object-model caps cannot affect output while the object model is disabled.
+/// Only knobs observable by the production solver participate.
 pub(crate) fn solver_budget_digest_parts(budget: &SolverBudget) -> Vec<String> {
-    let mut parts = vec![
+    vec![
         format!("budget.max_steps={}", budget.max_steps),
         format!(
             "budget.max_outer_iterations={}",
             budget.max_outer_iterations
+        ),
+        format!(
+            "budget.points_to.max_objects_per_var={}",
+            budget.points_to.max_objects_per_var
+        ),
+        format!(
+            "budget.points_to.max_dynamic_vars={}",
+            budget.points_to.max_dynamic_vars
         ),
         // Go RTA sub-budget knobs (D-12): a Go-knob change invalidates downstream.
         format!(
@@ -90,26 +88,6 @@ pub(crate) fn solver_budget_digest_parts(budget: &SolverBudget) -> Vec<String> {
             "budget.go.max_worklist_steps={}",
             budget.go.max_worklist_steps
         ),
-        // JS/TS function-token sub-budget knobs (JS-04): a token-knob change
-        // invalidates downstream. Appended after Go so existing parts keep order.
-        format!(
-            "budget.js.max_tokens_per_var={}",
-            budget.js.max_tokens_per_var
-        ),
-        format!(
-            "budget.js.max_candidates_per_callsite={}",
-            budget.js.max_candidates_per_callsite
-        ),
-        format!(
-            "budget.js.max_token_worklist_steps={}",
-            budget.js.max_token_worklist_steps
-        ),
-        // JS/TS object-model flag and sub-budget knobs (JS-05): appended after the
-        // token fields so the existing digest recipe keeps its established order.
-        format!(
-            "budget.object_model_enabled={}",
-            budget.object_model_enabled
-        ),
         format!(
             "budget.adaptation.max_expansions_per_model={}",
             budget.adaptation.max_expansions_per_model
@@ -122,42 +100,7 @@ pub(crate) fn solver_budget_digest_parts(budget: &SolverBudget) -> Vec<String> {
             "budget.adaptation.max_model_derived_edges={}",
             budget.adaptation.max_model_derived_edges
         ),
-    ];
-
-    if budget.object_model_enabled {
-        parts.extend([
-            format!(
-                "budget.object.max_objects_per_place={}",
-                budget.object.max_objects_per_place
-            ),
-            format!(
-                "budget.object.max_properties_per_object={}",
-                budget.object.max_properties_per_object
-            ),
-            format!(
-                "budget.object.max_tokens_per_property={}",
-                budget.object.max_tokens_per_property
-            ),
-            format!(
-                "budget.object.max_computed_buckets_per_object={}",
-                budget.object.max_computed_buckets_per_object
-            ),
-            format!(
-                "budget.object.max_prototype_depth={}",
-                budget.object.max_prototype_depth
-            ),
-            format!(
-                "budget.object.max_receiver_candidates_per_callsite={}",
-                budget.object.max_receiver_candidates_per_callsite
-            ),
-            format!(
-                "budget.object.max_object_worklist_steps={}",
-                budget.object.max_object_worklist_steps
-            ),
-        ]);
-    }
-
-    parts
+    ]
 }
 
 #[cfg(test)]
@@ -190,19 +133,16 @@ mod tests {
                     "provenance_projection_v1",
                     "precision_ceiling_v1",
                     "go_rta_fixpoint_v1",
-                    "ts_tokens_fixpoint_v1",
-                    "ts_object_model_fixpoint_v3",
+                    "ts_points_to_projection_v1",
                     "adaptation_model_v1",
                     "budget.max_steps=10000",
                     "budget.max_outer_iterations=64",
+                    "budget.points_to.max_objects_per_var=64",
+                    "budget.points_to.max_dynamic_vars=512",
                     "budget.go.address_taken_threshold=256",
                     "budget.go.max_candidates_per_callsite=128",
                     "budget.go.max_rta_rounds=32",
                     "budget.go.max_worklist_steps=10000",
-                    "budget.js.max_tokens_per_var=128",
-                    "budget.js.max_candidates_per_callsite=256",
-                    "budget.js.max_token_worklist_steps=10000",
-                    "budget.object_model_enabled=false",
                     "budget.adaptation.max_expansions_per_model=64",
                     "budget.adaptation.max_targets_per_source=16",
                     "budget.adaptation.max_model_derived_edges=2048",
@@ -230,19 +170,16 @@ mod tests {
                 "provenance_projection_v1",
                 "precision_ceiling_v1",
                 "go_rta_fixpoint_v1",
-                "ts_tokens_fixpoint_v1",
-                "ts_object_model_fixpoint_v3",
+                "ts_points_to_projection_v1",
                 "adaptation_model_v1",
                 "budget.max_steps=10000",
                 "budget.max_outer_iterations=64",
+                "budget.points_to.max_objects_per_var=64",
+                "budget.points_to.max_dynamic_vars=512",
                 "budget.go.address_taken_threshold=256",
                 "budget.go.max_candidates_per_callsite=128",
                 "budget.go.max_rta_rounds=32",
                 "budget.go.max_worklist_steps=10000",
-                "budget.js.max_tokens_per_var=128",
-                "budget.js.max_candidates_per_callsite=256",
-                "budget.js.max_token_worklist_steps=10000",
-                "budget.object_model_enabled=false",
                 "budget.adaptation.max_expansions_per_model=64",
                 "budget.adaptation.max_targets_per_source=16",
                 "budget.adaptation.max_model_derived_edges=2048",
@@ -276,10 +213,10 @@ mod tests {
 
         let mut bumped_objects = SolverBudget::default();
         bumped_objects.points_to.max_objects_per_var += 1;
-        assert_eq!(
+        assert_ne!(
             solver_provider_parameter_digest(&bumped_objects),
             base,
-            "changing an inactive points-to budget knob must not change the parameter digest"
+            "changing the active points-to budget must change the parameter digest"
         );
 
         // D-12: a Go RTA sub-budget knob (the roadmap-named address-taken threshold)
@@ -301,113 +238,6 @@ mod tests {
             solver_provider_parameter_digest(&bumped_steps),
             base,
             "changing the Go RTA worklist-step cap must change the parameter digest"
-        );
-
-        // JS-04: a JS token sub-budget knob participates in the digest, so a token-knob
-        // change invalidates downstream.
-        let mut bumped_js = SolverBudget::default();
-        bumped_js.js.max_tokens_per_var += 1;
-        assert_ne!(
-            solver_provider_parameter_digest(&bumped_js),
-            base,
-            "changing a JS token sub-budget knob must change the parameter digest"
-        );
-
-        let mut bumped_js_steps = SolverBudget::default();
-        bumped_js_steps.js.max_token_worklist_steps += 1;
-        assert_ne!(
-            solver_provider_parameter_digest(&bumped_js_steps),
-            base,
-            "changing the JS token worklist-step cap must change the parameter digest"
-        );
-
-        let mut toggled_object_model = SolverBudget {
-            object_model_enabled: true,
-            ..SolverBudget::default()
-        };
-        assert_ne!(
-            solver_provider_parameter_digest(&toggled_object_model),
-            base,
-            "toggling object-model enablement must change the parameter digest"
-        );
-
-        toggled_object_model = SolverBudget::default();
-        toggled_object_model.object.max_objects_per_place += 1;
-        assert_eq!(
-            solver_provider_parameter_digest(&toggled_object_model),
-            base,
-            "changing disabled object-model caps must not change the parameter digest"
-        );
-
-        let mut bumped_object_properties = SolverBudget {
-            object_model_enabled: true,
-            ..SolverBudget::default()
-        };
-        let enabled_object_base = solver_provider_parameter_digest(&bumped_object_properties);
-        bumped_object_properties.object.max_properties_per_object += 1;
-        assert_ne!(
-            solver_provider_parameter_digest(&bumped_object_properties),
-            enabled_object_base,
-            "changing enabled max_properties_per_object must change the parameter digest"
-        );
-
-        let mut bumped_object_tokens = SolverBudget {
-            object_model_enabled: true,
-            ..SolverBudget::default()
-        };
-        bumped_object_tokens.object.max_tokens_per_property += 1;
-        assert_ne!(
-            solver_provider_parameter_digest(&bumped_object_tokens),
-            enabled_object_base,
-            "changing enabled max_tokens_per_property must change the parameter digest"
-        );
-
-        let mut bumped_object_computed = SolverBudget {
-            object_model_enabled: true,
-            ..SolverBudget::default()
-        };
-        bumped_object_computed
-            .object
-            .max_computed_buckets_per_object += 1;
-        assert_ne!(
-            solver_provider_parameter_digest(&bumped_object_computed),
-            enabled_object_base,
-            "changing enabled max_computed_buckets_per_object must change the parameter digest"
-        );
-
-        let mut bumped_object_depth = SolverBudget {
-            object_model_enabled: true,
-            ..SolverBudget::default()
-        };
-        bumped_object_depth.object.max_prototype_depth += 1;
-        assert_ne!(
-            solver_provider_parameter_digest(&bumped_object_depth),
-            enabled_object_base,
-            "changing enabled max_prototype_depth must change the parameter digest"
-        );
-
-        let mut bumped_object_receivers = SolverBudget {
-            object_model_enabled: true,
-            ..SolverBudget::default()
-        };
-        bumped_object_receivers
-            .object
-            .max_receiver_candidates_per_callsite += 1;
-        assert_ne!(
-            solver_provider_parameter_digest(&bumped_object_receivers),
-            enabled_object_base,
-            "changing enabled max_receiver_candidates_per_callsite must change the parameter digest"
-        );
-
-        let mut bumped_object_steps = SolverBudget {
-            object_model_enabled: true,
-            ..SolverBudget::default()
-        };
-        bumped_object_steps.object.max_object_worklist_steps += 1;
-        assert_ne!(
-            solver_provider_parameter_digest(&bumped_object_steps),
-            enabled_object_base,
-            "changing enabled max_object_worklist_steps must change the parameter digest"
         );
 
         let mut bumped_adaptation = SolverBudget::default();

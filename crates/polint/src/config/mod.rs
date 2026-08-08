@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
-use crate::analysis::solver::budget::{GoRtaSubBudget, JsObjectModelSubBudget, JsTokensSubBudget};
+use crate::analysis::solver::budget::GoRtaSubBudget;
 
 const CONFIG_MAX_BYTES: u64 = 1_048_576;
 
@@ -55,15 +55,11 @@ pub(crate) struct ReachabilityConfig {
 /// `[solver]` config table (D-10). `.polint.toml` config surface for the unified
 /// solver — NOT an SDK promotion. Sits beside [`ReachabilityConfig`].
 ///
-/// Today it threads the per-language Go RTA caps (`solver.go.*`) and JS/TS token
-/// caps (`solver.js.*`) into their solver sub-budgets; later stages extend it with
-/// cross-language knobs.
+/// Today it threads the Go RTA caps (`solver.go.*`) into its solver sub-budget.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct SolverConfig {
     #[serde(default)]
     pub(crate) go: SolverGoConfig,
-    #[serde(default)]
-    pub(crate) js: SolverJsConfig,
 }
 
 /// `[solver.go]` config sub-table (D-10). Each knob is an `Option<usize>` so an
@@ -79,35 +75,6 @@ pub(crate) struct SolverGoConfig {
     pub(crate) max_rta_rounds: Option<usize>,
     #[serde(default)]
     pub(crate) max_worklist_steps: Option<usize>,
-}
-
-/// `[solver.js]` config sub-table (JS-04/JS-05). Each numeric knob is an
-/// `Option<usize>` so an absent key falls back to its sub-budget default. A zero
-/// value is treated as a typo and also falls back to the default.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub(crate) struct SolverJsConfig {
-    #[serde(default)]
-    pub(crate) object_model: Option<bool>,
-    #[serde(default)]
-    pub(crate) max_tokens_per_var: Option<usize>,
-    #[serde(default)]
-    pub(crate) max_candidates_per_callsite: Option<usize>,
-    #[serde(default)]
-    pub(crate) max_token_worklist_steps: Option<usize>,
-    #[serde(default)]
-    pub(crate) max_object_objects_per_place: Option<usize>,
-    #[serde(default)]
-    pub(crate) max_object_properties_per_object: Option<usize>,
-    #[serde(default)]
-    pub(crate) max_object_tokens_per_property: Option<usize>,
-    #[serde(default)]
-    pub(crate) max_object_computed_buckets_per_object: Option<usize>,
-    #[serde(default)]
-    pub(crate) max_object_prototype_depth: Option<usize>,
-    #[serde(default)]
-    pub(crate) max_object_receiver_candidates_per_callsite: Option<usize>,
-    #[serde(default)]
-    pub(crate) max_object_worklist_steps: Option<usize>,
 }
 
 impl SolverConfig {
@@ -133,67 +100,6 @@ impl SolverConfig {
         );
         overlay_positive_cap(&mut budget.max_rta_rounds, self.go.max_rta_rounds);
         overlay_positive_cap(&mut budget.max_worklist_steps, self.go.max_worklist_steps);
-        budget
-    }
-
-    /// Overlay present `[solver.js]` config values onto
-    /// [`JsTokensSubBudget::default()`]. Like Go RTA caps, every JS token cap is a
-    /// strictly-positive ceiling: `0` falls back to the documented default rather
-    /// than disabling the token driver.
-    pub(crate) fn to_js_sub_budget(&self) -> JsTokensSubBudget {
-        let mut budget = JsTokensSubBudget::default();
-        overlay_positive_cap(&mut budget.max_tokens_per_var, self.js.max_tokens_per_var);
-        overlay_positive_cap(
-            &mut budget.max_candidates_per_callsite,
-            self.js.max_candidates_per_callsite,
-        );
-        overlay_positive_cap(
-            &mut budget.max_token_worklist_steps,
-            self.js.max_token_worklist_steps,
-        );
-        budget
-    }
-
-    /// Return whether the JS/TS object-model solver driver should run. It is
-    /// disabled by default until benchmark promotion gates approve default enablement.
-    pub(crate) fn js_object_model_enabled(&self) -> bool {
-        self.js.object_model.unwrap_or(false)
-    }
-
-    /// Overlay present `[solver.js]` object-model config values onto
-    /// [`JsObjectModelSubBudget::default()`]. Every object cap is a strictly-positive
-    /// ceiling: `0` falls back to the documented default rather than disabling proof
-    /// or making the future driver immediately exhausted.
-    pub(crate) fn to_js_object_sub_budget(&self) -> JsObjectModelSubBudget {
-        let mut budget = JsObjectModelSubBudget::default();
-        overlay_positive_cap(
-            &mut budget.max_objects_per_place,
-            self.js.max_object_objects_per_place,
-        );
-        overlay_positive_cap(
-            &mut budget.max_properties_per_object,
-            self.js.max_object_properties_per_object,
-        );
-        overlay_positive_cap(
-            &mut budget.max_tokens_per_property,
-            self.js.max_object_tokens_per_property,
-        );
-        overlay_positive_cap(
-            &mut budget.max_computed_buckets_per_object,
-            self.js.max_object_computed_buckets_per_object,
-        );
-        overlay_positive_cap(
-            &mut budget.max_prototype_depth,
-            self.js.max_object_prototype_depth,
-        );
-        overlay_positive_cap(
-            &mut budget.max_receiver_candidates_per_callsite,
-            self.js.max_object_receiver_candidates_per_callsite,
-        );
-        overlay_positive_cap(
-            &mut budget.max_object_worklist_steps,
-            self.js.max_object_worklist_steps,
-        );
         budget
     }
 }
@@ -724,171 +630,6 @@ max_worklist_steps = 5
             GoRtaSubBudget::default().max_rta_rounds,
             "a zeroed sibling falls back to default, not 0"
         );
-    }
-
-    #[test]
-    fn solver_config_defaults_to_js_sub_budget_defaults() {
-        // Absent [solver] table falls back to JsTokensSubBudget::default() (JS-04).
-        let config: PolintConfig = toml::from_str("").unwrap();
-        assert_eq!(
-            config.solver.to_js_sub_budget(),
-            JsTokensSubBudget::default()
-        );
-    }
-
-    #[test]
-    fn solver_js_override_maps_into_js_sub_budget() {
-        // A [solver.js] override changes ONLY the present knobs; absent knobs keep
-        // their default.
-        let config: PolintConfig = toml::from_str(
-            r#"
-[solver.js]
-max_tokens_per_var = 12
-max_token_worklist_steps = 50000
-"#,
-        )
-        .unwrap();
-        let budget = config.solver.to_js_sub_budget();
-        assert_eq!(budget.max_tokens_per_var, 12);
-        assert_eq!(budget.max_token_worklist_steps, 50_000);
-        assert_eq!(
-            budget.max_candidates_per_callsite,
-            JsTokensSubBudget::default().max_candidates_per_callsite
-        );
-    }
-
-    #[test]
-    fn solver_js_zero_knob_falls_back_to_default_not_self_disable() {
-        // A `[solver.js]` cap of 0 must not be overlaid verbatim: every token cap is
-        // strictly positive, and a zero typo would otherwise force immediate budget
-        // exhaustion or suppress useful propagation.
-        let config: PolintConfig = toml::from_str(
-            r#"
-[solver.js]
-max_tokens_per_var = 0
-max_candidates_per_callsite = 0
-max_token_worklist_steps = 0
-"#,
-        )
-        .unwrap();
-        let budget = config.solver.to_js_sub_budget();
-        assert_eq!(budget, JsTokensSubBudget::default());
-    }
-
-    #[test]
-    fn solver_js_positive_knob_still_overrides_after_zero_clamp() {
-        // The zero-clamp must not block a legitimate positive override: a present
-        // positive value still maps through, while a zeroed sibling falls back.
-        let config: PolintConfig = toml::from_str(
-            r#"
-[solver.js]
-max_tokens_per_var = 0
-max_candidates_per_callsite = 17
-"#,
-        )
-        .unwrap();
-        let budget = config.solver.to_js_sub_budget();
-        assert_eq!(
-            budget.max_tokens_per_var,
-            JsTokensSubBudget::default().max_tokens_per_var,
-            "a zeroed sibling falls back to default, not 0"
-        );
-        assert_eq!(
-            budget.max_candidates_per_callsite, 17,
-            "positive override applies"
-        );
-    }
-
-    #[test]
-    fn solver_config_defaults_to_object_model_disabled() {
-        let config: PolintConfig = toml::from_str("").unwrap();
-        assert!(!config.solver.js_object_model_enabled());
-        assert_eq!(
-            config.solver.to_js_object_sub_budget(),
-            JsObjectModelSubBudget::default()
-        );
-    }
-
-    #[test]
-    fn solver_js_object_model_flag_enables_object_model() {
-        let config: PolintConfig = toml::from_str(
-            r#"
-[solver.js]
-object_model = true
-"#,
-        )
-        .unwrap();
-        assert!(config.solver.js_object_model_enabled());
-    }
-
-    #[test]
-    fn solver_js_object_override_maps_into_object_sub_budget() {
-        let config: PolintConfig = toml::from_str(
-            r#"
-[solver.js]
-max_object_objects_per_place = 12
-max_object_tokens_per_property = 17
-max_object_receiver_candidates_per_callsite = 5
-max_object_worklist_steps = 50000
-"#,
-        )
-        .unwrap();
-        let budget = config.solver.to_js_object_sub_budget();
-        assert_eq!(budget.max_objects_per_place, 12);
-        assert_eq!(budget.max_tokens_per_property, 17);
-        assert_eq!(budget.max_receiver_candidates_per_callsite, 5);
-        assert_eq!(budget.max_object_worklist_steps, 50_000);
-        assert_eq!(
-            budget.max_properties_per_object,
-            JsObjectModelSubBudget::default().max_properties_per_object
-        );
-        assert_eq!(
-            budget.max_computed_buckets_per_object,
-            JsObjectModelSubBudget::default().max_computed_buckets_per_object
-        );
-        assert_eq!(
-            budget.max_prototype_depth,
-            JsObjectModelSubBudget::default().max_prototype_depth
-        );
-    }
-
-    #[test]
-    fn solver_js_object_zero_knobs_fall_back_to_default() {
-        let config: PolintConfig = toml::from_str(
-            r#"
-[solver.js]
-max_object_objects_per_place = 0
-max_object_properties_per_object = 0
-max_object_tokens_per_property = 0
-max_object_computed_buckets_per_object = 0
-max_object_prototype_depth = 0
-max_object_receiver_candidates_per_callsite = 0
-max_object_worklist_steps = 0
-"#,
-        )
-        .unwrap();
-        assert_eq!(
-            config.solver.to_js_object_sub_budget(),
-            JsObjectModelSubBudget::default()
-        );
-    }
-
-    #[test]
-    fn solver_js_object_positive_knob_still_overrides_after_zero_clamp() {
-        let config: PolintConfig = toml::from_str(
-            r#"
-[solver.js]
-max_object_objects_per_place = 0
-max_object_properties_per_object = 33
-"#,
-        )
-        .unwrap();
-        let budget = config.solver.to_js_object_sub_budget();
-        assert_eq!(
-            budget.max_objects_per_place,
-            JsObjectModelSubBudget::default().max_objects_per_place
-        );
-        assert_eq!(budget.max_properties_per_object, 33);
     }
 
     #[test]

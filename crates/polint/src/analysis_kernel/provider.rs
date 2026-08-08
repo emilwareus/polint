@@ -576,9 +576,6 @@ fn solver_budget_from_loaded(
 ) -> crate::analysis::solver::budget::SolverBudget {
     crate::analysis::solver::budget::SolverBudget {
         go: loaded.config.solver.to_go_sub_budget(),
-        js: loaded.config.solver.to_js_sub_budget(),
-        object_model_enabled: loaded.config.solver.js_object_model_enabled(),
-        object: loaded.config.solver.to_js_object_sub_budget(),
         ..crate::analysis::solver::budget::SolverBudget::default()
     }
 }

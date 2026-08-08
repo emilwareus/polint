@@ -634,8 +634,9 @@ mod tests {
     };
     use crate::analysis::points_to::solver::{PointsToBudget, solve_points_to};
     use crate::analysis::solver::go_rta::GoRtaInputs;
-    use crate::analysis::solver::policy::{GoRtaPolicy, PointsToPolicy, TsTokensPolicy};
-    use crate::analysis::solver::ts_tokens::TsTokenInputs;
+    use crate::analysis::solver::policy::{
+        GoRtaPolicy, PointsToPolicy, TsPointsToInputs, TsPointsToPolicy,
+    };
 
     fn constraint(stable_key: &str, kind: PointsToConstraintKind) -> PointsToConstraintFact {
         PointsToConstraintFact {
@@ -760,7 +761,7 @@ mod tests {
         let engine = SolverEngine::new(
             vec![
                 Box::new(GoRtaPolicy::new(GoRtaInputs::default())),
-                Box::new(TsTokensPolicy::new(TsTokenInputs::default())),
+                Box::new(TsPointsToPolicy::new(TsPointsToInputs::default())),
             ],
             budget,
         );
@@ -768,7 +769,7 @@ mod tests {
 
         assert_eq!(run.policy_outcomes.len(), 2);
         assert_eq!(run.policy_outcomes[0].policy_id, "go_rta");
-        assert_eq!(run.policy_outcomes[1].policy_id, "ts_tokens");
+        assert_eq!(run.policy_outcomes[1].policy_id, "ts_points_to");
         assert!(
             run.policy_outcomes
                 .iter()
@@ -1353,7 +1354,7 @@ mod tests {
             vec![
                 Box::new(PointsToPolicy::new(exhausting_points_to)),
                 Box::new(GoRtaPolicy::new(GoRtaInputs::default())),
-                Box::new(TsTokensPolicy::new(TsTokenInputs::default())),
+                Box::new(TsPointsToPolicy::new(TsPointsToInputs::default())),
             ],
             budget,
         );

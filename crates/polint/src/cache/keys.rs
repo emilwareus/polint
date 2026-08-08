@@ -206,30 +206,15 @@ fn deterministic_reachability(reachability: &ReachabilityConfig) -> String {
 
 fn deterministic_solver(solver: &SolverConfig) -> String {
     format!(
-        "go.address_taken_threshold={}|go.max_candidates_per_callsite={}|go.max_rta_rounds={}|go.max_worklist_steps={}|js.object_model={}|js.max_tokens_per_var={}|js.max_candidates_per_callsite={}|js.max_token_worklist_steps={}|js.max_object_objects_per_place={}|js.max_object_properties_per_object={}|js.max_object_tokens_per_property={}|js.max_object_computed_buckets_per_object={}|js.max_object_prototype_depth={}|js.max_object_receiver_candidates_per_callsite={}|js.max_object_worklist_steps={}",
+        "go.address_taken_threshold={}|go.max_candidates_per_callsite={}|go.max_rta_rounds={}|go.max_worklist_steps={}",
         deterministic_usize_option(solver.go.address_taken_threshold),
         deterministic_usize_option(solver.go.max_candidates_per_callsite),
         deterministic_usize_option(solver.go.max_rta_rounds),
         deterministic_usize_option(solver.go.max_worklist_steps),
-        deterministic_bool_option(solver.js.object_model),
-        deterministic_usize_option(solver.js.max_tokens_per_var),
-        deterministic_usize_option(solver.js.max_candidates_per_callsite),
-        deterministic_usize_option(solver.js.max_token_worklist_steps),
-        deterministic_usize_option(solver.js.max_object_objects_per_place),
-        deterministic_usize_option(solver.js.max_object_properties_per_object),
-        deterministic_usize_option(solver.js.max_object_tokens_per_property),
-        deterministic_usize_option(solver.js.max_object_computed_buckets_per_object),
-        deterministic_usize_option(solver.js.max_object_prototype_depth),
-        deterministic_usize_option(solver.js.max_object_receiver_candidates_per_callsite),
-        deterministic_usize_option(solver.js.max_object_worklist_steps),
     )
 }
 
 fn deterministic_usize_option(value: Option<usize>) -> String {
-    value.map(|value| value.to_string()).unwrap_or_default()
-}
-
-fn deterministic_bool_option(value: Option<bool>) -> String {
     value.map(|value| value.to_string()).unwrap_or_default()
 }
 
@@ -423,15 +408,7 @@ mod tests {
         let mut go_modified = baseline.clone();
         go_modified.config.solver.go.address_taken_threshold = Some(17);
 
-        let mut js_modified = baseline.clone();
-        js_modified.config.solver.js.object_model = Some(true);
-
-        let mut object_modified = baseline.clone();
-        object_modified.config.solver.js.max_object_prototype_depth = Some(4);
-
         assert_ne!(config_hash(&baseline), config_hash(&go_modified));
-        assert_ne!(config_hash(&baseline), config_hash(&js_modified));
-        assert_ne!(config_hash(&baseline), config_hash(&object_modified));
     }
 
     #[test]

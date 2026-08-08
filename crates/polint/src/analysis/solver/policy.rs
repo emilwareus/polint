@@ -9,7 +9,7 @@
 //! determinism fixtures stay byte-identical. It does NOT rewrite the points-to
 //! fixpoint.
 //!
-//! The Go ([`GoRtaPolicy`]) and TS ([`TsTokensPolicy`]) policies are the private
+//! The Go ([`GoRtaPolicy`]) and TS ([`TsPointsToPolicy`]) policies are the private
 //! language-specific edge-producing policies driven by the unified engine.
 //!
 //! See [`super`] for the D-04 naming-collision guard (unified core vs. the
@@ -23,8 +23,8 @@ use crate::analysis::points_to::solver::{PointsToSolveResult, solve_points_to};
 use super::budget::{BudgetStatus, SolverBudget};
 use super::facts::DerivedEdgeFact;
 use super::go_rta::{GoRtaInputs, solve_go_rta};
-use super::ts_object_model::{TsObjectModelInputs, solve_ts_object_model};
-use super::ts_tokens::{TsTokenInputs, solve_ts_tokens};
+use ts_points_to::budget_status;
+pub(crate) use ts_points_to::{TsPointsToInputs, solve_ts_points_to};
 
 /// Outcome produced by a [`SolverPolicy`] when driven by the engine.
 ///
@@ -154,61 +154,310 @@ impl SolverPolicy for GoRtaPolicy {
     }
 }
 
-/// JS/TS function-token policy (JS-04). It owns a closed token snapshot
-/// and emits conservative token-derived call edges.
-pub(crate) struct TsTokensPolicy {
-    inputs: TsTokenInputs,
+/// JS/TS points-to policy. It projects the semantic graph into the shared
+/// field-sensitive Andersen solver and emits indirect call edges from solved sets.
+pub(crate) struct TsPointsToPolicy {
+    inputs: TsPointsToInputs,
 }
 
-impl TsTokensPolicy {
-    pub(crate) fn new(inputs: TsTokenInputs) -> Self {
+impl TsPointsToPolicy {
+    pub(crate) fn new(inputs: TsPointsToInputs) -> Self {
         Self { inputs }
     }
 }
 
-impl SolverPolicy for TsTokensPolicy {
+impl SolverPolicy for TsPointsToPolicy {
     fn id(&self) -> &'static str {
-        "ts_tokens"
+        "ts_points_to"
     }
 
     fn solve(&self, budget: &SolverBudget) -> PolicyOutcome {
-        let output = solve_ts_tokens(&self.inputs, budget);
+        let output = solve_ts_points_to(&self.inputs, budget);
         PolicyOutcome {
             points_to: None,
             derived_edges: output.derived_edges,
-            budget_status: output.budget_status,
-            budget_reasons: output.budget_reasons,
-            steps: output.steps,
+            budget_status: budget_status(&output.points_to),
+            budget_reasons: output.points_to.budget_reasons,
+            steps: 0,
         }
     }
 }
 
-/// JS/TS object/property policy (JS-05). It owns a closed object-model
-/// snapshot and emits conservative property-backed call edges.
-pub(crate) struct TsObjectModelPolicy {
-    inputs: TsObjectModelInputs,
-}
+mod ts_points_to {
+    use std::collections::{BTreeMap, BTreeSet};
 
-impl TsObjectModelPolicy {
-    pub(crate) fn new(inputs: TsObjectModelInputs) -> Self {
-        Self { inputs }
+    use crate::analysis::ids::{
+        DerivedEdgeId, ObjectTokenId, PointsToConstraintId, PtVarId, SemanticNodeId,
+    };
+    use crate::analysis::points_to::facts::{
+        PointsToConstraintFact, PointsToConstraintKind, PointsToPrecision, PointsToStatus,
+    };
+    use crate::analysis::points_to::solver::{PointsToSolveResult, solve_points_to};
+    use crate::analysis::semantic_graph::constraints::{ConstraintFact, ConstraintKind};
+    use crate::analysis::semantic_graph::facts::NodeKind;
+    use crate::analysis::solver::budget::{BudgetStatus, SolverBudget};
+    use crate::analysis::solver::facts::DerivedEdgeFact;
+    use crate::analysis::solver::provenance::{ContributingFact, DerivedEdgeProvenance};
+    use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
+    use crate::core::AnalysisDb;
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct TsPointsToCallsite {
+        caller_node: SemanticNodeId,
+        callsite_node: SemanticNodeId,
+        callsite_stable_key: String,
+        constraint_stable_key: String,
     }
-}
 
-impl SolverPolicy for TsObjectModelPolicy {
-    fn id(&self) -> &'static str {
-        "ts_object_model"
+    #[derive(Debug, Clone, Default, PartialEq, Eq)]
+    pub(crate) struct TsPointsToInputs {
+        constraints: Vec<ConstraintFact>,
+        callable_objects: BTreeMap<ObjectTokenId, (SemanticNodeId, String)>,
+        callsites: Vec<TsPointsToCallsite>,
     }
 
-    fn solve(&self, budget: &SolverBudget) -> PolicyOutcome {
-        let output = solve_ts_object_model(&self.inputs, budget);
-        PolicyOutcome {
-            points_to: None,
-            derived_edges: output.derived_edges,
-            budget_status: output.budget_status,
-            budget_reasons: output.budget_reasons,
-            steps: output.steps,
+    impl TsPointsToInputs {
+        pub(crate) fn from_db(db: &AnalysisDb) -> Self {
+            let function_node_by_id = db
+                .semantic_nodes()
+                .iter()
+                .filter_map(|node| match node.kind {
+                    NodeKind::Function(function) => Some((function, node.id)),
+                    _ => None,
+                })
+                .collect::<BTreeMap<_, _>>();
+            let callsite_node_by_id = db
+                .semantic_nodes()
+                .iter()
+                .filter_map(|node| match node.kind {
+                    NodeKind::Callsite(callsite) => Some((callsite, node.id)),
+                    _ => None,
+                })
+                .collect::<BTreeMap<_, _>>();
+            let node_key_by_id = db
+                .semantic_nodes()
+                .iter()
+                .map(|node| (node.id, node.stable_key.clone()))
+                .collect::<BTreeMap<_, _>>();
+            let constraint_key_by_callsite = db
+                .semantic_constraints()
+                .iter()
+                .filter_map(|constraint| match constraint.kind {
+                    ConstraintKind::CallConstraint { callsite } => {
+                        Some((callsite, constraint.stable_key.clone()))
+                    }
+                    _ => None,
+                })
+                .collect::<BTreeMap<_, _>>();
+
+            let callable_objects = db
+                .semantic_nodes()
+                .iter()
+                .filter_map(|node| match node.kind {
+                    NodeKind::Function(_) => {
+                        Some((object_for_node(node.id), (node.id, node.stable_key.clone())))
+                    }
+                    _ => None,
+                })
+                .collect();
+            let callsites = db
+                .call_sites()
+                .iter()
+                .filter(|site| site.language.is_ts_family())
+                .filter_map(|site| {
+                    let callsite_node = *callsite_node_by_id.get(&site.id)?;
+                    let caller_node = *function_node_by_id.get(&site.caller)?;
+                    Some(TsPointsToCallsite {
+                        caller_node,
+                        callsite_node,
+                        callsite_stable_key: node_key_by_id.get(&callsite_node)?.clone(),
+                        constraint_stable_key: constraint_key_by_callsite
+                            .get(&callsite_node)
+                            .cloned()
+                            .unwrap_or_else(|| site.stable_key.clone()),
+                    })
+                })
+                .collect();
+
+            Self {
+                constraints: db.semantic_constraints().to_vec(),
+                callable_objects,
+                callsites,
+            }
         }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct TsPointsToSolveResult {
+        pub(crate) points_to: PointsToSolveResult,
+        pub(crate) derived_edges: Vec<DerivedEdgeFact>,
+    }
+
+    pub(crate) fn solve_ts_points_to(
+        inputs: &TsPointsToInputs,
+        budget: &SolverBudget,
+    ) -> TsPointsToSolveResult {
+        let constraints = project_constraints(inputs);
+        let points_to = solve_points_to(&constraints, budget.points_to_budget());
+        let sets = points_to
+            .sets
+            .iter()
+            .map(|set| (set.variable, set))
+            .collect::<BTreeMap<_, _>>();
+        let mut edges = BTreeMap::new();
+
+        for callsite in &inputs.callsites {
+            let Some(set) = sets.get(&var_for_node(callsite.callsite_node)) else {
+                continue;
+            };
+            if set.status != PointsToStatus::Present {
+                continue;
+            }
+            for object in &set.objects {
+                let Some((target, target_stable_key)) = inputs.callable_objects.get(object) else {
+                    continue;
+                };
+                let provenance = DerivedEdgeProvenance::new(
+                    vec![
+                        ContributingFact {
+                            stable_key: callsite.constraint_stable_key.clone(),
+                        },
+                        ContributingFact {
+                            stable_key: callsite.callsite_stable_key.clone(),
+                        },
+                        ContributingFact {
+                            stable_key: target_stable_key.clone(),
+                        },
+                        ContributingFact {
+                            stable_key: set.stable_key.clone(),
+                        },
+                    ],
+                    &ConstraintKind::CallConstraint {
+                        callsite: callsite.callsite_node,
+                    },
+                    0,
+                );
+                let stable_key = stable_key_from_parts(
+                    FactFamily::SolverDerivedEdge,
+                    &[
+                        ("source", callsite.caller_node.0.to_string()),
+                        ("target", target.0.to_string()),
+                        ("provenance", provenance.stable_key_fragment()),
+                    ],
+                );
+                edges.entry(stable_key.clone()).or_insert(DerivedEdgeFact {
+                    id: DerivedEdgeId(0),
+                    source: callsite.caller_node,
+                    target: *target,
+                    status: set.status,
+                    precision: set.precision,
+                    stable_key,
+                    provenance,
+                });
+            }
+        }
+
+        TsPointsToSolveResult {
+            points_to,
+            derived_edges: edges.into_values().collect(),
+        }
+    }
+
+    fn project_constraints(inputs: &TsPointsToInputs) -> Vec<PointsToConstraintFact> {
+        let mut kinds = BTreeSet::new();
+        let callsite_by_source_key = inputs
+            .constraints
+            .iter()
+            .filter_map(|constraint| match constraint.kind {
+                ConstraintKind::CallConstraint { callsite } => {
+                    Some((constraint.stable_key.as_str(), callsite))
+                }
+                _ => None,
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        for (&object, &(node, _)) in &inputs.callable_objects {
+            kinds.insert(PointsToConstraintKind::AddressOf {
+                dst: var_for_node(node),
+                object,
+            });
+        }
+        for constraint in &inputs.constraints {
+            if constraint.status != PointsToStatus::Present {
+                continue;
+            }
+            match &constraint.kind {
+                ConstraintKind::CopyEdge { dst, src } => {
+                    kinds.insert(PointsToConstraintKind::Copy {
+                        dst: var_for_node(*dst),
+                        src: var_for_node(*src),
+                    });
+                }
+                ConstraintKind::Alloc { dst, object } => {
+                    let object_token = object_for_node(*object);
+                    kinds.insert(PointsToConstraintKind::AddressOf {
+                        dst: var_for_node(*object),
+                        object: object_token,
+                    });
+                    kinds.insert(PointsToConstraintKind::AddressOf {
+                        dst: var_for_node(*dst),
+                        object: object_token,
+                    });
+                }
+                ConstraintKind::FieldLoad { dst, base, field } => {
+                    kinds.insert(PointsToConstraintKind::FieldLoad {
+                        dst: var_for_node(*dst),
+                        base: var_for_node(*base),
+                        field: field.clone(),
+                    });
+                    if let Some(callsite) =
+                        callsite_by_source_key.get(constraint.stable_key.as_str())
+                    {
+                        kinds.insert(PointsToConstraintKind::Copy {
+                            dst: var_for_node(*callsite),
+                            src: var_for_node(*dst),
+                        });
+                    }
+                }
+                ConstraintKind::FieldStore { base, field, src } => {
+                    kinds.insert(PointsToConstraintKind::FieldStore {
+                        base: var_for_node(*base),
+                        field: field.clone(),
+                        src: var_for_node(*src),
+                    });
+                }
+                ConstraintKind::CallConstraint { .. }
+                | ConstraintKind::ModelEdge { .. }
+                | ConstraintKind::TypeConstraint { .. } => {}
+            }
+        }
+
+        kinds
+            .into_iter()
+            .enumerate()
+            .map(|(index, kind)| PointsToConstraintFact {
+                id: PointsToConstraintId(index as u64),
+                stable_key: stable_key_from_parts(
+                    FactFamily::PointsToConstraint,
+                    &[("kind", format!("{kind:?}"))],
+                ),
+                kind,
+                status: PointsToStatus::Present,
+                precision: PointsToPrecision::FlowInsensitive,
+            })
+            .collect()
+    }
+
+    fn var_for_node(node: SemanticNodeId) -> PtVarId {
+        PtVarId(node.0)
+    }
+
+    fn object_for_node(node: SemanticNodeId) -> ObjectTokenId {
+        ObjectTokenId(node.0)
+    }
+
+    pub(crate) fn budget_status(result: &PointsToSolveResult) -> BudgetStatus {
+        BudgetStatus::from_points_to(result.budget_status)
     }
 }
 
@@ -219,133 +468,16 @@ mod tests {
 
     use crate::analysis::ids::SemanticNodeId;
     use crate::analysis::solver::go_rta::inputs::{GoRtaCallsite, GoRtaMethod};
-    use crate::analysis::solver::ts_tokens::inputs::{
-        TsFunctionToken, TsTokenCallsite, TsTokenCopyEdge,
-    };
 
     #[test]
     fn ts_policy_id_is_stable() {
         let budget = SolverBudget::default();
-        let ts = TsTokensPolicy::new(TsTokenInputs::default());
+        let ts = TsPointsToPolicy::new(TsPointsToInputs::default());
         let ts_outcome = ts.solve(&budget);
-        assert_eq!(ts.id(), "ts_tokens");
+        assert_eq!(ts.id(), "ts_points_to");
         assert!(ts_outcome.points_to.is_none());
         assert!(ts_outcome.derived_edges.is_empty());
         assert_eq!(ts_outcome.budget_status, BudgetStatus::WithinBudget);
-    }
-
-    #[test]
-    fn ts_policy_derives_edges_from_resolvable_token_flow() {
-        let inputs = TsTokenInputs {
-            function_tokens: BTreeMap::from([(
-                SemanticNodeId(1),
-                TsFunctionToken {
-                    function_node: SemanticNodeId(1),
-                    function_stable_key: "function:target".to_string(),
-                    source_stable_key: "semantic:function:target".to_string(),
-                },
-            )]),
-            copy_edges: vec![TsTokenCopyEdge {
-                dst: SemanticNodeId(9),
-                src: SemanticNodeId(1),
-                stable_key: "copy:target-to-callsite".to_string(),
-            }],
-            callsites: vec![TsTokenCallsite {
-                caller_node: SemanticNodeId(100),
-                callsite_node: SemanticNodeId(9),
-                callsite_stable_key: "callsite:alias".to_string(),
-                constraint_stable_key: "constraint:call".to_string(),
-            }],
-            ..TsTokenInputs::default()
-        };
-        let ts = TsTokensPolicy::new(inputs);
-
-        let outcome = ts.solve(&SolverBudget::default());
-
-        assert_eq!(outcome.derived_edges.len(), 1);
-        assert_eq!(outcome.derived_edges[0].source, SemanticNodeId(100));
-        assert_eq!(outcome.derived_edges[0].target, SemanticNodeId(1));
-        assert_eq!(outcome.budget_status, BudgetStatus::WithinBudget);
-        assert!(outcome.steps > 0);
-    }
-
-    #[test]
-    fn ts_object_model_policy_derives_edges_from_resolvable_property_flow() {
-        let inputs = crate::analysis::solver::ts_object_model::inputs::TsObjectModelInputs {
-            allocations: vec![
-                crate::analysis::solver::ts_object_model::inputs::TsObjectAllocationInput {
-                    place_node: SemanticNodeId(30),
-                    object_node: SemanticNodeId(10),
-                    stable_key: "allocation:holder".to_string(),
-                },
-            ],
-            property_writes: vec![
-                crate::analysis::solver::ts_object_model::inputs::TsObjectPropertyWrite {
-                    base_object: SemanticNodeId(10),
-                    field: "static:target".to_string(),
-                    source_node: SemanticNodeId(2),
-                    stable_key: "write:target".to_string(),
-                },
-            ],
-            property_reads: vec![
-                crate::analysis::solver::ts_object_model::inputs::TsObjectPropertyRead {
-                    base_object: SemanticNodeId(10),
-                    base_is_this: false,
-                    field: "static:target".to_string(),
-                    destination_node: SemanticNodeId(20),
-                    callsite_node: Some(SemanticNodeId(9)),
-                    caller_node: Some(SemanticNodeId(1)),
-                    callsite_stable_key: Some("callsite:target".to_string()),
-                    constraint_stable_key: "read:target".to_string(),
-                    stable_key: "read:target".to_string(),
-                },
-            ],
-            token_inputs: TsTokenInputs {
-                function_tokens: BTreeMap::from([(
-                    SemanticNodeId(2),
-                    TsFunctionToken {
-                        function_node: SemanticNodeId(2),
-                        function_stable_key: "function:target".to_string(),
-                        source_stable_key: "node:function:target".to_string(),
-                    },
-                )]),
-                ..Default::default()
-            },
-            node_kinds: BTreeMap::from([
-                (
-                    SemanticNodeId(1),
-                    crate::analysis::semantic_graph::facts::NodeKind::Function(
-                        crate::core::FunctionId(1),
-                    ),
-                ),
-                (
-                    SemanticNodeId(2),
-                    crate::analysis::semantic_graph::facts::NodeKind::Function(
-                        crate::core::FunctionId(2),
-                    ),
-                ),
-                (
-                    SemanticNodeId(10),
-                    crate::analysis::semantic_graph::facts::NodeKind::AbstractObject(
-                        crate::analysis::ids::ObjectTokenId(10),
-                    ),
-                ),
-            ]),
-            ..Default::default()
-        }
-        .normalized();
-        let policy = TsObjectModelPolicy::new(inputs);
-
-        let outcome = policy.solve(&SolverBudget {
-            object_model_enabled: true,
-            ..SolverBudget::default()
-        });
-
-        assert_eq!(policy.id(), "ts_object_model");
-        assert_eq!(outcome.derived_edges.len(), 1);
-        assert_eq!(outcome.derived_edges[0].source, SemanticNodeId(1));
-        assert_eq!(outcome.derived_edges[0].target, SemanticNodeId(2));
-        assert_eq!(outcome.budget_status, BudgetStatus::WithinBudget);
     }
 
     #[test]
