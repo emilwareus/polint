@@ -131,14 +131,6 @@ pub(crate) enum CallAlgorithm {
     GoCha,
     GoRta,
     GoVta,
-    FunctionTokenFlow,
-    /// Value-flow edge emitted while walking an object method body speculatively
-    /// with `this` bound to the object (`app.use = function(){ this.lazyrouter() }`),
-    /// without that method being a confirmed invocation. Behaves like
-    /// `FunctionTokenFlow` for resolution, but the demand-driven reachability filter
-    /// must NOT seed its caller as a root — the method counts only when reached
-    /// through the real call graph (so dead framework methods stay pruned).
-    ThisMethodFlow,
     TypeHierarchy,
     PointsTo,
     SummaryAssisted,

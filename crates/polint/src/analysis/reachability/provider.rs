@@ -5,7 +5,6 @@ use crate::analysis::ids::ReachabilityRootId;
 use crate::analysis::reachability::cache_key::reachability_provider_parameter_digest;
 use crate::analysis::reachability::discover::discover_reachability_roots;
 use crate::analysis::reachability::store::{REACHABILITY_PROVIDER_ID, ReachabilityProviderOutput};
-use crate::analysis::reachability::traverse::mark_call_reachability;
 use crate::analysis_kernel::ProviderManifest;
 use crate::analysis_kernel::incremental::{
     CacheStats, Digest, DigestKind, InputComponent, InputSnapshot,
@@ -62,29 +61,11 @@ pub(crate) fn derive_reachability_with_cache_stats(
         .iter()
         .map(|root| root.stable_key.clone())
         .collect();
-    // Step: mark call reachability — BFS/DFS over resolved direct-call edges
-    // from the storable roots, keyed by call-site stable key (composition, never
-    // mutating analysis::calls; D-18).
-    //
-    // WR-04 forward-compat note: these marks are computed and stored in PRODUCTION
-    // here, but their only readers in v1.3 (`reachable_graph_lookup`,
-    // `filter_scored_edges_by_scoring_mode`, `scored_call_graph_edges_for_db`) are
-    // `#[cfg(test)]` — the eval harness that consumes them is internal/test-facing
-    // with no public CLI/SDK surface. The production marking is INTENTIONAL per D-18
-    // (the REACH-02 deliverable): a solver-derived edge set can replace the
-    // direct-call edges behind this SAME marking contract and read the marks in
-    // production. Do NOT remove the production marking to chase "dead computation" —
-    // the produced-but-unread state in v1.3 production is deliberate forward-compat.
-    let marks = mark_call_reachability(db, &real_roots);
-    // Step: normalize the STORABLE set (real roots + marks). The digest is
-    // computed over exactly this set so it certifies what actually lands in the db;
+    // Step: normalize the storable roots. The digest is computed over exactly this
+    // set so it certifies what actually lands in the db;
     // `ReachabilityRootFact.id` carries `#[serde(skip)]`, so the digest payload
     // never folds in run-local dense IDs (D-06/D-19).
-    let mut storable = ReachabilityProviderOutput {
-        roots: real_roots,
-        marks,
-    }
-    .normalized();
+    let mut storable = ReachabilityProviderOutput { roots: real_roots }.normalized();
     // Step: digest over the stored stable payloads, plus a dedicated stable-key
     // part for configured-unresolvable roots so the cache invalidates when they
     // change without serializing whole facts (with dense IDs) into the `root=`
@@ -187,12 +168,6 @@ fn reachability_output_digest(
             .iter()
             .map(|root| format!("root={}", stable_fact_payload(root))),
     );
-    parts.extend(
-        output
-            .marks
-            .iter()
-            .map(|mark| format!("mark={}", stable_fact_payload(mark))),
-    );
     // Configured-unresolvable roots are NOT stored and NOT serialized as `root=`
     // facts (that would fold dense IDs / a non-stored superset into the digest,
     // CR-01). Instead each contributes its stable key under a dedicated part so the
@@ -202,10 +177,7 @@ fn reachability_output_digest(
             .iter()
             .map(|key| format!("unresolved_configured={key}")),
     );
-    if output.roots.is_empty()
-        && output.marks.is_empty()
-        && unresolved_configured_stable_keys.is_empty()
-    {
+    if output.roots.is_empty() && unresolved_configured_stable_keys.is_empty() {
         parts.push("reachability_output=empty".to_string());
     }
 

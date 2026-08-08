@@ -316,8 +316,7 @@ fn data_flow_edge_kind(kind: DataFlowEdgeKind) -> EvidenceEdgeKind {
         | DataFlowEdgeKind::LocalWrite
         | DataFlowEdgeKind::ReturnValue
         | DataFlowEdgeKind::CallArgumentToReturn
-        | DataFlowEdgeKind::SourceIntroduction
-        | DataFlowEdgeKind::SinkReachability => EvidenceEdgeKind::DataValue,
+        | DataFlowEdgeKind::SourceIntroduction => EvidenceEdgeKind::DataValue,
         DataFlowEdgeKind::CallArgumentToParameter => EvidenceEdgeKind::ParameterIn,
         DataFlowEdgeKind::CallReturnToUse => EvidenceEdgeKind::ParameterOut,
         DataFlowEdgeKind::ReceiverToMethod => EvidenceEdgeKind::Call,

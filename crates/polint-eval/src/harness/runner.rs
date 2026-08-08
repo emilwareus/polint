@@ -133,51 +133,6 @@ pub(crate) fn build_report_for_cases<A: BenchmarkAdapter>(
     Ok(normalize_run(&run))
 }
 
-/// Applies the per-suite [`ScoringMode`](crate::eval::suite::ScoringMode) filter to
-/// the live call-graph edges in a kernel-run db, returning the call-site stable
-/// keys whose edges are SCORED under that mode (D-17).
-///
-/// The join mirrors the composition-by-stable-key discipline: each
-/// `db.call_targets()` edge is mapped to its call-site stable key (via
-/// `db.call_sites()` by `CallSiteId`), then [`filter_scored_edges_by_scoring_mode`]
-/// consults the reachable-graph marking by that key. For `oracle-rta` the result
-/// is the reachable-from-roots edges only; for `oracle-jelly` / `whole-repo` it is
-/// every edge. The db is never mutated — edges excluded from scoring remain present
-/// as facts marked unreachable (T-43-02-03).
-///
-/// WARNING (D-17): swapping `oracle-rta` and `oracle-jelly` silently tanks one
-/// suite's recall — see the doc on `filter_scored_edges_by_scoring_mode`.
-#[cfg(test)]
-fn scored_call_graph_edges_for_db(
-    db: &crate::core::AnalysisDb,
-    scoring_mode: crate::eval::suite::ScoringMode,
-) -> Vec<String> {
-    use std::collections::BTreeMap;
-
-    let site_key_by_id: BTreeMap<_, &str> = db
-        .call_sites()
-        .iter()
-        .map(|site| (site.id, site.stable_key.as_str()))
-        .collect();
-    // One entry per scorable call-graph edge, tagged with its source call-site key.
-    let edge_site_keys: Vec<&str> = db
-        .call_targets()
-        .iter()
-        .filter_map(|target| site_key_by_id.get(&target.site).copied())
-        .collect();
-
-    let reachable = crate::eval::metrics::reachable_graph_lookup(db);
-    crate::eval::metrics::filter_scored_edges_by_scoring_mode(
-        &edge_site_keys,
-        |key| key,
-        scoring_mode,
-        &reachable,
-    )
-    .into_iter()
-    .map(|index| edge_site_keys[index].to_string())
-    .collect()
-}
-
 /// Aggregates the categorized-failure counters across every case's observed
 /// items (Plan 42-03). Each case's observation layer emits per-category invariants
 /// from the live `AnalysisDb`; this sums them into the suite-wide section so the
@@ -341,17 +296,6 @@ fn run_polint_for_prepared_case<A: BenchmarkAdapter>(
         })?;
     let mut observed = adapter.normalize_kernel_output(manifest, case, prepared, &output)?;
     observed.extend(crate::eval::observed::adaptation_model_facts_from_kernel_output(&output));
-    // D-17: thread the suite's scoring_mode into the scoring path. The mode-aware
-    // filter consults the reachable-graph marking by call-site stable key. Under
-    // oracle-rta only reachable-from-roots edges count; oracle-jelly/whole-repo
-    // score the full set. Edges excluded from scoring stay present as facts (the
-    // db is not mutated) — we record the mode-aware scored edge count as an
-    // invariant so the scoring decision is captured in the report.
-    let scored = scored_call_graph_edges_for_db(&output.db, manifest.scoring_mode);
-    observed.push(scoring_mode_scored_edges_invariant(
-        manifest.scoring_mode,
-        scored.len(),
-    ));
     Ok(observed)
 }
 
@@ -370,23 +314,6 @@ fn apply_prepared_target_file_filter(
         .collect();
     loaded.config.workspace.exclude.clear();
     loaded.respect_gitignore = false;
-}
-
-#[cfg(test)]
-fn scoring_mode_scored_edges_invariant(
-    scoring_mode: crate::eval::suite::ScoringMode,
-    scored_edge_count: usize,
-) -> ObservedItem {
-    use crate::eval::model::ObservedInvariant;
-    ObservedItem::Invariant(ObservedInvariant {
-        name: "reachability.scoring_mode.scored_edge_count".to_string(),
-        value: scored_edge_count.to_string(),
-        mode: AssertionMode::Partial,
-        producer_id: Some("polint.reachability".to_string()),
-        provenance: Some(format!("scoring_mode={}", scoring_mode.as_wire_str())),
-        precision: None,
-        status: None,
-    })
 }
 
 #[cfg(test)]

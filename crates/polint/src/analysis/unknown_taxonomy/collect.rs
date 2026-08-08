@@ -819,7 +819,6 @@ fn data_flow_edge_kind_label(kind: DataFlowEdgeKind) -> &'static str {
         DataFlowEdgeKind::HavocFlow => "havoc_flow",
         DataFlowEdgeKind::BudgetTruncated => "budget_truncated",
         DataFlowEdgeKind::SourceIntroduction => "source_introduction",
-        DataFlowEdgeKind::SinkReachability => "sink_reachability",
         DataFlowEdgeKind::Sanitizer => "sanitizer",
         DataFlowEdgeKind::Barrier => "barrier",
         DataFlowEdgeKind::Model => "model",

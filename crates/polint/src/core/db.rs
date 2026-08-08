@@ -49,7 +49,7 @@ use crate::analysis::mir::op::{MirOperation, UnsupportedSemanticFact};
 use crate::analysis::places::PlaceFact;
 use crate::analysis::points_to::facts::{PointsToConstraintFact, PointsToSetFact};
 use crate::analysis::points_to::store::PointsToStore;
-use crate::analysis::reachability::facts::{CallReachabilityFact, ReachabilityRootFact};
+use crate::analysis::reachability::facts::ReachabilityRootFact;
 use crate::analysis::reachability::store::{ReachabilityProviderOutput, ReachabilityStore};
 use crate::analysis::refined_calls::facts::RefinedCallEdgeFact;
 use crate::analysis::refined_calls::provider::REFINED_CALLS_PROVIDER_ID;
@@ -1251,10 +1251,6 @@ impl AnalysisDb {
         dead_code,
         reason = "Reachability marks are populated by the marking traversal in  and read by debug/eval."
     )]
-    pub(crate) fn reachability_marks(&self) -> &[CallReachabilityFact] {
-        self.reachability_store_inner().marks()
-    }
-
     /// Stores the normalized semantic-graph nodes/edges/constraints (GRAPH-01),
     /// mirroring [`Self::replace_reachability_facts`]. Construction runs through
     /// [`SemanticGraphStore::from_output`], which normalizes (stable-key sort + dense

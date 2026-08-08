@@ -6,7 +6,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::analysis::reachability::facts::{
-    CallReachabilityFact, ReachabilityRootFact, RootKind, RootPrecision, RootProvenance, RootStatus,
+    ReachabilityRootFact, RootKind, RootPrecision, RootProvenance, RootStatus,
 };
 use crate::core::{AnalysisDb, FileId};
 
@@ -19,7 +19,6 @@ pub(crate) fn metadata_debug_json_for_test(db: &AnalysisDb) -> Value {
     let report = ReachabilityDebugReport {
         counts: reachability_counts(db),
         roots: root_detail_rows(db),
-        marks: mark_detail_rows(db),
     };
     serde_json::to_value(report).expect("reachability debug report should serialize")
 }
@@ -28,13 +27,11 @@ pub(crate) fn metadata_debug_json_for_test(db: &AnalysisDb) -> Value {
 struct ReachabilityDebugReport {
     counts: ReachabilityDebugCounts,
     roots: Vec<RootDetailRow>,
-    marks: Vec<MarkDetailRow>,
 }
 
 #[derive(Default, Serialize)]
 struct ReachabilityDebugCounts {
     total_roots: usize,
-    total_marks: usize,
     by_kind: BTreeMap<String, usize>,
     by_status: BTreeMap<String, usize>,
     by_precision: BTreeMap<String, usize>,
@@ -51,18 +48,9 @@ struct RootDetailRow {
     stable_key: String,
 }
 
-#[derive(Serialize)]
-struct MarkDetailRow {
-    call_site_stable_key: String,
-    in_reachable_graph: bool,
-    reason: String,
-    stable_key: String,
-}
-
 fn reachability_counts(db: &AnalysisDb) -> ReachabilityDebugCounts {
     let mut counts = ReachabilityDebugCounts {
         total_roots: db.reachability_roots().len(),
-        total_marks: db.reachability_marks().len(),
         ..Default::default()
     };
     for root in db.reachability_roots() {
@@ -85,21 +73,6 @@ fn root_detail_rows(db: &AnalysisDb) -> Vec<RootDetailRow> {
             precision: precision_label(root.precision).to_string(),
             provenance: provenance_label(root.provenance).to_string(),
             stable_key: root.stable_key.clone(),
-        })
-        .collect();
-    rows.sort_by(|a, b| a.stable_key.cmp(&b.stable_key));
-    rows
-}
-
-fn mark_detail_rows(db: &AnalysisDb) -> Vec<MarkDetailRow> {
-    let mut rows: Vec<MarkDetailRow> = db
-        .reachability_marks()
-        .iter()
-        .map(|mark: &CallReachabilityFact| MarkDetailRow {
-            call_site_stable_key: mark.call_site_stable_key.clone(),
-            in_reachable_graph: mark.in_reachable_graph,
-            reason: mark.reason.clone(),
-            stable_key: mark.stable_key.clone(),
         })
         .collect();
     rows.sort_by(|a, b| a.stable_key.cmp(&b.stable_key));
@@ -196,11 +169,8 @@ mod tests {
                 &span(file, 1, 2),
             ),
         };
-        db.replace_reachability_facts(ReachabilityProviderOutput {
-            roots: vec![root],
-            marks: Vec::new(),
-        })
-        .expect("store root");
+        db.replace_reachability_facts(ReachabilityProviderOutput { roots: vec![root] })
+            .expect("store root");
         db
     }
 
@@ -209,7 +179,6 @@ mod tests {
         let db = AnalysisDb::new();
         let report = metadata_debug_json_for_test(&db);
         assert_eq!(report["counts"]["total_roots"], 0);
-        assert_eq!(report["counts"]["total_marks"], 0);
         assert!(report["roots"].as_array().unwrap().is_empty());
     }
 

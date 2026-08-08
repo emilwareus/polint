@@ -121,10 +121,7 @@ fn validate_refined_call_edges(
         }
         if matches!(
             edge.algorithm,
-            CallAlgorithm::FunctionTokenFlow
-                | CallAlgorithm::PointsTo
-                | CallAlgorithm::FrameworkModel
-                | CallAlgorithm::RepoModel
+            CallAlgorithm::PointsTo | CallAlgorithm::FrameworkModel | CallAlgorithm::RepoModel
         ) && edge.precision == CallPrecision::Exact
         {
             diagnostics.push(invalid_refined_call_diagnostic(

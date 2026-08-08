@@ -1082,7 +1082,6 @@ fn data_flow_edge_step_label(kind: DataFlowEdgeKind) -> &'static str {
         DataFlowEdgeKind::UnknownFlow | DataFlowEdgeKind::HavocFlow => "unknown",
         DataFlowEdgeKind::BudgetTruncated => "budget",
         DataFlowEdgeKind::SourceIntroduction => "source",
-        DataFlowEdgeKind::SinkReachability => "sink",
         DataFlowEdgeKind::Sanitizer => "sanitizer",
         DataFlowEdgeKind::Barrier => "barrier",
         DataFlowEdgeKind::Model => "model",
@@ -2643,7 +2642,6 @@ mod tests {
                     &root_span,
                 ),
             }],
-            marks: Vec::new(),
         })
         .expect("valid reachability facts");
         db
@@ -2814,7 +2812,6 @@ mod tests {
                     &root_span,
                 ),
             }],
-            marks: Vec::new(),
         })
         .expect("valid reachability facts");
         db
@@ -2873,7 +2870,6 @@ mod tests {
                     &root_span,
                 ),
             }],
-            marks: Vec::new(),
         })
         .expect("valid reachability facts");
         db

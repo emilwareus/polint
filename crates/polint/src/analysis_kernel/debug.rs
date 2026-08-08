@@ -2418,8 +2418,6 @@ fn call_algorithm_label(algorithm: CallAlgorithm) -> &'static str {
         CallAlgorithm::GoCha => "GoCha",
         CallAlgorithm::GoRta => "GoRta",
         CallAlgorithm::GoVta => "GoVta",
-        CallAlgorithm::FunctionTokenFlow => "FunctionTokenFlow",
-        CallAlgorithm::ThisMethodFlow => "ThisMethodFlow",
         CallAlgorithm::TypeHierarchy => "TypeHierarchy",
         CallAlgorithm::PointsTo => "PointsTo",
         CallAlgorithm::SummaryAssisted => "SummaryAssisted",

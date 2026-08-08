@@ -172,7 +172,6 @@ fn parse_symbol_ref(value: &str) -> Option<SymbolId> {
 fn extension_algorithm(value: &str) -> CallAlgorithm {
     match value {
         "framework_model" => CallAlgorithm::FrameworkModel,
-        "function_token" => CallAlgorithm::FunctionTokenFlow,
         "points_to" => CallAlgorithm::PointsTo,
         "repo_model" => CallAlgorithm::RepoModel,
         _ => CallAlgorithm::RepoModel,

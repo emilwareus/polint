@@ -84,7 +84,7 @@ mod tests {
             synthetic_target: None,
             language: Language::TypeScript,
             edge_kind: CallEdgeKind::FunctionValue,
-            algorithm: CallAlgorithm::FunctionTokenFlow,
+            algorithm: CallAlgorithm::PointsTo,
             tier: RefinedCallTier::TypeValueFunctionToken,
             status: CallTargetStatus::Resolved,
             reason: None,

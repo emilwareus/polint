@@ -114,7 +114,6 @@ pub(crate) enum DataFlowEdgeKind {
     HavocFlow,
     BudgetTruncated,
     SourceIntroduction,
-    SinkReachability,
     Sanitizer,
     Barrier,
     Model,

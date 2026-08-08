@@ -443,9 +443,7 @@ fn go_rta_graph_kind(edge_kind: &str, algorithm: &str) -> Option<&'static str> {
         ("Method" | "MethodDirect", "GoCha" | "GoRta" | "GoVta" | "TypeHierarchy") => {
             Some("dynamic_method_call")
         }
-        ("FunctionValue", _) | (_, "FunctionTokenFlow" | "PointsTo") => {
-            Some("dynamic_function_call")
-        }
+        ("FunctionValue", _) | (_, "PointsTo") => Some("dynamic_function_call"),
         ("Method" | "MethodDirect", _) => Some("static_method_call"),
         ("Direct" | "Constructor" | "StaticMember" | "Synthetic" | "Spawn" | "Deferred", _) => {
             Some("static_function_call")

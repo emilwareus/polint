@@ -197,8 +197,6 @@ fn algorithm_label(algorithm: CallAlgorithm) -> &'static str {
         CallAlgorithm::GoCha => "go_cha",
         CallAlgorithm::GoRta => "go_rta",
         CallAlgorithm::GoVta => "go_vta",
-        CallAlgorithm::FunctionTokenFlow => "function_token_flow",
-        CallAlgorithm::ThisMethodFlow => "this_method_flow",
         CallAlgorithm::TypeHierarchy => "type_hierarchy",
         CallAlgorithm::PointsTo => "points_to",
         CallAlgorithm::SummaryAssisted => "summary_assisted",

@@ -259,7 +259,6 @@ mod tests {
         let (mut db, file, function) = db_with_function();
         db.replace_reachability_facts(ReachabilityProviderOutput {
             roots: vec![root(function, file, span(file, 1, 2))],
-            marks: Vec::new(),
         })
         .expect("store");
         let mut diagnostics = Vec::new();
@@ -279,7 +278,6 @@ mod tests {
         // pointing target at a function we never registered.
         let result = db.replace_reachability_facts(ReachabilityProviderOutput {
             roots: vec![dangling],
-            marks: Vec::new(),
         });
         // from_output rejects the dangling target before storage.
         assert!(result.is_err());
@@ -296,11 +294,8 @@ mod tests {
         let (mut db, file, function) = db_with_function();
         // end_byte < start_byte
         let bad = root(function, file, span(file, 9, 1));
-        db.replace_reachability_facts(ReachabilityProviderOutput {
-            roots: vec![bad],
-            marks: Vec::new(),
-        })
-        .expect("store accepts referential-valid root with bad span");
+        db.replace_reachability_facts(ReachabilityProviderOutput { roots: vec![bad] })
+            .expect("store accepts referential-valid root with bad span");
         let mut diagnostics = Vec::new();
         validate_reachability(&db, &mut diagnostics);
         assert!(
