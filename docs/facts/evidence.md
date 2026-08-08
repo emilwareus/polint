@@ -5,9 +5,11 @@ support bounded diagnostic JSON/SARIF output with path status, precision,
 provenance, unknowns, omitted regions, summary expansion handles, replay keys,
 and hidden-node counts.
 
-Evidence is not a public SDK fact view in this phase. Repo-local rules should
-continue to report scalar diagnostic evidence with `Diagnostic::with_evidence`
-and consume only the supported fact views exported by `polint::sdk::prelude`.
+Evidence is not a public SDK fact view. Repo-local rules should continue to
+report scalar diagnostic evidence with `Diagnostic::with_evidence` and consume
+only the supported fact views exported by `polint::sdk::prelude`. The public
+`StructuredEvidenceV1` type is the validated JSON envelope that appears on
+diagnostics as `evidence_v1` when the engine attaches provenance.
 
 The renderer is conservative:
 
@@ -18,6 +20,7 @@ The renderer is conservative:
   as such and must not be treated as exact coverage.
 - Debug and eval rows use relative/stable keys and must not include raw source
   bodies, absolute workspace paths, parser object ids, or timestamps.
+- Human text output does not render `evidence_v1` by default.
 
 Future public evidence fact views should be added only through the SDK contract
 with documented limits and heuristic behavior.
@@ -46,6 +49,13 @@ Each query family also emits flat query-specific evidence. For example,
 reachable-call policies include `root`, `target`, and `path`; control-flow
 policies include `required_guard` or `required_cleanup`; data-flow policies
 include `source`, `sink`, `path_status`, and `barrier_status`.
+
+For `ReachQuery`, `GuardQuery`, `LifecycleQuery`, and `FlowQuery` findings that
+carry engine path hops, the diagnostic also includes a bounded `evidence_v1`
+envelope (paths, unknowns, omitted regions, limits, and a `replay_key`). Hand-
+authored rule diagnostics do not receive structured evidence. Rule-host JSON
+that includes `evidence_v1` is validated at the process boundary; invalid
+envelopes are dropped and reported as `polint/internal` diagnostics.
 
 Provider facts are cached by lifecycle/config/model inputs. Policy query
 results are evaluated inside rule execution, so runtime query parameters are

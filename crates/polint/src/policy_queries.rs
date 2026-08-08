@@ -14,9 +14,9 @@ use crate::analysis::refined_calls::facts::{RefinedCallConfidence, RefinedCallEd
 use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId};
 use crate::sdk::policy::{
     BarrierPattern, BarrierPatternKind, EventPattern, EventPatternKind, FlowQuery, GuardPattern,
-    GuardPatternKind, GuardQuery, LifecycleQuery, PolicyConfidence, PolicyOperation,
-    PolicyPrecision, PolicyStatus, PolicyViolation, ReachQuery, SinkPattern, SinkPatternKind,
-    SourcePattern, SourcePatternKind,
+    GuardPatternKind, GuardQuery, LifecycleQuery, PolicyConfidence, PolicyEvidenceEdgeKind,
+    PolicyOperation, PolicyPrecision, PolicyStatus, PolicyViolation, ReachQuery, SinkPattern,
+    SinkPatternKind, SourcePattern, SourcePatternKind,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -275,19 +275,22 @@ fn forbidden_reachable_calls(
                         truncated = true;
                         break 'roots;
                     }
-                    results.push(violation_for_edge(
-                        db,
-                        edge,
-                        &site_by_id,
-                        PolicyOperation::CallsForbiddenReachable,
-                        query_digest,
-                        vec![
-                            ("root", root_label.clone()),
-                            ("path", path.join(" -> ")),
-                            ("target", target_label),
-                            ("depth", edge_depth.to_string()),
-                        ],
-                    ));
+                    results.push(
+                        violation_for_edge(
+                            db,
+                            edge,
+                            &site_by_id,
+                            PolicyOperation::CallsForbiddenReachable,
+                            query_digest,
+                            vec![
+                                ("root", root_label.clone()),
+                                ("path", path.join(" -> ")),
+                                ("target", target_label),
+                                ("depth", edge_depth.to_string()),
+                            ],
+                        )
+                        .with_path_evidence(path.clone(), PolicyEvidenceEdgeKind::Call),
+                    );
                 }
 
                 if traversable_status(edge.status)
@@ -344,18 +347,24 @@ fn missing_guard_calls(
                 truncated = true;
                 break 'functions;
             }
-            results.push(control_violation(
-                db,
-                event,
-                PolicyOperation::ControlFlowMissingGuard,
-                query_digest,
-                vec![
-                    ("policy", "missing_guard".to_string()),
-                    ("required_guard", query.guard.values().join(",")),
-                    ("uncovered_path", format!("entry -> {}", event.target_label)),
-                    ("requested_max_depth", query.max_depth.to_string()),
-                ],
-            ));
+            results.push(
+                control_violation(
+                    db,
+                    event,
+                    PolicyOperation::ControlFlowMissingGuard,
+                    query_digest,
+                    vec![
+                        ("policy", "missing_guard".to_string()),
+                        ("required_guard", query.guard.values().join(",")),
+                        ("uncovered_path", format!("entry -> {}", event.target_label)),
+                        ("requested_max_depth", query.max_depth.to_string()),
+                    ],
+                )
+                .with_path_evidence(
+                    ["entry".to_string(), event.target_label.clone()],
+                    PolicyEvidenceEdgeKind::Control,
+                ),
+            );
         }
     }
 
@@ -399,22 +408,28 @@ fn missing_cleanup_calls(
                 truncated = true;
                 break 'functions;
             }
-            results.push(control_violation(
-                db,
-                event,
-                PolicyOperation::ControlFlowMissingCleanup,
-                query_digest,
-                vec![
-                    ("policy", "missing_cleanup".to_string()),
-                    ("required_cleanup", query.cleanup.values().join(",")),
-                    ("uncovered_path", format!("{} -> exit", event.target_label)),
-                    (
-                        "require_error_cleanup",
-                        query.require_error_cleanup.to_string(),
-                    ),
-                    ("requested_max_depth", query.max_depth.to_string()),
-                ],
-            ));
+            results.push(
+                control_violation(
+                    db,
+                    event,
+                    PolicyOperation::ControlFlowMissingCleanup,
+                    query_digest,
+                    vec![
+                        ("policy", "missing_cleanup".to_string()),
+                        ("required_cleanup", query.cleanup.values().join(",")),
+                        ("uncovered_path", format!("{} -> exit", event.target_label)),
+                        (
+                            "require_error_cleanup",
+                            query.require_error_cleanup.to_string(),
+                        ),
+                        ("requested_max_depth", query.max_depth.to_string()),
+                    ],
+                )
+                .with_path_evidence(
+                    [event.target_label.clone(), "exit".to_string()],
+                    PolicyEvidenceEdgeKind::Control,
+                ),
+            );
         }
     }
 
@@ -800,6 +815,12 @@ fn flow_violation(
         ));
     }
 
+    let mut hops = vec![source.label.clone()];
+    for edge in path_edges(store, path) {
+        hops.push(data_flow_edge_step_label(edge.kind).to_string());
+    }
+    hops.push(sink.target_label.clone());
+
     PolicyViolation::new(
         PolicyOperation::DataFlowForbidden,
         query_digest,
@@ -809,6 +830,7 @@ fn flow_violation(
         precision,
         evidence,
     )
+    .with_path_evidence(hops, PolicyEvidenceEdgeKind::DataTaint)
 }
 
 fn found_data_flow_status(
@@ -1936,6 +1958,50 @@ mod tests {
         assert_eq!(violations.len(), 1);
         assert_eq!(violations[0].status(), PolicyStatus::Exact);
         assert_eq!(violations[0].precision(), PolicyPrecision::SetupAware);
+    }
+
+    #[test]
+    fn policy_query_findings_carry_replayable_evidence() {
+        let db = policy_query_db(false);
+        let mut query = ReachQuery::new(EventPattern::call("dangerous"));
+        query.roots = vec![EventPattern::call("main")];
+
+        let violations = forbidden_reachable(&db, query);
+        assert!(!violations.is_empty());
+
+        let with_path = violations
+            .iter()
+            .map(|violation| violation.diagnostic("local/test", "reachable"))
+            .filter(|diagnostic| {
+                diagnostic
+                    .evidence_v1
+                    .as_ref()
+                    .and_then(|evidence| evidence.as_value().get("paths"))
+                    .and_then(|paths| paths.as_array())
+                    .is_some_and(|paths| !paths.is_empty())
+            })
+            .collect::<Vec<_>>();
+        let coverage = (with_path.len() as f64) / (violations.len() as f64);
+        assert!(
+            coverage > 0.90,
+            "expected >90% policy-query findings with evidence paths, got {:.1}% ({}/{})",
+            coverage * 100.0,
+            with_path.len(),
+            violations.len()
+        );
+
+        let evidence = with_path[0]
+            .evidence_v1
+            .as_ref()
+            .expect("structured evidence")
+            .as_value();
+        assert!(
+            evidence["bundle"]["replay_key"]
+                .as_str()
+                .is_some_and(|key| !key.is_empty())
+        );
+        assert!(evidence["unknowns"].as_array().is_some());
+        assert!(evidence["limits"].as_object().is_some());
     }
 
     #[test]

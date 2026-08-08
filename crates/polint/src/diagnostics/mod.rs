@@ -140,18 +140,25 @@ pub struct Evidence {
     pub value: String,
 }
 
+/// Validated `evidence_v1` envelope for JSON/SARIF provenance.
+///
+/// Construct only through [`StructuredEvidenceV1::try_from_value`] so the schema
+/// validator cannot be bypassed. The raw JSON value stays private.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct StructuredEvidenceV1 {
+#[non_exhaustive]
+pub struct StructuredEvidenceV1 {
     value: serde_json::Value,
 }
 
 impl StructuredEvidenceV1 {
-    pub(crate) fn try_from_value(value: serde_json::Value) -> Result<Self, String> {
+    /// Validates `value` against the `evidence_v1` schema and wraps it.
+    pub fn try_from_value(value: serde_json::Value) -> Result<Self, String> {
         validate_structured_evidence_v1(&value)?;
         Ok(Self { value })
     }
 
-    pub(crate) fn as_value(&self) -> &serde_json::Value {
+    /// Borrows the validated JSON value.
+    pub fn as_value(&self) -> &serde_json::Value {
         &self.value
     }
 }
@@ -775,8 +782,9 @@ pub struct Diagnostic {
     pub labels: Vec<Label>,
     pub help: Option<String>,
     pub evidence: Vec<Evidence>,
+    /// Bounded structured provenance envelope when produced by policy queries.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) evidence_v1: Option<StructuredEvidenceV1>,
+    pub evidence_v1: Option<StructuredEvidenceV1>,
     #[serde(skip)]
     pub(crate) evidence_bundle: Option<EvidenceBundleRef>,
     pub suggestions: Vec<Suggestion>,
@@ -931,10 +939,6 @@ impl Diagnostic {
         self
     }
 
-    #[allow(
-        dead_code,
-        reason = "Structured evidence attachment is wired for current renderers and exercised through diagnostics tests before production call sites attach bundles."
-    )]
     pub(crate) fn with_structured_evidence_v1(mut self, value: StructuredEvidenceV1) -> Self {
         self.evidence_v1 = Some(value);
         self
@@ -1163,13 +1167,6 @@ struct PolintToolWire<'a> {
 }
 
 #[derive(Debug, Deserialize)]
-struct HostJsonReport {
-    diagnostics: Vec<Diagnostic>,
-    #[serde(default)]
-    summary: Option<HostJsonSummary>,
-}
-
-#[derive(Debug, Deserialize)]
 struct HostJsonSummary {
     #[serde(default)]
     rules: Vec<RuleExecutionRow>,
@@ -1182,20 +1179,97 @@ pub fn diagnostics_from_json_report(s: &str) -> Result<Vec<Diagnostic>, serde_js
 }
 
 /// Parse diagnostics plus rule-execution telemetry from a rule-host JSON report.
+///
+/// `evidence_v1` is a trust boundary: validate and keep, or drop and emit an
+/// internal diagnostic. `evidence_bundle` is always cleared — it is an in-process
+/// store reference that cannot cross a process boundary.
 pub(crate) fn diagnostics_and_rule_execution_from_public_json_report(
     s: &str,
 ) -> Result<(Vec<Diagnostic>, Vec<RuleExecutionRow>), serde_json::Error> {
-    let report: HostJsonReport = serde_json::from_str(s)?;
-    let mut diagnostics = report.diagnostics;
-    for diagnostic in &mut diagnostics {
-        diagnostic.evidence_v1 = None;
+    let report: PublicJsonReportWire = serde_json::from_str(s)?;
+    let mut diagnostics = Vec::with_capacity(report.diagnostics.len());
+    let mut internal = Vec::new();
+    for mut wire in report.diagnostics {
+        let raw_evidence = wire.evidence_v1.take();
+        let mut diagnostic = wire.into_diagnostic();
         diagnostic.evidence_bundle = None;
+        diagnostic.evidence_v1 = None;
+        if let Some(value) = raw_evidence {
+            match StructuredEvidenceV1::try_from_value(value) {
+                Ok(evidence) => diagnostic.evidence_v1 = Some(evidence),
+                Err(error) => {
+                    internal.push(Diagnostic::warning(
+                        "polint/internal",
+                        diagnostic.file.clone(),
+                        diagnostic.range,
+                        format!("dropped invalid evidence_v1 from rule host: {error}"),
+                    ));
+                }
+            }
+        }
+        diagnostics.push(diagnostic);
     }
+    diagnostics.extend(internal);
     let rules = report
         .summary
         .map(|summary| summary.rules)
         .unwrap_or_default();
     Ok((diagnostics, rules))
+}
+
+#[derive(Deserialize)]
+struct PublicJsonReportWire {
+    diagnostics: Vec<PublicDiagnosticWire>,
+    #[serde(default)]
+    summary: Option<HostJsonSummary>,
+}
+
+#[derive(Deserialize)]
+struct PublicDiagnosticWire {
+    rule_id: String,
+    severity: Severity,
+    file: String,
+    range: TextRange,
+    message: String,
+    #[serde(default)]
+    labels: Vec<Label>,
+    #[serde(default)]
+    help: Option<String>,
+    #[serde(default)]
+    evidence: Vec<Evidence>,
+    #[serde(default)]
+    evidence_v1: Option<serde_json::Value>,
+    #[serde(default)]
+    suggestions: Vec<Suggestion>,
+    #[serde(default)]
+    fix: Option<Fix>,
+    #[serde(default)]
+    stable_fingerprint: String,
+}
+
+impl PublicDiagnosticWire {
+    fn into_diagnostic(self) -> Diagnostic {
+        let stable_fingerprint = if self.stable_fingerprint.is_empty() {
+            diagnostic_fingerprint(&self.rule_id, &self.file, self.range, &self.message)
+        } else {
+            self.stable_fingerprint
+        };
+        Diagnostic {
+            rule_id: self.rule_id,
+            severity: self.severity,
+            file: self.file,
+            range: self.range,
+            message: self.message,
+            labels: self.labels,
+            help: self.help,
+            evidence: self.evidence,
+            evidence_v1: None,
+            evidence_bundle: None,
+            suggestions: self.suggestions,
+            fix: self.fix,
+            stable_fingerprint,
+        }
+    }
 }
 
 pub(crate) fn build_ai_friendly_report(
@@ -2577,7 +2651,7 @@ mod tests {
     }
 
     #[test]
-    fn public_json_report_strips_structured_evidence_from_local_rule_output() {
+    fn public_json_report_keeps_validated_structured_evidence_from_local_rule_output() {
         let diagnostic = Diagnostic::warning(
             "local/rule",
             "src/lib.rs",
@@ -2592,8 +2666,78 @@ mod tests {
 
         assert_eq!(diagnostics.len(), 1);
         assert!(
-            diagnostics[0].evidence_v1.is_none(),
-            "external rule-host JSON must not inject internal structured evidence"
+            diagnostics[0].evidence_v1.is_some(),
+            "validated evidence_v1 must survive the rule-host trust boundary"
+        );
+    }
+
+    #[test]
+    fn malformed_evidence_from_a_rule_host_is_dropped_not_propagated() {
+        let json = serde_json::json!({
+            "version": 1,
+            "schema": POLINT_REPORT_JSON_SCHEMA_V1_URL,
+            "tool": { "name": "polint", "version": "0.0.0" },
+            "diagnostics": [{
+                "rule_id": "local/rule",
+                "severity": "warn",
+                "file": "src/lib.rs",
+                "range": { "start_line": 1, "start_col": 1, "end_line": 1, "end_col": 1 },
+                "message": "message",
+                "labels": [],
+                "help": null,
+                "evidence": [],
+                "evidence_v1": {
+                    "version": 1,
+                    "bundle": {
+                        "id": 0,
+                        "stable_key": "bundle:bad",
+                        "diagnostic_stable_key": "diag:bad",
+                        "status": "not-a-real-status",
+                        "precision": "Exact",
+                        "provenance": "Query",
+                        "validation": "RendererValidated",
+                        "confidence": "High",
+                        "replay_key": null
+                    },
+                    "paths": [],
+                    "unknowns": [],
+                    "omitted_regions": [],
+                    "limits": {
+                        "max_paths": 5,
+                        "max_edges_per_path": 96,
+                        "max_unknowns": 32,
+                        "max_omitted_regions": 32,
+                        "total_paths": 0,
+                        "rendered_paths": 0,
+                        "paths_truncated": false,
+                        "total_unknowns": 0,
+                        "rendered_unknowns": 0,
+                        "unknowns_truncated": false,
+                        "total_omitted_regions": 0,
+                        "rendered_omitted_regions": 0,
+                        "omitted_regions_truncated": false
+                    }
+                },
+                "suggestions": [],
+                "fix": null,
+                "stable_fingerprint": "fp"
+            }]
+        })
+        .to_string();
+
+        let (diagnostics, _rules) = diagnostics_and_rule_execution_from_public_json_report(&json)
+            .expect("public diagnostics");
+
+        assert_eq!(diagnostics.len(), 2);
+        assert!(diagnostics[0].evidence_v1.is_none());
+        assert_eq!(diagnostics[0].rule_id, "local/rule");
+        assert_eq!(diagnostics[1].rule_id, "polint/internal");
+        assert!(
+            diagnostics[1]
+                .message
+                .contains("dropped invalid evidence_v1"),
+            "{}",
+            diagnostics[1].message
         );
     }
 

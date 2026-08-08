@@ -41,7 +41,8 @@ pub mod prelude {
     pub use crate::diagnostics::{
         ColorChoice, Diagnostic, Evidence, Fix, JsonReportMeta, Label, OutputFormat,
         POLINT_REPORT_JSON_SCHEMA_V1_URL, PolintReport, PolintToolInfo, RenderOpts, Severity,
-        Suggestion, TextRange as DiagnosticRange, diagnostics_from_json_report,
+        StructuredEvidenceV1, Suggestion, TextRange as DiagnosticRange,
+        diagnostics_from_json_report,
     };
     pub use crate::rule_error::{RuleError, RuleResult};
     pub use crate::sdk::collect_go_tests;

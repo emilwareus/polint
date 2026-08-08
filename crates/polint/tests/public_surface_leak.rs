@@ -108,6 +108,7 @@ const ALLOWED_PRELUDE: &[&str] = &[
     "PolintToolInfo",
     "RenderOpts",
     "Severity",
+    "StructuredEvidenceV1",
     "Suggestion",
     "DiagnosticRange", // re-export alias: `TextRange as DiagnosticRange`
     "diagnostics_from_json_report",
@@ -620,12 +621,11 @@ fn allowlist_has_no_duplicates_and_expected_count() {
         ALLOWED_PRELUDE.len(),
         "ALLOWED_PRELUDE contains duplicate entries"
     );
-    // Locked count derived from sdk/mod.rs after the PolicyConfidence
-    // promotion plus the sanctioned review-rules API addition (ChangedFiles +
-    // ChangeStatus); see docs/API-VISIBILITY-PLAN.md.
+    // Locked count derived from sdk/mod.rs after StructuredEvidenceV1 promotion;
+    // see docs/API-VISIBILITY-PLAN.md.
     assert_eq!(
         ALLOWED_PRELUDE.len(),
-        115,
+        116,
         "ALLOWED_PRELUDE count changed — update this assertion ONLY alongside a sanctioned \
          API promotion record"
     );

@@ -303,6 +303,9 @@ mod allowlist_witness {
     fn _assert_severity() -> ::core::marker::PhantomData<Severity> {
         ::core::marker::PhantomData
     }
+    fn _assert_structuredevidencev1() -> ::core::marker::PhantomData<StructuredEvidenceV1> {
+        ::core::marker::PhantomData
+    }
     fn _assert_sourcefile() -> ::core::marker::PhantomData<SourceFile> {
         ::core::marker::PhantomData
     }
