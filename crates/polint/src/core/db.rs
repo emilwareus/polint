@@ -23,7 +23,8 @@ use crate::analysis::data_flow::store::{DataFlowOutput, DataFlowStore};
 use crate::analysis::domains::facts::{DomainEventFact, DomainObservationFact};
 use crate::analysis::domains::store::{DomainOutput, DomainStore};
 use crate::analysis::entrypoints::facts::{
-    EntrypointFact, FrameworkDispatchEdgeFact, TrustBoundaryFact, UnresolvedFrameworkFact,
+    EntrypointFact, EntrypointStatus, FrameworkDispatchEdgeFact, TrustBoundaryFact,
+    UnresolvedFrameworkFact,
 };
 use crate::analysis::entrypoints::store::{EntrypointOutput, EntrypointStore};
 use crate::analysis::error::AnalysisError;
@@ -56,10 +57,13 @@ use crate::analysis::store::SemanticStore;
 use crate::analysis::summaries::facts::{SummaryEventFact, SummaryFact};
 use crate::analysis::summaries::store::{SummaryOutput, SummaryStore};
 use crate::analysis::types::facts::{NarrowedTypeFact, TypeFact};
+use crate::analysis::types::provider::TYPE_VALUE_ALIAS_PROVIDER_ID;
 use crate::analysis::types::store::{TypeStore, TypeValueAliasOutput};
 use crate::analysis::values::facts::{AllocationTokenFact, ValueFact};
 use crate::analysis::values::store::ValueStore;
-use crate::analysis_kernel::{FactFamily, FactMetaStore};
+use crate::analysis_kernel::{
+    FactConfidence, FactFamily, FactMeta, FactMetaStore, FactPrecision, ValidationStatus,
+};
 use crate::diagnostics::fingerprint;
 use crate::go::semantic::facts::{
     GoSemanticAddressTakenFact, GoSemanticCallsiteFact, GoSemanticDynamicDispatchFact,
@@ -96,10 +100,12 @@ use super::ids::{
     BranchId, FileId, FunctionId, ImportId, ModuleEdgeId, ModuleNodeId, PackageId,
     ResolvedImportId, SymbolId,
 };
+use super::labels::*;
 use super::lang::Language;
 use super::metadata::*;
 use super::review::ReviewChangeset;
 use super::span::Span;
+use super::{ENTRYPOINTS_PROVIDER_ID, POLINT_DIRECT_SUMMARIES_PROVIDER_ID};
 
 #[derive(Debug, Clone)]
 pub struct AnalysisDb {
@@ -1757,6 +1763,701 @@ impl AnalysisDb {
             FactFamily::EvidenceUnknown,
             FactFamily::EvidenceOmittedRegion,
             FactFamily::EvidenceReplayKey,
+        ]);
+    }
+    fn refresh_abstract_domain_metadata(&mut self) {
+        self.fact_meta.remove_family(FactFamily::DomainObservation);
+        self.fact_meta.remove_family(FactFamily::DomainEvent);
+
+        let Some(store) = self.abstract_domain_store.take() else {
+            return;
+        };
+
+        for fact in store.observations() {
+            let run_id = fact.id.0;
+            let metadata = self.domain_observation_metadata(fact);
+            self.record_fact_meta(FactFamily::DomainObservation, run_id, metadata);
+        }
+
+        for fact in store.events() {
+            let run_id = fact.id.0;
+            let metadata = self.domain_event_metadata(fact);
+            self.record_fact_meta(FactFamily::DomainEvent, run_id, metadata);
+        }
+
+        self.abstract_domain_store = Some(store);
+        self.finish_fact_meta_insertions(&[FactFamily::DomainObservation, FactFamily::DomainEvent]);
+    }
+
+    fn refresh_summary_metadata(&mut self) {
+        self.fact_meta.remove_family(FactFamily::SummaryControl);
+        self.fact_meta.remove_family(FactFamily::SummaryCall);
+        self.fact_meta.remove_family(FactFamily::SummaryMemory);
+        self.fact_meta.remove_family(FactFamily::SummaryTito);
+        self.fact_meta.remove_family(FactFamily::SummaryEvent);
+
+        if let Some(store) = self.summary_store.take() {
+            for fact in store.all_summaries() {
+                let family = summary_domain_to_fact_family(fact.domain);
+                let run_id = fact.id.0;
+                let metadata = self.summary_fact_metadata(fact);
+                self.record_fact_meta(family, run_id, metadata);
+            }
+
+            for fact in store.all_events() {
+                let run_id = fact.id.0;
+                let metadata = self.summary_event_metadata(fact);
+                self.record_fact_meta(FactFamily::SummaryEvent, run_id, metadata);
+            }
+
+            self.summary_store = Some(store);
+            self.finish_fact_meta_insertions(&[
+                FactFamily::SummaryControl,
+                FactFamily::SummaryCall,
+                FactFamily::SummaryMemory,
+                FactFamily::SummaryTito,
+                FactFamily::SummaryEvent,
+            ]);
+            return;
+        }
+
+        for index in 0..self.summary_facts.len() {
+            let (family, run_id, metadata) = {
+                let fact = &self.summary_facts[index];
+                (
+                    summary_domain_to_fact_family(fact.domain),
+                    fact.id.0,
+                    self.summary_fact_metadata(fact),
+                )
+            };
+            self.record_fact_meta(family, run_id, metadata);
+        }
+
+        for index in 0..self.summary_events.len() {
+            let (run_id, metadata) = {
+                let fact = &self.summary_events[index];
+                (fact.id.0, self.summary_event_metadata(fact))
+            };
+            self.record_fact_meta(FactFamily::SummaryEvent, run_id, metadata);
+        }
+        self.finish_fact_meta_insertions(&[
+            FactFamily::SummaryControl,
+            FactFamily::SummaryCall,
+            FactFamily::SummaryMemory,
+            FactFamily::SummaryTito,
+            FactFamily::SummaryEvent,
+        ]);
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Extension metadata refresh is reached through extension provider wiring in the next plan."
+    )]
+    fn refresh_extension_metadata(&mut self) {
+        self.fact_meta.remove_family(FactFamily::ExtensionFact);
+        let metadata = self
+            .extension_facts
+            .iter()
+            .enumerate()
+            .map(|(index, fact)| (index as u64, extension_fact_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in metadata {
+            self.record_fact_meta(FactFamily::ExtensionFact, run_id, metadata);
+        }
+        self.finish_fact_meta_insertions(&[FactFamily::ExtensionFact]);
+    }
+
+    fn refresh_adaptation_model_metadata(&mut self) {
+        self.fact_meta.remove_family(FactFamily::AdaptationModel);
+        let metadata = self
+            .adaptation_model_facts
+            .iter()
+            .enumerate()
+            .map(|(index, fact)| (index as u64, adaptation_model_fact_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in metadata {
+            self.record_fact_meta(FactFamily::AdaptationModel, run_id, metadata);
+        }
+        self.finish_fact_meta_insertions(&[FactFamily::AdaptationModel]);
+    }
+
+    fn refresh_entrypoint_metadata(&mut self) {
+        self.fact_meta.remove_family(FactFamily::Entrypoint);
+        self.fact_meta.remove_family(FactFamily::TrustBoundary);
+        self.fact_meta.remove_family(FactFamily::DispatchEdge);
+        self.fact_meta
+            .remove_family(FactFamily::UnresolvedFramework);
+
+        let entrypoint_metadata = self
+            .entrypoint_facts
+            .iter()
+            .map(|fact| (fact.id.0, self.entrypoint_fact_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in entrypoint_metadata {
+            self.record_fact_meta(FactFamily::Entrypoint, run_id, metadata);
+        }
+
+        let trust_boundary_metadata = self
+            .trust_boundary_facts
+            .iter()
+            .map(|fact| (fact.id.0, self.trust_boundary_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in trust_boundary_metadata {
+            self.record_fact_meta(FactFamily::TrustBoundary, run_id, metadata);
+        }
+
+        let dispatch_edge_metadata = self
+            .dispatch_edge_facts
+            .iter()
+            .map(|fact| (fact.id.0, self.dispatch_edge_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in dispatch_edge_metadata {
+            self.record_fact_meta(FactFamily::DispatchEdge, run_id, metadata);
+        }
+
+        let unresolved_metadata = self
+            .unresolved_framework_facts
+            .iter()
+            .map(|fact| (fact.id.0, self.unresolved_framework_metadata(fact)))
+            .collect::<Vec<_>>();
+        for (run_id, metadata) in unresolved_metadata {
+            self.record_fact_meta(FactFamily::UnresolvedFramework, run_id, metadata);
+        }
+        self.finish_fact_meta_insertions(&[
+            FactFamily::Entrypoint,
+            FactFamily::TrustBoundary,
+            FactFamily::DispatchEdge,
+            FactFamily::UnresolvedFramework,
+        ]);
+    }
+
+    fn refresh_type_value_alias_metadata(&mut self) {
+        for family in [
+            FactFamily::Type,
+            FactFamily::NarrowedType,
+            FactFamily::Value,
+            FactFamily::AllocationToken,
+            FactFamily::AccessPath,
+            FactFamily::PointsToConstraint,
+            FactFamily::PointsToSet,
+            FactFamily::AliasAnswer,
+        ] {
+            self.fact_meta.remove_family(family);
+        }
+
+        for index in 0..self.type_facts.len() {
+            let (run_id, metadata) = {
+                let fact = &self.type_facts[index];
+                (fact.id.0, self.type_fact_metadata(fact))
+            };
+            self.record_fact_meta(FactFamily::Type, run_id, metadata);
+        }
+
+        for index in 0..self.narrowed_type_facts.len() {
+            let (run_id, metadata) = {
+                let fact = &self.narrowed_type_facts[index];
+                (fact.id.0, self.narrowed_type_metadata(fact))
+            };
+            self.record_fact_meta(FactFamily::NarrowedType, run_id, metadata);
+        }
+
+        for index in 0..self.value_facts.len() {
+            let (run_id, metadata) = {
+                let fact = &self.value_facts[index];
+                (fact.id.0, self.value_fact_metadata(fact))
+            };
+            self.record_fact_meta(FactFamily::Value, run_id, metadata);
+        }
+
+        for index in 0..self.allocation_tokens.len() {
+            let (run_id, metadata) = {
+                let fact = &self.allocation_tokens[index];
+                (fact.id.0, self.allocation_token_metadata(fact))
+            };
+            self.record_fact_meta(FactFamily::AllocationToken, run_id, metadata);
+        }
+
+        for index in 0..self.access_path_facts.len() {
+            let (run_id, metadata) = {
+                let fact = &self.access_path_facts[index];
+                (fact.id.0, self.access_path_metadata(fact))
+            };
+            self.record_fact_meta(FactFamily::AccessPath, run_id, metadata);
+        }
+
+        for index in 0..self.points_to_constraints.len() {
+            let (run_id, metadata) = {
+                let fact = &self.points_to_constraints[index];
+                (fact.id.0, self.points_to_constraint_metadata(fact))
+            };
+            self.record_fact_meta(FactFamily::PointsToConstraint, run_id, metadata);
+        }
+
+        for index in 0..self.points_to_sets.len() {
+            let (run_id, metadata) = {
+                let fact = &self.points_to_sets[index];
+                (fact.id.0, self.points_to_set_metadata(fact))
+            };
+            self.record_fact_meta(FactFamily::PointsToSet, run_id, metadata);
+        }
+
+        for index in 0..self.alias_answers.len() {
+            let (run_id, metadata) = {
+                let fact = &self.alias_answers[index];
+                (fact.id.0, self.alias_answer_metadata(fact))
+            };
+            self.record_fact_meta(FactFamily::AliasAnswer, run_id, metadata);
+        }
+
+        self.finish_fact_meta_insertions(&[
+            FactFamily::Type,
+            FactFamily::NarrowedType,
+            FactFamily::Value,
+            FactFamily::AllocationToken,
+            FactFamily::AccessPath,
+            FactFamily::PointsToConstraint,
+            FactFamily::PointsToSet,
+            FactFamily::AliasAnswer,
+        ]);
+    }
+
+    fn type_fact_metadata(&self, fact: &TypeFact) -> FactMeta {
+        let (precision, confidence) =
+            type_metadata_precision(fact.status, fact.precision, Some(fact.confidence));
+        fact_meta_from_stable_key(
+            FactFamily::Type,
+            TYPE_VALUE_ALIAS_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", format!("{:?}", fact.status)),
+                ("precision", format!("{:?}", fact.precision)),
+                ("phase", format!("{:?}", fact.phase)),
+                ("language", language_label(fact.language).to_string()),
+                ("file_key", self.option_source_file_key(fact.file)),
+                (
+                    "place_key",
+                    fact.place
+                        .map(|place| self.fact_stable_key(FactFamily::Place, place.0))
+                        .unwrap_or_else(none_value),
+                ),
+                ("subject", format!("{:?}", fact.subject)),
+                ("shape", format!("{:?}", fact.shape)),
+                ("provenance", format!("{:?}", fact.provenance)),
+            ]),
+        )
+    }
+
+    fn narrowed_type_metadata(&self, fact: &NarrowedTypeFact) -> FactMeta {
+        let (precision, confidence) = type_metadata_precision(fact.status, fact.precision, None);
+        fact_meta_from_stable_key(
+            FactFamily::NarrowedType,
+            TYPE_VALUE_ALIAS_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", format!("{:?}", fact.status)),
+                ("precision", format!("{:?}", fact.precision)),
+                ("language", language_label(fact.language).to_string()),
+                (
+                    "place_key",
+                    self.fact_stable_key(FactFamily::Place, fact.place.0),
+                ),
+                (
+                    "operation_key",
+                    fact.operation
+                        .map(|operation| {
+                            self.fact_stable_key(FactFamily::MirOperation, operation.0)
+                        })
+                        .unwrap_or_else(none_value),
+                ),
+                ("evidence", fact.evidence.clone()),
+            ]),
+        )
+    }
+
+    fn value_fact_metadata(&self, fact: &ValueFact) -> FactMeta {
+        let (precision, confidence) = value_metadata_precision(fact.status, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::Value,
+            TYPE_VALUE_ALIAS_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", format!("{:?}", fact.status)),
+                ("precision", format!("{:?}", fact.precision)),
+                ("language", language_label(fact.language).to_string()),
+                ("subject", format!("{:?}", fact.subject)),
+                ("kind", format!("{:?}", fact.kind)),
+                ("provenance", format!("{:?}", fact.provenance)),
+            ]),
+        )
+    }
+
+    fn allocation_token_metadata(&self, fact: &AllocationTokenFact) -> FactMeta {
+        fact_meta_from_stable_key(
+            FactFamily::AllocationToken,
+            TYPE_VALUE_ALIAS_PROVIDER_ID,
+            FactPrecision::SetupAware,
+            FactConfidence::Medium,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("kind", format!("{:?}", fact.kind)),
+                ("language", language_label(fact.language).to_string()),
+                (
+                    "source_place",
+                    fact.source_place
+                        .map(|place| self.fact_stable_key(FactFamily::Place, place.0))
+                        .unwrap_or_else(none_value),
+                ),
+                ("provenance", format!("{:?}", fact.provenance)),
+            ]),
+        )
+    }
+
+    fn access_path_metadata(&self, fact: &AccessPathFact) -> FactMeta {
+        let precision = match fact.status {
+            crate::analysis::access_paths::facts::AccessPathStatus::Resolved => {
+                FactPrecision::SetupAware
+            }
+            crate::analysis::access_paths::facts::AccessPathStatus::Partial => {
+                FactPrecision::Ambiguous
+            }
+            crate::analysis::access_paths::facts::AccessPathStatus::Unknown => {
+                FactPrecision::Unresolved
+            }
+            crate::analysis::access_paths::facts::AccessPathStatus::Unsupported => {
+                FactPrecision::Unsupported
+            }
+            crate::analysis::access_paths::facts::AccessPathStatus::BudgetExceeded => {
+                FactPrecision::Heuristic
+            }
+        };
+        fact_meta_from_stable_key(
+            FactFamily::AccessPath,
+            TYPE_VALUE_ALIAS_PROVIDER_ID,
+            precision,
+            FactConfidence::Medium,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", format!("{:?}", fact.status)),
+                ("language", language_label(fact.language).to_string()),
+                (
+                    "base_key",
+                    self.fact_stable_key(FactFamily::Place, fact.base.0),
+                ),
+                ("projection_count", fact.projections.len().to_string()),
+            ]),
+        )
+    }
+
+    fn points_to_constraint_metadata(&self, fact: &PointsToConstraintFact) -> FactMeta {
+        let (precision, confidence) = points_to_metadata_precision(fact.status, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::PointsToConstraint,
+            TYPE_VALUE_ALIAS_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", format!("{:?}", fact.status)),
+                ("precision", format!("{:?}", fact.precision)),
+                ("kind", format!("{:?}", fact.kind)),
+            ]),
+        )
+    }
+
+    fn points_to_set_metadata(&self, fact: &PointsToSetFact) -> FactMeta {
+        let (precision, confidence) = points_to_metadata_precision(fact.status, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::PointsToSet,
+            TYPE_VALUE_ALIAS_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", format!("{:?}", fact.status)),
+                ("precision", format!("{:?}", fact.precision)),
+                ("budget", format!("{:?}", fact.budget)),
+                ("variable", format!("{:?}", fact.variable)),
+                ("objects", format!("{:?}", fact.objects)),
+            ]),
+        )
+    }
+
+    fn alias_answer_metadata(&self, fact: &AliasAnswerFact) -> FactMeta {
+        let (precision, confidence) = alias_metadata_precision(fact.status, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::AliasAnswer,
+            TYPE_VALUE_ALIAS_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", format!("{:?}", fact.status)),
+                ("precision", format!("{:?}", fact.precision)),
+                ("reason", format!("{:?}", fact.reason)),
+                ("left", format!("{:?}", fact.left)),
+                ("right", format!("{:?}", fact.right)),
+                ("evidence", fact.evidence.join("\n")),
+            ]),
+        )
+    }
+
+    fn entrypoint_fact_metadata(&self, fact: &EntrypointFact) -> FactMeta {
+        let (precision, confidence) = entrypoint_precision_metadata(fact.status, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::Entrypoint,
+            ENTRYPOINTS_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("status", format!("{:?}", fact.status)),
+                ("precision", format!("{:?}", fact.precision)),
+                ("kind", format!("{:?}", fact.kind)),
+                ("language", language_label(fact.language).to_string()),
+                ("framework", fact.framework_id.clone()),
+                ("file_key", self.source_file_key(fact.registration_file)),
+                (
+                    "function_key",
+                    self.function_key(
+                        fact.target_function,
+                        &fact.framework_id,
+                        &fact.registration_span,
+                    ),
+                ),
+                ("provenance", format!("{:?}", fact.provenance)),
+            ]),
+        )
+    }
+
+    fn trust_boundary_metadata(&self, fact: &TrustBoundaryFact) -> FactMeta {
+        let (precision, confidence) =
+            entrypoint_precision_metadata(EntrypointStatus::Resolved, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::TrustBoundary,
+            ENTRYPOINTS_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("source_kind", format!("{:?}", fact.source_kind)),
+                ("entrypoint_key", fact.entrypoint_stable_key.clone()),
+                ("precision", format!("{:?}", fact.precision)),
+                ("language", language_label(fact.language).to_string()),
+                ("file_key", self.source_file_key(fact.file)),
+            ]),
+        )
+    }
+
+    fn dispatch_edge_metadata(&self, fact: &FrameworkDispatchEdgeFact) -> FactMeta {
+        let (precision, confidence) =
+            entrypoint_precision_metadata(EntrypointStatus::Resolved, fact.precision);
+        fact_meta_from_stable_key(
+            FactFamily::DispatchEdge,
+            ENTRYPOINTS_PROVIDER_ID,
+            precision,
+            confidence,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("edge_kind", format!("{:?}", fact.edge_kind)),
+                ("from_source", fact.from_source.clone()),
+                ("precision", format!("{:?}", fact.precision)),
+                ("language", language_label(fact.language).to_string()),
+                ("file_key", self.source_file_key(fact.file)),
+            ]),
+        )
+    }
+
+    fn unresolved_framework_metadata(&self, fact: &UnresolvedFrameworkFact) -> FactMeta {
+        fact_meta_from_stable_key(
+            FactFamily::UnresolvedFramework,
+            ENTRYPOINTS_PROVIDER_ID,
+            FactPrecision::SetupAware,
+            FactConfidence::Medium,
+            fact.stable_key.clone(),
+            stable_parts([
+                ("reason", format!("{:?}", fact.reason)),
+                ("framework", fact.framework_id.clone()),
+                ("precision", format!("{:?}", fact.precision)),
+                ("language", language_label(fact.language).to_string()),
+                ("file_key", self.source_file_key(fact.file)),
+            ]),
+        )
+    }
+
+    fn summary_fact_metadata(&self, fact: &SummaryFact) -> FactMeta {
+        let (precision, confidence) = summary_precision_metadata(fact.status, fact.precision);
+        FactMeta {
+            stable_key: fact.stable_key.clone(),
+            producer_id: POLINT_DIRECT_SUMMARIES_PROVIDER_ID,
+            layer_id: POLINT_DIRECT_SUMMARIES_PROVIDER_ID,
+            precision,
+            confidence,
+            validation: ValidationStatus::NativeTrusted,
+            payload_digest: summary_fact_payload_metadata_digest(fact),
+        }
+    }
+
+    fn summary_event_metadata(&self, fact: &SummaryEventFact) -> FactMeta {
+        let (precision, confidence) = summary_precision_metadata(fact.status, fact.precision);
+        FactMeta {
+            stable_key: fact.stable_key.clone(),
+            producer_id: POLINT_DIRECT_SUMMARIES_PROVIDER_ID,
+            layer_id: POLINT_DIRECT_SUMMARIES_PROVIDER_ID,
+            precision,
+            confidence,
+            validation: ValidationStatus::NativeTrusted,
+            payload_digest: summary_event_payload_metadata_digest(fact),
+        }
+    }
+
+    fn refresh_cfg_metadata(&mut self) {
+        self.fact_meta.remove_family(FactFamily::CfgFunction);
+        self.fact_meta.remove_family(FactFamily::CfgNode);
+        self.fact_meta.remove_family(FactFamily::BasicBlock);
+        self.fact_meta.remove_family(FactFamily::CfgEdge);
+        self.fact_meta.remove_family(FactFamily::CfgReachability);
+        self.fact_meta.remove_family(FactFamily::CfgDominator);
+        self.fact_meta.remove_family(FactFamily::CfgPostDominator);
+        self.fact_meta
+            .remove_family(FactFamily::CfgControlDependence);
+        self.fact_meta
+            .remove_family(FactFamily::UnsupportedControlFlow);
+
+        for index in 0..self.cfg_functions.len() {
+            let (run_id, metadata) = {
+                let fact = &self.cfg_functions[index];
+                (fact.id.0, self.cfg_function_metadata(fact))
+            };
+            self.record_fact_meta(FactFamily::CfgFunction, run_id, metadata);
+        }
+
+        for index in 0..self.cfg_nodes.len() {
+            let (run_id, metadata) = {
+                let fact = &self.cfg_nodes[index];
+                (fact.id.0, self.cfg_node_metadata(fact))
+            };
+            self.record_fact_meta(FactFamily::CfgNode, run_id, metadata);
+        }
+
+        for index in 0..self.cfg_blocks.len() {
+            let (run_id, metadata) = {
+                let fact = &self.cfg_blocks[index];
+                (fact.id.0, self.cfg_block_metadata(fact))
+            };
+            self.record_fact_meta(FactFamily::BasicBlock, run_id, metadata);
+        }
+
+        for index in 0..self.cfg_edges.len() {
+            let (run_id, metadata) = {
+                let fact = &self.cfg_edges[index];
+                (fact.id.0, self.cfg_edge_metadata(fact))
+            };
+            self.record_fact_meta(FactFamily::CfgEdge, run_id, metadata);
+        }
+
+        for index in 0..self.cfg_reachability.len() {
+            let (run_id, metadata) = {
+                let fact = &self.cfg_reachability[index];
+                (fact.id.0, self.cfg_reachability_metadata(fact))
+            };
+            self.record_fact_meta(FactFamily::CfgReachability, run_id, metadata);
+        }
+
+        for index in 0..self.cfg_dominators.len() {
+            let (run_id, metadata) = {
+                let fact = &self.cfg_dominators[index];
+                (fact.id.0, self.cfg_dominator_metadata(fact))
+            };
+            self.record_fact_meta(FactFamily::CfgDominator, run_id, metadata);
+        }
+
+        for index in 0..self.cfg_postdominators.len() {
+            let (run_id, metadata) = {
+                let fact = &self.cfg_postdominators[index];
+                (fact.id.0, self.cfg_postdominator_metadata(fact))
+            };
+            self.record_fact_meta(FactFamily::CfgPostDominator, run_id, metadata);
+        }
+
+        for index in 0..self.cfg_control_dependence.len() {
+            let (run_id, metadata) = {
+                let fact = &self.cfg_control_dependence[index];
+                (fact.id.0, self.cfg_control_dependence_metadata(fact))
+            };
+            self.record_fact_meta(FactFamily::CfgControlDependence, run_id, metadata);
+        }
+
+        for index in 0..self.unsupported_control_flow.len() {
+            let (run_id, metadata) = {
+                let fact = &self.unsupported_control_flow[index];
+                (fact.id.0, self.unsupported_control_flow_metadata(fact))
+            };
+            self.record_fact_meta(FactFamily::UnsupportedControlFlow, run_id, metadata);
+        }
+
+        self.finish_fact_meta_insertions(&[
+            FactFamily::CfgFunction,
+            FactFamily::CfgNode,
+            FactFamily::BasicBlock,
+            FactFamily::CfgEdge,
+            FactFamily::CfgReachability,
+            FactFamily::CfgDominator,
+            FactFamily::CfgPostDominator,
+            FactFamily::CfgControlDependence,
+            FactFamily::UnsupportedControlFlow,
+        ]);
+    }
+
+    fn refresh_semantic_mir_metadata(&mut self) {
+        self.fact_meta.remove_family(FactFamily::MirBody);
+        self.fact_meta.remove_family(FactFamily::MirOperation);
+        self.fact_meta.remove_family(FactFamily::Place);
+        self.fact_meta
+            .remove_family(FactFamily::UnsupportedSemantic);
+
+        for index in 0..self.mir_bodies().len() {
+            let (run_id, metadata) = {
+                let body = &self.mir_bodies()[index];
+                (body.id.0, self.mir_body_metadata(body))
+            };
+            self.record_fact_meta(FactFamily::MirBody, run_id, metadata);
+        }
+
+        for index in 0..self.mir_operations().len() {
+            let (run_id, metadata) = {
+                let operation = &self.mir_operations()[index];
+                (operation.id.0, self.mir_operation_metadata(operation))
+            };
+            self.record_fact_meta(FactFamily::MirOperation, run_id, metadata);
+        }
+
+        for index in 0..self.mir_places().len() {
+            let (run_id, metadata) = {
+                let place = &self.mir_places()[index];
+                (place.id.0, self.place_metadata(place))
+            };
+            self.record_fact_meta(FactFamily::Place, run_id, metadata);
+        }
+
+        for index in 0..self.unsupported_semantics().len() {
+            let (run_id, metadata) = {
+                let row = &self.unsupported_semantics()[index];
+                (row.id.0, self.unsupported_semantic_metadata(row))
+            };
+            self.record_fact_meta(FactFamily::UnsupportedSemantic, run_id, metadata);
+        }
+
+        self.finish_fact_meta_insertions(&[
+            FactFamily::MirBody,
+            FactFamily::MirOperation,
+            FactFamily::Place,
+            FactFamily::UnsupportedSemantic,
         ]);
     }
 }
