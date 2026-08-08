@@ -619,7 +619,7 @@
       "state": "IN_FLIGHT",
       "branch": "swarm/W2.5",
       "worktree": "/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.5",
-      "tip": "f965054b4a4f39f4fa4f10567ae1e2c29563bef0",
+      "tip": "5c942dba15783b6b7871dabf2405320aa961980e",
       "analysis_db_fields": 57,
       "target_fields": 30,
       "note": "Independent of W2.3 StableKeyId; symbols_by_name stays String-keyed. Landed through IdentityStore. Remaining: more Option+flat collapses (refined_call, data_flow, evidence, summary, entrypoint, type/value/\u2026), dead_code cleanup. Target \u226430.",
@@ -691,7 +691,7 @@
   },
   "integration_branch": "static-analysis-architecture-review",
   "never_merge_to_main": true,
-  "integration_head": "f965054b4a4f39f4fa4f10567ae1e2c29563bef0",
+  "integration_head": "5c942dba15783b6b7871dabf2405320aa961980e",
   "m0_gate": {
     "status": "PASS",
     "completed_at": "2026-08-08T11:52:00+02:00",
