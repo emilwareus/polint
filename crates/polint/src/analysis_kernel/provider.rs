@@ -521,6 +521,228 @@ impl Provider for ExtensionsProvider {
     }
 }
 
+fn solver_budget_from_loaded(
+    loaded: &LoadedConfig,
+) -> crate::analysis::solver::budget::SolverBudget {
+    crate::analysis::solver::budget::SolverBudget {
+        go: loaded.config.solver.to_go_sub_budget(),
+        js: loaded.config.solver.to_js_sub_budget(),
+        object_model_enabled: loaded.config.solver.js_object_model_enabled(),
+        object: loaded.config.solver.to_js_object_sub_budget(),
+        ..crate::analysis::solver::budget::SolverBudget::default()
+    }
+}
+
+pub(crate) struct TypeValueAliasProvider;
+
+impl Provider for TypeValueAliasProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.type_value_alias")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let derivation = crate::analysis::types::provider::derive_type_value_alias_with_cache_stats(
+            ctx.db,
+            ctx.input_snapshot,
+            self.manifest(),
+            ctx.dependency_digest("polint.semantic_mir"),
+            ctx.dependency_digest("polint.cfg"),
+            ctx.dependency_digest("polint.calls"),
+            ctx.dependency_digest("polint.abstract_domains"),
+            ctx.dependency_digest("polint.direct_summaries"),
+            ctx.dependency_digest("polint.entrypoints"),
+            ctx.dependency_digest("polint.extensions"),
+            ctx.dependency_digest("polint.symbol_graph"),
+            ctx.dependency_digest("polint.module_topology"),
+            vec![
+                ctx.dependency_digest("polint.go.syntax"),
+                ctx.dependency_digest("polint.ts.syntax"),
+            ],
+        );
+        ProviderRunResult {
+            diagnostics: derivation.diagnostics,
+            cache_stats: derivation.cache_stats,
+            output_digest: derivation.output_digest,
+        }
+    }
+}
+
+pub(crate) struct SemanticGraphProvider;
+
+impl Provider for SemanticGraphProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.semantic_graph")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let solver_budget = solver_budget_from_loaded(ctx.loaded);
+        let derivation =
+            crate::analysis::semantic_graph::provider::derive_semantic_graph_with_cache_stats(
+                ctx.db,
+                ctx.loaded,
+                solver_budget.adaptation,
+                ctx.input_snapshot,
+                self.manifest(),
+                ctx.dependency_digest("polint.calls"),
+                ctx.dependency_digest("polint.identity"),
+                ctx.dependency_digest("polint.abstract_domains"),
+                ctx.dependency_digest("polint.entrypoints"),
+                ctx.dependency_digest("polint.reachability"),
+                ctx.dependency_digest("polint.type_value_alias"),
+                ctx.dependency_digest("polint.symbol_graph"),
+                ctx.dependency_digest("polint.module_topology"),
+                ctx.dependency_digest("polint.go.syntax"),
+                ctx.dependency_digest("polint.ts.syntax"),
+                ctx.dependency_digest("polint.semantic_mir"),
+                ctx.dependency_digest("polint.go.semantic"),
+            );
+        ProviderRunResult {
+            diagnostics: derivation.diagnostics,
+            cache_stats: derivation.cache_stats,
+            output_digest: derivation.output_digest,
+        }
+    }
+}
+
+pub(crate) struct SolverProvider;
+
+impl Provider for SolverProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.solver")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let derivation = crate::analysis::solver::provider::derive_solver_with_cache_stats(
+            ctx.db,
+            ctx.input_snapshot,
+            self.manifest(),
+            solver_budget_from_loaded(ctx.loaded),
+            ctx.dependency_digest("polint.semantic_graph"),
+            ctx.dependency_digest("polint.type_value_alias"),
+            ctx.dependency_digest("polint.go.semantic"),
+        );
+        ProviderRunResult {
+            diagnostics: derivation.diagnostics,
+            cache_stats: derivation.cache_stats,
+            output_digest: derivation.output_digest,
+        }
+    }
+}
+
+pub(crate) struct RefinedCallsProvider;
+
+impl Provider for RefinedCallsProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.refined_calls")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let derivation =
+            crate::analysis::refined_calls::provider::derive_refined_calls_with_cache_stats(
+                ctx.db,
+                ctx.input_snapshot,
+                self.manifest(),
+                ctx.dependency_digest("polint.calls"),
+                ctx.dependency_digest("polint.entrypoints"),
+                ctx.dependency_digest("polint.direct_summaries"),
+                ctx.dependency_digest("polint.type_value_alias"),
+                ctx.dependency_digest("polint.extensions"),
+                ctx.dependency_digest("polint.solver"),
+            );
+        ProviderRunResult {
+            diagnostics: derivation.diagnostics,
+            cache_stats: derivation.cache_stats,
+            output_digest: derivation.output_digest,
+        }
+    }
+}
+
+pub(crate) struct DataFlowProvider;
+
+impl Provider for DataFlowProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.data_flow")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let derivation = crate::analysis::data_flow::provider::derive_data_flow_with_cache_stats(
+            ctx.db,
+            ctx.input_snapshot,
+            self.manifest(),
+            ctx.dependency_digest("polint.semantic_mir"),
+            ctx.dependency_digest("polint.cfg"),
+            ctx.dependency_digest("polint.calls"),
+            ctx.dependency_digest("polint.refined_calls"),
+            ctx.dependency_digest("polint.direct_summaries"),
+            ctx.dependency_digest("polint.type_value_alias"),
+            ctx.dependency_digest("polint.entrypoints"),
+            ctx.dependency_digest("polint.extensions"),
+        );
+        ProviderRunResult {
+            diagnostics: derivation.diagnostics,
+            cache_stats: derivation.cache_stats,
+            output_digest: derivation.output_digest,
+        }
+    }
+}
+
+pub(crate) struct EvidenceProvider;
+
+impl Provider for EvidenceProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.evidence")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let derivation = crate::analysis::evidence::provider::derive_evidence_with_cache_stats(
+            ctx.db,
+            ctx.input_snapshot,
+            self.manifest(),
+            ctx.dependency_digest("polint.semantic_mir"),
+            ctx.dependency_digest("polint.cfg"),
+            ctx.dependency_digest("polint.calls"),
+            ctx.dependency_digest("polint.refined_calls"),
+            ctx.dependency_digest("polint.direct_summaries"),
+            ctx.dependency_digest("polint.type_value_alias"),
+            ctx.dependency_digest("polint.entrypoints"),
+            ctx.dependency_digest("polint.extensions"),
+            ctx.dependency_digest("polint.data_flow"),
+        );
+        ProviderRunResult {
+            diagnostics: derivation.diagnostics,
+            cache_stats: derivation.cache_stats,
+            output_digest: derivation.output_digest,
+        }
+    }
+}
+
+pub(crate) struct MetricsProvider;
+
+impl Provider for MetricsProvider {
+    fn manifest(&self) -> &'static ProviderManifest {
+        manifest_by_id("polint.metrics")
+    }
+
+    fn run(&self, ctx: &mut ProviderCtx<'_>) -> ProviderRunResult {
+        let derivation = crate::metrics::derive_requested_metrics_with_cache_stats(
+            ctx.db,
+            ctx.plan,
+            ctx.cache,
+            ctx.input_snapshot,
+            self.manifest(),
+            vec![
+                ctx.dependency_digest("polint.go.syntax"),
+                ctx.dependency_digest("polint.ts.syntax"),
+            ],
+        );
+        ProviderRunResult {
+            diagnostics: derivation.diagnostics,
+            cache_stats: derivation.cache_stats,
+            output_digest: derivation.output_digest,
+        }
+    }
+}
+
 /// Topological schedule of `PROVIDER_MANIFESTS` with ties broken by declaration index.
 ///
 /// Edge: provider P depends on Q when any string in `P.inputs` appears in `Q.outputs`.
