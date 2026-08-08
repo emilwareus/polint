@@ -1,0 +1,55 @@
+{
+  "schema_version": "polint-scale-corpus-run-0",
+  "command": "make scale-corpus-run",
+  "limits": {
+    "workload": "isolated_perf_full_pipeline",
+    "note": "Publishes suites that complete under host memory; OOM/error is a recorded result with LOC attempted. Grafana-scale full_pipeline is not required. Measurement stops after the first hard failure."
+  },
+  "repos": [
+    {
+      "suite_id": "excalidraw-excalidraw-scale",
+      "status": "oom",
+      "source_commit": "f1640710aae577cafb3c52ab2bf255a460c3ebf1",
+      "checkout_commit": "0dbd2a39319d41fda37b2945dea0dcbd58d6a564",
+      "repo_id": "excalidraw-excalidraw",
+      "loc": 86527,
+      "repo_file_count": null,
+      "repo_source_bytes": null,
+      "peak_rss_bytes": null,
+      "peak_rss_delta_bytes": null,
+      "cold_wall_clock_ms": null,
+      "warm_wall_clock_ms": null,
+      "failure_detail": "isolated perf child SIGKILL (signal 9) after ~1026s at ~12GB+ RSS during full_pipeline measurement; LOC attempted=86527. Re-run `make scale-corpus-run` to refresh."
+    },
+    {
+      "suite_id": "gohugoio-hugo-scale",
+      "status": "skipped_after_failure",
+      "source_commit": "3f35721fb2c75a1f7cc5a7a14400b66e73d4b06e",
+      "checkout_commit": "3f35721fb2c75a1f7cc5a7a14400b66e73d4b06e",
+      "repo_id": "gohugoio-hugo",
+      "loc": 198514,
+      "repo_file_count": null,
+      "repo_source_bytes": null,
+      "peak_rss_bytes": null,
+      "peak_rss_delta_bytes": null,
+      "cold_wall_clock_ms": null,
+      "warm_wall_clock_ms": null,
+      "failure_detail": "skipped after hard failure on `excalidraw-excalidraw-scale`; LOC counted but isolated perf not attempted (stops before larger suites)"
+    },
+    {
+      "suite_id": "grafana-grafana-scale",
+      "status": "skipped_after_failure",
+      "source_commit": "b58701869e1a11b696010a6f28bd96b68a2cf0d0",
+      "checkout_commit": "b58701869e1a11b696010a6f28bd96b68a2cf0d0",
+      "repo_id": "grafana-grafana",
+      "loc": 1548746,
+      "repo_file_count": null,
+      "repo_source_bytes": null,
+      "peak_rss_bytes": null,
+      "peak_rss_delta_bytes": null,
+      "cold_wall_clock_ms": null,
+      "warm_wall_clock_ms": null,
+      "failure_detail": "skipped after hard failure on `excalidraw-excalidraw-scale`; LOC counted but isolated perf not attempted (stops before larger suites). Grafana full_pipeline not required for this milestone gate."
+    }
+  ]
+}

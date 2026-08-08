@@ -11,4 +11,5 @@ pub(crate) mod gate;
 pub(crate) mod measure;
 pub(crate) mod report;
 pub(crate) mod runner;
+pub(crate) mod scale_corpus;
 pub(crate) mod sweep;

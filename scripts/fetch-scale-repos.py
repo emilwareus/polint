@@ -102,11 +102,26 @@ def ensure_checkout(root: Path, pin: dict[str, str], *, dry_run: bool) -> None:
         run_git(["remote", "set-url", "origin", url], cwd=dest)
         run_git(["fetch", "--tags", "origin"], cwd=dest)
 
-    run_git(["checkout", "--force", commit], cwd=dest)
+    # Pins may be commit SHAs or annotated-tag object SHAs (excalidraw v0.17.6).
+    # Always check out the peeled commit so HEAD is a commit object while still
+    # verifying the manifest pin resolves to that same commit.
+    try:
+        peeled = run_git(["rev-parse", f"{commit}^{{commit}}"], cwd=dest).lower()
+    except subprocess.CalledProcessError as err:
+        raise SystemExit(
+            f"{dest}: cannot resolve pin {commit} to a commit: {err.stderr}"
+        ) from err
+    run_git(["checkout", "--force", peeled], cwd=dest)
     head = run_git(["rev-parse", "HEAD"], cwd=dest).lower()
-    if head != commit:
-        raise SystemExit(f"{dest}: HEAD {head} != pinned {commit}")
-    print(f"ok {pin['id']} @ {head}", file=sys.stderr)
+    if head != peeled:
+        raise SystemExit(f"{dest}: HEAD {head} != peeled pin {peeled} (from {commit})")
+    if peeled == commit:
+        print(f"ok {pin['id']} @ {head}", file=sys.stderr)
+    else:
+        print(
+            f"ok {pin['id']} @ {head} (peeled from annotated tag {commit})",
+            file=sys.stderr,
+        )
 
 
 def print_pins_stable(pins: list[dict[str, str]]) -> None:

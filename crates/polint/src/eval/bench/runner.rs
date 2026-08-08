@@ -216,6 +216,7 @@ pub(crate) fn run_repo_perf_point_isolated_with_store_mode(
         // Never let the child inherit the regenerator switch (it would re-enter
         // regeneration and recurse) or a stale review ref from an outer spawn.
         .env_remove("POLINT_WRITE_STORE_DISABLED_BASELINE")
+        .env_remove("POLINT_WRITE_SCALE_CORPUS")
         .env_remove(CHILD_REVIEW_ENV)
         .env_remove(CHILD_SEMANTIC_STORE_ENV);
     if let Some(reference) = review_ref {
