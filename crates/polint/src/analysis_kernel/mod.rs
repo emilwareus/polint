@@ -938,9 +938,14 @@ impl AnalysisKernel {
             metrics_output_digest,
         ));
         tracing::info!(target: "polint::kernel", "phase: metrics + derived done");
-        let validation_diagnostics =
-            validation::validate_fact_metadata(&db, Self::provider_manifests());
-        diagnostics.extend(validation_diagnostics);
+        // Whole-DB fact-metadata validation is an assertion pass, not analysis.
+        // Debug builds keep it on; release production skips it unless
+        // POLINT_VALIDATE_FACTS is set.
+        if validation::fact_metadata_validation_enabled() {
+            let validation_diagnostics =
+                validation::validate_fact_metadata(&db, Self::provider_manifests());
+            diagnostics.extend(validation_diagnostics);
+        }
         db.finish_all_fact_meta_insertions();
         // Persistence is deliberately last: store availability must not change
         // provider execution, validated facts, diagnostics, or capability
@@ -1408,6 +1413,39 @@ mod tests {
             assert!(AnalysisKernel::missing_fact_metadata_for_test(&output.db).is_empty());
             assert_eq!(output.run_report.store_status(), &StoreStatus::Ready);
             assert!(store_path.is_file());
+        }
+    }
+
+    #[test]
+    fn kernel_run_respects_fact_metadata_validation_gate() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let loaded = load_config(temp.path()).expect("default config loads");
+        let cache = Cache::new("", false);
+        let plan = AnalysisPlan::empty();
+        let before = validation::fact_metadata_validation_call_count_for_test();
+        let enabled = validation::fact_metadata_validation_enabled();
+
+        AnalysisKernel::run(KernelInput {
+            loaded: &loaded,
+            cache: &cache,
+            config_digest: "config",
+            rule_digest: "rules",
+            plan: &plan,
+            parallel: false,
+        })
+        .expect("kernel should run");
+
+        let after = validation::fact_metadata_validation_call_count_for_test();
+        if enabled {
+            assert!(
+                after > before,
+                "gated kernel path must call validate_fact_metadata when enabled"
+            );
+        } else {
+            assert_eq!(
+                after, before,
+                "gated kernel path must skip validate_fact_metadata when disabled"
+            );
         }
     }
 

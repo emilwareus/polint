@@ -38,10 +38,63 @@ use crate::symbol_graph::semantic::{ExportId, ScopeId, SemanticStatus};
 const SYMBOL_GRAPH_PROVIDER_ID: &str = "polint.symbol_graph";
 const SEMANTIC_EVIDENCE_ORDER: (&str, &str, &str) = ("family", "stable_key", "reason");
 
+/// Opt-in that forces whole-DB fact-metadata validation in release builds.
+pub(crate) const VALIDATE_FACTS_ENV: &str = "POLINT_VALIDATE_FACTS";
+
+#[cfg(test)]
+static FACT_METADATA_VALIDATION_CALLS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Whether the kernel should run [`validate_fact_metadata`] on this process.
+///
+/// Debug builds validate by default so tests and local development keep the
+/// assertion pass. Release production runs skip it unless `POLINT_VALIDATE_FACTS`
+/// is set in the environment.
+pub(crate) fn fact_metadata_validation_enabled() -> bool {
+    fact_metadata_validation_enabled_for(
+        cfg!(debug_assertions),
+        std::env::var_os(VALIDATE_FACTS_ENV).is_some(),
+    )
+}
+
+fn fact_metadata_validation_enabled_for(
+    debug_assertions: bool,
+    validate_facts_opt_in: bool,
+) -> bool {
+    debug_assertions || validate_facts_opt_in
+}
+
+#[cfg(test)]
+pub(crate) fn fact_metadata_validation_call_count_for_test() -> usize {
+    FACT_METADATA_VALIDATION_CALLS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(test)]
+mod fact_metadata_validation_gate {
+    use super::fact_metadata_validation_enabled_for;
+
+    #[test]
+    fn skips_release_builds_without_opt_in() {
+        assert!(!fact_metadata_validation_enabled_for(false, false));
+    }
+
+    #[test]
+    fn runs_in_debug_builds_by_default() {
+        assert!(fact_metadata_validation_enabled_for(true, false));
+    }
+
+    #[test]
+    fn runs_when_opted_in_for_release() {
+        assert!(fact_metadata_validation_enabled_for(false, true));
+    }
+}
+
 pub(crate) fn validate_fact_metadata(
     db: &AnalysisDb,
     manifests: &[ProviderManifest],
 ) -> Vec<Diagnostic> {
+    #[cfg(test)]
+    FACT_METADATA_VALIDATION_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut diagnostics = Vec::new();
     let ids = IdSets::from_db(db);
     let manifests_by_id = manifests
