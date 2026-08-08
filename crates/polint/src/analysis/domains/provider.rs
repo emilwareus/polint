@@ -1,5 +1,5 @@
 use super::cache_key::abstract_domains_provider_parameter_digest;
-use super::solver::{LocalDomainSolver, SolverInput, SolverPolicy};
+use super::solver::{IdeDomainSolver, SolverInput, SolverPolicy};
 use super::store::{DomainMaterialization, DomainOutput};
 use crate::analysis::cfg::ids::BasicBlockId;
 use crate::analysis::ids::{MirBodyId, MirOpId, PlaceId};
@@ -82,7 +82,7 @@ fn derive_abstract_domains_with_materialization(
     upstream_syntax_output_digests: Vec<Digest>,
     materialization: DomainMaterialization,
 ) -> AbstractDomainsProviderOutput {
-    let solver = LocalDomainSolver::new(SolverPolicy::deterministic());
+    let solver = IdeDomainSolver::new(SolverPolicy::deterministic());
     let result = match materialization {
         DomainMaterialization::Full => solver.solve(SolverInput::from(&*db)),
         DomainMaterialization::SummaryInputs => {

@@ -1,18 +1,18 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use super::lattice::{Changed, TopReason};
 use super::results::DomainResults;
 pub(crate) use super::results::SolverStatus;
 use super::state::ProductState;
 use super::transfer::{BranchSense, EdgeTransfer, OperationTransfer, TransferCx};
-use crate::analysis::cfg::facts::{
-    BasicBlockFact, BasicBlockKind, CfgEdgeFact, CfgEdgeKind, CfgNodeFact, CfgView,
-};
-use crate::analysis::cfg::ids::{BasicBlockId, CfgFunctionId};
-use crate::analysis::ids::{MirBodyId, MirOpId};
+use crate::analysis::cfg::facts::{BasicBlockFact, CfgEdgeKind, CfgNodeFact};
+use crate::analysis::cfg::ids::{BasicBlockId, CfgFunctionId, CfgNodeId};
+use crate::analysis::ids::{CallSiteId, MirBodyId, MirOpId, PlaceId};
+use crate::analysis::ifds::{Icfg, IcfgEdgeKind};
 use crate::analysis::mir::body::MirBody;
-use crate::analysis::mir::op::{MirOperation, MirOperationKind};
-use crate::core::AnalysisDb;
+use crate::analysis::mir::op::{MirOperation, MirOperationKind, MirValue};
+use crate::analysis::places::PlaceRoot;
+use crate::core::{AnalysisDb, FunctionId};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SolverInput<'a> {
@@ -37,7 +37,7 @@ pub(crate) struct SolverResult {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct LocalDomainSolver {
+pub(crate) struct IdeDomainSolver {
     policy: SolverPolicy,
 }
 
@@ -48,10 +48,16 @@ pub(crate) enum SolverOutputMode {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct QueueKey {
-    reverse_postorder: u32,
-    stable_key: String,
-    block: BasicBlockId,
+struct ExplodedPoint {
+    node: CfgNodeId,
+    call_stack: Vec<CallSiteId>,
+}
+
+struct IdeMaterialization {
+    block_entries: BTreeMap<BasicBlockId, ProductState>,
+    block_exits: BTreeMap<BasicBlockId, ProductState>,
+    operation_states: BTreeMap<MirOpId, (BasicBlockId, String, ProductState, ProductState)>,
+    statuses: BTreeMap<MirBodyId, SolverStatus>,
 }
 
 impl<'a> From<&'a AnalysisDb> for SolverInput<'a> {
@@ -80,7 +86,7 @@ impl SolverPolicy {
     }
 }
 
-impl LocalDomainSolver {
+impl IdeDomainSolver {
     pub(crate) fn new(policy: SolverPolicy) -> Self {
         Self { policy }
     }
@@ -98,189 +104,204 @@ impl LocalDomainSolver {
         input: SolverInput<'_>,
         output_mode: SolverOutputMode,
     ) -> SolverResult {
-        let mut results = DomainResults::new();
         let facts = SolverFactIndex::new(input.db);
         let transfer_cx = TransferCx::from_db(input.db);
+        let icfg = Icfg::build(input.db);
+        let mut states = BTreeMap::<ExplodedPoint, ProductState>::new();
+        let mut queue = VecDeque::new();
+        let mut block_entries = BTreeMap::<BasicBlockId, ProductState>::new();
+        let mut block_exits = BTreeMap::<BasicBlockId, ProductState>::new();
+        let mut operation_states =
+            BTreeMap::<MirOpId, (BasicBlockId, String, ProductState, ProductState)>::new();
+        let mut statuses = facts
+            .functions
+            .iter()
+            .map(|function| (function.body, SolverStatus::Solved))
+            .collect::<BTreeMap<_, _>>();
+        let mut widening_fuel = self.policy.budget.widening_fuel;
+        let mut results = DomainResults::new();
 
         for function in &facts.functions {
-            let Some(body) = facts.body_by_id.get(&function.body).copied() else {
-                continue;
-            };
-            self.solve_function(
-                body,
-                function.id,
-                &facts,
-                &transfer_cx,
-                output_mode,
-                &mut results,
+            enqueue(
+                &mut states,
+                &mut queue,
+                ExplodedPoint {
+                    node: function.entry_node,
+                    call_stack: Vec::new(),
+                },
+                ProductState::entry(),
             );
         }
 
-        SolverResult { results }
-    }
-
-    fn solve_function(
-        &self,
-        body: &MirBody,
-        function: CfgFunctionId,
-        facts: &SolverFactIndex<'_>,
-        transfer_cx: &TransferCx<'_>,
-        output_mode: SolverOutputMode,
-        results: &mut DomainResults,
-    ) {
-        let blocks = facts.blocks(function);
-        let nodes = facts.nodes(function);
-        let edges = facts.edges(function);
-        let operations_by_block = operations_by_block(nodes, &facts.operations_by_id);
-        let outgoing_edges = edges_by_source_block(edges);
-        let block_keys = blocks
-            .iter()
-            .map(|block| {
-                (
-                    block.id,
-                    QueueKey {
-                        reverse_postorder: block.reverse_postorder,
-                        stable_key: block.stable_key.clone(),
-                        block: block.id,
-                    },
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
-        let mut entry_states = blocks
-            .iter()
-            .map(|block| (block.id, ProductState::bottom()))
-            .collect::<BTreeMap<_, _>>();
-        let mut exit_states = entry_states.clone();
-        let mut operation_states = if output_mode.records_operation_states() {
-            Some(BTreeMap::<
-                MirOpId,
-                (BasicBlockId, String, ProductState, ProductState),
-            >::new())
-        } else {
-            None
-        };
-        let mut status = SolverStatus::Solved;
-        let mut widening_fuel = self.policy.budget.widening_fuel;
-
-        let Some(entry_block) = entry_block(blocks) else {
-            results.insert_function(
-                body.id,
-                body.stable_key.clone(),
-                status,
-                ProductState::bottom(),
-            );
-            return;
-        };
-
-        entry_states.insert(entry_block, ProductState::entry());
-        let mut queue = BTreeSet::from([block_keys[&entry_block].clone()]);
         let mut iterations = 0_u32;
-
-        while let Some(next) = queue.iter().next().cloned() {
-            queue.remove(&next);
+        while let Some(point) = queue.pop_front() {
             if iterations >= self.policy.budget.max_iterations {
-                status = SolverStatus::BudgetExceeded;
-                mark_budget_exceeded(
-                    results,
-                    body.id,
-                    next.block,
-                    &mut entry_states,
-                    &mut exit_states,
+                mark_ide_budget_exceeded(
+                    &facts,
+                    &mut states,
+                    &mut statuses,
+                    &mut results,
+                    point.node,
                 );
                 break;
             }
             iterations += 1;
-
-            let mut state = entry_states
-                .get(&next.block)
+            let Some(node) = facts.node_by_id.get(&point.node).copied() else {
+                continue;
+            };
+            let Some(function) = facts.function_by_cfg.get(&node.cfg_function).copied() else {
+                continue;
+            };
+            let Some(body) = facts.body_by_id.get(&function.body).copied() else {
+                continue;
+            };
+            let state = states
+                .get(&point)
                 .cloned()
                 .unwrap_or_else(ProductState::bottom);
-            for operation in operations_by_block.get(&next.block).into_iter().flatten() {
-                if let Some(operation_states) = &mut operation_states {
-                    let before = state.clone();
-                    OperationTransfer::apply(transfer_cx, operation, &mut state);
-                    state.reduce_value_only(self.policy.reduction_rounds);
-                    let after = state.clone();
-                    operation_states.insert(
-                        operation.id,
-                        (next.block, operation.stable_key.clone(), before, after),
+            let visible_before = facts.visible_state(function.function, &state);
+            join_state(&mut block_entries, node.block, &visible_before);
+
+            let operation = node
+                .operation
+                .and_then(|id| facts.operations_by_id.get(&id).copied());
+            let is_resolved_call = operation.is_some_and(|operation| {
+                matches!(
+                    operation.kind,
+                    MirOperationKind::Call { site, .. } if icfg.has_resolved_call(site)
+                )
+            });
+            let mut after = state.clone();
+            if let Some(operation) = operation
+                && !is_resolved_call
+            {
+                OperationTransfer::apply(&transfer_cx, operation, &mut after);
+                after.reduce_value_only(self.policy.reduction_rounds);
+            }
+            let visible_after = facts.visible_state(function.function, &after);
+            if output_mode.records_operation_states()
+                && let Some(operation) = operation
+            {
+                if is_resolved_call {
+                    join_operation_state(
+                        &mut operation_states,
+                        node.block,
+                        operation,
+                        &visible_before,
+                        &ProductState::bottom(),
                     );
                 } else {
-                    OperationTransfer::apply(transfer_cx, operation, &mut state);
-                    state.reduce_value_only(self.policy.reduction_rounds);
-                }
-            }
-            state.reduce_value_only(self.policy.reduction_rounds);
-            exit_states.insert(next.block, state.clone());
-
-            for edge in outgoing_edges.get(&next.block).into_iter().flatten() {
-                let mut candidate = state.clone();
-                if let Some((predicate_place, sense)) =
-                    branch_assumption(edge.kind, operations_by_block.get(&next.block))
-                {
-                    EdgeTransfer::apply_branch_assumption(
-                        transfer_cx,
-                        predicate_place,
-                        sense,
-                        &mut candidate,
+                    join_operation_state(
+                        &mut operation_states,
+                        node.block,
+                        operation,
+                        &visible_before,
+                        &visible_after,
                     );
                 }
-                if edge.kind == CfgEdgeKind::LoopBack {
+            }
+            if facts.last_node_by_block.get(&node.block) == Some(&node.id) {
+                join_state(&mut block_exits, node.block, &visible_after);
+            }
+
+            for edge in icfg.outgoing(node.id) {
+                let mut next_point = ExplodedPoint {
+                    node: edge.to,
+                    call_stack: point.call_stack.clone(),
+                };
+                let mut candidate = match edge.kind {
+                    IcfgEdgeKind::Intra(kind) => {
+                        let mut candidate = after.clone();
+                        apply_branch(&transfer_cx, kind, operation, &mut candidate);
+                        candidate
+                    }
+                    IcfgEdgeKind::CallToReturn(site, kind) => {
+                        if icfg.has_resolved_call(site) {
+                            continue;
+                        }
+                        let mut candidate = after.clone();
+                        apply_branch(&transfer_cx, kind, operation, &mut candidate);
+                        candidate
+                    }
+                    IcfgEdgeKind::Call(site) => {
+                        let Some(call) = facts.call_operation_by_site.get(&site).copied() else {
+                            continue;
+                        };
+                        let Some(callee) = facts.function_for_node(edge.to) else {
+                            continue;
+                        };
+                        let mut candidate = state.clone();
+                        facts.map_call_arguments(call, callee.function, &mut candidate);
+                        next_point.call_stack.push(site);
+                        candidate
+                    }
+                    IcfgEdgeKind::Return(site) => {
+                        if next_point.call_stack.pop() != Some(site) {
+                            continue;
+                        }
+                        let Some(call) = facts.call_operation_by_site.get(&site).copied() else {
+                            continue;
+                        };
+                        let Some(caller) = facts.function_for_node(edge.to) else {
+                            continue;
+                        };
+                        let mut candidate = after.clone();
+                        facts.map_return(body.id, call, caller.function, &mut candidate);
+                        if output_mode.records_operation_states() {
+                            let caller_visible = facts.visible_state(caller.function, &candidate);
+                            let before_call = facts.visible_state(caller.function, &state);
+                            let call_block = facts
+                                .node_by_operation
+                                .get(&call.id)
+                                .map_or(node.block, |node| node.block);
+                            join_operation_state(
+                                &mut operation_states,
+                                call_block,
+                                call,
+                                &before_call,
+                                &caller_visible,
+                            );
+                        }
+                        candidate
+                    }
+                };
+
+                let control_kind = match edge.kind {
+                    IcfgEdgeKind::Intra(kind) | IcfgEdgeKind::CallToReturn(_, kind) => Some(kind),
+                    IcfgEdgeKind::Call(_) | IcfgEdgeKind::Return(_) => None,
+                };
+                if control_kind == Some(CfgEdgeKind::LoopBack) {
                     if widening_fuel == 0 {
-                        status = SolverStatus::Widened;
+                        statuses.insert(body.id, SolverStatus::Widened);
                         candidate.mark_reachability_top(TopReason::Widened);
                         results.record_top_event(
                             body.id,
-                            Some(edge.to_block),
+                            Some(node.block),
                             None,
                             TopReason::Widened,
-                            format!("{};reason=widened", edge.stable_key),
+                            format!("body={};block={};reason=widened", body.id.0, node.block.0),
                         );
                     } else {
                         widening_fuel -= 1;
                     }
                 }
-
-                let changed = entry_states
-                    .entry(edge.to_block)
-                    .or_insert_with(ProductState::bottom)
-                    .join_into(&candidate);
-                if changed == Changed::Yes
-                    && let Some(queue_key) = block_keys.get(&edge.to_block)
-                {
-                    queue.insert(queue_key.clone());
-                }
+                enqueue(&mut states, &mut queue, next_point, candidate);
             }
         }
 
-        let entry_state = entry_states
-            .get(&entry_block)
-            .cloned()
-            .unwrap_or_else(ProductState::bottom);
-        results.insert_function(body.id, body.stable_key.clone(), status, entry_state);
-
-        for block in blocks {
-            results.insert_block_state(
-                body.id,
-                block.id,
-                block.stable_key.clone(),
-                entry_states
-                    .get(&block.id)
-                    .cloned()
-                    .unwrap_or_else(ProductState::bottom),
-                exit_states
-                    .get(&block.id)
-                    .cloned()
-                    .unwrap_or_else(ProductState::bottom),
-            );
-        }
-
-        if let Some(operation_states) = operation_states {
-            for (operation, (block, stable_key, before, after)) in operation_states {
-                results
-                    .insert_operation_state(body.id, block, operation, stable_key, before, after);
-            }
-        }
+        materialize_results(
+            &facts,
+            &states,
+            IdeMaterialization {
+                block_entries,
+                block_exits,
+                operation_states,
+                statuses,
+            },
+            output_mode,
+            &mut results,
+        );
+        SolverResult { results }
     }
 }
 
@@ -294,9 +315,15 @@ struct SolverFactIndex<'a> {
     body_by_id: BTreeMap<MirBodyId, &'a MirBody>,
     operations_by_id: BTreeMap<MirOpId, &'a MirOperation>,
     functions: Vec<&'a crate::analysis::cfg::facts::CfgFunctionFact>,
-    blocks_by_function: BTreeMap<CfgFunctionId, Vec<&'a BasicBlockFact>>,
-    nodes_by_function: BTreeMap<CfgFunctionId, Vec<&'a CfgNodeFact>>,
-    edges_by_function: BTreeMap<CfgFunctionId, Vec<&'a CfgEdgeFact>>,
+    function_by_cfg: BTreeMap<CfgFunctionId, &'a crate::analysis::cfg::facts::CfgFunctionFact>,
+    node_by_id: BTreeMap<CfgNodeId, &'a CfgNodeFact>,
+    node_by_operation: BTreeMap<MirOpId, &'a CfgNodeFact>,
+    blocks: Vec<&'a BasicBlockFact>,
+    last_node_by_block: BTreeMap<BasicBlockId, CfgNodeId>,
+    visible_places_by_function: BTreeMap<FunctionId, BTreeSet<PlaceId>>,
+    parameters_by_function: BTreeMap<FunctionId, Vec<PlaceId>>,
+    call_operation_by_site: BTreeMap<CallSiteId, &'a MirOperation>,
+    return_values_by_body: BTreeMap<MirBodyId, Vec<Option<&'a MirValue>>>,
 }
 
 impl<'a> SolverFactIndex<'a> {
@@ -323,95 +350,182 @@ impl<'a> SolverFactIndex<'a> {
             (left_body, left.stable_key.as_str()).cmp(&(right_body, right.stable_key.as_str()))
         });
 
-        let mut blocks_by_function = BTreeMap::<CfgFunctionId, Vec<&BasicBlockFact>>::new();
-        for block in db.cfg_blocks() {
-            blocks_by_function
-                .entry(block.cfg_function)
-                .or_default()
-                .push(block);
-        }
-        for blocks in blocks_by_function.values_mut() {
-            blocks.sort_by(|left, right| {
-                (left.reverse_postorder, left.stable_key.as_str(), left.id).cmp(&(
-                    right.reverse_postorder,
-                    right.stable_key.as_str(),
-                    right.id,
-                ))
-            });
-        }
-
-        let mut nodes_by_function = BTreeMap::<CfgFunctionId, Vec<&CfgNodeFact>>::new();
+        let function_by_cfg = functions
+            .iter()
+            .map(|function| (function.id, *function))
+            .collect();
+        let mut blocks = db.cfg_blocks().iter().collect::<Vec<_>>();
+        blocks.sort_by_key(|block| (block.reverse_postorder, block.id));
+        let mut node_by_id = BTreeMap::new();
+        let mut node_by_operation = BTreeMap::new();
+        let mut last_node_by_block = BTreeMap::new();
         for node in db.cfg_nodes() {
-            nodes_by_function
-                .entry(node.cfg_function)
-                .or_default()
-                .push(node);
-        }
-        for nodes in nodes_by_function.values_mut() {
-            nodes.sort_by(|left, right| {
-                (left.block, left.operation_ordinal, left.stable_key.as_str()).cmp(&(
-                    right.block,
-                    right.operation_ordinal,
-                    right.stable_key.as_str(),
-                ))
-            });
+            node_by_id.insert(node.id, node);
+            if let Some(operation) = node.operation {
+                node_by_operation.insert(operation, node);
+            }
+            last_node_by_block
+                .entry(node.block)
+                .and_modify(|current: &mut CfgNodeId| {
+                    let current_ordinal = node_by_id[current].operation_ordinal;
+                    if current_ordinal <= node.operation_ordinal {
+                        *current = node.id;
+                    }
+                })
+                .or_insert(node.id);
         }
 
-        let mut edges_by_function = BTreeMap::<CfgFunctionId, Vec<&CfgEdgeFact>>::new();
-        for edge in db.cfg_edges() {
-            if edge.view == CfgView::NormalControl {
-                edges_by_function
-                    .entry(edge.cfg_function)
+        let mut visible_places_by_function = BTreeMap::<FunctionId, BTreeSet<PlaceId>>::new();
+        let mut global_places = BTreeSet::new();
+        let mut parameters_by_function = BTreeMap::<FunctionId, Vec<(u32, PlaceId)>>::new();
+        for place in db.mir_places() {
+            if let Some(function) = place.function {
+                visible_places_by_function
+                    .entry(function)
                     .or_default()
-                    .push(edge);
+                    .insert(place.id);
+            }
+            match place.root {
+                PlaceRoot::Parameter {
+                    function, index, ..
+                } => parameters_by_function
+                    .entry(function)
+                    .or_default()
+                    .push((index, place.id)),
+                PlaceRoot::Global { .. } => {
+                    global_places.insert(place.id);
+                }
+                _ => {}
             }
         }
-        for edges in edges_by_function.values_mut() {
-            edges.sort_by(|left, right| {
+        for places in visible_places_by_function.values_mut() {
+            places.extend(global_places.iter().copied());
+        }
+        let parameters_by_function = parameters_by_function
+            .into_iter()
+            .map(|(function, mut parameters)| {
+                parameters.sort();
                 (
-                    left.from_block,
-                    left.to_block,
-                    left.kind,
-                    left.stable_key.as_str(),
+                    function,
+                    parameters.into_iter().map(|(_, place)| place).collect(),
                 )
-                    .cmp(&(
-                        right.from_block,
-                        right.to_block,
-                        right.kind,
-                        right.stable_key.as_str(),
-                    ))
-            });
+            })
+            .collect();
+        let call_operation_by_site = db
+            .mir_operations()
+            .iter()
+            .filter_map(|operation| match operation.kind {
+                MirOperationKind::Call { site, .. } => Some((site, operation)),
+                _ => None,
+            })
+            .collect();
+        let mut return_values_by_body = BTreeMap::<MirBodyId, Vec<Option<&MirValue>>>::new();
+        for operation in db.mir_operations() {
+            if let MirOperationKind::Return { ref value } = operation.kind {
+                return_values_by_body
+                    .entry(operation.body)
+                    .or_default()
+                    .push(value.as_ref());
+            }
         }
 
         Self {
             body_by_id,
             operations_by_id,
             functions,
-            blocks_by_function,
-            nodes_by_function,
-            edges_by_function,
+            function_by_cfg,
+            node_by_id,
+            node_by_operation,
+            blocks,
+            last_node_by_block,
+            visible_places_by_function,
+            parameters_by_function,
+            call_operation_by_site,
+            return_values_by_body,
         }
     }
 
-    fn blocks(&self, function: CfgFunctionId) -> &[&'a BasicBlockFact] {
-        self.blocks_by_function
-            .get(&function)
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
+    fn function_for_node(
+        &self,
+        node: CfgNodeId,
+    ) -> Option<&'a crate::analysis::cfg::facts::CfgFunctionFact> {
+        self.node_by_id
+            .get(&node)
+            .and_then(|node| self.function_by_cfg.get(&node.cfg_function))
+            .copied()
     }
 
-    fn nodes(&self, function: CfgFunctionId) -> &[&'a CfgNodeFact] {
-        self.nodes_by_function
-            .get(&function)
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
+    fn visible_state(&self, function: FunctionId, state: &ProductState) -> ProductState {
+        let mut visible = state.clone();
+        visible.retain_places(
+            self.visible_places_by_function
+                .get(&function)
+                .unwrap_or(&BTreeSet::new()),
+        );
+        visible
     }
 
-    fn edges(&self, function: CfgFunctionId) -> &[&'a CfgEdgeFact] {
-        self.edges_by_function
-            .get(&function)
+    fn map_call_arguments(
+        &self,
+        call: &MirOperation,
+        callee: FunctionId,
+        state: &mut ProductState,
+    ) {
+        let MirOperationKind::Call { arguments, .. } = &call.kind else {
+            return;
+        };
+        let source = state.clone();
+        for (argument, parameter) in arguments.iter().zip(
+            self.parameters_by_function
+                .get(&callee)
+                .into_iter()
+                .flatten(),
+        ) {
+            state.copy_place_from(&source, *parameter, *argument);
+        }
+    }
+
+    fn map_return(
+        &self,
+        callee_body: MirBodyId,
+        call: &MirOperation,
+        caller: FunctionId,
+        state: &mut ProductState,
+    ) {
+        let MirOperationKind::Call { return_place, .. } = call.kind else {
+            return;
+        };
+        let source = state.clone();
+        state.retain_places(
+            self.visible_places_by_function
+                .get(&caller)
+                .unwrap_or(&BTreeSet::new()),
+        );
+        let values = self
+            .return_values_by_body
+            .get(&callee_body)
             .map(Vec::as_slice)
-            .unwrap_or(&[])
+            .unwrap_or(&[]);
+        if values.is_empty() {
+            state.mark_place_top(return_place, TopReason::UnknownValue);
+            return;
+        }
+        let base = state.clone();
+        let mut joined = ProductState::bottom();
+        for value in values {
+            let mut returned = base.clone();
+            match value {
+                Some(MirValue::Place(source_place)) => {
+                    returned.copy_place_from(&source, return_place, *source_place);
+                }
+                Some(value) => {
+                    OperationTransfer::apply_return_value(&mut returned, return_place, value);
+                }
+                None => returned.mark_place_top(return_place, TopReason::UnknownValue),
+            }
+            joined.join_into(&returned);
+        }
+        *state = joined;
     }
 }
 
@@ -433,95 +547,190 @@ impl SolverResult {
     }
 }
 
-fn operations_by_block<'a>(
-    nodes: &[&CfgNodeFact],
-    operations_by_id: &BTreeMap<MirOpId, &'a MirOperation>,
-) -> BTreeMap<BasicBlockId, Vec<&'a MirOperation>> {
-    let mut operations = BTreeMap::<BasicBlockId, Vec<&MirOperation>>::new();
-    for node in nodes {
-        let Some(operation_id) = node.operation else {
-            continue;
-        };
-        let Some(operation) = operations_by_id.get(&operation_id).copied() else {
-            continue;
-        };
-        operations.entry(node.block).or_default().push(operation);
-    }
-    for block_operations in operations.values_mut() {
-        block_operations.sort_by(|left, right| {
-            (left.ordinal, left.stable_key.as_str(), left.id).cmp(&(
-                right.ordinal,
-                right.stable_key.as_str(),
-                right.id,
-            ))
-        });
-    }
-    operations
-}
-
-fn edges_by_source_block<'a>(
-    edges: &[&'a CfgEdgeFact],
-) -> BTreeMap<BasicBlockId, Vec<&'a CfgEdgeFact>> {
-    let mut by_source = BTreeMap::<BasicBlockId, Vec<&CfgEdgeFact>>::new();
-    for edge in edges {
-        by_source.entry(edge.from_block).or_default().push(*edge);
-    }
-    by_source
-}
-
-fn entry_block(blocks: &[&BasicBlockFact]) -> Option<BasicBlockId> {
-    blocks
-        .iter()
-        .find(|block| block.kind == BasicBlockKind::Entry)
-        .or_else(|| blocks.first())
-        .map(|block| block.id)
-}
-
 fn branch_assumption(
     edge: CfgEdgeKind,
-    operations: Option<&Vec<&MirOperation>>,
-) -> Option<(Option<crate::analysis::ids::PlaceId>, BranchSense)> {
+    operation: Option<&MirOperation>,
+) -> Option<(Option<PlaceId>, BranchSense)> {
     let sense = match edge {
         CfgEdgeKind::True => BranchSense::True,
         CfgEdgeKind::False => BranchSense::False,
         _ => return None,
     };
-    operations.and_then(|operations| {
-        operations.iter().rev().find_map(|operation| {
-            if let MirOperationKind::Branch {
-                predicate_place, ..
-            } = operation.kind
-            {
-                Some((predicate_place, sense))
-            } else {
-                None
-            }
-        })
+    operation.and_then(|operation| {
+        if let MirOperationKind::Branch {
+            predicate_place, ..
+        } = operation.kind
+        {
+            Some((predicate_place, sense))
+        } else {
+            None
+        }
     })
 }
 
-fn mark_budget_exceeded(
-    results: &mut DomainResults,
-    body: MirBodyId,
-    block: BasicBlockId,
-    entry_states: &mut BTreeMap<BasicBlockId, ProductState>,
-    exit_states: &mut BTreeMap<BasicBlockId, ProductState>,
+fn apply_branch(
+    transfer_cx: &TransferCx<'_>,
+    kind: CfgEdgeKind,
+    operation: Option<&MirOperation>,
+    state: &mut ProductState,
 ) {
-    for state in entry_states.values_mut().chain(exit_states.values_mut()) {
+    if let Some((predicate, sense)) = branch_assumption(kind, operation) {
+        EdgeTransfer::apply_branch_assumption(transfer_cx, predicate, sense, state);
+    }
+}
+
+fn enqueue(
+    states: &mut BTreeMap<ExplodedPoint, ProductState>,
+    queue: &mut VecDeque<ExplodedPoint>,
+    point: ExplodedPoint,
+    incoming: ProductState,
+) {
+    let changed = states
+        .entry(point.clone())
+        .or_insert_with(ProductState::bottom)
+        .join_into(&incoming);
+    if changed == Changed::Yes {
+        queue.push_back(point);
+    }
+}
+
+fn join_state<K: Ord + Copy>(
+    states: &mut BTreeMap<K, ProductState>,
+    key: K,
+    incoming: &ProductState,
+) {
+    states
+        .entry(key)
+        .or_insert_with(ProductState::bottom)
+        .join_into(incoming);
+}
+
+fn join_operation_state(
+    states: &mut BTreeMap<MirOpId, (BasicBlockId, String, ProductState, ProductState)>,
+    block: BasicBlockId,
+    operation: &MirOperation,
+    before: &ProductState,
+    after: &ProductState,
+) {
+    let row = states.entry(operation.id).or_insert_with(|| {
+        (
+            block,
+            operation.stable_key.clone(),
+            ProductState::bottom(),
+            ProductState::bottom(),
+        )
+    });
+    row.2.join_into(before);
+    row.3.join_into(after);
+}
+
+fn mark_ide_budget_exceeded(
+    facts: &SolverFactIndex<'_>,
+    states: &mut BTreeMap<ExplodedPoint, ProductState>,
+    statuses: &mut BTreeMap<MirBodyId, SolverStatus>,
+    results: &mut DomainResults,
+    node: CfgNodeId,
+) {
+    for state in states.values_mut() {
         state.mark_reachability_top(TopReason::BudgetExceeded);
     }
+    for status in statuses.values_mut() {
+        *status = SolverStatus::BudgetExceeded;
+    }
+    let Some(cfg_node) = facts.node_by_id.get(&node) else {
+        return;
+    };
+    let Some(function) = facts.function_by_cfg.get(&cfg_node.cfg_function) else {
+        return;
+    };
     results.record_top_event(
-        body,
-        Some(block),
+        function.body,
+        Some(cfg_node.block),
         None,
         TopReason::BudgetExceeded,
-        format!("body={};block={};reason=budget_exceeded", body.0, block.0),
+        format!(
+            "body={};block={};reason=budget_exceeded",
+            function.body.0, cfg_node.block.0
+        ),
     );
+}
+
+fn materialize_results(
+    facts: &SolverFactIndex<'_>,
+    states: &BTreeMap<ExplodedPoint, ProductState>,
+    materialization: IdeMaterialization,
+    output_mode: SolverOutputMode,
+    results: &mut DomainResults,
+) {
+    for function in &facts.functions {
+        let mut entry = ProductState::bottom();
+        for (point, state) in states {
+            if point.node == function.entry_node {
+                entry.join_into(&facts.visible_state(function.function, state));
+            }
+        }
+        let body_key = facts.body_by_id.get(&function.body).map_or_else(
+            || function.stable_key.clone(),
+            |body| body.stable_key.clone(),
+        );
+        results.insert_function(
+            function.body,
+            body_key,
+            materialization
+                .statuses
+                .get(&function.body)
+                .copied()
+                .unwrap_or(SolverStatus::Solved),
+            entry,
+        );
+    }
+
+    for block in &facts.blocks {
+        let Some(function) = facts.function_by_cfg.get(&block.cfg_function) else {
+            continue;
+        };
+        results.insert_block_state(
+            function.body,
+            block.id,
+            block.stable_key.clone(),
+            materialization
+                .block_entries
+                .get(&block.id)
+                .cloned()
+                .unwrap_or_else(ProductState::bottom),
+            materialization
+                .block_exits
+                .get(&block.id)
+                .cloned()
+                .unwrap_or_else(ProductState::bottom),
+        );
+    }
+
+    if output_mode.records_operation_states() {
+        for (operation, (block, stable_key, before, after)) in materialization.operation_states {
+            let Some(mir_operation) = facts.operations_by_id.get(&operation) else {
+                continue;
+            };
+            results.insert_operation_state(
+                mir_operation.body,
+                block,
+                operation,
+                stable_key,
+                before,
+                after,
+            );
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis::calls::facts::{
+        CallAlgorithm, CallCallee, CallEdgeKind, CallPrecision, CallProvenance, CallSiteFact,
+        CallSyntaxKind, CallTargetStatus,
+    };
+    use crate::analysis::calls::store::CallOutput;
     use crate::analysis::cfg::facts::{
         BasicBlockFact, BasicBlockKind, CfgEdgeFact, CfgEdgeKind, CfgFunctionFact, CfgNodeFact,
         CfgNodeKind, CfgPrecision, CfgStatus, CfgView,
@@ -531,17 +740,21 @@ mod tests {
     use crate::analysis::domains::core::{ConstantDomain, ConstantLiteral, ReachabilityDomain};
     use crate::analysis::domains::lattice::TopReason;
     use crate::analysis::domains::store::{DomainMaterialization, DomainOutput};
-    use crate::analysis::ids::{MirBodyId, MirOpId, PlaceId};
+    use crate::analysis::ids::{CallTargetId, MirBodyId, MirOpId, PlaceId, RefinedCallEdgeId};
     use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
     use crate::analysis::mir::op::{AssignMode, MirOperation, MirOperationKind, MirValue};
     use crate::analysis::places::{PlaceFact, PlaceRoot, PlaceStatus};
+    use crate::analysis::refined_calls::facts::{
+        RefinedCallConfidence, RefinedCallEdgeFact, RefinedCallTier, RefinedCallValidation,
+    };
+    use crate::analysis::refined_calls::store::RefinedCallOutput;
     use crate::core::{FileId, FunctionId, Language, Span};
 
     #[test]
     fn deterministic_shuffled_rows_produce_byte_identical_result_digests() {
         let first = test_fixture::solver_input(false);
         let second = test_fixture::solver_input(true);
-        let solver = LocalDomainSolver::new(SolverPolicy::for_test(SolverBudget {
+        let solver = IdeDomainSolver::new(SolverPolicy::for_test(SolverBudget {
             max_iterations: 16,
             widening_fuel: 2,
         }));
@@ -555,7 +768,7 @@ mod tests {
     #[test]
     fn loop_back_edges_consume_widening_fuel_and_record_widening_top() {
         let input = test_fixture::looping_solver_input();
-        let solver = LocalDomainSolver::new(SolverPolicy::for_test(SolverBudget {
+        let solver = IdeDomainSolver::new(SolverPolicy::for_test(SolverBudget {
             max_iterations: 16,
             widening_fuel: 0,
         }));
@@ -568,7 +781,7 @@ mod tests {
     #[test]
     fn budget_exhaustion_marks_function_result_budget_top() {
         let input = test_fixture::looping_solver_input();
-        let solver = LocalDomainSolver::new(SolverPolicy::for_test(SolverBudget {
+        let solver = IdeDomainSolver::new(SolverPolicy::for_test(SolverBudget {
             max_iterations: 1,
             widening_fuel: 4,
         }));
@@ -582,7 +795,7 @@ mod tests {
     #[test]
     fn cursor_after_operation_exposes_transfer_materialized_state() {
         let input = test_fixture::solver_input(false);
-        let solver = LocalDomainSolver::new(SolverPolicy::for_test(SolverBudget {
+        let solver = IdeDomainSolver::new(SolverPolicy::for_test(SolverBudget {
             max_iterations: 16,
             widening_fuel: 2,
         }));
@@ -607,7 +820,7 @@ mod tests {
     #[test]
     fn unreachable_blocks_expose_unreachable_without_value_facts() {
         let input = test_fixture::unreachable_solver_input();
-        let solver = LocalDomainSolver::new(SolverPolicy::for_test(SolverBudget {
+        let solver = IdeDomainSolver::new(SolverPolicy::for_test(SolverBudget {
             max_iterations: 16,
             widening_fuel: 2,
         }));
@@ -628,7 +841,7 @@ mod tests {
     #[test]
     fn solving_same_function_twice_returns_identical_stable_result_rows() {
         let input = test_fixture::solver_input(false);
-        let solver = LocalDomainSolver::new(SolverPolicy::for_test(SolverBudget {
+        let solver = IdeDomainSolver::new(SolverPolicy::for_test(SolverBudget {
             max_iterations: 16,
             widening_fuel: 2,
         }));
@@ -642,7 +855,7 @@ mod tests {
     #[test]
     fn summary_input_solver_skips_operation_states_without_changing_output_rows() {
         let input = test_fixture::solver_input(false);
-        let solver = LocalDomainSolver::new(SolverPolicy::for_test(SolverBudget {
+        let solver = IdeDomainSolver::new(SolverPolicy::for_test(SolverBudget {
             max_iterations: 16,
             widening_fuel: 2,
         }));
@@ -662,6 +875,39 @@ mod tests {
 
         assert_eq!(full_output, summary_output);
         assert!(summary.results().before_operation(MirOpId(0)).is_none());
+    }
+
+    #[test]
+    fn ide_solver_maps_constant_and_nilness_through_matched_call_and_return() {
+        let input = test_fixture::interprocedural_solver_input();
+        let solver = IdeDomainSolver::new(SolverPolicy::for_test(SolverBudget {
+            max_iterations: 64,
+            widening_fuel: 2,
+        }));
+
+        let result = solver.solve(input);
+        let after_call = result
+            .results()
+            .after_operation(MirOpId(1))
+            .expect("matched return should materialize the call result");
+
+        assert_eq!(
+            *after_call
+                .core
+                .constants
+                .get(&PlaceId(1))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "missing return constant in {after_call:?}; callee={:?}",
+                        result.results().after_operation(MirOpId(2))
+                    )
+                }),
+            ConstantDomain::from_literal(ConstantLiteral::String("ready".to_string()))
+        );
+        assert_eq!(
+            after_call.core.nilness.get(&PlaceId(1)),
+            Some(&crate::analysis::domains::core::NilnessDomain::NonNil)
+        );
     }
 
     mod test_fixture {
@@ -708,6 +954,326 @@ mod tests {
             db.replace_cfg_facts(cfg).expect("CFG should store");
             let db = Box::leak(Box::new(db));
             (&*db).into()
+        }
+
+        pub(super) fn interprocedural_solver_input() -> SolverInput<'static> {
+            let caller = FunctionId(1);
+            let callee = FunctionId(2);
+            let argument = PlaceId(0);
+            let call_result = PlaceId(1);
+            let parameter = PlaceId(2);
+            let site = CallSiteId(1);
+            let mut db = AnalysisDb::new();
+            db.replace_semantic_mir(MirOutput {
+                bodies: vec![
+                    mir_body(MirBodyId(0), caller, "body:0:caller"),
+                    mir_body(MirBodyId(1), callee, "body:1:callee"),
+                ],
+                places: vec![
+                    local_place(argument, caller, "argument", "place:0:argument"),
+                    local_place(call_result, caller, "result", "place:1:result"),
+                    PlaceFact {
+                        id: parameter,
+                        language: Language::Go,
+                        file: Some(FileId(1)),
+                        function: Some(callee),
+                        root: PlaceRoot::Parameter {
+                            function: callee,
+                            index: 0,
+                            name: Some("value".to_string()),
+                        },
+                        projections: Vec::new(),
+                        stable_key: "place:2:callee:value".to_string(),
+                        status: PlaceStatus::Resolved,
+                    },
+                ],
+                operations: vec![
+                    mir_operation(
+                        MirOpId(0),
+                        MirBodyId(0),
+                        MirOperationKind::Assign {
+                            place: argument,
+                            value: MirValue::Literal {
+                                value: "\"ready\"".to_string(),
+                            },
+                            mode: AssignMode::Overwrite,
+                        },
+                        "op:0:caller:assign",
+                    ),
+                    mir_operation(
+                        MirOpId(1),
+                        MirBodyId(0),
+                        MirOperationKind::Call {
+                            site,
+                            callee: MirValue::Unknown {
+                                evidence: "callee".to_string(),
+                            },
+                            arguments: vec![argument],
+                            return_place: call_result,
+                        },
+                        "op:1:caller:call",
+                    ),
+                    mir_operation(
+                        MirOpId(2),
+                        MirBodyId(1),
+                        MirOperationKind::Return {
+                            value: Some(MirValue::Place(parameter)),
+                        },
+                        "op:2:callee:return",
+                    ),
+                ],
+                unsupported: Vec::new(),
+                ..MirOutput::default()
+            })
+            .expect("semantic MIR should store");
+            db.replace_cfg_facts(interprocedural_cfg(caller, callee))
+                .expect("CFG should store");
+            db.replace_call_facts(CallOutput {
+                sites: vec![call_site(site, caller)],
+                targets: Vec::new(),
+                unresolved: Vec::new(),
+            })
+            .expect("call facts should store");
+            db.replace_refined_call_facts(RefinedCallOutput {
+                edges: vec![refined_call(site, caller, callee)],
+            })
+            .expect("refined calls should store");
+            let db = Box::leak(Box::new(db));
+            (&*db).into()
+        }
+
+        fn mir_body(id: MirBodyId, function: FunctionId, stable_key: &str) -> MirBody {
+            MirBody {
+                id,
+                language: Language::Go,
+                file: FileId(1),
+                function,
+                package: None,
+                module: None,
+                owner_stable_key: format!("owner:{}", function.0),
+                span: span(),
+                stable_key: stable_key.to_string(),
+                status: MirStatus::Resolved,
+            }
+        }
+
+        fn local_place(
+            id: PlaceId,
+            function: FunctionId,
+            name: &str,
+            stable_key: &str,
+        ) -> PlaceFact {
+            PlaceFact {
+                id,
+                language: Language::Go,
+                file: Some(FileId(1)),
+                function: Some(function),
+                root: PlaceRoot::Local {
+                    function,
+                    name: name.to_string(),
+                },
+                projections: Vec::new(),
+                stable_key: stable_key.to_string(),
+                status: PlaceStatus::Resolved,
+            }
+        }
+
+        fn mir_operation(
+            id: MirOpId,
+            body: MirBodyId,
+            kind: MirOperationKind,
+            stable_key: &str,
+        ) -> MirOperation {
+            MirOperation {
+                id,
+                body,
+                ordinal: id.0 as u32,
+                span: span(),
+                kind,
+                stable_key: stable_key.to_string(),
+                status: MirStatus::Resolved,
+            }
+        }
+
+        fn interprocedural_cfg(caller: FunctionId, callee: FunctionId) -> CfgOutput {
+            let functions = vec![
+                cfg_function_for(1, 0, caller, 1, 4, "cfg:caller"),
+                cfg_function_for(2, 1, callee, 10, 12, "cfg:callee"),
+            ];
+            let blocks = vec![
+                cfg_block(1, 1, BasicBlockKind::Entry, 0),
+                cfg_block(2, 1, BasicBlockKind::StraightLine, 1),
+                cfg_block(3, 1, BasicBlockKind::StraightLine, 2),
+                cfg_block(4, 1, BasicBlockKind::ExitNormal, 3),
+                cfg_block(10, 2, BasicBlockKind::Entry, 0),
+                cfg_block(11, 2, BasicBlockKind::StraightLine, 1),
+                cfg_block(12, 2, BasicBlockKind::ExitNormal, 2),
+            ];
+            let nodes = vec![
+                cfg_node_for(1, 1, 1, 0, None),
+                cfg_node_for(2, 1, 2, 1, Some(MirOpId(0))),
+                cfg_node_for(3, 1, 3, 2, Some(MirOpId(1))),
+                cfg_node_for(4, 1, 4, 3, None),
+                cfg_node_for(10, 2, 10, 0, None),
+                cfg_node_for(11, 2, 11, 1, Some(MirOpId(2))),
+                cfg_node_for(12, 2, 12, 2, None),
+            ];
+            let edges = vec![
+                cfg_edge_for(1, 1, 1, 2),
+                cfg_edge_for(2, 1, 2, 3),
+                cfg_edge_for(3, 1, 3, 4),
+                cfg_edge_for(4, 2, 10, 11),
+                cfg_edge_for(5, 2, 11, 12),
+            ];
+            CfgOutput {
+                functions,
+                blocks,
+                nodes,
+                edges,
+                ..CfgOutput::empty()
+            }
+        }
+
+        fn cfg_function_for(
+            id: u64,
+            body: u64,
+            function: FunctionId,
+            entry: u64,
+            exit: u64,
+            stable_key: &str,
+        ) -> CfgFunctionFact {
+            CfgFunctionFact {
+                id: CfgFunctionId(id),
+                body: MirBodyId(body),
+                function,
+                language: Language::Go,
+                file: FileId(1),
+                span: span(),
+                entry_node: CfgNodeId(entry),
+                normal_exit_node: CfgNodeId(exit),
+                exceptional_exit_node: None,
+                stable_key: stable_key.to_string(),
+                status: CfgStatus::Resolved,
+                precision: CfgPrecision::ExactLowered,
+            }
+        }
+
+        fn cfg_block(
+            id: u64,
+            function: u64,
+            kind: BasicBlockKind,
+            reverse_postorder: u32,
+        ) -> BasicBlockFact {
+            BasicBlockFact {
+                id: BasicBlockId(id),
+                cfg_function: CfgFunctionId(function),
+                kind,
+                first_node: Some(CfgNodeId(id)),
+                last_node: Some(CfgNodeId(id)),
+                reachable: true,
+                reverse_postorder,
+                stable_key: format!("block:{function}:{id}"),
+                status: CfgStatus::Resolved,
+                precision: CfgPrecision::ExactLowered,
+            }
+        }
+
+        fn cfg_node_for(
+            id: u64,
+            function: u64,
+            block: u64,
+            ordinal: u32,
+            operation: Option<MirOpId>,
+        ) -> CfgNodeFact {
+            CfgNodeFact {
+                id: CfgNodeId(id),
+                cfg_function: CfgFunctionId(function),
+                body: MirBodyId(function - 1),
+                operation,
+                block: BasicBlockId(block),
+                kind: if operation.is_some() {
+                    CfgNodeKind::Operation
+                } else {
+                    CfgNodeKind::Synthetic
+                },
+                span: Some(span()),
+                generated: operation.is_none(),
+                operation_ordinal: ordinal,
+                stable_key: format!("node:{function}:{id}"),
+                status: CfgStatus::Resolved,
+                precision: CfgPrecision::ExactLowered,
+            }
+        }
+
+        fn cfg_edge_for(id: u64, function: u64, from: u64, to: u64) -> CfgEdgeFact {
+            CfgEdgeFact {
+                id: CfgEdgeId(id),
+                cfg_function: CfgFunctionId(function),
+                view: CfgView::NormalControl,
+                from: CfgNodeId(from),
+                to: CfgNodeId(to),
+                from_block: BasicBlockId(from),
+                to_block: BasicBlockId(to),
+                kind: CfgEdgeKind::Normal,
+                label: None,
+                stable_key: format!("edge:{function}:{from}:{to}"),
+                status: CfgStatus::Resolved,
+                precision: CfgPrecision::ExactLowered,
+            }
+        }
+
+        fn call_site(site: CallSiteId, caller: FunctionId) -> CallSiteFact {
+            CallSiteFact {
+                id: site,
+                language: Language::Go,
+                file: FileId(1),
+                caller,
+                owner_symbol: None,
+                body: MirBodyId(0),
+                operation: MirOpId(1),
+                span: span(),
+                kind: CallSyntaxKind::Function,
+                callee: CallCallee::Identifier {
+                    reference: None,
+                    name: "callee".to_string(),
+                },
+                receiver: None,
+                arguments: vec![PlaceId(0)],
+                result: Some(PlaceId(1)),
+                status: CallTargetStatus::Resolved,
+                precision: CallPrecision::Exact,
+                in_throw: false,
+                stable_key: "call:caller:callee".to_string(),
+            }
+        }
+
+        fn refined_call(
+            site: CallSiteId,
+            caller: FunctionId,
+            callee: FunctionId,
+        ) -> RefinedCallEdgeFact {
+            RefinedCallEdgeFact {
+                id: RefinedCallEdgeId(1),
+                site,
+                base_target: Some(CallTargetId(1)),
+                caller,
+                target_function: Some(callee),
+                target_symbol: None,
+                synthetic_target: None,
+                language: Language::Go,
+                edge_kind: CallEdgeKind::Direct,
+                algorithm: CallAlgorithm::DirectReference,
+                tier: RefinedCallTier::DirectOnly,
+                status: CallTargetStatus::Resolved,
+                reason: None,
+                provenance: CallProvenance::Native,
+                precision: CallPrecision::Exact,
+                validation: RefinedCallValidation::ReferentiallyValidated,
+                confidence: RefinedCallConfidence::High,
+                evidence: Vec::new(),
+                input_stable_keys: Vec::new(),
+                stable_key: "refined:caller:callee".to_string(),
+            }
         }
 
         fn span() -> Span {

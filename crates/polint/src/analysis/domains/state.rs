@@ -118,6 +118,63 @@ impl ProductState {
             .collect()
     }
 
+    pub(crate) fn retain_places(&mut self, places: &BTreeSet<PlaceId>) {
+        self.core.nilness.retain(|place, _| places.contains(place));
+        self.core
+            .truthiness
+            .retain(|place, _| places.contains(place));
+        self.core
+            .constants
+            .retain(|place, _| places.contains(place));
+        self.core.strings.retain(|place, _| places.contains(place));
+        self.core
+            .initializedness
+            .retain(|place, _| places.contains(place));
+    }
+
+    pub(crate) fn copy_place_from(
+        &mut self,
+        source_state: &Self,
+        target: PlaceId,
+        source: PlaceId,
+    ) {
+        self.core.nilness.remove(&target);
+        self.core.truthiness.remove(&target);
+        self.core.constants.remove(&target);
+        self.core.strings.remove(&target);
+        self.core.initializedness.remove(&target);
+        copy_slot(
+            &mut self.core.nilness,
+            &source_state.core.nilness,
+            target,
+            source,
+        );
+        copy_slot(
+            &mut self.core.truthiness,
+            &source_state.core.truthiness,
+            target,
+            source,
+        );
+        copy_slot(
+            &mut self.core.constants,
+            &source_state.core.constants,
+            target,
+            source,
+        );
+        copy_slot(
+            &mut self.core.strings,
+            &source_state.core.strings,
+            target,
+            source,
+        );
+        copy_slot(
+            &mut self.core.initializedness,
+            &source_state.core.initializedness,
+            target,
+            source,
+        );
+    }
+
     pub(crate) fn widen(&self, next: &Self, site: WidenSite, fuel: WidenFuel) -> Self {
         let mut widened = self.clone();
         widened.core.reachability =
@@ -240,6 +297,17 @@ where
         changed |= join_single(target, *place, incoming_value);
     }
     changed
+}
+
+fn copy_slot<D: Clone>(
+    target_map: &mut BTreeMap<PlaceId, D>,
+    source_map: &BTreeMap<PlaceId, D>,
+    target: PlaceId,
+    source: PlaceId,
+) {
+    if let Some(value) = source_map.get(&source) {
+        target_map.insert(target, value.clone());
+    }
 }
 
 fn place_map_leq<D>(left: &BTreeMap<PlaceId, D>, right: &BTreeMap<PlaceId, D>) -> bool

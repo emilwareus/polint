@@ -51,27 +51,27 @@ pub(crate) enum DataFlowPathStatus {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum IcfgEdgeKind {
-    Intra,
+pub(crate) enum IcfgEdgeKind {
+    Intra(crate::analysis::cfg::facts::CfgEdgeKind),
     Call(CallSiteId),
     Return(CallSiteId),
-    CallToReturn(CallSiteId),
+    CallToReturn(CallSiteId, crate::analysis::cfg::facts::CfgEdgeKind),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct IcfgEdge {
-    to: CfgNodeId,
-    kind: IcfgEdgeKind,
+pub(crate) struct IcfgEdge {
+    pub(crate) to: CfgNodeId,
+    pub(crate) kind: IcfgEdgeKind,
 }
 
 #[derive(Debug, Default)]
-struct Icfg {
+pub(crate) struct Icfg {
     outgoing: BTreeMap<CfgNodeId, Vec<IcfgEdge>>,
     calls: BTreeMap<CallSiteId, BTreeSet<RefinedCallEdgeId>>,
 }
 
 impl Icfg {
-    fn build(db: &AnalysisDb) -> Self {
+    pub(crate) fn build(db: &AnalysisDb) -> Self {
         Self::from_facts(
             db.cfg_functions(),
             db.cfg_nodes(),
@@ -111,8 +111,9 @@ impl Icfg {
             let kind = call_site_by_node
                 .get(&edge.from)
                 .copied()
-                .map(IcfgEdgeKind::CallToReturn)
-                .unwrap_or(IcfgEdgeKind::Intra);
+                .map_or(IcfgEdgeKind::Intra(edge.kind), |site| {
+                    IcfgEdgeKind::CallToReturn(site, edge.kind)
+                });
             graph.push_edge(edge.from, edge.to, kind);
         }
 
@@ -144,7 +145,7 @@ impl Icfg {
                 .into_iter()
                 .flatten()
                 .filter_map(|edge| {
-                    matches!(edge.kind, IcfgEdgeKind::CallToReturn(site) if site == refined.site)
+                    matches!(edge.kind, IcfgEdgeKind::CallToReturn(site, _) if site == refined.site)
                         .then_some(edge.to)
                 })
                 .collect::<Vec<_>>();
@@ -169,6 +170,14 @@ impl Icfg {
             .entry(from)
             .or_default()
             .push(IcfgEdge { to, kind });
+    }
+
+    pub(crate) fn outgoing(&self, node: CfgNodeId) -> &[IcfgEdge] {
+        self.outgoing.get(&node).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    pub(crate) fn has_resolved_call(&self, site: CallSiteId) -> bool {
+        self.calls.get(&site).is_some_and(|edges| !edges.is_empty())
     }
 
     fn accepts_boundary(&self, site: CallSiteId, refined_call: Option<RefinedCallEdgeId>) -> bool {
@@ -542,7 +551,7 @@ mod tests {
             BTreeSet::from([
                 IcfgEdge {
                     to: CfgNodeId(2),
-                    kind: IcfgEdgeKind::CallToReturn(CallSiteId(1)),
+                    kind: IcfgEdgeKind::CallToReturn(CallSiteId(1), CfgEdgeKind::Normal),
                 },
                 IcfgEdge {
                     to: CfgNodeId(4),

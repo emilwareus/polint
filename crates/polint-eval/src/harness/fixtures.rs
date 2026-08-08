@@ -799,7 +799,7 @@ fn abstract_domain_observed_with_policy(
             plan,
             parallel: true,
         })?;
-    let solver = crate::analysis::domains::solver::LocalDomainSolver::new(policy);
+    let solver = crate::analysis::domains::solver::IdeDomainSolver::new(policy);
     let result = solver.solve(crate::analysis::domains::solver::SolverInput::from(
         &output.db,
     ));

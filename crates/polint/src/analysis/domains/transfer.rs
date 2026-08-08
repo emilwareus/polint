@@ -176,6 +176,15 @@ impl OperationTransfer {
         }
         state.reduce_value_only(4);
     }
+
+    pub(crate) fn apply_return_value(
+        state: &mut ProductState,
+        return_place: PlaceId,
+        value: &MirValue,
+    ) {
+        assign_value(state, return_place, value);
+        state.reduce_value_only(4);
+    }
 }
 
 impl EdgeTransfer {
