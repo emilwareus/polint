@@ -9,6 +9,7 @@
 - **Do M3 (real IR) and M4 (IFDS / principled engine) on this PR/branch.**
 - **Migrate existing Go + TypeScript/JavaScript analysis only.** No new languages. No Rust frontend. No layering dogfood (W0.3 stays deferred follow-up).
 - **No new product features, no placeholders, no “reserved for later” hooks** that are not required to migrate what already exists.
+- **No dual paths. No internal backwards compatibility.** Complete migration only: delete old logic in the same change that lands the new path. Do not keep `legacy`/`compat`/`v1` shims, parallel CFG/MIR readers, flat-op control-flow alongside blocks, or “temporary” dual dispatch that survives the PR. New path only.
 - **No behavior regressions** on existing goldens / public SDK contracts unless a golden lock is explicitly granted for a justified MIR/CFG migration step.
 - **Interning (W2.3 StableKeyId):** follow-up only — do not block M3/M4.
 - **LoC / retained-bytes-per-LOC / cycle-count gates:** ignored as ship criteria. Architecture correctness and non-regression matter.

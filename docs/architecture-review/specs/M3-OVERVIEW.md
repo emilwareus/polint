@@ -43,6 +43,8 @@ Then **M4** (separate specs under `W4.*`).
 
 ---
 
-## Dual-system ban
+## Dual-system ban (hard)
 
-Do **not** leave “flat ops CFG” and “block CFG” both live. Prefer small PRs that each leave **one** production path. Temporary scaffolding inside a single land commit is fine; long-lived dual dispatch is not.
+Do **not** leave “flat ops CFG” and “block CFG” both live. Prefer small PRs that each leave **one** production path.
+
+**Human binding:** complete migration only — **no internal backwards compatibility**, no `legacy`/`compat` shims, no parallel readers, no “keep old until callers move” leftovers. When the new path lands, the old path is **deleted in the same change**. Temporary scaffolding that does not ship on the branch tip is fine; dual dispatch on the landed tip is not.
