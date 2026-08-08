@@ -737,7 +737,7 @@ fn polint_test_json_matches_schema_v1() {
 }
 
 #[test]
-fn new_rule_generates_positive_and_negative_agent_fixtures() {
+fn new_rule_generates_clean_and_violating_agent_fixtures() {
     let temp = tempfile::tempdir().unwrap();
     polint_cmd()
         .current_dir(temp.path())
@@ -752,12 +752,12 @@ fn new_rule_generates_positive_and_negative_agent_fixtures() {
 
     assert!(
         temp.path()
-            .join(".polint/tests/rules/no_raw_colors/positive/polint-test.toml")
+            .join(".polint/tests/rules/no_raw_colors/clean/polint-test.toml")
             .is_file()
     );
     assert!(
         temp.path()
-            .join(".polint/tests/rules/no_raw_colors/negative/polint-test.toml")
+            .join(".polint/tests/rules/no_raw_colors/violating/polint-test.toml")
             .is_file()
     );
 }
@@ -2382,17 +2382,17 @@ paths = [".polint/rules"]
     let rule_path = temp.path().join(".polint/rules/src/no_raw_colors.rs");
     let fixture_manifest = temp
         .path()
-        .join(".polint/tests/rules/no_raw_colors/negative/polint-test.toml");
+        .join(".polint/tests/rules/no_raw_colors/violating/polint-test.toml");
     let fixture_source = temp
         .path()
-        .join(".polint/tests/rules/no_raw_colors/negative/src/example.ts");
-    let positive_manifest = temp
+        .join(".polint/tests/rules/no_raw_colors/violating/src/example.ts");
+    let clean_manifest = temp
         .path()
-        .join(".polint/tests/rules/no_raw_colors/positive/polint-test.toml");
+        .join(".polint/tests/rules/no_raw_colors/clean/polint-test.toml");
     assert!(rule_path.is_file());
     assert!(fixture_manifest.is_file());
     assert!(fixture_source.is_file());
-    assert!(positive_manifest.is_file());
+    assert!(clean_manifest.is_file());
 
     let generated_rule = fs::read_to_string(&rule_path).unwrap();
     assert!(generated_rule.contains("use polint::sdk::prelude::*;"));
@@ -6851,13 +6851,13 @@ fn new_rule_js_uses_js_fixture_files_for_non_template_rules() {
 
     assert!(
         temp.path()
-            .join(".polint/tests/rules/no_debug_name/positive/src/example.js")
+            .join(".polint/tests/rules/no_debug_name/clean/src/example.js")
             .is_file()
     );
     assert!(
         !temp
             .path()
-            .join(".polint/tests/rules/no_debug_name/positive/src/example.ts")
+            .join(".polint/tests/rules/no_debug_name/clean/src/example.ts")
             .exists()
     );
 }

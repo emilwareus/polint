@@ -282,8 +282,9 @@ Repo-local rules live in **one** Rust package under `.polint/rules/`:
 ```
 
 `polint new-rule <lang> <name>` adds `src/<name_with_underscores>.rs`, wires it
-into `src/main.rs`, and creates positive and negative fixture cases under
-`.polint/tests/rules/<name_with_underscores>/`. For v1.4 policy-query starters,
+into `src/main.rs`, and creates clean and violating fixture cases under
+`.polint/tests/rules/<name_with_underscores>/` (`clean` expects no diagnostic;
+`violating` expects the rule to fire). For v1.4 policy-query starters,
 use `--template <id>` with TypeScript for `request-to-shell`, `secret-to-log`,
 `pii-to-analytics`, `sensitive-write-guard`, `transaction-cleanup`,
 `raw-reachable-api`, `ssrf`, `dangerous-html`, `unsafe-deserialization`, or
@@ -502,4 +503,35 @@ fn display_relative(root: &Path, path: &Path) -> String {
         .unwrap_or(path)
         .to_string_lossy()
         .replace('\\', "/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn repo_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    #[test]
+    fn checked_in_skills_match_generated_skill_markdown_byte_for_byte() {
+        let claude_path = repo_root().join(".claude/skills/polint/SKILL.md");
+        let codex_path = repo_root().join(".agents/skills/polint/SKILL.md");
+        let checked_in_claude = fs::read_to_string(&claude_path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", claude_path.display()));
+        let checked_in_codex = fs::read_to_string(&codex_path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", codex_path.display()));
+        assert_eq!(
+            checked_in_claude,
+            skill_markdown(SkillAgent::Claude),
+            "{} must match skill_markdown(Claude) byte-for-byte",
+            claude_path.display()
+        );
+        assert_eq!(
+            checked_in_codex,
+            skill_markdown(SkillAgent::Codex),
+            "{} must match skill_markdown(Codex) byte-for-byte",
+            codex_path.display()
+        );
+    }
 }

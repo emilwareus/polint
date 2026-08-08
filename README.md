@@ -427,6 +427,19 @@ same relevant inputs should restore those caches. See the
 [GitHub Action guide](docs/GITHUB-ACTION.md) for inputs, cache keys, and
 pinning options.
 
+## Versions
+
+| Component | Requirement |
+|-----------|-------------|
+| Rust (MSRV) | 1.95 |
+| Go (symbol/reference sidecars) | 1.25+ on `PATH` |
+
+### Minimum Rust version
+
+polint's MSRV is **1.95** (workspace `rust-version` and root `rust-toolchain.toml`).
+`polint init` writes a matching root `rust-toolchain.toml` when missing so
+repo-local rule packs build with a compatible compiler.
+
 ## More
 
 - [Examples](examples/)

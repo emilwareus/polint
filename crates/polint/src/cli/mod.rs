@@ -779,7 +779,7 @@ fn new_rule(root: PathBuf, args: &NewRuleArgs) -> Result<()> {
     )?;
     if args.review {
         // A review rule's diagnostics depend on a diff, so the static
-        // positive/negative `polint check` fixtures do not apply. Review rules
+        // clean/violating `polint check` fixtures do not apply. Review rules
         // are exercised with `polint review <ref>`.
         println!(
             "Created review rule module {} (run it with `polint review <ref>`; \
@@ -1011,9 +1011,9 @@ fn write_rule_fixture_skeleton(
     }
     let fixture_file = language.fixture_file();
     write_rule_fixture_case(
-        &rule_tests_dir.join("positive"),
+        &rule_tests_dir.join("clean"),
         language.as_str(),
-        &rule_fixture_positive_source_template(language.as_str(), template),
+        &rule_fixture_clean_source_template(language.as_str(), template),
         &rule_fixture_manifest_template(
             rule_name,
             fixture_file,
@@ -1023,9 +1023,9 @@ fn write_rule_fixture_skeleton(
         ),
     )?;
     write_rule_fixture_case(
-        &rule_tests_dir.join("negative"),
+        &rule_tests_dir.join("violating"),
         language.as_str(),
-        &rule_fixture_negative_source_template(language.as_str(), template),
+        &rule_fixture_violating_source_template(language.as_str(), template),
         &rule_fixture_manifest_template(
             rule_name,
             fixture_file,
@@ -1108,13 +1108,13 @@ fn rule_fixture_severity(template: Option<RuleTemplateKind>) -> &'static str {
     if template.is_some() { "error" } else { "warn" }
 }
 
-fn rule_fixture_positive_source_template(
+fn rule_fixture_clean_source_template(
     language: &str,
     template: Option<RuleTemplateKind>,
 ) -> String {
     if let Some(template) = template {
         return policy_template_spec(language, template)
-            .positive_source
+            .clean_source
             .to_string();
     }
 
@@ -1135,13 +1135,13 @@ func main() {}
     }
 }
 
-fn rule_fixture_negative_source_template(
+fn rule_fixture_violating_source_template(
     language: &str,
     template: Option<RuleTemplateKind>,
 ) -> String {
     if let Some(template) = template {
         return policy_template_spec(language, template)
-            .negative_source
+            .violating_source
             .to_string();
     }
 
@@ -1272,8 +1272,8 @@ struct PolicyTemplateSpec {
     view_param: &'static str,
     body: String,
     message: &'static str,
-    positive_source: &'static str,
-    negative_source: &'static str,
+    clean_source: &'static str,
+    violating_source: &'static str,
 }
 
 fn policy_rule_module_template(
@@ -1318,14 +1318,14 @@ fn policy_template_spec(language: &str, template: RuleTemplateKind) -> PolicyTem
             None,
             (
                 if go {
-                    GO_REQUEST_TO_SHELL_POSITIVE
+                    GO_REQUEST_TO_SHELL_CLEAN
                 } else {
-                    TS_REQUEST_TO_SHELL_POSITIVE
+                    TS_REQUEST_TO_SHELL_CLEAN
                 },
                 if go {
-                    GO_REQUEST_TO_SHELL_NEGATIVE
+                    GO_REQUEST_TO_SHELL_VIOLATING
                 } else {
-                    TS_REQUEST_TO_SHELL_NEGATIVE
+                    TS_REQUEST_TO_SHELL_VIOLATING
                 },
             ),
         ),
@@ -1338,14 +1338,14 @@ fn policy_template_spec(language: &str, template: RuleTemplateKind) -> PolicyTem
             Some("Heuristic"),
             (
                 if go {
-                    GO_SECRET_TO_LOG_POSITIVE
+                    GO_SECRET_TO_LOG_CLEAN
                 } else {
-                    TS_SECRET_TO_LOG_POSITIVE
+                    TS_SECRET_TO_LOG_CLEAN
                 },
                 if go {
-                    GO_SECRET_TO_LOG_NEGATIVE
+                    GO_SECRET_TO_LOG_VIOLATING
                 } else {
-                    TS_SECRET_TO_LOG_NEGATIVE
+                    TS_SECRET_TO_LOG_VIOLATING
                 },
             ),
         ),
@@ -1362,14 +1362,14 @@ fn policy_template_spec(language: &str, template: RuleTemplateKind) -> PolicyTem
             Some("Heuristic"),
             (
                 if go {
-                    GO_PII_TO_ANALYTICS_POSITIVE
+                    GO_PII_TO_ANALYTICS_CLEAN
                 } else {
-                    TS_PII_TO_ANALYTICS_POSITIVE
+                    TS_PII_TO_ANALYTICS_CLEAN
                 },
                 if go {
-                    GO_PII_TO_ANALYTICS_NEGATIVE
+                    GO_PII_TO_ANALYTICS_VIOLATING
                 } else {
-                    TS_PII_TO_ANALYTICS_NEGATIVE
+                    TS_PII_TO_ANALYTICS_VIOLATING
                 },
             ),
         ),
@@ -1379,14 +1379,14 @@ fn policy_template_spec(language: &str, template: RuleTemplateKind) -> PolicyTem
             "writeBalance",
             r#"["authorize", "validate_payment"]"#,
             if go {
-                GO_SENSITIVE_WRITE_GUARD_POSITIVE
+                GO_SENSITIVE_WRITE_GUARD_CLEAN
             } else {
-                TS_SENSITIVE_WRITE_GUARD_POSITIVE
+                TS_SENSITIVE_WRITE_GUARD_CLEAN
             },
             if go {
-                GO_SENSITIVE_WRITE_GUARD_NEGATIVE
+                GO_SENSITIVE_WRITE_GUARD_VIOLATING
             } else {
-                TS_SENSITIVE_WRITE_GUARD_NEGATIVE
+                TS_SENSITIVE_WRITE_GUARD_VIOLATING
             },
         ),
         RuleTemplateKind::TransactionCleanup => control_cleanup_policy_template(
@@ -1395,14 +1395,14 @@ fn policy_template_spec(language: &str, template: RuleTemplateKind) -> PolicyTem
             if go { "Begin" } else { "beginTransaction" },
             if go { "Rollback" } else { "rollback" },
             if go {
-                GO_TRANSACTION_CLEANUP_POSITIVE
+                GO_TRANSACTION_CLEANUP_CLEAN
             } else {
-                TS_TRANSACTION_CLEANUP_POSITIVE
+                TS_TRANSACTION_CLEANUP_CLEAN
             },
             if go {
-                GO_TRANSACTION_CLEANUP_NEGATIVE
+                GO_TRANSACTION_CLEANUP_VIOLATING
             } else {
-                TS_TRANSACTION_CLEANUP_NEGATIVE
+                TS_TRANSACTION_CLEANUP_VIOLATING
             },
         ),
         RuleTemplateKind::RawReachableApi => calls_policy_template(
@@ -1411,14 +1411,14 @@ fn policy_template_spec(language: &str, template: RuleTemplateKind) -> PolicyTem
             "dangerousAdmin",
             "main",
             if go {
-                GO_RAW_REACHABLE_API_POSITIVE
+                GO_RAW_REACHABLE_API_CLEAN
             } else {
-                TS_RAW_REACHABLE_API_POSITIVE
+                TS_RAW_REACHABLE_API_CLEAN
             },
             if go {
-                GO_RAW_REACHABLE_API_NEGATIVE
+                GO_RAW_REACHABLE_API_VIOLATING
             } else {
-                TS_RAW_REACHABLE_API_NEGATIVE
+                TS_RAW_REACHABLE_API_VIOLATING
             },
         ),
         RuleTemplateKind::Ssrf => data_flow_policy_template(
@@ -1429,15 +1429,11 @@ fn policy_template_spec(language: &str, template: RuleTemplateKind) -> PolicyTem
             r#"["allowlist_url", "validate_url"]"#,
             None,
             (
+                if go { GO_SSRF_CLEAN } else { TS_SSRF_CLEAN },
                 if go {
-                    GO_SSRF_POSITIVE
+                    GO_SSRF_VIOLATING
                 } else {
-                    TS_SSRF_POSITIVE
-                },
-                if go {
-                    GO_SSRF_NEGATIVE
-                } else {
-                    TS_SSRF_NEGATIVE
+                    TS_SSRF_VIOLATING
                 },
             ),
         ),
@@ -1450,14 +1446,14 @@ fn policy_template_spec(language: &str, template: RuleTemplateKind) -> PolicyTem
             None,
             (
                 if go {
-                    GO_DANGEROUS_HTML_POSITIVE
+                    GO_DANGEROUS_HTML_CLEAN
                 } else {
-                    TS_DANGEROUS_HTML_POSITIVE
+                    TS_DANGEROUS_HTML_CLEAN
                 },
                 if go {
-                    GO_DANGEROUS_HTML_NEGATIVE
+                    GO_DANGEROUS_HTML_VIOLATING
                 } else {
-                    TS_DANGEROUS_HTML_NEGATIVE
+                    TS_DANGEROUS_HTML_VIOLATING
                 },
             ),
         ),
@@ -1470,14 +1466,14 @@ fn policy_template_spec(language: &str, template: RuleTemplateKind) -> PolicyTem
             None,
             (
                 if go {
-                    GO_UNSAFE_DESERIALIZATION_POSITIVE
+                    GO_UNSAFE_DESERIALIZATION_CLEAN
                 } else {
-                    TS_UNSAFE_DESERIALIZATION_POSITIVE
+                    TS_UNSAFE_DESERIALIZATION_CLEAN
                 },
                 if go {
-                    GO_UNSAFE_DESERIALIZATION_NEGATIVE
+                    GO_UNSAFE_DESERIALIZATION_VIOLATING
                 } else {
-                    TS_UNSAFE_DESERIALIZATION_NEGATIVE
+                    TS_UNSAFE_DESERIALIZATION_VIOLATING
                 },
             ),
         ),
@@ -1490,14 +1486,14 @@ fn policy_template_spec(language: &str, template: RuleTemplateKind) -> PolicyTem
             None,
             (
                 if go {
-                    GO_USER_FILE_PATH_POSITIVE
+                    GO_USER_FILE_PATH_CLEAN
                 } else {
-                    TS_USER_FILE_PATH_POSITIVE
+                    TS_USER_FILE_PATH_CLEAN
                 },
                 if go {
-                    GO_USER_FILE_PATH_NEGATIVE
+                    GO_USER_FILE_PATH_VIOLATING
                 } else {
-                    TS_USER_FILE_PATH_NEGATIVE
+                    TS_USER_FILE_PATH_VIOLATING
                 },
             ),
         ),
@@ -1514,7 +1510,7 @@ fn data_flow_policy_template(
     fixtures: (&'static str, &'static str),
 ) -> PolicyTemplateSpec {
     let sink = sink.into();
-    let (positive_source, negative_source) = fixtures;
+    let (clean_source, violating_source) = fixtures;
     let minimum_precision = minimum_precision
         .map(|precision| format!("    query.minimum_precision = PolicyPrecision::{precision};\n"))
         .unwrap_or_default();
@@ -1539,8 +1535,8 @@ fn data_flow_policy_template(
 "#
         ),
         message,
-        positive_source,
-        negative_source,
+        clean_source,
+        violating_source,
     }
 }
 
@@ -1549,8 +1545,8 @@ fn control_guard_policy_template(
     message: &'static str,
     event: &'static str,
     guards: &'static str,
-    positive_source: &'static str,
-    negative_source: &'static str,
+    clean_source: &'static str,
+    violating_source: &'static str,
 ) -> PolicyTemplateSpec {
     PolicyTemplateSpec {
         description,
@@ -1571,8 +1567,8 @@ fn control_guard_policy_template(
 "#
         ),
         message,
-        positive_source,
-        negative_source,
+        clean_source,
+        violating_source,
     }
 }
 
@@ -1581,8 +1577,8 @@ fn control_cleanup_policy_template(
     message: &'static str,
     start: &'static str,
     cleanup: &'static str,
-    positive_source: &'static str,
-    negative_source: &'static str,
+    clean_source: &'static str,
+    violating_source: &'static str,
 ) -> PolicyTemplateSpec {
     PolicyTemplateSpec {
         description,
@@ -1603,8 +1599,8 @@ fn control_cleanup_policy_template(
 "#
         ),
         message,
-        positive_source,
-        negative_source,
+        clean_source,
+        violating_source,
     }
 }
 
@@ -1613,8 +1609,8 @@ fn calls_policy_template(
     message: &'static str,
     target: &'static str,
     root: &'static str,
-    positive_source: &'static str,
-    negative_source: &'static str,
+    clean_source: &'static str,
+    violating_source: &'static str,
 ) -> PolicyTemplateSpec {
     PolicyTemplateSpec {
         description,
@@ -1634,8 +1630,8 @@ fn calls_policy_template(
 "#
         ),
         message,
-        positive_source,
-        negative_source,
+        clean_source,
+        violating_source,
     }
 }
 
@@ -1643,7 +1639,7 @@ fn call_sink(target: &'static str) -> String {
     format!(r#"SinkPattern::call("{target}")"#)
 }
 
-const TS_REQUEST_TO_SHELL_POSITIVE: &str = r#"import express from "express";
+const TS_REQUEST_TO_SHELL_CLEAN: &str = r#"import express from "express";
 const app = express();
 
 function validate_command(command: string): string { return command; }
@@ -1655,7 +1651,7 @@ app.get("/run", function handler(req, res) {
 });
 "#;
 
-const TS_REQUEST_TO_SHELL_NEGATIVE: &str = r#"import express from "express";
+const TS_REQUEST_TO_SHELL_VIOLATING: &str = r#"import express from "express";
 const app = express();
 
 function exec(command: string) {}
@@ -1666,7 +1662,7 @@ app.get("/run", function handler(req, res) {
 });
 "#;
 
-const TS_SECRET_TO_LOG_POSITIVE: &str = r#"function redact(value: string): string { return value; }
+const TS_SECRET_TO_LOG_CLEAN: &str = r#"function redact(value: string): string { return value; }
 
 export function handler(token: string) {
   // Token-like input is redacted before it is logged.
@@ -1674,13 +1670,13 @@ export function handler(token: string) {
 }
 "#;
 
-const TS_SECRET_TO_LOG_NEGATIVE: &str = r#"export function handler(token: string) {
+const TS_SECRET_TO_LOG_VIOLATING: &str = r#"export function handler(token: string) {
   // Policy violation: token-like input reaches a logger unchanged.
   console.log(token);
 }
 "#;
 
-const TS_PII_TO_ANALYTICS_POSITIVE: &str = r#"function analyticsTrack(value: string) {}
+const TS_PII_TO_ANALYTICS_CLEAN: &str = r#"function analyticsTrack(value: string) {}
 function anonymize(value: string): string { return value; }
 
 export function handler(email: string) {
@@ -1689,7 +1685,7 @@ export function handler(email: string) {
 }
 "#;
 
-const TS_PII_TO_ANALYTICS_NEGATIVE: &str = r#"function analyticsTrack(value: string) {}
+const TS_PII_TO_ANALYTICS_VIOLATING: &str = r#"function analyticsTrack(value: string) {}
 
 export function handler(email: string) {
   // Policy violation: raw PII-like input reaches analytics.
@@ -1697,7 +1693,7 @@ export function handler(email: string) {
 }
 "#;
 
-const TS_SENSITIVE_WRITE_GUARD_POSITIVE: &str = r#"function authorize() {}
+const TS_SENSITIVE_WRITE_GUARD_CLEAN: &str = r#"function authorize() {}
 function writeBalance() {}
 
 export function handler() {
@@ -1707,7 +1703,7 @@ export function handler() {
 }
 "#;
 
-const TS_SENSITIVE_WRITE_GUARD_NEGATIVE: &str = r#"function writeBalance() {}
+const TS_SENSITIVE_WRITE_GUARD_VIOLATING: &str = r#"function writeBalance() {}
 
 export function handler() {
   // Policy violation: sensitive write has no prior guard in this function.
@@ -1715,7 +1711,7 @@ export function handler() {
 }
 "#;
 
-const TS_TRANSACTION_CLEANUP_POSITIVE: &str = r#"function beginTransaction() {}
+const TS_TRANSACTION_CLEANUP_CLEAN: &str = r#"function beginTransaction() {}
 function rollback() {}
 
 export function handler() {
@@ -1725,7 +1721,7 @@ export function handler() {
 }
 "#;
 
-const TS_TRANSACTION_CLEANUP_NEGATIVE: &str = r#"function beginTransaction() {}
+const TS_TRANSACTION_CLEANUP_VIOLATING: &str = r#"function beginTransaction() {}
 
 export function handler() {
   // Policy violation: the transaction is opened without cleanup.
@@ -1733,7 +1729,7 @@ export function handler() {
 }
 "#;
 
-const TS_RAW_REACHABLE_API_POSITIVE: &str = r#"function safeAdmin() {}
+const TS_RAW_REACHABLE_API_CLEAN: &str = r#"function safeAdmin() {}
 
 export function main() {
   // Production root reaches only the safe wrapper.
@@ -1741,7 +1737,7 @@ export function main() {
 }
 "#;
 
-const TS_RAW_REACHABLE_API_NEGATIVE: &str = r#"function dangerousAdmin() {}
+const TS_RAW_REACHABLE_API_VIOLATING: &str = r#"function dangerousAdmin() {}
 function handler() { dangerousAdmin(); }
 
 export function main() {
@@ -1750,7 +1746,7 @@ export function main() {
 }
 "#;
 
-const TS_SSRF_POSITIVE: &str = r#"import express from "express";
+const TS_SSRF_CLEAN: &str = r#"import express from "express";
 const app = express();
 
 function allowlist_url(url: string): string { return url; }
@@ -1762,7 +1758,7 @@ app.get("/fetch", function handler(req, res) {
 });
 "#;
 
-const TS_SSRF_NEGATIVE: &str = r#"import express from "express";
+const TS_SSRF_VIOLATING: &str = r#"import express from "express";
 const app = express();
 
 function fetchUrl(url: string) {}
@@ -1773,7 +1769,7 @@ app.get("/fetch", function handler(req, res) {
 });
 "#;
 
-const TS_DANGEROUS_HTML_POSITIVE: &str = r#"import express from "express";
+const TS_DANGEROUS_HTML_CLEAN: &str = r#"import express from "express";
 const app = express();
 
 function setInnerHTML(html: string) {}
@@ -1785,7 +1781,7 @@ app.post("/preview", function handler(req, res) {
 });
 "#;
 
-const TS_DANGEROUS_HTML_NEGATIVE: &str = r#"import express from "express";
+const TS_DANGEROUS_HTML_VIOLATING: &str = r#"import express from "express";
 const app = express();
 
 function setInnerHTML(html: string) {}
@@ -1796,7 +1792,7 @@ app.post("/preview", function handler(req, res) {
 });
 "#;
 
-const TS_UNSAFE_DESERIALIZATION_POSITIVE: &str = r#"import express from "express";
+const TS_UNSAFE_DESERIALIZATION_CLEAN: &str = r#"import express from "express";
 const app = express();
 
 function unsafeDeserialize(raw: string) {}
@@ -1808,7 +1804,7 @@ app.post("/load", function handler(req, res) {
 });
 "#;
 
-const TS_UNSAFE_DESERIALIZATION_NEGATIVE: &str = r#"import express from "express";
+const TS_UNSAFE_DESERIALIZATION_VIOLATING: &str = r#"import express from "express";
 const app = express();
 
 function unsafeDeserialize(raw: string) {}
@@ -1819,7 +1815,7 @@ app.post("/load", function handler(req, res) {
 });
 "#;
 
-const TS_USER_FILE_PATH_POSITIVE: &str = r#"import express from "express";
+const TS_USER_FILE_PATH_CLEAN: &str = r#"import express from "express";
 const app = express();
 
 function readFile(path: string) {}
@@ -1831,7 +1827,7 @@ app.get("/file", function handler(req, res) {
 });
 "#;
 
-const TS_USER_FILE_PATH_NEGATIVE: &str = r#"import express from "express";
+const TS_USER_FILE_PATH_VIOLATING: &str = r#"import express from "express";
 const app = express();
 
 function readFile(path: string) {}
@@ -1842,7 +1838,7 @@ app.get("/file", function handler(req, res) {
 });
 "#;
 
-const GO_REQUEST_TO_SHELL_POSITIVE: &str = r#"package main
+const GO_REQUEST_TO_SHELL_CLEAN: &str = r#"package main
 
 func validate_command(command string) string { return command }
 
@@ -1852,7 +1848,7 @@ func handler(command string) {
 }
 "#;
 
-const GO_REQUEST_TO_SHELL_NEGATIVE: &str = r#"package main
+const GO_REQUEST_TO_SHELL_VIOLATING: &str = r#"package main
 
 func execCommand(command string) {}
 
@@ -1861,7 +1857,7 @@ func handler(command string) {
 }
 "#;
 
-const GO_SECRET_TO_LOG_POSITIVE: &str = r#"package main
+const GO_SECRET_TO_LOG_CLEAN: &str = r#"package main
 
 func log(value string) {}
 func redact(value string) string { return value }
@@ -1873,7 +1869,7 @@ func handler(token string) {
 }
 "#;
 
-const GO_SECRET_TO_LOG_NEGATIVE: &str = r#"package main
+const GO_SECRET_TO_LOG_VIOLATING: &str = r#"package main
 
 func log(value string) {}
 
@@ -1882,7 +1878,7 @@ func handler(token string) {
 }
 "#;
 
-const GO_PII_TO_ANALYTICS_POSITIVE: &str = r#"package main
+const GO_PII_TO_ANALYTICS_CLEAN: &str = r#"package main
 
 func trackAnalytics(value string) {}
 func anonymize(value string) string { return value }
@@ -1894,7 +1890,7 @@ func handler(email string) {
 }
 "#;
 
-const GO_PII_TO_ANALYTICS_NEGATIVE: &str = r#"package main
+const GO_PII_TO_ANALYTICS_VIOLATING: &str = r#"package main
 
 func trackAnalytics(value string) {}
 
@@ -1903,7 +1899,7 @@ func handler(email string) {
 }
 "#;
 
-const GO_SENSITIVE_WRITE_GUARD_POSITIVE: &str = r#"package main
+const GO_SENSITIVE_WRITE_GUARD_CLEAN: &str = r#"package main
 
 func authorize() {}
 func writeBalance() {}
@@ -1915,7 +1911,7 @@ func handler() {
 }
 "#;
 
-const GO_SENSITIVE_WRITE_GUARD_NEGATIVE: &str = r#"package main
+const GO_SENSITIVE_WRITE_GUARD_VIOLATING: &str = r#"package main
 
 func writeBalance() {}
 
@@ -1925,7 +1921,7 @@ func handler() {
 }
 "#;
 
-const GO_TRANSACTION_CLEANUP_POSITIVE: &str = r#"package main
+const GO_TRANSACTION_CLEANUP_CLEAN: &str = r#"package main
 
 func Begin() {}
 func Rollback() {}
@@ -1937,7 +1933,7 @@ func handler() {
 }
 "#;
 
-const GO_TRANSACTION_CLEANUP_NEGATIVE: &str = r#"package main
+const GO_TRANSACTION_CLEANUP_VIOLATING: &str = r#"package main
 
 func Begin() {}
 
@@ -1947,7 +1943,7 @@ func handler() {
 }
 "#;
 
-const GO_RAW_REACHABLE_API_POSITIVE: &str = r#"package main
+const GO_RAW_REACHABLE_API_CLEAN: &str = r#"package main
 
 func main() {
 	// Production root reaches only the safe wrapper.
@@ -1957,7 +1953,7 @@ func main() {
 func safeAdmin() {}
 "#;
 
-const GO_RAW_REACHABLE_API_NEGATIVE: &str = r#"package main
+const GO_RAW_REACHABLE_API_VIOLATING: &str = r#"package main
 
 func main() {
 	// Policy violation: production root reaches the raw admin API.
@@ -1971,7 +1967,7 @@ func handler() {
 func dangerousAdmin() {}
 "#;
 
-const GO_SSRF_POSITIVE: &str = r#"package main
+const GO_SSRF_CLEAN: &str = r#"package main
 
 func allowlist_url(url string) string { return url }
 
@@ -1981,7 +1977,7 @@ func handler(url string) {
 }
 "#;
 
-const GO_SSRF_NEGATIVE: &str = r#"package main
+const GO_SSRF_VIOLATING: &str = r#"package main
 
 func fetchURL(url string) {}
 
@@ -1990,7 +1986,7 @@ func handler(url string) {
 }
 "#;
 
-const GO_DANGEROUS_HTML_POSITIVE: &str = r#"package main
+const GO_DANGEROUS_HTML_CLEAN: &str = r#"package main
 
 func renderHTML(html string) {}
 func sanitize_html(html string) string { return html }
@@ -2002,7 +1998,7 @@ func handler(html string) {
 }
 "#;
 
-const GO_DANGEROUS_HTML_NEGATIVE: &str = r#"package main
+const GO_DANGEROUS_HTML_VIOLATING: &str = r#"package main
 
 func renderHTML(html string) {}
 
@@ -2011,7 +2007,7 @@ func handler(html string) {
 }
 "#;
 
-const GO_UNSAFE_DESERIALIZATION_POSITIVE: &str = r#"package main
+const GO_UNSAFE_DESERIALIZATION_CLEAN: &str = r#"package main
 
 func unsafeDeserialize(raw string) {}
 func verify_schema(raw string) string { return raw }
@@ -2023,7 +2019,7 @@ func handler(payload string) {
 }
 "#;
 
-const GO_UNSAFE_DESERIALIZATION_NEGATIVE: &str = r#"package main
+const GO_UNSAFE_DESERIALIZATION_VIOLATING: &str = r#"package main
 
 func unsafeDeserialize(raw string) {}
 
@@ -2032,7 +2028,7 @@ func handler(payload string) {
 }
 "#;
 
-const GO_USER_FILE_PATH_POSITIVE: &str = r#"package main
+const GO_USER_FILE_PATH_CLEAN: &str = r#"package main
 
 func readFile(path string) {}
 func validate_path(path string) string { return path }
@@ -2044,7 +2040,7 @@ func handler(path string) {
 }
 "#;
 
-const GO_USER_FILE_PATH_NEGATIVE: &str = r#"package main
+const GO_USER_FILE_PATH_VIOLATING: &str = r#"package main
 
 func readFile(path string) {}
 
