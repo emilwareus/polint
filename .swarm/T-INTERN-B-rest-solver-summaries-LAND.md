@@ -120,4 +120,4 @@ Concrete findings closed without densification or dual identity fields:
 
 - Feat commit: `1a2d62387820060178dba5f5626c8fc645fef88a`
 - Swarm land: `f3284061`
-- Audit-fix commit: `14f248fad48afe341b2bdd3289c42015d91feb36`
+- Audit-fix commit: `39097eebd2d434abeb7d3b21d2e8598483ea026f`
