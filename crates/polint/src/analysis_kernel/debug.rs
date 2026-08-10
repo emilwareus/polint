@@ -1315,6 +1315,7 @@ fn summaries_report(db: &AnalysisDb) -> SummaryDebugReport {
 }
 
 fn extensions_report(db: &AnalysisDb) -> ExtensionDebugReport {
+    let interner = db.stable_key_interner();
     let mut activations = db
         .extension_activations()
         .iter()
@@ -1343,7 +1344,7 @@ fn extensions_report(db: &AnalysisDb) -> ExtensionDebugReport {
             extension_id: fact.extension_id.clone(),
             provider_id: fact.provider_id.clone(),
             fact_family: fact.fact_family.clone(),
-            stable_key: fact.stable_key.clone(),
+            stable_key: interner.resolve(fact.stable_key).to_string(),
             precision: format!("{:?}", fact.precision),
             confidence: format!("{:?}", fact.confidence),
             evidence_count: fact.evidence.len(),
@@ -1359,7 +1360,7 @@ fn extensions_report(db: &AnalysisDb) -> ExtensionDebugReport {
             extension_id: fact.extension_id.clone(),
             provider_id: fact.provider_id.clone(),
             fact_family: fact.fact_family.clone(),
-            stable_key: fact.stable_key.clone(),
+            stable_key: interner.resolve(fact.stable_key).to_string(),
             reason: format!("{:?}", fact.reason),
             evidence_count: fact.evidence.len(),
         })

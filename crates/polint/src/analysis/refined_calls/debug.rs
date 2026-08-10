@@ -19,7 +19,7 @@ pub(crate) fn refined_calls_debug_json_for_test(db: &AnalysisDb) -> serde_json::
         .iter()
         .map(|edge| RefinedCallDebugRow {
             family: FactFamily::RefinedCallEdge.label(),
-            stable_key: edge.stable_key.clone(),
+            stable_key_text: db.resolve_stable_key(edge.stable_key).to_string(),
             producer_id: "polint.refined_calls",
             layer_id: "polint.refined_calls",
             language: format!("{:?}", edge.language),
@@ -66,7 +66,7 @@ pub(crate) fn refined_calls_debug_json_for_test(db: &AnalysisDb) -> serde_json::
 #[derive(Serialize)]
 struct RefinedCallDebugRow {
     family: &'static str,
-    stable_key: String,
+    stable_key_text: String,
     producer_id: &'static str,
     layer_id: &'static str,
     language: String,

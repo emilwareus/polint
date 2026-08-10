@@ -176,7 +176,7 @@ fn go_rta_oracle_identity(
             debug_assert!(
                 !rel_string.is_empty(),
                 "go_relstring render must be non-empty for {}",
-                record.stable_key
+                crate::core::test_stable_key_interner().resolve(record.stable_key)
             );
             // The x/tools RTA `WANT:` oracle uses bare names, so benchmark matching
             // intentionally stays on display_name even when RelString contains a

@@ -4,7 +4,7 @@ use crate::analysis::calls::facts::{CallAlgorithm, CallProvenance, CallTargetSta
 use crate::analysis::error::AnalysisError;
 use crate::analysis::ids::CallSiteId;
 use crate::analysis::refined_calls::facts::{RefinedCallEdgeFact, RefinedCallTier};
-use crate::core::{FunctionId, SymbolId};
+use crate::core::{FunctionId, StableKeyInterner, SymbolId};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct RefinedCallOutput {
@@ -16,7 +16,7 @@ impl RefinedCallOutput {
         Self::default()
     }
 
-    pub(crate) fn normalized(mut self) -> Self {
+    pub(crate) fn normalized(mut self, interner: &StableKeyInterner) -> Self {
         self.edges = self
             .edges
             .into_iter()
@@ -24,7 +24,7 @@ impl RefinedCallOutput {
             .collect();
         self.edges.sort_by(|left, right| {
             (
-                left.stable_key.as_str(),
+                interner.resolve(left.stable_key),
                 left.site,
                 left.tier,
                 left.algorithm,
@@ -33,7 +33,7 @@ impl RefinedCallOutput {
                 left.id,
             )
                 .cmp(&(
-                    right.stable_key.as_str(),
+                    interner.resolve(right.stable_key),
                     right.site,
                     right.tier,
                     right.algorithm,
@@ -60,18 +60,27 @@ pub(crate) struct RefinedCallStore {
 }
 
 impl RefinedCallStore {
-    pub(crate) fn from_output(output: RefinedCallOutput) -> Result<Self, AnalysisError> {
-        Self::from_normalized_output(output.normalized())
+    pub(crate) fn from_output(
+        output: RefinedCallOutput,
+        interner: &StableKeyInterner,
+    ) -> Result<Self, AnalysisError> {
+        Self::from_normalized_output(output.normalized(interner), interner)
     }
 
-    pub(crate) fn from_normalized_output(output: RefinedCallOutput) -> Result<Self, AnalysisError> {
+    pub(crate) fn from_normalized_output(
+        output: RefinedCallOutput,
+        interner: &StableKeyInterner,
+    ) -> Result<Self, AnalysisError> {
         let mut seen_keys = BTreeSet::new();
         let mut seen_ids = BTreeSet::new();
         for edge in &output.edges {
-            if !seen_keys.insert(edge.stable_key.clone()) {
+            if !seen_keys.insert(edge.stable_key) {
                 return Err(AnalysisError::InvalidFact {
                     provider: "polint.refined_calls",
-                    reason: format!("duplicate refined call stable key `{}`", edge.stable_key),
+                    reason: format!(
+                        "duplicate refined call stable key `{}`",
+                        interner.resolve(edge.stable_key)
+                    ),
                 });
             }
             if !seen_ids.insert(edge.id) {
@@ -203,26 +212,34 @@ mod tests {
 
     #[test]
     fn store_normalizes_edges_and_indexes_by_tier() {
-        let store = RefinedCallStore::from_output(RefinedCallOutput {
-            edges: vec![
-                edge(1, "b", RefinedCallTier::PointsToAssisted),
-                edge(0, "a", RefinedCallTier::DirectPlusFramework),
-            ],
-        })
+        let interner = crate::core::test_stable_key_interner();
+        let store = RefinedCallStore::from_output(
+            RefinedCallOutput {
+                edges: vec![
+                    edge(1, "b", RefinedCallTier::PointsToAssisted),
+                    edge(0, "a", RefinedCallTier::DirectPlusFramework),
+                ],
+            },
+            &interner,
+        )
         .expect("valid refined calls");
 
-        assert_eq!(store.edges()[0].stable_key, "a");
+        assert_eq!(interner.resolve(store.edges()[0].stable_key).as_ref(), "a");
         assert_eq!(store.by_tier(RefinedCallTier::DirectPlusFramework).len(), 1);
     }
 
     #[test]
     fn store_rejects_duplicate_stable_keys() {
-        let result = RefinedCallStore::from_output(RefinedCallOutput {
-            edges: vec![
-                edge(0, "duplicate", RefinedCallTier::DirectOnly),
-                edge(1, "duplicate", RefinedCallTier::DirectOnly),
-            ],
-        });
+        let interner = crate::core::test_stable_key_interner();
+        let result = RefinedCallStore::from_output(
+            RefinedCallOutput {
+                edges: vec![
+                    edge(0, "duplicate", RefinedCallTier::DirectOnly),
+                    edge(1, "duplicate", RefinedCallTier::DirectOnly),
+                ],
+            },
+            &interner,
+        );
 
         assert!(result.is_err());
     }
@@ -248,7 +265,7 @@ mod tests {
             confidence: RefinedCallConfidence::High,
             evidence: vec![],
             input_stable_keys: vec![],
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 }

@@ -1003,7 +1003,7 @@ mod tests {
                 None,
             ),
             multiplicity: 1,
-            stable_key: "identity|callsite|synthetic".to_string(),
+            stable_key: crate::core::stable_key_for_test("identity|callsite|synthetic"),
             originating_call_site_id: None,
             originating_call_target_id: None,
         }

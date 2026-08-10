@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::analysis::ids::{AccessPathId, AliasAnswerId, PlaceId};
+use crate::core::StableKeyId;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct AliasAnswerFact {
@@ -11,7 +12,7 @@ pub(crate) struct AliasAnswerFact {
     pub(crate) reason: AliasReason,
     pub(crate) evidence: Vec<String>,
     pub(crate) precision: AliasPrecision,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

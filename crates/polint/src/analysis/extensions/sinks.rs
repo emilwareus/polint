@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::core::StableKeyId;
+
 pub(crate) const TYPE_VALUE_ALIAS_TYPE_FAMILY: &str = "type_value_alias.type";
 pub(crate) const TYPE_VALUE_ALIAS_VALUE_FAMILY: &str = "type_value_alias.value";
 pub(crate) const TYPE_VALUE_ALIAS_ALLOCATION_FAMILY: &str = "type_value_alias.allocation_token";
@@ -23,7 +25,7 @@ pub(crate) struct ExtensionFactCandidate {
     pub(crate) extension_id: String,
     pub(crate) provider_id: String,
     pub(crate) fact_family: String,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub(crate) binding_refs: Vec<String>,
     pub(crate) span: Option<ExtensionSpanRef>,
     pub(crate) precision: Option<ExtensionFactPrecision>,
@@ -76,12 +78,15 @@ impl ExtensionFactCandidate {
         self
     }
 
-    pub(crate) fn output_sort_key(&self) -> (&str, &str, &str, &str) {
+    pub(crate) fn output_sort_key<'a>(
+        &'a self,
+        interner: &'a crate::core::StableKeyInterner,
+    ) -> (&'a str, &'a str, &'a str, std::sync::Arc<str>) {
         (
             &self.extension_id,
             &self.provider_id,
             &self.fact_family,
-            &self.stable_key,
+            interner.resolve(self.stable_key),
         )
     }
 }
@@ -323,7 +328,7 @@ mod tests {
             extension_id: "demo".to_string(),
             provider_id: "routes".to_string(),
             fact_family: "extension.routes".to_string(),
-            stable_key: "route:/a".to_string(),
+            stable_key: crate::core::stable_key_for_test("route:/a"),
             binding_refs: vec!["file:src/a.ts".to_string(), "file:src/a.ts".to_string()],
             span: None,
             precision: Some(ExtensionFactPrecision::Heuristic),
@@ -343,8 +348,13 @@ mod tests {
 
         assert_eq!(first, second);
         assert_eq!(
-            first.output_sort_key(),
-            ("demo", "routes", "extension.routes", "route:/a")
+            first.output_sort_key(&crate::core::AnalysisDb::new().stable_key_interner()),
+            (
+                "demo",
+                "routes",
+                "extension.routes",
+                std::sync::Arc::from("route:/a")
+            )
         );
     }
 
@@ -354,7 +364,7 @@ mod tests {
             extension_id: "demo".to_string(),
             provider_id: "types".to_string(),
             fact_family: TYPE_VALUE_ALIAS_ALIAS_ANSWER_FAMILY.to_string(),
-            stable_key: "alias:extension".to_string(),
+            stable_key: crate::core::stable_key_for_test("alias:extension"),
             binding_refs: vec!["file:src/app.ts".to_string()],
             span: None,
             precision: Some(ExtensionFactPrecision::Heuristic),
@@ -382,7 +392,7 @@ mod tests {
             extension_id: "demo".to_string(),
             provider_id: "types".to_string(),
             fact_family: TYPE_VALUE_ALIAS_POINTS_TO_CONSTRAINT_FAMILY.to_string(),
-            stable_key: "pt:extension".to_string(),
+            stable_key: crate::core::stable_key_for_test("pt:extension"),
             binding_refs: vec!["file:src/app.ts".to_string()],
             span: None,
             precision: Some(ExtensionFactPrecision::Heuristic),
@@ -424,7 +434,7 @@ mod tests {
             extension_id: "demo".to_string(),
             provider_id: "model".to_string(),
             fact_family: REFINED_CALL_EDGE_FAMILY.to_string(),
-            stable_key: "refined:extension".to_string(),
+            stable_key: crate::core::stable_key_for_test("refined:extension"),
             binding_refs: vec!["file:src/app.ts".to_string()],
             span: None,
             precision: Some(ExtensionFactPrecision::Heuristic),

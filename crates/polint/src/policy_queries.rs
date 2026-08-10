@@ -1441,11 +1441,11 @@ fn refined_adjacency<'a>(
         edges.sort_by(|left, right| {
             (
                 best_call_target_label(db, left, site_by_id),
-                left.stable_key.as_str(),
+                db.resolve_stable_key(left.stable_key).as_ref(),
             )
                 .cmp(&(
                     best_call_target_label(db, right, site_by_id),
-                    right.stable_key.as_str(),
+                    db.resolve_stable_key(right.stable_key).as_ref(),
                 ))
         });
     }
@@ -1473,8 +1473,14 @@ fn selected_reachability_roots<'a>(
         })
         .collect::<Vec<_>>();
     roots.sort_by(|left, right| {
-        (root_label(db, left), left.stable_key.as_str())
-            .cmp(&(root_label(db, right), right.stable_key.as_str()))
+        (
+            root_label(db, left),
+            db.resolve_stable_key(left.stable_key).as_ref(),
+        )
+            .cmp(&(
+                root_label(db, right),
+                db.resolve_stable_key(right.stable_key).as_ref(),
+            ))
     });
     roots
 }
@@ -2635,12 +2641,14 @@ mod tests {
                 provenance: RootProvenance::NativeDiscovery,
                 status: RootStatus::Resolved,
                 provider_id: REACHABILITY_PROVIDER_ID.to_string(),
-                stable_key: compute_reachability_root_stable_key(
-                    root_kind,
-                    Language::Go,
-                    "main.main",
-                    file,
-                    &root_span,
+                stable_key: crate::core::stable_key_for_test(
+                    &compute_reachability_root_stable_key(
+                        root_kind,
+                        Language::Go,
+                        "main.main",
+                        file,
+                        &root_span,
+                    ),
                 ),
             }],
         })
@@ -2805,12 +2813,14 @@ mod tests {
                 provenance: RootProvenance::NativeDiscovery,
                 status: RootStatus::Resolved,
                 provider_id: REACHABILITY_PROVIDER_ID.to_string(),
-                stable_key: compute_reachability_root_stable_key(
-                    RootKind::Main,
-                    Language::Go,
-                    "main.main",
-                    file,
-                    &root_span,
+                stable_key: crate::core::stable_key_for_test(
+                    &compute_reachability_root_stable_key(
+                        RootKind::Main,
+                        Language::Go,
+                        "main.main",
+                        file,
+                        &root_span,
+                    ),
                 ),
             }],
         })
@@ -2863,12 +2873,14 @@ mod tests {
                 provenance: RootProvenance::NativeDiscovery,
                 status: RootStatus::Resolved,
                 provider_id: REACHABILITY_PROVIDER_ID.to_string(),
-                stable_key: compute_reachability_root_stable_key(
-                    RootKind::Main,
-                    Language::Go,
-                    "main.main",
-                    file,
-                    &root_span,
+                stable_key: crate::core::stable_key_for_test(
+                    &compute_reachability_root_stable_key(
+                        RootKind::Main,
+                        Language::Go,
+                        "main.main",
+                        file,
+                        &root_span,
+                    ),
                 ),
             }],
         })
@@ -3528,7 +3540,7 @@ mod tests {
             confidence: RefinedCallConfidence::High,
             evidence: Vec::new(),
             input_stable_keys: Vec::new(),
-            stable_key: format!("refined:{id}:{label}"),
+            stable_key: crate::core::stable_key_for_test(&format!("refined:{id}:{label}")),
         }
     }
 
@@ -3558,7 +3570,9 @@ mod tests {
             confidence: RefinedCallConfidence::High,
             evidence: Vec::new(),
             input_stable_keys: Vec::new(),
-            stable_key: format!("refined:{id}:{label}:unresolved"),
+            stable_key: crate::core::stable_key_for_test(&format!(
+                "refined:{id}:{label}:unresolved"
+            )),
         }
     }
 }

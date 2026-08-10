@@ -4,7 +4,7 @@ use super::facts::{
     AllocationKind, AllocationTokenFact, ValueFact, ValueKind, ValueStatus, ValueSubject,
 };
 use crate::analysis::ids::{AbstractValueId, AllocationTokenId, PlaceId, ValueFactId};
-use crate::core::{FunctionId, Language};
+use crate::core::{FunctionId, Language, StableKeyInterner};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ValueOutput {
@@ -13,9 +13,10 @@ pub(crate) struct ValueOutput {
 }
 
 impl ValueOutput {
-    pub(crate) fn normalized(mut self) -> Self {
+    pub(crate) fn normalized(mut self, interner: &StableKeyInterner) -> Self {
         self.allocations.sort_by(|left, right| {
-            (left.stable_key.as_str(), left.id).cmp(&(right.stable_key.as_str(), right.id))
+            (interner.resolve(left.stable_key), left.id)
+                .cmp(&(interner.resolve(right.stable_key), right.id))
         });
         let allocation_remap = self
             .allocations
@@ -27,7 +28,8 @@ impl ValueOutput {
             row.id = AllocationTokenId(index as u64);
         }
         self.values.sort_by(|left, right| {
-            (left.stable_key.as_str(), left.id).cmp(&(right.stable_key.as_str(), right.id))
+            (interner.resolve(left.stable_key), left.id)
+                .cmp(&(interner.resolve(right.stable_key), right.id))
         });
         for (index, row) in self.values.iter_mut().enumerate() {
             row.id = ValueFactId(index as u64);
@@ -73,8 +75,8 @@ impl ValueStore {
         dead_code,
         reason = "Compatibility callers can still pass unnormalized output; providers use from_normalized_output."
     )]
-    pub(crate) fn from_output(output: ValueOutput) -> Self {
-        Self::from_normalized_output(output.normalized())
+    pub(crate) fn from_output(output: ValueOutput, interner: &StableKeyInterner) -> Self {
+        Self::from_normalized_output(output.normalized(interner))
     }
 
     pub(crate) fn from_normalized_output(output: ValueOutput) -> Self {
@@ -135,7 +137,7 @@ mod tests {
             precision: ValuePrecision::ExactLocal,
             status: ValueStatus::Present,
             provenance: ValueProvenance::Native,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
@@ -151,19 +153,23 @@ mod tests {
             source_operation: None,
             span: None,
             provenance: ValueProvenance::Native,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
     #[test]
     fn value_output_sorts_by_stable_key_and_reassigns_ids() {
+        let interner = crate::core::test_stable_key_interner();
         let output = ValueOutput {
             values: vec![value(9, "value:z"), value(3, "value:a")],
             allocations: Vec::new(),
         }
-        .normalized();
+        .normalized(&interner);
 
-        assert_eq!(output.values[0].stable_key, "value:a");
+        assert_eq!(
+            interner.resolve(output.values[0].stable_key).as_ref(),
+            "value:a"
+        );
         assert_eq!(output.values[0].id, ValueFactId(0));
         assert_eq!(output.values[0].value, AbstractValueId(0));
         assert_eq!(output.values[1].id, ValueFactId(1));
@@ -172,6 +178,7 @@ mod tests {
 
     #[test]
     fn value_output_remaps_allocation_references_after_sorting_allocations() {
+        let interner = crate::core::test_stable_key_interner();
         let output = ValueOutput {
             values: vec![
                 ValueFact {
@@ -186,11 +193,17 @@ mod tests {
             ],
             allocations: vec![allocation(0, "alloc:z"), allocation(1, "alloc:a")],
         }
-        .normalized();
+        .normalized(&interner);
 
-        assert_eq!(output.allocations[0].stable_key, "alloc:a");
+        assert_eq!(
+            interner.resolve(output.allocations[0].stable_key).as_ref(),
+            "alloc:a"
+        );
         assert_eq!(output.allocations[0].id, AllocationTokenId(0));
-        assert_eq!(output.allocations[1].stable_key, "alloc:z");
+        assert_eq!(
+            interner.resolve(output.allocations[1].stable_key).as_ref(),
+            "alloc:z"
+        );
         assert_eq!(output.allocations[1].id, AllocationTokenId(1));
         assert_eq!(
             output.values[0].subject,

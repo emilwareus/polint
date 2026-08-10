@@ -310,7 +310,7 @@ fn derive_unresolved_call_edge(
             super::facts::DataFlowBudgetReason::PathCount,
             1,
             2,
-            &edge.stable_key,
+            &interner.resolve(edge.stable_key),
             output,
         )
     });
@@ -362,7 +362,10 @@ fn push_edge(
         FactFamily::DataFlowEdge,
         &[
             ("kind", format!("{:?}", draft.kind)),
-            ("refined_call", draft.edge.stable_key.clone()),
+            (
+                "refined_call",
+                interner.resolve(draft.edge.stable_key).to_string(),
+            ),
             ("from", node_key(interner, output, draft.from)),
             ("to", node_key(interner, output, draft.to)),
             ("status", format!("{:?}", draft.status)),
@@ -394,7 +397,7 @@ fn push_edge(
         evidence: draft.evidence,
         input_stable_keys: {
             let mut keys = draft.edge.input_stable_keys.clone();
-            keys.push(draft.edge.stable_key.clone());
+            keys.push(interner.resolve(draft.edge.stable_key).to_string());
             keys.extend(draft.extra_input_stable_keys);
             keys
         },
@@ -469,7 +472,10 @@ fn push_call_summary_tito_edge(
         FactFamily::DataFlowEdge,
         &[
             ("kind", format!("{:?}", DataFlowEdgeKind::SummaryTito)),
-            ("refined_call", edge.stable_key.clone()),
+            (
+                "refined_call",
+                interner.resolve(edge.stable_key).to_string(),
+            ),
             ("summary", summary.stable_key.clone()),
             ("from", node_key(interner, output, from)),
             ("to", node_key(interner, output, to)),
@@ -512,7 +518,7 @@ fn push_call_summary_tito_edge(
             ),
         ],
         input_stable_keys: vec![
-            edge.stable_key.clone(),
+            interner.resolve(edge.stable_key).to_string(),
             summary.stable_key.clone(),
             summary.callable_stable_key.clone(),
         ],
@@ -579,7 +585,10 @@ fn call_node(
         FactFamily::DataFlowNode,
         &[
             ("kind", format!("{kind:?}")),
-            ("refined_call", edge.stable_key.clone()),
+            (
+                "refined_call",
+                interner.resolve(edge.stable_key).to_string(),
+            ),
             ("node", suffix),
         ],
     );
@@ -1221,7 +1230,7 @@ mod tests {
             confidence: RefinedCallConfidence::High,
             evidence: vec!["test".to_string()],
             input_stable_keys: vec!["call-site".to_string()],
-            stable_key: "refined:edge".to_string(),
+            stable_key: crate::core::stable_key_for_test("refined:edge"),
         }
     }
 
@@ -1229,7 +1238,7 @@ mod tests {
         RefinedCallEdgeFact {
             id,
             site,
-            stable_key: format!("refined:edge:{}", id.0),
+            stable_key: crate::core::stable_key_for_test(&format!("refined:edge:{}", id.0)),
             ..refined_edge(CallTargetStatus::Resolved)
         }
     }

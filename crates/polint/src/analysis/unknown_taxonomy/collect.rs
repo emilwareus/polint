@@ -434,7 +434,7 @@ fn refined_call_unknown(
             precision: Some(call_precision_label(edge.precision).to_string()),
             docs_path: Some(docs_path.to_string()),
             suggested_artifact: Some(suggested_artifact.to_string()),
-            source_stable_key: Some(edge.stable_key.clone()),
+            source_stable_key: Some(db.resolve_stable_key(edge.stable_key).to_string()),
         },
     )
 }
@@ -466,7 +466,7 @@ fn adaptation_unknowns(db: &AnalysisDb) -> Vec<UnknownRow> {
                     precision: Some(fact.fact.confidence.as_str().to_string()),
                     docs_path: Some("docs/facts/capability-plans.md".to_string()),
                     suggested_artifact: Some("model".to_string()),
-                    source_stable_key: Some(fact.fact.stable_key.clone()),
+                    source_stable_key: Some(interner.resolve(fact.fact.stable_key).to_string()),
                 },
             )
         })
@@ -1467,7 +1467,7 @@ mod tests {
             confidence: RefinedCallConfidence::Low,
             evidence: vec!["solver_derived_edge".to_string()],
             input_stable_keys: vec!["solver:budget".to_string()],
-            stable_key: "refined:budget".to_string(),
+            stable_key: crate::core::stable_key_for_test("refined:budget"),
         }
     }
 
@@ -1500,7 +1500,7 @@ mod tests {
             language: ModelLanguage::TypeScript,
             scope: "repo".to_string(),
             evidence: vec!["fixture".to_string()],
-            stable_key: "model:missing".to_string(),
+            stable_key: crate::core::stable_key_for_test("model:missing"),
         }
     }
 }

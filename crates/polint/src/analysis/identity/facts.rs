@@ -3,7 +3,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::analysis::ids::{CallSiteId, CallTargetId};
-use crate::core::{FileId, Span};
+use crate::core::{FileId, Span, StableKeyId};
 
 /// Dense run-local handle for an identity record.
 ///
@@ -94,7 +94,7 @@ pub(crate) struct IdentityRecord {
     pub(crate) display_name: Arc<str>,
     pub(crate) signature_digest: SignatureDigest,
     pub(crate) multiplicity: u32,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub(crate) originating_call_site_id: Option<CallSiteId>,
     pub(crate) originating_call_target_id: Option<CallTargetId>,
 }
@@ -295,7 +295,9 @@ mod tests {
                 None,
             ),
             multiplicity: 1,
-            stable_key: "identity|function|go|example.com/pkg|pkg.Type|3|4..5".to_string(),
+            stable_key: crate::core::stable_key_for_test(
+                "identity|function|go|example.com/pkg|pkg.Type|3|4..5",
+            ),
             originating_call_site_id: None,
             originating_call_target_id: None,
         }

@@ -8,7 +8,7 @@ use crate::analysis::types::store::TypeValueAliasOutput;
 use crate::analysis::values::facts::{
     AllocationTokenFact, ValueFact, ValueKind, ValueStatus, ValueSubject,
 };
-use crate::analysis_kernel::{FactFamily, stable_key_text_from_parts};
+use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
 
 pub(crate) fn derive_points_to_constraints(
     interner: &crate::core::StableKeyInterner,
@@ -18,7 +18,7 @@ pub(crate) fn derive_points_to_constraints(
     builder.collect_values(interner, &output.values.values);
     builder.collect_allocations(interner, &output.values.allocations);
     builder.collect_access_paths(interner, &output.access_paths.access_paths);
-    builder.finish()
+    builder.finish(interner)
 }
 
 #[derive(Default)]
@@ -218,9 +218,12 @@ impl ConstraintBuilder {
         });
     }
 
-    fn finish(mut self) -> Vec<PointsToConstraintFact> {
-        self.constraints
-            .sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    fn finish(mut self, interner: &crate::core::StableKeyInterner) -> Vec<PointsToConstraintFact> {
+        self.constraints.sort_by(|left, right| {
+            interner
+                .resolve(left.stable_key)
+                .cmp(&interner.resolve(right.stable_key))
+        });
         self.constraints
             .dedup_by(|left, right| left.stable_key == right.stable_key);
         for (index, constraint) in self.constraints.iter_mut().enumerate() {
@@ -246,8 +249,8 @@ fn access_path_var(path: &AccessPathFact) -> PtVarId {
 fn constraint_stable_key(
     interner: &crate::core::StableKeyInterner,
     kind: &PointsToConstraintKind,
-) -> String {
-    stable_key_text_from_parts(
+) -> crate::core::StableKeyId {
+    stable_key_from_parts(
         interner,
         FactFamily::PointsToConstraint,
         &[("kind", format!("{kind:?}"))],
@@ -415,7 +418,7 @@ mod tests {
             precision: ValuePrecision::Heuristic,
             status,
             provenance: ValueProvenance::Native,
-            stable_key: format!("value:{}", id.0),
+            stable_key: crate::core::stable_key_for_test(&format!("value:{}", id.0)),
         }
     }
 
@@ -430,7 +433,7 @@ mod tests {
             function: None,
             body: Some(MirBodyId(0)),
             status: AccessPathStatus::Partial,
-            stable_key: format!("path:{}", id.0),
+            stable_key: crate::core::stable_key_for_test(&format!("path:{}", id.0)),
         }
     }
 }

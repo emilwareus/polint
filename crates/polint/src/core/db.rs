@@ -964,7 +964,8 @@ impl AnalysisDb {
             .iter()
             .map(|target| target.id)
             .collect::<BTreeSet<_>>();
-        let store = IdentityStore::from_output(output, &valid_sites, &valid_targets)?;
+        let interner = self.stable_key_interner();
+        let store = IdentityStore::from_output(output, &interner, &valid_sites, &valid_targets)?;
         *self.identity_store_mut() = store;
         Ok(())
     }
@@ -996,14 +997,15 @@ impl AnalysisDb {
         &mut self,
         output: RefinedCallOutput,
     ) -> Result<(), AnalysisError> {
-        self.replace_normalized_refined_call_facts(output.normalized())
+        self.replace_normalized_refined_call_facts(output.normalized(&self.stable_key_interner()))
     }
 
     pub(crate) fn replace_normalized_refined_call_facts(
         &mut self,
         output: RefinedCallOutput,
     ) -> Result<(), AnalysisError> {
-        let store = RefinedCallStore::from_normalized_output(output)?;
+        let interner = self.stable_key_interner();
+        let store = RefinedCallStore::from_normalized_output(output, &interner)?;
         *self.refined_call_store_mut() = store;
         self.refresh_refined_call_metadata();
         Ok(())
@@ -1223,7 +1225,7 @@ impl AnalysisDb {
         reason = "Extension fact replacement is wired into the kernel provider in the next plan."
     )]
     pub(crate) fn replace_extension_facts(&mut self, output: ExtensionOutput) {
-        let output = output.normalized();
+        let output = output.normalized(&self.stable_key_interner());
         let store = self.extension_store_mut();
         store.activations = output.activations;
         store.accepted = output.accepted;
@@ -1306,10 +1308,23 @@ impl AnalysisDb {
         &mut self,
         output: ReachabilityProviderOutput,
     ) -> Result<(), AnalysisError> {
-        let valid_function_ids = self.functions().iter().map(|row| row.id).collect();
-        let valid_entrypoint_ids = self.entrypoint_facts().iter().map(|row| row.id).collect();
-        let store =
-            ReachabilityStore::from_output(output, &valid_function_ids, &valid_entrypoint_ids)?;
+        let interner = self.stable_key_interner();
+        let valid_function_ids = self
+            .functions()
+            .iter()
+            .map(|row| row.id)
+            .collect::<BTreeSet<_>>();
+        let valid_entrypoint_ids = self
+            .entrypoint_facts()
+            .iter()
+            .map(|row| row.id)
+            .collect::<BTreeSet<_>>();
+        let store = ReachabilityStore::from_output(
+            output,
+            &interner,
+            &valid_function_ids,
+            &valid_entrypoint_ids,
+        )?;
         *self.reachability_store_mut() = store;
         Ok(())
     }
@@ -1547,7 +1562,9 @@ impl AnalysisDb {
         reason = "Compatibility callers can still pass unnormalized aggregate output; providers use the normalized fast path."
     )]
     pub(crate) fn replace_type_value_alias_facts(&mut self, output: TypeValueAliasOutput) {
-        self.replace_normalized_type_value_alias_facts(output.normalized());
+        self.replace_normalized_type_value_alias_facts(
+            output.normalized(&self.stable_key_interner()),
+        );
     }
 
     pub(crate) fn replace_normalized_type_value_alias_facts(
@@ -1839,9 +1856,10 @@ impl AnalysisDb {
     )]
     fn refresh_extension_metadata(&mut self) {
         self.fact_meta.remove_family(FactFamily::ExtensionFact);
+        let interner = self.stable_key_interner();
         let facts = self.extension_facts().to_vec();
         for (index, fact) in facts.iter().enumerate() {
-            let metadata = extension_fact_metadata(fact);
+            let metadata = extension_fact_metadata(&interner, fact);
             self.record_fact_meta(FactFamily::ExtensionFact, index as u64, metadata);
         }
         self.finish_fact_meta_insertions(&[FactFamily::ExtensionFact]);
@@ -1849,9 +1867,10 @@ impl AnalysisDb {
 
     fn refresh_adaptation_model_metadata(&mut self) {
         self.fact_meta.remove_family(FactFamily::AdaptationModel);
+        let interner = self.stable_key_interner();
         let facts = self.adaptation_model_facts().to_vec();
         for (index, fact) in facts.iter().enumerate() {
-            let metadata = adaptation_model_fact_metadata(fact);
+            let metadata = adaptation_model_fact_metadata(&interner, fact);
             self.record_fact_meta(FactFamily::AdaptationModel, index as u64, metadata);
         }
         self.finish_fact_meta_insertions(&[FactFamily::AdaptationModel]);
@@ -1969,7 +1988,7 @@ impl AnalysisDb {
             TYPE_VALUE_ALIAS_PROVIDER_ID,
             precision,
             confidence,
-            fact.stable_key.clone(),
+            self.resolve_stable_key(fact.stable_key).to_string(),
             stable_parts([
                 ("status", format!("{:?}", fact.status)),
                 ("precision", format!("{:?}", fact.precision)),
@@ -1996,7 +2015,7 @@ impl AnalysisDb {
             TYPE_VALUE_ALIAS_PROVIDER_ID,
             precision,
             confidence,
-            fact.stable_key.clone(),
+            self.resolve_stable_key(fact.stable_key).to_string(),
             stable_parts([
                 ("status", format!("{:?}", fact.status)),
                 ("precision", format!("{:?}", fact.precision)),
@@ -2025,7 +2044,7 @@ impl AnalysisDb {
             TYPE_VALUE_ALIAS_PROVIDER_ID,
             precision,
             confidence,
-            fact.stable_key.clone(),
+            self.resolve_stable_key(fact.stable_key).to_string(),
             stable_parts([
                 ("status", format!("{:?}", fact.status)),
                 ("precision", format!("{:?}", fact.precision)),
@@ -2043,7 +2062,7 @@ impl AnalysisDb {
             TYPE_VALUE_ALIAS_PROVIDER_ID,
             FactPrecision::SetupAware,
             FactConfidence::Medium,
-            fact.stable_key.clone(),
+            self.resolve_stable_key(fact.stable_key).to_string(),
             stable_parts([
                 ("kind", format!("{:?}", fact.kind)),
                 ("language", language_label(fact.language).to_string()),
@@ -2081,7 +2100,7 @@ impl AnalysisDb {
             TYPE_VALUE_ALIAS_PROVIDER_ID,
             precision,
             FactConfidence::Medium,
-            fact.stable_key.clone(),
+            self.resolve_stable_key(fact.stable_key).to_string(),
             stable_parts([
                 ("status", format!("{:?}", fact.status)),
                 ("language", language_label(fact.language).to_string()),
@@ -2101,7 +2120,7 @@ impl AnalysisDb {
             TYPE_VALUE_ALIAS_PROVIDER_ID,
             precision,
             confidence,
-            fact.stable_key.clone(),
+            self.resolve_stable_key(fact.stable_key).to_string(),
             stable_parts([
                 ("status", format!("{:?}", fact.status)),
                 ("precision", format!("{:?}", fact.precision)),
@@ -2117,7 +2136,7 @@ impl AnalysisDb {
             TYPE_VALUE_ALIAS_PROVIDER_ID,
             precision,
             confidence,
-            fact.stable_key.clone(),
+            self.resolve_stable_key(fact.stable_key).to_string(),
             stable_parts([
                 ("status", format!("{:?}", fact.status)),
                 ("precision", format!("{:?}", fact.precision)),
@@ -2135,7 +2154,7 @@ impl AnalysisDb {
             TYPE_VALUE_ALIAS_PROVIDER_ID,
             precision,
             confidence,
-            fact.stable_key.clone(),
+            self.resolve_stable_key(fact.stable_key).to_string(),
             stable_parts([
                 ("status", format!("{:?}", fact.status)),
                 ("precision", format!("{:?}", fact.precision)),
@@ -4294,7 +4313,7 @@ impl AnalysisDb {
             precision,
             confidence,
             validation,
-            fact.stable_key.clone(),
+            self.resolve_stable_key(fact.stable_key).to_string(),
             stable_parts([
                 ("status", call_status_label(fact.status).to_string()),
                 (

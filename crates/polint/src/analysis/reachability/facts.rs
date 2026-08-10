@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::analysis::ids::{EntrypointId, ReachabilityRootId};
-use crate::core::{FileId, FunctionId, Language, Span, SymbolId};
+use crate::core::{FileId, FunctionId, Language, Span, StableKeyId, SymbolId};
 
 // ---------------------------------------------------------------------------
 // ReachabilityRootFact
@@ -34,7 +34,7 @@ pub(crate) struct ReachabilityRootFact {
     pub(crate) provenance: RootProvenance,
     pub(crate) status: RootStatus,
     pub(crate) provider_id: String,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
 /// Closed taxonomy of reachability root kinds (D-04).
@@ -233,13 +233,13 @@ mod tests {
             provenance: RootProvenance::NativeDiscovery,
             status: RootStatus::Resolved,
             provider_id: "polint.reachability".to_string(),
-            stable_key: compute_reachability_root_stable_key(
+            stable_key: crate::core::stable_key_for_test(&compute_reachability_root_stable_key(
                 RootKind::Main,
                 Language::Go,
                 "main.main",
                 FileId(3),
                 &span,
-            ),
+            )),
         }
     }
 

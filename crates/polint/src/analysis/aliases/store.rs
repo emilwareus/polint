@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use super::facts::{AliasAnswerFact, AliasOperand, AliasPrecision, AliasStatus};
 use crate::analysis::ids::{AccessPathId, AliasAnswerId, PlaceId};
+use crate::core::StableKeyInterner;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct AliasOutput {
@@ -9,9 +10,10 @@ pub(crate) struct AliasOutput {
 }
 
 impl AliasOutput {
-    pub(crate) fn normalized(mut self) -> Self {
+    pub(crate) fn normalized(mut self, interner: &StableKeyInterner) -> Self {
         self.answers.sort_by(|left, right| {
-            (left.stable_key.as_str(), left.id).cmp(&(right.stable_key.as_str(), right.id))
+            (interner.resolve(left.stable_key), left.id)
+                .cmp(&(interner.resolve(right.stable_key), right.id))
         });
         for (index, row) in self.answers.iter_mut().enumerate() {
             row.id = AliasAnswerId(index as u64);
@@ -34,8 +36,8 @@ impl AliasStore {
         dead_code,
         reason = "Compatibility callers can still pass unnormalized output; providers use from_normalized_output."
     )]
-    pub(crate) fn from_output(output: AliasOutput) -> Self {
-        Self::from_normalized_output(output.normalized())
+    pub(crate) fn from_output(output: AliasOutput, interner: &StableKeyInterner) -> Self {
+        Self::from_normalized_output(output.normalized(interner))
     }
 
     pub(crate) fn from_normalized_output(output: AliasOutput) -> Self {
@@ -85,18 +87,22 @@ mod tests {
             reason: AliasReason::MissingPointsTo,
             evidence: vec!["missing-points-to".to_string()],
             precision: AliasPrecision::Unknown,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
     #[test]
     fn alias_output_sorts_by_stable_key_and_reassigns_ids() {
+        let interner = crate::core::test_stable_key_interner();
         let output = AliasOutput {
             answers: vec![answer(10, "alias:z"), answer(4, "alias:a")],
         }
-        .normalized();
+        .normalized(&interner);
 
-        assert_eq!(output.answers[0].stable_key, "alias:a");
+        assert_eq!(
+            interner.resolve(output.answers[0].stable_key).as_ref(),
+            "alias:a"
+        );
         assert_eq!(output.answers[0].id, AliasAnswerId(0));
         assert_eq!(output.answers[1].id, AliasAnswerId(1));
     }

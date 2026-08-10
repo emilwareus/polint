@@ -45,7 +45,7 @@ struct RootDetailRow {
     status: String,
     precision: String,
     provenance: String,
-    stable_key: String,
+    stable_key_text: String,
 }
 
 fn reachability_counts(db: &AnalysisDb) -> ReachabilityDebugCounts {
@@ -72,10 +72,10 @@ fn root_detail_rows(db: &AnalysisDb) -> Vec<RootDetailRow> {
             status: status_label(root.status).to_string(),
             precision: precision_label(root.precision).to_string(),
             provenance: provenance_label(root.provenance).to_string(),
-            stable_key: root.stable_key.clone(),
+            stable_key_text: db.resolve_stable_key(root.stable_key).to_string(),
         })
         .collect();
-    rows.sort_by(|a, b| a.stable_key.cmp(&b.stable_key));
+    rows.sort_by(|a, b| a.stable_key_text.cmp(&b.stable_key_text));
     rows
 }
 
@@ -161,13 +161,13 @@ mod tests {
             provenance: RootProvenance::NativeDiscovery,
             status: RootStatus::Resolved,
             provider_id: REACHABILITY_PROVIDER_ID.to_string(),
-            stable_key: compute_reachability_root_stable_key(
+            stable_key: crate::core::stable_key_for_test(&compute_reachability_root_stable_key(
                 RootKind::Main,
                 Language::Go,
                 "main.main",
                 file,
                 &span(file, 1, 2),
-            ),
+            )),
         };
         db.replace_reachability_facts(ReachabilityProviderOutput { roots: vec![root] })
             .expect("store root");

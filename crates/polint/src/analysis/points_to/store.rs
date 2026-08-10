@@ -5,6 +5,7 @@ use super::facts::{
     PointsToStatus,
 };
 use crate::analysis::ids::{ObjectTokenId, PointsToConstraintId, PointsToSetId, PtVarId};
+use crate::core::StableKeyInterner;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct PointsToOutput {
@@ -13,12 +14,14 @@ pub(crate) struct PointsToOutput {
 }
 
 impl PointsToOutput {
-    pub(crate) fn normalized(mut self) -> Self {
+    pub(crate) fn normalized(mut self, interner: &StableKeyInterner) -> Self {
         self.constraints.sort_by(|left, right| {
-            (left.stable_key.as_str(), left.id).cmp(&(right.stable_key.as_str(), right.id))
+            (interner.resolve(left.stable_key), left.id)
+                .cmp(&(interner.resolve(right.stable_key), right.id))
         });
         self.sets.sort_by(|left, right| {
-            (left.stable_key.as_str(), left.id).cmp(&(right.stable_key.as_str(), right.id))
+            (interner.resolve(left.stable_key), left.id)
+                .cmp(&(interner.resolve(right.stable_key), right.id))
         });
         for (index, row) in self.constraints.iter_mut().enumerate() {
             row.id = PointsToConstraintId(index as u64);
@@ -47,8 +50,8 @@ impl PointsToStore {
         dead_code,
         reason = "Compatibility callers can still pass unnormalized output; providers use from_normalized_output."
     )]
-    pub(crate) fn from_output(output: PointsToOutput) -> Self {
-        Self::from_normalized_output(output.normalized())
+    pub(crate) fn from_output(output: PointsToOutput, interner: &StableKeyInterner) -> Self {
+        Self::from_normalized_output(output.normalized(interner))
     }
 
     pub(crate) fn from_normalized_output(output: PointsToOutput) -> Self {
@@ -111,19 +114,23 @@ mod tests {
             },
             status: PointsToStatus::Present,
             precision: PointsToPrecision::FlowInsensitive,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
     #[test]
     fn points_to_output_sorts_by_stable_key_and_reassigns_ids() {
+        let interner = crate::core::test_stable_key_interner();
         let output = PointsToOutput {
             constraints: vec![constraint(9, "pt:z"), constraint(2, "pt:a")],
             sets: Vec::new(),
         }
-        .normalized();
+        .normalized(&interner);
 
-        assert_eq!(output.constraints[0].stable_key, "pt:a");
+        assert_eq!(
+            interner.resolve(output.constraints[0].stable_key).as_ref(),
+            "pt:a"
+        );
         assert_eq!(output.constraints[0].id, PointsToConstraintId(0));
         assert_eq!(output.constraints[1].id, PointsToConstraintId(1));
     }

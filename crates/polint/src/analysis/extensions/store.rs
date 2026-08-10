@@ -5,6 +5,7 @@ use super::sinks::{
     ExtensionFactCandidate, ExtensionFactConfidence, ExtensionFactPrecision, ExtensionFactStatus,
 };
 use super::validate::ExtensionRejectionReason;
+use crate::core::{StableKeyId, StableKeyInterner};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ExtensionOutput {
@@ -28,7 +29,7 @@ pub(crate) struct AcceptedExtensionFact {
     pub(crate) extension_id: String,
     pub(crate) provider_id: String,
     pub(crate) fact_family: String,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub(crate) binding_refs: Vec<String>,
     pub(crate) precision: ExtensionFactPrecision,
     pub(crate) confidence: ExtensionFactConfidence,
@@ -43,13 +44,13 @@ pub(crate) struct RejectedExtensionFact {
     pub(crate) extension_id: String,
     pub(crate) provider_id: String,
     pub(crate) fact_family: String,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub(crate) reason: ExtensionRejectionReason,
     pub(crate) evidence: Vec<String>,
 }
 
 impl ExtensionOutput {
-    pub(crate) fn normalized(mut self) -> Self {
+    pub(crate) fn normalized(mut self, interner: &StableKeyInterner) -> Self {
         for activation in &mut self.activations {
             activation.output_digest_inputs.sort();
             activation.output_digest_inputs.dedup();
@@ -71,13 +72,13 @@ impl ExtensionOutput {
                 left.extension_id.as_str(),
                 left.provider_id.as_str(),
                 left.fact_family.as_str(),
-                left.stable_key.as_str(),
+                interner.resolve(left.stable_key),
             )
                 .cmp(&(
                     right.extension_id.as_str(),
                     right.provider_id.as_str(),
                     right.fact_family.as_str(),
-                    right.stable_key.as_str(),
+                    interner.resolve(right.stable_key),
                 ))
         });
         self.rejected.sort_by(|left, right| {
@@ -85,14 +86,14 @@ impl ExtensionOutput {
                 left.extension_id.as_str(),
                 left.provider_id.as_str(),
                 left.fact_family.as_str(),
-                left.stable_key.as_str(),
+                interner.resolve(left.stable_key),
                 left.reason,
             )
                 .cmp(&(
                     right.extension_id.as_str(),
                     right.provider_id.as_str(),
                     right.fact_family.as_str(),
-                    right.stable_key.as_str(),
+                    interner.resolve(right.stable_key),
                     right.reason,
                 ))
         });
@@ -101,9 +102,12 @@ impl ExtensionOutput {
 }
 
 impl AcceptedExtensionFact {
-    pub(crate) fn from_candidate(candidate: ExtensionFactCandidate) -> Self {
+    pub(crate) fn from_candidate(
+        candidate: ExtensionFactCandidate,
+        interner: &StableKeyInterner,
+    ) -> Self {
         let candidate = candidate.normalized();
-        let payload_digest = extension_payload_digest(&candidate);
+        let payload_digest = extension_payload_digest(&candidate, interner);
         Self {
             extension_id: candidate.extension_id,
             provider_id: candidate.provider_id,
@@ -124,6 +128,7 @@ impl RejectedExtensionFact {
     pub(crate) fn from_candidate(
         candidate: &ExtensionFactCandidate,
         reason: ExtensionRejectionReason,
+        _interner: &StableKeyInterner,
     ) -> Self {
         let candidate = candidate.clone().normalized();
         Self {
@@ -137,12 +142,15 @@ impl RejectedExtensionFact {
     }
 }
 
-fn extension_payload_digest(candidate: &ExtensionFactCandidate) -> String {
+fn extension_payload_digest(
+    candidate: &ExtensionFactCandidate,
+    interner: &StableKeyInterner,
+) -> String {
     let mut parts = vec![
         format!("extension_id={}", candidate.extension_id),
         format!("provider_id={}", candidate.provider_id),
         format!("family={}", candidate.fact_family),
-        format!("stable_key={}", candidate.stable_key),
+        format!("stable_key={}", interner.resolve(candidate.stable_key)),
         format!("precision={:?}", candidate.precision),
         format!("confidence={:?}", candidate.confidence),
     ];
@@ -174,6 +182,7 @@ mod tests {
 
     #[test]
     fn output_sorts_accepted_and_rejected_rows_deterministically() {
+        let interner = crate::core::test_stable_key_interner();
         let output = ExtensionOutput {
             activations: Vec::new(),
             accepted: vec![
@@ -197,7 +206,7 @@ mod tests {
                 ),
             ],
         }
-        .normalized();
+        .normalized(&interner);
 
         assert_eq!(output.accepted[0].provider_id, "a");
         assert_eq!(
@@ -216,7 +225,7 @@ mod tests {
             extension_id: extension_id.to_string(),
             provider_id: provider_id.to_string(),
             fact_family: fact_family.to_string(),
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
             binding_refs: Vec::new(),
             precision: ExtensionFactPrecision::Heuristic,
             confidence: ExtensionFactConfidence::Medium,
@@ -238,7 +247,7 @@ mod tests {
             extension_id: extension_id.to_string(),
             provider_id: provider_id.to_string(),
             fact_family: fact_family.to_string(),
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
             reason,
             evidence: Vec::new(),
         }

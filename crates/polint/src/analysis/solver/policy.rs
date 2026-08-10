@@ -214,7 +214,7 @@ mod ts_points_to {
     use crate::analysis::solver::budget::{BudgetStatus, SolverBudget};
     use crate::analysis::solver::facts::DerivedEdgeFact;
     use crate::analysis::solver::provenance::{ContributingFact, DerivedEdgeProvenance};
-    use crate::analysis_kernel::{FactFamily, stable_key_text_from_parts};
+    use crate::analysis_kernel::{FactFamily, stable_key_from_parts, stable_key_text_from_parts};
     use crate::core::AnalysisDb;
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -348,7 +348,7 @@ mod ts_points_to {
                             stable_key: target_stable_key.clone(),
                         },
                         ContributingFact {
-                            stable_key: set.stable_key.clone(),
+                            stable_key: interner.resolve(set.stable_key).to_string(),
                         },
                     ],
                     &ConstraintKind::CallConstraint {
@@ -458,7 +458,7 @@ mod ts_points_to {
             .enumerate()
             .map(|(index, kind)| PointsToConstraintFact {
                 id: PointsToConstraintId(index as u64),
-                stable_key: stable_key_text_from_parts(
+                stable_key: stable_key_from_parts(
                     interner,
                     FactFamily::PointsToConstraint,
                     &[("kind", format!("{kind:?}"))],

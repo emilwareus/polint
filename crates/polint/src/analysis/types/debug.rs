@@ -135,46 +135,47 @@ fn debug_counts(db: &AnalysisDb) -> TypeValueAliasDebugCounts {
 }
 
 fn stable_key_rows(db: &AnalysisDb) -> Vec<String> {
+    let interner = db.stable_key_interner();
     let mut rows = Vec::new();
     rows.extend(
         db.type_facts()
             .iter()
-            .map(|fact| format!("type:{}", fact.stable_key)),
+            .map(|fact| format!("type:{}", interner.resolve(fact.stable_key))),
     );
     rows.extend(
         db.narrowed_type_facts()
             .iter()
-            .map(|fact| format!("narrowed_type:{}", fact.stable_key)),
+            .map(|fact| format!("narrowed_type:{}", interner.resolve(fact.stable_key))),
     );
     rows.extend(
         db.value_facts()
             .iter()
-            .map(|fact| format!("value:{}", fact.stable_key)),
+            .map(|fact| format!("value:{}", interner.resolve(fact.stable_key))),
     );
     rows.extend(
         db.allocation_tokens()
             .iter()
-            .map(|fact| format!("allocation:{}", fact.stable_key)),
+            .map(|fact| format!("allocation:{}", interner.resolve(fact.stable_key))),
     );
     rows.extend(
         db.access_path_facts()
             .iter()
-            .map(|fact| format!("access_path:{}", fact.stable_key)),
+            .map(|fact| format!("access_path:{}", interner.resolve(fact.stable_key))),
     );
     rows.extend(
         db.points_to_constraints()
             .iter()
-            .map(|fact| format!("points_to_constraint:{}", fact.stable_key)),
+            .map(|fact| format!("points_to_constraint:{}", interner.resolve(fact.stable_key))),
     );
     rows.extend(
         db.points_to_sets()
             .iter()
-            .map(|fact| format!("points_to_set:{}", fact.stable_key)),
+            .map(|fact| format!("points_to_set:{}", interner.resolve(fact.stable_key))),
     );
     rows.extend(
         db.alias_answers()
             .iter()
-            .map(|fact| format!("alias_answer:{}", fact.stable_key)),
+            .map(|fact| format!("alias_answer:{}", interner.resolve(fact.stable_key))),
     );
     rows.sort();
     rows
@@ -312,7 +313,7 @@ mod tests {
                     confidence: TypeConfidence::Low,
                     status: TypeStatus::Unknown,
                     provenance: TypeProvenance::Native,
-                    stable_key: "type:fixture".to_string(),
+                    stable_key: crate::core::stable_key_for_test("type:fixture"),
                 }],
                 narrowed: Vec::new(),
             },
@@ -331,7 +332,7 @@ mod tests {
                     precision: ValuePrecision::Unknown,
                     status: ValueStatus::Unknown,
                     provenance: ValueProvenance::Generated,
-                    stable_key: "value:fixture".to_string(),
+                    stable_key: crate::core::stable_key_for_test("value:fixture"),
                 }],
                 allocations: vec![AllocationTokenFact {
                     id: AllocationTokenId(0),
@@ -344,7 +345,7 @@ mod tests {
                     source_operation: None,
                     span: None,
                     provenance: ValueProvenance::Native,
-                    stable_key: "allocation:fixture".to_string(),
+                    stable_key: crate::core::stable_key_for_test("allocation:fixture"),
                 }],
             },
             access_paths: AccessPathOutput {
@@ -358,7 +359,7 @@ mod tests {
                     function: None,
                     body: None,
                     status: AccessPathStatus::Unknown,
-                    stable_key: "path:fixture".to_string(),
+                    stable_key: crate::core::stable_key_for_test("path:fixture"),
                 }],
             },
             points_to: PointsToOutput {
@@ -370,7 +371,7 @@ mod tests {
                     status: PointsToStatus::Present,
                     precision: PointsToPrecision::FlowInsensitive,
                     budget: PointsToBudgetStatus::WithinBudget,
-                    stable_key: "points-to:fixture".to_string(),
+                    stable_key: crate::core::stable_key_for_test("points-to:fixture"),
                 }],
             },
             aliases: AliasOutput {
@@ -412,7 +413,7 @@ mod tests {
             reason: AliasReason::ExtensionProvided,
             evidence: vec![stable_key.to_string()],
             precision: AliasPrecision::Heuristic,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 }

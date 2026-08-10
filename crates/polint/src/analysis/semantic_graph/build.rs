@@ -901,7 +901,7 @@ impl GraphBuilder {
                     confidence: fact.confidence.as_str().to_string(),
                     evidence: fact.evidence.clone(),
                 },
-                &fact.stable_key,
+                &interner.resolve(fact.stable_key),
             );
         }
     }
@@ -1001,7 +1001,7 @@ impl GraphBuilder {
                     dst: dst_node,
                     src: src_node,
                 },
-                &value.stable_key,
+                &interner.resolve(value.stable_key),
             );
         }
     }
@@ -2571,9 +2571,15 @@ mod tests {
         sources: &[String],
         targets: &[String],
     ) -> AdaptationModelStore {
+        let interner = crate::core::AnalysisDb::new().stable_key_interner();
         let universe = ValidationUniverse::new(sources.iter().cloned(), targets.iter().cloned())
             .with_oracle_labels(["expected:benchmark-answer"]);
-        AdaptationModelStore::build(facts, &universe, AdaptationModelBudget::default())
+        AdaptationModelStore::build(
+            &interner,
+            facts,
+            &universe,
+            AdaptationModelBudget::default(),
+        )
     }
 
     fn model_fact(source: &str, target: &str) -> LoadedModelFact {
@@ -2585,7 +2591,7 @@ mod tests {
             language: ModelLanguage::TypeScript,
             scope: "src/app.ts".to_string(),
             evidence: vec!["src/app.ts:10".to_string()],
-            stable_key: format!("model:{source}->{target}"),
+            stable_key: crate::core::stable_key_for_test(&format!("model:{source}->{target}")),
         }
     }
 

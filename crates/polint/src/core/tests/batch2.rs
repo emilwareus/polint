@@ -172,7 +172,7 @@
                         precision: ValuePrecision::ExactLocal,
                         status: ValueStatus::Present,
                         provenance: ValueProvenance::Native,
-                        stable_key: "value:literal".to_string(),
+                        stable_key: crate::core::stable_key_for_test("value:literal"),
                     }],
                     allocations: Vec::new(),
                 },

@@ -34,10 +34,11 @@ pub(crate) fn validate_reachability(db: &AnalysisDb, diagnostics: &mut Vec<Diagn
         "ReachabilityRoot",
         db.reachability_roots()
             .iter()
-            .map(|row| row.stable_key.as_str()),
+            .map(|row| db.resolve_stable_key(row.stable_key).to_string()),
     );
 
     for root in db.reachability_roots() {
+        let stable_key = db.resolve_stable_key(root.stable_key);
         validate_root(
             diagnostics,
             root,
@@ -45,6 +46,7 @@ pub(crate) fn validate_reachability(db: &AnalysisDb, diagnostics: &mut Vec<Diagn
             &symbols,
             &files,
             &entrypoints,
+            &stable_key,
         );
     }
 }
@@ -56,6 +58,7 @@ fn validate_root(
     symbols: &BTreeSet<crate::core::SymbolId>,
     files: &BTreeSet<crate::core::FileId>,
     entrypoints: &BTreeSet<crate::analysis::ids::EntrypointId>,
+    stable_key: &str,
 ) {
     // IN-04: an unresolved configured root carries sentinel target/file ids by
     // design (it resolved to no real function/file). Skip the referential dangling
@@ -67,7 +70,7 @@ fn validate_root(
         push_diagnostic(
             diagnostics,
             "ReachabilityRoot",
-            &root.stable_key,
+            stable_key,
             "target_function",
             "dangling reachability root target function reference",
         );
@@ -78,7 +81,7 @@ fn validate_root(
         push_diagnostic(
             diagnostics,
             "ReachabilityRoot",
-            &root.stable_key,
+            stable_key,
             "target_symbol",
             "dangling reachability root target symbol reference",
         );
@@ -89,7 +92,7 @@ fn validate_root(
         push_diagnostic(
             diagnostics,
             "ReachabilityRoot",
-            &root.stable_key,
+            stable_key,
             "originating_entrypoint",
             "dangling reachability root originating entrypoint reference",
         );
@@ -98,7 +101,7 @@ fn validate_root(
         push_diagnostic(
             diagnostics,
             "ReachabilityRoot",
-            &root.stable_key,
+            stable_key,
             "file",
             "dangling reachability root file reference",
         );
@@ -107,7 +110,7 @@ fn validate_root(
         push_diagnostic(
             diagnostics,
             "ReachabilityRoot",
-            &root.stable_key,
+            stable_key,
             "span",
             "invalid span byte range",
         );
@@ -130,18 +133,18 @@ pub(crate) fn reject_exact_precision(
     }
 }
 
-fn check_duplicate_stable_keys<'a>(
+fn check_duplicate_stable_keys(
     diagnostics: &mut Vec<Diagnostic>,
     family: &'static str,
-    keys: impl Iterator<Item = &'a str>,
+    keys: impl Iterator<Item = String>,
 ) {
     let mut seen = BTreeSet::new();
     for key in keys {
-        if !seen.insert(key) {
+        if !seen.insert(key.clone()) {
             push_diagnostic(
                 diagnostics,
                 family,
-                key,
+                &key,
                 "stable_key",
                 "duplicate stable key",
             );
@@ -223,13 +226,13 @@ mod tests {
             provenance: RootProvenance::NativeDiscovery,
             status: RootStatus::Resolved,
             provider_id: REACHABILITY_PROVIDER_ID.to_string(),
-            stable_key: compute_reachability_root_stable_key(
+            stable_key: crate::core::stable_key_for_test(&compute_reachability_root_stable_key(
                 RootKind::Main,
                 Language::Go,
                 "main.main",
                 file,
                 &span,
-            ),
+            )),
         }
     }
 
@@ -349,14 +352,22 @@ mod tests {
             provenance: RootProvenance::Configured,
             status: RootStatus::Unresolved,
             provider_id: REACHABILITY_PROVIDER_ID.to_string(),
-            stable_key: compute_reachability_root_stable_key(
+            stable_key: crate::core::stable_key_for_test(&compute_reachability_root_stable_key(
                 RootKind::ConfiguredEntrypoint,
                 Language::Unknown,
                 "configured:does/not.Resolve",
                 sentinel_file,
                 &sentinel_span,
-            ),
+            )),
         };
+
+        let stable_key_text = compute_reachability_root_stable_key(
+            RootKind::ConfiguredEntrypoint,
+            Language::Unknown,
+            "configured:does/not.Resolve",
+            sentinel_file,
+            &sentinel_span,
+        );
 
         let mut diagnostics = Vec::new();
         validate_root(
@@ -366,6 +377,7 @@ mod tests {
             &symbols,
             &files,
             &entrypoints,
+            &stable_key_text,
         );
         assert!(
             diagnostics.is_empty(),
@@ -381,6 +393,7 @@ mod tests {
             &symbols,
             &files,
             &entrypoints,
+            &stable_key_text,
         );
         assert!(
             !diagnostics.is_empty(),

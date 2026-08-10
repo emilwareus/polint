@@ -9,7 +9,6 @@ use crate::analysis_kernel::incremental::{
 };
 use crate::core::AnalysisDb;
 use crate::diagnostics::Diagnostic;
-use serde::Serialize;
 use std::fmt::Debug;
 
 pub(crate) const TYPE_VALUE_ALIAS_PROVIDER_ID: &str = "polint.type_value_alias";
@@ -54,12 +53,16 @@ pub(crate) fn derive_type_value_alias_with_cache_stats(
         .access_paths
         .access_paths
         .extend(ts_js_output.access_paths.access_paths);
-    output = output.normalized();
-    let base_merge =
-        super::validate::merge_extension_type_value_alias_base_facts(output, db.extension_facts());
-    output = base_merge.output.normalized();
+    output = output.normalized(interner);
+    let base_merge = super::validate::merge_extension_type_value_alias_base_facts(
+        interner,
+        output,
+        db.extension_facts(),
+    );
+    output = base_merge.output.normalized(interner);
     diagnostics.extend(base_merge.diagnostics);
     let relation_merge = super::validate::merge_extension_type_value_alias_relation_facts(
+        interner,
         output,
         db.extension_facts(),
     );
@@ -83,8 +86,9 @@ pub(crate) fn derive_type_value_alias_with_cache_stats(
         .extend(std::mem::take(&mut output.aliases.answers));
     output.points_to = points_to_output;
     output.aliases = alias_output;
-    output = output.normalized();
+    output = output.normalized(interner);
     let output_digest = type_value_alias_output_digest(
+        interner,
         manifest,
         input_snapshot,
         &semantic_mir_output_digest,
@@ -112,6 +116,7 @@ pub(crate) fn derive_type_value_alias_with_cache_stats(
 
 #[allow(clippy::too_many_arguments)]
 fn type_value_alias_output_digest(
+    interner: &crate::core::StableKeyInterner,
     manifest: &ProviderManifest,
     input_snapshot: &InputSnapshot,
     semantic_mir_output_digest: &Digest,
@@ -185,56 +190,55 @@ fn type_value_alias_output_digest(
             .types
             .types
             .iter()
-            .map(|row| format!("type={}", stable_fact_payload(row))),
+            .map(|row| format!("type={}", stable_fact_payload(interner, row))),
     );
     parts.extend(
         output
             .types
             .narrowed
             .iter()
-            .map(|row| format!("narrowed_type={}", stable_fact_payload(row))),
+            .map(|row| format!("narrowed_type={}", stable_fact_payload(interner, row))),
     );
     parts.extend(
         output
             .values
             .values
             .iter()
-            .map(|row| format!("value={}", stable_fact_payload(row))),
+            .map(|row| format!("value={}", stable_fact_payload(interner, row))),
     );
     parts.extend(
         output
             .values
             .allocations
             .iter()
-            .map(|row| format!("allocation={}", stable_fact_payload(row))),
+            .map(|row| format!("allocation={}", stable_fact_payload(interner, row))),
     );
     parts.extend(
         output
             .access_paths
             .access_paths
             .iter()
-            .map(|row| format!("access_path={}", stable_fact_payload(row))),
+            .map(|row| format!("access_path={}", stable_fact_payload(interner, row))),
     );
-    parts.extend(
-        output
-            .points_to
-            .constraints
-            .iter()
-            .map(|row| format!("points_to_constraint={}", stable_fact_payload(row))),
-    );
+    parts.extend(output.points_to.constraints.iter().map(|row| {
+        format!(
+            "points_to_constraint={}",
+            stable_fact_payload(interner, row)
+        )
+    }));
     parts.extend(
         output
             .points_to
             .sets
             .iter()
-            .map(|row| format!("points_to_set={}", stable_fact_payload(row))),
+            .map(|row| format!("points_to_set={}", stable_fact_payload(interner, row))),
     );
     parts.extend(
         output
             .aliases
             .answers
             .iter()
-            .map(|row| format!("alias_answer={}", stable_fact_payload(row))),
+            .map(|row| format!("alias_answer={}", stable_fact_payload(interner, row))),
     );
     if output.types.types.is_empty()
         && output.types.narrowed.is_empty()
@@ -266,11 +270,37 @@ fn extend_component_parts(parts: &mut Vec<String>, prefix: &str, components: &[I
     }));
 }
 
-fn stable_fact_payload<T>(fact: &T) -> String
+fn stable_fact_payload<T>(interner: &crate::core::StableKeyInterner, fact: &T) -> String
 where
-    T: Serialize + Debug,
+    T: Debug,
 {
-    serde_json::to_string(fact).unwrap_or_else(|_| format!("{fact:?}"))
+    resolve_stable_key_ids(interner, &format!("{fact:?}"))
+}
+
+fn resolve_stable_key_ids(interner: &crate::core::StableKeyInterner, payload: &str) -> String {
+    let mut resolved = String::with_capacity(payload.len());
+    let mut remaining = payload;
+    while let Some(start) = remaining.find("StableKeyId(") {
+        resolved.push_str(&remaining[..start]);
+        let id_start = start + "StableKeyId(".len();
+        let Some(relative_end) = remaining[id_start..].find(')') else {
+            resolved.push_str(&remaining[start..]);
+            return resolved;
+        };
+        let id_end = id_start + relative_end;
+        let Ok(id) = remaining[id_start..id_end].parse::<u32>() else {
+            resolved.push_str(&remaining[start..=id_end]);
+            remaining = &remaining[id_end + 1..];
+            continue;
+        };
+        resolved.push_str(&format!(
+            "{:?}",
+            interner.resolve(crate::core::StableKeyId(id))
+        ));
+        remaining = &remaining[id_end + 1..];
+    }
+    resolved.push_str(remaining);
+    resolved
 }
 
 #[cfg(test)]
@@ -423,7 +453,7 @@ export function flow(input, key) {
                     confidence: TypeConfidence::Low,
                     status: TypeStatus::Unknown,
                     provenance: TypeProvenance::Native,
-                    stable_key: "type:seed".to_string(),
+                    stable_key: crate::core::stable_key_for_test("type:seed"),
                 }],
                 narrowed: Vec::new(),
             },
@@ -480,7 +510,7 @@ export function flow(input, key) {
             extension_id: "demo".to_string(),
             provider_id: "precision".to_string(),
             fact_family: family.to_string(),
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
             binding_refs: vec!["file:src/app.ts".to_string()],
             precision: ExtensionFactPrecision::Heuristic,
             confidence: ExtensionFactConfidence::Medium,

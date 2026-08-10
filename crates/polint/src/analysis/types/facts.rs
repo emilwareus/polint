@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::analysis::cfg::ids::BasicBlockId;
 use crate::analysis::ids::{MirBodyId, MirOpId, NarrowedTypeId, PlaceId, TypeFactId, TypeSetId};
-use crate::core::{FileId, FunctionId, Language, SymbolId};
+use crate::core::{FileId, FunctionId, Language, StableKeyId, SymbolId};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct TypeFact {
@@ -22,7 +22,7 @@ pub(crate) struct TypeFact {
     pub(crate) confidence: TypeConfidence,
     pub(crate) status: TypeStatus,
     pub(crate) provenance: TypeProvenance,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,7 +40,7 @@ pub(crate) struct NarrowedTypeFact {
     pub(crate) body: Option<MirBodyId>,
     pub(crate) precision: TypePrecision,
     pub(crate) status: TypeStatus,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

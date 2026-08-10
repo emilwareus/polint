@@ -6,7 +6,7 @@ use crate::analysis::aliases::store::AliasOutput;
 use crate::analysis::ids::{NarrowedTypeId, PlaceId, TypeFactId, TypeSetId};
 use crate::analysis::points_to::store::PointsToOutput;
 use crate::analysis::values::store::ValueOutput;
-use crate::core::{FunctionId, Language};
+use crate::core::{FunctionId, Language, StableKeyInterner};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct TypeValueAliasOutput {
@@ -18,13 +18,13 @@ pub(crate) struct TypeValueAliasOutput {
 }
 
 impl TypeValueAliasOutput {
-    pub(crate) fn normalized(self) -> Self {
+    pub(crate) fn normalized(self, interner: &StableKeyInterner) -> Self {
         Self {
-            types: self.types.normalized(),
-            values: self.values.normalized(),
-            access_paths: self.access_paths.normalized(),
-            points_to: self.points_to.normalized(),
-            aliases: self.aliases.normalized(),
+            types: self.types.normalized(interner),
+            values: self.values.normalized(interner),
+            access_paths: self.access_paths.normalized(interner),
+            points_to: self.points_to.normalized(interner),
+            aliases: self.aliases.normalized(interner),
         }
     }
 }
@@ -36,12 +36,14 @@ pub(crate) struct TypeOutput {
 }
 
 impl TypeOutput {
-    pub(crate) fn normalized(mut self) -> Self {
+    pub(crate) fn normalized(mut self, interner: &StableKeyInterner) -> Self {
         self.types.sort_by(|left, right| {
-            (left.stable_key.as_str(), left.id).cmp(&(right.stable_key.as_str(), right.id))
+            (interner.resolve(left.stable_key), left.id)
+                .cmp(&(interner.resolve(right.stable_key), right.id))
         });
         self.narrowed.sort_by(|left, right| {
-            (left.stable_key.as_str(), left.id).cmp(&(right.stable_key.as_str(), right.id))
+            (interner.resolve(left.stable_key), left.id)
+                .cmp(&(interner.resolve(right.stable_key), right.id))
         });
         let mut type_set_remap = BTreeMap::new();
         for (index, row) in self.types.iter().enumerate() {
@@ -94,8 +96,8 @@ impl TypeStore {
         dead_code,
         reason = "Compatibility callers can still pass unnormalized output; providers use from_normalized_output."
     )]
-    pub(crate) fn from_output(output: TypeOutput) -> Self {
-        Self::from_normalized_output(output.normalized())
+    pub(crate) fn from_output(output: TypeOutput, interner: &StableKeyInterner) -> Self {
+        Self::from_normalized_output(output.normalized(interner))
     }
 
     pub(crate) fn from_normalized_output(output: TypeOutput) -> Self {
@@ -160,19 +162,23 @@ mod tests {
             confidence: TypeConfidence::Medium,
             status: TypeStatus::Present,
             provenance: TypeProvenance::Native,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
     #[test]
     fn type_output_sorts_by_stable_key_and_reassigns_ids() {
+        let interner = crate::core::test_stable_key_interner();
         let output = TypeOutput {
             types: vec![type_fact(7, "type:z"), type_fact(3, "type:a")],
             narrowed: Vec::new(),
         }
-        .normalized();
+        .normalized(&interner);
 
-        assert_eq!(output.types[0].stable_key, "type:a");
+        assert_eq!(
+            interner.resolve(output.types[0].stable_key).as_ref(),
+            "type:a"
+        );
         assert_eq!(output.types[0].id, TypeFactId(0));
         assert_eq!(output.types[0].type_set, TypeSetId(0));
         assert_eq!(output.types[1].id, TypeFactId(1));
@@ -181,6 +187,7 @@ mod tests {
 
     #[test]
     fn type_output_remaps_type_set_references_after_sorting() {
+        let interner = crate::core::test_stable_key_interner();
         let output = TypeOutput {
             types: vec![
                 TypeFact {
@@ -203,10 +210,10 @@ mod tests {
                 body: None,
                 precision: TypePrecision::Conservative,
                 status: TypeStatus::Present,
-                stable_key: "narrowed:z".to_string(),
+                stable_key: crate::core::stable_key_for_test("narrowed:z"),
             }],
         }
-        .normalized();
+        .normalized(&interner);
 
         assert_eq!(output.narrowed[0].type_set, TypeSetId(1));
         assert_eq!(

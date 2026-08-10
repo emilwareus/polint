@@ -9,9 +9,10 @@ pub(crate) const ADAPTATION_MODEL_VALIDATOR_VERSION: &str = "adaptation_model_va
 pub(crate) fn adaptation_model_digest(
     store: &AdaptationModelStore,
     budget: AdaptationModelBudget,
+    interner: &crate::core::StableKeyInterner,
 ) -> Digest {
     let budget_parts = budget.digest_parts();
-    let store_parts = store.digest_parts();
+    let store_parts = store.digest_parts(interner);
     let mut parts: Vec<&str> = vec![
         ADAPTATION_MODEL_SCHEMA_LABEL,
         ADAPTATION_MODEL_ALGORITHM,
@@ -30,42 +31,56 @@ mod tests {
 
     #[test]
     fn digest_changes_when_model_behavior_changes() {
+        let interner = crate::core::AnalysisDb::new().stable_key_interner();
         let universe = ValidationUniverse::new(["call:a"], ["function:a", "function:b"]);
         let budget = AdaptationModelBudget::default();
-        let first =
-            AdaptationModelStore::build(vec![fact("call:a", "function:a")], &universe, budget);
-        let second =
-            AdaptationModelStore::build(vec![fact("call:a", "function:b")], &universe, budget);
+        let first = AdaptationModelStore::build(
+            &interner,
+            vec![fact("call:a", "function:a")],
+            &universe,
+            budget,
+        );
+        let second = AdaptationModelStore::build(
+            &interner,
+            vec![fact("call:a", "function:b")],
+            &universe,
+            budget,
+        );
         assert_ne!(
-            adaptation_model_digest(&first, budget),
-            adaptation_model_digest(&second, budget)
+            adaptation_model_digest(&first, budget, &interner),
+            adaptation_model_digest(&second, budget, &interner)
         );
     }
 
     #[test]
     fn digest_is_stable_for_file_reorder() {
+        let interner = crate::core::AnalysisDb::new().stable_key_interner();
         let universe = ValidationUniverse::new(["call:a", "call:b"], ["function:a", "function:b"]);
         let budget = AdaptationModelBudget::default();
         let first = AdaptationModelStore::build(
+            &interner,
             vec![fact("call:b", "function:b"), fact("call:a", "function:a")],
             &universe,
             budget,
         );
         let second = AdaptationModelStore::build(
+            &interner,
             vec![fact("call:a", "function:a"), fact("call:b", "function:b")],
             &universe,
             budget,
         );
         assert_eq!(
-            adaptation_model_digest(&first, budget),
-            adaptation_model_digest(&second, budget)
+            adaptation_model_digest(&first, budget, &interner),
+            adaptation_model_digest(&second, budget, &interner)
         );
     }
 
     #[test]
     fn digest_changes_when_budget_changes() {
+        let interner = crate::core::AnalysisDb::new().stable_key_interner();
         let universe = ValidationUniverse::new(["call:a"], ["function:a"]);
         let store = AdaptationModelStore::build(
+            &interner,
             vec![fact("call:a", "function:a")],
             &universe,
             AdaptationModelBudget::default(),
@@ -73,8 +88,8 @@ mod tests {
         let mut changed = AdaptationModelBudget::default();
         changed.max_model_facts += 1;
         assert_ne!(
-            adaptation_model_digest(&store, AdaptationModelBudget::default()),
-            adaptation_model_digest(&store, changed)
+            adaptation_model_digest(&store, AdaptationModelBudget::default(), &interner),
+            adaptation_model_digest(&store, changed, &interner)
         );
     }
 
@@ -87,7 +102,7 @@ mod tests {
             language: ModelLanguage::TypeScript,
             scope: "src/app.ts".to_string(),
             evidence: vec!["src/app.ts:10".to_string()],
-            stable_key: format!("{source}->{target}"),
+            stable_key: crate::core::stable_key_for_test(&format!("{source}->{target}")),
         }
     }
 }

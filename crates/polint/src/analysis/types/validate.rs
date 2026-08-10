@@ -29,7 +29,7 @@ use crate::analysis::values::facts::{
     AllocationKind, AllocationTokenFact, ValueFact, ValueKind, ValuePrecision, ValueProvenance,
     ValueStatus, ValueSubject,
 };
-use crate::core::Language;
+use crate::core::{Language, StableKeyId};
 use crate::diagnostics::{Diagnostic, TextRange};
 
 pub(crate) struct ExtensionTypeValueAliasMerge {
@@ -38,43 +38,60 @@ pub(crate) struct ExtensionTypeValueAliasMerge {
 }
 
 pub(crate) fn merge_extension_type_value_alias_facts(
+    interner: &crate::core::StableKeyInterner,
     output: TypeValueAliasOutput,
     extension_facts: &[AcceptedExtensionFact],
 ) -> TypeValueAliasOutput {
-    let base_merge = merge_extension_type_value_alias_base_facts(output, extension_facts);
-    let relation_merge =
-        merge_extension_type_value_alias_relation_facts(base_merge.output, extension_facts);
-    relation_merge.output.normalized()
+    let base_merge = merge_extension_type_value_alias_base_facts(interner, output, extension_facts);
+    let relation_merge = merge_extension_type_value_alias_relation_facts(
+        interner,
+        base_merge.output,
+        extension_facts,
+    );
+    relation_merge.output.normalized(interner)
 }
 
 pub(crate) fn merge_extension_type_value_alias_base_facts(
+    interner: &crate::core::StableKeyInterner,
     output: TypeValueAliasOutput,
     extension_facts: &[AcceptedExtensionFact],
 ) -> ExtensionTypeValueAliasMerge {
-    merge_extension_type_value_alias_facts_with_filter(output, extension_facts, |family| {
-        matches!(
-            family,
-            TYPE_VALUE_ALIAS_TYPE_FAMILY
-                | TYPE_VALUE_ALIAS_VALUE_FAMILY
-                | TYPE_VALUE_ALIAS_ALLOCATION_FAMILY
-                | TYPE_VALUE_ALIAS_ACCESS_PATH_FAMILY
-        )
-    })
+    merge_extension_type_value_alias_facts_with_filter(
+        interner,
+        output,
+        extension_facts,
+        |family| {
+            matches!(
+                family,
+                TYPE_VALUE_ALIAS_TYPE_FAMILY
+                    | TYPE_VALUE_ALIAS_VALUE_FAMILY
+                    | TYPE_VALUE_ALIAS_ALLOCATION_FAMILY
+                    | TYPE_VALUE_ALIAS_ACCESS_PATH_FAMILY
+            )
+        },
+    )
 }
 
 pub(crate) fn merge_extension_type_value_alias_relation_facts(
+    interner: &crate::core::StableKeyInterner,
     output: TypeValueAliasOutput,
     extension_facts: &[AcceptedExtensionFact],
 ) -> ExtensionTypeValueAliasMerge {
-    merge_extension_type_value_alias_facts_with_filter(output, extension_facts, |family| {
-        matches!(
-            family,
-            TYPE_VALUE_ALIAS_POINTS_TO_CONSTRAINT_FAMILY | TYPE_VALUE_ALIAS_ALIAS_ANSWER_FAMILY
-        )
-    })
+    merge_extension_type_value_alias_facts_with_filter(
+        interner,
+        output,
+        extension_facts,
+        |family| {
+            matches!(
+                family,
+                TYPE_VALUE_ALIAS_POINTS_TO_CONSTRAINT_FAMILY | TYPE_VALUE_ALIAS_ALIAS_ANSWER_FAMILY
+            )
+        },
+    )
 }
 
 fn merge_extension_type_value_alias_facts_with_filter(
+    interner: &crate::core::StableKeyInterner,
     mut output: TypeValueAliasOutput,
     extension_facts: &[AcceptedExtensionFact],
     include_family: impl Fn(&str) -> bool,
@@ -87,7 +104,11 @@ fn merge_extension_type_value_alias_facts_with_filter(
             continue;
         }
         if stable_keys.contains(&fact.stable_key) {
-            diagnostics.push(extension_merge_diagnostic(fact, "stable_key_conflict"));
+            diagnostics.push(extension_merge_diagnostic(
+                interner,
+                fact,
+                "stable_key_conflict",
+            ));
             continue;
         }
         let inserted = match fact.fact_family.as_str() {
@@ -104,72 +125,46 @@ fn merge_extension_type_value_alias_facts_with_filter(
             _ => false,
         };
         if inserted {
-            stable_keys.insert(fact.stable_key.clone());
+            stable_keys.insert(fact.stable_key);
         } else {
-            diagnostics.push(extension_merge_diagnostic(fact, "malformed_payload"));
+            diagnostics.push(extension_merge_diagnostic(
+                interner,
+                fact,
+                "malformed_payload",
+            ));
         }
     }
     ExtensionTypeValueAliasMerge {
-        output: output.normalized(),
+        output: output.normalized(interner),
         diagnostics,
     }
 }
 
-fn native_stable_keys(output: &TypeValueAliasOutput) -> BTreeSet<String> {
+fn native_stable_keys(output: &TypeValueAliasOutput) -> BTreeSet<StableKeyId> {
     output
         .types
         .types
         .iter()
-        .map(|fact| fact.stable_key.clone())
-        .chain(
-            output
-                .types
-                .narrowed
-                .iter()
-                .map(|fact| fact.stable_key.clone()),
-        )
-        .chain(
-            output
-                .values
-                .values
-                .iter()
-                .map(|fact| fact.stable_key.clone()),
-        )
-        .chain(
-            output
-                .values
-                .allocations
-                .iter()
-                .map(|fact| fact.stable_key.clone()),
-        )
+        .map(|fact| fact.stable_key)
+        .chain(output.types.narrowed.iter().map(|fact| fact.stable_key))
+        .chain(output.values.values.iter().map(|fact| fact.stable_key))
+        .chain(output.values.allocations.iter().map(|fact| fact.stable_key))
         .chain(
             output
                 .access_paths
                 .access_paths
                 .iter()
-                .map(|fact| fact.stable_key.clone()),
+                .map(|fact| fact.stable_key),
         )
         .chain(
             output
                 .points_to
                 .constraints
                 .iter()
-                .map(|fact| fact.stable_key.clone()),
+                .map(|fact| fact.stable_key),
         )
-        .chain(
-            output
-                .points_to
-                .sets
-                .iter()
-                .map(|fact| fact.stable_key.clone()),
-        )
-        .chain(
-            output
-                .aliases
-                .answers
-                .iter()
-                .map(|fact| fact.stable_key.clone()),
-        )
+        .chain(output.points_to.sets.iter().map(|fact| fact.stable_key))
+        .chain(output.aliases.answers.iter().map(|fact| fact.stable_key))
         .collect()
 }
 
@@ -199,7 +194,7 @@ fn merge_type_fact(output: &mut TypeValueAliasOutput, fact: &AcceptedExtensionFa
         provenance: TypeProvenance::Extension {
             extension_id: fact.extension_id.clone(),
         },
-        stable_key: fact.stable_key.clone(),
+        stable_key: fact.stable_key,
     });
     true
 }
@@ -226,7 +221,7 @@ fn merge_value_fact(output: &mut TypeValueAliasOutput, fact: &AcceptedExtensionF
         provenance: ValueProvenance::Extension {
             extension_id: fact.extension_id.clone(),
         },
-        stable_key: fact.stable_key.clone(),
+        stable_key: fact.stable_key,
     });
     true
 }
@@ -248,7 +243,7 @@ fn merge_allocation_fact(output: &mut TypeValueAliasOutput, fact: &AcceptedExten
         provenance: ValueProvenance::Extension {
             extension_id: fact.extension_id.clone(),
         },
-        stable_key: fact.stable_key.clone(),
+        stable_key: fact.stable_key,
     });
     true
 }
@@ -268,7 +263,7 @@ fn merge_access_path_fact(output: &mut TypeValueAliasOutput, fact: &AcceptedExte
         function: None,
         body: None,
         status: AccessPathStatus::Resolved,
-        stable_key: fact.stable_key.clone(),
+        stable_key: fact.stable_key,
     });
     true
 }
@@ -286,7 +281,7 @@ fn merge_points_to_constraint(
         kind,
         status: PointsToStatus::Present,
         precision: points_to_precision(fact.precision),
-        stable_key: fact.stable_key.clone(),
+        stable_key: fact.stable_key,
     });
     true
 }
@@ -317,7 +312,7 @@ fn merge_alias_answer(
         reason: AliasReason::ExtensionProvided,
         evidence: extension_evidence(fact),
         precision: alias_precision(fact.precision),
-        stable_key: fact.stable_key.clone(),
+        stable_key: fact.stable_key,
     });
     true
 }
@@ -363,19 +358,19 @@ impl ExtensionRefMaps {
             .access_paths
             .access_paths
             .iter()
-            .map(|fact| (fact.stable_key.as_str(), fact.id))
+            .map(|fact| (fact.stable_key, fact.id))
             .collect::<BTreeMap<_, _>>();
         let allocation_ids_by_stable_key = output
             .values
             .allocations
             .iter()
-            .map(|fact| (fact.stable_key.as_str(), fact.id))
+            .map(|fact| (fact.stable_key, fact.id))
             .collect::<BTreeMap<_, _>>();
         let value_ids_by_stable_key = output
             .values
             .values
             .iter()
-            .map(|fact| (fact.stable_key.as_str(), fact.id))
+            .map(|fact| (fact.stable_key, fact.id))
             .collect::<BTreeMap<_, _>>();
 
         let mut maps = Self::default();
@@ -410,7 +405,7 @@ impl ExtensionRefMaps {
         &mut self,
         extension_facts: &[AcceptedExtensionFact],
         family: &str,
-        ids_by_stable_key: &BTreeMap<&str, T>,
+        ids_by_stable_key: &BTreeMap<StableKeyId, T>,
         mut insert: impl FnMut(&mut Self, ExtensionLocalRef, T),
     ) {
         let mut local_counts = BTreeMap::<(&str, &str), u64>::new();
@@ -422,12 +417,12 @@ impl ExtensionRefMaps {
             (
                 left.extension_id.as_str(),
                 left.provider_id.as_str(),
-                left.stable_key.as_str(),
+                left.stable_key,
             )
                 .cmp(&(
                     right.extension_id.as_str(),
                     right.provider_id.as_str(),
-                    right.stable_key.as_str(),
+                    right.stable_key,
                 ))
         });
 
@@ -435,7 +430,7 @@ impl ExtensionRefMaps {
             let count = local_counts
                 .entry((fact.extension_id.as_str(), fact.provider_id.as_str()))
                 .or_default();
-            if let Some(id) = ids_by_stable_key.get(fact.stable_key.as_str()).copied() {
+            if let Some(id) = ids_by_stable_key.get(&fact.stable_key).copied() {
                 insert(
                     self,
                     ExtensionLocalRef {
@@ -804,7 +799,11 @@ fn extension_evidence(fact: &AcceptedExtensionFact) -> Vec<String> {
     evidence
 }
 
-fn extension_merge_diagnostic(fact: &AcceptedExtensionFact, reason: &'static str) -> Diagnostic {
+fn extension_merge_diagnostic(
+    interner: &crate::core::StableKeyInterner,
+    fact: &AcceptedExtensionFact,
+    reason: &'static str,
+) -> Diagnostic {
     Diagnostic::error(
         "polint/extension",
         "<workspace>",
@@ -814,7 +813,7 @@ fn extension_merge_diagnostic(fact: &AcceptedExtensionFact, reason: &'static str
     .with_evidence("extension_id", fact.extension_id.clone())
     .with_evidence("provider_id", fact.provider_id.clone())
     .with_evidence("fact_family", fact.fact_family.clone())
-    .with_evidence("stable_key", fact.stable_key.clone())
+    .with_evidence("stable_key", interner.resolve(fact.stable_key).to_string())
     .with_evidence("reason", reason)
 }
 
@@ -830,9 +829,15 @@ mod tests {
         TYPE_VALUE_ALIAS_VALUE_FAMILY,
     };
 
+    fn test_interner() -> crate::core::StableKeyInterner {
+        crate::core::AnalysisDb::new().stable_key_interner()
+    }
+
     #[test]
     fn extension_merge_adds_type_value_allocation_access_path_and_points_to_rows() {
+        let interner = test_interner();
         let merged = merge_extension_type_value_alias_facts(
+            &interner,
             TypeValueAliasOutput::default(),
             &[
                 accepted(
@@ -882,13 +887,15 @@ mod tests {
                     reason: AliasReason::MissingPointsTo,
                     evidence: vec!["native-missing".to_string()],
                     precision: AliasPrecision::Unknown,
-                    stable_key: "alias:native:unknown".to_string(),
+                    stable_key: crate::core::stable_key_for_test("alias:native:unknown"),
                 }],
             },
             ..TypeValueAliasOutput::default()
         };
 
+        let interner = test_interner();
         let merged = merge_extension_type_value_alias_facts(
+            &interner,
             output,
             &[accepted_alias("alias:extension:no", "no_alias")],
         );
@@ -922,13 +929,15 @@ mod tests {
                     reason: AliasReason::MissingPointsTo,
                     evidence: vec!["native-missing".to_string()],
                     precision: AliasPrecision::Unknown,
-                    stable_key: "alias:shared".to_string(),
+                    stable_key: crate::core::stable_key_for_test("alias:shared"),
                 }],
             },
             ..TypeValueAliasOutput::default()
         };
 
+        let interner = test_interner();
         let merged = merge_extension_type_value_alias_facts(
+            &interner,
             output,
             &[accepted_alias("alias:shared", "no_alias")],
         );
@@ -952,14 +961,16 @@ mod tests {
                     source_operation: None,
                     span: None,
                     provenance: ValueProvenance::Native,
-                    stable_key: "allocation:a-native".to_string(),
+                    stable_key: crate::core::stable_key_for_test("allocation:a-native"),
                 }],
                 ..Default::default()
             },
             ..TypeValueAliasOutput::default()
         };
 
+        let interner = test_interner();
         let merged = merge_extension_type_value_alias_facts(
+            &interner,
             output,
             &[
                 accepted(
@@ -978,7 +989,9 @@ mod tests {
             .values
             .allocations
             .iter()
-            .find(|allocation| allocation.stable_key == "allocation:z-extension")
+            .find(|allocation| {
+                interner.resolve(allocation.stable_key).as_ref() == "allocation:z-extension"
+            })
             .expect("extension allocation should be present")
             .id;
 
@@ -1010,7 +1023,7 @@ mod tests {
             extension_id: "demo".to_string(),
             provider_id: "aliases".to_string(),
             fact_family: family.to_string(),
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
             binding_refs: vec!["file:src/app.ts".to_string()],
             precision: ExtensionFactPrecision::Heuristic,
             confidence: ExtensionFactConfidence::Medium,

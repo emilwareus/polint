@@ -11,10 +11,12 @@ use crate::analysis::extensions::sinks::{
 };
 use crate::analysis::extensions::store::AcceptedExtensionFact;
 use crate::analysis::ids::{CallSiteId, RefinedCallEdgeId};
-use crate::analysis_kernel::{FactFamily, stable_key_text_from_parts};
+use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
 use crate::core::{AnalysisDb, FunctionId, SymbolId};
 
 pub(crate) fn derive_extension_refinements(db: &AnalysisDb) -> RefinedCallOutput {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let mut edges = Vec::new();
     for fact in db
         .extension_facts()
@@ -25,7 +27,7 @@ pub(crate) fn derive_extension_refinements(db: &AnalysisDb) -> RefinedCallOutput
             edges.push(edge);
         }
     }
-    RefinedCallOutput { edges }.normalized()
+    RefinedCallOutput { edges }.normalized(interner)
 }
 
 fn edge_from_extension_fact(
@@ -76,15 +78,15 @@ fn edge_from_extension_fact(
         validation: extension_validation(status),
         confidence: extension_confidence(fact.confidence),
         evidence: extension_evidence(fact),
-        input_stable_keys: vec![fact.stable_key.clone()],
-        stable_key: stable_key_text_from_parts(
+        input_stable_keys: vec![interner.resolve(fact.stable_key).to_string()],
+        stable_key: stable_key_from_parts(
             interner,
             FactFamily::RefinedCallEdge,
             &[
                 ("tier", "extension_model".to_string()),
                 ("extension", fact.extension_id.clone()),
                 ("provider", fact.provider_id.clone()),
-                ("candidate", fact.stable_key.clone()),
+                ("candidate", interner.resolve(fact.stable_key).to_string()),
             ],
         ),
     })
@@ -375,7 +377,7 @@ mod tests {
             extension_id: "demo".to_string(),
             provider_id: "model".to_string(),
             fact_family: REFINED_CALL_EDGE_FAMILY.to_string(),
-            stable_key: "extension:refined".to_string(),
+            stable_key: crate::core::stable_key_for_test("extension:refined"),
             binding_refs: vec!["file:src/app.ts".to_string()],
             precision: ExtensionFactPrecision::Heuristic,
             confidence: ExtensionFactConfidence::Medium,

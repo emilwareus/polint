@@ -216,7 +216,9 @@ mod tests {
                 None,
             ),
             multiplicity: 1,
-            stable_key: "identity|callsite|go|example.com/pkg|pkg.Caller|1|0..0".to_string(),
+            stable_key: crate::core::stable_key_for_test(
+                "identity|callsite|go|example.com/pkg|pkg.Caller|1|0..0",
+            ),
             originating_call_site_id: None,
             originating_call_target_id: None,
         }

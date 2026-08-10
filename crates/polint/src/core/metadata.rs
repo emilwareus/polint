@@ -141,10 +141,14 @@ pub(super) fn source_file_metadata(
     dead_code,
     reason = "Extension fact metadata is reached through extension provider wiring in the next plan."
 )]
-pub(super) fn extension_fact_metadata(fact: &AcceptedExtensionFact) -> FactMeta {
+pub(super) fn extension_fact_metadata(
+    interner: &crate::core::StableKeyInterner,
+    fact: &AcceptedExtensionFact,
+) -> FactMeta {
     let producer_id = leaked_extension_producer_id(&fact.extension_id, &fact.provider_id);
     let precision = extension_precision_metadata(fact.precision);
     let confidence = extension_confidence_metadata(fact.confidence);
+    let stable_key = interner.resolve(fact.stable_key).to_string();
     let payload_extra_parts = [
         ("family", fact.fact_family.clone()),
         ("bindings", fact.binding_refs.join(",")),
@@ -152,10 +156,10 @@ pub(super) fn extension_fact_metadata(fact: &AcceptedExtensionFact) -> FactMeta 
         ("payload", fact.payload_labels.join(",")),
         ("status", format!("{:?}", fact.status)),
     ];
-    let payload_digest = metadata_payload_digest(&fact.stable_key, &payload_extra_parts);
+    let payload_digest = metadata_payload_digest(&stable_key, &payload_extra_parts);
 
     FactMeta {
-        stable_key: fact.stable_key.clone(),
+        stable_key,
         producer_id,
         layer_id: producer_id,
         precision,
@@ -165,16 +169,20 @@ pub(super) fn extension_fact_metadata(fact: &AcceptedExtensionFact) -> FactMeta 
     }
 }
 
-pub(super) fn adaptation_model_fact_metadata(fact: &AcceptedModelFact) -> FactMeta {
+pub(super) fn adaptation_model_fact_metadata(
+    interner: &crate::core::StableKeyInterner,
+    fact: &AcceptedModelFact,
+) -> FactMeta {
+    let stable_key = interner.resolve(fact.fact.stable_key).to_string();
     FactMeta {
-        stable_key: fact.fact.stable_key.clone(),
+        stable_key: stable_key.clone(),
         producer_id: "polint.adaptation.model",
         layer_id: "polint.adaptation.model",
         precision: FactPrecision::Heuristic,
         confidence: FactConfidence::Medium,
         validation: ValidationStatus::SchemaValidated,
         payload_digest: metadata_payload_digest(
-            &fact.fact.stable_key,
+            &stable_key,
             &[
                 ("model_path", fact.fact.model_path.clone()),
                 ("source_pattern", fact.fact.source_pattern.clone()),

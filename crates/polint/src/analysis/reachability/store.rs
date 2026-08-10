@@ -1,9 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use crate::analysis::error::AnalysisError;
 use crate::analysis::ids::EntrypointId;
 use crate::analysis::reachability::facts::{ReachabilityRootFact, RootKind};
-use crate::core::{FunctionId, Language};
+use crate::core::{FunctionId, Language, StableKeyInterner};
 
 pub(crate) const REACHABILITY_PROVIDER_ID: &str = "polint.reachability";
 
@@ -13,7 +14,7 @@ pub(crate) const REACHABILITY_PROVIDER_ID: &str = "polint.reachability";
 /// span bytes)` with the remaining distinguishing fields (`originating_entrypoint`,
 /// `stable_key`) so two distinct roots can never tie — the byte-stable ordering
 /// contract the determinism gate (Plan 03) inherits.
-type RootSortKey = (
+type RootSortKey<'a> = (
     RootKind,
     Language,
     FunctionId,
@@ -21,10 +22,13 @@ type RootSortKey = (
     u32, // span start_byte
     u32, // span end_byte
     Option<EntrypointId>,
-    String, // stable_key
+    Arc<str>, // stable_key text
 );
 
-fn root_sort_key(root: &ReachabilityRootFact) -> RootSortKey {
+fn root_sort_key<'a>(
+    root: &'a ReachabilityRootFact,
+    interner: &'a StableKeyInterner,
+) -> RootSortKey<'a> {
     (
         root.kind,
         root.language,
@@ -33,7 +37,7 @@ fn root_sort_key(root: &ReachabilityRootFact) -> RootSortKey {
         root.span.start_byte,
         root.span.end_byte,
         root.originating_entrypoint,
-        root.stable_key.clone(),
+        interner.resolve(root.stable_key),
     )
 }
 
@@ -49,8 +53,10 @@ impl ReachabilityProviderOutput {
     }
 
     /// Sorts roots by their locked total-order sort keys.
-    pub(crate) fn normalized(mut self) -> Self {
-        self.roots.sort_by_key(root_sort_key);
+    pub(crate) fn normalized(mut self, interner: &StableKeyInterner) -> Self {
+        self.roots.sort_by(|left, right| {
+            root_sort_key(left, interner).cmp(&root_sort_key(right, interner))
+        });
         self
     }
 }
@@ -70,10 +76,11 @@ impl ReachabilityStore {
     /// sets, returning [`AnalysisError::InvalidFact`] on a dangling ref (D-03).
     pub(crate) fn from_output(
         output: ReachabilityProviderOutput,
+        interner: &StableKeyInterner,
         valid_function_ids: &BTreeSet<FunctionId>,
         valid_entrypoint_ids: &BTreeSet<EntrypointId>,
     ) -> Result<Self, AnalysisError> {
-        let output = output.normalized();
+        let output = output.normalized(interner);
 
         for root in &output.roots {
             if !valid_function_ids.contains(&root.target_function) {
@@ -81,7 +88,8 @@ impl ReachabilityStore {
                     provider: REACHABILITY_PROVIDER_ID,
                     reason: format!(
                         "dangling target function {:?} for reachability root `{}`",
-                        root.target_function, root.stable_key
+                        root.target_function,
+                        interner.resolve(root.stable_key)
                     ),
                 });
             }
@@ -92,7 +100,8 @@ impl ReachabilityStore {
                     provider: REACHABILITY_PROVIDER_ID,
                     reason: format!(
                         "dangling originating entrypoint {:?} for reachability root `{}`",
-                        entrypoint, root.stable_key
+                        entrypoint,
+                        interner.resolve(root.stable_key)
                     ),
                 });
             }
@@ -173,13 +182,13 @@ mod tests {
             provenance: RootProvenance::NativeDiscovery,
             status: RootStatus::Resolved,
             provider_id: REACHABILITY_PROVIDER_ID.to_string(),
-            stable_key: compute_reachability_root_stable_key(
+            stable_key: crate::core::stable_key_for_test(&compute_reachability_root_stable_key(
                 kind,
                 Language::Go,
                 &format!("pkg.F{function}"),
                 FileId(1),
                 &span,
-            ),
+            )),
         }
     }
 
@@ -189,24 +198,30 @@ mod tests {
 
     #[test]
     fn normalized_is_insertion_order_independent() {
+        let interner = crate::core::test_stable_key_interner();
         let a = root(1, RootKind::Main, None);
         let b = root(2, RootKind::Init, None);
         let first = ReachabilityProviderOutput {
             roots: vec![a.clone(), b.clone()],
         }
-        .normalized();
-        let second = ReachabilityProviderOutput { roots: vec![b, a] }.normalized();
+        .normalized(&interner);
+        let second = ReachabilityProviderOutput { roots: vec![b, a] }.normalized(&interner);
         assert_eq!(first, second);
     }
 
     #[test]
     fn from_output_builds_deterministic_indexes() {
+        let interner = crate::core::test_stable_key_interner();
         let output = ReachabilityProviderOutput {
             roots: vec![root(1, RootKind::Main, None), root(2, RootKind::Init, None)],
         };
-        let store =
-            ReachabilityStore::from_output(output, &function_ids(&[1, 2]), &BTreeSet::new())
-                .expect("store");
+        let store = ReachabilityStore::from_output(
+            output,
+            &interner,
+            &function_ids(&[1, 2]),
+            &BTreeSet::new(),
+        )
+        .expect("store");
         assert_eq!(store.roots().len(), 2);
         assert_eq!(store.roots_for_kind(RootKind::Main).len(), 1);
         assert_eq!(store.roots_for_kind(RootKind::Init).len(), 1);
@@ -217,22 +232,30 @@ mod tests {
 
     #[test]
     fn from_output_rejects_dangling_target_function() {
+        let interner = crate::core::test_stable_key_interner();
         let output = ReachabilityProviderOutput {
             roots: vec![root(7, RootKind::Main, None)],
         };
-        let error = ReachabilityStore::from_output(output, &BTreeSet::new(), &BTreeSet::new())
-            .expect_err("dangling target function rejected");
+        let error =
+            ReachabilityStore::from_output(output, &interner, &BTreeSet::new(), &BTreeSet::new())
+                .expect_err("dangling target function rejected");
         assert!(error.to_string().contains("dangling target function"));
         assert!(error.to_string().contains("polint.reachability"));
     }
 
     #[test]
     fn from_output_rejects_dangling_originating_entrypoint() {
+        let interner = crate::core::test_stable_key_interner();
         let output = ReachabilityProviderOutput {
             roots: vec![root(1, RootKind::Test, Some(42))],
         };
-        let error = ReachabilityStore::from_output(output, &function_ids(&[1]), &BTreeSet::new())
-            .expect_err("dangling entrypoint rejected");
+        let error = ReachabilityStore::from_output(
+            output,
+            &interner,
+            &function_ids(&[1]),
+            &BTreeSet::new(),
+        )
+        .expect_err("dangling entrypoint rejected");
         assert!(
             error
                 .to_string()
@@ -242,20 +265,24 @@ mod tests {
 
     #[test]
     fn from_output_accepts_valid_references() {
+        let interner = crate::core::test_stable_key_interner();
         let mut entrypoints = BTreeSet::new();
         entrypoints.insert(EntrypointId(42));
         let output = ReachabilityProviderOutput {
             roots: vec![root(1, RootKind::Test, Some(42))],
         };
-        let store = ReachabilityStore::from_output(output, &function_ids(&[1]), &entrypoints)
-            .expect("valid references");
+        let store =
+            ReachabilityStore::from_output(output, &interner, &function_ids(&[1]), &entrypoints)
+                .expect("valid references");
         assert_eq!(store.roots().len(), 1);
     }
 
     #[test]
     fn empty_output_builds_empty_store() {
+        let interner = crate::core::test_stable_key_interner();
         let store = ReachabilityStore::from_output(
             ReachabilityProviderOutput::empty(),
+            &interner,
             &BTreeSet::new(),
             &BTreeSet::new(),
         )

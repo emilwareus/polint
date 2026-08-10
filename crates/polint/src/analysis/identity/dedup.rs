@@ -205,14 +205,14 @@ mod tests {
                 language, package, container, "name", None, None,
             ),
             multiplicity: 1,
-            stable_key: compute_identity_stable_key(
+            stable_key: crate::core::stable_key_for_test(&compute_identity_stable_key(
                 kind,
                 language,
                 package,
                 container,
                 FileId(file),
                 &span,
-            ),
+            )),
             originating_call_site_id: site.map(CallSiteId),
             originating_call_target_id: None,
         }
@@ -346,11 +346,11 @@ mod tests {
         let reverse = dedup_identity_records(vec![c, b, a]);
         let forward_keys = forward
             .iter()
-            .map(|record| record.stable_key.clone())
+            .map(|record| record.stable_key)
             .collect::<Vec<_>>();
         let reverse_keys = reverse
             .iter()
-            .map(|record| record.stable_key.clone())
+            .map(|record| record.stable_key)
             .collect::<Vec<_>>();
         assert_eq!(forward_keys, reverse_keys);
     }

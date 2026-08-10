@@ -262,8 +262,8 @@ fn collect_adaptation_model_input(
         .map(|node| interner.resolve(node.stable_key).to_string())
         .collect::<Vec<_>>();
     let universe = ValidationUniverse::new(node_keys.clone(), node_keys);
-    let store = AdaptationModelStore::build(facts, &universe, budget);
-    let model_digest = adaptation_model_digest(&store, budget);
+    let store = AdaptationModelStore::build(interner, facts, &universe, budget);
+    let model_digest = adaptation_model_digest(&store, budget, interner);
     digest_parts.push(format!("validated_models={model_digest}"));
 
     digest_parts.sort();

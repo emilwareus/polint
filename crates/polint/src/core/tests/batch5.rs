@@ -565,7 +565,7 @@
                 extension_id: "demo".to_string(),
                 provider_id: "routes".to_string(),
                 fact_family: "extension.routes".to_string(),
-                stable_key: "route:/a".to_string(),
+                stable_key: crate::core::stable_key_for_test("route:/a"),
                 binding_refs: vec!["file:src/app.ts".to_string()],
                 precision: ExtensionFactPrecision::Heuristic,
                 confidence: ExtensionFactConfidence::Medium,
@@ -578,7 +578,7 @@
                 extension_id: "demo".to_string(),
                 provider_id: "routes".to_string(),
                 fact_family: "extension.routes".to_string(),
-                stable_key: "route:/bad".to_string(),
+                stable_key: crate::core::stable_key_for_test("route:/bad"),
                 reason:
                     crate::analysis::extensions::validate::ExtensionRejectionReason::NativeConflict,
                 evidence: vec!["fixture".to_string()],

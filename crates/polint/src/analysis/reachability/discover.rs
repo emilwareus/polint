@@ -153,13 +153,15 @@ fn entrypoint_bridge_root(db: &AnalysisDb, entrypoint: &EntrypointFact) -> Reach
                 db.resolve_stable_key(entrypoint.stable_key)
             )
         });
-    let stable_key = compute_reachability_root_stable_key(
-        kind,
-        entrypoint.language,
-        &function_identity,
-        entrypoint.registration_file,
-        &entrypoint.registration_span,
-    );
+    let stable_key = db
+        .stable_key_interner()
+        .intern(compute_reachability_root_stable_key(
+            kind,
+            entrypoint.language,
+            &function_identity,
+            entrypoint.registration_file,
+            &entrypoint.registration_span,
+        ));
     ReachabilityRootFact {
         id: ReachabilityRootId(0),
         kind,
@@ -204,13 +206,15 @@ fn configured_roots_for(db: &AnalysisDb, configured: &[String]) -> Vec<Reachabil
                 RootPrecision::Heuristic,
             ),
             ConfiguredResolution::Unresolved => {
-                let stable_key = compute_reachability_root_stable_key(
-                    RootKind::ConfiguredEntrypoint,
-                    Language::Unknown,
-                    &format!("configured:{entry}"),
-                    UNRESOLVED_FILE,
-                    &unresolved_span(),
-                );
+                let stable_key =
+                    db.stable_key_interner()
+                        .intern(compute_reachability_root_stable_key(
+                            RootKind::ConfiguredEntrypoint,
+                            Language::Unknown,
+                            &format!("configured:{entry}"),
+                            UNRESOLVED_FILE,
+                            &unresolved_span(),
+                        ));
                 ReachabilityRootFact {
                     id: ReachabilityRootId(0),
                     kind: RootKind::ConfiguredEntrypoint,
@@ -238,13 +242,15 @@ fn configured_resolved_root(
     precision: RootPrecision,
 ) -> ReachabilityRootFact {
     let function_identity = function_identity_for(db, function);
-    let stable_key = compute_reachability_root_stable_key(
-        RootKind::ConfiguredEntrypoint,
-        function.language,
-        &function_identity,
-        function.file,
-        &function.span,
-    );
+    let stable_key = db
+        .stable_key_interner()
+        .intern(compute_reachability_root_stable_key(
+            RootKind::ConfiguredEntrypoint,
+            function.language,
+            &function_identity,
+            function.file,
+            &function.span,
+        ));
     ReachabilityRootFact {
         id: ReachabilityRootId(0),
         kind: RootKind::ConfiguredEntrypoint,
@@ -274,13 +280,15 @@ fn native_root(
     status: RootStatus,
 ) -> ReachabilityRootFact {
     let function_identity = function_identity_for(db, function);
-    let stable_key = compute_reachability_root_stable_key(
-        kind,
-        function.language,
-        &function_identity,
-        function.file,
-        &function.span,
-    );
+    let stable_key = db
+        .stable_key_interner()
+        .intern(compute_reachability_root_stable_key(
+            kind,
+            function.language,
+            &function_identity,
+            function.file,
+            &function.span,
+        ));
     ReachabilityRootFact {
         id: ReachabilityRootId(0),
         kind,
@@ -588,7 +596,10 @@ mod tests {
         assert_eq!(exported.len(), 1);
         assert_eq!(exported[0].precision, RootPrecision::ResolvedStatic);
         // Stable key uses package.Name, not a dense ID.
-        assert!(exported[0].stable_key.contains("svc.Handle"));
+        assert!(
+            db.resolve_stable_key(exported[0].stable_key)
+                .contains("svc.Handle")
+        );
     }
 
     #[test]

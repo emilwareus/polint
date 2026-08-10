@@ -9,10 +9,12 @@ use crate::analysis::ids::RefinedCallEdgeId;
 use crate::analysis::summaries::facts::{
     SummaryDomainKind, SummaryFact, SummaryPrecision, SummaryStatus,
 };
-use crate::analysis_kernel::{FactFamily, FactRef, stable_key_text_from_parts};
+use crate::analysis_kernel::{FactFamily, FactRef, stable_key_from_parts};
 use crate::core::AnalysisDb;
 
 pub(crate) fn derive_summary_assisted_refinements(db: &AnalysisDb) -> RefinedCallOutput {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let mut edges = Vec::new();
     for summary in db.summary_facts() {
         if summary.domain != SummaryDomainKind::CallEffects
@@ -28,7 +30,7 @@ pub(crate) fn derive_summary_assisted_refinements(db: &AnalysisDb) -> RefinedCal
             edges.push(edge_from_summary(db, summary, target, edges.len()));
         }
     }
-    RefinedCallOutput { edges }.normalized()
+    RefinedCallOutput { edges }.normalized(interner)
 }
 
 fn edge_from_summary(
@@ -79,7 +81,7 @@ fn edge_from_summary(
             format!("summary={summary_key}"),
         ],
         input_stable_keys: vec![summary_key.clone(), target_key.clone()],
-        stable_key: stable_key_text_from_parts(
+        stable_key: stable_key_from_parts(
             interner,
             FactFamily::RefinedCallEdge,
             &[

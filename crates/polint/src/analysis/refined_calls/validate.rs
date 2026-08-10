@@ -42,15 +42,16 @@ fn validate_refined_call_edges(
     let mut seen_stable_keys = BTreeSet::new();
 
     for edge in edges {
-        if !seen_stable_keys.insert(edge.stable_key.as_str()) {
+        let stable_key = db.resolve_stable_key(edge.stable_key);
+        if !seen_stable_keys.insert(edge.stable_key) {
             diagnostics.push(invalid_refined_call_diagnostic(
-                &edge.stable_key,
+                stable_key.as_ref(),
                 "duplicate stable key".to_string(),
             ));
         }
         if !call_sites.contains(&edge.site) && !uses_synthetic_framework_site(edge) {
             diagnostics.push(invalid_refined_call_diagnostic(
-                &edge.stable_key,
+                stable_key.as_ref(),
                 format!("dangling call site {:?}", edge.site),
             ));
         }
@@ -58,13 +59,13 @@ fn validate_refined_call_edges(
             && !call_targets.contains(&base_target)
         {
             diagnostics.push(invalid_refined_call_diagnostic(
-                &edge.stable_key,
+                stable_key.as_ref(),
                 format!("dangling base call target {base_target:?}"),
             ));
         }
         if !functions.contains(&edge.caller) {
             diagnostics.push(invalid_refined_call_diagnostic(
-                &edge.stable_key,
+                stable_key.as_ref(),
                 format!("dangling caller {:?}", edge.caller),
             ));
         }
@@ -72,7 +73,7 @@ fn validate_refined_call_edges(
             && !functions.contains(&target_function)
         {
             diagnostics.push(invalid_refined_call_diagnostic(
-                &edge.stable_key,
+                stable_key.as_ref(),
                 format!("dangling target function {target_function:?}"),
             ));
         }
@@ -80,34 +81,31 @@ fn validate_refined_call_edges(
             && !symbols.contains(&target_symbol)
         {
             diagnostics.push(invalid_refined_call_diagnostic(
-                &edge.stable_key,
+                stable_key.as_ref(),
                 format!("dangling target symbol {target_symbol:?}"),
             ));
         }
-        if !edge
-            .stable_key
-            .contains(FactFamily::RefinedCallEdge.label())
-        {
+        if !stable_key.contains(FactFamily::RefinedCallEdge.label()) {
             diagnostics.push(invalid_refined_call_diagnostic(
-                &edge.stable_key,
+                stable_key.as_ref(),
                 "stable key does not include refined call fact family".to_string(),
             ));
         }
         if edge.evidence.is_empty() {
             diagnostics.push(invalid_refined_call_diagnostic(
-                &edge.stable_key,
+                stable_key.as_ref(),
                 "missing refined call evidence".to_string(),
             ));
         }
         if edge.input_stable_keys.is_empty() {
             diagnostics.push(invalid_refined_call_diagnostic(
-                &edge.stable_key,
+                stable_key.as_ref(),
                 "missing refined call input stable keys".to_string(),
             ));
         }
         if edge.provenance == CallProvenance::Model && edge.precision == CallPrecision::Exact {
             diagnostics.push(invalid_refined_call_diagnostic(
-                &edge.stable_key,
+                stable_key.as_ref(),
                 "model refined call edge cannot claim exact precision".to_string(),
             ));
         }
@@ -115,7 +113,7 @@ fn validate_refined_call_edges(
             && matches!(edge.precision, CallPrecision::Exact)
         {
             diagnostics.push(invalid_refined_call_diagnostic(
-                &edge.stable_key,
+                stable_key.as_ref(),
                 "extension refined call edge cannot claim exact precision".to_string(),
             ));
         }
@@ -125,7 +123,7 @@ fn validate_refined_call_edges(
         ) && edge.precision == CallPrecision::Exact
         {
             diagnostics.push(invalid_refined_call_diagnostic(
-                &edge.stable_key,
+                stable_key.as_ref(),
                 "dynamic refined call algorithm cannot claim exact precision".to_string(),
             ));
         }
@@ -133,7 +131,7 @@ fn validate_refined_call_edges(
             && !valid_synthetic_target(synthetic_target)
         {
             diagnostics.push(invalid_refined_call_diagnostic(
-                &edge.stable_key,
+                stable_key.as_ref(),
                 format!("malformed synthetic target `{synthetic_target}`"),
             ));
         }
@@ -145,7 +143,7 @@ fn validate_refined_call_edges(
             && edge.synthetic_target.is_none()
         {
             diagnostics.push(invalid_refined_call_diagnostic(
-                &edge.stable_key,
+                stable_key.as_ref(),
                 "resolved or ambiguous refined edge has no target".to_string(),
             ));
         }
@@ -358,7 +356,7 @@ mod tests {
             confidence: RefinedCallConfidence::Medium,
             evidence: vec!["test".to_string()],
             input_stable_keys: vec!["input".to_string()],
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 

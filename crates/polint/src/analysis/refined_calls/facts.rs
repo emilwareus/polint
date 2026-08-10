@@ -5,7 +5,7 @@ use crate::analysis::calls::facts::{
     UnresolvedCallReason,
 };
 use crate::analysis::ids::{CallSiteId, CallTargetId, RefinedCallEdgeId};
-use crate::core::{FunctionId, Language, SymbolId};
+use crate::core::{FunctionId, Language, StableKeyId, SymbolId};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct RefinedCallEdgeFact {
@@ -28,7 +28,7 @@ pub(crate) struct RefinedCallEdgeFact {
     pub(crate) confidence: RefinedCallConfidence,
     pub(crate) evidence: Vec<String>,
     pub(crate) input_stable_keys: Vec<String>,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -94,12 +94,15 @@ mod tests {
             confidence: RefinedCallConfidence::High,
             evidence: vec!["value".to_string()],
             input_stable_keys: vec!["call-site".to_string()],
-            stable_key: "refined:edge".to_string(),
+            stable_key: crate::core::stable_key_for_test("refined:edge"),
         };
 
         assert_eq!(edge.site, CallSiteId(2));
         assert_eq!(edge.base_target, Some(CallTargetId(3)));
-        assert_eq!(edge.stable_key, "refined:edge");
+        assert_eq!(
+            edge.stable_key,
+            crate::core::stable_key_for_test("refined:edge")
+        );
     }
 
     #[test]
@@ -124,7 +127,7 @@ mod tests {
             confidence: RefinedCallConfidence::Medium,
             evidence: vec!["b".to_string(), "a".to_string(), "a".to_string()],
             input_stable_keys: vec!["z".to_string(), "a".to_string()],
-            stable_key: "refined:synthetic".to_string(),
+            stable_key: crate::core::stable_key_for_test("refined:synthetic"),
         }
         .normalized();
 

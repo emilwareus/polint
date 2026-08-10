@@ -46,9 +46,12 @@ pub(crate) fn derive_identity_with_cache_stats(
     }
     // Step: normalize (dedup already sorts, but normalize keeps the contract
     // single-sourced through IdentityProviderOutput).
-    let output = IdentityProviderOutput { records }.normalized();
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
+    let output = IdentityProviderOutput { records }.normalized(interner);
     // Step: digest.
     let output_digest = identity_output_digest(
+        interner,
         manifest,
         input_snapshot,
         &calls_provider_output_digest,
@@ -75,16 +78,18 @@ pub(crate) fn derive_identity_with_cache_stats(
 
 /// Projects existing function and call-site facts into identity records.
 fn extract_identity_records(db: &AnalysisDb) -> Vec<IdentityRecord> {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let mut records = Vec::new();
 
     for function in db.functions() {
-        if let Some(record) = function_identity_record(db, function) {
+        if let Some(record) = function_identity_record(db, interner, function) {
             records.push(record);
         }
     }
 
     for site in db.call_sites() {
-        if let Some(record) = callsite_identity_record(db, site) {
+        if let Some(record) = callsite_identity_record(db, interner, site) {
             records.push(record);
         }
     }
@@ -92,7 +97,11 @@ fn extract_identity_records(db: &AnalysisDb) -> Vec<IdentityRecord> {
     records
 }
 
-fn function_identity_record(db: &AnalysisDb, function: &FunctionFact) -> Option<IdentityRecord> {
+fn function_identity_record(
+    db: &AnalysisDb,
+    interner: &crate::core::StableKeyInterner,
+    function: &FunctionFact,
+) -> Option<IdentityRecord> {
     let language = language_tag(function.language)?;
     let package_or_module: Arc<str> = Arc::from(package_or_module_for_record(
         db,
@@ -102,6 +111,7 @@ fn function_identity_record(db: &AnalysisDb, function: &FunctionFact) -> Option<
     let container_path: Arc<str> = Arc::from(function.name.as_str());
     let display_name: Arc<str> = Arc::from(function.name.as_str());
     Some(build_record(
+        interner,
         IdentityKind::Function,
         function.file,
         &function.span,
@@ -113,13 +123,18 @@ fn function_identity_record(db: &AnalysisDb, function: &FunctionFact) -> Option<
     ))
 }
 
-fn callsite_identity_record(db: &AnalysisDb, site: &CallSiteFact) -> Option<IdentityRecord> {
+fn callsite_identity_record(
+    db: &AnalysisDb,
+    interner: &crate::core::StableKeyInterner,
+    site: &CallSiteFact,
+) -> Option<IdentityRecord> {
     let language = language_tag(site.language)?;
     let package_or_module: Arc<str> =
         Arc::from(package_or_module_for_record(db, site.language, site.file));
     let container_path: Arc<str> = Arc::from(callsite_container_path(db, site));
     let display_name: Arc<str> = Arc::from(callsite_display_name(site));
     Some(build_record(
+        interner,
         IdentityKind::Callsite,
         site.file,
         &site.span,
@@ -133,6 +148,7 @@ fn callsite_identity_record(db: &AnalysisDb, site: &CallSiteFact) -> Option<Iden
 
 #[allow(clippy::too_many_arguments)]
 fn build_record(
+    interner: &crate::core::StableKeyInterner,
     kind: IdentityKind,
     file: crate::core::FileId,
     span: &Span,
@@ -150,14 +166,14 @@ fn build_record(
         None,
         None,
     );
-    let stable_key = compute_identity_stable_key(
+    let stable_key = interner.intern(compute_identity_stable_key(
         kind,
         language,
         &package_or_module,
         &container_path,
         file,
         span,
-    );
+    ));
     IdentityRecord {
         id: IdentityRecordId(0),
         kind,
@@ -258,6 +274,7 @@ fn language_tag(language: Language) -> Option<LanguageTag> {
 
 /// Output digest over stable payloads, never dense IDs (Pattern F, T-42-02).
 fn identity_output_digest(
+    interner: &crate::core::StableKeyInterner,
     manifest: &ProviderManifest,
     input_snapshot: &InputSnapshot,
     calls_provider_output_digest: &Digest,
@@ -276,7 +293,7 @@ fn identity_output_digest(
     parts.extend(output.records.iter().map(|record| {
         format!(
             "identity_record={} language={} package_or_module={} container={} digest={} kind={:?} multiplicity={}",
-            record.stable_key,
+            interner.resolve(record.stable_key),
             record.language.as_str(),
             record.package_or_module,
             record.container_path,
@@ -373,7 +390,8 @@ mod tests {
             calls: Vec::new(),
         });
         let function = db.functions().first().expect("pushed function").clone();
-        super::function_identity_record(&db, &function).expect("Go function builds a record")
+        super::function_identity_record(&db, &db.stable_key_interner(), &function)
+            .expect("Go function builds a record")
     }
 
     #[test]
@@ -424,8 +442,8 @@ mod tests {
         });
 
         let function = db.functions().first().expect("pushed function").clone();
-        let record =
-            super::function_identity_record(&db, &function).expect("Go function builds a record");
+        let record = super::function_identity_record(&db, &db.stable_key_interner(), &function)
+            .expect("Go function builds a record");
         assert_eq!(
             record.package_or_module.as_ref(),
             "github.com/acme/project/pkg"
@@ -466,8 +484,8 @@ mod tests {
             calls: Vec::new(),
         });
         let function = db.functions().first().expect("pushed function").clone();
-        let record =
-            super::function_identity_record(&db, &function).expect("TS function builds a record");
+        let record = super::function_identity_record(&db, &db.stable_key_interner(), &function)
+            .expect("TS function builds a record");
         assert_eq!(record.package_or_module.as_ref(), "src/app.ts");
     }
 
@@ -487,14 +505,14 @@ mod tests {
                 language, "pkg", container, container, None, None,
             ),
             multiplicity,
-            stable_key: compute_identity_stable_key(
+            stable_key: crate::core::stable_key_for_test(&compute_identity_stable_key(
                 IdentityKind::Function,
                 language,
                 "pkg",
                 container,
                 FileId(0),
                 &span,
-            ),
+            )),
             originating_call_site_id: None,
             originating_call_target_id: None,
         }
@@ -518,6 +536,7 @@ mod tests {
             .find(|manifest| manifest.id == "polint.identity")
             .expect("identity manifest");
         super::identity_output_digest(
+            &db.stable_key_interner(),
             manifest,
             &snapshot,
             &Digest::from_parts(DigestKind::ProviderOutput, "polint.calls", &["a"]),

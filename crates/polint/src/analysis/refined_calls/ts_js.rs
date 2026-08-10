@@ -12,16 +12,18 @@ use crate::analysis::ids::{PlaceId, RefinedCallEdgeId};
 use crate::analysis::points_to::facts::PointsToStatus;
 use crate::analysis::semantic_graph::constraints::ConstraintKind;
 use crate::analysis::semantic_graph::facts::NodeKind;
-use crate::analysis_kernel::{FactFamily, stable_key_text_from_parts};
+use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
 use crate::core::AnalysisDb;
 
 pub(crate) fn derive_ts_js_refinements(db: &AnalysisDb) -> RefinedCallOutput {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let edges = db
         .unresolved_calls()
         .iter()
         .filter_map(|unresolved| unresolved_edge(db, unresolved))
         .collect();
-    RefinedCallOutput { edges }.normalized()
+    RefinedCallOutput { edges }.normalized(interner)
 }
 
 fn unresolved_edge(
@@ -66,7 +68,7 @@ fn unresolved_edge(
         confidence: RefinedCallConfidence::Low,
         evidence: vec!["ts_js_points_to_unresolved".to_string()],
         input_stable_keys: vec![unresolved_key.clone()],
-        stable_key: stable_key_text_from_parts(
+        stable_key: stable_key_from_parts(
             interner,
             FactFamily::RefinedCallEdge,
             &[

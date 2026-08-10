@@ -5,7 +5,7 @@ use crate::analysis::access_paths::facts::AccessPathFact;
 use crate::analysis::ids::{AliasAnswerId, ObjectTokenId, PtVarId};
 use crate::analysis::points_to::facts::{PointsToBudgetStatus, PointsToSetFact, PointsToStatus};
 use crate::analysis::points_to::vars;
-use crate::analysis_kernel::{FactFamily, stable_key_text_from_parts};
+use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
 
 #[derive(Debug, Default)]
 pub(crate) struct AliasQueryIndex<'a> {
@@ -43,7 +43,7 @@ impl<'a> AliasQueryIndex<'a> {
             reason,
             evidence,
             precision,
-            stable_key: stable_key_text_from_parts(
+            stable_key: stable_key_from_parts(
                 interner,
                 FactFamily::AliasAnswer,
                 &[
@@ -256,7 +256,7 @@ mod tests {
             function: None,
             body: None,
             status: AccessPathStatus::Resolved,
-            stable_key: "path:root".to_string(),
+            stable_key: crate::core::stable_key_for_test("path:root"),
         }];
         let index = AliasQueryIndex::new(&paths, &[]);
 
@@ -281,7 +281,7 @@ mod tests {
             function: None,
             body: None,
             status: AccessPathStatus::Partial,
-            stable_key: format!("path:{}", id.0),
+            stable_key: crate::core::stable_key_for_test(&format!("path:{}", id.0)),
         }
     }
 
@@ -293,7 +293,7 @@ mod tests {
             status: PointsToStatus::Present,
             precision: PointsToPrecision::FlowInsensitive,
             budget: PointsToBudgetStatus::WithinBudget,
-            stable_key: format!("set:{}", variable.0),
+            stable_key: crate::core::stable_key_for_test(&format!("set:{}", variable.0)),
         }
     }
 }

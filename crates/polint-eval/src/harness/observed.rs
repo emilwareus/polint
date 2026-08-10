@@ -175,10 +175,11 @@ pub(crate) fn call_graph_unknown_facts_from_kernel_output(
 pub(crate) fn adaptation_model_facts_from_kernel_output(
     output: &crate::analysis_kernel::KernelOutput,
 ) -> Vec<ObservedItem> {
+    let interner = output.db.stable_key_interner();
     let accepted = output.db.adaptation_model_facts().iter().map(|fact| {
         ObservedItem::Fact(ObservedFact {
             family: "AdaptationModel".to_string(),
-            stable_key: fact.fact.stable_key.clone(),
+            stable_key: interner.resolve(fact.fact.stable_key).to_string(),
             mode: AssertionMode::Exact,
             producer_id: Some("polint.adaptation.model".to_string()),
             provenance: Some(format!("model_path={}", fact.fact.model_path)),
@@ -199,7 +200,7 @@ pub(crate) fn adaptation_model_facts_from_kernel_output(
         .map(|fact| {
             ObservedItem::Fact(ObservedFact {
                 family: "AdaptationModel".to_string(),
-                stable_key: fact.fact.stable_key.clone(),
+                stable_key: interner.resolve(fact.fact.stable_key).to_string(),
                 mode: AssertionMode::Exact,
                 producer_id: Some("polint.adaptation.model".to_string()),
                 provenance: Some(format!("model_path={}", fact.fact.model_path)),
@@ -734,7 +735,7 @@ fn identity_render_invariants(db: &crate::core::AnalysisDb) -> Vec<ObservedItem>
         assert!(
             !go_rel.is_empty(),
             "go_relstring render must be non-empty for {}",
-            record.stable_key
+            db.resolve_stable_key(record.stable_key)
         );
         let Some(source) = files.get(&record.file_id) else {
             continue;
@@ -834,13 +835,14 @@ fn provider_output_invariants(run_report: &KernelRunReport) -> Vec<ObservedItem>
 
 #[cfg(test)]
 fn extension_facts(db: &AnalysisDb) -> Vec<ObservedItem> {
+    let interner = db.stable_key_interner();
     let mut facts = db
         .extension_facts()
         .iter()
         .map(|fact| {
             ObservedItem::Fact(ObservedFact {
                 family: fact.fact_family.clone(),
-                stable_key: fact.stable_key.clone(),
+                stable_key: interner.resolve(fact.stable_key).to_string(),
                 mode: AssertionMode::Exact,
                 producer_id: Some(extension_producer_id(&fact.extension_id, &fact.provider_id)),
                 provenance: Some("kernel.extension_sink.accepted".to_string()),
@@ -859,7 +861,7 @@ fn extension_facts(db: &AnalysisDb) -> Vec<ObservedItem> {
     facts.extend(db.rejected_extension_facts().iter().map(|fact| {
         ObservedItem::Fact(ObservedFact {
             family: fact.fact_family.clone(),
-            stable_key: fact.stable_key.clone(),
+            stable_key: interner.resolve(fact.stable_key).to_string(),
             mode: AssertionMode::Exact,
             producer_id: Some(extension_producer_id(&fact.extension_id, &fact.provider_id)),
             provenance: Some("kernel.extension_sink.rejected".to_string()),
@@ -878,11 +880,12 @@ fn extension_facts(db: &AnalysisDb) -> Vec<ObservedItem> {
 
 #[cfg(test)]
 fn type_value_alias_facts(db: &AnalysisDb) -> Vec<ObservedItem> {
+    let interner = db.stable_key_interner();
     let mut facts = Vec::new();
     facts.extend(db.type_facts().iter().map(|fact| {
         ObservedItem::Fact(ObservedFact {
             family: "Type".to_string(),
-            stable_key: fact.stable_key.clone(),
+            stable_key: interner.resolve(fact.stable_key).to_string(),
             mode: AssertionMode::Exact,
             producer_id: Some("polint.type_value_alias".to_string()),
             provenance: Some(format!("type_value_alias.type.{:?}", fact.provenance)),
@@ -897,7 +900,7 @@ fn type_value_alias_facts(db: &AnalysisDb) -> Vec<ObservedItem> {
     facts.extend(db.narrowed_type_facts().iter().map(|fact| {
         ObservedItem::Fact(ObservedFact {
             family: "NarrowedType".to_string(),
-            stable_key: fact.stable_key.clone(),
+            stable_key: interner.resolve(fact.stable_key).to_string(),
             mode: AssertionMode::Exact,
             producer_id: Some("polint.type_value_alias".to_string()),
             provenance: Some("type_value_alias.narrowed_type".to_string()),
@@ -912,7 +915,7 @@ fn type_value_alias_facts(db: &AnalysisDb) -> Vec<ObservedItem> {
     facts.extend(db.value_facts().iter().map(|fact| {
         ObservedItem::Fact(ObservedFact {
             family: "Value".to_string(),
-            stable_key: fact.stable_key.clone(),
+            stable_key: interner.resolve(fact.stable_key).to_string(),
             mode: AssertionMode::Exact,
             producer_id: Some("polint.type_value_alias".to_string()),
             provenance: Some(format!("type_value_alias.value.{:?}", fact.provenance)),
@@ -924,7 +927,7 @@ fn type_value_alias_facts(db: &AnalysisDb) -> Vec<ObservedItem> {
     facts.extend(db.allocation_tokens().iter().map(|fact| {
         ObservedItem::Fact(ObservedFact {
             family: "AllocationToken".to_string(),
-            stable_key: fact.stable_key.clone(),
+            stable_key: interner.resolve(fact.stable_key).to_string(),
             mode: AssertionMode::Exact,
             producer_id: Some("polint.type_value_alias".to_string()),
             provenance: Some(format!("type_value_alias.allocation.{:?}", fact.provenance)),
@@ -939,7 +942,7 @@ fn type_value_alias_facts(db: &AnalysisDb) -> Vec<ObservedItem> {
     facts.extend(db.access_path_facts().iter().map(|fact| {
         ObservedItem::Fact(ObservedFact {
             family: "AccessPath".to_string(),
-            stable_key: fact.stable_key.clone(),
+            stable_key: interner.resolve(fact.stable_key).to_string(),
             mode: AssertionMode::Exact,
             producer_id: Some("polint.type_value_alias".to_string()),
             provenance: Some("type_value_alias.access_path".to_string()),
@@ -954,7 +957,7 @@ fn type_value_alias_facts(db: &AnalysisDb) -> Vec<ObservedItem> {
     facts.extend(db.points_to_constraints().iter().map(|fact| {
         ObservedItem::Fact(ObservedFact {
             family: "PointsToConstraint".to_string(),
-            stable_key: fact.stable_key.clone(),
+            stable_key: interner.resolve(fact.stable_key).to_string(),
             mode: AssertionMode::Exact,
             producer_id: Some("polint.type_value_alias".to_string()),
             provenance: Some("type_value_alias.points_to_constraint".to_string()),
@@ -966,7 +969,7 @@ fn type_value_alias_facts(db: &AnalysisDb) -> Vec<ObservedItem> {
     facts.extend(db.points_to_sets().iter().map(|fact| {
         ObservedItem::Fact(ObservedFact {
             family: "PointsToSet".to_string(),
-            stable_key: fact.stable_key.clone(),
+            stable_key: interner.resolve(fact.stable_key).to_string(),
             mode: AssertionMode::Exact,
             producer_id: Some("polint.type_value_alias".to_string()),
             provenance: Some("type_value_alias.points_to_set".to_string()),
@@ -981,7 +984,7 @@ fn type_value_alias_facts(db: &AnalysisDb) -> Vec<ObservedItem> {
     facts.extend(db.alias_answers().iter().map(|fact| {
         ObservedItem::Fact(ObservedFact {
             family: "AliasAnswer".to_string(),
-            stable_key: fact.stable_key.clone(),
+            stable_key: interner.resolve(fact.stable_key).to_string(),
             mode: AssertionMode::Exact,
             producer_id: Some("polint.type_value_alias".to_string()),
             provenance: Some("type_value_alias.alias_answer".to_string()),
@@ -998,7 +1001,7 @@ fn type_value_alias_facts(db: &AnalysisDb) -> Vec<ObservedItem> {
     facts.extend(db.alias_answers().iter().map(|fact| {
         ObservedItem::Fact(ObservedFact {
             family: format!("AliasAnswer.{:?}", fact.status),
-            stable_key: fact.stable_key.clone(),
+            stable_key: interner.resolve(fact.stable_key).to_string(),
             mode: AssertionMode::Exact,
             producer_id: Some("polint.type_value_alias".to_string()),
             provenance: Some("type_value_alias.alias_answer.status".to_string()),
@@ -3547,7 +3550,7 @@ path = "repo"
                     reason: AliasReason::ExtensionProvided,
                     evidence: vec!["eval".to_string()],
                     precision: AliasPrecision::Heuristic,
-                    stable_key: format!("alias:{status:?}"),
+                    stable_key: crate::core::stable_key_for_test(&format!("alias:{status:?}")),
                 })
                 .collect(),
             },

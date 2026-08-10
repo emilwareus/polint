@@ -1,4 +1,3 @@
-use serde::Serialize;
 use std::fmt::Debug;
 
 use crate::analysis::ids::ReachabilityRootId;
@@ -45,6 +44,8 @@ pub(crate) fn derive_reachability_with_cache_stats(
     module_topology_output_digest: Digest,
 ) -> ReachabilityProviderRunOutput {
     debug_assert_eq!(manifest.id, REACHABILITY_PROVIDER_ID);
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
 
     // Step: extract roots from existing facts + configured input.
     let roots = discover_reachability_roots(db, configured_roots);
@@ -59,18 +60,19 @@ pub(crate) fn derive_reachability_with_cache_stats(
         .partition(|root| db.functions().iter().any(|f| f.id == root.target_function));
     let unresolved_stable_keys: Vec<String> = unresolved_roots
         .iter()
-        .map(|root| root.stable_key.clone())
+        .map(|root| interner.resolve(root.stable_key).to_string())
         .collect();
     // Step: normalize the storable roots. The digest is computed over exactly this
     // set so it certifies what actually lands in the db;
     // `ReachabilityRootFact.id` carries `#[serde(skip)]`, so the digest payload
     // never folds in run-local dense IDs (D-06/D-19).
-    let mut storable = ReachabilityProviderOutput { roots: real_roots }.normalized();
+    let mut storable = ReachabilityProviderOutput { roots: real_roots }.normalized(interner);
     // Step: digest over the stored stable payloads, plus a dedicated stable-key
     // part for configured-unresolvable roots so the cache invalidates when they
     // change without serializing whole facts (with dense IDs) into the `root=`
     // parts.
     let output_digest = reachability_output_digest(
+        interner,
         manifest,
         input_snapshot,
         &calls_output_digest,
@@ -96,7 +98,7 @@ pub(crate) fn derive_reachability_with_cache_stats(
     // of whether the store succeeds (D-13).
     let mut diagnostics: Vec<Diagnostic> = unresolved_roots
         .iter()
-        .map(unresolved_configured_root_diagnostic)
+        .map(|root| unresolved_configured_root_diagnostic(interner, root))
         .collect();
 
     // Step: store the storable set.
@@ -129,6 +131,7 @@ pub(crate) fn derive_reachability_with_cache_stats(
 /// provider output digest the reachability provider consumes is also folded in.
 #[allow(clippy::too_many_arguments)]
 fn reachability_output_digest(
+    interner: &crate::core::StableKeyInterner,
     manifest: &ProviderManifest,
     input_snapshot: &InputSnapshot,
     calls_output_digest: &Digest,
@@ -166,7 +169,7 @@ fn reachability_output_digest(
         output
             .roots
             .iter()
-            .map(|root| format!("root={}", stable_fact_payload(root))),
+            .map(|root| format!("root={}", stable_fact_payload(interner, root))),
     );
     // Configured-unresolvable roots are NOT stored and NOT serialized as `root=`
     // facts (that would fold dense IDs / a non-stored superset into the digest,
@@ -195,11 +198,37 @@ fn extend_component_parts(parts: &mut Vec<String>, prefix: &str, components: &[I
     }));
 }
 
-fn stable_fact_payload<T>(fact: &T) -> String
+fn stable_fact_payload<T>(interner: &crate::core::StableKeyInterner, fact: &T) -> String
 where
-    T: Serialize + Debug,
+    T: Debug,
 {
-    serde_json::to_string(fact).unwrap_or_else(|_| format!("{fact:?}"))
+    resolve_stable_key_ids(interner, &format!("{fact:?}"))
+}
+
+fn resolve_stable_key_ids(interner: &crate::core::StableKeyInterner, payload: &str) -> String {
+    let mut resolved = String::with_capacity(payload.len());
+    let mut remaining = payload;
+    while let Some(start) = remaining.find("StableKeyId(") {
+        resolved.push_str(&remaining[..start]);
+        let id_start = start + "StableKeyId(".len();
+        let Some(relative_end) = remaining[id_start..].find(')') else {
+            resolved.push_str(&remaining[start..]);
+            return resolved;
+        };
+        let id_end = id_start + relative_end;
+        let Ok(id) = remaining[id_start..id_end].parse::<u32>() else {
+            resolved.push_str(&remaining[start..=id_end]);
+            remaining = &remaining[id_end + 1..];
+            continue;
+        };
+        resolved.push_str(&format!(
+            "{:?}",
+            interner.resolve(crate::core::StableKeyId(id))
+        ));
+        remaining = &remaining[id_end + 1..];
+    }
+    resolved.push_str(remaining);
+    resolved
 }
 
 fn provider_error_diagnostic(message: String) -> Diagnostic {
@@ -221,6 +250,7 @@ fn provider_error_diagnostic(message: String) -> Diagnostic {
 /// operator can see exactly which configured `[reachability] roots` entry failed to
 /// resolve, mirroring `validate.rs`'s evidence-bearing diagnostic discipline.
 fn unresolved_configured_root_diagnostic(
+    interner: &crate::core::StableKeyInterner,
     root: &crate::analysis::reachability::facts::ReachabilityRootFact,
 ) -> Diagnostic {
     Diagnostic::warning(
@@ -231,7 +261,7 @@ fn unresolved_configured_root_diagnostic(
     )
     .with_evidence("provider", REACHABILITY_PROVIDER_ID)
     .with_evidence("family", "ReachabilityRoot")
-    .with_evidence("stable_key", root.stable_key.clone())
+    .with_evidence("stable_key", interner.resolve(root.stable_key).to_string())
     .with_evidence("status", root.status.as_str())
     .with_evidence(
         "reason",
@@ -348,6 +378,7 @@ mod tests {
         let snapshot = snapshot(&db);
         let output = ReachabilityProviderOutput::empty();
         let digest = reachability_output_digest(
+            &db.stable_key_interner(),
             manifest(),
             &snapshot,
             &absent("polint.calls"),

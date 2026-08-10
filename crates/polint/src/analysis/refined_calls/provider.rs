@@ -1,4 +1,3 @@
-use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 
@@ -20,7 +19,7 @@ use crate::analysis::solver::facts::DerivedEdgeFact;
 use crate::analysis_kernel::incremental::{
     CacheStats, Digest, DigestKind, InputComponent, InputSnapshot,
 };
-use crate::analysis_kernel::{FactFamily, FactRef, ProviderManifest};
+use crate::analysis_kernel::{FactFamily, FactRef, ProviderManifest, stable_key_from_parts};
 use crate::core::AnalysisDb;
 use crate::diagnostics::Diagnostic;
 
@@ -87,9 +86,10 @@ pub(crate) fn derive_refined_calls_with_cache_stats(
         .edges
         .extend(super::extensions::derive_extension_refinements(db).edges);
     output.edges.extend(derive_solver_refinements(db).edges);
-    output = finalized_output(output);
+    output = finalized_output(interner, output);
 
     let output_digest = refined_calls_output_digest(
+        interner,
         manifest,
         input_snapshot,
         &calls_output_digest,
@@ -117,8 +117,11 @@ pub(crate) fn derive_refined_calls_with_cache_stats(
     }
 }
 
-fn finalized_output(mut output: RefinedCallOutput) -> RefinedCallOutput {
-    output = output.normalized();
+fn finalized_output(
+    interner: &crate::core::StableKeyInterner,
+    mut output: RefinedCallOutput,
+) -> RefinedCallOutput {
+    output = output.normalized(interner);
     for (index, edge) in output.edges.iter_mut().enumerate() {
         edge.id = crate::analysis::ids::RefinedCallEdgeId(index as u64);
     }
@@ -276,11 +279,10 @@ impl<'a> SolverProjectionIndex<'a> {
     }
 
     fn callsite_for_solver_edge(&self, edge: &DerivedEdgeFact) -> Option<&'a CallSiteFact> {
-        edge.provenance.contributing_facts.iter().find_map(|fact| {
-            self.callsite_by_stable_key
-                .get(fact.stable_key.as_str())
-                .copied()
-        })
+        edge.provenance
+            .contributing_facts
+            .iter()
+            .find_map(|fact| self.callsite_by_stable_key.get(&fact.stable_key).copied())
     }
 }
 
@@ -471,8 +473,8 @@ fn stable_refined_call_key_from_solver_edge(
     interner: &crate::core::StableKeyInterner,
     site: &CallSiteFact,
     edge: &DerivedEdgeFact,
-) -> String {
-    crate::analysis_kernel::stable_key_text_from_parts(
+) -> crate::core::StableKeyId {
+    stable_key_from_parts(
         interner,
         FactFamily::RefinedCallEdge,
         &[
@@ -507,8 +509,8 @@ fn stable_refined_call_key(
     target: &CallTargetFact,
     tier: RefinedCallTier,
     base_target_key: &str,
-) -> String {
-    crate::analysis_kernel::stable_key_text_from_parts(
+) -> crate::core::StableKeyId {
+    stable_key_from_parts(
         interner,
         FactFamily::RefinedCallEdge,
         &[
@@ -521,6 +523,7 @@ fn stable_refined_call_key(
 
 #[allow(clippy::too_many_arguments)]
 fn refined_calls_output_digest(
+    interner: &crate::core::StableKeyInterner,
     manifest: &ProviderManifest,
     input_snapshot: &InputSnapshot,
     calls_output_digest: &Digest,
@@ -573,7 +576,7 @@ fn refined_calls_output_digest(
         output
             .edges
             .iter()
-            .map(|edge| format!("refined_call_edge={}", stable_fact_payload(edge))),
+            .map(|edge| format!("refined_call_edge={}", stable_fact_payload(interner, edge))),
     );
     if output.edges.is_empty() {
         parts.push("refined_calls_output=empty".to_string());
@@ -597,11 +600,37 @@ fn extend_component_parts(parts: &mut Vec<String>, prefix: &str, components: &[I
     }));
 }
 
-fn stable_fact_payload<T>(fact: &T) -> String
+fn stable_fact_payload<T>(interner: &crate::core::StableKeyInterner, fact: &T) -> String
 where
-    T: Serialize + Debug,
+    T: Debug,
 {
-    serde_json::to_string(fact).unwrap_or_else(|_| format!("{fact:?}"))
+    resolve_stable_key_ids(interner, &format!("{fact:?}"))
+}
+
+fn resolve_stable_key_ids(interner: &crate::core::StableKeyInterner, payload: &str) -> String {
+    let mut resolved = String::with_capacity(payload.len());
+    let mut remaining = payload;
+    while let Some(start) = remaining.find("StableKeyId(") {
+        resolved.push_str(&remaining[..start]);
+        let id_start = start + "StableKeyId(".len();
+        let Some(relative_end) = remaining[id_start..].find(')') else {
+            resolved.push_str(&remaining[start..]);
+            return resolved;
+        };
+        let id_end = id_start + relative_end;
+        let Ok(id) = remaining[id_start..id_end].parse::<u32>() else {
+            resolved.push_str(&remaining[start..=id_end]);
+            remaining = &remaining[id_end + 1..];
+            continue;
+        };
+        resolved.push_str(&format!(
+            "{:?}",
+            interner.resolve(crate::core::StableKeyId(id))
+        ));
+        remaining = &remaining[id_end + 1..];
+    }
+    resolved.push_str(remaining);
+    resolved
 }
 
 #[cfg(test)]
@@ -1437,17 +1466,21 @@ mod tests {
 
     #[test]
     fn finalized_output_reassigns_dense_ids_after_sorting() {
-        let output = finalized_output(RefinedCallOutput {
-            edges: vec![refined_edge("z", 10), refined_edge("a", 10)],
-        });
+        let interner = crate::core::test_stable_key_interner();
+        let output = finalized_output(
+            &interner,
+            RefinedCallOutput {
+                edges: vec![refined_edge("z", 10), refined_edge("a", 10)],
+            },
+        );
 
         assert_eq!(
             output
                 .edges
                 .iter()
-                .map(|edge| (edge.id.0, edge.stable_key.as_str()))
+                .map(|edge| (edge.id.0, interner.resolve(edge.stable_key).to_string()))
                 .collect::<Vec<_>>(),
-            vec![(0, "a"), (1, "z")]
+            vec![(0, "a".to_string()), (1, "z".to_string())]
         );
     }
 
@@ -1472,7 +1505,7 @@ mod tests {
             confidence: RefinedCallConfidence::Medium,
             evidence: Vec::new(),
             input_stable_keys: Vec::new(),
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 }

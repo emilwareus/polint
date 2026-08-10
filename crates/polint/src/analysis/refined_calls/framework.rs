@@ -13,12 +13,14 @@ use crate::analysis::entrypoints::facts::{
     UnresolvedFrameworkReason,
 };
 use crate::analysis::ids::{CallSiteId, RefinedCallEdgeId};
-use crate::analysis_kernel::{FactFamily, FactRef, stable_key_text_from_parts};
+use crate::analysis_kernel::{FactFamily, FactRef, stable_key_from_parts};
 #[cfg(test)]
 use crate::core::Language;
 use crate::core::{AnalysisDb, FunctionId, SymbolId};
 
 pub(crate) fn derive_framework_refinements(db: &AnalysisDb) -> RefinedCallOutput {
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
     let entrypoints_by_key = db
         .entrypoint_facts()
         .iter()
@@ -38,7 +40,7 @@ pub(crate) fn derive_framework_refinements(db: &AnalysisDb) -> RefinedCallOutput
         }
     }
 
-    RefinedCallOutput { edges }.normalized()
+    RefinedCallOutput { edges }.normalized(interner)
 }
 
 fn edge_from_dispatch(
@@ -89,7 +91,7 @@ fn edge_from_dispatch(
             ),
             dispatch_key.clone(),
         ],
-        stable_key: stable_key_text_from_parts(
+        stable_key: stable_key_from_parts(
             interner,
             FactFamily::RefinedCallEdge,
             &[
@@ -141,7 +143,7 @@ fn edge_from_unresolved(
             format!("reason={:?}", unresolved.reason),
         ],
         input_stable_keys: vec![unresolved_key.clone()],
-        stable_key: stable_key_text_from_parts(
+        stable_key: stable_key_from_parts(
             interner,
             FactFamily::RefinedCallEdge,
             &[

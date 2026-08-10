@@ -14,11 +14,12 @@ pub(crate) struct AdaptationModelStore {
 
 impl AdaptationModelStore {
     pub(crate) fn build(
+        interner: &crate::core::StableKeyInterner,
         mut loaded: Vec<LoadedModelFact>,
         universe: &ValidationUniverse,
         budget: AdaptationModelBudget,
     ) -> Self {
-        loaded.sort();
+        loaded.sort_by(|left, right| left.sort_key(interner).cmp(&right.sort_key(interner)));
 
         let mut accepted = Vec::new();
         let mut rejected = Vec::new();
@@ -49,8 +50,16 @@ impl AdaptationModelStore {
             }
         }
 
-        accepted.sort();
-        rejected.sort();
+        accepted.sort_by(|left, right| {
+            left.fact
+                .sort_key(interner)
+                .cmp(&right.fact.sort_key(interner))
+        });
+        rejected.sort_by(|left, right| {
+            left.fact
+                .sort_key(interner)
+                .cmp(&right.fact.sort_key(interner))
+        });
         Self {
             loaded,
             accepted,
@@ -70,15 +79,15 @@ impl AdaptationModelStore {
         &self.rejected
     }
 
-    pub(crate) fn digest_parts(&self) -> Vec<String> {
+    pub(crate) fn digest_parts(&self, interner: &crate::core::StableKeyInterner) -> Vec<String> {
         let mut parts = Vec::new();
         for fact in &self.accepted {
             parts.push("accepted.reason=accepted".to_string());
-            parts.extend(fact.fact.digest_parts());
+            parts.extend(fact.fact.digest_parts(interner));
         }
         for fact in &self.rejected {
             parts.push(format!("rejected.reason={}", fact.reason.as_str()));
-            parts.extend(fact.fact.digest_parts());
+            parts.extend(fact.fact.digest_parts(interner));
         }
         parts
     }
@@ -96,7 +105,9 @@ mod tests {
             fact("call:a", "function:a"),
         ];
         let universe = ValidationUniverse::new(["call:a", "call:b"], ["function:a"]);
+        let interner = crate::core::AnalysisDb::new().stable_key_interner();
         let store = AdaptationModelStore::build(
+            &interner,
             loaded,
             &universe,
             AdaptationModelBudget {
@@ -117,7 +128,9 @@ mod tests {
     fn budget_overflow_is_explicit_rejection_evidence() {
         let loaded = vec![fact("call:a", "function:a"), fact("call:b", "function:b")];
         let universe = ValidationUniverse::new(["call:a", "call:b"], ["function:a", "function:b"]);
+        let interner = crate::core::AnalysisDb::new().stable_key_interner();
         let store = AdaptationModelStore::build(
+            &interner,
             loaded,
             &universe,
             AdaptationModelBudget {
@@ -133,7 +146,9 @@ mod tests {
     fn per_source_target_fanout_overflow_is_explicit_rejection_evidence() {
         let loaded = vec![fact("call:a", "function:a"), fact("call:a", "function:b")];
         let universe = ValidationUniverse::new(["call:a"], ["function:a", "function:b"]);
+        let interner = crate::core::AnalysisDb::new().stable_key_interner();
         let store = AdaptationModelStore::build(
+            &interner,
             loaded,
             &universe,
             AdaptationModelBudget {
@@ -155,7 +170,7 @@ mod tests {
             language: ModelLanguage::TypeScript,
             scope: "src/app.ts".to_string(),
             evidence: vec!["src/app.ts:10".to_string()],
-            stable_key: format!("{source}->{target}"),
+            stable_key: crate::core::stable_key_for_test(&format!("{source}->{target}")),
         }
     }
 }

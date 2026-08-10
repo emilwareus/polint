@@ -47,6 +47,7 @@ pub(crate) fn validate_extension_output(
         exact_validation_evidence,
         candidates,
     } = input;
+    let interner = db.stable_key_interner();
     let rule_input = ExtensionValidationInput {
         declared_outputs,
         native_stable_keys,
@@ -55,12 +56,12 @@ pub(crate) fn validate_extension_output(
     };
     let mut accepted = Vec::new();
     let mut rejected = Vec::new();
-    let mut accepted_keys = BTreeSet::new();
+    let mut accepted_keys = BTreeSet::<crate::core::StableKeyId>::new();
 
     let mut type_value_alias_refs = TypeValueAliasRefContext::from_db(db);
     let mut relation_candidates = Vec::new();
 
-    for candidate in sorted_candidates(candidates) {
+    for candidate in sorted_candidates(db, candidates) {
         if is_type_value_alias_relation_family(&candidate.fact_family) {
             relation_candidates.push(candidate);
             continue;
@@ -74,11 +75,13 @@ pub(crate) fn validate_extension_output(
             &type_value_alias_refs,
         );
         if let Some(reason) = reason {
-            rejected.push(RejectedExtensionFact::from_candidate(&candidate, reason));
+            rejected.push(RejectedExtensionFact::from_candidate(
+                &candidate, reason, &interner,
+            ));
         } else {
-            accepted_keys.insert(candidate.stable_key.clone());
+            accepted_keys.insert(candidate.stable_key);
             type_value_alias_refs.record_extension_base_fact(&candidate);
-            accepted.push(AcceptedExtensionFact::from_candidate(candidate));
+            accepted.push(AcceptedExtensionFact::from_candidate(candidate, &interner));
         }
     }
 
@@ -91,10 +94,12 @@ pub(crate) fn validate_extension_output(
             &type_value_alias_refs,
         );
         if let Some(reason) = reason {
-            rejected.push(RejectedExtensionFact::from_candidate(&candidate, reason));
+            rejected.push(RejectedExtensionFact::from_candidate(
+                &candidate, reason, &interner,
+            ));
         } else {
-            accepted_keys.insert(candidate.stable_key.clone());
-            accepted.push(AcceptedExtensionFact::from_candidate(candidate));
+            accepted_keys.insert(candidate.stable_key);
+            accepted.push(AcceptedExtensionFact::from_candidate(candidate, &interner));
         }
     }
 
@@ -103,15 +108,22 @@ pub(crate) fn validate_extension_output(
         accepted,
         rejected,
     }
-    .normalized()
+    .normalized(&interner)
 }
 
-fn sorted_candidates(mut candidates: Vec<ExtensionFactCandidate>) -> Vec<ExtensionFactCandidate> {
+fn sorted_candidates(
+    db: &AnalysisDb,
+    mut candidates: Vec<ExtensionFactCandidate>,
+) -> Vec<ExtensionFactCandidate> {
+    let interner = db.stable_key_interner();
     candidates = candidates
         .into_iter()
         .map(ExtensionFactCandidate::normalized)
         .collect();
-    candidates.sort_by(|left, right| left.output_sort_key().cmp(&right.output_sort_key()));
+    candidates.sort_by(|left, right| {
+        left.output_sort_key(&interner)
+            .cmp(&right.output_sort_key(&interner))
+    });
     candidates
 }
 
@@ -132,9 +144,10 @@ fn rejection_reason(
     db: &AnalysisDb,
     input: &ExtensionValidationInput,
     candidate: &ExtensionFactCandidate,
-    accepted_keys: &BTreeSet<String>,
+    accepted_keys: &BTreeSet<crate::core::StableKeyId>,
     type_value_alias_refs: &TypeValueAliasRefContext,
 ) -> Option<ExtensionRejectionReason> {
+    let stable_key_text = db.resolve_stable_key(candidate.stable_key);
     if !input.declared_outputs.contains(&candidate.fact_family) {
         return Some(ExtensionRejectionReason::UndeclaredOutput);
     }
@@ -172,11 +185,11 @@ fn rejection_reason(
         && candidate.precision == Some(ExtensionFactPrecision::Exact)
         && !input
             .exact_validation_evidence
-            .contains(&candidate.stable_key)
+            .contains(stable_key_text.as_ref())
     {
         return Some(ExtensionRejectionReason::TypeValueAliasPrecisionCeiling);
     }
-    if candidate.stable_key.starts_with("synthetic:") && candidate.evidence.is_empty() {
+    if stable_key_text.starts_with("synthetic:") && candidate.evidence.is_empty() {
         return Some(ExtensionRejectionReason::SyntheticIdMissingEvidence);
     }
     if candidate.evidence.is_empty() {
@@ -191,13 +204,13 @@ fn rejection_reason(
     if accepted_keys.contains(&candidate.stable_key) {
         return Some(ExtensionRejectionReason::DuplicateStableKey);
     }
-    if input.native_stable_keys.contains(&candidate.stable_key) {
+    if input.native_stable_keys.contains(stable_key_text.as_ref()) {
         return Some(ExtensionRejectionReason::NativeConflict);
     }
     if candidate.precision == Some(ExtensionFactPrecision::Exact)
         && !input
             .exact_validation_evidence
-            .contains(&candidate.stable_key)
+            .contains(stable_key_text.as_ref())
     {
         return Some(ExtensionRejectionReason::MissingProvenance);
     }
@@ -572,7 +585,7 @@ mod tests {
             extension_id: "demo".to_string(),
             provider_id: "routes".to_string(),
             fact_family: "extension.routes".to_string(),
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
             binding_refs: vec!["file:src/app.ts".to_string()],
             span: Some(ExtensionSpanRef {
                 relative_path: "src/app.ts".to_string(),
@@ -676,18 +689,18 @@ mod tests {
 
     #[test]
     fn accepted_and_rejected_output_is_sorted_deterministically() {
-        let output = validate_extension_output(
-            &db(),
-            input(vec![candidate("route:z"), candidate("route:a")]),
-        );
+        let db = db();
+        let output =
+            validate_extension_output(&db, input(vec![candidate("route:z"), candidate("route:a")]));
 
+        let interner = db.stable_key_interner();
         assert_eq!(
             output
                 .accepted
                 .iter()
-                .map(|fact| fact.stable_key.as_str())
+                .map(|fact| interner.resolve(fact.stable_key).to_string())
                 .collect::<Vec<_>>(),
-            vec!["route:a", "route:z"]
+            vec!["route:a".to_string(), "route:z".to_string()]
         );
         assert!(output.rejected.is_empty());
     }

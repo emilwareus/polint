@@ -151,7 +151,7 @@ mod tests {
             language: ModelLanguage::TypeScript,
             scope: "src/app.ts".to_string(),
             evidence: vec!["src/app.ts:10".to_string()],
-            stable_key: format!("{source}->{target}"),
+            stable_key: crate::core::stable_key_for_test(&format!("{source}->{target}")),
         }
     }
 }

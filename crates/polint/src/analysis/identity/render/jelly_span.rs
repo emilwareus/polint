@@ -165,14 +165,14 @@ mod tests {
                 None,
             ),
             multiplicity: 1,
-            stable_key: compute_identity_stable_key(
+            stable_key: crate::core::stable_key_for_test(&compute_identity_stable_key(
                 IdentityKind::Function,
                 language,
                 "src/foo.ts",
                 "foo",
                 FileId(1),
                 &span,
-            ),
+            )),
             originating_call_site_id: None,
             originating_call_target_id: None,
         }

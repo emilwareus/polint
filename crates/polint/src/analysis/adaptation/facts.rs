@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::core::{StableKeyId, StableKeyInterner};
+
 /// Source language for a repo-local adaptation model fact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -49,7 +51,7 @@ impl ModelConfidence {
 }
 
 /// Loaded TOML model fact after schema parsing and path normalization.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub(crate) struct LoadedModelFact {
     pub(crate) model_path: String,
     pub(crate) source_pattern: String,
@@ -58,11 +60,11 @@ pub(crate) struct LoadedModelFact {
     pub(crate) language: ModelLanguage,
     pub(crate) scope: String,
     pub(crate) evidence: Vec<String>,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
 impl LoadedModelFact {
-    pub(crate) fn digest_parts(&self) -> Vec<String> {
+    pub(crate) fn digest_parts(&self, interner: &StableKeyInterner) -> Vec<String> {
         let mut parts = vec![
             format!("model_path={}", self.model_path),
             format!("source_pattern={}", self.source_pattern),
@@ -70,21 +72,34 @@ impl LoadedModelFact {
             format!("confidence={}", self.confidence.as_str()),
             format!("language={}", self.language.as_str()),
             format!("scope={}", self.scope),
-            format!("stable_key={}", self.stable_key),
+            format!("stable_key={}", interner.resolve(self.stable_key)),
         ];
         parts.extend(self.evidence.iter().map(|item| format!("evidence={item}")));
         parts
     }
+
+    pub(crate) fn sort_key<'a>(&'a self, interner: &'a StableKeyInterner) -> impl Ord + 'a {
+        (
+            self.model_path.as_str(),
+            self.source_pattern.as_str(),
+            self.target_pattern.as_str(),
+            self.confidence,
+            self.language,
+            self.scope.as_str(),
+            interner.resolve(self.stable_key),
+            self.evidence.as_slice(),
+        )
+    }
 }
 
 /// Accepted model fact. Later plans lower this into `ConstraintKind::ModelEdge`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub(crate) struct AcceptedModelFact {
     pub(crate) fact: LoadedModelFact,
 }
 
 /// Rejected model fact with a deterministic reason.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub(crate) struct RejectedModelFact {
     pub(crate) fact: LoadedModelFact,
     pub(crate) reason: RejectionReason,

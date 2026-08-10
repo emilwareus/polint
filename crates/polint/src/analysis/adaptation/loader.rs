@@ -4,7 +4,7 @@ use serde::Deserialize;
 use thiserror::Error;
 
 use crate::analysis::adaptation::facts::{LoadedModelFact, ModelConfidence, ModelLanguage};
-use crate::analysis_kernel::{FactFamily, stable_key_text_from_parts};
+use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub(crate) enum ModelLoadError {
@@ -98,7 +98,7 @@ pub(crate) fn load_model_file(
         });
     }
 
-    facts.sort();
+    facts.sort_by(|left, right| left.sort_key(interner).cmp(&right.sort_key(interner)));
     Ok(facts)
 }
 
@@ -135,7 +135,7 @@ fn model_stable_key(
     confidence: ModelConfidence,
     language: ModelLanguage,
     pair: (&str, &[String]),
-) -> String {
+) -> crate::core::StableKeyId {
     let (scope, evidence) = pair;
     let language = language.as_str().to_string();
     let confidence = confidence.as_str().to_string();
@@ -148,7 +148,7 @@ fn model_stable_key(
         ("scope", scope.to_string()),
     ];
     parts.extend(evidence.iter().map(|item| ("evidence", item.clone())));
-    stable_key_text_from_parts(interner, FactFamily::AdaptationModel, &parts)
+    stable_key_from_parts(interner, FactFamily::AdaptationModel, &parts)
 }
 
 #[cfg(test)]
@@ -167,40 +167,41 @@ evidence = ["src/app.ts:10", " src/app.ts:10 "]
 
     #[test]
     fn loader_parses_and_normalizes_model_facts() {
-        let facts = load_model_file(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            ".polint/models/framework.toml",
-            VALID,
-        )
-        .unwrap();
+        let interner = crate::core::AnalysisDb::new().stable_key_interner();
+        let facts = load_model_file(&interner, ".polint/models/framework.toml", VALID).unwrap();
         assert_eq!(facts.len(), 1);
         assert_eq!(facts[0].model_path, ".polint/models/framework.toml");
         assert_eq!(facts[0].confidence, ModelConfidence::Heuristic);
         assert_eq!(facts[0].language, ModelLanguage::TypeScript);
         assert_eq!(facts[0].evidence, vec!["src/app.ts:10"]);
-        assert!(facts[0].stable_key.contains("15:AdaptationModel"));
+        assert!(
+            interner
+                .resolve(facts[0].stable_key)
+                .contains("15:AdaptationModel")
+        );
     }
 
     #[test]
     fn loader_stable_keys_keep_evidence_boundaries() {
-        let first = model_stable_key(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+        let interner = crate::core::AnalysisDb::new().stable_key_interner();
+        let first = interner.resolve(model_stable_key(
+            &interner,
             ".polint/models/framework.toml",
             "call:src/app.ts:10:register",
             "function:src/app.ts:1:onRegister",
             ModelConfidence::Heuristic,
             ModelLanguage::TypeScript,
             ("src/app.ts", &["a,b".to_string(), "c".to_string()]),
-        );
-        let second = model_stable_key(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+        ));
+        let second = interner.resolve(model_stable_key(
+            &interner,
             ".polint/models/framework.toml",
             "call:src/app.ts:10:register",
             "function:src/app.ts:1:onRegister",
             ModelConfidence::Heuristic,
             ModelLanguage::TypeScript,
             ("src/app.ts", &["a".to_string(), "b,c".to_string()]),
-        );
+        ));
 
         assert_ne!(first, second);
     }

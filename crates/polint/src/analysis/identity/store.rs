@@ -4,7 +4,7 @@ use crate::analysis::error::AnalysisError;
 use crate::analysis::identity::dedup::record_sort_key;
 use crate::analysis::identity::facts::{IdentityKind, IdentityRecord, LanguageTag};
 use crate::analysis::ids::{CallSiteId, CallTargetId};
-use crate::core::FileId;
+use crate::core::{FileId, StableKeyInterner};
 
 /// Provider output for `polint.identity` — the normalized identity record set.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -19,7 +19,7 @@ impl IdentityProviderOutput {
 
     /// Sorts records by the locked identity sort key
     /// `(language, package_or_module, container_path, file_id, span, kind)`.
-    pub(crate) fn normalized(mut self) -> Self {
+    pub(crate) fn normalized(mut self, _interner: &StableKeyInterner) -> Self {
         self.records.sort_by_key(record_sort_key);
         self
     }
@@ -39,10 +39,11 @@ impl IdentityStore {
     /// reference resolves against the supplied valid ID sets (Pattern I, D-04).
     pub(crate) fn from_output(
         output: IdentityProviderOutput,
+        interner: &StableKeyInterner,
         valid_call_site_ids: &BTreeSet<CallSiteId>,
         valid_call_target_ids: &BTreeSet<CallTargetId>,
     ) -> Result<Self, AnalysisError> {
-        let output = output.normalized();
+        let output = output.normalized(interner);
 
         for record in &output.records {
             if let Some(site) = record.originating_call_site_id
@@ -52,7 +53,8 @@ impl IdentityStore {
                     provider: "polint.identity",
                     reason: format!(
                         "dangling originating call site {:?} for identity `{}`",
-                        site, record.stable_key
+                        site,
+                        interner.resolve(record.stable_key)
                     ),
                 });
             }
@@ -63,7 +65,8 @@ impl IdentityStore {
                     provider: "polint.identity",
                     reason: format!(
                         "dangling originating call target {:?} for identity `{}`",
-                        target, record.stable_key
+                        target,
+                        interner.resolve(record.stable_key)
                     ),
                 });
             }
@@ -134,14 +137,14 @@ mod tests {
                 None,
             ),
             multiplicity: 1,
-            stable_key: compute_identity_stable_key(
+            stable_key: crate::core::stable_key_for_test(&compute_identity_stable_key(
                 kind,
                 language,
                 "pkg",
                 &format!("pkg.T{id}"),
                 FileId(file),
                 &span,
-            ),
+            )),
             originating_call_site_id: site.map(CallSiteId),
             originating_call_target_id: None,
         }
@@ -149,6 +152,7 @@ mod tests {
 
     #[test]
     fn from_output_builds_deterministic_indexes() {
+        let interner = crate::core::test_stable_key_interner();
         let output = IdentityProviderOutput {
             records: vec![
                 record(1, 0, IdentityKind::Function, None),
@@ -156,7 +160,8 @@ mod tests {
             ],
         };
         let store =
-            IdentityStore::from_output(output, &BTreeSet::new(), &BTreeSet::new()).expect("store");
+            IdentityStore::from_output(output, &interner, &BTreeSet::new(), &BTreeSet::new())
+                .expect("store");
         assert_eq!(store.records().len(), 2);
         assert_eq!(store.records_for_file(FileId(0)).len(), 1);
         assert_eq!(store.records_for_language(LanguageTag::Go).len(), 2);
@@ -171,11 +176,13 @@ mod tests {
 
     #[test]
     fn from_output_rejects_dangling_call_site_reference() {
+        let interner = crate::core::test_stable_key_interner();
         let output = IdentityProviderOutput {
             records: vec![record(1, 0, IdentityKind::Callsite, Some(99))],
         };
-        let error = IdentityStore::from_output(output, &BTreeSet::new(), &BTreeSet::new())
-            .expect_err("dangling site rejected");
+        let error =
+            IdentityStore::from_output(output, &interner, &BTreeSet::new(), &BTreeSet::new())
+                .expect_err("dangling site rejected");
         assert!(
             error
                 .to_string()
@@ -186,20 +193,23 @@ mod tests {
 
     #[test]
     fn from_output_accepts_valid_call_site_reference() {
+        let interner = crate::core::test_stable_key_interner();
         let mut sites = BTreeSet::new();
         sites.insert(CallSiteId(7));
         let output = IdentityProviderOutput {
             records: vec![record(1, 0, IdentityKind::Callsite, Some(7))],
         };
-        let store =
-            IdentityStore::from_output(output, &sites, &BTreeSet::new()).expect("valid reference");
+        let store = IdentityStore::from_output(output, &interner, &sites, &BTreeSet::new())
+            .expect("valid reference");
         assert_eq!(store.records().len(), 1);
     }
 
     #[test]
     fn empty_output_builds_empty_store() {
+        let interner = crate::core::test_stable_key_interner();
         let store = IdentityStore::from_output(
             IdentityProviderOutput::empty(),
+            &interner,
             &BTreeSet::new(),
             &BTreeSet::new(),
         )

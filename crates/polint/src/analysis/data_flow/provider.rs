@@ -304,7 +304,7 @@ fn derive_extension_models(db: &AnalysisDb, output: &mut DataFlowOutput) {
             language: crate::core::Language::Unknown,
             provider_id: fact.provider_id.clone(),
             model_id: Some(fact.extension_id.clone()),
-            source_stable_key: Some(fact.stable_key.clone()),
+            source_stable_key: Some(interner.resolve(fact.stable_key).to_string()),
             status: DataFlowStatus::Present,
             precision: extension_precision(fact.precision),
             validation: DataFlowValidation::ExtensionValidated,
@@ -317,7 +317,10 @@ fn derive_extension_models(db: &AnalysisDb, output: &mut DataFlowOutput) {
                 FactFamily::DataFlowModel,
                 &[
                     ("kind", format!("{kind:?}")),
-                    ("extension_fact", fact.stable_key.clone()),
+                    (
+                        "extension_fact",
+                        interner.resolve(fact.stable_key).to_string(),
+                    ),
                 ],
             ),
         });

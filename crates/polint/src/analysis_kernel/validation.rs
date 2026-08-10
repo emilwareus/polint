@@ -142,73 +142,73 @@ fn validate_data_flow(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
 }
 
 fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
+    let interner = db.stable_key_interner();
     let type_value_alias_ids = TypeValueAliasIdSets::from_db(db);
 
     check_type_value_alias_stable_keys(
         diagnostics,
         FactFamily::Type,
-        db.type_facts().iter().map(|fact| fact.stable_key.as_str()),
+        &interner,
+        db.type_facts().iter().map(|fact| fact.stable_key),
     );
     check_type_value_alias_stable_keys(
         diagnostics,
         FactFamily::Value,
-        db.value_facts().iter().map(|fact| fact.stable_key.as_str()),
+        &interner,
+        db.value_facts().iter().map(|fact| fact.stable_key),
     );
     check_type_value_alias_stable_keys(
         diagnostics,
         FactFamily::NarrowedType,
-        db.narrowed_type_facts()
-            .iter()
-            .map(|fact| fact.stable_key.as_str()),
+        &interner,
+        db.narrowed_type_facts().iter().map(|fact| fact.stable_key),
     );
     check_type_value_alias_stable_keys(
         diagnostics,
         FactFamily::AllocationToken,
-        db.allocation_tokens()
-            .iter()
-            .map(|fact| fact.stable_key.as_str()),
+        &interner,
+        db.allocation_tokens().iter().map(|fact| fact.stable_key),
     );
     check_type_value_alias_stable_keys(
         diagnostics,
         FactFamily::AccessPath,
-        db.access_path_facts()
-            .iter()
-            .map(|fact| fact.stable_key.as_str()),
+        &interner,
+        db.access_path_facts().iter().map(|fact| fact.stable_key),
     );
     check_type_value_alias_stable_keys(
         diagnostics,
         FactFamily::AliasAnswer,
-        db.alias_answers()
-            .iter()
-            .map(|fact| fact.stable_key.as_str()),
+        &interner,
+        db.alias_answers().iter().map(|fact| fact.stable_key),
     );
     check_type_value_alias_stable_keys(
         diagnostics,
         FactFamily::PointsToConstraint,
+        &interner,
         db.points_to_constraints()
             .iter()
-            .map(|fact| fact.stable_key.as_str()),
+            .map(|fact| fact.stable_key),
     );
     check_type_value_alias_stable_keys(
         diagnostics,
         FactFamily::PointsToSet,
-        db.points_to_sets()
-            .iter()
-            .map(|fact| fact.stable_key.as_str()),
+        &interner,
+        db.points_to_sets().iter().map(|fact| fact.stable_key),
     );
 
     for fact in db.type_facts() {
+        let stable_key = interner.resolve(fact.stable_key);
         validate_type_subject(
             diagnostics,
             &type_value_alias_ids,
-            &fact.stable_key,
+            stable_key.as_ref(),
             &fact.subject,
         );
         validate_optional_type_value_alias_ref(
             diagnostics,
             &type_value_alias_ids.files,
             FactFamily::Type,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "file",
             fact.file,
         );
@@ -216,7 +216,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.functions,
             FactFamily::Type,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "function",
             fact.function,
         );
@@ -224,7 +224,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.bodies,
             FactFamily::Type,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "body",
             fact.body,
         );
@@ -232,7 +232,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.places,
             FactFamily::Type,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "place",
             fact.place,
         );
@@ -240,7 +240,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.cfg_blocks,
             FactFamily::Type,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "cfg_block",
             fact.cfg_block,
         );
@@ -248,25 +248,31 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.operations,
             FactFamily::Type,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "operation",
             fact.operation,
         );
         validate_type_shape_refs(
             diagnostics,
             &type_value_alias_ids,
-            &fact.stable_key,
+            stable_key.as_ref(),
             &fact.shape,
         );
-        validate_type_status_precision(diagnostics, &fact.stable_key, fact.status, fact.precision);
+        validate_type_status_precision(
+            diagnostics,
+            stable_key.as_ref(),
+            fact.status,
+            fact.precision,
+        );
     }
 
     for fact in db.narrowed_type_facts() {
+        let stable_key = interner.resolve(fact.stable_key);
         validate_type_value_alias_ref(
             diagnostics,
             &type_value_alias_ids.places,
             FactFamily::NarrowedType,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "place",
             fact.place,
         );
@@ -274,7 +280,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.type_sets,
             FactFamily::NarrowedType,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "type_set",
             fact.type_set,
         );
@@ -282,7 +288,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.cfg_blocks,
             FactFamily::NarrowedType,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "cfg_block",
             fact.cfg_block,
         );
@@ -290,7 +296,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.operations,
             FactFamily::NarrowedType,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "operation",
             fact.operation,
         );
@@ -298,7 +304,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.places,
             FactFamily::NarrowedType,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "predicate",
             fact.predicate,
         );
@@ -306,7 +312,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.files,
             FactFamily::NarrowedType,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "file",
             fact.file,
         );
@@ -314,7 +320,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.functions,
             FactFamily::NarrowedType,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "function",
             fact.function,
         );
@@ -322,31 +328,37 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.bodies,
             FactFamily::NarrowedType,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "body",
             fact.body,
         );
-        validate_type_status_precision(diagnostics, &fact.stable_key, fact.status, fact.precision);
+        validate_type_status_precision(
+            diagnostics,
+            stable_key.as_ref(),
+            fact.status,
+            fact.precision,
+        );
     }
 
     for fact in db.value_facts() {
+        let stable_key = interner.resolve(fact.stable_key);
         validate_value_subject(
             diagnostics,
             &type_value_alias_ids,
-            &fact.stable_key,
+            stable_key.as_ref(),
             &fact.subject,
         );
         validate_value_kind(
             diagnostics,
             &type_value_alias_ids,
-            &fact.stable_key,
+            stable_key.as_ref(),
             &fact.kind,
         );
         validate_optional_type_value_alias_ref(
             diagnostics,
             &type_value_alias_ids.files,
             FactFamily::Value,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "file",
             fact.file,
         );
@@ -354,7 +366,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.functions,
             FactFamily::Value,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "function",
             fact.function,
         );
@@ -362,19 +374,25 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.bodies,
             FactFamily::Value,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "body",
             fact.body,
         );
-        validate_value_status_precision(diagnostics, &fact.stable_key, fact.status, fact.precision);
+        validate_value_status_precision(
+            diagnostics,
+            stable_key.as_ref(),
+            fact.status,
+            fact.precision,
+        );
     }
 
     for fact in db.allocation_tokens() {
+        let stable_key = interner.resolve(fact.stable_key);
         validate_optional_type_value_alias_ref(
             diagnostics,
             &type_value_alias_ids.files,
             FactFamily::AllocationToken,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "file",
             fact.file,
         );
@@ -382,7 +400,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.functions,
             FactFamily::AllocationToken,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "function",
             fact.function,
         );
@@ -390,7 +408,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.bodies,
             FactFamily::AllocationToken,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "body",
             fact.body,
         );
@@ -398,7 +416,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.places,
             FactFamily::AllocationToken,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "source_place",
             fact.source_place,
         );
@@ -406,7 +424,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.operations,
             FactFamily::AllocationToken,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "source_operation",
             fact.source_operation,
         );
@@ -416,7 +434,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
         {
             diagnostics.push(type_value_alias_diagnostic(
                 FactFamily::AllocationToken,
-                &fact.stable_key,
+                stable_key.as_ref(),
                 "span",
                 reason,
             ));
@@ -424,11 +442,12 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
     }
 
     for fact in db.access_path_facts() {
+        let stable_key = interner.resolve(fact.stable_key);
         validate_type_value_alias_ref(
             diagnostics,
             &type_value_alias_ids.places,
             FactFamily::AccessPath,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "base",
             fact.base,
         );
@@ -436,7 +455,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.files,
             FactFamily::AccessPath,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "file",
             fact.file,
         );
@@ -444,7 +463,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.functions,
             FactFamily::AccessPath,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "function",
             fact.function,
         );
@@ -452,14 +471,14 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.bodies,
             FactFamily::AccessPath,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "body",
             fact.body,
         );
         if fact.depth != fact.projections.len() as u32 {
             diagnostics.push(type_value_alias_diagnostic(
                 FactFamily::AccessPath,
-                &fact.stable_key,
+                stable_key.as_ref(),
                 "depth",
                 "access_path_depth_mismatch",
             ));
@@ -470,7 +489,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
                     diagnostics,
                     &type_value_alias_ids.call_sites,
                     FactFamily::AccessPath,
-                    &fact.stable_key,
+                    stable_key.as_ref(),
                     "projection.call_return",
                     *call,
                 );
@@ -479,27 +498,29 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
     }
 
     for fact in db.points_to_constraints() {
+        let stable_key = interner.resolve(fact.stable_key);
         validate_points_to_constraint_kind(
             diagnostics,
             &type_value_alias_ids,
-            &fact.stable_key,
+            stable_key.as_ref(),
             &fact.kind,
         );
         validate_points_to_status_precision(
             diagnostics,
             FactFamily::PointsToConstraint,
-            &fact.stable_key,
+            stable_key.as_ref(),
             fact.status,
             fact.precision,
         );
     }
 
     for fact in db.points_to_sets() {
+        let stable_key = interner.resolve(fact.stable_key);
         validate_points_to_var(
             diagnostics,
             &type_value_alias_ids,
             FactFamily::PointsToSet,
-            &fact.stable_key,
+            stable_key.as_ref(),
             "variable",
             fact.variable,
         );
@@ -508,7 +529,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
         {
             diagnostics.push(type_value_alias_diagnostic(
                 FactFamily::PointsToSet,
-                &fact.stable_key,
+                stable_key.as_ref(),
                 "budget",
                 "budget_status_mismatch",
             ));
@@ -518,7 +539,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
                 diagnostics,
                 &type_value_alias_ids.object_tokens,
                 FactFamily::PointsToSet,
-                &fact.stable_key,
+                stable_key.as_ref(),
                 "object",
                 *object,
             );
@@ -526,19 +547,20 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
         validate_points_to_status_precision(
             diagnostics,
             FactFamily::PointsToSet,
-            &fact.stable_key,
+            stable_key.as_ref(),
             fact.status,
             fact.precision,
         );
     }
 
     for fact in db.alias_answers() {
+        let stable_key = interner.resolve(fact.stable_key);
         validate_alias_operand(
             db,
             diagnostics,
             &type_value_alias_ids.places,
             &type_value_alias_ids.access_paths,
-            fact.stable_key.as_str(),
+            stable_key.as_ref(),
             fact.left,
         );
         validate_alias_operand(
@@ -546,7 +568,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
             diagnostics,
             &type_value_alias_ids.places,
             &type_value_alias_ids.access_paths,
-            fact.stable_key.as_str(),
+            stable_key.as_ref(),
             fact.right,
         );
         if matches!(fact.status, AliasStatus::MustAlias | AliasStatus::NoAlias)
@@ -554,7 +576,7 @@ fn validate_type_value_alias(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>)
         {
             diagnostics.push(type_value_alias_diagnostic(
                 FactFamily::AliasAnswer,
-                &fact.stable_key,
+                stable_key.as_ref(),
                 "evidence",
                 "overconfident_alias_answer",
             ));
@@ -642,17 +664,19 @@ impl TypeValueAliasIdSets {
     }
 }
 
-fn check_type_value_alias_stable_keys<'a>(
+fn check_type_value_alias_stable_keys(
     diagnostics: &mut Vec<Diagnostic>,
     family: FactFamily,
-    keys: impl Iterator<Item = &'a str>,
+    interner: &crate::core::StableKeyInterner,
+    keys: impl Iterator<Item = crate::core::StableKeyId>,
 ) {
     let mut seen = BTreeSet::new();
     for key in keys {
-        if !seen.insert(key) {
+        let text = interner.resolve(key);
+        if !seen.insert(text.to_string()) {
             diagnostics.push(type_value_alias_diagnostic(
                 family,
-                key,
+                text.as_ref(),
                 "stable_key",
                 "duplicate_stable_key",
             ));
@@ -1453,7 +1477,7 @@ mod type_value_alias_validation {
                     body: None,
                     precision: TypePrecision::ExactLocal,
                     status: TypeStatus::Unsupported,
-                    stable_key: "narrowed:bad".to_string(),
+                    stable_key: crate::core::stable_key_for_test("narrowed:bad"),
                 }],
             },
             values: ValueOutput {
@@ -1469,7 +1493,7 @@ mod type_value_alias_validation {
                     precision: ValuePrecision::Unknown,
                     status: ValueStatus::Present,
                     provenance: ValueProvenance::Native,
-                    stable_key: "value:bad".to_string(),
+                    stable_key: crate::core::stable_key_for_test("value:bad"),
                 }],
                 allocations: vec![AllocationTokenFact {
                     id: AllocationTokenId(0),
@@ -1490,7 +1514,7 @@ mod type_value_alias_validation {
                         end_col: 1,
                     }),
                     provenance: ValueProvenance::Native,
-                    stable_key: "allocation:bad".to_string(),
+                    stable_key: crate::core::stable_key_for_test("allocation:bad"),
                 }],
             },
             access_paths: AccessPathOutput {
@@ -1506,7 +1530,7 @@ mod type_value_alias_validation {
                     function: None,
                     body: None,
                     status: AccessPathStatus::Resolved,
-                    stable_key: "path:bad".to_string(),
+                    stable_key: crate::core::stable_key_for_test("path:bad"),
                 }],
             },
             points_to: PointsToOutput {
@@ -1519,7 +1543,7 @@ mod type_value_alias_validation {
                         },
                         status: PointsToStatus::Present,
                         precision: PointsToPrecision::Unknown,
-                        stable_key: "pt:constraint:object".to_string(),
+                        stable_key: crate::core::stable_key_for_test("pt:constraint:object"),
                     },
                     PointsToConstraintFact {
                         id: PointsToConstraintId(1),
@@ -1529,7 +1553,7 @@ mod type_value_alias_validation {
                         },
                         status: PointsToStatus::Present,
                         precision: PointsToPrecision::Unknown,
-                        stable_key: "pt:constraint:value".to_string(),
+                        stable_key: crate::core::stable_key_for_test("pt:constraint:value"),
                     },
                 ],
                 sets: vec![PointsToSetFact {
@@ -1539,7 +1563,7 @@ mod type_value_alias_validation {
                     status: PointsToStatus::BudgetExceeded,
                     precision: PointsToPrecision::Unknown,
                     budget: PointsToBudgetStatus::WithinBudget,
-                    stable_key: "pt:budget".to_string(),
+                    stable_key: crate::core::stable_key_for_test("pt:budget"),
                 }],
             },
             aliases: AliasOutput {
@@ -1551,7 +1575,7 @@ mod type_value_alias_validation {
                     reason: AliasReason::ExtensionProvided,
                     evidence: Vec::new(),
                     precision: AliasPrecision::Unknown,
-                    stable_key: "alias:bad".to_string(),
+                    stable_key: crate::core::stable_key_for_test("alias:bad"),
                 }],
             },
         });
@@ -1624,7 +1648,7 @@ mod type_value_alias_validation {
                     precision: ValuePrecision::Unknown,
                     status: ValueStatus::Unknown,
                     provenance: ValueProvenance::Generated,
-                    stable_key: "value:call-result".to_string(),
+                    stable_key: crate::core::stable_key_for_test("value:call-result"),
                 }],
                 allocations: Vec::new(),
             },
@@ -1639,7 +1663,7 @@ mod type_value_alias_validation {
                     status: PointsToStatus::Present,
                     precision: PointsToPrecision::FlowInsensitive,
                     budget: PointsToBudgetStatus::WithinBudget,
-                    stable_key: "points-to:value-object".to_string(),
+                    stable_key: crate::core::stable_key_for_test("points-to:value-object"),
                 }],
             },
             ..TypeValueAliasOutput::default()
@@ -1681,7 +1705,7 @@ mod type_value_alias_validation {
             provenance: TypeProvenance::Extension {
                 extension_id: "fixture".to_string(),
             },
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 }
@@ -5818,7 +5842,7 @@ mod tests {
                 extension_id: "demo".to_string(),
                 provider_id: "routes".to_string(),
                 fact_family: "extension.routes".to_string(),
-                stable_key: "route:/a".to_string(),
+                stable_key: crate::core::stable_key_for_test("route:/a"),
                 binding_refs: Vec::new(),
                 precision: crate::analysis::extensions::sinks::ExtensionFactPrecision::Exact,
                 confidence: crate::analysis::extensions::sinks::ExtensionFactConfidence::High,

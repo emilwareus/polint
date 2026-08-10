@@ -28,14 +28,15 @@ pub(crate) fn validate_identity(db: &AnalysisDb, diagnostics: &mut Vec<Diagnosti
         diagnostics,
         db.identity_records()
             .iter()
-            .map(|row| row.stable_key.as_str()),
+            .map(|row| db.resolve_stable_key(row.stable_key).to_string()),
     );
 
     for record in db.identity_records() {
+        let stable_key = db.resolve_stable_key(record.stable_key);
         if !files.contains(&record.file_id) {
             push_diagnostic(
                 diagnostics,
-                &record.stable_key,
+                &stable_key,
                 "file_id",
                 "dangling identity file reference",
             );
@@ -45,7 +46,7 @@ pub(crate) fn validate_identity(db: &AnalysisDb, diagnostics: &mut Vec<Diagnosti
         {
             push_diagnostic(
                 diagnostics,
-                &record.stable_key,
+                &stable_key,
                 "originating_call_site_id",
                 "dangling identity originating call site reference",
             );
@@ -55,23 +56,18 @@ pub(crate) fn validate_identity(db: &AnalysisDb, diagnostics: &mut Vec<Diagnosti
         {
             push_diagnostic(
                 diagnostics,
-                &record.stable_key,
+                &stable_key,
                 "originating_call_target_id",
                 "dangling identity originating call target reference",
             );
         }
         if record.span.start_byte > record.span.end_byte {
-            push_diagnostic(
-                diagnostics,
-                &record.stable_key,
-                "span",
-                "invalid span byte range",
-            );
+            push_diagnostic(diagnostics, &stable_key, "span", "invalid span byte range");
         }
         if record.signature_digest == SignatureDigest([0u8; 16]) {
             push_diagnostic(
                 diagnostics,
-                &record.stable_key,
+                &stable_key,
                 "signature_digest",
                 "signature digest must not be all-zero",
             );
@@ -79,14 +75,14 @@ pub(crate) fn validate_identity(db: &AnalysisDb, diagnostics: &mut Vec<Diagnosti
     }
 }
 
-fn check_duplicate_stable_keys<'a>(
+fn check_duplicate_stable_keys(
     diagnostics: &mut Vec<Diagnostic>,
-    keys: impl Iterator<Item = &'a str>,
+    keys: impl Iterator<Item = String>,
 ) {
     let mut seen = BTreeSet::new();
     for key in keys {
-        if !seen.insert(key) {
-            push_diagnostic(diagnostics, key, "stable_key", "duplicate stable key");
+        if !seen.insert(key.clone()) {
+            push_diagnostic(diagnostics, &key, "stable_key", "duplicate stable key");
         }
     }
 }
@@ -175,7 +171,7 @@ mod tests {
             display_name: Arc::from("T"),
             signature_digest,
             multiplicity: 1,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
             originating_call_site_id: None,
             originating_call_target_id: None,
         }
@@ -241,14 +237,14 @@ mod tests {
         let mut dangling = record(file.0, "identity:dangling-site", false, false);
         dangling.kind = IdentityKind::Callsite;
         dangling.originating_call_site_id = Some(crate::analysis::ids::CallSiteId(42));
-        dangling.stable_key = compute_identity_stable_key(
+        dangling.stable_key = crate::core::stable_key_for_test(&compute_identity_stable_key(
             IdentityKind::Callsite,
             LanguageTag::Go,
             "pkg",
             "pkg.T",
             file,
             &dangling.span,
-        );
+        ));
         db.set_identity_records_for_test(vec![dangling]);
 
         let mut diagnostics = Vec::new();
@@ -269,14 +265,14 @@ mod tests {
         let mut db = base_db();
         let file = db.files()[0].id;
         let span = Span::point(file, 2, 1);
-        let stable_key = compute_identity_stable_key(
+        let stable_key = crate::core::stable_key_for_test(&compute_identity_stable_key(
             IdentityKind::Function,
             LanguageTag::Go,
             "src/main.go",
             "main",
             file,
             &span,
-        );
+        ));
         db.replace_identity_facts(IdentityProviderOutput {
             records: vec![IdentityRecord {
                 id: IdentityRecordId(0),

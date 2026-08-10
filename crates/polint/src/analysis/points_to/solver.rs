@@ -8,7 +8,7 @@ use super::store::PointsToOutput;
 use super::vars;
 use crate::analysis::ids::{ObjectTokenId, PointsToSetId, PtVarId};
 use crate::analysis::solver::budget::BudgetReason;
-use crate::analysis_kernel::{FactFamily, stable_key_text_from_parts};
+use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PointsToBudget {
@@ -288,7 +288,7 @@ impl<'a> Solver<'a> {
                 status,
                 precision,
                 budget: budget_status,
-                stable_key: stable_key_text_from_parts(
+                stable_key: stable_key_from_parts(
                     interner,
                     FactFamily::PointsToSet,
                     &[
@@ -316,7 +316,7 @@ pub(crate) fn output_with_solved_sets(
         constraints,
         sets: solve.sets,
     }
-    .normalized()
+    .normalized(interner)
 }
 
 #[cfg(test)]
@@ -534,7 +534,7 @@ mod tests {
             kind,
             status: PointsToStatus::Present,
             precision: PointsToPrecision::FlowInsensitive,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 }

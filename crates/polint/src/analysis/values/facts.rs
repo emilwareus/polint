@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::analysis::ids::{
     AbstractValueId, AllocationTokenId, MirBodyId, MirOpId, PlaceId, ValueFactId,
 };
-use crate::core::{FileId, FunctionId, Language, Span};
+use crate::core::{FileId, FunctionId, Language, Span, StableKeyId};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ValueFact {
@@ -18,7 +18,7 @@ pub(crate) struct ValueFact {
     pub(crate) precision: ValuePrecision,
     pub(crate) status: ValueStatus,
     pub(crate) provenance: ValueProvenance,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,7 +33,7 @@ pub(crate) struct AllocationTokenFact {
     pub(crate) source_operation: Option<MirOpId>,
     pub(crate) span: Option<Span>,
     pub(crate) provenance: ValueProvenance,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

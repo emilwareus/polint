@@ -11,7 +11,6 @@ use crate::analysis::mir::op::{
     MirAggregateKind, MirOperation, MirOperationKind, MirValue, UnsupportedPrecision,
 };
 use crate::analysis::places::{PlaceFact, PlaceProjection, PlaceRoot, PlaceStatus};
-use crate::analysis::stable_key::semantic_stable_key;
 use crate::analysis::types::facts::{
     NarrowedTypeFact, TypeConfidence, TypeFact, TypePhase, TypePrecision, TypeProvenance,
     TypeShape, TypeStatus, TypeSubject,
@@ -22,7 +21,7 @@ use crate::analysis::values::facts::{
     ValueStatus, ValueSubject,
 };
 use crate::analysis::values::store::ValueOutput;
-use crate::analysis_kernel::FactFamily;
+use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
 use crate::core::{AnalysisDb, FileId, FunctionId, Language};
 
 type RootPlaceKey = (PlaceRoot, Option<FileId>, Option<FunctionId>);
@@ -133,7 +132,7 @@ pub(crate) fn derive_go_type_value_alias(db: &AnalysisDb) -> TypeValueAliasOutpu
         access_paths: AccessPathOutput { access_paths },
         ..TypeValueAliasOutput::default()
     }
-    .normalized()
+    .normalized(interner)
 }
 
 fn type_fact_for_place(
@@ -680,8 +679,8 @@ fn stable_key<const N: usize>(
     interner: &crate::core::StableKeyInterner,
     family: FactFamily,
     parts: [(&'static str, String); N],
-) -> String {
-    semantic_stable_key(interner, family, &parts).into_string()
+) -> crate::core::StableKeyId {
+    stable_key_from_parts(interner, family, &parts)
 }
 
 trait PlaceRootBody {
@@ -789,6 +788,7 @@ mod tests {
     #[test]
     fn go_unsupported_rows_stay_unknown_or_unsupported() {
         let db = db_with_go_mir();
+        let interner = db.stable_key_interner();
         let output = derive_go_type_value_alias(&db);
 
         assert!(output.types.types.iter().any(|row| {
@@ -796,7 +796,7 @@ mod tests {
                 && matches!(row.shape, TypeShape::Unsupported { .. })
         }));
         assert!(!output.types.types.iter().any(|row| {
-            row.stable_key.contains("unsupported")
+            interner.resolve(row.stable_key).contains("unsupported")
                 && row.status == TypeStatus::Present
                 && row.precision == TypePrecision::ExactLocal
         }));

@@ -760,7 +760,7 @@ mod tests {
             confidence: RefinedCallConfidence::High,
             evidence: Vec::new(),
             input_stable_keys: Vec::new(),
-            stable_key: format!("refined:{id}"),
+            stable_key: crate::core::stable_key_for_test(&format!("refined:{id}")),
         }
     }
 

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::analysis::ids::{AccessPathId, CallSiteId, MirBodyId, PlaceId};
-use crate::core::{FileId, FunctionId, Language};
+use crate::core::{FileId, FunctionId, Language, StableKeyId};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct AccessPathFact {
@@ -14,7 +14,7 @@ pub(crate) struct AccessPathFact {
     pub(crate) function: Option<FunctionId>,
     pub(crate) body: Option<MirBodyId>,
     pub(crate) status: AccessPathStatus,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use super::facts::{AccessPathFact, AccessPathStatus};
 use crate::analysis::ids::{AccessPathId, PlaceId};
-use crate::core::{FunctionId, Language};
+use crate::core::{FunctionId, Language, StableKeyInterner};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct AccessPathOutput {
@@ -10,9 +10,10 @@ pub(crate) struct AccessPathOutput {
 }
 
 impl AccessPathOutput {
-    pub(crate) fn normalized(mut self) -> Self {
+    pub(crate) fn normalized(mut self, interner: &StableKeyInterner) -> Self {
         self.access_paths.sort_by(|left, right| {
-            (left.stable_key.as_str(), left.id).cmp(&(right.stable_key.as_str(), right.id))
+            (interner.resolve(left.stable_key), left.id)
+                .cmp(&(interner.resolve(right.stable_key), right.id))
         });
         for (index, row) in self.access_paths.iter_mut().enumerate() {
             row.id = AccessPathId(index as u64);
@@ -35,8 +36,8 @@ impl AccessPathStore {
         dead_code,
         reason = "Compatibility callers can still pass unnormalized output; providers use from_normalized_output."
     )]
-    pub(crate) fn from_output(output: AccessPathOutput) -> Self {
-        Self::from_normalized_output(output.normalized())
+    pub(crate) fn from_output(output: AccessPathOutput, interner: &StableKeyInterner) -> Self {
+        Self::from_normalized_output(output.normalized(interner))
     }
 
     pub(crate) fn from_normalized_output(output: AccessPathOutput) -> Self {
@@ -80,18 +81,22 @@ mod tests {
             function: None,
             body: None,
             status: AccessPathStatus::Resolved,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
     #[test]
     fn access_path_output_sorts_by_stable_key_and_reassigns_ids() {
+        let interner = crate::core::test_stable_key_interner();
         let output = AccessPathOutput {
             access_paths: vec![access_path(8, "path:z"), access_path(2, "path:a")],
         }
-        .normalized();
+        .normalized(&interner);
 
-        assert_eq!(output.access_paths[0].stable_key, "path:a");
+        assert_eq!(
+            interner.resolve(output.access_paths[0].stable_key).as_ref(),
+            "path:a"
+        );
         assert_eq!(output.access_paths[0].id, AccessPathId(0));
         assert_eq!(output.access_paths[1].id, AccessPathId(1));
     }

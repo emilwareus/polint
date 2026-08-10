@@ -4,7 +4,7 @@ use super::store::AliasOutput;
 use crate::analysis::access_paths::facts::AccessPathFact;
 use crate::analysis::ids::AliasAnswerId;
 use crate::analysis::points_to::facts::PointsToSetFact;
-use crate::analysis_kernel::{FactFamily, stable_key_text_from_parts};
+use crate::analysis_kernel::{FactFamily, stable_key_from_parts};
 
 pub(crate) const MAX_PROVIDER_STACK_PAIRS: usize = 64;
 
@@ -40,7 +40,7 @@ pub(crate) fn derive_alias_answers(
             answers.push(index.answer(interner, *left, *right));
         }
     }
-    AliasOutput { answers }.normalized()
+    AliasOutput { answers }.normalized(interner)
 }
 
 fn budget_exceeded_answer(
@@ -56,7 +56,7 @@ fn budget_exceeded_answer(
         reason: AliasReason::BudgetExceeded,
         evidence: vec!["provider-stack alias pair budget exceeded".to_string()],
         precision: AliasPrecision::Unknown,
-        stable_key: stable_key_text_from_parts(
+        stable_key: stable_key_from_parts(
             interner,
             FactFamily::AliasAnswer,
             &[
@@ -145,7 +145,7 @@ mod tests {
             function: None,
             body: None,
             status: AccessPathStatus::Partial,
-            stable_key: format!("path:{}", id.0),
+            stable_key: crate::core::stable_key_for_test(&format!("path:{}", id.0)),
         }
     }
 
@@ -157,7 +157,7 @@ mod tests {
             status: PointsToStatus::Present,
             precision: PointsToPrecision::FlowInsensitive,
             budget: PointsToBudgetStatus::WithinBudget,
-            stable_key: format!("set:{}", variable.0),
+            stable_key: crate::core::stable_key_for_test(&format!("set:{}", variable.0)),
         }
     }
 }

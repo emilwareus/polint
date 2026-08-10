@@ -830,9 +830,9 @@
       "branch": null,
       "dispatched_at": "2026-08-10T16:59:58+02:00",
       "attempts": 1,
-      "slice": "rest-remaining",
+      "slice": null,
       "fact_family_locks": [],
-      "note": "analysis_mid MERGED@5005df4e; paused \u2014 do not auto-dispatch next rest until human says continue",
+      "note": "rest-small-facts MERGED@00c25aed; remaining rest families still open (summaries/solver/slicing/residuals); T-INTERN-B not complete",
       "slices_done": [
         "symbols",
         "mir",
@@ -841,9 +841,16 @@
         "rest-semantic",
         "rest-frontends",
         "rest-module-graph",
-        "rest-analysis-mid"
+        "rest-analysis-mid",
+        "rest-small-facts"
       ],
-      "updated_at": "2026-08-10T19:44:40+02:00"
+      "updated_at": "2026-08-10T23:03:50+02:00",
+      "slices": {
+        "rest-small-facts": {
+          "commit": "00c25aed",
+          "merged_at": "2026-08-10T23:03:55+02:00"
+        }
+      }
     },
     "T-INTERN-C": {
       "state": "BLOCKED",
@@ -928,7 +935,7 @@
   },
   "integration_branch": "static-analysis-architecture-review",
   "never_merge_to_main": true,
-  "integration_head": "5005df4e",
+  "integration_head": "00c25aed",
   "m0_gate": {
     "status": "PASS",
     "completed_at": "2026-08-08T11:52:00+02:00",
@@ -1080,6 +1087,11 @@
       "at": "2026-08-10T19:44:40+02:00",
       "event": "T-INTERN-B rest-analysis-mid MERGED",
       "commit": "5005df4e"
+    },
+    {
+      "at": "2026-08-10T23:03:55+02:00",
+      "event": "T-INTERN-B rest-small-facts MERGED",
+      "commit": "00c25aed"
     }
   ],
   "ready": [],
