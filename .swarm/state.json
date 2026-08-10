@@ -832,7 +832,7 @@
       "attempts": 1,
       "slice": null,
       "fact_family_locks": [],
-      "note": "rest-solver-summaries commit pending; fact_family lock released; T-INTERN-B not complete",
+      "note": "rest-solver-summaries MERGED@1a2d6238; remaining residual/debug/wire + T-INTERN-C; T-INTERN-B not complete",
       "slices_done": [
         "symbols",
         "mir",
@@ -845,15 +845,15 @@
         "rest-small-facts",
         "rest-solver-summaries"
       ],
-      "updated_at": "2026-08-10T23:38:30+02:00",
+      "updated_at": "2026-08-10T23:38:35+02:00",
       "slices": {
         "rest-small-facts": {
           "commit": "15aaf817",
           "merged_at": "2026-08-10T23:04:25+02:00"
         },
         "rest-solver-summaries": {
-          "commit": "PENDING",
-          "merged_at": "2026-08-10T23:38:30+02:00"
+          "commit": "1a2d6238",
+          "merged_at": "2026-08-10T23:38:35+02:00"
         }
       }
     },
@@ -940,7 +940,7 @@
   },
   "integration_branch": "static-analysis-architecture-review",
   "never_merge_to_main": true,
-  "integration_head": "0c6dc64d",
+  "integration_head": "1a2d6238",
   "m0_gate": {
     "status": "PASS",
     "completed_at": "2026-08-08T11:52:00+02:00",
@@ -1036,7 +1036,8 @@
     "2026-08-08T18:57:24+02:00: W2.5 IdentityStore landed @ 85a316fb; AnalysisDb fields=57; main untouched",
     "2026-08-10T23:16:28+02:00: T-INTERN-B claimed fact_family:solver_summaries_slicing for rest-solver-summaries slice",
     "2026-08-10T23:37:59+02:00: T-INTERN-B rest-solver-summaries slice complete; released fact_family:solver_summaries_slicing; T-INTERN-B remains open",
-    "2026-08-10T23:38:15+02:00: T-INTERN-B rest-solver-summaries landed @0c6dc64d; fact_family lock released; T-INTERN-B remains open"
+    "2026-08-10T23:38:15+02:00: T-INTERN-B rest-solver-summaries landed @0c6dc64d; fact_family lock released; T-INTERN-B remains open",
+    "2026-08-10T23:38:35+02:00: T-INTERN-B rest-solver-summaries landed @1a2d6238; fact_family lock released; T-INTERN-B remains open"
   ],
   "events": [
     "2026-08-08T15:10:20+02:00: W2.2d+e landed FF @271ccd15; core/mod.rs 8739 LOC; capability+rule extracted; main untouched",
@@ -1102,9 +1103,9 @@
       "commit": "15aaf817"
     },
     {
-      "at": "2026-08-10T23:38:15+02:00",
+      "at": "2026-08-10T23:38:35+02:00",
       "event": "T-INTERN-B rest-solver-summaries MERGED",
-      "commit": "0c6dc64d"
+      "commit": "1a2d6238"
     }
   ],
   "ready": [],

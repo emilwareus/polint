@@ -83,3 +83,6 @@ Diagnosis:
 T-INTERN-B still open for residual/debug/wire buckets above. T-INTERN-C remains
 blocked on full B (`stable_key: String` count → 0 including FactMeta).
 
+## Landing
+
+- Feat commit: 
