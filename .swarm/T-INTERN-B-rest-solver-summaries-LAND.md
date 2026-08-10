@@ -85,4 +85,5 @@ blocked on full B (`stable_key: String` count → 0 including FactMeta).
 
 ## Landing
 
-- Feat commit: 
+- Feat commit: `1a2d62387820060178dba5f5626c8fc645fef88a`
+- Swarm land: `f3284061`
