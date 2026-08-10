@@ -827,14 +827,16 @@
         "T-INTERN-A"
       ],
       "created_at": "2026-08-10T10:04:15+02:00",
-      "branch": "swarm/T-INTERN-B-symbols",
-      "dispatched_at": "2026-08-10T12:03:01+02:00",
+      "branch": "swarm/T-INTERN-B-mir",
+      "dispatched_at": "2026-08-10T13:46:49+02:00",
       "attempts": 1,
-      "slice": "symbols",
+      "slice": "mir",
       "fact_family_locks": [
-        "symbols",
-        "definitions",
-        "references"
+        "mir"
+      ],
+      "note": "symbols MERGED@e9ef53b3; next MIR",
+      "slices_done": [
+        "symbols"
       ]
     },
     "T-INTERN-C": {
@@ -869,17 +871,9 @@
   "locks": {
     "golden": null,
     "fact_family": {},
-    "fact_family:symbols": {
+    "fact_family:mir": {
       "holder": "T-INTERN-B",
-      "at": "2026-08-10T12:03:01+02:00"
-    },
-    "fact_family:definitions": {
-      "holder": "T-INTERN-B",
-      "at": "2026-08-10T12:03:01+02:00"
-    },
-    "fact_family:references": {
-      "holder": "T-INTERN-B",
-      "at": "2026-08-10T12:03:01+02:00"
+      "at": "2026-08-10T13:46:49+02:00"
     }
   },
   "milestone": "PRE-SHIP",
@@ -932,7 +926,7 @@
   },
   "integration_branch": "static-analysis-architecture-review",
   "never_merge_to_main": true,
-  "integration_head": "3564fe3d",
+  "integration_head": "e9ef53b3",
   "m0_gate": {
     "status": "PASS",
     "completed_at": "2026-08-08T11:52:00+02:00",
@@ -1044,7 +1038,12 @@
     "2026-08-08T16:01:26+02:00: W2.2 MERGED @d43b371f; AnalysisDb extracted; mod barrel+tests; READY W2.3+W2.4; main untouched",
     "2026-08-08T16:28:48+02:00: W2.3 MERGED-NOOP (ESCALATE no RTA win); W2.4 steps1-4 landed @ 8fd7c456; tip advanced; W2.5 blocked (interning model wrong); main untouched",
     "2026-08-08T18:54:16+02:00: W2.5 progress tip 8a42a69d; AnalysisDb fields 102\u219259; no ts_/go_semantic_ flats; main untouched",
-    "2026-08-08T19:11:03+02:00: W2.5 MERGED FF @acde3818; AnalysisDb fields=5; fact_family locks cleared; main untouched"
+    "2026-08-08T19:11:03+02:00: W2.5 MERGED FF @acde3818; AnalysisDb fields=5; fact_family locks cleared; main untouched",
+    {
+      "at": "2026-08-10T13:46:49+02:00",
+      "event": "T-INTERN-B symbols MERGED",
+      "commit": "e9ef53b3"
+    }
   ],
   "ready": [],
   "BLOCKED": [],
