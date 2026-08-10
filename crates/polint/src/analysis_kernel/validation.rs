@@ -1241,6 +1241,7 @@ mod abstract_domains {
 
     fn base_db() -> AnalysisDb {
         let mut db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
         let file = db.add_file(
             PathBuf::from("src/app.ts"),
             "src/app.ts".to_string(),
@@ -1265,9 +1266,9 @@ mod abstract_domains {
                 function: FunctionId(0),
                 package: None,
                 module: None,
-                owner_stable_key: "function:app".to_string(),
+                owner_stable_key: interner.intern("function:app".to_string()),
                 span: span(file),
-                stable_key: "body:app".to_string(),
+                stable_key: interner.intern("body:app".to_string()),
                 status: MirStatus::Partial,
             }],
             places: vec![PlaceFact {
@@ -1280,7 +1281,7 @@ mod abstract_domains {
                     name: "value".to_string(),
                 },
                 projections: Vec::new(),
-                stable_key: "place:value".to_string(),
+                stable_key: interner.intern("place:value".to_string()),
                 status: PlaceStatus::Partial,
             }],
             operations: vec![MirOperation {
@@ -1295,7 +1296,7 @@ mod abstract_domains {
                     },
                     mode: AssignMode::DeclarationBinding,
                 },
-                stable_key: "op:assign".to_string(),
+                stable_key: interner.intern("op:assign".to_string()),
                 status: MirStatus::Partial,
             }],
             unsupported: Vec::new(),
@@ -1706,13 +1707,27 @@ mod semantic_mir {
     #[test]
     fn semantic_mir_validation_reports_malformed_rows_with_required_evidence() {
         let mut db = base_db();
+        let interner = db.stable_key_interner();
         db.replace_semantic_mir(MirOutput {
             bodies: vec![
-                body(0, FunctionId(0), span(FileId(0), 0, 20), "body:dup"),
-                body(1, FunctionId(99), span(FileId(0), 0, 999), "body:dup"),
+                body(
+                    &interner,
+                    0,
+                    FunctionId(0),
+                    span(FileId(0), 0, 20),
+                    "body:dup",
+                ),
+                body(
+                    &interner,
+                    1,
+                    FunctionId(99),
+                    span(FileId(0), 0, 999),
+                    "body:dup",
+                ),
             ],
             places: vec![
                 place(
+                    &interner,
                     0,
                     FunctionId(99),
                     vec![PlaceProjection::IndexUnknown {
@@ -1720,7 +1735,7 @@ mod semantic_mir {
                     }],
                     "place:bad",
                 ),
-                call_return_place(1, "place:return"),
+                call_return_place(&interner, 1, "place:return"),
             ],
             operations: vec![MirOperation {
                 id: MirOpId(0),
@@ -1735,7 +1750,7 @@ mod semantic_mir {
                     arguments: vec![PlaceId(0)],
                     return_place: PlaceId(1),
                 },
-                stable_key: "op:call".to_string(),
+                stable_key: interner.intern("op:call".to_string()),
                 status: MirStatus::Partial,
             }],
             unsupported: vec![UnsupportedSemanticFact {
@@ -1752,7 +1767,7 @@ mod semantic_mir {
                 conservative_action: ConservativeAction::HavocAffectedPlaces,
                 precision: UnsupportedPrecision::Unsupported,
                 status: MirStatus::Unsupported,
-                stable_key: "unsupported:bad".to_string(),
+                stable_key: interner.intern("unsupported:bad".to_string()),
             }],
             ..MirOutput::default()
         })
@@ -1784,8 +1799,15 @@ mod semantic_mir {
     #[test]
     fn semantic_mir_validation_rejects_exact_provider_precision() {
         let mut db = base_db();
+        let interner = db.stable_key_interner();
         db.replace_semantic_mir(MirOutput {
-            bodies: vec![body(0, FunctionId(0), span(FileId(0), 0, 20), "body:ok")],
+            bodies: vec![body(
+                &interner,
+                0,
+                FunctionId(0),
+                span(FileId(0), 0, 20),
+                "body:ok",
+            )],
             places: Vec::new(),
             operations: Vec::new(),
             unsupported: Vec::new(),
@@ -1843,7 +1865,13 @@ mod semantic_mir {
         db
     }
 
-    fn body(id: u64, function: FunctionId, span: Span, stable_key: &str) -> MirBody {
+    fn body(
+        interner: &crate::core::StableKeyInterner,
+        id: u64,
+        function: FunctionId,
+        span: Span,
+        stable_key: &str,
+    ) -> MirBody {
         MirBody {
             id: MirBodyId(id),
             language: Language::TypeScript,
@@ -1851,14 +1879,15 @@ mod semantic_mir {
             function,
             package: None,
             module: None,
-            owner_stable_key: format!("function:{}", function.0),
+            owner_stable_key: interner.intern(format!("function:{}", function.0)),
             span,
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key.to_string()),
             status: MirStatus::Partial,
         }
     }
 
     fn place(
+        interner: &crate::core::StableKeyInterner,
         id: u64,
         function: FunctionId,
         projections: Vec<PlaceProjection>,
@@ -1874,12 +1903,16 @@ mod semantic_mir {
                 name: "value".to_string(),
             },
             projections,
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key.to_string()),
             status: PlaceStatus::Partial,
         }
     }
 
-    fn call_return_place(id: u64, stable_key: &str) -> PlaceFact {
+    fn call_return_place(
+        interner: &crate::core::StableKeyInterner,
+        id: u64,
+        stable_key: &str,
+    ) -> PlaceFact {
         PlaceFact {
             id: PlaceId(id),
             language: Language::TypeScript,
@@ -1889,7 +1922,7 @@ mod semantic_mir {
                 call: CallSiteId(0),
             },
             projections: Vec::new(),
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key.to_string()),
             status: PlaceStatus::Partial,
         }
     }

@@ -568,6 +568,7 @@ mod calls_provider {
             cyclomatic_complexity: 1,
             calls: Vec::new(),
         });
+        let interner = db.stable_key_interner();
         db.replace_semantic_mir(MirOutput {
             bodies: vec![MirBody {
                 id: MirBodyId(0),
@@ -576,9 +577,9 @@ mod calls_provider {
                 function,
                 package: None,
                 module: None,
-                owner_stable_key: "function:app".to_string(),
+                owner_stable_key: interner.intern("function:app".to_string()),
                 span: span(file, 1, 0),
-                stable_key: "mir-body:app".to_string(),
+                stable_key: interner.intern("mir-body:app".to_string()),
                 status: MirStatus::Partial,
             }],
             places: vec![
@@ -592,7 +593,7 @@ mod calls_provider {
                         name: "callback".to_string(),
                     },
                     projections: Vec::new(),
-                    stable_key: "place:callback".to_string(),
+                    stable_key: interner.intern("place:callback".to_string()),
                     status: PlaceStatus::Partial,
                 },
                 PlaceFact {
@@ -604,7 +605,7 @@ mod calls_provider {
                         call: CallSiteId(10),
                     },
                     projections: Vec::new(),
-                    stable_key: "place:return".to_string(),
+                    stable_key: interner.intern("place:return".to_string()),
                     status: PlaceStatus::Partial,
                 },
             ],
@@ -619,7 +620,7 @@ mod calls_provider {
                     arguments: Vec::new(),
                     return_place: PlaceId(2),
                 },
-                stable_key: "mir-op:callback-call".to_string(),
+                stable_key: interner.intern("mir-op:callback-call".to_string()),
                 status: MirStatus::Partial,
             }],
             unsupported: Vec::new(),

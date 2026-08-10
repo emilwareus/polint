@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use crate::analysis::calls::facts::{
     CallCallee, CallPrecision, CallSiteFact, CallSyntaxKind, CallTargetStatus, UnresolvedCallReason,
 };
-use crate::analysis::ids::{MirBodyId, MirValueId, PlaceId};
+use crate::analysis::ids::{MirValueId, PlaceId};
 use crate::analysis::mir::body::MirBody;
 use crate::analysis::mir::op::{MirOperation, MirOperationKind, MirValue};
 use crate::analysis::places::{PlaceFact, PlaceProjection, PlaceRoot};
@@ -37,17 +37,17 @@ pub(crate) fn extract_call_sites(db: &AnalysisDb) -> Vec<CallSiteFact> {
     call_operations.sort_by(
         |(left_body, left_operation), (right_body, right_operation)| {
             (
-                left_body.stable_key.as_str(),
+                db.resolve_stable_key(left_body.stable_key),
                 span_key(&left_operation.span),
                 left_operation.ordinal,
-                left_operation.stable_key.as_str(),
+                db.resolve_stable_key(left_operation.stable_key),
                 left_operation.id,
             )
                 .cmp(&(
-                    right_body.stable_key.as_str(),
+                    db.resolve_stable_key(right_body.stable_key),
                     span_key(&right_operation.span),
                     right_operation.ordinal,
-                    right_operation.stable_key.as_str(),
+                    db.resolve_stable_key(right_operation.stable_key),
                     right_operation.id,
                 ))
         },
@@ -74,7 +74,6 @@ pub(crate) fn extract_call_sites(db: &AnalysisDb) -> Vec<CallSiteFact> {
         })
     };
 
-    let mut same_span_ordinals = BTreeMap::new();
     let mut sites = Vec::with_capacity(call_operations.len());
     for (body, operation) in call_operations {
         let MirOperationKind::Call {
@@ -86,14 +85,9 @@ pub(crate) fn extract_call_sites(db: &AnalysisDb) -> Vec<CallSiteFact> {
         else {
             continue;
         };
-        let same_span = same_span_ordinal(&mut same_span_ordinals, body.id, &operation.span);
         let (call_callee, receiver, kind, callee_shape) =
             call_callee(callee, body.language, &places);
-        let operation_stable_key = if operation.stable_key.trim().is_empty() {
-            format!("same_span:{same_span:06}")
-        } else {
-            operation.stable_key.clone()
-        };
+        let operation_stable_key = db.resolve_stable_key(operation.stable_key);
 
         sites.push(CallSiteFact {
             id: *site,
@@ -127,17 +121,6 @@ pub(crate) fn extract_call_sites(db: &AnalysisDb) -> Vec<CallSiteFact> {
         (left.stable_key.as_str(), left.id).cmp(&(right.stable_key.as_str(), right.id))
     });
     sites
-}
-
-fn same_span_ordinal(
-    ordinals: &mut BTreeMap<(MirBodyId, String), u32>,
-    body: MirBodyId,
-    span: &Span,
-) -> u32 {
-    let next = ordinals.entry((body, span_key(span))).or_insert(0);
-    let ordinal = *next;
-    *next += 1;
-    ordinal
 }
 
 fn call_callee(
@@ -574,7 +557,11 @@ mod tests {
         (file, function)
     }
 
-    fn body(file: FileId, function: FunctionId, language: Language) -> MirBody {
+    fn key(db: &AnalysisDb, text: impl Into<String>) -> crate::core::StableKeyId {
+        db.stable_key_interner().intern(text.into())
+    }
+
+    fn body(db: &AnalysisDb, file: FileId, function: FunctionId, language: Language) -> MirBody {
         MirBody {
             id: MirBodyId(1),
             language,
@@ -582,14 +569,15 @@ mod tests {
             function,
             package: None,
             module: None,
-            owner_stable_key: "function:caller:stable".to_string(),
+            owner_stable_key: key(db, "function:caller:stable"),
             span: span(file, 1, 0),
-            stable_key: "mir-body:caller".to_string(),
+            stable_key: key(db, "mir-body:caller"),
             status: MirStatus::Resolved,
         }
     }
 
     fn place(
+        db: &AnalysisDb,
         id: u64,
         file: FileId,
         function: FunctionId,
@@ -603,12 +591,13 @@ mod tests {
             function: Some(function),
             root,
             projections,
-            stable_key: format!("place:{id}"),
+            stable_key: key(db, format!("place:{id}")),
             status: PlaceStatus::Resolved,
         }
     }
 
     fn call_op(
+        db: &AnalysisDb,
         id: u64,
         ordinal: u32,
         file: FileId,
@@ -627,7 +616,7 @@ mod tests {
                 arguments,
                 return_place: PlaceId(9),
             },
-            stable_key: format!("mir-op:call:{id}"),
+            stable_key: key(db, format!("mir-op:call:{id}")),
             status: MirStatus::Resolved,
         }
     }
@@ -637,9 +626,10 @@ mod tests {
         let mut db = AnalysisDb::new();
         let (file, function) = add_file_and_function(&mut db, "src/app.ts");
         db.replace_semantic_mir(MirOutput {
-            bodies: vec![body(file, function, Language::TypeScript)],
+            bodies: vec![body(&db, file, function, Language::TypeScript)],
             places: vec![
                 place(
+                    &db,
                     1,
                     file,
                     function,
@@ -650,6 +640,7 @@ mod tests {
                     Vec::new(),
                 ),
                 place(
+                    &db,
                     2,
                     file,
                     function,
@@ -660,6 +651,7 @@ mod tests {
                     Vec::new(),
                 ),
                 place(
+                    &db,
                     9,
                     file,
                     function,
@@ -670,6 +662,7 @@ mod tests {
                 ),
             ],
             operations: vec![call_op(
+                &db,
                 1,
                 0,
                 file,
@@ -712,8 +705,9 @@ mod tests {
         let (file, function) = add_file_and_function(&mut db, "src/iife.ts");
         let anonymous = anonymous_callable_name(1, 14);
         db.replace_semantic_mir(MirOutput {
-            bodies: vec![body(file, function, Language::TypeScript)],
+            bodies: vec![body(&db, file, function, Language::TypeScript)],
             places: vec![place(
+                &db,
                 9,
                 file,
                 function,
@@ -723,6 +717,7 @@ mod tests {
                 Vec::new(),
             )],
             operations: vec![call_op(
+                &db,
                 1,
                 0,
                 file,
@@ -754,9 +749,10 @@ mod tests {
         let mut db = AnalysisDb::new();
         let (file, function) = add_file_and_function(&mut db, "src/app.ts");
         db.replace_semantic_mir(MirOutput {
-            bodies: vec![body(file, function, Language::TypeScript)],
+            bodies: vec![body(&db, file, function, Language::TypeScript)],
             places: vec![
                 place(
+                    &db,
                     1,
                     file,
                     function,
@@ -767,6 +763,7 @@ mod tests {
                     Vec::new(),
                 ),
                 place(
+                    &db,
                     9,
                     file,
                     function,
@@ -777,6 +774,7 @@ mod tests {
                 ),
             ],
             operations: vec![call_op(
+                &db,
                 1,
                 0,
                 file,
@@ -807,9 +805,10 @@ mod tests {
         let mut first = AnalysisDb::new();
         let (file, function) = add_file_and_function(&mut first, "src/app.ts");
         let output = MirOutput {
-            bodies: vec![body(file, function, Language::TypeScript)],
+            bodies: vec![body(&first, file, function, Language::TypeScript)],
             places: vec![
                 place(
+                    &first,
                     1,
                     file,
                     function,
@@ -820,6 +819,7 @@ mod tests {
                     Vec::new(),
                 ),
                 place(
+                    &first,
                     2,
                     file,
                     function,
@@ -830,6 +830,7 @@ mod tests {
                     Vec::new(),
                 ),
                 place(
+                    &first,
                     9,
                     file,
                     function,
@@ -840,8 +841,24 @@ mod tests {
                 ),
             ],
             operations: vec![
-                call_op(2, 1, file, 20, MirValue::Place(PlaceId(2)), Vec::new()),
-                call_op(1, 0, file, 10, MirValue::Place(PlaceId(1)), Vec::new()),
+                call_op(
+                    &first,
+                    2,
+                    1,
+                    file,
+                    20,
+                    MirValue::Place(PlaceId(2)),
+                    Vec::new(),
+                ),
+                call_op(
+                    &first,
+                    1,
+                    0,
+                    file,
+                    10,
+                    MirValue::Place(PlaceId(1)),
+                    Vec::new(),
+                ),
             ],
             unsupported: Vec::new(),
             ..MirOutput::default()
@@ -853,7 +870,12 @@ mod tests {
         let mut second = AnalysisDb::new();
         let (second_file, second_function) = add_file_and_function(&mut second, "src/app.ts");
         let mut reordered = output;
-        reordered.bodies = vec![body(second_file, second_function, Language::TypeScript)];
+        reordered.bodies = vec![body(
+            &second,
+            second_file,
+            second_function,
+            Language::TypeScript,
+        )];
         reordered.operations.reverse();
         second
             .replace_semantic_mir(reordered)

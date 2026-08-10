@@ -46,7 +46,7 @@ impl<'db> CfgLowering<'db> {
 
     fn lower(&mut self, interner: &crate::core::StableKeyInterner) {
         let mut bodies = self.db.mir_bodies().iter().collect::<Vec<_>>();
-        bodies.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+        bodies.sort_by_cached_key(|body| interner.resolve(body.stable_key));
 
         for body in bodies {
             let has_exceptional_control = self.db.mir_terminators().iter().any(|terminator| {
@@ -78,10 +78,7 @@ impl<'db> CfgLowering<'db> {
             .iter()
             .filter(|block| block.body == body)
             .collect::<Vec<_>>();
-        blocks.sort_by(|left, right| {
-            (left.ordinal, left.stable_key.as_str())
-                .cmp(&(right.ordinal, right.stable_key.as_str()))
-        });
+        blocks.sort_by_cached_key(|block| (block.ordinal, interner.resolve(block.stable_key)));
         let unwind_targets = self
             .db
             .mir_terminators()
@@ -535,7 +532,7 @@ fn unsupported_control_flow_fact(
                     "span",
                     format!("{}..{}", row.span.start_byte, row.span.end_byte),
                 ),
-                ("source", row.stable_key.clone()),
+                ("source", interner.resolve(row.stable_key).to_string()),
             ],
         )
         .into_string(),
@@ -608,7 +605,7 @@ mod tests {
         }
     }
 
-    fn body(language: Language) -> MirBody {
+    fn body(interner: &crate::core::StableKeyInterner, language: Language) -> MirBody {
         MirBody {
             id: MirBodyId(0),
             language,
@@ -616,14 +613,14 @@ mod tests {
             function: FunctionId(1),
             package: None,
             module: None,
-            owner_stable_key: "ts:function:f".to_string(),
+            owner_stable_key: interner.intern("ts:function:f".to_string()),
             span: span(0, 10),
-            stable_key: format!("{}:body:f", language_label(language)),
+            stable_key: interner.intern(format!("{}:body:f", language_label(language))),
             status: MirStatus::Partial,
         }
     }
 
-    fn assign(id: u64, ordinal: u32) -> MirOperation {
+    fn assign(interner: &crate::core::StableKeyInterner, id: u64, ordinal: u32) -> MirOperation {
         MirOperation {
             id: MirOpId(id),
             body: MirBodyId(0),
@@ -634,24 +631,25 @@ mod tests {
                 value: MirValue::Place(PlaceId(1)),
                 mode: AssignMode::Overwrite,
             },
-            stable_key: format!("ts:assign:{ordinal}"),
+            stable_key: interner.intern(format!("ts:assign:{ordinal}")),
             status: MirStatus::Partial,
         }
     }
 
-    fn return_op(id: u64, ordinal: u32) -> MirOperation {
+    fn return_op(interner: &crate::core::StableKeyInterner, id: u64, ordinal: u32) -> MirOperation {
         MirOperation {
             id: MirOpId(id),
             body: MirBodyId(0),
             ordinal,
             span: span(ordinal as usize, ordinal as usize + 1),
             kind: MirOperationKind::Return { value: None },
-            stable_key: format!("ts:return:{ordinal}"),
+            stable_key: interner.intern(format!("ts:return:{ordinal}")),
             status: MirStatus::Partial,
         }
     }
 
     fn unsupported(
+        interner: &crate::core::StableKeyInterner,
         id: u64,
         operation: Option<MirOpId>,
         construct: &str,
@@ -671,11 +669,16 @@ mod tests {
             conservative_action: ConservativeAction::HavocAffectedPlaces,
             precision: UnsupportedPrecision::Unsupported,
             status: MirStatus::Unsupported,
-            stable_key: format!("ts:unsupported:{construct}:{id}"),
+            stable_key: interner.intern(format!("ts:unsupported:{construct}:{id}")),
         }
     }
 
-    fn place(id: u64, name: &str, language: Language) -> PlaceFact {
+    fn place(
+        interner: &crate::core::StableKeyInterner,
+        id: u64,
+        name: &str,
+        language: Language,
+    ) -> PlaceFact {
         PlaceFact {
             id: PlaceId(id),
             language,
@@ -686,7 +689,7 @@ mod tests {
                 name: name.to_string(),
             },
             projections: Vec::new(),
-            stable_key: format!("ts:place:{name}"),
+            stable_key: interner.intern(format!("ts:place:{name}")),
             status: PlaceStatus::Resolved,
         }
     }
@@ -696,6 +699,8 @@ mod tests {
         operations: Vec<MirOperation>,
         unsupported: Vec<UnsupportedSemanticFact>,
     ) -> AnalysisDb {
+        let mut db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
         let statements = operations
             .iter()
             .enumerate()
@@ -704,7 +709,7 @@ mod tests {
                 body: MirBodyId(0),
                 ordinal: operation.ordinal,
                 operation: operation.id,
-                stable_key: format!("statement:{index}"),
+                stable_key: interner.intern(format!("statement:{index}")),
                 status: operation.status,
             })
             .collect::<Vec<_>>();
@@ -715,16 +720,15 @@ mod tests {
                 None
             }
         });
-        let mut db = AnalysisDb::new();
         db.replace_semantic_mir(MirOutput {
-            bodies: vec![body(language)],
+            bodies: vec![body(&interner, language)],
             blocks: vec![MirBlock {
                 id: MirBlockId(0),
                 body: MirBodyId(0),
                 ordinal: 0,
                 statements: statements.iter().map(|statement| statement.id).collect(),
                 terminator: MirTerminatorId(0),
-                stable_key: "block:0".to_string(),
+                stable_key: interner.intern("block:0".to_string()),
             }],
             statements,
             terminators: vec![MirTerminator {
@@ -734,10 +738,13 @@ mod tests {
                 kind: MirTerminatorKind::Return {
                     value: value.flatten(),
                 },
-                stable_key: "terminator:0".to_string(),
+                stable_key: interner.intern("terminator:0".to_string()),
                 status: MirStatus::Partial,
             }],
-            places: vec![place(1, "x", language), place(2, "ret", language)],
+            places: vec![
+                place(&interner, 1, "x", language),
+                place(&interner, 2, "ret", language),
+            ],
             place_types: Vec::new(),
             operations,
             unsupported,
@@ -748,9 +755,10 @@ mod tests {
 
     #[test]
     fn cfg_lowers_straight_line_return_without_derived_rows() {
+        let interner = crate::core::StableKeyInterner::default();
         let db = db_with(
             Language::TypeScript,
-            vec![assign(1, 1), return_op(2, 2)],
+            vec![assign(&interner, 1, 1), return_op(&interner, 2, 2)],
             Vec::new(),
         );
         let output = lower_cfg(&db);
@@ -772,7 +780,12 @@ mod tests {
 
     #[test]
     fn cfg_connects_explicit_mir_return_to_normal_exit() {
-        let db = db_with(Language::TypeScript, vec![assign(1, 1)], Vec::new());
+        let interner = crate::core::StableKeyInterner::default();
+        let db = db_with(
+            Language::TypeScript,
+            vec![assign(&interner, 1, 1)],
+            Vec::new(),
+        );
         let output = lower_cfg(&db);
         let exit = output
             .blocks
@@ -791,7 +804,8 @@ mod tests {
 
     #[test]
     fn cfg_lowers_go_body_without_language_dispatch() {
-        let db = db_with(Language::Go, vec![assign(1, 1)], Vec::new());
+        let interner = crate::core::StableKeyInterner::default();
+        let db = db_with(Language::Go, vec![assign(&interner, 1, 1)], Vec::new());
         let output = lower_cfg(&db);
 
         assert_eq!(output.functions.len(), 1);
@@ -919,26 +933,17 @@ export function* values(value) { yield value; }
 
     #[test]
     fn unsupported_control_flow_key_uses_source_stable_identity() {
-        let mut first = unsupported(1, Some(MirOpId(1)), "throw");
-        let mut second = unsupported(2, Some(MirOpId(99)), "throw");
+        let interner = crate::core::StableKeyInterner::default();
+        let mut first = unsupported(&interner, 1, Some(MirOpId(1)), "throw");
+        let mut second = unsupported(&interner, 2, Some(MirOpId(99)), "throw");
         first.body = Some(MirBodyId(7));
         second.body = Some(MirBodyId(42));
         second.span = first.span.clone();
-        first.stable_key = "ts:unsupported:stable-source".to_string();
-        second.stable_key = first.stable_key.clone();
+        first.stable_key = interner.intern("ts:unsupported:stable-source".to_string());
+        second.stable_key = first.stable_key;
 
-        let first_fact = unsupported_control_flow_fact(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            0,
-            &first,
-            &BTreeMap::new(),
-        );
-        let second_fact = unsupported_control_flow_fact(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            0,
-            &second,
-            &BTreeMap::new(),
-        );
+        let first_fact = unsupported_control_flow_fact(&interner, 0, &first, &BTreeMap::new());
+        let second_fact = unsupported_control_flow_fact(&interner, 0, &second, &BTreeMap::new());
 
         assert_eq!(first_fact.stable_key, second_fact.stable_key);
     }

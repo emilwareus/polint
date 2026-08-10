@@ -2910,6 +2910,7 @@ mod tests {
 
     fn policy_query_db_with_mir_ordered_call_sequence(callees: &[(&str, u32)]) -> AnalysisDb {
         let mut db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
         let file = db.add_file(
             PathBuf::from("src/main.go"),
             "src/main.go".to_string(),
@@ -2930,6 +2931,7 @@ mod tests {
             targets.push(call_target(id, site.id, handler, callee_function));
             edges.push(refined_edge(id, site.id, handler, callee_function, callee));
             operations.push(mir_operation(
+                &interner,
                 operation,
                 MirBodyId(handler.0),
                 *operation_ordinal,
@@ -2939,7 +2941,7 @@ mod tests {
         }
 
         db.replace_semantic_mir(MirOutput {
-            bodies: vec![mir_body(file, handler)],
+            bodies: vec![mir_body(&interner, file, handler)],
             places: Vec::new(),
             operations,
             unsupported: Vec::new(),
@@ -2959,6 +2961,7 @@ mod tests {
 
     fn policy_query_db_with_cfg_ordered_call_sequence(callees: &[(&str, u32, u32)]) -> AnalysisDb {
         let mut db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
         let file = db.add_file(
             PathBuf::from("src/main.go"),
             "src/main.go".to_string(),
@@ -2984,7 +2987,13 @@ mod tests {
             let site = call_site(id, file, handler, callee);
             targets.push(call_target(id, site.id, handler, callee_function));
             edges.push(refined_edge(id, site.id, handler, callee_function, callee));
-            operations.push(mir_operation(operation, body, *mir_ordinal, file));
+            operations.push(mir_operation(
+                &interner,
+                operation,
+                body,
+                *mir_ordinal,
+                file,
+            ));
             cfg_nodes.push(CfgNodeFact {
                 id: cfg_node,
                 cfg_function,
@@ -3015,7 +3024,7 @@ mod tests {
         }
 
         db.replace_semantic_mir(MirOutput {
-            bodies: vec![mir_body(file, handler)],
+            bodies: vec![mir_body(&interner, file, handler)],
             places: Vec::new(),
             operations,
             unsupported: Vec::new(),
@@ -3370,7 +3379,11 @@ mod tests {
         }
     }
 
-    fn mir_body(file: FileId, function: FunctionId) -> MirBody {
+    fn mir_body(
+        interner: &crate::core::StableKeyInterner,
+        file: FileId,
+        function: FunctionId,
+    ) -> MirBody {
         MirBody {
             id: MirBodyId(function.0),
             language: Language::Go,
@@ -3378,14 +3391,15 @@ mod tests {
             function,
             package: None,
             module: None,
-            owner_stable_key: "function:handler".to_string(),
+            owner_stable_key: interner.intern("function:handler".to_string()),
             span: Span::point(file, 1, 1),
-            stable_key: "mir:body:handler".to_string(),
+            stable_key: interner.intern("mir:body:handler".to_string()),
             status: MirStatus::Resolved,
         }
     }
 
     fn mir_operation(
+        interner: &crate::core::StableKeyInterner,
         operation: MirOpId,
         body: MirBodyId,
         ordinal: u32,
@@ -3400,7 +3414,7 @@ mod tests {
                 predicate: MirPredicateId(operation.0),
                 predicate_place: None,
             },
-            stable_key: format!("mir:op:{:05}", operation.0),
+            stable_key: interner.intern(format!("mir:op:{:05}", operation.0)),
             status: MirStatus::Resolved,
         }
     }

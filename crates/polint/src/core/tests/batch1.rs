@@ -221,7 +221,7 @@ None,
         }
     }
 
-    fn test_mir_body(id: u64, file: FileId, stable_key: &str) -> MirBody {
+    fn test_mir_body(interner: &crate::core::StableKeyInterner, id: u64, file: FileId, stable_key: &str) -> MirBody {
         MirBody {
             id: MirBodyId(id),
             language: Language::TypeScript,
@@ -229,14 +229,14 @@ None,
             function: FunctionId(id),
             package: None,
             module: None,
-            owner_stable_key: format!("function:{stable_key}"),
+            owner_stable_key: interner.intern(format!("function:{stable_key}")),
             span: test_span(file, 1),
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key.to_string()),
             status: MirStatus::Resolved,
         }
     }
 
-    fn test_place(id: u64, file: FileId, stable_key: &str) -> PlaceFact {
+    fn test_place(interner: &crate::core::StableKeyInterner, id: u64, file: FileId, stable_key: &str) -> PlaceFact {
         PlaceFact {
             id: PlaceId(id),
             language: Language::TypeScript,
@@ -247,12 +247,12 @@ None,
                 name: stable_key.to_string(),
             },
             projections: Vec::new(),
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key.to_string()),
             status: PlaceStatus::Resolved,
         }
     }
 
-    fn test_mir_operation(
+    fn test_mir_operation(interner: &crate::core::StableKeyInterner,
         id: u64,
         body: MirBodyId,
         place: PlaceId,
@@ -269,12 +269,12 @@ None,
                 value: MirValue::Place(value),
                 mode: AssignMode::Overwrite,
             },
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key.to_string()),
             status: MirStatus::Resolved,
         }
     }
 
-    fn test_unsupported(stable_key: &str) -> UnsupportedSemanticFact {
+    fn test_unsupported(interner: &crate::core::StableKeyInterner, stable_key: &str) -> UnsupportedSemanticFact {
         UnsupportedSemanticFact {
             id: UnsupportedId(
                 stable_key
@@ -293,7 +293,7 @@ None,
             conservative_action: ConservativeAction::HavocAffectedPlaces,
             precision: UnsupportedPrecision::Unsupported,
             status: MirStatus::Unsupported,
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key.to_string()),
         }
     }
 

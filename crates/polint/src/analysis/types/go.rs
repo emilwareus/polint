@@ -164,7 +164,7 @@ fn type_fact_for_place(
             TypePrecision::Unknown,
             TypeConfidence::Low,
             TypeShape::Unknown {
-                reason: place.stable_key.clone(),
+                reason: interner.resolve(place.stable_key).to_string(),
             },
         ),
         PlaceStatus::Unsupported => (
@@ -173,7 +173,7 @@ fn type_fact_for_place(
             TypePrecision::Unsupported,
             TypeConfidence::Low,
             TypeShape::Unsupported {
-                reason: place.stable_key.clone(),
+                reason: interner.resolve(place.stable_key).to_string(),
             },
         ),
     };
@@ -200,7 +200,7 @@ fn type_fact_for_place(
             FactFamily::Type,
             [
                 ("language", "go".to_string()),
-                ("place", place.stable_key.clone()),
+                ("place", interner.resolve(place.stable_key).to_string()),
                 ("phase", format!("{phase:?}")),
             ],
         ),
@@ -271,7 +271,7 @@ fn access_path_for_place(
             FactFamily::AccessPath,
             [
                 ("language", "go".to_string()),
-                ("place", place.stable_key.clone()),
+                ("place", interner.resolve(place.stable_key).to_string()),
                 ("projection_count", place.projections.len().to_string()),
             ],
         ),
@@ -362,7 +362,10 @@ fn collect_values_for_operation(
                     FactFamily::Value,
                     [
                         ("language", "go".to_string()),
-                        ("operation", operation.stable_key.clone()),
+                        (
+                            "operation",
+                            interner.resolve(operation.stable_key).to_string(),
+                        ),
                         ("kind", "call_return".to_string()),
                     ],
                 ),
@@ -464,7 +467,10 @@ fn push_value_for_mir_value(
             FactFamily::Value,
             [
                 ("language", "go".to_string()),
-                ("operation", operation.stable_key.clone()),
+                (
+                    "operation",
+                    interner.resolve(operation.stable_key).to_string(),
+                ),
                 ("ordinal", values.len().to_string()),
             ],
         ),
@@ -567,7 +573,10 @@ fn push_function_value(
             FactFamily::Value,
             [
                 ("language", "go".to_string()),
-                ("operation", operation.stable_key.clone()),
+                (
+                    "operation",
+                    interner.resolve(operation.stable_key).to_string(),
+                ),
                 ("kind", "function_object".to_string()),
             ],
         ),
@@ -598,7 +607,10 @@ fn push_allocation(
             FactFamily::AllocationToken,
             [
                 ("language", "go".to_string()),
-                ("operation", operation.stable_key.clone()),
+                (
+                    "operation",
+                    interner.resolve(operation.stable_key).to_string(),
+                ),
                 ("kind", label.to_string()),
             ],
         ),
@@ -654,7 +666,10 @@ fn unsupported_type_fact(
             FactFamily::Type,
             [
                 ("language", "go".to_string()),
-                ("unsupported", unsupported.stable_key.clone()),
+                (
+                    "unsupported",
+                    interner.resolve(unsupported.stable_key).to_string(),
+                ),
                 ("ordinal", id.to_string()),
             ],
         ),
@@ -797,6 +812,7 @@ mod tests {
 
     fn db_with_go_mir() -> AnalysisDb {
         let mut db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
         let file = db.add_file(
             "service.go".into(),
             "service.go".to_string(),
@@ -820,9 +836,9 @@ mod tests {
             function,
             package: None,
             module: None,
-            owner_stable_key: "go:function:Service.Authorize".to_string(),
+            owner_stable_key: interner.intern("go:function:Service.Authorize".to_string()),
             span: Span::point(file, 1, 1),
-            stable_key: "go:body:Service.Authorize".to_string(),
+            stable_key: interner.intern("go:body:Service.Authorize".to_string()),
             status: MirStatus::Partial,
         };
         let receiver = PlaceFact {
@@ -836,7 +852,7 @@ mod tests {
                 name: Some("svc".to_string()),
             },
             projections: Vec::new(),
-            stable_key: "go:place:svc".to_string(),
+            stable_key: interner.intern("go:place:svc".to_string()),
             status: PlaceStatus::Resolved,
         };
         let selector = PlaceFact {
@@ -847,16 +863,17 @@ mod tests {
                     evidence: "index".to_string(),
                 },
             ],
-            stable_key: "go:place:svc.Tokens[index]".to_string(),
+            stable_key: interner.intern("go:place:svc.Tokens[index]".to_string()),
             ..receiver.clone()
         };
         let call_projection = PlaceFact {
             id: PlaceId(2),
             projections: vec![PlaceProjection::CallReturn(CallSiteId(42))],
-            stable_key: "go:place:svc.call_return".to_string(),
+            stable_key: interner.intern("go:place:svc.call_return".to_string()),
             ..receiver.clone()
         };
         let nil_op = operation(
+            &interner,
             MirOpId(0),
             body.id,
             file,
@@ -869,6 +886,7 @@ mod tests {
             },
         );
         let composite_op = operation(
+            &interner,
             MirOpId(1),
             body.id,
             file,
@@ -880,6 +898,7 @@ mod tests {
             },
         );
         let function_op = operation(
+            &interner,
             MirOpId(2),
             body.id,
             file,
@@ -891,6 +910,7 @@ mod tests {
             },
         );
         let place_copy_op = operation(
+            &interner,
             MirOpId(3),
             body.id,
             file,
@@ -918,7 +938,7 @@ mod tests {
                 conservative_action: ConservativeAction::HavocAffectedPlaces,
                 precision: UnsupportedPrecision::Unsupported,
                 status: MirStatus::Unsupported,
-                stable_key: "go:unsupported:unsafe".to_string(),
+                stable_key: interner.intern("go:unsupported:unsafe".to_string()),
             }],
             ..MirOutput::default()
         })
@@ -927,6 +947,7 @@ mod tests {
     }
 
     fn operation(
+        interner: &crate::core::StableKeyInterner,
         id: MirOpId,
         body: MirBodyId,
         file: FileId,
@@ -938,7 +959,7 @@ mod tests {
             ordinal: id.0 as u32,
             span: Span::point(file, id.0 as u32 + 1, 1),
             kind,
-            stable_key: format!("go:op:{}", id.0),
+            stable_key: interner.intern(format!("go:op:{}", id.0)),
             status: MirStatus::Partial,
         }
     }

@@ -208,7 +208,7 @@ fn type_fact_for_place(
             TypePrecision::Unknown,
             TypeConfidence::Low,
             TypeShape::Unknown {
-                reason: place.stable_key.clone(),
+                reason: interner.resolve(place.stable_key).to_string(),
             },
         ),
         PlaceStatus::Unsupported => (
@@ -217,7 +217,7 @@ fn type_fact_for_place(
             TypePrecision::Unsupported,
             TypeConfidence::Low,
             TypeShape::Unsupported {
-                reason: place.stable_key.clone(),
+                reason: interner.resolve(place.stable_key).to_string(),
             },
         ),
     };
@@ -244,7 +244,7 @@ fn type_fact_for_place(
             FactFamily::Type,
             [
                 ("language", language_label(place.language).to_string()),
-                ("place", place.stable_key.clone()),
+                ("place", interner.resolve(place.stable_key).to_string()),
                 ("phase", format!("{phase:?}")),
             ],
         ),
@@ -316,7 +316,7 @@ fn access_path_for_place(
             FactFamily::AccessPath,
             [
                 ("language", language_label(place.language).to_string()),
-                ("place", place.stable_key.clone()),
+                ("place", interner.resolve(place.stable_key).to_string()),
                 ("projection_count", place.projections.len().to_string()),
             ],
         ),
@@ -413,7 +413,10 @@ fn collect_values_for_operation(
                     FactFamily::Value,
                     [
                         ("language", "ts-js".to_string()),
-                        ("operation", operation.stable_key.clone()),
+                        (
+                            "operation",
+                            interner.resolve(operation.stable_key).to_string(),
+                        ),
                         ("kind", "call_return".to_string()),
                     ],
                 ),
@@ -542,7 +545,10 @@ fn push_value_for_mir_value(
             FactFamily::Value,
             [
                 ("language", "ts-js".to_string()),
-                ("operation", operation.stable_key.clone()),
+                (
+                    "operation",
+                    interner.resolve(operation.stable_key).to_string(),
+                ),
                 ("ordinal", values.len().to_string()),
             ],
         ),
@@ -732,7 +738,10 @@ fn push_function_value(
             FactFamily::Value,
             [
                 ("language", "ts-js".to_string()),
-                ("operation", operation.stable_key.clone()),
+                (
+                    "operation",
+                    interner.resolve(operation.stable_key).to_string(),
+                ),
                 ("kind", "function_object".to_string()),
             ],
         ),
@@ -847,7 +856,10 @@ fn collect_narrowing_for_operation(
             FactFamily::Type,
             [
                 ("language", language_label(body.language).to_string()),
-                ("operation", operation.stable_key.clone()),
+                (
+                    "operation",
+                    interner.resolve(operation.stable_key).to_string(),
+                ),
                 ("place", place.0.to_string()),
                 ("phase", "flow_narrowed".to_string()),
             ],
@@ -890,7 +902,10 @@ fn collect_narrowing_for_operation(
                 FactFamily::NarrowedType,
                 [
                     ("language", language_label(body.language).to_string()),
-                    ("operation", operation.stable_key.clone()),
+                    (
+                        "operation",
+                        interner.resolve(operation.stable_key).to_string(),
+                    ),
                     ("place", place.0.to_string()),
                     ("evidence", evidence.trim().to_string()),
                 ],
@@ -977,7 +992,10 @@ fn push_allocation(
             FactFamily::AllocationToken,
             [
                 ("language", language_label(language).to_string()),
-                ("operation", operation.stable_key.clone()),
+                (
+                    "operation",
+                    interner.resolve(operation.stable_key).to_string(),
+                ),
                 ("kind", label.to_string()),
             ],
         ),
@@ -1033,7 +1051,10 @@ fn unsupported_type_fact(
             FactFamily::Type,
             [
                 ("language", language_label(unsupported.language).to_string()),
-                ("unsupported", unsupported.stable_key.clone()),
+                (
+                    "unsupported",
+                    interner.resolve(unsupported.stable_key).to_string(),
+                ),
                 ("ordinal", id.to_string()),
             ],
         ),
@@ -1066,7 +1087,10 @@ fn unsupported_value_fact(
             FactFamily::Value,
             [
                 ("language", language_label(unsupported.language).to_string()),
-                ("unsupported", unsupported.stable_key.clone()),
+                (
+                    "unsupported",
+                    interner.resolve(unsupported.stable_key).to_string(),
+                ),
                 ("ordinal", id.to_string()),
             ],
         ),
@@ -1201,6 +1225,7 @@ mod tests {
 
     fn db_with_ts_mir() -> AnalysisDb {
         let mut db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
         let source = r#"
 export function narrow(user, value, dynamicKey) {
   if (user != null) {}
@@ -1240,25 +1265,25 @@ export function narrow(user, value, dynamicKey) {
             function,
             package: None,
             module: None,
-            owner_stable_key: "ts:function:narrow".to_string(),
+            owner_stable_key: interner.intern("ts:function:narrow".to_string()),
             span: span_for(source, file, "export function narrow", "}"),
-            stable_key: "ts:body:narrow".to_string(),
+            stable_key: interner.intern("ts:body:narrow".to_string()),
             status: MirStatus::Partial,
         };
-        let user = place(function, file, PlaceId(0), "user");
-        let value = place(function, file, PlaceId(1), "value");
+        let user = place(&interner, function, file, PlaceId(0), "user");
+        let value = place(&interner, function, file, PlaceId(1), "value");
         let dynamic = PlaceFact {
             id: PlaceId(2),
             projections: vec![PlaceProjection::IndexUnknown {
                 evidence: "dynamicKey".to_string(),
             }],
-            stable_key: "ts:place:user[dynamicKey]".to_string(),
+            stable_key: interner.intern("ts:place:user[dynamicKey]".to_string()),
             status: PlaceStatus::Partial,
             ..user.clone()
         };
-        let obj = place(function, file, PlaceId(3), "obj");
-        let func = place(function, file, PlaceId(4), "fn");
-        let class = place(function, file, PlaceId(5), "cls");
+        let obj = place(&interner, function, file, PlaceId(3), "obj");
+        let func = place(&interner, function, file, PlaceId(4), "fn");
+        let class = place(&interner, function, file, PlaceId(5), "cls");
         let mut operations = Vec::new();
         for needle in [
             "if (user != null)",
@@ -1270,6 +1295,7 @@ export function narrow(user, value, dynamicKey) {
             "if (user)",
         ] {
             operations.push(operation(
+                &interner,
                 MirOpId(operations.len() as u64),
                 body.id,
                 span_for(source, file, needle, "{}"),
@@ -1280,6 +1306,7 @@ export function narrow(user, value, dynamicKey) {
             ));
         }
         operations.push(operation(
+            &interner,
             MirOpId(operations.len() as u64),
             body.id,
             span_for(source, file, "const obj", ";"),
@@ -1290,6 +1317,7 @@ export function narrow(user, value, dynamicKey) {
             },
         ));
         operations.push(operation(
+            &interner,
             MirOpId(operations.len() as u64),
             body.id,
             span_for(source, file, "const fn", ";"),
@@ -1300,6 +1328,7 @@ export function narrow(user, value, dynamicKey) {
             },
         ));
         operations.push(operation(
+            &interner,
             MirOpId(operations.len() as u64),
             body.id,
             span_for(source, file, "const cls", ";"),
@@ -1327,7 +1356,7 @@ export function narrow(user, value, dynamicKey) {
                 conservative_action: ConservativeAction::HavocAffectedPlaces,
                 precision: UnsupportedPrecision::Unsupported,
                 status: MirStatus::Unsupported,
-                stable_key: "ts:unsupported:dynamic-key".to_string(),
+                stable_key: interner.intern("ts:unsupported:dynamic-key".to_string()),
             }],
             ..MirOutput::default()
         })
@@ -1335,7 +1364,13 @@ export function narrow(user, value, dynamicKey) {
         db
     }
 
-    fn place(function: FunctionId, file: FileId, id: PlaceId, name: &str) -> PlaceFact {
+    fn place(
+        interner: &crate::core::StableKeyInterner,
+        function: FunctionId,
+        file: FileId,
+        id: PlaceId,
+        name: &str,
+    ) -> PlaceFact {
         PlaceFact {
             id,
             language: Language::TypeScript,
@@ -1346,19 +1381,25 @@ export function narrow(user, value, dynamicKey) {
                 name: name.to_string(),
             },
             projections: Vec::new(),
-            stable_key: format!("ts:place:{name}"),
+            stable_key: interner.intern(format!("ts:place:{name}")),
             status: PlaceStatus::Resolved,
         }
     }
 
-    fn operation(id: MirOpId, body: MirBodyId, span: Span, kind: MirOperationKind) -> MirOperation {
+    fn operation(
+        interner: &crate::core::StableKeyInterner,
+        id: MirOpId,
+        body: MirBodyId,
+        span: Span,
+        kind: MirOperationKind,
+    ) -> MirOperation {
         MirOperation {
             id,
             body,
             ordinal: id.0 as u32,
             span,
             kind,
-            stable_key: format!("ts:op:{}", id.0),
+            stable_key: interner.intern(format!("ts:op:{}", id.0)),
             status: MirStatus::Partial,
         }
     }

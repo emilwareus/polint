@@ -327,7 +327,7 @@ pub(crate) fn callable_stable_key_map(
 ) -> std::collections::BTreeMap<MirBodyId, String> {
     db.mir_bodies()
         .iter()
-        .map(|body| (body.id, body.stable_key.clone()))
+        .map(|body| (body.id, db.resolve_stable_key(body.stable_key).to_string()))
         .collect()
 }
 

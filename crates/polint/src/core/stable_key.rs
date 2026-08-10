@@ -16,7 +16,8 @@ pub(crate) struct StableKeyInterner {
 }
 
 impl StableKeyInterner {
-    pub(crate) fn intern(&self, key: String) -> StableKeyId {
+    pub(crate) fn intern(&self, key: impl Into<String>) -> StableKeyId {
+        let key = key.into();
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         if let Some(id) = state.ids.get(key.as_str()) {
             return *id;

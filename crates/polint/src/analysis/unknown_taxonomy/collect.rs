@@ -307,7 +307,7 @@ fn unsupported_semantic_unknowns(db: &AnalysisDb) -> Vec<UnknownRow> {
                     precision: Some("unsupported".to_string()),
                     docs_path: Some("docs/facts/capability-plans.md".to_string()),
                     suggested_artifact: Some("provider".to_string()),
-                    source_stable_key: Some(row.stable_key.clone()),
+                    source_stable_key: Some(interner.resolve(row.stable_key).to_string()),
                 },
             )
         })

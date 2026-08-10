@@ -503,9 +503,10 @@ mod tests {
             cyclomatic_complexity: 1,
             calls: vec!["model".to_string()],
         });
+        let interner = db.stable_key_interner();
         db.replace_semantic_mir(MirOutput {
             bodies: Vec::new(),
-            places: (0..3).map(test_place).collect(),
+            places: (0..3).map(|id| test_place(&interner, id)).collect(),
             operations: Vec::new(),
             unsupported: Vec::new(),
             ..MirOutput::default()
@@ -545,7 +546,7 @@ mod tests {
         Span::point(FileId(0), 1, 1)
     }
 
-    fn test_place(id: u64) -> PlaceFact {
+    fn test_place(interner: &crate::core::StableKeyInterner, id: u64) -> PlaceFact {
         PlaceFact {
             id: PlaceId(id),
             language: Language::TypeScript,
@@ -556,7 +557,7 @@ mod tests {
                 name: format!("p{id}"),
             },
             projections: Vec::new(),
-            stable_key: format!("place:{id}"),
+            stable_key: interner.intern(format!("place:{id}")),
             status: PlaceStatus::Resolved,
         }
     }

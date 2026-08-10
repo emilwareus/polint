@@ -9,7 +9,7 @@ use crate::analysis::mir::body::{
 };
 use crate::analysis::mir::op::{MirOperation, MirOperationKind, MirValue, UnsupportedSemanticFact};
 use crate::analysis::places::{PlaceFact, PlaceRoot, PlaceTypeFact};
-use crate::core::SEMANTIC_MIR_PROVIDER_ID;
+use crate::core::{SEMANTIC_MIR_PROVIDER_ID, StableKeyId, StableKeyInterner};
 
 #[derive(Debug, Default, Clone)]
 pub(crate) struct SemanticStore {
@@ -28,34 +28,50 @@ pub(crate) struct SemanticStore {
 }
 
 impl SemanticStore {
-    pub(crate) fn from_output(output: MirOutput) -> Result<Self, AnalysisError> {
-        let output = output.normalized();
-        let (mir_bodies, body_ids) = normalize_bodies(output.bodies);
-        let (places, place_ids) = normalize_places(output.places, &body_ids)?;
+    pub(crate) fn from_output(
+        output: MirOutput,
+        interner: &StableKeyInterner,
+    ) -> Result<Self, AnalysisError> {
+        let output = output.normalized(interner);
+        let (mir_bodies, body_ids) = normalize_bodies(output.bodies, interner);
+        let (places, place_ids) = normalize_places(output.places, &body_ids, interner)?;
         let place_types = normalize_place_types(output.place_types, &place_ids)?;
-        let unsupported_ids = unsupported_id_map(&output.unsupported);
-        let (mir_operations, operation_ids) =
-            normalize_operations(output.operations, &body_ids, &place_ids, &unsupported_ids)?;
+        let unsupported_ids = unsupported_id_map(&output.unsupported, interner);
+        let (mir_operations, operation_ids) = normalize_operations(
+            output.operations,
+            &body_ids,
+            &place_ids,
+            &unsupported_ids,
+            interner,
+        )?;
         let block_ids = stable_id_map(
             &output.blocks,
-            |row| &row.stable_key,
+            interner,
+            |row| row.stable_key,
             |row| row.id,
             MirBlockId,
         );
         let statement_ids = stable_id_map(
             &output.statements,
-            |row| &row.stable_key,
+            interner,
+            |row| row.stable_key,
             |row| row.id,
             MirStatementId,
         );
         let terminator_ids = stable_id_map(
             &output.terminators,
-            |row| &row.stable_key,
+            interner,
+            |row| row.stable_key,
             |row| row.id,
             MirTerminatorId,
         );
-        let mir_statements =
-            normalize_statements(output.statements, &body_ids, &operation_ids, &statement_ids)?;
+        let mir_statements = normalize_statements(
+            output.statements,
+            &body_ids,
+            &operation_ids,
+            &statement_ids,
+            interner,
+        )?;
         let mir_terminators = normalize_terminators(
             output.terminators,
             &body_ids,
@@ -63,6 +79,7 @@ impl SemanticStore {
             &place_ids,
             &unsupported_ids,
             &terminator_ids,
+            interner,
         )?;
         let mir_blocks = normalize_blocks(
             output.blocks,
@@ -70,6 +87,7 @@ impl SemanticStore {
             &block_ids,
             &statement_ids,
             &terminator_ids,
+            interner,
         )?;
         let unsupported_semantics = normalize_unsupported_with_ids(
             output.unsupported,
@@ -77,6 +95,7 @@ impl SemanticStore {
             &operation_ids,
             &place_ids,
             &unsupported_ids,
+            interner,
         )?;
 
         Ok(Self {
@@ -166,8 +185,11 @@ fn normalize_place_types(
     Ok(place_types)
 }
 
-fn normalize_bodies(mut bodies: Vec<MirBody>) -> (Vec<MirBody>, BTreeMap<MirBodyId, MirBodyId>) {
-    bodies.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+fn normalize_bodies(
+    mut bodies: Vec<MirBody>,
+    interner: &StableKeyInterner,
+) -> (Vec<MirBody>, BTreeMap<MirBodyId, MirBodyId>) {
+    bodies.sort_by_cached_key(|body| interner.resolve(body.stable_key));
     let mut body_ids = BTreeMap::new();
     for (index, body) in bodies.iter_mut().enumerate() {
         let new_id = MirBodyId(index as u64);
@@ -180,8 +202,9 @@ fn normalize_bodies(mut bodies: Vec<MirBody>) -> (Vec<MirBody>, BTreeMap<MirBody
 fn normalize_places(
     mut places: Vec<PlaceFact>,
     body_ids: &BTreeMap<MirBodyId, MirBodyId>,
+    interner: &StableKeyInterner,
 ) -> Result<(Vec<PlaceFact>, BTreeMap<PlaceId, PlaceId>), AnalysisError> {
-    places.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    places.sort_by_cached_key(|place| interner.resolve(place.stable_key));
     let mut place_ids = BTreeMap::new();
     for (index, place) in places.iter_mut().enumerate() {
         let new_id = PlaceId(index as u64);
@@ -197,8 +220,9 @@ fn normalize_operations(
     body_ids: &BTreeMap<MirBodyId, MirBodyId>,
     place_ids: &BTreeMap<PlaceId, PlaceId>,
     unsupported_ids: &BTreeMap<UnsupportedId, UnsupportedId>,
+    interner: &StableKeyInterner,
 ) -> Result<(Vec<MirOperation>, BTreeMap<MirOpId, MirOpId>), AnalysisError> {
-    operations.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    operations.sort_by_cached_key(|operation| interner.resolve(operation.stable_key));
     let mut operation_ids = BTreeMap::new();
     for (index, operation) in operations.iter_mut().enumerate() {
         let new_id = MirOpId(index as u64);
@@ -212,15 +236,16 @@ fn normalize_operations(
 
 fn stable_id_map<T, Id: Copy + Ord>(
     rows: &[T],
-    stable_key: impl Fn(&T) -> &str,
+    interner: &StableKeyInterner,
+    stable_key: impl Fn(&T) -> StableKeyId,
     old_id: impl Fn(&T) -> Id,
     make_id: impl Fn(u64) -> Id,
 ) -> BTreeMap<Id, Id> {
     let mut sorted = rows
         .iter()
-        .map(|row| (stable_key(row), row))
+        .map(|row| (interner.resolve(stable_key(row)), row))
         .collect::<Vec<_>>();
-    sorted.sort_by(|left, right| left.0.cmp(right.0));
+    sorted.sort_by(|left, right| left.0.cmp(&right.0));
     sorted
         .into_iter()
         .enumerate()
@@ -233,8 +258,9 @@ fn normalize_statements(
     body_ids: &BTreeMap<MirBodyId, MirBodyId>,
     operation_ids: &BTreeMap<MirOpId, MirOpId>,
     statement_ids: &BTreeMap<MirStatementId, MirStatementId>,
+    interner: &StableKeyInterner,
 ) -> Result<Vec<MirStatement>, AnalysisError> {
-    rows.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    rows.sort_by_cached_key(|row| interner.resolve(row.stable_key));
     for row in &mut rows {
         row.id = remap_id(row.id, statement_ids, "dangling MIR statement id")?;
         row.body = remap_body_id(row.body, body_ids, "dangling MIR statement body")?;
@@ -254,8 +280,9 @@ fn normalize_terminators(
     place_ids: &BTreeMap<PlaceId, PlaceId>,
     unsupported_ids: &BTreeMap<UnsupportedId, UnsupportedId>,
     terminator_ids: &BTreeMap<MirTerminatorId, MirTerminatorId>,
+    interner: &StableKeyInterner,
 ) -> Result<Vec<MirTerminator>, AnalysisError> {
-    rows.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    rows.sort_by_cached_key(|row| interner.resolve(row.stable_key));
     for row in &mut rows {
         row.id = remap_id(row.id, terminator_ids, "dangling MIR terminator id")?;
         row.body = remap_body_id(row.body, body_ids, "dangling MIR terminator body")?;
@@ -276,8 +303,9 @@ fn normalize_blocks(
     block_ids: &BTreeMap<MirBlockId, MirBlockId>,
     statement_ids: &BTreeMap<MirStatementId, MirStatementId>,
     terminator_ids: &BTreeMap<MirTerminatorId, MirTerminatorId>,
+    interner: &StableKeyInterner,
 ) -> Result<Vec<MirBlock>, AnalysisError> {
-    rows.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    rows.sort_by_cached_key(|row| interner.resolve(row.stable_key));
     for row in &mut rows {
         row.id = remap_id(row.id, block_ids, "dangling MIR block id")?;
         row.body = remap_body_id(row.body, body_ids, "dangling MIR block body")?;
@@ -387,8 +415,9 @@ fn normalize_unsupported_with_ids(
     operation_ids: &BTreeMap<MirOpId, MirOpId>,
     place_ids: &BTreeMap<PlaceId, PlaceId>,
     unsupported_ids: &BTreeMap<UnsupportedId, UnsupportedId>,
+    interner: &StableKeyInterner,
 ) -> Result<Vec<UnsupportedSemanticFact>, AnalysisError> {
-    rows.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    rows.sort_by_cached_key(|row| interner.resolve(row.stable_key));
     for (index, row) in rows.iter_mut().enumerate() {
         let new_id = UnsupportedId(index as u64);
         let expected_id = unsupported_ids
@@ -419,12 +448,15 @@ fn normalize_unsupported_with_ids(
     Ok(rows)
 }
 
-fn unsupported_id_map(rows: &[UnsupportedSemanticFact]) -> BTreeMap<UnsupportedId, UnsupportedId> {
+fn unsupported_id_map(
+    rows: &[UnsupportedSemanticFact],
+    interner: &StableKeyInterner,
+) -> BTreeMap<UnsupportedId, UnsupportedId> {
     let mut sorted = rows
         .iter()
-        .map(|row| (row.stable_key.as_str(), row.id))
+        .map(|row| (interner.resolve(row.stable_key), row.id))
         .collect::<Vec<_>>();
-    sorted.sort_by(|left, right| left.0.cmp(right.0));
+    sorted.sort_by(|left, right| left.0.cmp(&right.0));
     sorted
         .into_iter()
         .enumerate()
@@ -603,7 +635,7 @@ mod tests {
         }
     }
 
-    fn body() -> MirBody {
+    fn body(interner: &crate::core::StableKeyInterner) -> MirBody {
         MirBody {
             id: MirBodyId(0),
             language: Language::Go,
@@ -611,14 +643,14 @@ mod tests {
             function: FunctionId(1),
             package: None,
             module: None,
-            owner_stable_key: "owner".to_string(),
+            owner_stable_key: interner.intern("owner".to_string()),
             span: span(),
-            stable_key: "body".to_string(),
+            stable_key: interner.intern("body".to_string()),
             status: MirStatus::Partial,
         }
     }
 
-    fn place() -> PlaceFact {
+    fn place(interner: &crate::core::StableKeyInterner) -> PlaceFact {
         PlaceFact {
             id: PlaceId(0),
             language: Language::Go,
@@ -629,12 +661,17 @@ mod tests {
                 name: "value".to_string(),
             },
             projections: Vec::new(),
-            stable_key: "place".to_string(),
+            stable_key: interner.intern("place".to_string()),
             status: PlaceStatus::Resolved,
         }
     }
 
-    fn unsupported(id: u64, stable_key: &str, operation: MirOpId) -> UnsupportedSemanticFact {
+    fn unsupported(
+        interner: &crate::core::StableKeyInterner,
+        id: u64,
+        stable_key: &str,
+        operation: MirOpId,
+    ) -> UnsupportedSemanticFact {
         UnsupportedSemanticFact {
             id: UnsupportedId(id),
             body: Some(MirBodyId(0)),
@@ -649,15 +686,16 @@ mod tests {
             conservative_action: ConservativeAction::HavocAffectedPlaces,
             precision: UnsupportedPrecision::Unsupported,
             status: MirStatus::Unsupported,
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key.to_string()),
         }
     }
 
     #[test]
     fn semantic_store_remaps_unsupported_operation_refs_after_unsupported_sorting() {
+        let interner = crate::core::StableKeyInterner::default();
         let output = MirOutput {
-            bodies: vec![body()],
-            places: vec![place()],
+            bodies: vec![body(&interner)],
+            places: vec![place(&interner)],
             operations: vec![MirOperation {
                 id: MirOpId(0),
                 body: MirBodyId(0),
@@ -666,17 +704,17 @@ mod tests {
                 kind: MirOperationKind::Unsupported {
                     unsupported: UnsupportedId(0),
                 },
-                stable_key: "operation".to_string(),
+                stable_key: interner.intern("operation".to_string()),
                 status: MirStatus::Unsupported,
             }],
             unsupported: vec![
-                unsupported(0, "unsupported:z", MirOpId(0)),
-                unsupported(1, "unsupported:a", MirOpId(0)),
+                unsupported(&interner, 0, "unsupported:z", MirOpId(0)),
+                unsupported(&interner, 1, "unsupported:a", MirOpId(0)),
             ],
             ..MirOutput::default()
         };
 
-        let store = SemanticStore::from_output(output).expect("store normalizes");
+        let store = SemanticStore::from_output(output, &interner).expect("store normalizes");
         let operation = store
             .mir_operations()
             .first()
@@ -686,12 +724,10 @@ mod tests {
         };
 
         assert_eq!(unsupported, UnsupportedId(1));
-        assert_eq!(
-            store
-                .unsupported_semantic(unsupported)
-                .expect("remapped unsupported row exists")
-                .stable_key,
-            "unsupported:z"
-        );
+        let stable_key = store
+            .unsupported_semantic(unsupported)
+            .expect("remapped unsupported row exists")
+            .stable_key;
+        assert_eq!(interner.resolve(stable_key).as_ref(), "unsupported:z");
     }
 }

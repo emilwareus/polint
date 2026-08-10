@@ -6,9 +6,9 @@ use crate::analysis::ids::{CallSiteId, MirBodyId, PlaceId};
 use crate::analysis::stable_key::semantic_stable_key;
 use crate::analysis::types::facts::TypeShape;
 use crate::analysis_kernel::FactFamily;
-use crate::core::{FileId, FunctionId, Language, SymbolId};
+use crate::core::{FileId, FunctionId, Language, StableKeyId, StableKeyInterner, SymbolId};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PlaceFact {
     pub(crate) id: PlaceId,
     pub(crate) language: Language,
@@ -16,7 +16,7 @@ pub(crate) struct PlaceFact {
     pub(crate) function: Option<FunctionId>,
     pub(crate) root: PlaceRoot,
     pub(crate) projections: Vec<PlaceProjection>,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub(crate) status: PlaceStatus,
 }
 
@@ -123,30 +123,6 @@ impl PlaceStableContext {
 }
 
 impl PlaceTableBuilder {
-    #[cfg(test)]
-    pub(crate) fn insert(
-        &mut self,
-        language: Language,
-        file: Option<FileId>,
-        function: Option<FunctionId>,
-        root: PlaceRoot,
-        projections: Vec<PlaceProjection>,
-        status: PlaceStatus,
-    ) -> String {
-        self.insert_with_context(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            &PlaceStableContext::for_test(),
-            PlaceInsert {
-                language,
-                file,
-                function,
-                root,
-                projections,
-                status,
-            },
-        )
-    }
-
     pub(crate) fn insert_with_context(
         &mut self,
         interner: &crate::core::StableKeyInterner,
@@ -188,11 +164,10 @@ impl PlaceTableBuilder {
         stable_key
     }
 
-    pub(crate) fn finish(self) -> Vec<PlaceFact> {
-        self.finish_with_types().0
-    }
-
-    pub(crate) fn finish_with_types(self) -> (Vec<PlaceFact>, Vec<PlaceTypeFact>) {
+    pub(crate) fn finish_with_types(
+        self,
+        interner: &StableKeyInterner,
+    ) -> (Vec<PlaceFact>, Vec<PlaceTypeFact>) {
         let mut place_types = Vec::new();
         let places = self
             .places
@@ -210,7 +185,7 @@ impl PlaceTableBuilder {
                     function: draft.function,
                     root: draft.root,
                     projections: draft.projections,
-                    stable_key,
+                    stable_key: interner.intern(stable_key),
                     status: draft.status,
                 }
             })
@@ -318,15 +293,21 @@ mod tests {
 
     fn single_place_key(root: PlaceRoot, projections: Vec<PlaceProjection>) -> String {
         let mut builder = PlaceTableBuilder::default();
-        builder.insert(
-            Language::TypeScript,
-            Some(FileId(1)),
-            Some(FunctionId(10)),
-            root,
-            projections,
-            PlaceStatus::Resolved,
+        let interner = crate::core::StableKeyInterner::default();
+        builder.insert_with_context(
+            &interner,
+            &PlaceStableContext::for_test(),
+            PlaceInsert {
+                language: Language::TypeScript,
+                file: Some(FileId(1)),
+                function: Some(FunctionId(10)),
+                root,
+                projections,
+                status: PlaceStatus::Resolved,
+            },
         );
-        builder.finish().remove(0).stable_key
+        let stable_key = builder.finish_with_types(&interner).0.remove(0).stable_key;
+        interner.resolve(stable_key).to_string()
     }
 
     #[test]
@@ -417,39 +398,50 @@ mod tests {
 
     #[test]
     fn place_table_builder_assigns_dense_ids_by_sorted_stable_key() {
+        let interner = crate::core::StableKeyInterner::default();
         let mut builder = PlaceTableBuilder::default();
-        builder.insert(
-            Language::Go,
-            Some(FileId(1)),
-            Some(FunctionId(10)),
-            PlaceRoot::Local {
-                function: FunctionId(10),
-                name: "zeta".to_string(),
+        builder.insert_with_context(
+            &interner,
+            &PlaceStableContext::for_test(),
+            PlaceInsert {
+                language: Language::Go,
+                file: Some(FileId(1)),
+                function: Some(FunctionId(10)),
+                root: PlaceRoot::Local {
+                    function: FunctionId(10),
+                    name: "zeta".to_string(),
+                },
+                projections: Vec::new(),
+                status: PlaceStatus::Resolved,
             },
-            Vec::new(),
-            PlaceStatus::Resolved,
         );
-        builder.insert(
-            Language::Go,
-            Some(FileId(1)),
-            Some(FunctionId(10)),
-            PlaceRoot::Local {
-                function: FunctionId(10),
-                name: "alpha".to_string(),
+        builder.insert_with_context(
+            &interner,
+            &PlaceStableContext::for_test(),
+            PlaceInsert {
+                language: Language::Go,
+                file: Some(FileId(1)),
+                function: Some(FunctionId(10)),
+                root: PlaceRoot::Local {
+                    function: FunctionId(10),
+                    name: "alpha".to_string(),
+                },
+                projections: Vec::new(),
+                status: PlaceStatus::Resolved,
             },
-            Vec::new(),
-            PlaceStatus::Resolved,
         );
 
-        let places = builder.finish();
+        let places = builder.finish_with_types(&interner).0;
 
         assert_eq!(
             places.iter().map(|place| place.id).collect::<Vec<_>>(),
             vec![PlaceId(0), PlaceId(1)]
         );
-        assert!(places[0].stable_key < places[1].stable_key);
-        assert!(!places[0].stable_key.contains("place_id"));
-        assert!(!places[1].stable_key.contains("PlaceId"));
+        let first = interner.resolve(places[0].stable_key);
+        let second = interner.resolve(places[1].stable_key);
+        assert!(first < second);
+        assert!(!first.contains("place_id"));
+        assert!(!second.contains("PlaceId"));
     }
 
     #[test]

@@ -359,7 +359,7 @@ mod tests {
         }
     }
 
-    fn body() -> MirBody {
+    fn body(interner: &crate::core::StableKeyInterner) -> MirBody {
         MirBody {
             id: MirBodyId(1),
             language: Language::Go,
@@ -367,14 +367,14 @@ mod tests {
             function: FunctionId(1),
             package: None,
             module: None,
-            owner_stable_key: "owner".to_string(),
+            owner_stable_key: interner.intern("owner"),
             span: span(),
-            stable_key: "body:one".to_string(),
+            stable_key: interner.intern("body:one"),
             status: MirStatus::Resolved,
         }
     }
 
-    fn op(id: u64, ordinal: u32) -> MirOperation {
+    fn op(interner: &crate::core::StableKeyInterner, id: u64, ordinal: u32) -> MirOperation {
         MirOperation {
             id: MirOpId(id),
             body: MirBodyId(1),
@@ -385,19 +385,16 @@ mod tests {
                 value: MirValue::Place(PlaceId(2)),
                 mode: AssignMode::Overwrite,
             },
-            stable_key: format!("op:{ordinal}"),
+            stable_key: interner.intern(format!("op:{ordinal}")),
             status: MirStatus::Resolved,
         }
     }
 
     #[test]
     fn graph_view_exposes_sorted_block_successors_and_predecessors() {
+        let interner = crate::core::StableKeyInterner::default();
         let mut builder = CfgBuilder::new();
-        let function = builder.start_function(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            &body(),
-            false,
-        );
+        let function = builder.start_function(&interner, &body(&interner), false);
         let entry = builder.current_block();
         let branch = builder.start_block(
             &crate::core::AnalysisDb::new().stable_key_interner(),
@@ -405,7 +402,7 @@ mod tests {
         );
         builder.append_operation_node(
             &crate::core::AnalysisDb::new().stable_key_interner(),
-            Some(&op(1, 1)),
+            Some(&op(&interner, 1, 1)),
             CfgNodeKind::Condition,
             Some(span()),
         );
@@ -415,7 +412,7 @@ mod tests {
         );
         builder.append_operation_node(
             &crate::core::AnalysisDb::new().stable_key_interner(),
-            Some(&op(2, 2)),
+            Some(&op(&interner, 2, 2)),
             CfgNodeKind::Operation,
             Some(span()),
         );
@@ -425,7 +422,7 @@ mod tests {
         );
         builder.append_operation_node(
             &crate::core::AnalysisDb::new().stable_key_interner(),
-            Some(&op(3, 3)),
+            Some(&op(&interner, 3, 3)),
             CfgNodeKind::Operation,
             Some(span()),
         );

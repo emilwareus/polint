@@ -6,12 +6,14 @@ use crate::analysis::ids::{
 };
 use crate::analysis::mir::op::{MirOperation, MirValue, UnsupportedSemanticFact};
 use crate::analysis::places::{PlaceFact, PlaceTypeFact};
-use crate::core::{FileId, FunctionId, Language, ModuleNodeId, PackageId, Span};
+use crate::core::{
+    FileId, FunctionId, Language, ModuleNodeId, PackageId, Span, StableKeyId, StableKeyInterner,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) struct MirBlockId(pub(crate) u64);
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MirBody {
     pub(crate) id: MirBodyId,
     pub(crate) language: Language,
@@ -19,29 +21,29 @@ pub(crate) struct MirBody {
     pub(crate) function: FunctionId,
     pub(crate) package: Option<PackageId>,
     pub(crate) module: Option<ModuleNodeId>,
-    pub(crate) owner_stable_key: String,
+    pub(crate) owner_stable_key: StableKeyId,
     pub(crate) span: Span,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub(crate) status: MirStatus,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MirStatement {
     pub(crate) id: MirStatementId,
     pub(crate) body: MirBodyId,
     pub(crate) ordinal: u32,
     pub(crate) operation: MirOpId,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub(crate) status: MirStatus,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MirTerminator {
     pub(crate) id: MirTerminatorId,
     pub(crate) body: MirBodyId,
     pub(crate) ordinal: u32,
     pub(crate) kind: MirTerminatorKind,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub(crate) status: MirStatus,
 }
 
@@ -95,17 +97,17 @@ pub(crate) enum SuspendKind {
     ChannelSend,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MirBlock {
     pub(crate) id: MirBlockId,
     pub(crate) body: MirBodyId,
     pub(crate) ordinal: u32,
     pub(crate) statements: Vec<MirStatementId>,
     pub(crate) terminator: MirTerminatorId,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct MirOutput {
     pub(crate) bodies: Vec<MirBody>,
     pub(crate) blocks: Vec<MirBlock>,
@@ -118,42 +120,42 @@ pub(crate) struct MirOutput {
 }
 
 impl MirOutput {
-    pub(crate) fn normalized(mut self) -> Self {
+    pub(crate) fn normalized(mut self, interner: &StableKeyInterner) -> Self {
         self.bodies
-            .sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
-        self.blocks.sort_by(|left, right| {
-            (left.body, left.ordinal, left.stable_key.as_str()).cmp(&(
-                right.body,
-                right.ordinal,
-                right.stable_key.as_str(),
-            ))
+            .sort_by_cached_key(|body| interner.resolve(body.stable_key));
+        self.blocks.sort_by_cached_key(|block| {
+            (
+                block.body,
+                block.ordinal,
+                interner.resolve(block.stable_key),
+            )
         });
-        self.statements.sort_by(|left, right| {
-            (left.body, left.ordinal, left.stable_key.as_str()).cmp(&(
-                right.body,
-                right.ordinal,
-                right.stable_key.as_str(),
-            ))
+        self.statements.sort_by_cached_key(|statement| {
+            (
+                statement.body,
+                statement.ordinal,
+                interner.resolve(statement.stable_key),
+            )
         });
-        self.terminators.sort_by(|left, right| {
-            (left.body, left.ordinal, left.stable_key.as_str()).cmp(&(
-                right.body,
-                right.ordinal,
-                right.stable_key.as_str(),
-            ))
+        self.terminators.sort_by_cached_key(|terminator| {
+            (
+                terminator.body,
+                terminator.ordinal,
+                interner.resolve(terminator.stable_key),
+            )
         });
         self.places
-            .sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+            .sort_by_cached_key(|place| interner.resolve(place.stable_key));
         self.place_types.sort_by_key(|fact| fact.place);
-        self.operations.sort_by(|left, right| {
-            (left.body, left.ordinal, left.stable_key.as_str()).cmp(&(
-                right.body,
-                right.ordinal,
-                right.stable_key.as_str(),
-            ))
+        self.operations.sort_by_cached_key(|operation| {
+            (
+                operation.body,
+                operation.ordinal,
+                interner.resolve(operation.stable_key),
+            )
         });
         self.unsupported
-            .sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+            .sort_by_cached_key(|row| interner.resolve(row.stable_key));
         self
     }
 }
@@ -189,7 +191,7 @@ mod tests {
         }
     }
 
-    fn body(id: u64, stable_key: &str) -> MirBody {
+    fn body(interner: &StableKeyInterner, id: u64, stable_key: &str) -> MirBody {
         MirBody {
             id: MirBodyId(id),
             language: Language::Go,
@@ -197,14 +199,14 @@ mod tests {
             function: FunctionId(id),
             package: Some(PackageId(1)),
             module: Some(ModuleNodeId(1)),
-            owner_stable_key: format!("owner:{id}"),
+            owner_stable_key: interner.intern(format!("owner:{id}")),
             span: span(),
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key.to_string()),
             status: MirStatus::Resolved,
         }
     }
 
-    fn place(id: u64, stable_key: &str) -> PlaceFact {
+    fn place(interner: &StableKeyInterner, id: u64, stable_key: &str) -> PlaceFact {
         PlaceFact {
             id: PlaceId(id),
             language: Language::Go,
@@ -215,12 +217,17 @@ mod tests {
                 name: stable_key.to_string(),
             },
             projections: Vec::new(),
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key.to_string()),
             status: PlaceStatus::Resolved,
         }
     }
 
-    fn operation(body: u64, ordinal: u32, stable_key: &str) -> MirOperation {
+    fn operation(
+        interner: &StableKeyInterner,
+        body: u64,
+        ordinal: u32,
+        stable_key: &str,
+    ) -> MirOperation {
         MirOperation {
             id: MirOpId(u64::from(ordinal)),
             body: MirBodyId(body),
@@ -231,12 +238,12 @@ mod tests {
                 value: MirValue::Place(PlaceId(2)),
                 mode: AssignMode::Overwrite,
             },
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key.to_string()),
             status: MirStatus::Resolved,
         }
     }
 
-    fn unsupported(stable_key: &str) -> UnsupportedSemanticFact {
+    fn unsupported(interner: &StableKeyInterner, stable_key: &str) -> UnsupportedSemanticFact {
         UnsupportedSemanticFact {
             id: UnsupportedId(1),
             body: Some(MirBodyId(1)),
@@ -251,14 +258,15 @@ mod tests {
             conservative_action: ConservativeAction::HavocAffectedPlaces,
             precision: UnsupportedPrecision::Unsupported,
             status: MirStatus::Unsupported,
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key.to_string()),
         }
     }
 
     #[test]
     fn mir_output_normalized_sorts_all_fact_rows_deterministically() {
+        let interner = StableKeyInterner::default();
         let output = MirOutput {
-            bodies: vec![body(2, "body:z"), body(1, "body:a")],
+            bodies: vec![body(&interner, 2, "body:z"), body(&interner, 1, "body:a")],
             blocks: vec![
                 MirBlock {
                     id: MirBlockId(2),
@@ -266,7 +274,7 @@ mod tests {
                     ordinal: 2,
                     statements: vec![MirStatementId(2)],
                     terminator: MirTerminatorId(2),
-                    stable_key: "block:z".to_string(),
+                    stable_key: interner.intern("block:z".to_string()),
                 },
                 MirBlock {
                     id: MirBlockId(1),
@@ -274,7 +282,7 @@ mod tests {
                     ordinal: 1,
                     statements: vec![MirStatementId(1)],
                     terminator: MirTerminatorId(1),
-                    stable_key: "block:a".to_string(),
+                    stable_key: interner.intern("block:a".to_string()),
                 },
             ],
             statements: vec![
@@ -283,7 +291,7 @@ mod tests {
                     body: MirBodyId(2),
                     ordinal: 2,
                     operation: MirOpId(2),
-                    stable_key: "statement:z".to_string(),
+                    stable_key: interner.intern("statement:z".to_string()),
                     status: MirStatus::Resolved,
                 },
                 MirStatement {
@@ -291,7 +299,7 @@ mod tests {
                     body: MirBodyId(1),
                     ordinal: 1,
                     operation: MirOpId(1),
-                    stable_key: "statement:a".to_string(),
+                    stable_key: interner.intern("statement:a".to_string()),
                     status: MirStatus::Resolved,
                 },
             ],
@@ -301,7 +309,7 @@ mod tests {
                     body: MirBodyId(2),
                     ordinal: 2,
                     kind: MirTerminatorKind::Return { value: None },
-                    stable_key: "terminator:z".to_string(),
+                    stable_key: interner.intern("terminator:z".to_string()),
                     status: MirStatus::Resolved,
                 },
                 MirTerminator {
@@ -309,27 +317,33 @@ mod tests {
                     body: MirBodyId(1),
                     ordinal: 1,
                     kind: MirTerminatorKind::Return { value: None },
-                    stable_key: "terminator:a".to_string(),
+                    stable_key: interner.intern("terminator:a".to_string()),
                     status: MirStatus::Resolved,
                 },
             ],
-            places: vec![place(2, "place:z"), place(1, "place:a")],
+            places: vec![
+                place(&interner, 2, "place:z"),
+                place(&interner, 1, "place:a"),
+            ],
             place_types: Vec::new(),
             operations: vec![
-                operation(2, 2, "op:z"),
-                operation(1, 2, "op:b"),
-                operation(1, 1, "op:z"),
-                operation(1, 1, "op:a"),
+                operation(&interner, 2, 2, "op:z"),
+                operation(&interner, 1, 2, "op:b"),
+                operation(&interner, 1, 1, "op:z"),
+                operation(&interner, 1, 1, "op:a"),
             ],
-            unsupported: vec![unsupported("unsupported:z"), unsupported("unsupported:a")],
+            unsupported: vec![
+                unsupported(&interner, "unsupported:z"),
+                unsupported(&interner, "unsupported:a"),
+            ],
         }
-        .normalized();
+        .normalized(&interner);
 
         assert_eq!(
             output
                 .bodies
                 .iter()
-                .map(|body| body.stable_key.as_str())
+                .map(|body| interner.resolve(body.stable_key).to_string())
                 .collect::<Vec<_>>(),
             vec!["body:a", "body:z"]
         );
@@ -337,31 +351,46 @@ mod tests {
             output
                 .places
                 .iter()
-                .map(|place| place.stable_key.as_str())
+                .map(|place| interner.resolve(place.stable_key).to_string())
                 .collect::<Vec<_>>(),
             vec!["place:a", "place:z"]
         );
-        assert_eq!(output.blocks[0].stable_key, "block:a");
-        assert_eq!(output.statements[0].stable_key, "statement:a");
-        assert_eq!(output.terminators[0].stable_key, "terminator:a");
+        assert_eq!(
+            interner.resolve(output.blocks[0].stable_key).as_ref(),
+            "block:a"
+        );
+        assert_eq!(
+            interner.resolve(output.statements[0].stable_key).as_ref(),
+            "statement:a"
+        );
+        assert_eq!(
+            interner.resolve(output.terminators[0].stable_key).as_ref(),
+            "terminator:a"
+        );
         assert_eq!(
             output
                 .operations
                 .iter()
-                .map(|op| (op.body, op.ordinal, op.stable_key.as_str()))
+                .map(|op| {
+                    (
+                        op.body,
+                        op.ordinal,
+                        interner.resolve(op.stable_key).to_string(),
+                    )
+                })
                 .collect::<Vec<_>>(),
             vec![
-                (MirBodyId(1), 1, "op:a"),
-                (MirBodyId(1), 1, "op:z"),
-                (MirBodyId(1), 2, "op:b"),
-                (MirBodyId(2), 2, "op:z"),
+                (MirBodyId(1), 1, "op:a".to_string()),
+                (MirBodyId(1), 1, "op:z".to_string()),
+                (MirBodyId(1), 2, "op:b".to_string()),
+                (MirBodyId(2), 2, "op:z".to_string()),
             ]
         );
         assert_eq!(
             output
                 .unsupported
                 .iter()
-                .map(|row| row.stable_key.as_str())
+                .map(|row| interner.resolve(row.stable_key).to_string())
                 .collect::<Vec<_>>(),
             vec!["unsupported:a", "unsupported:z"]
         );
@@ -394,13 +423,14 @@ mod tests {
 
     #[test]
     fn unsupported_semantic_rows_require_evidence_and_conservative_labels() {
-        assert!(unsupported("unsupported:complete").is_complete());
+        let interner = StableKeyInterner::default();
+        assert!(unsupported(&interner, "unsupported:complete").is_complete());
 
         let incomplete = UnsupportedSemanticFact {
             construct: String::new(),
             source_evidence: String::new(),
             affected_domains: Vec::new(),
-            ..unsupported("unsupported:missing")
+            ..unsupported(&interner, "unsupported:missing")
         };
 
         assert!(!incomplete.is_complete());

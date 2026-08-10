@@ -102,7 +102,7 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
                             interner,
                             operation,
                             DataFlowNodeKind::Value,
-                            format!("read:{}", operation.stable_key),
+                            format!("read:{}", self.operation_key(operation)),
                         );
                         self.push_edge(
                             interner,
@@ -119,7 +119,7 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
                                 evidence: vec!["read".to_string()],
                                 input_stable_keys: vec![
                                     self.place_key(*place),
-                                    operation.stable_key.clone(),
+                                    self.operation_key(operation),
                                 ],
                             },
                         );
@@ -131,7 +131,7 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
                             interner,
                             operation,
                             DataFlowNodeKind::SummaryOutput,
-                            format!("return:{}", operation.stable_key),
+                            format!("return:{}", self.operation_key(operation)),
                         );
                         self.push_edge(
                             interner,
@@ -146,7 +146,7 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
                                 provenance: DataFlowProvenance::Native,
                                 budget: None,
                                 evidence: vec!["return_value".to_string()],
-                                input_stable_keys: vec![operation.stable_key.clone()],
+                                input_stable_keys: vec![self.operation_key(operation)],
                             },
                         );
                     }
@@ -177,7 +177,7 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
                                     input_stable_keys: vec![
                                         self.place_key(*argument),
                                         self.place_key(*return_place),
-                                        operation.stable_key.clone(),
+                                        self.operation_key(operation),
                                     ],
                                 },
                             );
@@ -225,7 +225,7 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
                     interner,
                     operation,
                     DataFlowNodeKind::Synthetic,
-                    format!("unknown-source:{}", operation.stable_key),
+                    format!("unknown-source:{}", self.operation_key(operation)),
                 )
             });
         self.push_edge(
@@ -245,7 +245,7 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
                 provenance: DataFlowProvenance::Native,
                 budget: None,
                 evidence: vec![evidence.to_string(), value_evidence(value)],
-                input_stable_keys: vec![self.place_key(target), operation.stable_key.clone()],
+                input_stable_keys: vec![self.place_key(target), self.operation_key(operation)],
             },
         );
     }
@@ -297,7 +297,7 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
                             .map(|fact| fact.construct.clone())
                             .unwrap_or_else(|| "missing_unsupported_fact".to_string()),
                     ],
-                    input_stable_keys: vec![self.place_key(*place), operation.stable_key.clone()],
+                    input_stable_keys: vec![self.place_key(*place), self.operation_key(operation)],
                 },
             );
         }
@@ -382,25 +382,25 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
                 interner,
                 operation,
                 DataFlowNodeKind::Synthetic,
-                format!("unknown:{evidence}:{}", operation.stable_key),
+                format!("unknown:{evidence}:{}", self.operation_key(operation)),
             )),
             MirValue::BinOp { op, .. } => Some(self.operation_node(
                 interner,
                 operation,
                 DataFlowNodeKind::Value,
-                format!("binop:{op}:{}", operation.stable_key),
+                format!("binop:{op}:{}", self.operation_key(operation)),
             )),
             MirValue::Aggregate { kind, .. } => Some(self.operation_node(
                 interner,
                 operation,
                 DataFlowNodeKind::Value,
-                format!("aggregate:{kind:?}:{}", operation.stable_key),
+                format!("aggregate:{kind:?}:{}", self.operation_key(operation)),
             )),
             MirValue::Closure { body, .. } => Some(self.operation_node(
                 interner,
                 operation,
                 DataFlowNodeKind::Value,
-                format!("closure:{}:{}", body.0, operation.stable_key),
+                format!("closure:{}:{}", body.0, self.operation_key(operation)),
             )),
             MirValue::Literal { .. } => None,
         }
@@ -421,7 +421,7 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
             interner,
             FactFamily::DataFlowNode,
             &[
-                ("operation", operation.stable_key.clone()),
+                ("operation", self.operation_key(operation)),
                 ("node", suffix),
             ],
         );
@@ -471,7 +471,7 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
             FactFamily::DataFlowEdge,
             &[
                 ("kind", format!("{:?}", draft.kind)),
-                ("operation", draft.operation.stable_key.clone()),
+                ("operation", self.operation_key(draft.operation)),
                 ("from", self.node_key(draft.from)),
                 ("to", self.node_key(draft.to)),
                 ("status", format!("{:?}", draft.status)),
@@ -529,8 +529,12 @@ impl<'a, 'b> LocalFlowBuilder<'a, 'b> {
             .mir_places()
             .iter()
             .find(|fact| fact.id == place)
-            .map(|place| place.stable_key.clone())
+            .map(|place| self.db.resolve_stable_key(place.stable_key).to_string())
             .unwrap_or_else(|| format!("place:{}", place.0))
+    }
+
+    fn operation_key(&self, operation: &MirOperation) -> String {
+        self.db.resolve_stable_key(operation.stable_key).to_string()
     }
 
     fn node_key(&self, node: DataFlowNodeId) -> String {
@@ -666,10 +670,12 @@ mod tests {
     #[test]
     fn local_builder_derives_parameter_local_return_flow() {
         let mut db = AnalysisDb::default();
+        let interner = db.stable_key_interner();
         db.replace_semantic_mir(MirOutput {
-            bodies: vec![body()],
+            bodies: vec![body(&interner)],
             places: vec![
                 place(
+                    &interner,
                     0,
                     PlaceRoot::Parameter {
                         function: FunctionId(1),
@@ -679,6 +685,7 @@ mod tests {
                     Vec::new(),
                 ),
                 place(
+                    &interner,
                     1,
                     PlaceRoot::Local {
                         function: FunctionId(1),
@@ -689,6 +696,7 @@ mod tests {
             ],
             operations: vec![
                 op(
+                    &interner,
                     0,
                     MirOperationKind::Bind {
                         place: PlaceId(1),
@@ -696,6 +704,7 @@ mod tests {
                     },
                 ),
                 op(
+                    &interner,
                     1,
                     MirOperationKind::Return {
                         value: Some(MirValue::Place(PlaceId(1))),
@@ -728,10 +737,12 @@ mod tests {
     #[test]
     fn call_argument_to_return_edge_carries_typed_call_site() {
         let mut db = AnalysisDb::default();
+        let interner = db.stable_key_interner();
         db.replace_semantic_mir(MirOutput {
-            bodies: vec![body()],
+            bodies: vec![body(&interner)],
             places: vec![
                 place(
+                    &interner,
                     0,
                     PlaceRoot::Parameter {
                         function: FunctionId(1),
@@ -741,6 +752,7 @@ mod tests {
                     Vec::new(),
                 ),
                 place(
+                    &interner,
                     1,
                     PlaceRoot::Local {
                         function: FunctionId(1),
@@ -750,6 +762,7 @@ mod tests {
                 ),
             ],
             operations: vec![op(
+                &interner,
                 0,
                 MirOperationKind::Call {
                     site: CallSiteId(7),
@@ -780,10 +793,12 @@ mod tests {
     #[test]
     fn projection_mutation_emits_projection_edge_with_place_evidence() {
         let mut db = AnalysisDb::default();
+        let interner = db.stable_key_interner();
         db.replace_semantic_mir(MirOutput {
-            bodies: vec![body()],
+            bodies: vec![body(&interner)],
             places: vec![
                 place(
+                    &interner,
                     0,
                     PlaceRoot::Local {
                         function: FunctionId(1),
@@ -792,6 +807,7 @@ mod tests {
                     Vec::new(),
                 ),
                 place(
+                    &interner,
                     1,
                     PlaceRoot::Local {
                         function: FunctionId(1),
@@ -801,6 +817,7 @@ mod tests {
                 ),
             ],
             operations: vec![op(
+                &interner,
                 0,
                 MirOperationKind::Assign {
                     place: PlaceId(1),
@@ -832,9 +849,11 @@ mod tests {
     #[test]
     fn unknown_write_emits_havoc_or_unknown_edge() {
         let mut db = AnalysisDb::default();
+        let interner = db.stable_key_interner();
         db.replace_semantic_mir(MirOutput {
-            bodies: vec![body()],
+            bodies: vec![body(&interner)],
             places: vec![place(
+                &interner,
                 0,
                 PlaceRoot::Local {
                     function: FunctionId(1),
@@ -843,6 +862,7 @@ mod tests {
                 Vec::new(),
             )],
             operations: vec![op(
+                &interner,
                 0,
                 MirOperationKind::Assign {
                     place: PlaceId(0),
@@ -873,9 +893,11 @@ mod tests {
     #[test]
     fn literal_assignment_does_not_emit_unknown_source_present_flow() {
         let mut db = AnalysisDb::default();
+        let interner = db.stable_key_interner();
         db.replace_semantic_mir(MirOutput {
-            bodies: vec![body()],
+            bodies: vec![body(&interner)],
             places: vec![place(
+                &interner,
                 0,
                 PlaceRoot::Local {
                     function: FunctionId(1),
@@ -884,6 +906,7 @@ mod tests {
                 Vec::new(),
             )],
             operations: vec![op(
+                &interner,
                 0,
                 MirOperationKind::Assign {
                     place: PlaceId(0),
@@ -911,10 +934,12 @@ mod tests {
     #[test]
     fn literal_overwrite_kills_stale_incoming_local_flow() {
         let mut db = AnalysisDb::default();
+        let interner = db.stable_key_interner();
         db.replace_semantic_mir(MirOutput {
-            bodies: vec![body()],
+            bodies: vec![body(&interner)],
             places: vec![
                 place(
+                    &interner,
                     0,
                     PlaceRoot::Parameter {
                         function: FunctionId(1),
@@ -924,6 +949,7 @@ mod tests {
                     Vec::new(),
                 ),
                 place(
+                    &interner,
                     1,
                     PlaceRoot::Local {
                         function: FunctionId(1),
@@ -934,6 +960,7 @@ mod tests {
             ],
             operations: vec![
                 op(
+                    &interner,
                     0,
                     MirOperationKind::Bind {
                         place: PlaceId(1),
@@ -941,6 +968,7 @@ mod tests {
                     },
                 ),
                 op(
+                    &interner,
                     1,
                     MirOperationKind::Assign {
                         place: PlaceId(1),
@@ -951,6 +979,7 @@ mod tests {
                     },
                 ),
                 op(
+                    &interner,
                     2,
                     MirOperationKind::Return {
                         value: Some(MirValue::Place(PlaceId(1))),
@@ -986,10 +1015,12 @@ mod tests {
     #[test]
     fn literal_overwrite_in_branchy_body_preserves_possible_incoming_local_flow() {
         let mut db = AnalysisDb::default();
+        let interner = db.stable_key_interner();
         db.replace_semantic_mir(MirOutput {
-            bodies: vec![body()],
+            bodies: vec![body(&interner)],
             places: vec![
                 place(
+                    &interner,
                     0,
                     PlaceRoot::Parameter {
                         function: FunctionId(1),
@@ -999,6 +1030,7 @@ mod tests {
                     Vec::new(),
                 ),
                 place(
+                    &interner,
                     1,
                     PlaceRoot::Local {
                         function: FunctionId(1),
@@ -1009,6 +1041,7 @@ mod tests {
             ],
             operations: vec![
                 op(
+                    &interner,
                     0,
                     MirOperationKind::Bind {
                         place: PlaceId(1),
@@ -1016,6 +1049,7 @@ mod tests {
                     },
                 ),
                 op(
+                    &interner,
                     1,
                     MirOperationKind::Branch {
                         predicate: MirPredicateId(1),
@@ -1023,6 +1057,7 @@ mod tests {
                     },
                 ),
                 op(
+                    &interner,
                     2,
                     MirOperationKind::Assign {
                         place: PlaceId(1),
@@ -1033,6 +1068,7 @@ mod tests {
                     },
                 ),
                 op(
+                    &interner,
                     3,
                     MirOperationKind::Return {
                         value: Some(MirValue::Place(PlaceId(1))),
@@ -1058,7 +1094,7 @@ mod tests {
         );
     }
 
-    fn body() -> MirBody {
+    fn body(interner: &crate::core::StableKeyInterner) -> MirBody {
         MirBody {
             id: MirBodyId(1),
             language: Language::TypeScript,
@@ -1066,9 +1102,9 @@ mod tests {
             function: FunctionId(1),
             package: None,
             module: None,
-            owner_stable_key: "function:one".to_string(),
+            owner_stable_key: interner.intern("function:one".to_string()),
             span: span(),
-            stable_key: "body:one".to_string(),
+            stable_key: interner.intern("body:one".to_string()),
             status: MirStatus::Resolved,
         }
     }
@@ -1080,19 +1116,28 @@ mod tests {
         }
     }
 
-    fn op(ordinal: u32, kind: MirOperationKind) -> MirOperation {
+    fn op(
+        interner: &crate::core::StableKeyInterner,
+        ordinal: u32,
+        kind: MirOperationKind,
+    ) -> MirOperation {
         MirOperation {
             id: MirOpId(u64::from(ordinal)),
             body: MirBodyId(1),
             ordinal,
             span: span(),
             kind,
-            stable_key: format!("op:{ordinal}"),
+            stable_key: interner.intern(format!("op:{ordinal}")),
             status: MirStatus::Resolved,
         }
     }
 
-    fn place(id: u64, root: PlaceRoot, projections: Vec<PlaceProjection>) -> PlaceFact {
+    fn place(
+        interner: &crate::core::StableKeyInterner,
+        id: u64,
+        root: PlaceRoot,
+        projections: Vec<PlaceProjection>,
+    ) -> PlaceFact {
         PlaceFact {
             id: PlaceId(id),
             language: Language::TypeScript,
@@ -1100,7 +1145,7 @@ mod tests {
             function: Some(FunctionId(1)),
             root,
             projections,
-            stable_key: format!("place:{id}:target"),
+            stable_key: interner.intern(format!("place:{id}:target")),
             status: PlaceStatus::Resolved,
         }
     }

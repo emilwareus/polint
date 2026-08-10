@@ -225,7 +225,7 @@ fn push_source_introduction_edge(
         &[
             ("kind", "SourceIntroduction".to_string()),
             ("trust_boundary", boundary.stable_key.clone()),
-            ("place", place.stable_key.clone()),
+            ("place", interner.resolve(place.stable_key).to_string()),
         ],
     );
     if output
@@ -271,7 +271,10 @@ fn push_source_introduction_edge(
                 .map(|index| format!("target_parameter_index={index}"))
                 .unwrap_or_else(|| "target_parameter_index=unknown".to_string()),
         ],
-        input_stable_keys: vec![boundary.stable_key.clone(), place.stable_key.clone()],
+        input_stable_keys: vec![
+            boundary.stable_key.clone(),
+            interner.resolve(place.stable_key).to_string(),
+        ],
         stable_key,
     });
 }
@@ -480,6 +483,7 @@ mod tests {
     #[test]
     fn source_models_create_source_introduction_edges_to_matching_parameters() {
         let mut db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
         let file = db.add_file(
             PathBuf::from("src/main.ts"),
             "src/main.ts".to_string(),
@@ -497,7 +501,7 @@ mod tests {
             calls: Vec::new(),
         });
         db.replace_semantic_mir(MirOutput {
-            bodies: vec![mir_body(file, function)],
+            bodies: vec![mir_body(&interner, file, function)],
             places: vec![parameter_place(file, function)],
             operations: Vec::new(),
             unsupported: Vec::new(),
@@ -536,6 +540,7 @@ mod tests {
     #[test]
     fn source_models_downgrade_unknown_parameter_index_edges() {
         let mut db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
         let file = db.add_file(
             PathBuf::from("src/main.ts"),
             "src/main.ts".to_string(),
@@ -553,10 +558,10 @@ mod tests {
             calls: Vec::new(),
         });
         db.replace_semantic_mir(MirOutput {
-            bodies: vec![mir_body(file, function)],
+            bodies: vec![mir_body(&interner, file, function)],
             places: vec![
-                parameter_place_with_index(file, function, 0, "req"),
-                parameter_place_with_index(file, function, 1, "res"),
+                parameter_place_with_index(&interner, file, function, 0, "req"),
+                parameter_place_with_index(&interner, file, function, 1, "res"),
             ],
             operations: Vec::new(),
             unsupported: Vec::new(),
@@ -594,7 +599,11 @@ mod tests {
         }));
     }
 
-    fn mir_body(file: FileId, function: FunctionId) -> MirBody {
+    fn mir_body(
+        interner: &crate::core::StableKeyInterner,
+        file: FileId,
+        function: FunctionId,
+    ) -> MirBody {
         MirBody {
             id: MirBodyId(0),
             language: Language::TypeScript,
@@ -602,18 +611,20 @@ mod tests {
             function,
             package: None,
             module: None,
-            owner_stable_key: "function:handler".to_string(),
+            owner_stable_key: interner.intern("function:handler".to_string()),
             span: Span::point(file, 1, 1),
-            stable_key: "body:handler".to_string(),
+            stable_key: interner.intern("body:handler".to_string()),
             status: MirStatus::Resolved,
         }
     }
 
     fn parameter_place(file: FileId, function: FunctionId) -> PlaceFact {
-        parameter_place_with_index(file, function, 0, "req")
+        let interner = crate::core::StableKeyInterner::default();
+        parameter_place_with_index(&interner, file, function, 0, "req")
     }
 
     fn parameter_place_with_index(
+        interner: &crate::core::StableKeyInterner,
         file: FileId,
         function: FunctionId,
         index: u32,
@@ -630,7 +641,7 @@ mod tests {
                 name: Some(name.to_string()),
             },
             projections: Vec::<PlaceProjection>::new(),
-            stable_key: format!("place:{name}"),
+            stable_key: interner.intern(format!("place:{name}")),
             status: PlaceStatus::Resolved,
         }
     }

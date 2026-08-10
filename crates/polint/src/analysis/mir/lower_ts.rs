@@ -28,7 +28,7 @@ use crate::analysis::stable_key::semantic_stable_key;
 use crate::analysis::types::facts::TypeShape;
 use crate::analysis_kernel::FactFamily;
 use crate::core::{
-    AnalysisDb, FileId, FunctionFact, FunctionId, Language, SourceFile, Span,
+    AnalysisDb, FileId, FunctionFact, FunctionId, Language, SourceFile, Span, StableKeyId,
     is_synthetic_ts_js_module_function,
 };
 use crate::ts::{
@@ -54,10 +54,10 @@ pub(crate) fn lower_ts_mir(db: &AnalysisDb) -> MirOutput {
         lowering.lower_file(interner, db, file);
     }
 
-    let (places, place_types) = lowering.places.clone().finish_with_types();
+    let (places, place_types) = lowering.places.clone().finish_with_types(interner);
     let place_ids = places
         .iter()
-        .map(|place| (place.stable_key.clone(), place.id))
+        .map(|place| (interner.resolve(place.stable_key).to_string(), place.id))
         .collect::<BTreeMap<_, _>>();
     let operations = lowering.finish_operations(&place_ids);
     let unsupported = lowering.finish_unsupported(interner, &place_ids);
@@ -83,6 +83,7 @@ pub(crate) fn lower_ts_mir(db: &AnalysisDb) -> MirOutput {
         })
         .collect::<BTreeMap<_, _>>();
     let (blocks, statements, terminators) = lower_control_flow(
+        interner,
         &lowering.bodies,
         &operations,
         &control_shapes,
@@ -100,10 +101,11 @@ pub(crate) fn lower_ts_mir(db: &AnalysisDb) -> MirOutput {
         operations,
         unsupported,
     }
-    .normalized()
+    .normalized(interner)
 }
 
 fn lower_control_flow(
+    interner: &crate::core::StableKeyInterner,
     bodies: &[MirBody],
     operations: &[MirOperation],
     control_shapes: &BTreeMap<MirOpId, ControlShape>,
@@ -142,12 +144,13 @@ fn lower_control_flow(
 
         for (step_index, step_id) in step_ids.into_iter().enumerate() {
             if let Some(operation) = body_operations.get(&step_id).copied() {
+                let operation_stable_key = interner.resolve(operation.stable_key);
                 let statement = MirStatement {
                     id: MirStatementId(statements.len() as u64),
                     body: body.id,
                     ordinal: operation.ordinal,
                     operation: operation.id,
-                    stable_key: format!("{}:statement", operation.stable_key),
+                    stable_key: interner.intern(format!("{operation_stable_key}:statement")),
                     status: operation.status,
                 };
                 drafts[current].statements.push(statement.id);
@@ -180,7 +183,7 @@ fn lower_control_flow(
                             },
                             ControlShape::Switch => MirTerminatorKind::Switch {
                                 discriminant: MirValue::Unknown {
-                                    evidence: operation.stable_key.clone(),
+                                    evidence: operation_stable_key.to_string(),
                                 },
                                 cases: vec![(
                                     MirValue::Unknown {
@@ -273,6 +276,7 @@ fn lower_control_flow(
         if drafts[current].terminator.is_none() {
             drafts[current].terminator = Some(MirTerminatorKind::Return { value: None });
         }
+        let body_stable_key = interner.resolve(body.stable_key);
         for draft in drafts {
             let kind = draft
                 .terminator
@@ -281,7 +285,8 @@ fn lower_control_flow(
                 id: MirTerminatorId(terminators.len() as u64),
                 body: draft.body,
                 ordinal: draft.ordinal,
-                stable_key: format!("{}:terminator:{}", body.stable_key, draft.ordinal),
+                stable_key: interner
+                    .intern(format!("{body_stable_key}:terminator:{}", draft.ordinal)),
                 status: body.status,
                 kind,
             };
@@ -291,7 +296,7 @@ fn lower_control_flow(
                 ordinal: draft.ordinal,
                 statements: draft.statements,
                 terminator: terminator.id,
-                stable_key: format!("{}:block:{}", body.stable_key, draft.ordinal),
+                stable_key: interner.intern(format!("{body_stable_key}:block:{}", draft.ordinal)),
             });
             terminators.push(terminator);
         }
@@ -450,6 +455,7 @@ impl TsMirLowering {
             );
             let body = self.push_body(interner, db, file, module_function, span);
             let mut module_lowering = FunctionLowering::new(
+                interner,
                 file,
                 file.source.as_ref(),
                 module_function.id,
@@ -468,6 +474,7 @@ impl TsMirLowering {
 
         for (function, function_id, body) in prepared {
             let mut function_lowering = FunctionLowering::new(
+                interner,
                 file,
                 file.source.as_ref(),
                 function_id,
@@ -523,19 +530,21 @@ impl TsMirLowering {
         span: Span,
     ) -> MirBody {
         let id = MirBodyId(self.bodies.len() as u64);
-        let owner_stable_key = owner_stable_key(interner, file, function);
-        let stable_key = semantic_stable_key(
+        let owner_stable_key_text = owner_stable_key(interner, file, function);
+        let stable_key_text = semantic_stable_key(
             interner,
             FactFamily::MirBody,
             &[
                 ("language", language_label(file.language).to_string()),
                 ("path", file.relative_path.clone()),
-                ("owner", owner_stable_key.clone()),
+                ("owner", owner_stable_key_text.clone()),
                 ("start_byte", span.start_byte.to_string()),
                 ("end_byte", span.end_byte.to_string()),
             ],
         )
         .into_string();
+        let owner_stable_key = interner.intern(owner_stable_key_text);
+        let stable_key = interner.intern(stable_key_text);
         let body = MirBody {
             id,
             language: file.language,
@@ -1339,6 +1348,7 @@ struct FunctionLowering<'source> {
 
 impl<'source> FunctionLowering<'source> {
     fn new(
+        interner: &crate::core::StableKeyInterner,
         file: &SourceFile,
         source: &'source str,
         function: FunctionId,
@@ -1354,8 +1364,8 @@ impl<'source> FunctionLowering<'source> {
             body: body.id,
             stable_context: PlaceStableContext::new(
                 file.relative_path.clone(),
-                body.owner_stable_key.clone(),
-                body.stable_key.clone(),
+                interner.resolve(body.owner_stable_key).to_string(),
+                interner.resolve(body.stable_key).to_string(),
             ),
             closure_bodies,
             closure_capture_names,
@@ -3747,7 +3757,7 @@ struct OperationDraft {
     ordinal: u32,
     span: Span,
     kind: OperationKindDraft,
-    stable_key: String,
+    stable_key: StableKeyId,
     status: MirStatus,
 }
 
@@ -3762,7 +3772,13 @@ impl OperationDraft {
         pair: (OperationKindDraft, MirStatus),
     ) -> Self {
         let (kind, status) = pair;
-        let stable_key = operation_stable_key(interner, body_stable_key, ordinal, &span, &kind);
+        let stable_key = interner.intern(operation_stable_key(
+            interner,
+            body_stable_key,
+            ordinal,
+            &span,
+            &kind,
+        ));
         Self {
             id,
             body,
@@ -3782,7 +3798,7 @@ impl OperationDraft {
             ordinal: self.ordinal,
             span: self.span.clone(),
             kind,
-            stable_key: self.stable_key.clone(),
+            stable_key: self.stable_key,
             status: self.status,
         })
     }
@@ -4115,7 +4131,7 @@ impl UnsupportedDraft {
             conservative_action: self.conservative_action,
             precision: UnsupportedPrecision::Unsupported,
             status: MirStatus::Unsupported,
-            stable_key: unsupported_stable_key(interner, self),
+            stable_key: interner.intern(unsupported_stable_key(interner, self)),
         }
     }
 }
@@ -4379,12 +4395,13 @@ mod places {
     use crate::core::{AnalysisDb, Language, TS_JS_MODULE_FUNCTION_NAME};
     use std::path::PathBuf;
 
-    fn lower(path: &str, source: &str) -> MirOutput {
+    fn lower(path: &str, source: &str) -> (MirOutput, crate::core::StableKeyInterner) {
         let mut db = AnalysisDb::new();
         db.add_file(PathBuf::from(path), path.to_string(), source.to_string());
         let diagnostics = crate::ts::analyze(&mut db);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        lower_ts_mir(&db)
+        let output = lower_ts_mir(&db);
+        (output, db.stable_key_interner())
     }
 
     fn lower_allowing_parser_diagnostics(path: &str, source: &str) -> (AnalysisDb, MirOutput) {
@@ -4483,32 +4500,30 @@ export function render(user, index) {
   return token;
 }
 "#;
-        let first = lower("src/render.ts", source);
-        let second = lower("src/render.ts", source);
+        let (first, first_interner) = lower("src/render.ts", source);
+        let (second, second_interner) = lower("src/render.ts", source);
 
         assert_eq!(first.bodies.len(), 2);
-        assert!(
-            first
-                .bodies
-                .iter()
-                .any(|body| body.owner_stable_key.contains(TS_JS_MODULE_FUNCTION_NAME))
-        );
-        assert!(
-            first
-                .bodies
-                .iter()
-                .any(|body| body.owner_stable_key.contains("render"))
-        );
+        assert!(first.bodies.iter().any(|body| {
+            first_interner
+                .resolve(body.owner_stable_key)
+                .contains(TS_JS_MODULE_FUNCTION_NAME)
+        }));
+        assert!(first.bodies.iter().any(|body| {
+            first_interner
+                .resolve(body.owner_stable_key)
+                .contains("render")
+        }));
         assert_eq!(
             first
                 .places
                 .iter()
-                .map(|place| place.stable_key.as_str())
+                .map(|place| first_interner.resolve(place.stable_key).to_string())
                 .collect::<Vec<_>>(),
             second
                 .places
                 .iter()
-                .map(|place| place.stable_key.as_str())
+                .map(|place| second_interner.resolve(place.stable_key).to_string())
                 .collect::<Vec<_>>()
         );
         assert!(first.places.iter().any(|place| matches!(
@@ -4548,7 +4563,7 @@ export function render(user, index) {
 
     #[test]
     fn ts_lowerer_constructs_structured_values_closure_captures_and_place_types() {
-        let output = lower(
+        let (output, _interner) = lower(
             "src/values.ts",
             r#"
 export function make(seed: number) {
@@ -4633,12 +4648,16 @@ class View {
         assert!(output.bodies.iter().any(|body| {
             body.function == arrow.id
                 && body.language == Language::Tsx
-                && body.owner_stable_key.contains("render")
+                && db
+                    .resolve_stable_key(body.owner_stable_key)
+                    .contains("render")
         }));
         assert!(output.bodies.iter().any(|body| {
             body.function == method.id
                 && body.language == Language::Tsx
-                && body.owner_stable_key.contains("View.render")
+                && db
+                    .resolve_stable_key(body.owner_stable_key)
+                    .contains("View.render")
         }));
         assert!(output.places.iter().any(|place| matches!(
             &place.root,
@@ -4660,7 +4679,7 @@ class View {
 
     #[test]
     fn ts_mir_place_rows_do_not_carry_oxc_ast_debug_evidence() {
-        let output = lower(
+        let (output, _) = lower(
             "src/render.ts",
             r#"
 export function render(user) {
@@ -4692,17 +4711,18 @@ mod operations {
     use std::collections::BTreeSet;
     use std::path::PathBuf;
 
-    fn lower(path: &str, source: &str) -> MirOutput {
+    fn lower(path: &str, source: &str) -> (MirOutput, crate::core::StableKeyInterner) {
         let mut db = AnalysisDb::new();
         db.add_file(PathBuf::from(path), path.to_string(), source.to_string());
         let diagnostics = crate::ts::analyze(&mut db);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        lower_ts_mir(&db)
+        let output = lower_ts_mir(&db);
+        (output, db.stable_key_interner())
     }
 
     #[test]
     fn ts_statement_lowering_emits_assignment_modes_and_control_shapes() {
-        let output = lower(
+        let (output, _) = lower(
             "src/flow.ts",
             r#"
 export function flow(user, index, enabled) {
@@ -4779,8 +4799,8 @@ export function flow(token, count) {
   return result;
 }
 "#;
-        let first = lower("src/calls.ts", source);
-        let second = lower("src/calls.ts", source);
+        let (first, first_interner) = lower("src/calls.ts", source);
+        let (second, second_interner) = lower("src/calls.ts", source);
 
         let first_calls = first
             .operations
@@ -4792,7 +4812,7 @@ export function flow(token, count) {
                     arguments,
                     return_place,
                 } => Some((
-                    operation.stable_key.clone(),
+                    first_interner.resolve(operation.stable_key).to_string(),
                     *site,
                     callee,
                     arguments.len(),
@@ -4811,7 +4831,7 @@ export function flow(token, count) {
                     return_place,
                     ..
                 } => Some((
-                    operation.stable_key.clone(),
+                    second_interner.resolve(operation.stable_key).to_string(),
                     *site,
                     arguments.len(),
                     *return_place,
@@ -4847,7 +4867,7 @@ const k1 = {
 };
 k1.a4().a2();
 "#;
-        let output = lower("src/chained.js", source);
+        let (output, _) = lower("src/chained.js", source);
         let chain_start = source.find("k1.a4()").expect("chained call source exists") as u32;
         let same_start_calls = output
             .operations
@@ -4877,7 +4897,7 @@ k1.a4().a2();
 ((new f()));
 function f() {}
 "#;
-        let output = lower("src/call_shapes.js", source);
+        let (output, _) = lower("src/call_shapes.js", source);
         let span_texts = output
             .operations
             .iter()
@@ -4896,7 +4916,7 @@ function f() {}
 
     #[test]
     fn ts_module_body_lowering_emits_top_level_calls() {
-        let output = lower(
+        let (output, interner) = lower(
             "src/main.ts",
             r#"
 function boot() {
@@ -4909,7 +4929,11 @@ boot();
         let module = output
             .bodies
             .iter()
-            .find(|body| body.owner_stable_key.contains(TS_JS_MODULE_FUNCTION_NAME))
+            .find(|body| {
+                interner
+                    .resolve(body.owner_stable_key)
+                    .contains(TS_JS_MODULE_FUNCTION_NAME)
+            })
             .expect("module body should be lowered");
         let module_boot_calls = output
             .operations
@@ -4931,7 +4955,7 @@ boot();
 
     #[test]
     fn ts_new_expression_lowers_constructor_call() {
-        let output = lower(
+        let (output, _) = lower(
             "src/new.ts",
             r#"
 function Widget(value) {
@@ -4962,7 +4986,7 @@ new Widget(1);
 
     #[test]
     fn ts_iife_callees_use_anonymous_callable_identity() {
-        let output = lower(
+        let (output, interner) = lower(
             "src/iife.ts",
             r#"
 (function(value) {
@@ -4976,7 +5000,11 @@ new Widget(1);
         let anonymous_bodies = output
             .bodies
             .iter()
-            .filter(|body| body.owner_stable_key.contains("<polint:anonymous:"))
+            .filter(|body| {
+                interner
+                    .resolve(body.owner_stable_key)
+                    .contains("<polint:anonymous:")
+            })
             .count();
         let anonymous_calls = output
             .operations
@@ -4998,7 +5026,7 @@ new Widget(1);
 
     #[test]
     fn ts_unsupported_semantics_are_structured_and_conservative() {
-        let output = lower(
+        let (output, _) = lower(
             "src/dynamic.tsx",
             r#"
 export async function flow(obj, key, promise, value) {
@@ -5050,7 +5078,7 @@ export async function flow(obj, key, promise, value) {
 
     #[test]
     fn ts_nested_expression_lowering_preserves_calls_and_argument_places() {
-        let output = lower(
+        let (output, _) = lower(
             "src/nested.ts",
             r#"
 export function nested(a, b, tag) {
@@ -5110,7 +5138,7 @@ export function nested(a, b, tag) {
 
     #[test]
     fn ts_control_statement_edges_are_explicit_and_still_lower_nested_calls() {
-        let output = lower(
+        let (output, _) = lower(
             "src/control.ts",
             r#"
 export function control(kind, items, errors) {
@@ -5180,7 +5208,7 @@ export function control(kind, items, errors) {
 
     #[test]
     fn ts_for_initializer_expression_is_explicitly_unsupported_not_silent() {
-        let output = lower(
+        let (output, _) = lower(
             "src/for-init.ts",
             r#"
 export function loop(start, test, update) {
@@ -5216,7 +5244,7 @@ export function loop(start, test, update) {
 
     #[test]
     fn ts_for_in_and_for_of_existing_targets_record_left_writes() {
-        let output = lower(
+        let (output, _) = lower(
             "src/for-left.ts",
             r#"
 export function loop(target, index, items, map) {
@@ -5258,7 +5286,7 @@ export function loop(target, index, items, map) {
 
     #[test]
     fn ts_array_object_and_jsx_expression_children_preserve_nested_calls() {
-        let output = lower(
+        let (output, _) = lower(
             "src/nested-values.tsx",
             r#"
 export function view(a, b, items) {
@@ -5293,7 +5321,7 @@ export function view(a, b, items) {
 
     #[test]
     fn ts_optional_private_and_dynamic_import_edges_are_explicit() {
-        let output = lower(
+        let (output, _) = lower(
             "src/private.tsx",
             r#"
 class Box {
@@ -5349,7 +5377,7 @@ class Box {
 
     #[test]
     fn ts_optional_chaining_emits_unique_mir_and_unsupported_keys() {
-        let output = lower(
+        let (output, interner) = lower(
             "src/optional.ts",
             r#"
 export function flow(options, data) {
@@ -5363,12 +5391,12 @@ export function flow(options, data) {
         let operation_keys = output
             .operations
             .iter()
-            .map(|operation| operation.stable_key.as_str())
+            .map(|operation| interner.resolve(operation.stable_key))
             .collect::<BTreeSet<_>>();
         let unsupported_keys = output
             .unsupported
             .iter()
-            .map(|row| row.stable_key.as_str())
+            .map(|row| interner.resolve(row.stable_key))
             .collect::<BTreeSet<_>>();
 
         assert_eq!(operation_keys.len(), output.operations.len());

@@ -30,17 +30,14 @@ pub(crate) fn validate_semantic_mir(
 fn validate_body_rows(db: &AnalysisDb, ids: &SemanticMirIdSets, diagnostics: &mut Vec<Diagnostic>) {
     let mut keys = BTreeMap::new();
     for body in db.mir_bodies() {
-        check_duplicate_stable_key(
-            diagnostics,
-            &mut keys,
-            FactFamily::MirBody,
-            body.stable_key.as_str(),
-        );
+        let stable_key = db.resolve_stable_key(body.stable_key);
+        let owner_stable_key = db.resolve_stable_key(body.owner_stable_key);
+        check_duplicate_stable_key(diagnostics, &mut keys, FactFamily::MirBody, &stable_key);
         check_ref(
             diagnostics,
             &ids.files,
             FactFamily::MirBody,
-            body.stable_key.as_str(),
+            &stable_key,
             "MirBody.file",
             body.file,
         );
@@ -48,7 +45,7 @@ fn validate_body_rows(db: &AnalysisDb, ids: &SemanticMirIdSets, diagnostics: &mu
             diagnostics,
             &ids.functions,
             FactFamily::MirBody,
-            body.stable_key.as_str(),
+            &stable_key,
             "MirBody.function",
             body.function,
         );
@@ -56,7 +53,7 @@ fn validate_body_rows(db: &AnalysisDb, ids: &SemanticMirIdSets, diagnostics: &mu
             diagnostics,
             &ids.packages,
             FactFamily::MirBody,
-            body.stable_key.as_str(),
+            &stable_key,
             "MirBody.package",
             body.package,
         );
@@ -64,16 +61,16 @@ fn validate_body_rows(db: &AnalysisDb, ids: &SemanticMirIdSets, diagnostics: &mu
             diagnostics,
             &ids.modules,
             FactFamily::MirBody,
-            body.stable_key.as_str(),
+            &stable_key,
             "MirBody.module",
             body.module,
         );
         check_nonempty(
             diagnostics,
             FactFamily::MirBody,
-            body.stable_key.as_str(),
+            &stable_key,
             "MirBody.owner_stable_key",
-            body.owner_stable_key.as_str(),
+            &owner_stable_key,
         );
         check_span(
             db,
@@ -81,7 +78,7 @@ fn validate_body_rows(db: &AnalysisDb, ids: &SemanticMirIdSets, diagnostics: &mu
             diagnostics,
             SpanCheck {
                 family: FactFamily::MirBody,
-                stable_key: body.stable_key.as_str(),
+                stable_key: &stable_key,
                 field: "MirBody.span",
                 owner_file: Some(body.file),
                 span: &body.span,
@@ -97,17 +94,13 @@ fn validate_place_rows(
 ) {
     let mut keys = BTreeMap::new();
     for place in db.mir_places() {
-        check_duplicate_stable_key(
-            diagnostics,
-            &mut keys,
-            FactFamily::Place,
-            place.stable_key.as_str(),
-        );
+        let stable_key = db.resolve_stable_key(place.stable_key);
+        check_duplicate_stable_key(diagnostics, &mut keys, FactFamily::Place, &stable_key);
         check_optional_ref(
             diagnostics,
             &ids.files,
             FactFamily::Place,
-            place.stable_key.as_str(),
+            &stable_key,
             "Place.file",
             place.file,
         );
@@ -115,19 +108,19 @@ fn validate_place_rows(
             diagnostics,
             &ids.functions,
             FactFamily::Place,
-            place.stable_key.as_str(),
+            &stable_key,
             "Place.function",
             place.function,
         );
-        validate_place_root(&place.root, ids, diagnostics, place.stable_key.as_str());
-        validate_place_projections(&place.projections, diagnostics, place.stable_key.as_str());
+        validate_place_root(&place.root, ids, diagnostics, &stable_key);
+        validate_place_projections(&place.projections, diagnostics, &stable_key);
 
         if let Some(file) = place.file
             && db.file(file).is_none()
         {
             diagnostics.push(semantic_mir_diagnostic(
                 FactFamily::Place,
-                place.stable_key.as_str(),
+                &stable_key,
                 "Place.file",
                 format!("Place.file does not exist: {file:?}"),
             ));
@@ -142,17 +135,18 @@ fn validate_operation_rows(
 ) {
     let mut keys = BTreeMap::new();
     for operation in db.mir_operations() {
+        let stable_key = db.resolve_stable_key(operation.stable_key);
         check_duplicate_stable_key(
             diagnostics,
             &mut keys,
             FactFamily::MirOperation,
-            operation.stable_key.as_str(),
+            &stable_key,
         );
         check_ref(
             diagnostics,
             &ids.bodies,
             FactFamily::MirOperation,
-            operation.stable_key.as_str(),
+            &stable_key,
             "MirOperation.body",
             operation.body,
         );
@@ -162,7 +156,7 @@ fn validate_operation_rows(
             diagnostics,
             SpanCheck {
                 family: FactFamily::MirOperation,
-                stable_key: operation.stable_key.as_str(),
+                stable_key: &stable_key,
                 field: "MirOperation.span",
                 owner_file: db
                     .mir_bodies()
@@ -172,12 +166,7 @@ fn validate_operation_rows(
                 span: &operation.span,
             },
         );
-        validate_operation_kind(
-            &operation.kind,
-            ids,
-            diagnostics,
-            operation.stable_key.as_str(),
-        );
+        validate_operation_kind(&operation.kind, ids, diagnostics, &stable_key);
     }
 }
 
@@ -188,17 +177,18 @@ fn validate_unsupported_rows(
 ) {
     let mut keys = BTreeMap::new();
     for row in db.unsupported_semantics() {
+        let stable_key = db.resolve_stable_key(row.stable_key);
         check_duplicate_stable_key(
             diagnostics,
             &mut keys,
             FactFamily::UnsupportedSemantic,
-            row.stable_key.as_str(),
+            &stable_key,
         );
         check_optional_ref(
             diagnostics,
             &ids.bodies,
             FactFamily::UnsupportedSemantic,
-            row.stable_key.as_str(),
+            &stable_key,
             "UnsupportedSemantic.body",
             row.body,
         );
@@ -206,7 +196,7 @@ fn validate_unsupported_rows(
             diagnostics,
             &ids.operations,
             FactFamily::UnsupportedSemantic,
-            row.stable_key.as_str(),
+            &stable_key,
             "UnsupportedSemantic.operation",
             row.operation,
         );
@@ -214,7 +204,7 @@ fn validate_unsupported_rows(
             diagnostics,
             &ids.files,
             FactFamily::UnsupportedSemantic,
-            row.stable_key.as_str(),
+            &stable_key,
             "UnsupportedSemantic.file",
             row.file,
         );
@@ -224,7 +214,7 @@ fn validate_unsupported_rows(
             diagnostics,
             SpanCheck {
                 family: FactFamily::UnsupportedSemantic,
-                stable_key: row.stable_key.as_str(),
+                stable_key: &stable_key,
                 field: "UnsupportedSemantic.span",
                 owner_file: Some(row.file),
                 span: &row.span,
@@ -235,7 +225,7 @@ fn validate_unsupported_rows(
                 diagnostics,
                 &ids.places,
                 FactFamily::UnsupportedSemantic,
-                row.stable_key.as_str(),
+                &stable_key,
                 "UnsupportedSemantic.affected_places",
                 *place,
             );
@@ -243,21 +233,21 @@ fn validate_unsupported_rows(
         check_nonempty(
             diagnostics,
             FactFamily::UnsupportedSemantic,
-            row.stable_key.as_str(),
+            &stable_key,
             "UnsupportedSemantic.construct",
             row.construct.as_str(),
         );
         check_nonempty(
             diagnostics,
             FactFamily::UnsupportedSemantic,
-            row.stable_key.as_str(),
+            &stable_key,
             "UnsupportedSemantic.source_evidence",
             row.source_evidence.as_str(),
         );
         if row.affected_domains.is_empty() {
             diagnostics.push(semantic_mir_diagnostic(
                 FactFamily::UnsupportedSemantic,
-                row.stable_key.as_str(),
+                &stable_key,
                 "UnsupportedSemantic.affected_domains",
                 "unsupported semantics must name at least one affected analysis domain",
             ));
@@ -265,7 +255,7 @@ fn validate_unsupported_rows(
         if matches!(row.status, MirStatus::Resolved) {
             diagnostics.push(semantic_mir_diagnostic(
                 FactFamily::UnsupportedSemantic,
-                row.stable_key.as_str(),
+                &stable_key,
                 "UnsupportedSemantic.status",
                 "unsupported semantics cannot be resolved",
             ));
@@ -273,7 +263,7 @@ fn validate_unsupported_rows(
         if !matches!(row.precision, UnsupportedPrecision::Unsupported) {
             diagnostics.push(semantic_mir_diagnostic(
                 FactFamily::UnsupportedSemantic,
-                row.stable_key.as_str(),
+                &stable_key,
                 "UnsupportedSemantic.precision",
                 "unsupported semantics must preserve unsupported precision",
             ));

@@ -919,7 +919,7 @@ impl AnalysisDb {
     pub(crate) fn replace_semantic_mir(&mut self, output: MirOutput) -> Result<(), AnalysisError> {
         let interner_handle = self.stable_key_interner();
         let interner = &interner_handle;
-        *self.semantic_mir_store_mut() = SemanticStore::from_output(output)?;
+        *self.semantic_mir_store_mut() = SemanticStore::from_output(output, interner)?;
         self.refresh_semantic_mir_metadata(interner);
         Ok(())
     }
@@ -4036,7 +4036,7 @@ impl AnalysisDb {
             SEMANTIC_MIR_PROVIDER_ID,
             precision,
             confidence,
-            body.stable_key.clone(),
+            interner.resolve(body.stable_key).to_string(),
             stable_parts([
                 ("status", mir_status_label(body.status).to_string()),
                 ("language", language_label(body.language).to_string()),
@@ -4045,7 +4045,10 @@ impl AnalysisDb {
                     "function_key",
                     self.function_key(interner, body.function, "", &body.span),
                 ),
-                ("owner_stable_key", body.owner_stable_key.clone()),
+                (
+                    "owner_stable_key",
+                    interner.resolve(body.owner_stable_key).to_string(),
+                ),
                 (
                     "package",
                     body.package
@@ -4070,7 +4073,7 @@ impl AnalysisDb {
             SEMANTIC_MIR_PROVIDER_ID,
             precision,
             confidence,
-            operation.stable_key.clone(),
+            self.resolve_stable_key(operation.stable_key).to_string(),
             stable_parts([
                 ("status", mir_status_label(operation.status).to_string()),
                 (
@@ -4092,7 +4095,7 @@ impl AnalysisDb {
             SEMANTIC_MIR_PROVIDER_ID,
             precision,
             confidence,
-            place.stable_key.clone(),
+            self.resolve_stable_key(place.stable_key).to_string(),
             stable_parts([
                 ("status", place_status_label(place.status).to_string()),
                 ("language", language_label(place.language).to_string()),
@@ -4110,7 +4113,7 @@ impl AnalysisDb {
             SEMANTIC_MIR_PROVIDER_ID,
             precision,
             confidence,
-            row.stable_key.clone(),
+            self.resolve_stable_key(row.stable_key).to_string(),
             stable_parts([
                 ("status", mir_status_label(row.status).to_string()),
                 ("language", language_label(row.language).to_string()),

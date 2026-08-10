@@ -16,6 +16,7 @@
 //! pass.
 
 use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
+use std::sync::Arc;
 
 use oxc_allocator::Allocator;
 use oxc_ast::AstKind;
@@ -901,10 +902,10 @@ impl GraphBuilder {
         // copy chains through a shared place. A place absent from the MIR place table
         // has no honest stable identity at this layer, so its copy is skipped rather
         // than fabricated (D-07), mirroring the Alloc/Field deferrals.
-        let place_key_by_id: BTreeMap<PlaceId, &str> = db
+        let place_key_by_id: BTreeMap<PlaceId, Arc<str>> = db
             .mir_places()
             .iter()
-            .map(|place| (place.id, place.stable_key.as_str()))
+            .map(|place| (place.id, interner.resolve(place.stable_key)))
             .collect();
 
         for value in db.value_facts() {
@@ -922,7 +923,7 @@ impl GraphBuilder {
 
             // Both endpoints must resolve to a place with an honest, shared stable
             // identity; otherwise skip rather than fabricate a per-fact place node.
-            let (Some(&dst_stable), Some(&src_stable)) = (
+            let (Some(dst_stable), Some(src_stable)) = (
                 place_key_by_id.get(&dst_place),
                 place_key_by_id.get(&src_place),
             ) else {
@@ -1691,7 +1692,7 @@ fn ts_inventory_display_matches_function_name(display: Option<&str>, function_na
 struct TsObjectModelNodeContext<'a> {
     direct: TsDirectBindingNodeContext<'a>,
     object_token_by_key: BTreeMap<&'a str, ObjectTokenId>,
-    place_by_stable_key: BTreeMap<&'a str, PlaceId>,
+    place_by_stable_key: BTreeMap<Arc<str>, PlaceId>,
     synthetic_place_by_key: BTreeMap<String, PlaceId>,
 }
 
@@ -1714,7 +1715,7 @@ impl<'a> TsObjectModelNodeContext<'a> {
         let place_by_stable_key = db
             .mir_places()
             .iter()
-            .map(|place| (place.stable_key.as_str(), place.id))
+            .map(|place| (interner.resolve(place.stable_key), place.id))
             .collect::<BTreeMap<_, _>>();
 
         let mut synthetic_place_keys = BTreeSet::new();
@@ -1882,7 +1883,7 @@ impl<'a> TsObjectModelNodeContext<'a> {
 }
 
 fn insert_synthetic_place_key(
-    place_by_stable_key: &BTreeMap<&str, PlaceId>,
+    place_by_stable_key: &BTreeMap<Arc<str>, PlaceId>,
     synthetic_place_keys: &mut BTreeSet<String>,
     key: String,
 ) {

@@ -512,6 +512,7 @@ mod tests {
 
     fn go_db_base() -> AnalysisDb {
         let mut db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
         let file = db.add_file(
             "handler.go".into(),
             "handler.go".to_string(),
@@ -553,7 +554,7 @@ mod tests {
                     name: Some("r".to_string()),
                 },
                 projections: Vec::new(),
-                stable_key: "place:receiver".to_string(),
+                stable_key: interner.intern("place:receiver".to_string()),
                 status: PlaceStatus::Resolved,
             }],
             unsupported: Vec::new(),

@@ -51,7 +51,8 @@ impl DirectSummaryBuilder {
             }
             for ops in map.values_mut() {
                 ops.sort_by(|a, b| {
-                    (a.ordinal, a.stable_key.as_str()).cmp(&(b.ordinal, b.stable_key.as_str()))
+                    (a.ordinal, interner.resolve(a.stable_key))
+                        .cmp(&(b.ordinal, interner.resolve(b.stable_key)))
                 });
             }
             map
@@ -118,7 +119,7 @@ impl DirectSummaryBuilder {
             let function_bodies = &bodies_by_function[&function];
             // Use the first body (there should typically be one per function)
             let body = function_bodies[0];
-            let callable_key = body.stable_key.clone();
+            let callable_key = interner.resolve(body.stable_key).to_string();
             let body_ops = operations_by_body
                 .get(&body.id)
                 .map(|v| v.as_slice())
@@ -1017,6 +1018,7 @@ mod tests {
     #[test]
     fn single_function_produces_four_domain_summaries() {
         let mut db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
         db.replace_semantic_mir(MirOutput {
             bodies: vec![MirBody {
                 id: MirBodyId(0),
@@ -1025,9 +1027,9 @@ mod tests {
                 function: FunctionId(1),
                 package: None,
                 module: None,
-                owner_stable_key: "owner:test".to_string(),
+                owner_stable_key: interner.intern("owner:test".to_string()),
                 span: span(),
-                stable_key: "body:test".to_string(),
+                stable_key: interner.intern("body:test".to_string()),
                 status: MirStatus::Resolved,
             }],
             places: vec![PlaceFact {
@@ -1040,7 +1042,7 @@ mod tests {
                     name: "x".to_string(),
                 },
                 projections: Vec::new(),
-                stable_key: "place:x".to_string(),
+                stable_key: interner.intern("place:x".to_string()),
                 status: PlaceStatus::Resolved,
             }],
             operations: vec![MirOperation {
@@ -1049,7 +1051,7 @@ mod tests {
                 ordinal: 1,
                 span: span(),
                 kind: MirOperationKind::Return { value: None },
-                stable_key: "op:return".to_string(),
+                stable_key: interner.intern("op:return".to_string()),
                 status: MirStatus::Resolved,
             }],
             unsupported: Vec::new(),
@@ -1072,6 +1074,7 @@ mod tests {
     #[test]
     fn unresolved_calls_produce_events() {
         let mut db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
         db.replace_semantic_mir(MirOutput {
             bodies: vec![MirBody {
                 id: MirBodyId(0),
@@ -1080,9 +1083,9 @@ mod tests {
                 function: FunctionId(1),
                 package: None,
                 module: None,
-                owner_stable_key: "owner:test".to_string(),
+                owner_stable_key: interner.intern("owner:test".to_string()),
                 span: span(),
-                stable_key: "body:test".to_string(),
+                stable_key: interner.intern("body:test".to_string()),
                 status: MirStatus::Resolved,
             }],
             places: vec![],
@@ -1092,7 +1095,7 @@ mod tests {
                 ordinal: 1,
                 span: span(),
                 kind: MirOperationKind::Return { value: None },
-                stable_key: "op:return".to_string(),
+                stable_key: interner.intern("op:return".to_string()),
                 status: MirStatus::Resolved,
             }],
             unsupported: Vec::new(),
@@ -1162,6 +1165,7 @@ mod tests {
 
     fn db_with_param_and_local_ops() -> AnalysisDb {
         let mut db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
         // Function with param[0] read and local written
         db.replace_semantic_mir(MirOutput {
             bodies: vec![MirBody {
@@ -1171,9 +1175,9 @@ mod tests {
                 function: FunctionId(1),
                 package: None,
                 module: None,
-                owner_stable_key: "owner:mem".to_string(),
+                owner_stable_key: interner.intern("owner:mem".to_string()),
                 span: span(),
-                stable_key: "body:mem".to_string(),
+                stable_key: interner.intern("body:mem".to_string()),
                 status: MirStatus::Resolved,
             }],
             places: vec![
@@ -1188,7 +1192,7 @@ mod tests {
                         name: Some("arg0".to_string()),
                     },
                     projections: Vec::new(),
-                    stable_key: "place:param0".to_string(),
+                    stable_key: interner.intern("place:param0".to_string()),
                     status: PlaceStatus::Resolved,
                 },
                 PlaceFact {
@@ -1201,7 +1205,7 @@ mod tests {
                         name: "tmp".to_string(),
                     },
                     projections: Vec::new(),
-                    stable_key: "place:local-tmp".to_string(),
+                    stable_key: interner.intern("place:local-tmp".to_string()),
                     status: PlaceStatus::Resolved,
                 },
             ],
@@ -1213,7 +1217,7 @@ mod tests {
                     ordinal: 1,
                     span: span(),
                     kind: MirOperationKind::Read { place: PlaceId(0) },
-                    stable_key: "op:read-param0".to_string(),
+                    stable_key: interner.intern("op:read-param0".to_string()),
                     status: MirStatus::Resolved,
                 },
                 // Write local tmp from param[0]
@@ -1227,7 +1231,7 @@ mod tests {
                         value: MirValue::Place(PlaceId(0)),
                         mode: AssignMode::Overwrite,
                     },
-                    stable_key: "op:assign-tmp".to_string(),
+                    stable_key: interner.intern("op:assign-tmp".to_string()),
                     status: MirStatus::Resolved,
                 },
                 MirOperation {
@@ -1236,7 +1240,7 @@ mod tests {
                     ordinal: 3,
                     span: span(),
                     kind: MirOperationKind::Return { value: None },
-                    stable_key: "op:return".to_string(),
+                    stable_key: interner.intern("op:return".to_string()),
                     status: MirStatus::Resolved,
                 },
             ],
@@ -1282,6 +1286,7 @@ mod tests {
     #[test]
     fn tito_detects_param_returned_directly() {
         let mut db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
         // Function that returns param[0] directly: `return arg0`
         db.replace_semantic_mir(MirOutput {
             bodies: vec![MirBody {
@@ -1291,9 +1296,9 @@ mod tests {
                 function: FunctionId(1),
                 package: None,
                 module: None,
-                owner_stable_key: "owner:tito".to_string(),
+                owner_stable_key: interner.intern("owner:tito".to_string()),
                 span: span(),
-                stable_key: "body:tito".to_string(),
+                stable_key: interner.intern("body:tito".to_string()),
                 status: MirStatus::Resolved,
             }],
             places: vec![PlaceFact {
@@ -1307,7 +1312,7 @@ mod tests {
                     name: Some("arg0".to_string()),
                 },
                 projections: Vec::new(),
-                stable_key: "place:param0".to_string(),
+                stable_key: interner.intern("place:param0".to_string()),
                 status: PlaceStatus::Resolved,
             }],
             operations: vec![MirOperation {
@@ -1318,7 +1323,7 @@ mod tests {
                 kind: MirOperationKind::Return {
                     value: Some(MirValue::Place(PlaceId(0))),
                 },
-                stable_key: "op:return-param".to_string(),
+                stable_key: interner.intern("op:return-param".to_string()),
                 status: MirStatus::Resolved,
             }],
             unsupported: Vec::new(),
@@ -1369,6 +1374,7 @@ mod tests {
     #[test]
     fn tito_assignment_overwrite_kills_stale_param_copy() {
         let mut db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
         db.replace_semantic_mir(MirOutput {
             bodies: vec![MirBody {
                 id: MirBodyId(0),
@@ -1377,9 +1383,9 @@ mod tests {
                 function: FunctionId(1),
                 package: None,
                 module: None,
-                owner_stable_key: "owner:tito-overwrite".to_string(),
+                owner_stable_key: interner.intern("owner:tito-overwrite".to_string()),
                 span: span(),
-                stable_key: "body:tito-overwrite".to_string(),
+                stable_key: interner.intern("body:tito-overwrite".to_string()),
                 status: MirStatus::Resolved,
             }],
             places: vec![
@@ -1394,7 +1400,7 @@ mod tests {
                         name: Some("arg0".to_string()),
                     },
                     projections: Vec::new(),
-                    stable_key: "place:param0".to_string(),
+                    stable_key: interner.intern("place:param0".to_string()),
                     status: PlaceStatus::Resolved,
                 },
                 PlaceFact {
@@ -1407,7 +1413,7 @@ mod tests {
                         name: "tmp".to_string(),
                     },
                     projections: Vec::new(),
-                    stable_key: "place:tmp".to_string(),
+                    stable_key: interner.intern("place:tmp".to_string()),
                     status: PlaceStatus::Resolved,
                 },
             ],
@@ -1422,7 +1428,7 @@ mod tests {
                         value: MirValue::Place(PlaceId(0)),
                         mode: AssignMode::DeclarationBinding,
                     },
-                    stable_key: "op:tmp-param".to_string(),
+                    stable_key: interner.intern("op:tmp-param".to_string()),
                     status: MirStatus::Resolved,
                 },
                 MirOperation {
@@ -1437,7 +1443,7 @@ mod tests {
                         },
                         mode: AssignMode::Overwrite,
                     },
-                    stable_key: "op:tmp-safe".to_string(),
+                    stable_key: interner.intern("op:tmp-safe".to_string()),
                     status: MirStatus::Resolved,
                 },
                 MirOperation {
@@ -1448,7 +1454,7 @@ mod tests {
                     kind: MirOperationKind::Return {
                         value: Some(MirValue::Place(PlaceId(1))),
                     },
-                    stable_key: "op:return-tmp".to_string(),
+                    stable_key: interner.intern("op:return-tmp".to_string()),
                     status: MirStatus::Resolved,
                 },
             ],
@@ -1476,6 +1482,7 @@ mod tests {
     #[test]
     fn tito_unknown_write_kills_stale_param_copy_in_straight_line_body() {
         let mut db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
         db.replace_semantic_mir(MirOutput {
             bodies: vec![MirBody {
                 id: MirBodyId(0),
@@ -1484,9 +1491,9 @@ mod tests {
                 function: FunctionId(1),
                 package: None,
                 module: None,
-                owner_stable_key: "owner:tito-unknown-write".to_string(),
+                owner_stable_key: interner.intern("owner:tito-unknown-write".to_string()),
                 span: span(),
-                stable_key: "body:tito-unknown-write".to_string(),
+                stable_key: interner.intern("body:tito-unknown-write".to_string()),
                 status: MirStatus::Resolved,
             }],
             places: vec![
@@ -1501,7 +1508,7 @@ mod tests {
                         name: Some("arg0".to_string()),
                     },
                     projections: Vec::new(),
-                    stable_key: "place:param0".to_string(),
+                    stable_key: interner.intern("place:param0".to_string()),
                     status: PlaceStatus::Resolved,
                 },
                 PlaceFact {
@@ -1514,7 +1521,7 @@ mod tests {
                         name: "tmp".to_string(),
                     },
                     projections: Vec::new(),
-                    stable_key: "place:tmp".to_string(),
+                    stable_key: interner.intern("place:tmp".to_string()),
                     status: PlaceStatus::Resolved,
                 },
             ],
@@ -1529,7 +1536,7 @@ mod tests {
                         value: MirValue::Place(PlaceId(0)),
                         mode: AssignMode::DeclarationBinding,
                     },
-                    stable_key: "op:tmp-param".to_string(),
+                    stable_key: interner.intern("op:tmp-param".to_string()),
                     status: MirStatus::Resolved,
                 },
                 MirOperation {
@@ -1544,7 +1551,7 @@ mod tests {
                         },
                         mode: AssignMode::UnknownWrite,
                     },
-                    stable_key: "op:tmp-unknown".to_string(),
+                    stable_key: interner.intern("op:tmp-unknown".to_string()),
                     status: MirStatus::Resolved,
                 },
                 MirOperation {
@@ -1555,7 +1562,7 @@ mod tests {
                     kind: MirOperationKind::Return {
                         value: Some(MirValue::Place(PlaceId(1))),
                     },
-                    stable_key: "op:return-tmp".to_string(),
+                    stable_key: interner.intern("op:return-tmp".to_string()),
                     status: MirStatus::Resolved,
                 },
             ],
@@ -1578,6 +1585,7 @@ mod tests {
     #[test]
     fn tito_assignment_overwrite_in_branchy_body_keeps_possible_param_copy() {
         let mut db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
         db.replace_semantic_mir(MirOutput {
             bodies: vec![MirBody {
                 id: MirBodyId(0),
@@ -1586,9 +1594,9 @@ mod tests {
                 function: FunctionId(1),
                 package: None,
                 module: None,
-                owner_stable_key: "owner:tito-branch-overwrite".to_string(),
+                owner_stable_key: interner.intern("owner:tito-branch-overwrite".to_string()),
                 span: span(),
-                stable_key: "body:tito-branch-overwrite".to_string(),
+                stable_key: interner.intern("body:tito-branch-overwrite".to_string()),
                 status: MirStatus::Resolved,
             }],
             places: vec![
@@ -1603,7 +1611,7 @@ mod tests {
                         name: Some("arg0".to_string()),
                     },
                     projections: Vec::new(),
-                    stable_key: "place:param0".to_string(),
+                    stable_key: interner.intern("place:param0".to_string()),
                     status: PlaceStatus::Resolved,
                 },
                 PlaceFact {
@@ -1616,7 +1624,7 @@ mod tests {
                         name: "tmp".to_string(),
                     },
                     projections: Vec::new(),
-                    stable_key: "place:tmp".to_string(),
+                    stable_key: interner.intern("place:tmp".to_string()),
                     status: PlaceStatus::Resolved,
                 },
             ],
@@ -1631,7 +1639,7 @@ mod tests {
                         value: MirValue::Place(PlaceId(0)),
                         mode: AssignMode::DeclarationBinding,
                     },
-                    stable_key: "op:tmp-param".to_string(),
+                    stable_key: interner.intern("op:tmp-param".to_string()),
                     status: MirStatus::Resolved,
                 },
                 MirOperation {
@@ -1643,7 +1651,7 @@ mod tests {
                         predicate: MirPredicateId(1),
                         predicate_place: Some(PlaceId(0)),
                     },
-                    stable_key: "op:branch".to_string(),
+                    stable_key: interner.intern("op:branch".to_string()),
                     status: MirStatus::Resolved,
                 },
                 MirOperation {
@@ -1658,7 +1666,7 @@ mod tests {
                         },
                         mode: AssignMode::Overwrite,
                     },
-                    stable_key: "op:tmp-safe".to_string(),
+                    stable_key: interner.intern("op:tmp-safe".to_string()),
                     status: MirStatus::Resolved,
                 },
                 MirOperation {
@@ -1669,7 +1677,7 @@ mod tests {
                     kind: MirOperationKind::Return {
                         value: Some(MirValue::Place(PlaceId(1))),
                     },
-                    stable_key: "op:return-tmp".to_string(),
+                    stable_key: interner.intern("op:return-tmp".to_string()),
                     status: MirStatus::Resolved,
                 },
             ],
@@ -1699,6 +1707,7 @@ mod tests {
     #[test]
     fn unresolved_calls_produce_may_have_external_effects() {
         let mut db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
         db.replace_semantic_mir(MirOutput {
             bodies: vec![MirBody {
                 id: MirBodyId(0),
@@ -1707,9 +1716,9 @@ mod tests {
                 function: FunctionId(1),
                 package: None,
                 module: None,
-                owner_stable_key: "owner:ext".to_string(),
+                owner_stable_key: interner.intern("owner:ext".to_string()),
                 span: span(),
-                stable_key: "body:ext".to_string(),
+                stable_key: interner.intern("body:ext".to_string()),
                 status: MirStatus::Resolved,
             }],
             places: vec![],
@@ -1719,7 +1728,7 @@ mod tests {
                 ordinal: 1,
                 span: span(),
                 kind: MirOperationKind::Return { value: None },
-                stable_key: "op:return".to_string(),
+                stable_key: interner.intern("op:return".to_string()),
                 status: MirStatus::Resolved,
             }],
             unsupported: Vec::new(),

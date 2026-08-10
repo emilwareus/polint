@@ -28,7 +28,9 @@ pub(crate) fn derive_semantic_mir_with_cache_stats(
     symbol_graph_output_digest: Digest,
     upstream_syntax_output_digests: Vec<Digest>,
 ) -> SemanticMirProviderOutput {
-    let output = merge_language_outputs([lower_go_mir(db), lower_ts_mir(db)]);
+    let interner_handle = db.stable_key_interner();
+    let interner = &interner_handle;
+    let output = merge_language_outputs([lower_go_mir(db), lower_ts_mir(db)], interner);
     let output_digest = semantic_mir_output_digest(
         manifest,
         input_snapshot,
@@ -36,6 +38,7 @@ pub(crate) fn derive_semantic_mir_with_cache_stats(
         &symbol_graph_output_digest,
         &upstream_syntax_output_digests,
         &output,
+        interner,
     );
     let mut cache_stats = CacheStats::default();
     cache_stats.record_recompute();
@@ -54,7 +57,10 @@ pub(crate) fn derive_semantic_mir_with_cache_stats(
     }
 }
 
-fn merge_language_outputs(outputs: impl IntoIterator<Item = MirOutput>) -> MirOutput {
+fn merge_language_outputs(
+    outputs: impl IntoIterator<Item = MirOutput>,
+    interner: &crate::core::StableKeyInterner,
+) -> MirOutput {
     let mut merged = MirOutput {
         bodies: Vec::new(),
         places: Vec::new(),
@@ -65,7 +71,7 @@ fn merge_language_outputs(outputs: impl IntoIterator<Item = MirOutput>) -> MirOu
     for output in outputs {
         append_language_output(&mut merged, output);
     }
-    merged.normalized()
+    merged.normalized(interner)
 }
 
 fn append_language_output(merged: &mut MirOutput, mut output: MirOutput) {
@@ -332,6 +338,7 @@ fn semantic_mir_output_digest(
     symbol_graph_output_digest: &Digest,
     upstream_syntax_output_digests: &[Digest],
     output: &MirOutput,
+    interner: &crate::core::StableKeyInterner,
 ) -> Digest {
     let mut parts = vec![
         format!("provider_id={}", manifest.id),
@@ -365,9 +372,9 @@ fn semantic_mir_output_digest(
     for body in &output.bodies {
         parts.push(format!(
             "body={} status={:?} owner={} span={}:{} file={:?} function={:?}",
-            body.stable_key,
+            interner.resolve(body.stable_key),
             body.status,
-            body.owner_stable_key,
+            interner.resolve(body.owner_stable_key),
             body.span.start_byte,
             body.span.end_byte,
             body.file,
@@ -377,13 +384,17 @@ fn semantic_mir_output_digest(
     for block in &output.blocks {
         parts.push(format!(
             "block={} body={:?} ordinal={} statements={:?} terminator={:?}",
-            block.stable_key, block.body, block.ordinal, block.statements, block.terminator,
+            interner.resolve(block.stable_key),
+            block.body,
+            block.ordinal,
+            block.statements,
+            block.terminator,
         ));
     }
     for statement in &output.statements {
         parts.push(format!(
             "statement={} body={:?} ordinal={} operation={:?} status={:?}",
-            statement.stable_key,
+            interner.resolve(statement.stable_key),
             statement.body,
             statement.ordinal,
             statement.operation,
@@ -393,7 +404,7 @@ fn semantic_mir_output_digest(
     for terminator in &output.terminators {
         parts.push(format!(
             "terminator={} body={:?} ordinal={} kind={:?} status={:?}",
-            terminator.stable_key,
+            interner.resolve(terminator.stable_key),
             terminator.body,
             terminator.ordinal,
             terminator.kind,
@@ -403,7 +414,7 @@ fn semantic_mir_output_digest(
     for place in &output.places {
         parts.push(format!(
             "place={} status={:?} root={} projections={}",
-            place.stable_key,
+            interner.resolve(place.stable_key),
             place.status,
             place_root_fragment(&place.root),
             place
@@ -417,7 +428,7 @@ fn semantic_mir_output_digest(
     for operation in &output.operations {
         parts.push(format!(
             "operation={} body={:?} ordinal={} kind={} status={:?}",
-            operation.stable_key,
+            interner.resolve(operation.stable_key),
             operation.body,
             operation.ordinal,
             operation_kind_fragment(&operation.kind),
@@ -427,7 +438,7 @@ fn semantic_mir_output_digest(
     for unsupported in &output.unsupported {
         parts.push(format!(
             "unsupported={} construct={} action={:?} status={:?}",
-            unsupported.stable_key,
+            interner.resolve(unsupported.stable_key),
             unsupported.construct,
             unsupported.conservative_action,
             unsupported.status,
@@ -604,7 +615,12 @@ mod semantic_mir_provider {
         }
     }
 
-    fn body(id: u64, function: u64, stable_key: &str) -> MirBody {
+    fn body(
+        interner: &crate::core::StableKeyInterner,
+        id: u64,
+        function: u64,
+        stable_key: &str,
+    ) -> MirBody {
         MirBody {
             id: MirBodyId(id),
             language: Language::Go,
@@ -612,14 +628,19 @@ mod semantic_mir_provider {
             function: FunctionId(function),
             package: None,
             module: None,
-            owner_stable_key: stable_key.to_string(),
+            owner_stable_key: interner.intern(stable_key.to_string()),
             span: span(),
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key.to_string()),
             status: MirStatus::Resolved,
         }
     }
 
-    fn local_place(id: u64, function: u64, stable_key: &str) -> PlaceFact {
+    fn local_place(
+        interner: &crate::core::StableKeyInterner,
+        id: u64,
+        function: u64,
+        stable_key: &str,
+    ) -> PlaceFact {
         PlaceFact {
             id: PlaceId(id),
             language: Language::Go,
@@ -630,12 +651,13 @@ mod semantic_mir_provider {
                 name: stable_key.to_string(),
             },
             projections: Vec::new(),
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key.to_string()),
             status: PlaceStatus::Resolved,
         }
     }
 
     fn branch_operation(
+        interner: &crate::core::StableKeyInterner,
         id: u64,
         body: u64,
         predicate_place: PlaceId,
@@ -650,7 +672,7 @@ mod semantic_mir_provider {
                 predicate: MirPredicateId(1),
                 predicate_place: Some(predicate_place),
             },
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key.to_string()),
             status: MirStatus::Resolved,
         }
     }
@@ -750,26 +772,33 @@ mod semantic_mir_provider {
 
     #[test]
     fn merge_language_outputs_offsets_branch_predicate_place_references() {
+        let interner = crate::core::StableKeyInterner::default();
         let first = MirOutput {
-            bodies: vec![body(0, 1, "body:first")],
-            places: vec![local_place(0, 1, "place:first")],
+            bodies: vec![body(&interner, 0, 1, "body:first")],
+            places: vec![local_place(&interner, 0, 1, "place:first")],
             operations: Vec::new(),
             unsupported: Vec::new(),
             ..MirOutput::default()
         };
         let second = MirOutput {
-            bodies: vec![body(0, 2, "body:second")],
-            places: vec![local_place(0, 2, "place:second")],
-            operations: vec![branch_operation(0, 0, PlaceId(0), "op:second:branch")],
+            bodies: vec![body(&interner, 0, 2, "body:second")],
+            places: vec![local_place(&interner, 0, 2, "place:second")],
+            operations: vec![branch_operation(
+                &interner,
+                0,
+                0,
+                PlaceId(0),
+                "op:second:branch",
+            )],
             unsupported: Vec::new(),
             ..MirOutput::default()
         };
 
-        let output = super::merge_language_outputs([first, second]);
+        let output = super::merge_language_outputs([first, second], &interner);
         let branch = output
             .operations
             .iter()
-            .find(|operation| operation.stable_key == "op:second:branch")
+            .find(|operation| interner.resolve(operation.stable_key).as_ref() == "op:second:branch")
             .expect("merged branch operation");
 
         assert!(matches!(

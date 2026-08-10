@@ -468,6 +468,7 @@ mod tests {
     #[test]
     fn ts_http_error_middleware_targets_request_parameter_index() {
         let mut db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
         let file = db.add_file(
             PathBuf::from("src/app.ts"),
             "src/app.ts".to_string(),
@@ -487,10 +488,10 @@ mod tests {
         db.replace_semantic_mir(MirOutput {
             bodies: Vec::new(),
             places: vec![
-                parameter_place(file, function, 0, "err"),
-                parameter_place(file, function, 1, "req"),
-                parameter_place(file, function, 2, "res"),
-                parameter_place(file, function, 3, "next"),
+                parameter_place(&interner, file, function, 0, "err"),
+                parameter_place(&interner, file, function, 1, "req"),
+                parameter_place(&interner, file, function, 2, "res"),
+                parameter_place(&interner, file, function, 3, "next"),
             ],
             operations: Vec::new(),
             unsupported: Vec::new(),
@@ -721,7 +722,13 @@ mod tests {
         }
     }
 
-    fn parameter_place(file: FileId, function: FunctionId, index: u32, name: &str) -> PlaceFact {
+    fn parameter_place(
+        interner: &crate::core::StableKeyInterner,
+        file: FileId,
+        function: FunctionId,
+        index: u32,
+        name: &str,
+    ) -> PlaceFact {
         PlaceFact {
             id: PlaceId(index as u64),
             language: Language::TypeScript,
@@ -733,7 +740,7 @@ mod tests {
                 name: Some(name.to_string()),
             },
             projections: Vec::new(),
-            stable_key: format!("place:{name}"),
+            stable_key: interner.intern(format!("place:{name}")),
             status: PlaceStatus::Resolved,
         }
     }

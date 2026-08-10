@@ -71,9 +71,11 @@ impl CfgBuilder {
         include_exceptional_exit: bool,
     ) -> CfgFunctionId {
         let function_id = self.alloc_function_id();
+        let body_stable_key = interner.resolve(body.stable_key).to_string();
+        let owner_stable_key = interner.resolve(body.owner_stable_key).to_string();
         self.current_function = Some(function_id);
         self.current_body = Some(body.id);
-        self.current_body_stable_key = Some(body.stable_key.clone());
+        self.current_body_stable_key = Some(body_stable_key.clone());
         self.next_body_block_ordinal = 0;
         self.next_synthetic_node_ordinal = 0;
 
@@ -89,7 +91,7 @@ impl CfgBuilder {
                 interner,
                 FactFamily::CfgNode,
                 &[
-                    ("body", body.stable_key.clone()),
+                    ("body", body_stable_key.clone()),
                     ("kind", "entry".to_string()),
                 ],
             ),
@@ -104,7 +106,7 @@ impl CfgBuilder {
                 interner,
                 FactFamily::BasicBlock,
                 &[
-                    ("body", body.stable_key.clone()),
+                    ("body", body_stable_key.clone()),
                     ("kind", "entry".to_string()),
                 ],
             ),
@@ -122,7 +124,7 @@ impl CfgBuilder {
                 interner,
                 FactFamily::CfgNode,
                 &[
-                    ("body", body.stable_key.clone()),
+                    ("body", body_stable_key.clone()),
                     ("kind", "exit-normal".to_string()),
                 ],
             ),
@@ -137,7 +139,7 @@ impl CfgBuilder {
                 interner,
                 FactFamily::BasicBlock,
                 &[
-                    ("body", body.stable_key.clone()),
+                    ("body", body_stable_key.clone()),
                     ("kind", "exit-normal".to_string()),
                 ],
             ),
@@ -158,7 +160,7 @@ impl CfgBuilder {
                     interner,
                     FactFamily::CfgNode,
                     &[
-                        ("body", body.stable_key.clone()),
+                        ("body", body_stable_key.clone()),
                         ("kind", "exit-exceptional".to_string()),
                     ],
                 ),
@@ -175,7 +177,7 @@ impl CfgBuilder {
                     interner,
                     FactFamily::BasicBlock,
                     &[
-                        ("body", body.stable_key.clone()),
+                        ("body", body_stable_key.clone()),
                         ("kind", "exit-exceptional".to_string()),
                     ],
                 ),
@@ -197,10 +199,7 @@ impl CfgBuilder {
             stable_key: stable_key(
                 interner,
                 FactFamily::CfgFunction,
-                &[
-                    ("body", body.stable_key.clone()),
-                    ("owner", body.owner_stable_key.clone()),
-                ],
+                &[("body", body_stable_key), ("owner", owner_stable_key)],
             ),
             status: CfgStatus::Resolved,
             precision: CfgPrecision::ExactLowered,
@@ -279,7 +278,7 @@ impl CfgBuilder {
         let operation_id = operation.map(|operation| operation.id);
         let operation_key = operation.map_or_else(
             || format!("synthetic:{operation_ordinal}"),
-            |operation| operation.stable_key.clone(),
+            |operation| interner.resolve(operation.stable_key).to_string(),
         );
         let body_key = self.expect_body_stable_key().to_string();
         let node_id = self.new_node(CfgNodeDraft {
@@ -624,7 +623,7 @@ mod tests {
         }
     }
 
-    fn body() -> MirBody {
+    fn body(interner: &crate::core::StableKeyInterner) -> MirBody {
         MirBody {
             id: MirBodyId(1),
             language: Language::Go,
@@ -632,14 +631,14 @@ mod tests {
             function: FunctionId(1),
             package: None,
             module: None,
-            owner_stable_key: "owner".to_string(),
+            owner_stable_key: interner.intern("owner".to_string()),
             span: span(),
-            stable_key: "body:one".to_string(),
+            stable_key: interner.intern("body:one".to_string()),
             status: MirStatus::Resolved,
         }
     }
 
-    fn op(id: u64, ordinal: u32) -> MirOperation {
+    fn op(interner: &crate::core::StableKeyInterner, id: u64, ordinal: u32) -> MirOperation {
         MirOperation {
             id: MirOpId(id),
             body: MirBodyId(1),
@@ -650,19 +649,16 @@ mod tests {
                 value: MirValue::Place(PlaceId(2)),
                 mode: AssignMode::Overwrite,
             },
-            stable_key: format!("op:{ordinal}"),
+            stable_key: interner.intern(format!("op:{ordinal}")),
             status: MirStatus::Resolved,
         }
     }
 
     #[test]
     fn builder_creates_virtual_entry_and_exit_per_function() {
+        let interner = crate::core::StableKeyInterner::default();
         let mut builder = CfgBuilder::new();
-        let function = builder.start_function(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            &body(),
-            true,
-        );
+        let function = builder.start_function(&interner, &body(&interner), true);
         builder.finish_function();
         let output = builder.finish();
 
@@ -688,23 +684,15 @@ mod tests {
 
     #[test]
     fn builder_recomputes_reachability_before_finish() {
+        let interner = crate::core::StableKeyInterner::default();
         let mut builder = CfgBuilder::new();
-        builder.start_function(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            &body(),
-            true,
-        );
+        builder.start_function(&interner, &body(&interner), true);
         let entry = builder.current_block();
         let normal_exit = builder.normal_exit_block();
         let exceptional_exit = builder
             .exceptional_exit_block()
             .expect("exceptional exit block");
-        builder.add_edge(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            entry,
-            normal_exit,
-            CfgEdgeKind::Normal,
-        );
+        builder.add_edge(&interner, entry, normal_exit, CfgEdgeKind::Normal);
         builder.finish_function();
         let output = builder.finish();
 
@@ -732,21 +720,18 @@ mod tests {
     #[test]
     fn builder_assigns_deterministic_ids_for_straight_line_graphs() {
         fn build_keys() -> Vec<String> {
+            let interner = crate::core::StableKeyInterner::default();
             let mut builder = CfgBuilder::new();
-            builder.start_function(
-                &crate::core::AnalysisDb::new().stable_key_interner(),
-                &body(),
-                false,
-            );
+            builder.start_function(&interner, &body(&interner), false);
             builder.append_operation_node(
-                &crate::core::AnalysisDb::new().stable_key_interner(),
-                Some(&op(1, 1)),
+                &interner,
+                Some(&op(&interner, 1, 1)),
                 CfgNodeKind::Operation,
                 Some(span()),
             );
             builder.append_operation_node(
-                &crate::core::AnalysisDb::new().stable_key_interner(),
-                Some(&op(2, 2)),
+                &interner,
+                Some(&op(&interner, 2, 2)),
                 CfgNodeKind::Operation,
                 Some(span()),
             );
@@ -764,117 +749,66 @@ mod tests {
 
     #[test]
     fn builder_models_if_else_join_loop_return_unreachable_and_short_circuit_edges() {
+        let interner = crate::core::StableKeyInterner::default();
         let mut builder = CfgBuilder::new();
-        builder.start_function(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            &body(),
-            false,
-        );
+        builder.start_function(&interner, &body(&interner), false);
         let entry = builder.current_block();
-        let condition = builder.start_block(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            BasicBlockKind::Branch,
-        );
+        let condition = builder.start_block(&interner, BasicBlockKind::Branch);
         builder.append_operation_node(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            Some(&op(1, 1)),
+            &interner,
+            Some(&op(&interner, 1, 1)),
             CfgNodeKind::Condition,
             Some(span()),
         );
-        let then_block = builder.start_block(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            BasicBlockKind::StraightLine,
-        );
+        let then_block = builder.start_block(&interner, BasicBlockKind::StraightLine);
         builder.append_operation_node(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            Some(&op(2, 2)),
+            &interner,
+            Some(&op(&interner, 2, 2)),
             CfgNodeKind::Operation,
             Some(span()),
         );
-        let else_block = builder.start_block(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            BasicBlockKind::StraightLine,
-        );
+        let else_block = builder.start_block(&interner, BasicBlockKind::StraightLine);
         builder.append_operation_node(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            Some(&op(3, 3)),
+            &interner,
+            Some(&op(&interner, 3, 3)),
             CfgNodeKind::Operation,
             Some(span()),
         );
-        let loop_header = builder.start_block(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            BasicBlockKind::LoopHeader,
-        );
+        let loop_header = builder.start_block(&interner, BasicBlockKind::LoopHeader);
         builder.append_operation_node(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            Some(&op(4, 4)),
+            &interner,
+            Some(&op(&interner, 4, 4)),
             CfgNodeKind::Condition,
             Some(span()),
         );
-        let return_block = builder.start_block(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            BasicBlockKind::StraightLine,
-        );
+        let return_block = builder.start_block(&interner, BasicBlockKind::StraightLine);
         builder.append_operation_node(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            Some(&op(5, 5)),
+            &interner,
+            Some(&op(&interner, 5, 5)),
             CfgNodeKind::Return,
             Some(span()),
         );
-        let unreachable = builder.start_block(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            BasicBlockKind::Unreachable,
-        );
+        let unreachable = builder.start_block(&interner, BasicBlockKind::Unreachable);
         builder.append_operation_node(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            Some(&op(6, 6)),
+            &interner,
+            Some(&op(&interner, 6, 6)),
             CfgNodeKind::Operation,
             Some(span()),
         );
         builder.mark_unreachable(unreachable);
 
+        builder.add_edge(&interner, entry, condition, CfgEdgeKind::Normal);
+        builder.add_edge(&interner, condition, then_block, CfgEdgeKind::True);
+        builder.add_edge(&interner, condition, else_block, CfgEdgeKind::False);
         builder.add_edge(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            entry,
-            condition,
-            CfgEdgeKind::Normal,
-        );
-        builder.add_edge(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            condition,
-            then_block,
-            CfgEdgeKind::True,
-        );
-        builder.add_edge(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            condition,
-            else_block,
-            CfgEdgeKind::False,
-        );
-        builder.add_edge(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &interner,
             then_block,
             loop_header,
             CfgEdgeKind::ShortCircuit,
         );
-        builder.add_edge(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            else_block,
-            loop_header,
-            CfgEdgeKind::Normal,
-        );
-        builder.add_edge(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            loop_header,
-            loop_header,
-            CfgEdgeKind::LoopBack,
-        );
-        builder.add_edge(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            loop_header,
-            return_block,
-            CfgEdgeKind::LoopExit,
-        );
+        builder.add_edge(&interner, else_block, loop_header, CfgEdgeKind::Normal);
+        builder.add_edge(&interner, loop_header, loop_header, CfgEdgeKind::LoopBack);
+        builder.add_edge(&interner, loop_header, return_block, CfgEdgeKind::LoopExit);
         builder.finish_function();
         let output = builder.finish();
 

@@ -4,16 +4,16 @@ use crate::analysis::ids::{
     CallSiteId, MirBodyId, MirOpId, MirPredicateId, MirValueId, PlaceId, UnsupportedId,
 };
 use crate::analysis::mir::body::MirStatus;
-use crate::core::{FileId, Language, Span};
+use crate::core::{FileId, Language, Span, StableKeyId};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MirOperation {
     pub(crate) id: MirOpId,
     pub(crate) body: MirBodyId,
     pub(crate) ordinal: u32,
     pub(crate) span: Span,
     pub(crate) kind: MirOperationKind,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub(crate) status: MirStatus,
 }
 
@@ -105,7 +105,7 @@ pub(crate) struct MirAggregateField {
     pub(crate) value: MirValue,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct UnsupportedSemanticFact {
     pub(crate) id: UnsupportedId,
     pub(crate) body: Option<MirBodyId>,
@@ -120,7 +120,7 @@ pub(crate) struct UnsupportedSemanticFact {
     pub(crate) conservative_action: ConservativeAction,
     pub(crate) precision: UnsupportedPrecision,
     pub(crate) status: MirStatus,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
 }
 
 impl UnsupportedSemanticFact {

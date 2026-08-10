@@ -184,6 +184,7 @@ impl IdeDomainSolver {
             {
                 if is_resolved_call {
                     join_operation_state(
+                        &facts.interner,
                         &mut operation_states,
                         node.block,
                         operation,
@@ -192,6 +193,7 @@ impl IdeDomainSolver {
                     );
                 } else {
                     join_operation_state(
+                        &facts.interner,
                         &mut operation_states,
                         node.block,
                         operation,
@@ -255,6 +257,7 @@ impl IdeDomainSolver {
                                 .get(&call.id)
                                 .map_or(node.block, |node| node.block);
                             join_operation_state(
+                                &facts.interner,
                                 &mut operation_states,
                                 call_block,
                                 call,
@@ -312,6 +315,7 @@ impl SolverOutputMode {
 }
 
 struct SolverFactIndex<'a> {
+    interner: crate::core::StableKeyInterner,
     body_by_id: BTreeMap<MirBodyId, &'a MirBody>,
     operations_by_id: BTreeMap<MirOpId, &'a MirOperation>,
     functions: Vec<&'a crate::analysis::cfg::facts::CfgFunctionFact>,
@@ -328,6 +332,7 @@ struct SolverFactIndex<'a> {
 
 impl<'a> SolverFactIndex<'a> {
     fn new(db: &'a AnalysisDb) -> Self {
+        let interner = db.stable_key_interner();
         let body_by_id = db
             .mir_bodies()
             .iter()
@@ -341,13 +346,16 @@ impl<'a> SolverFactIndex<'a> {
 
         let mut functions = db.cfg_functions().iter().collect::<Vec<_>>();
         functions.sort_by(|left, right| {
-            let left_body = body_by_id
-                .get(&left.body)
-                .map_or("", |body| body.stable_key.as_str());
+            let left_body = body_by_id.get(&left.body).map_or_else(String::new, |body| {
+                interner.resolve(body.stable_key).to_string()
+            });
             let right_body = body_by_id
                 .get(&right.body)
-                .map_or("", |body| body.stable_key.as_str());
-            (left_body, left.stable_key.as_str()).cmp(&(right_body, right.stable_key.as_str()))
+                .map_or_else(String::new, |body| {
+                    interner.resolve(body.stable_key).to_string()
+                });
+            (left_body.as_str(), left.stable_key.as_str())
+                .cmp(&(right_body.as_str(), right.stable_key.as_str()))
         });
 
         let function_by_cfg = functions
@@ -430,6 +438,7 @@ impl<'a> SolverFactIndex<'a> {
         }
 
         Self {
+            interner,
             body_by_id,
             operations_by_id,
             functions,
@@ -606,6 +615,7 @@ fn join_state<K: Ord + Copy>(
 }
 
 fn join_operation_state(
+    interner: &crate::core::StableKeyInterner,
     states: &mut BTreeMap<MirOpId, (BasicBlockId, String, ProductState, ProductState)>,
     block: BasicBlockId,
     operation: &MirOperation,
@@ -615,7 +625,7 @@ fn join_operation_state(
     let row = states.entry(operation.id).or_insert_with(|| {
         (
             block,
-            operation.stable_key.clone(),
+            interner.resolve(operation.stable_key).to_string(),
             ProductState::bottom(),
             ProductState::bottom(),
         )
@@ -671,7 +681,7 @@ fn materialize_results(
         }
         let body_key = facts.body_by_id.get(&function.body).map_or_else(
             || function.stable_key.clone(),
-            |body| body.stable_key.clone(),
+            |body| facts.interner.resolve(body.stable_key).to_string(),
         );
         results.insert_function(
             function.body,
@@ -917,7 +927,8 @@ mod tests {
 
         pub(super) fn solver_input(shuffled: bool) -> SolverInput<'static> {
             let mut db = AnalysisDb::new();
-            db.replace_semantic_mir(mir_output(shuffled))
+            let interner = db.stable_key_interner();
+            db.replace_semantic_mir(mir_output(&interner, shuffled))
                 .expect("semantic MIR should store");
             db.replace_cfg_facts(cfg_output(shuffled, false))
                 .expect("CFG should store");
@@ -927,7 +938,8 @@ mod tests {
 
         pub(super) fn looping_solver_input() -> SolverInput<'static> {
             let mut db = AnalysisDb::new();
-            db.replace_semantic_mir(mir_output(false))
+            let interner = db.stable_key_interner();
+            db.replace_semantic_mir(mir_output(&interner, false))
                 .expect("semantic MIR should store");
             db.replace_cfg_facts(cfg_output(false, true))
                 .expect("CFG should store");
@@ -937,7 +949,8 @@ mod tests {
 
         pub(super) fn unreachable_solver_input() -> SolverInput<'static> {
             let mut db = AnalysisDb::new();
-            db.replace_semantic_mir(mir_output(false))
+            let interner = db.stable_key_interner();
+            db.replace_semantic_mir(mir_output(&interner, false))
                 .expect("semantic MIR should store");
             let mut cfg = cfg_output(false, false);
             cfg.blocks.push(BasicBlockFact {
@@ -966,14 +979,15 @@ mod tests {
             let parameter = PlaceId(2);
             let site = CallSiteId(1);
             let mut db = AnalysisDb::new();
+            let interner = db.stable_key_interner();
             db.replace_semantic_mir(MirOutput {
                 bodies: vec![
-                    mir_body(MirBodyId(0), caller, "body:0:caller"),
-                    mir_body(MirBodyId(1), callee, "body:1:callee"),
+                    mir_body(&interner, MirBodyId(0), caller, "body:0:caller"),
+                    mir_body(&interner, MirBodyId(1), callee, "body:1:callee"),
                 ],
                 places: vec![
-                    local_place(argument, caller, "argument", "place:0:argument"),
-                    local_place(call_result, caller, "result", "place:1:result"),
+                    local_place(&interner, argument, caller, "argument", "place:0:argument"),
+                    local_place(&interner, call_result, caller, "result", "place:1:result"),
                     PlaceFact {
                         id: parameter,
                         language: Language::Go,
@@ -985,12 +999,13 @@ mod tests {
                             name: Some("value".to_string()),
                         },
                         projections: Vec::new(),
-                        stable_key: "place:2:callee:value".to_string(),
+                        stable_key: interner.intern("place:2:callee:value".to_string()),
                         status: PlaceStatus::Resolved,
                     },
                 ],
                 operations: vec![
                     mir_operation(
+                        &interner,
                         MirOpId(0),
                         MirBodyId(0),
                         MirOperationKind::Assign {
@@ -1003,6 +1018,7 @@ mod tests {
                         "op:0:caller:assign",
                     ),
                     mir_operation(
+                        &interner,
                         MirOpId(1),
                         MirBodyId(0),
                         MirOperationKind::Call {
@@ -1016,6 +1032,7 @@ mod tests {
                         "op:1:caller:call",
                     ),
                     mir_operation(
+                        &interner,
                         MirOpId(2),
                         MirBodyId(1),
                         MirOperationKind::Return {
@@ -1044,7 +1061,12 @@ mod tests {
             (&*db).into()
         }
 
-        fn mir_body(id: MirBodyId, function: FunctionId, stable_key: &str) -> MirBody {
+        fn mir_body(
+            interner: &crate::core::StableKeyInterner,
+            id: MirBodyId,
+            function: FunctionId,
+            stable_key: &str,
+        ) -> MirBody {
             MirBody {
                 id,
                 language: Language::Go,
@@ -1052,14 +1074,15 @@ mod tests {
                 function,
                 package: None,
                 module: None,
-                owner_stable_key: format!("owner:{}", function.0),
+                owner_stable_key: interner.intern(format!("owner:{}", function.0)),
                 span: span(),
-                stable_key: stable_key.to_string(),
+                stable_key: interner.intern(stable_key.to_string()),
                 status: MirStatus::Resolved,
             }
         }
 
         fn local_place(
+            interner: &crate::core::StableKeyInterner,
             id: PlaceId,
             function: FunctionId,
             name: &str,
@@ -1075,12 +1098,13 @@ mod tests {
                     name: name.to_string(),
                 },
                 projections: Vec::new(),
-                stable_key: stable_key.to_string(),
+                stable_key: interner.intern(stable_key.to_string()),
                 status: PlaceStatus::Resolved,
             }
         }
 
         fn mir_operation(
+            interner: &crate::core::StableKeyInterner,
             id: MirOpId,
             body: MirBodyId,
             kind: MirOperationKind,
@@ -1092,7 +1116,7 @@ mod tests {
                 ordinal: id.0 as u32,
                 span: span(),
                 kind,
-                stable_key: stable_key.to_string(),
+                stable_key: interner.intern(stable_key.to_string()),
                 status: MirStatus::Resolved,
             }
         }
@@ -1290,7 +1314,7 @@ mod tests {
             }
         }
 
-        fn mir_output(shuffled: bool) -> MirOutput {
+        fn mir_output(interner: &crate::core::StableKeyInterner, shuffled: bool) -> MirOutput {
             let body = MirBody {
                 id: MirBodyId(0),
                 language: Language::Go,
@@ -1298,9 +1322,9 @@ mod tests {
                 function: FunctionId(1),
                 package: None,
                 module: None,
-                owner_stable_key: "owner:test".to_string(),
+                owner_stable_key: interner.intern("owner:test".to_string()),
                 span: span(),
-                stable_key: "body:test".to_string(),
+                stable_key: interner.intern("body:test".to_string()),
                 status: MirStatus::Resolved,
             };
             let place = PlaceFact {
@@ -1313,7 +1337,7 @@ mod tests {
                     name: "value".to_string(),
                 },
                 projections: Vec::new(),
-                stable_key: "place:value".to_string(),
+                stable_key: interner.intern("place:value".to_string()),
                 status: PlaceStatus::Resolved,
             };
             let op = MirOperation {
@@ -1328,7 +1352,7 @@ mod tests {
                     },
                     mode: AssignMode::Overwrite,
                 },
-                stable_key: "op:assign".to_string(),
+                stable_key: interner.intern("op:assign".to_string()),
                 status: MirStatus::Resolved,
             };
             let mut operations = vec![op];

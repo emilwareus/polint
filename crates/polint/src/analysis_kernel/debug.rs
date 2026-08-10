@@ -842,7 +842,7 @@ fn mir_body_rows(db: &AnalysisDb) -> Vec<SemanticMirDebugRow> {
                 SemanticMirDebugRow {
                     family: FactFamily::MirBody.label(),
                     run_id: body.id.0,
-                    stable_key: body.stable_key.clone(),
+                    stable_key: db.resolve_stable_key(body.stable_key).to_string(),
                     producer_id: metadata.producer_id,
                     layer_id: metadata.layer_id,
                     status: mir_status_label(body.status).to_string(),
@@ -876,7 +876,7 @@ fn mir_operation_rows(db: &AnalysisDb) -> Vec<SemanticMirDebugRow> {
                 SemanticMirDebugRow {
                     family: FactFamily::MirOperation.label(),
                     run_id: operation.id.0,
-                    stable_key: operation.stable_key.clone(),
+                    stable_key: db.resolve_stable_key(operation.stable_key).to_string(),
                     producer_id: metadata.producer_id,
                     layer_id: metadata.layer_id,
                     status: mir_status_label(operation.status).to_string(),
@@ -908,7 +908,7 @@ fn mir_place_rows(db: &AnalysisDb) -> Vec<SemanticMirDebugRow> {
                 SemanticMirDebugRow {
                     family: FactFamily::Place.label(),
                     run_id: place.id.0,
-                    stable_key: place.stable_key.clone(),
+                    stable_key: db.resolve_stable_key(place.stable_key).to_string(),
                     producer_id: metadata.producer_id,
                     layer_id: metadata.layer_id,
                     status: place_status_label(place.status).to_string(),
@@ -942,7 +942,7 @@ fn mir_unsupported_rows(db: &AnalysisDb) -> Vec<SemanticMirDebugRow> {
                 SemanticMirDebugRow {
                     family: FactFamily::UnsupportedSemantic.label(),
                     run_id: row.id.0,
-                    stable_key: row.stable_key.clone(),
+                    stable_key: db.resolve_stable_key(row.stable_key).to_string(),
                     producer_id: metadata.producer_id,
                     layer_id: metadata.layer_id,
                     status: mir_status_label(row.status).to_string(),
@@ -3150,6 +3150,7 @@ mod semantic_mir_debug_json {
     #[test]
     fn metadata_debug_json_contains_deterministic_semantic_mir_rows() {
         let mut db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
         let file = db.add_file(
             PathBuf::from("src/app.ts"),
             "src/app.ts".to_string(),
@@ -3174,9 +3175,9 @@ mod semantic_mir_debug_json {
                 function: FunctionId(0),
                 package: None,
                 module: None,
-                owner_stable_key: "function:app".to_string(),
+                owner_stable_key: interner.intern("function:app".to_string()),
                 span: span(file, 0, 54),
-                stable_key: "body:app".to_string(),
+                stable_key: interner.intern("body:app".to_string()),
                 status: MirStatus::Partial,
             }],
             places: vec![PlaceFact {
@@ -3189,7 +3190,7 @@ mod semantic_mir_debug_json {
                     name: "value".to_string(),
                 },
                 projections: vec![PlaceProjection::Property("count".to_string())],
-                stable_key: "place:value".to_string(),
+                stable_key: interner.intern("place:value".to_string()),
                 status: PlaceStatus::Partial,
             }],
             operations: vec![MirOperation {
@@ -3204,7 +3205,7 @@ mod semantic_mir_debug_json {
                     },
                     mode: AssignMode::Overwrite,
                 },
-                stable_key: "op:assign".to_string(),
+                stable_key: interner.intern("op:assign".to_string()),
                 status: MirStatus::Partial,
             }],
             unsupported: vec![UnsupportedSemanticFact {
@@ -3221,7 +3222,7 @@ mod semantic_mir_debug_json {
                 conservative_action: ConservativeAction::HavocAffectedPlaces,
                 precision: UnsupportedPrecision::Unsupported,
                 status: MirStatus::Unsupported,
-                stable_key: "unsupported:dynamic-write".to_string(),
+                stable_key: interner.intern("unsupported:dynamic-write".to_string()),
             }],
             ..MirOutput::default()
 })
@@ -3669,6 +3670,7 @@ mod abstract_domains_debug_json {
 
     fn base_db() -> AnalysisDb {
         let mut db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
         let file = db.add_file(
             PathBuf::from("src/app.ts"),
             "src/app.ts".to_string(),
@@ -3693,9 +3695,9 @@ mod abstract_domains_debug_json {
                 function: FunctionId(0),
                 package: None,
                 module: None,
-                owner_stable_key: "function:app".to_string(),
+                owner_stable_key: interner.intern("function:app".to_string()),
                 span: span(file),
-                stable_key: "body:app".to_string(),
+                stable_key: interner.intern("body:app".to_string()),
                 status: MirStatus::Partial,
             }],
             places: vec![PlaceFact {
@@ -3708,7 +3710,7 @@ mod abstract_domains_debug_json {
                     name: "value".to_string(),
                 },
                 projections: Vec::new(),
-                stable_key: "place:value".to_string(),
+                stable_key: interner.intern("place:value".to_string()),
                 status: PlaceStatus::Partial,
             }],
             operations: vec![MirOperation {
@@ -3723,7 +3725,7 @@ mod abstract_domains_debug_json {
                     },
                     mode: AssignMode::DeclarationBinding,
                 },
-                stable_key: "op:assign".to_string(),
+                stable_key: interner.intern("op:assign".to_string()),
                 status: MirStatus::Partial,
             }],
             unsupported: Vec::new(),

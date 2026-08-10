@@ -20,7 +20,9 @@ use crate::analysis::places::{
 use crate::analysis::stable_key::semantic_stable_key;
 use crate::analysis::types::facts::TypeShape;
 use crate::analysis_kernel::FactFamily;
-use crate::core::{AnalysisDb, FileId, FunctionFact, FunctionId, Language, SourceFile, Span};
+use crate::core::{
+    AnalysisDb, FileId, FunctionFact, FunctionId, Language, SourceFile, Span, StableKeyId,
+};
 
 pub(crate) fn lower_go_mir(db: &AnalysisDb) -> MirOutput {
     let interner_handle = db.stable_key_interner();
@@ -37,10 +39,10 @@ pub(crate) fn lower_go_mir(db: &AnalysisDb) -> MirOutput {
         lowering.lower_file(interner, db, file);
     }
 
-    let (places, place_types) = lowering.places.clone().finish_with_types();
+    let (places, place_types) = lowering.places.clone().finish_with_types(interner);
     let place_ids = places
         .iter()
-        .map(|place| (place.stable_key.clone(), place.id))
+        .map(|place| (interner.resolve(place.stable_key).to_string(), place.id))
         .collect::<BTreeMap<_, _>>();
     let operations = lowering.finish_operations(&place_ids);
     let unsupported = lowering.finish_unsupported(interner, &place_ids);
@@ -66,6 +68,7 @@ pub(crate) fn lower_go_mir(db: &AnalysisDb) -> MirOutput {
         })
         .collect::<BTreeMap<_, _>>();
     let (blocks, statements, terminators) = lower_control_flow(
+        interner,
         &lowering.bodies,
         &operations,
         &control_shapes,
@@ -83,10 +86,11 @@ pub(crate) fn lower_go_mir(db: &AnalysisDb) -> MirOutput {
         operations,
         unsupported,
     }
-    .normalized()
+    .normalized(interner)
 }
 
 fn lower_control_flow(
+    interner: &crate::core::StableKeyInterner,
     bodies: &[MirBody],
     operations: &[MirOperation],
     control_shapes: &BTreeMap<MirOpId, ControlShape>,
@@ -125,12 +129,13 @@ fn lower_control_flow(
 
         for (step_index, step_id) in step_ids.into_iter().enumerate() {
             if let Some(operation) = body_operations.get(&step_id).copied() {
+                let operation_stable_key = interner.resolve(operation.stable_key);
                 let statement = MirStatement {
                     id: MirStatementId(statements.len() as u64),
                     body: body.id,
                     ordinal: operation.ordinal,
                     operation: operation.id,
-                    stable_key: format!("{}:statement", operation.stable_key),
+                    stable_key: interner.intern(format!("{operation_stable_key}:statement")),
                     status: operation.status,
                 };
                 drafts[current].statements.push(statement.id);
@@ -163,7 +168,7 @@ fn lower_control_flow(
                             },
                             ControlShape::Switch => MirTerminatorKind::Switch {
                                 discriminant: MirValue::Unknown {
-                                    evidence: operation.stable_key.clone(),
+                                    evidence: operation_stable_key.to_string(),
                                 },
                                 cases: vec![(
                                     MirValue::Unknown {
@@ -244,6 +249,7 @@ fn lower_control_flow(
         if drafts[current].terminator.is_none() {
             drafts[current].terminator = Some(MirTerminatorKind::Return { value: None });
         }
+        let body_stable_key = interner.resolve(body.stable_key);
         for draft in drafts {
             let kind = draft
                 .terminator
@@ -252,7 +258,8 @@ fn lower_control_flow(
                 id: MirTerminatorId(terminators.len() as u64),
                 body: draft.body,
                 ordinal: draft.ordinal,
-                stable_key: format!("{}:terminator:{}", body.stable_key, draft.ordinal),
+                stable_key: interner
+                    .intern(format!("{body_stable_key}:terminator:{}", draft.ordinal)),
                 status: body.status,
                 kind,
             };
@@ -262,7 +269,7 @@ fn lower_control_flow(
                 ordinal: draft.ordinal,
                 statements: draft.statements,
                 terminator: terminator.id,
-                stable_key: format!("{}:block:{}", body.stable_key, draft.ordinal),
+                stable_key: interner.intern(format!("{body_stable_key}:block:{}", draft.ordinal)),
             });
             terminators.push(terminator);
         }
@@ -414,6 +421,7 @@ impl GoMirLowering {
                 .map(|(span, body)| (*span, body.id))
                 .collect::<BTreeMap<_, _>>();
             let mut function_lowering = FunctionLowering::new(
+                interner,
                 file,
                 file.source.as_ref(),
                 function.id,
@@ -439,6 +447,7 @@ impl GoMirLowering {
                     continue;
                 };
                 let mut closure_lowering = FunctionLowering::new(
+                    interner,
                     file,
                     file.source.as_ref(),
                     function.id,
@@ -455,7 +464,8 @@ impl GoMirLowering {
                     &mut self.unsupported,
                 );
             }
-            self.lower_parser_errors(interner, file, body.id, &body.stable_key, body_node);
+            let body_stable_key = interner.resolve(body.stable_key);
+            self.lower_parser_errors(interner, file, body.id, &body_stable_key, body_node);
         }
     }
 
@@ -468,19 +478,21 @@ impl GoMirLowering {
         span: Span,
     ) -> MirBody {
         let id = MirBodyId(self.bodies.len() as u64);
-        let owner_stable_key = owner_stable_key(interner, file, function);
-        let stable_key = semantic_stable_key(
+        let owner_stable_key_text = owner_stable_key(interner, file, function);
+        let stable_key_text = semantic_stable_key(
             interner,
             FactFamily::MirBody,
             &[
                 ("language", "go".to_string()),
                 ("path", file.relative_path.clone()),
-                ("owner", owner_stable_key.clone()),
+                ("owner", owner_stable_key_text.clone()),
                 ("start_byte", span.start_byte.to_string()),
                 ("end_byte", span.end_byte.to_string()),
             ],
         )
         .into_string();
+        let owner_stable_key = interner.intern(owner_stable_key_text);
+        let stable_key = interner.intern(stable_key_text);
         let body = MirBody {
             id,
             language: Language::Go,
@@ -630,6 +642,7 @@ struct FunctionLowering<'source> {
 
 impl<'source> FunctionLowering<'source> {
     fn new(
+        interner: &crate::core::StableKeyInterner,
         file: &SourceFile,
         source: &'source str,
         function: FunctionId,
@@ -644,8 +657,8 @@ impl<'source> FunctionLowering<'source> {
             body: body.id,
             stable_context: PlaceStableContext::new(
                 file.relative_path.clone(),
-                body.owner_stable_key.clone(),
-                body.stable_key.clone(),
+                interner.resolve(body.owner_stable_key).to_string(),
+                interner.resolve(body.stable_key).to_string(),
             ),
             closure_bodies,
             closure_capture_names,
@@ -1690,7 +1703,7 @@ struct OperationDraft {
     ordinal: u32,
     span: Span,
     kind: OperationKindDraft,
-    stable_key: String,
+    stable_key: StableKeyId,
     status: MirStatus,
 }
 
@@ -1705,7 +1718,13 @@ impl OperationDraft {
         pair: (OperationKindDraft, MirStatus),
     ) -> Self {
         let (kind, status) = pair;
-        let stable_key = operation_stable_key(interner, body_stable_key, ordinal, &span, &kind);
+        let stable_key = interner.intern(operation_stable_key(
+            interner,
+            body_stable_key,
+            ordinal,
+            &span,
+            &kind,
+        ));
         Self {
             id,
             body,
@@ -1725,7 +1744,7 @@ impl OperationDraft {
             ordinal: self.ordinal,
             span: self.span.clone(),
             kind,
-            stable_key: self.stable_key.clone(),
+            stable_key: self.stable_key,
             status: self.status,
         })
     }
@@ -2047,7 +2066,7 @@ impl UnsupportedDraft {
             conservative_action: self.conservative_action,
             precision: UnsupportedPrecision::Unsupported,
             status: MirStatus::Unsupported,
-            stable_key: unsupported_stable_key(interner, self),
+            stable_key: interner.intern(unsupported_stable_key(interner, self)),
         }
     }
 }
@@ -2380,7 +2399,7 @@ mod places {
     use crate::core::{AnalysisDb, FunctionId, Language};
     use std::path::PathBuf;
 
-    fn lower(source: &str) -> MirOutput {
+    fn lower(source: &str) -> (MirOutput, crate::core::StableKeyInterner) {
         let mut db = AnalysisDb::new();
         db.add_file(
             PathBuf::from("auth.go"),
@@ -2389,12 +2408,13 @@ mod places {
         );
         let diagnostics = crate::go::analyze(&mut db);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        lower_go_mir(&db)
+        let output = lower_go_mir(&db);
+        (output, db.stable_key_interner())
     }
 
     #[test]
     fn go_function_places_include_parameters_locals_globals_and_projections() {
-        let first = lower(
+        let (first, first_interner) = lower(
             r#"
 package auth
 
@@ -2407,7 +2427,7 @@ func authorize(user User, index int) bool {
 }
 "#,
         );
-        let second = lower(
+        let (second, second_interner) = lower(
             r#"
 package auth
 
@@ -2422,17 +2442,21 @@ func authorize(user User, index int) bool {
         );
 
         assert_eq!(first.bodies.len(), 1);
-        assert!(first.bodies[0].stable_key.contains("authorize"));
+        assert!(
+            first_interner
+                .resolve(first.bodies[0].stable_key)
+                .contains("authorize")
+        );
         assert_eq!(
             first
                 .places
                 .iter()
-                .map(|place| place.stable_key.as_str())
+                .map(|place| first_interner.resolve(place.stable_key).to_string())
                 .collect::<Vec<_>>(),
             second
                 .places
                 .iter()
-                .map(|place| place.stable_key.as_str())
+                .map(|place| second_interner.resolve(place.stable_key).to_string())
                 .collect::<Vec<_>>()
         );
 
@@ -2473,7 +2497,7 @@ func authorize(user User, index int) bool {
 
     #[test]
     fn go_literal_values_still_traverse_nested_expression_places() {
-        let output = lower(
+        let (output, _) = lower(
             r#"
 package auth
 
@@ -2501,7 +2525,7 @@ func authorize(user User, index int) func() string {
 
     #[test]
     fn go_lowerer_constructs_structured_values_closure_captures_and_place_types() {
-        let output = lower(
+        let (output, _) = lower(
             r#"
 package auth
 
@@ -2594,15 +2618,14 @@ func (svc *Service) authorize(user User) bool {
             } if *function == FunctionId(0) && name == "svc"
         )));
         assert!(
-            output.bodies[0]
-                .owner_stable_key
+            db.resolve_stable_key(output.bodies[0].owner_stable_key)
                 .contains("Service.authorize")
         );
     }
 
     #[test]
     fn go_mir_place_rows_do_not_carry_parser_node_debug_evidence() {
-        let output = lower(
+        let (output, _) = lower(
             r#"
 package auth
 
@@ -2629,7 +2652,7 @@ mod operations {
     };
     use std::path::PathBuf;
 
-    fn lower(source: &str) -> MirOutput {
+    fn lower(source: &str) -> (MirOutput, crate::core::StableKeyInterner) {
         let mut db = AnalysisDb::new();
         db.add_file(
             PathBuf::from("flow.go"),
@@ -2638,12 +2661,13 @@ mod operations {
         );
         let diagnostics = crate::go::analyze(&mut db);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        lower_go_mir(&db)
+        let output = lower_go_mir(&db);
+        (output, db.stable_key_interner())
     }
 
     #[test]
     fn go_statement_lowering_emits_assignment_modes_and_control_shapes() {
-        let output = lower(
+        let (output, _) = lower(
             r#"
 package auth
 
@@ -2718,7 +2742,7 @@ func flow(user User, index int) bool {
 
     #[test]
     fn go_declarations_and_compound_assignments_keep_all_mutated_places() {
-        let output = lower(
+        let (output, _) = lower(
             r#"
 package auth
 
@@ -2758,8 +2782,8 @@ func flow(token string, count int) bool {
     return result
 }
 "#;
-        let first = lower(source);
-        let second = lower(source);
+        let (first, first_interner) = lower(source);
+        let (second, second_interner) = lower(source);
 
         let first_calls = first
             .operations
@@ -2771,7 +2795,7 @@ func flow(token string, count int) bool {
                     arguments,
                     return_place,
                 } => Some((
-                    operation.stable_key.clone(),
+                    first_interner.resolve(operation.stable_key).to_string(),
                     *site,
                     callee,
                     arguments,
@@ -2790,7 +2814,7 @@ func flow(token string, count int) bool {
                     return_place,
                     ..
                 } => Some((
-                    operation.stable_key.clone(),
+                    second_interner.resolve(operation.stable_key).to_string(),
                     *site,
                     arguments.len(),
                     *return_place,
@@ -2820,7 +2844,7 @@ func flow(token string, count int) bool {
 
     #[test]
     fn go_unsupported_semantics_are_structured_and_conservative() {
-        let output = lower(
+        let (output, _) = lower(
             r#"
 package auth
 

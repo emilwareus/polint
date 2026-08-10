@@ -804,10 +804,11 @@ fn abstract_domain_observed_with_policy(
         &output.db,
     ));
     let mut db = output.db;
+    let interner = db.stable_key_interner();
     let place_stable_keys = db
         .mir_places()
         .iter()
-        .map(|place| (place.id, place.stable_key.clone()))
+        .map(|place| (place.id, interner.resolve(place.stable_key).to_string()))
         .collect();
     db.replace_abstract_domain_facts(
         crate::analysis::domains::store::DomainOutput::from_results_with_place_keys(

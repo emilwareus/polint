@@ -37,7 +37,8 @@ pub(crate) fn derive_unresolved_calls(
             continue;
         };
         let reason = reason_for_unsupported(unsupported);
-        insert_unresolved(interner, &mut rows, site, reason, &unsupported.stable_key);
+        let unsupported_stable_key = interner.resolve(unsupported.stable_key);
+        insert_unresolved(interner, &mut rows, site, reason, &unsupported_stable_key);
     }
 
     rows.into_values().collect()
@@ -297,6 +298,7 @@ mod tests {
         function: FunctionId,
         rows: Vec<UnsupportedSemanticFact>,
     ) {
+        let interner = db.stable_key_interner();
         db.replace_semantic_mir(MirOutput {
             bodies: vec![MirBody {
                 id: MirBodyId(0),
@@ -305,9 +307,9 @@ mod tests {
                 function,
                 package: None,
                 module: None,
-                owner_stable_key: "function:caller".to_string(),
+                owner_stable_key: interner.intern("function:caller".to_string()),
                 span: span(file, 1),
-                stable_key: "mir-body:caller".to_string(),
+                stable_key: interner.intern("mir-body:caller".to_string()),
                 status: MirStatus::Partial,
             }],
             places: vec![PlaceFact {
@@ -320,7 +322,7 @@ mod tests {
                     name: "callee".to_string(),
                 },
                 projections: Vec::new(),
-                stable_key: "place:callee".to_string(),
+                stable_key: interner.intern("place:callee".to_string()),
                 status: PlaceStatus::Partial,
             }],
             operations: vec![MirOperation {
@@ -334,7 +336,7 @@ mod tests {
                     arguments: Vec::new(),
                     return_place: PlaceId(1),
                 },
-                stable_key: "mir-op:call".to_string(),
+                stable_key: interner.intern("mir-op:call".to_string()),
                 status: MirStatus::Partial,
             }],
             unsupported: rows,
@@ -344,6 +346,7 @@ mod tests {
     }
 
     fn unsupported(
+        db: &AnalysisDb,
         id: u64,
         language: Language,
         file: FileId,
@@ -363,7 +366,9 @@ mod tests {
             conservative_action: ConservativeAction::HavocAffectedPlaces,
             precision: UnsupportedPrecision::Unsupported,
             status: MirStatus::Unsupported,
-            stable_key: format!("unsupported:{construct}"),
+            stable_key: db
+                .stable_key_interner()
+                .intern(format!("unsupported:{construct}")),
         }
     }
 
@@ -371,7 +376,7 @@ mod tests {
     fn unsupported_call_evidence_without_operation_or_span_does_not_attach_to_arbitrary_file_call()
     {
         let (mut db, file, function) = db_with_function(Language::TypeScript, "src/app.ts");
-        let mut row = unsupported(1, Language::TypeScript, file, "dynamic property");
+        let mut row = unsupported(&db, 1, Language::TypeScript, file, "dynamic property");
         row.operation = None;
         row.span = span(file, 99);
         replace_unsupported(&mut db, Language::TypeScript, file, function, vec![row]);
@@ -494,21 +499,16 @@ mod tests {
     #[test]
     fn derive_unresolved_calls_preserves_specific_ts_unsupported_reasons() {
         let (mut db, file, caller) = db_with_function(Language::TypeScript, "src/app.ts");
-        replace_unsupported(
-            &mut db,
-            Language::TypeScript,
-            file,
-            caller,
-            vec![
-                unsupported(1, Language::TypeScript, file, "eval"),
-                unsupported(2, Language::TypeScript, file, "dynamic property key"),
-                unsupported(3, Language::TypeScript, file, "dynamic import"),
-                unsupported(4, Language::TypeScript, file, "call/apply/bind"),
-                unsupported(5, Language::TypeScript, file, "Proxy"),
-                unsupported(6, Language::TypeScript, file, "decorator dispatch"),
-                unsupported(7, Language::TypeScript, file, "framework dispatch"),
-            ],
-        );
+        let unsupported = vec![
+            unsupported(&db, 1, Language::TypeScript, file, "eval"),
+            unsupported(&db, 2, Language::TypeScript, file, "dynamic property key"),
+            unsupported(&db, 3, Language::TypeScript, file, "dynamic import"),
+            unsupported(&db, 4, Language::TypeScript, file, "call/apply/bind"),
+            unsupported(&db, 5, Language::TypeScript, file, "Proxy"),
+            unsupported(&db, 6, Language::TypeScript, file, "decorator dispatch"),
+            unsupported(&db, 7, Language::TypeScript, file, "framework dispatch"),
+        ];
+        replace_unsupported(&mut db, Language::TypeScript, file, caller, unsupported);
         let sites = vec![site(
             Language::TypeScript,
             file,
@@ -536,19 +536,14 @@ mod tests {
     #[test]
     fn derive_unresolved_calls_preserves_specific_go_unsupported_reasons() {
         let (mut db, file, caller) = db_with_function(Language::Go, "flow.go");
-        replace_unsupported(
-            &mut db,
-            Language::Go,
-            file,
-            caller,
-            vec![
-                unsupported(1, Language::Go, file, "interface dispatch"),
-                unsupported(2, Language::Go, file, "reflect"),
-                unsupported(3, Language::Go, file, "go_statement"),
-                unsupported(4, Language::Go, file, "setup missing package"),
-                unsupported(5, Language::Go, file, "unsupported syntax"),
-            ],
-        );
+        let unsupported = vec![
+            unsupported(&db, 1, Language::Go, file, "interface dispatch"),
+            unsupported(&db, 2, Language::Go, file, "reflect"),
+            unsupported(&db, 3, Language::Go, file, "go_statement"),
+            unsupported(&db, 4, Language::Go, file, "setup missing package"),
+            unsupported(&db, 5, Language::Go, file, "unsupported syntax"),
+        ];
+        replace_unsupported(&mut db, Language::Go, file, caller, unsupported);
         let sites = vec![site(
             Language::Go,
             file,

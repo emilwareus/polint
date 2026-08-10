@@ -104,6 +104,7 @@ impl<'a> TransferCx<'a> {
     #[cfg(test)]
     pub(crate) fn add_unsupported_for_test(
         &mut self,
+        interner: &crate::core::StableKeyInterner,
         unsupported: UnsupportedId,
         affected_places: Vec<PlaceId>,
     ) {
@@ -125,7 +126,7 @@ impl<'a> TransferCx<'a> {
             conservative_action: ConservativeAction::HavocAffectedPlaces,
             precision: UnsupportedPrecision::Unsupported,
             status: MirStatus::Unsupported,
-            stable_key: "unsupported:test".to_string(),
+            stable_key: interner.intern("unsupported:test".to_string()),
         }));
         self.unsupported.insert(unsupported, &*row);
     }
@@ -461,14 +462,18 @@ mod tests {
 
     #[test]
     fn operation_transfer_is_monotone_for_literal_assignment_samples() {
+        let interner = crate::core::StableKeyInterner::default();
         let place = PlaceId(1);
-        let operation = operation(MirOperationKind::Assign {
-            place,
-            value: MirValue::Literal {
-                value: "true".to_string(),
+        let operation = operation(
+            &interner,
+            MirOperationKind::Assign {
+                place,
+                value: MirValue::Literal {
+                    value: "true".to_string(),
+                },
+                mode: AssignMode::Overwrite,
             },
-            mode: AssignMode::Overwrite,
-        });
+        );
         let mut lower = ProductState::entry();
         let mut upper = ProductState::entry();
         upper.core.truthiness.insert(place, TruthinessDomain::Maybe);
@@ -482,13 +487,17 @@ mod tests {
 
     #[test]
     fn literal_assignment_updates_p0_value_slots() {
+        let interner = crate::core::StableKeyInterner::default();
         let place = PlaceId(1);
-        let operation = operation(MirOperationKind::Bind {
-            place,
-            value: MirValue::Literal {
-                value: "\"route\"".to_string(),
+        let operation = operation(
+            &interner,
+            MirOperationKind::Bind {
+                place,
+                value: MirValue::Literal {
+                    value: "\"route\"".to_string(),
+                },
             },
-        });
+        );
         let mut state = ProductState::entry();
 
         OperationTransfer::apply(&TransferCx::empty_for_test(), &operation, &mut state);
@@ -511,14 +520,18 @@ mod tests {
 
     #[test]
     fn literal_overwrite_clears_stale_derived_string_slot() {
+        let interner = crate::core::StableKeyInterner::default();
         let place = PlaceId(1);
-        let operation = operation(MirOperationKind::Assign {
-            place,
-            value: MirValue::Literal {
-                value: "42".to_string(),
+        let operation = operation(
+            &interner,
+            MirOperationKind::Assign {
+                place,
+                value: MirValue::Literal {
+                    value: "42".to_string(),
+                },
+                mode: AssignMode::Overwrite,
             },
-            mode: AssignMode::Overwrite,
-        });
+        );
         let mut state = ProductState::entry();
         state
             .core
@@ -532,13 +545,17 @@ mod tests {
 
     #[test]
     fn copy_overwrite_clears_target_slots_missing_from_source() {
+        let interner = crate::core::StableKeyInterner::default();
         let target = PlaceId(1);
         let source = PlaceId(2);
-        let operation = operation(MirOperationKind::Assign {
-            place: target,
-            value: MirValue::Place(source),
-            mode: AssignMode::Overwrite,
-        });
+        let operation = operation(
+            &interner,
+            MirOperationKind::Assign {
+                place: target,
+                value: MirValue::Place(source),
+                mode: AssignMode::Overwrite,
+            },
+        );
         let mut state = ProductState::entry();
         state.core.constants.insert(
             source,
@@ -599,15 +616,19 @@ mod tests {
 
     #[test]
     fn unresolved_call_havocs_return_place_with_explicit_reason() {
+        let interner = crate::core::StableKeyInterner::default();
         let return_place = PlaceId(3);
-        let operation = operation(MirOperationKind::Call {
-            site: CallSiteId(9),
-            callee: MirValue::Unknown {
-                evidence: "dynamic".to_string(),
+        let operation = operation(
+            &interner,
+            MirOperationKind::Call {
+                site: CallSiteId(9),
+                callee: MirValue::Unknown {
+                    evidence: "dynamic".to_string(),
+                },
+                arguments: vec![PlaceId(1)],
+                return_place,
             },
-            arguments: vec![PlaceId(1)],
-            return_place,
-        });
+        );
         let cx = TransferCx::with_unresolved_for_test(
             CallSiteId(9),
             UnresolvedCallReason::UnknownCallee,
@@ -624,12 +645,16 @@ mod tests {
 
     #[test]
     fn unsupported_operation_havocs_affected_places() {
+        let interner = crate::core::StableKeyInterner::default();
         let place = PlaceId(1);
         let mut cx = TransferCx::empty_for_test();
-        cx.add_unsupported_for_test(UnsupportedId(2), vec![place]);
-        let operation = operation(MirOperationKind::Unsupported {
-            unsupported: UnsupportedId(2),
-        });
+        cx.add_unsupported_for_test(&interner, UnsupportedId(2), vec![place]);
+        let operation = operation(
+            &interner,
+            MirOperationKind::Unsupported {
+                unsupported: UnsupportedId(2),
+            },
+        );
         let mut state = ProductState::entry();
 
         OperationTransfer::apply(&cx, &operation, &mut state);
@@ -642,13 +667,17 @@ mod tests {
 
     #[test]
     fn dynamic_write_havocs_written_place() {
+        let interner = crate::core::StableKeyInterner::default();
         let place = PlaceId(1);
-        let operation = operation(MirOperationKind::Write {
-            place,
-            value: MirValue::Unknown {
-                evidence: "computed property".to_string(),
+        let operation = operation(
+            &interner,
+            MirOperationKind::Write {
+                place,
+                value: MirValue::Unknown {
+                    evidence: "computed property".to_string(),
+                },
             },
-        });
+        );
         let mut state = ProductState::entry();
 
         OperationTransfer::apply(&TransferCx::empty_for_test(), &operation, &mut state);
@@ -661,8 +690,9 @@ mod tests {
 
     #[test]
     fn read_without_prior_write_is_maybe_uninitialized_not_initialized() {
+        let interner = crate::core::StableKeyInterner::default();
         let place = PlaceId(1);
-        let operation = operation(MirOperationKind::Read { place });
+        let operation = operation(&interner, MirOperationKind::Read { place });
         let mut state = ProductState::entry();
 
         OperationTransfer::apply(&TransferCx::empty_for_test(), &operation, &mut state);
@@ -713,14 +743,17 @@ mod tests {
         );
     }
 
-    fn operation(kind: MirOperationKind) -> MirOperation {
+    fn operation(
+        interner: &crate::core::StableKeyInterner,
+        kind: MirOperationKind,
+    ) -> MirOperation {
         MirOperation {
             id: MirOpId(1),
             body: crate::analysis::ids::MirBodyId(1),
             ordinal: 1,
             span: Span::point(FileId(1), 1, 1),
             kind,
-            stable_key: "op:test".to_string(),
+            stable_key: interner.intern("op:test".to_string()),
             status: MirStatus::Resolved,
         }
     }

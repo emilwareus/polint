@@ -245,7 +245,7 @@ fn extend_component_parts(parts: &mut Vec<String>, prefix: &str, components: &[I
 fn body_stable_key_map(db: &AnalysisDb) -> std::collections::BTreeMap<MirBodyId, String> {
     db.mir_bodies()
         .iter()
-        .map(|body| (body.id, body.stable_key.clone()))
+        .map(|body| (body.id, db.resolve_stable_key(body.stable_key).to_string()))
         .collect()
 }
 
@@ -259,14 +259,24 @@ fn block_stable_key_map(db: &AnalysisDb) -> std::collections::BTreeMap<BasicBloc
 fn operation_stable_key_map(db: &AnalysisDb) -> std::collections::BTreeMap<MirOpId, String> {
     db.mir_operations()
         .iter()
-        .map(|operation| (operation.id, operation.stable_key.clone()))
+        .map(|operation| {
+            (
+                operation.id,
+                db.resolve_stable_key(operation.stable_key).to_string(),
+            )
+        })
         .collect()
 }
 
 fn place_stable_key_map(db: &AnalysisDb) -> std::collections::BTreeMap<PlaceId, String> {
     db.mir_places()
         .iter()
-        .map(|place| (place.id, place.stable_key.clone()))
+        .map(|place| {
+            (
+                place.id,
+                db.resolve_stable_key(place.stable_key).to_string(),
+            )
+        })
         .collect()
 }
 
