@@ -2886,7 +2886,7 @@ mod calls_debug_json {
                 algorithm: CallAlgorithm::SyntaxOnly,
                 provenance: CallProvenance::MirShape,
                 precision: CallPrecision::Unknown,
-                stable_key: crate::core::StableKeyId(2),
+                stable_key: crate::core::stable_key_for_test("call-unresolved:function-value"),
             }],
         })
         .expect("call rows should store");
@@ -2963,7 +2963,7 @@ mod calls_debug_json {
         db
     }
 
-    fn site(id: u64, _stable_key: &str) -> CallSiteFact {
+    fn site(id: u64, stable_key: &str) -> CallSiteFact {
         CallSiteFact {
             in_throw: false,
             id: CallSiteId(id),
@@ -2984,11 +2984,11 @@ mod calls_debug_json {
             result: None,
             status: CallTargetStatus::Resolved,
             precision: CallPrecision::SetupAware,
-            stable_key: crate::core::StableKeyId(id as u32),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
-    fn target(id: u64, _stable_key: &str) -> CallTargetFact {
+    fn target(id: u64, stable_key: &str) -> CallTargetFact {
         CallTargetFact {
             id: CallTargetId(id),
             site: CallSiteId(0),
@@ -3001,11 +3001,11 @@ mod calls_debug_json {
             reason: None,
             provenance: CallProvenance::Native,
             precision: CallPrecision::SetupAware,
-            stable_key: crate::core::StableKeyId(id as u32),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 
-    fn unresolved(_stable_key: &str) -> UnresolvedCallFact {
+    fn unresolved(stable_key: &str) -> UnresolvedCallFact {
         UnresolvedCallFact {
             site: CallSiteId(0),
             caller: FunctionId(0),
@@ -3014,7 +3014,7 @@ mod calls_debug_json {
             algorithm: CallAlgorithm::SyntaxOnly,
             provenance: CallProvenance::MirShape,
             precision: CallPrecision::Unknown,
-            stable_key: crate::core::StableKeyId(0),
+            stable_key: crate::core::stable_key_for_test(stable_key),
         }
     }
 

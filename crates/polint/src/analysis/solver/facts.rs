@@ -181,6 +181,16 @@ mod tests {
         assert!(edge.honors_precision_ceiling());
     }
 
+    fn json_tree_has_no_id_field(value: &serde_json::Value) -> bool {
+        match value {
+            serde_json::Value::Object(map) => {
+                !map.contains_key("id") && map.values().all(json_tree_has_no_id_field)
+            }
+            serde_json::Value::Array(items) => items.iter().all(json_tree_has_no_id_field),
+            _ => true,
+        }
+    }
+
     #[test]
     fn dense_id_is_omitted_from_stable_payload() {
         let interner = crate::core::test_stable_key_interner();
@@ -193,9 +203,24 @@ mod tests {
             stable_key: crate::core::stable_key_for_test("edge|copy_edge|a"),
             provenance: provenance(),
         };
-        let json = serde_json::to_string(&edge.stable_payload(&interner)).expect("serialize");
-        assert!(!json.contains("\"id\""));
-        assert!(json.contains("edge|copy_edge|a"));
-        assert!(!json.contains(&format!("{}", edge.stable_key.0)));
+        let payload = edge.stable_payload(&interner);
+        let json = serde_json::to_string(&payload).expect("serialize");
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("parse payload json");
+
+        assert_eq!(payload.stable_key_text, "edge|copy_edge|a");
+        assert_eq!(
+            parsed.get("stable_key"),
+            Some(&serde_json::Value::String("edge|copy_edge|a".to_string()))
+        );
+        assert!(
+            parsed
+                .get("stable_key")
+                .is_some_and(serde_json::Value::is_string),
+            "stable_key must serialize as resolved text, not a numeric id: {parsed:#?}"
+        );
+        assert!(
+            json_tree_has_no_id_field(&parsed),
+            "payload must not carry id fields: {parsed:#?}"
+        );
     }
 }
