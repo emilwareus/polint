@@ -252,7 +252,12 @@ fn body_stable_key_map(db: &AnalysisDb) -> std::collections::BTreeMap<MirBodyId,
 fn block_stable_key_map(db: &AnalysisDb) -> std::collections::BTreeMap<BasicBlockId, String> {
     db.cfg_blocks()
         .iter()
-        .map(|block| (block.id, block.stable_key.clone()))
+        .map(|block| {
+            (
+                block.id,
+                db.resolve_stable_key(block.stable_key).to_string(),
+            )
+        })
         .collect()
 }
 

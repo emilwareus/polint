@@ -925,7 +925,8 @@ impl AnalysisDb {
     }
 
     pub(crate) fn replace_cfg_facts(&mut self, output: CfgOutput) -> Result<(), AnalysisError> {
-        let output = output.normalized();
+        let interner_handle = self.stable_key_interner();
+        let output = output.normalized(&interner_handle);
         self.cfg_store_mut().replace(output);
         self.refresh_cfg_metadata();
         Ok(())
@@ -4858,7 +4859,7 @@ impl AnalysisDb {
             CFG_PROVIDER_ID,
             precision,
             confidence,
-            fact.stable_key.clone(),
+            self.resolve_stable_key(fact.stable_key).to_string(),
             stable_parts([
                 ("status", cfg_status_label(fact.status).to_string()),
                 ("precision", cfg_precision_label(fact.precision).to_string()),
@@ -4880,7 +4881,7 @@ impl AnalysisDb {
             CFG_PROVIDER_ID,
             precision,
             confidence,
-            fact.stable_key.clone(),
+            self.resolve_stable_key(fact.stable_key).to_string(),
             stable_parts([
                 ("status", cfg_status_label(fact.status).to_string()),
                 ("precision", cfg_precision_label(fact.precision).to_string()),
@@ -4902,7 +4903,7 @@ impl AnalysisDb {
             CFG_PROVIDER_ID,
             precision,
             confidence,
-            fact.stable_key.clone(),
+            self.resolve_stable_key(fact.stable_key).to_string(),
             stable_parts([
                 ("status", cfg_status_label(fact.status).to_string()),
                 ("precision", cfg_precision_label(fact.precision).to_string()),
@@ -4924,7 +4925,7 @@ impl AnalysisDb {
             CFG_PROVIDER_ID,
             precision,
             confidence,
-            fact.stable_key.clone(),
+            self.resolve_stable_key(fact.stable_key).to_string(),
             stable_parts([
                 ("status", cfg_status_label(fact.status).to_string()),
                 ("precision", cfg_precision_label(fact.precision).to_string()),
@@ -4947,7 +4948,7 @@ impl AnalysisDb {
             CFG_PROVIDER_ID,
             precision,
             confidence,
-            fact.stable_key.clone(),
+            self.resolve_stable_key(fact.stable_key).to_string(),
             stable_parts([
                 ("status", cfg_status_label(fact.status).to_string()),
                 ("precision", cfg_precision_label(fact.precision).to_string()),
@@ -4965,7 +4966,7 @@ impl AnalysisDb {
             CFG_PROVIDER_ID,
             precision,
             confidence,
-            fact.stable_key.clone(),
+            self.resolve_stable_key(fact.stable_key).to_string(),
             stable_parts([
                 ("status", cfg_status_label(fact.status).to_string()),
                 ("precision", cfg_precision_label(fact.precision).to_string()),
@@ -4984,7 +4985,7 @@ impl AnalysisDb {
             CFG_PROVIDER_ID,
             precision,
             confidence,
-            fact.stable_key.clone(),
+            self.resolve_stable_key(fact.stable_key).to_string(),
             stable_parts([
                 ("status", cfg_status_label(fact.status).to_string()),
                 ("precision", cfg_precision_label(fact.precision).to_string()),
@@ -5003,7 +5004,7 @@ impl AnalysisDb {
             CFG_PROVIDER_ID,
             precision,
             confidence,
-            fact.stable_key.clone(),
+            self.resolve_stable_key(fact.stable_key).to_string(),
             stable_parts([
                 ("status", cfg_status_label(fact.status).to_string()),
                 ("precision", cfg_precision_label(fact.precision).to_string()),
@@ -5025,7 +5026,7 @@ impl AnalysisDb {
             CFG_PROVIDER_ID,
             precision,
             confidence,
-            fact.stable_key.clone(),
+            self.resolve_stable_key(fact.stable_key).to_string(),
             stable_parts([
                 ("status", cfg_status_label(fact.status).to_string()),
                 ("precision", cfg_precision_label(fact.precision).to_string()),

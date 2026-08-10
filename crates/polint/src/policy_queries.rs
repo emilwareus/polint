@@ -3004,7 +3004,7 @@ mod tests {
                 span: Some(site.span.clone()),
                 generated: false,
                 operation_ordinal: *cfg_ordinal,
-                stable_key: format!("cfg:node:{id}:{callee}"),
+                stable_key: interner.intern(format!("cfg:node:{id}:{callee}")),
                 status: CfgStatus::Resolved,
                 precision: CfgPrecision::ExactLowered,
             });
@@ -3016,7 +3016,7 @@ mod tests {
                 last_node: Some(cfg_node),
                 reachable: true,
                 reverse_postorder: *cfg_ordinal,
-                stable_key: format!("cfg:block:{id}:{callee}"),
+                stable_key: interner.intern(format!("cfg:block:{id}:{callee}")),
                 status: CfgStatus::Resolved,
                 precision: CfgPrecision::ExactLowered,
             });
@@ -3042,7 +3042,7 @@ mod tests {
                 entry_node: CfgNodeId(10_000),
                 normal_exit_node: CfgNodeId(10_001),
                 exceptional_exit_node: None,
-                stable_key: "cfg:function:handler".to_string(),
+                stable_key: interner.intern("cfg:function:handler"),
                 status: CfgStatus::Resolved,
                 precision: CfgPrecision::ExactLowered,
             }],

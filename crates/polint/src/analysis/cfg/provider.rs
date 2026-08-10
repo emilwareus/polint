@@ -32,15 +32,16 @@ pub(crate) fn derive_cfg_with_cache_stats(
 ) -> CfgProviderOutput {
     let interner_handle = db.stable_key_interner();
     let interner = &interner_handle;
-    let mut output = derive_cfg_output(db).normalized();
+    let mut output = derive_cfg_output(db).normalized(interner);
     append_derived_rows(interner, &mut output, CfgView::NormalControl);
-    let output = output.normalized();
+    let output = output.normalized(interner);
     let output_digest = cfg_output_digest(
         manifest,
         input_snapshot,
         &semantic_mir_output_digest,
         &upstream_syntax_output_digests,
         &output,
+        interner,
     );
     let mut cache_stats = CacheStats::default();
     cache_stats.record_recompute();
@@ -83,6 +84,7 @@ fn cfg_output_digest(
     semantic_mir_output_digest: &Digest,
     upstream_syntax_output_digests: &[Digest],
     output: &CfgOutput,
+    interner: &crate::core::StableKeyInterner,
 ) -> Digest {
     let mut digest = Digest::builder(DigestKind::ProviderOutput, "cfg_output");
     digest.part("provider_id");
@@ -122,23 +124,23 @@ fn cfg_output_digest(
     let block_keys = block_key_map(output);
     let edge_keys = edge_key_map(output);
 
-    for row in sorted_refs_by_stable_key(&output.functions) {
+    for row in sorted_refs_by_stable_key(interner, &output.functions) {
         digest.part("cfg_function");
-        digest.part(&row.stable_key);
+        digest.part(interner.resolve(row.stable_key).as_ref());
         digest.debug_part(row.language);
         digest.part(&span_part(&row.span));
-        digest.part(stable_node_key(&node_keys, row.entry_node).as_ref());
-        digest.part(stable_node_key(&node_keys, row.normal_exit_node).as_ref());
-        digest.part(optional_node_key(&node_keys, row.exceptional_exit_node).as_ref());
+        digest.part(stable_node_key(interner, &node_keys, row.entry_node).as_ref());
+        digest.part(stable_node_key(interner, &node_keys, row.normal_exit_node).as_ref());
+        digest.part(optional_node_key(interner, &node_keys, row.exceptional_exit_node).as_ref());
         digest.debug_part(row.status);
         digest.debug_part(row.precision);
     }
 
-    for row in sorted_refs_by_stable_key(&output.nodes) {
+    for row in sorted_refs_by_stable_key(interner, &output.nodes) {
         digest.part("cfg_node");
-        digest.part(&row.stable_key);
-        digest.part(stable_function_key(&function_keys, row.cfg_function).as_ref());
-        digest.part(stable_block_key(&block_keys, row.block).as_ref());
+        digest.part(interner.resolve(row.stable_key).as_ref());
+        digest.part(stable_function_key(interner, &function_keys, row.cfg_function).as_ref());
+        digest.part(stable_block_key(interner, &block_keys, row.block).as_ref());
         digest.debug_part(row.kind);
         digest.part(optional_span_part(row.span.as_ref()).as_ref());
         digest.bool_part(row.generated);
@@ -147,85 +149,85 @@ fn cfg_output_digest(
         digest.debug_part(row.precision);
     }
 
-    for row in sorted_refs_by_stable_key(&output.blocks) {
+    for row in sorted_refs_by_stable_key(interner, &output.blocks) {
         digest.part("basic_block");
-        digest.part(&row.stable_key);
-        digest.part(stable_function_key(&function_keys, row.cfg_function).as_ref());
+        digest.part(interner.resolve(row.stable_key).as_ref());
+        digest.part(stable_function_key(interner, &function_keys, row.cfg_function).as_ref());
         digest.debug_part(row.kind);
-        digest.part(optional_node_key(&node_keys, row.first_node).as_ref());
-        digest.part(optional_node_key(&node_keys, row.last_node).as_ref());
+        digest.part(optional_node_key(interner, &node_keys, row.first_node).as_ref());
+        digest.part(optional_node_key(interner, &node_keys, row.last_node).as_ref());
         digest.bool_part(row.reachable);
         digest.part(&row.reverse_postorder.to_string());
         digest.debug_part(row.status);
         digest.debug_part(row.precision);
     }
 
-    for row in sorted_refs_by_stable_key(&output.edges) {
+    for row in sorted_refs_by_stable_key(interner, &output.edges) {
         digest.part("cfg_edge");
-        digest.part(&row.stable_key);
-        digest.part(stable_function_key(&function_keys, row.cfg_function).as_ref());
+        digest.part(interner.resolve(row.stable_key).as_ref());
+        digest.part(stable_function_key(interner, &function_keys, row.cfg_function).as_ref());
         digest.debug_part(row.view);
-        digest.part(stable_node_key(&node_keys, row.from).as_ref());
-        digest.part(stable_node_key(&node_keys, row.to).as_ref());
-        digest.part(stable_block_key(&block_keys, row.from_block).as_ref());
-        digest.part(stable_block_key(&block_keys, row.to_block).as_ref());
+        digest.part(stable_node_key(interner, &node_keys, row.from).as_ref());
+        digest.part(stable_node_key(interner, &node_keys, row.to).as_ref());
+        digest.part(stable_block_key(interner, &block_keys, row.from_block).as_ref());
+        digest.part(stable_block_key(interner, &block_keys, row.to_block).as_ref());
         digest.debug_part(row.kind);
         digest.part(row.label.as_deref().unwrap_or("none"));
         digest.debug_part(row.status);
         digest.debug_part(row.precision);
     }
 
-    for row in sorted_refs_by_stable_key(&output.reachability) {
+    for row in sorted_refs_by_stable_key(interner, &output.reachability) {
         digest.part("cfg_reachability");
-        digest.part(&row.stable_key);
-        digest.part(stable_function_key(&function_keys, row.cfg_function).as_ref());
+        digest.part(interner.resolve(row.stable_key).as_ref());
+        digest.part(stable_function_key(interner, &function_keys, row.cfg_function).as_ref());
         digest.debug_part(row.view);
-        digest.part(stable_block_key(&block_keys, row.block).as_ref());
+        digest.part(stable_block_key(interner, &block_keys, row.block).as_ref());
         digest.bool_part(row.reachable);
         digest.debug_part(row.status);
         digest.debug_part(row.precision);
     }
 
-    for row in sorted_refs_by_stable_key(&output.dominators) {
+    for row in sorted_refs_by_stable_key(interner, &output.dominators) {
         digest.part("cfg_dominator");
-        digest.part(&row.stable_key);
-        digest.part(stable_function_key(&function_keys, row.cfg_function).as_ref());
+        digest.part(interner.resolve(row.stable_key).as_ref());
+        digest.part(stable_function_key(interner, &function_keys, row.cfg_function).as_ref());
         digest.debug_part(row.view);
-        digest.part(stable_block_key(&block_keys, row.dominator).as_ref());
-        digest.part(stable_block_key(&block_keys, row.dominated).as_ref());
+        digest.part(stable_block_key(interner, &block_keys, row.dominator).as_ref());
+        digest.part(stable_block_key(interner, &block_keys, row.dominated).as_ref());
         digest.bool_part(row.immediate);
         digest.debug_part(row.status);
         digest.debug_part(row.precision);
     }
 
-    for row in sorted_refs_by_stable_key(&output.postdominators) {
+    for row in sorted_refs_by_stable_key(interner, &output.postdominators) {
         digest.part("cfg_postdominator");
-        digest.part(&row.stable_key);
-        digest.part(stable_function_key(&function_keys, row.cfg_function).as_ref());
+        digest.part(interner.resolve(row.stable_key).as_ref());
+        digest.part(stable_function_key(interner, &function_keys, row.cfg_function).as_ref());
         digest.debug_part(row.view);
-        digest.part(stable_block_key(&block_keys, row.postdominator).as_ref());
-        digest.part(stable_block_key(&block_keys, row.postdominated).as_ref());
+        digest.part(stable_block_key(interner, &block_keys, row.postdominator).as_ref());
+        digest.part(stable_block_key(interner, &block_keys, row.postdominated).as_ref());
         digest.bool_part(row.immediate);
         digest.debug_part(row.status);
         digest.debug_part(row.precision);
     }
 
-    for row in sorted_refs_by_stable_key(&output.control_dependence) {
+    for row in sorted_refs_by_stable_key(interner, &output.control_dependence) {
         digest.part("cfg_control_dependence");
-        digest.part(&row.stable_key);
-        digest.part(stable_function_key(&function_keys, row.cfg_function).as_ref());
+        digest.part(interner.resolve(row.stable_key).as_ref());
+        digest.part(stable_function_key(interner, &function_keys, row.cfg_function).as_ref());
         digest.debug_part(row.view);
-        digest.part(stable_edge_key(&edge_keys, row.controlling_edge).as_ref());
+        digest.part(stable_edge_key(interner, &edge_keys, row.controlling_edge).as_ref());
         digest.debug_part(row.controlling_edge_kind);
-        digest.part(stable_block_key(&block_keys, row.controlled_block).as_ref());
+        digest.part(stable_block_key(interner, &block_keys, row.controlled_block).as_ref());
         digest.debug_part(row.status);
         digest.debug_part(row.precision);
     }
 
-    for row in sorted_refs_by_stable_key(&output.unsupported) {
+    for row in sorted_refs_by_stable_key(interner, &output.unsupported) {
         digest.part("unsupported_control_flow");
-        digest.part(&row.stable_key);
-        digest.part(optional_function_key(&function_keys, row.cfg_function).as_ref());
+        digest.part(interner.resolve(row.stable_key).as_ref());
+        digest.part(optional_function_key(interner, &function_keys, row.cfg_function).as_ref());
         digest.debug_part(row.language);
         digest.part(&span_part(&row.span));
         digest.part(&row.construct);
@@ -239,15 +241,15 @@ fn cfg_output_digest(
 }
 
 trait StableKeyed {
-    fn stable_key(&self) -> &str;
+    fn stable_key(&self) -> crate::core::StableKeyId;
 }
 
 macro_rules! impl_stable_keyed {
     ($($ty:ty),+ $(,)?) => {
         $(
             impl StableKeyed for $ty {
-                fn stable_key(&self) -> &str {
-                    &self.stable_key
+                fn stable_key(&self) -> crate::core::StableKeyId {
+                    self.stable_key
                 }
             }
         )+
@@ -266,87 +268,102 @@ impl_stable_keyed!(
     crate::analysis::cfg::facts::UnsupportedControlFlowFact,
 );
 
-fn sorted_refs_by_stable_key<T: StableKeyed>(rows: &[T]) -> Vec<&T> {
+fn sorted_refs_by_stable_key<'a, T: StableKeyed>(
+    interner: &crate::core::StableKeyInterner,
+    rows: &'a [T],
+) -> Vec<&'a T> {
     let mut refs = rows.iter().collect::<Vec<_>>();
-    refs.sort_by(|left, right| left.stable_key().cmp(right.stable_key()));
+    refs.sort_by_cached_key(|row| interner.resolve(row.stable_key()));
     refs
 }
 
-fn function_key_map(output: &CfgOutput) -> BTreeMap<CfgFunctionId, &str> {
+fn function_key_map(output: &CfgOutput) -> BTreeMap<CfgFunctionId, crate::core::StableKeyId> {
     output
         .functions
         .iter()
-        .map(|row| (row.id, row.stable_key.as_str()))
+        .map(|row| (row.id, row.stable_key))
         .collect()
 }
 
-fn node_key_map(output: &CfgOutput) -> BTreeMap<CfgNodeId, &str> {
+fn node_key_map(output: &CfgOutput) -> BTreeMap<CfgNodeId, crate::core::StableKeyId> {
     output
         .nodes
         .iter()
-        .map(|row| (row.id, row.stable_key.as_str()))
+        .map(|row| (row.id, row.stable_key))
         .collect()
 }
 
-fn block_key_map(output: &CfgOutput) -> BTreeMap<BasicBlockId, &str> {
+fn block_key_map(output: &CfgOutput) -> BTreeMap<BasicBlockId, crate::core::StableKeyId> {
     output
         .blocks
         .iter()
-        .map(|row| (row.id, row.stable_key.as_str()))
+        .map(|row| (row.id, row.stable_key))
         .collect()
 }
 
-fn edge_key_map(output: &CfgOutput) -> BTreeMap<CfgEdgeId, &str> {
+fn edge_key_map(output: &CfgOutput) -> BTreeMap<CfgEdgeId, crate::core::StableKeyId> {
     output
         .edges
         .iter()
-        .map(|row| (row.id, row.stable_key.as_str()))
+        .map(|row| (row.id, row.stable_key))
         .collect()
 }
 
 fn stable_function_key<'a>(
-    keys: &'a BTreeMap<CfgFunctionId, &'a str>,
+    interner: &crate::core::StableKeyInterner,
+    keys: &BTreeMap<CfgFunctionId, crate::core::StableKeyId>,
     id: CfgFunctionId,
 ) -> Cow<'a, str> {
     keys.get(&id)
-        .map(|key| Cow::Borrowed(*key))
+        .map(|key| Cow::Owned(interner.resolve(*key).to_string()))
         .unwrap_or_else(|| Cow::Owned(format!("<missing-function:{}>", id.0)))
 }
 
-fn stable_node_key<'a>(keys: &'a BTreeMap<CfgNodeId, &'a str>, id: CfgNodeId) -> Cow<'a, str> {
+fn stable_node_key<'a>(
+    interner: &crate::core::StableKeyInterner,
+    keys: &BTreeMap<CfgNodeId, crate::core::StableKeyId>,
+    id: CfgNodeId,
+) -> Cow<'a, str> {
     keys.get(&id)
-        .map(|key| Cow::Borrowed(*key))
+        .map(|key| Cow::Owned(interner.resolve(*key).to_string()))
         .unwrap_or_else(|| Cow::Owned(format!("<missing-node:{}>", id.0)))
 }
 
 fn stable_block_key<'a>(
-    keys: &'a BTreeMap<BasicBlockId, &'a str>,
+    interner: &crate::core::StableKeyInterner,
+    keys: &BTreeMap<BasicBlockId, crate::core::StableKeyId>,
     id: BasicBlockId,
 ) -> Cow<'a, str> {
     keys.get(&id)
-        .map(|key| Cow::Borrowed(*key))
+        .map(|key| Cow::Owned(interner.resolve(*key).to_string()))
         .unwrap_or_else(|| Cow::Owned(format!("<missing-block:{}>", id.0)))
 }
 
-fn stable_edge_key<'a>(keys: &'a BTreeMap<CfgEdgeId, &'a str>, id: CfgEdgeId) -> Cow<'a, str> {
+fn stable_edge_key<'a>(
+    interner: &crate::core::StableKeyInterner,
+    keys: &BTreeMap<CfgEdgeId, crate::core::StableKeyId>,
+    id: CfgEdgeId,
+) -> Cow<'a, str> {
     keys.get(&id)
-        .map(|key| Cow::Borrowed(*key))
+        .map(|key| Cow::Owned(interner.resolve(*key).to_string()))
         .unwrap_or_else(|| Cow::Owned(format!("<missing-edge:{}>", id.0)))
 }
 
 fn optional_function_key<'a>(
-    keys: &'a BTreeMap<CfgFunctionId, &'a str>,
+    interner: &crate::core::StableKeyInterner,
+    keys: &BTreeMap<CfgFunctionId, crate::core::StableKeyId>,
     id: Option<CfgFunctionId>,
 ) -> Cow<'a, str> {
-    id.map(|id| stable_function_key(keys, id))
+    id.map(|id| stable_function_key(interner, keys, id))
         .unwrap_or(Cow::Borrowed("none"))
 }
 
 fn optional_node_key<'a>(
-    keys: &'a BTreeMap<CfgNodeId, &'a str>,
+    interner: &crate::core::StableKeyInterner,
+    keys: &BTreeMap<CfgNodeId, crate::core::StableKeyId>,
     id: Option<CfgNodeId>,
 ) -> Cow<'a, str> {
-    id.map(|id| stable_node_key(keys, id))
+    id.map(|id| stable_node_key(interner, keys, id))
         .unwrap_or(Cow::Borrowed("none"))
 }
 
@@ -471,94 +488,52 @@ mod cfg_provider {
         }
     }
 
-    fn branch_output_with_derived_rows() -> CfgOutput {
-        let interner = crate::core::StableKeyInterner::default();
+    fn branch_output_with_derived_rows(interner: &crate::core::StableKeyInterner) -> CfgOutput {
         let mut builder = CfgBuilder::new();
-        builder.start_function(&interner, &body(&interner), false);
+        builder.start_function(interner, &body(interner), false);
         let entry = builder.current_block();
-        let condition = builder.start_block(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            BasicBlockKind::Branch,
-        );
+        let condition = builder.start_block(interner, BasicBlockKind::Branch);
         builder.append_operation_node(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            Some(&op(&interner, 1, 1)),
+            interner,
+            Some(&op(interner, 1, 1)),
             CfgNodeKind::Condition,
             Some(span()),
         );
-        let then_block = builder.start_block(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            BasicBlockKind::StraightLine,
-        );
+        let then_block = builder.start_block(interner, BasicBlockKind::StraightLine);
         builder.append_operation_node(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            Some(&op(&interner, 2, 2)),
+            interner,
+            Some(&op(interner, 2, 2)),
             CfgNodeKind::Operation,
             Some(span()),
         );
-        let else_block = builder.start_block(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            BasicBlockKind::StraightLine,
-        );
+        let else_block = builder.start_block(interner, BasicBlockKind::StraightLine);
         builder.append_operation_node(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            Some(&op(&interner, 3, 3)),
+            interner,
+            Some(&op(interner, 3, 3)),
             CfgNodeKind::Operation,
             Some(span()),
         );
-        let join = builder.start_block(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            BasicBlockKind::Join,
-        );
+        let join = builder.start_block(interner, BasicBlockKind::Join);
         builder.append_operation_node(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            Some(&op(&interner, 4, 4)),
+            interner,
+            Some(&op(interner, 4, 4)),
             CfgNodeKind::Operation,
             Some(span()),
         );
 
-        builder.add_edge(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            entry,
-            condition,
-            CfgEdgeKind::Normal,
-        );
-        builder.add_edge(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            condition,
-            then_block,
-            CfgEdgeKind::True,
-        );
-        builder.add_edge(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            condition,
-            else_block,
-            CfgEdgeKind::False,
-        );
-        builder.add_edge(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            then_block,
-            join,
-            CfgEdgeKind::Normal,
-        );
-        builder.add_edge(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            else_block,
-            join,
-            CfgEdgeKind::Normal,
-        );
+        builder.add_edge(interner, entry, condition, CfgEdgeKind::Normal);
+        builder.add_edge(interner, condition, then_block, CfgEdgeKind::True);
+        builder.add_edge(interner, condition, else_block, CfgEdgeKind::False);
+        builder.add_edge(interner, then_block, join, CfgEdgeKind::Normal);
+        builder.add_edge(interner, else_block, join, CfgEdgeKind::Normal);
         builder.finish_function();
 
-        let mut output = builder.finish();
-        append_derived_rows(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            &mut output,
-            CfgView::NormalControl,
-        );
-        output.normalized()
+        let mut output = builder.finish(interner);
+        append_derived_rows(interner, &mut output, CfgView::NormalControl);
+        output.normalized(interner)
     }
 
-    fn digest_for_output(output: &CfgOutput) -> Digest {
+    fn digest_for_output(output: &CfgOutput, interner: &crate::core::StableKeyInterner) -> Digest {
         let temp = tempdir().expect("tempdir");
         fs::write(temp.path().join(".polint.toml"), "").expect("config");
         let loaded = load_config(temp.path()).expect("config loads");
@@ -575,13 +550,13 @@ mod cfg_provider {
             .iter()
             .find(|manifest| manifest.id == "polint.cfg")
             .expect("cfg manifest");
-
         cfg_output_digest(
             manifest,
             &snapshot,
             &Digest::from_parts(DigestKind::ProviderOutput, "mir", &["a"]),
             &[],
             output,
+            interner,
         )
     }
 
@@ -642,6 +617,7 @@ mod cfg_provider {
             .iter()
             .find(|manifest| manifest.id == "polint.cfg")
             .expect("cfg manifest");
+        let interner = db.stable_key_interner();
 
         let first = cfg_output_digest(
             manifest,
@@ -649,6 +625,7 @@ mod cfg_provider {
             &Digest::from_parts(DigestKind::ProviderOutput, "mir", &["a"]),
             &[],
             &CfgOutput::empty(),
+            &interner,
         );
         let second = cfg_output_digest(
             manifest,
@@ -656,6 +633,7 @@ mod cfg_provider {
             &Digest::from_parts(DigestKind::ProviderOutput, "mir", &["b"]),
             &[],
             &CfgOutput::empty(),
+            &interner,
         );
 
         assert_ne!(first, second);
@@ -679,6 +657,7 @@ mod cfg_provider {
             .iter()
             .find(|manifest| manifest.id == "polint.cfg")
             .expect("cfg manifest");
+        let interner = db.stable_key_interner();
         let semantic_mir = Digest::from_parts(DigestKind::ProviderOutput, "mir", &["a"]);
         let go_syntax = Digest::from_parts(DigestKind::ProviderOutput, "go", &["syntax"]);
         let ts_syntax = Digest::from_parts(DigestKind::ProviderOutput, "ts", &["syntax"]);
@@ -689,6 +668,7 @@ mod cfg_provider {
             &semantic_mir,
             &[go_syntax.clone(), ts_syntax.clone()],
             &CfgOutput::empty(),
+            &interner,
         );
         let second = cfg_output_digest(
             manifest,
@@ -696,6 +676,7 @@ mod cfg_provider {
             &semantic_mir,
             &[ts_syntax, go_syntax],
             &CfgOutput::empty(),
+            &interner,
         );
 
         assert_eq!(first, second);
@@ -703,7 +684,8 @@ mod cfg_provider {
 
     #[test]
     fn cfg_output_digest_changes_when_block_reachability_changes() {
-        let output = branch_output_with_derived_rows();
+        let interner = crate::core::StableKeyInterner::default();
+        let output = branch_output_with_derived_rows(&interner);
         let mut changed = output.clone();
         let block = changed
             .blocks
@@ -712,12 +694,16 @@ mod cfg_provider {
             .expect("join block");
         block.reachable = !block.reachable;
 
-        assert_ne!(digest_for_output(&output), digest_for_output(&changed));
+        assert_ne!(
+            digest_for_output(&output, &interner),
+            digest_for_output(&changed, &interner)
+        );
     }
 
     #[test]
     fn cfg_output_digest_changes_when_derived_immediate_flag_changes() {
-        let output = branch_output_with_derived_rows();
+        let interner = crate::core::StableKeyInterner::default();
+        let output = branch_output_with_derived_rows(&interner);
         let mut changed = output.clone();
         let dominator = changed
             .dominators
@@ -726,15 +712,22 @@ mod cfg_provider {
             .expect("immediate dominator row");
         dominator.immediate = false;
 
-        assert_ne!(digest_for_output(&output), digest_for_output(&changed));
+        assert_ne!(
+            digest_for_output(&output, &interner),
+            digest_for_output(&changed, &interner)
+        );
     }
 
     #[test]
     fn cfg_output_digest_is_stable_across_dense_id_shifts() {
-        let output = branch_output_with_derived_rows();
+        let interner = crate::core::StableKeyInterner::default();
+        let output = branch_output_with_derived_rows(&interner);
         let shifted = shift_dense_ids(output.clone());
 
-        assert_eq!(digest_for_output(&output), digest_for_output(&shifted));
+        assert_eq!(
+            digest_for_output(&output, &interner),
+            digest_for_output(&shifted, &interner)
+        );
     }
 
     fn shift_dense_ids(mut output: CfgOutput) -> CfgOutput {

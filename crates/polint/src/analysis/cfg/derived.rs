@@ -19,7 +19,7 @@ pub(crate) fn derive_reachability(
 ) -> Vec<ReachabilityFact> {
     let mut facts = Vec::new();
     let mut next_id = 1;
-    let index = CfgGraphIndex::new(output);
+    let index = CfgGraphIndex::new(interner, output);
     for graph in index.graphs(view) {
         let function = graph.function_id();
         let function_key = graph.function_stable_key();
@@ -37,7 +37,7 @@ pub(crate) fn derive_reachability(
                     &[
                         ("function", function_key.clone()),
                         ("view", format!("{view:?}")),
-                        ("block", block.stable_key.clone()),
+                        ("block", interner.resolve(block.stable_key).to_string()),
                     ],
                 ),
                 status: CfgStatus::Resolved,
@@ -46,7 +46,7 @@ pub(crate) fn derive_reachability(
             next_id += 1;
         }
     }
-    facts.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    facts.sort_by_cached_key(|row| interner.resolve(row.stable_key));
     facts
 }
 
@@ -57,11 +57,11 @@ pub(crate) fn derive_dominators(
 ) -> Vec<DominatorFact> {
     let mut facts = Vec::new();
     let mut next_id = 1;
-    let index = CfgGraphIndex::new(output);
+    let index = CfgGraphIndex::new(interner, output);
     for graph in index.graphs(view) {
         let function = graph.function_id();
         let function_key = graph.function_stable_key();
-        let block_keys = block_key_map(&graph);
+        let block_keys = block_key_map(interner, &graph);
         let Some(entry) = graph.entry_block() else {
             continue;
         };
@@ -94,7 +94,7 @@ pub(crate) fn derive_dominators(
             }
         }
     }
-    facts.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    facts.sort_by_cached_key(|row| interner.resolve(row.stable_key));
     facts
 }
 
@@ -105,11 +105,11 @@ pub(crate) fn derive_postdominators(
 ) -> Vec<PostDominatorFact> {
     let mut facts = Vec::new();
     let mut next_id = 1;
-    let index = CfgGraphIndex::new(output);
+    let index = CfgGraphIndex::new(interner, output);
     for graph in index.graphs(view) {
         let function = graph.function_id();
         let function_key = graph.function_stable_key();
-        let block_keys = block_key_map(&graph);
+        let block_keys = block_key_map(interner, &graph);
         let blocks = graph
             .block_refs()
             .iter()
@@ -171,7 +171,7 @@ pub(crate) fn derive_postdominators(
             }
         }
     }
-    facts.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    facts.sort_by_cached_key(|row| interner.resolve(row.stable_key));
     facts
 }
 
@@ -182,13 +182,13 @@ pub(crate) fn derive_control_dependence(
 ) -> Vec<ControlDependenceFact> {
     let mut facts = Vec::new();
     let mut next_id = 1;
-    let index = CfgGraphIndex::new(output);
+    let index = CfgGraphIndex::new(interner, output);
     for graph in index.graphs(view) {
         let function = graph.function_id();
         let function_key = graph.function_stable_key();
         let postdominators = postdominator_relation_for_graph(&graph);
         let immediate = immediate_relation(&postdominators);
-        let block_keys = block_key_map(&graph);
+        let block_keys = block_key_map(interner, &graph);
         let mut seen = BTreeSet::new();
 
         for edge in graph.edge_refs() {
@@ -227,7 +227,7 @@ pub(crate) fn derive_control_dependence(
             }
         }
     }
-    facts.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+    facts.sort_by_cached_key(|row| interner.resolve(row.stable_key));
     facts
 }
 
@@ -254,7 +254,7 @@ fn control_dependence_fact(
             &[
                 ("function", function_key.to_string()),
                 ("view", format!("{view:?}")),
-                ("edge", edge.stable_key.clone()),
+                ("edge", interner.resolve(edge.stable_key).to_string()),
                 ("controlled_block", controlled_block_key),
             ],
         ),
@@ -263,11 +263,14 @@ fn control_dependence_fact(
     }
 }
 
-fn block_key_map(graph: &CfgGraph<'_>) -> BTreeMap<BasicBlockId, String> {
+fn block_key_map(
+    interner: &crate::core::StableKeyInterner,
+    graph: &CfgGraph<'_>,
+) -> BTreeMap<BasicBlockId, String> {
     graph
         .block_refs()
         .iter()
-        .map(|block| (block.id, block.stable_key.clone()))
+        .map(|block| (block.id, interner.resolve(block.stable_key).to_string()))
         .collect()
 }
 
@@ -488,8 +491,8 @@ fn stable_key(
     interner: &crate::core::StableKeyInterner,
     family: FactFamily,
     parts: &[(&str, String)],
-) -> String {
-    semantic_stable_key(interner, family, parts).into_string()
+) -> crate::core::StableKeyId {
+    interner.intern(semantic_stable_key(interner, family, parts).into_string())
 }
 
 #[cfg(test)]
@@ -546,131 +549,74 @@ mod tests {
         }
     }
 
-    fn if_else_graph() -> CfgOutput {
-        let interner = crate::core::StableKeyInterner::default();
+    fn if_else_graph(interner: &crate::core::StableKeyInterner) -> CfgOutput {
         let mut builder = CfgBuilder::new();
-        builder.start_function(&interner, &body(&interner), false);
+        builder.start_function(interner, &body(interner), false);
         let entry = builder.current_block();
-        let condition = builder.start_block(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            BasicBlockKind::Branch,
-        );
+        let condition = builder.start_block(interner, BasicBlockKind::Branch);
         builder.append_operation_node(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            Some(&op(&interner, 1, 1)),
+            interner,
+            Some(&op(interner, 1, 1)),
             CfgNodeKind::Condition,
             Some(span()),
         );
-        let then_block = builder.start_block(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            BasicBlockKind::StraightLine,
-        );
+        let then_block = builder.start_block(interner, BasicBlockKind::StraightLine);
         builder.append_operation_node(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            Some(&op(&interner, 2, 2)),
+            interner,
+            Some(&op(interner, 2, 2)),
             CfgNodeKind::Operation,
             Some(span()),
         );
-        let else_block = builder.start_block(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            BasicBlockKind::StraightLine,
-        );
+        let else_block = builder.start_block(interner, BasicBlockKind::StraightLine);
         builder.append_operation_node(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            Some(&op(&interner, 3, 3)),
+            interner,
+            Some(&op(interner, 3, 3)),
             CfgNodeKind::Operation,
             Some(span()),
         );
-        let join = builder.start_block(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            BasicBlockKind::Join,
-        );
+        let join = builder.start_block(interner, BasicBlockKind::Join);
         builder.append_operation_node(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            Some(&op(&interner, 4, 4)),
+            interner,
+            Some(&op(interner, 4, 4)),
             CfgNodeKind::Operation,
             Some(span()),
         );
 
-        builder.add_edge(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            entry,
-            condition,
-            CfgEdgeKind::Normal,
-        );
-        builder.add_edge(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            condition,
-            then_block,
-            CfgEdgeKind::True,
-        );
-        builder.add_edge(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            condition,
-            else_block,
-            CfgEdgeKind::False,
-        );
-        builder.add_edge(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            then_block,
-            join,
-            CfgEdgeKind::Normal,
-        );
-        builder.add_edge(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            else_block,
-            join,
-            CfgEdgeKind::Normal,
-        );
+        builder.add_edge(interner, entry, condition, CfgEdgeKind::Normal);
+        builder.add_edge(interner, condition, then_block, CfgEdgeKind::True);
+        builder.add_edge(interner, condition, else_block, CfgEdgeKind::False);
+        builder.add_edge(interner, then_block, join, CfgEdgeKind::Normal);
+        builder.add_edge(interner, else_block, join, CfgEdgeKind::Normal);
         builder.finish_function();
-        builder.finish()
+        builder.finish(interner)
     }
 
     #[test]
     fn reachability_excludes_unreachable_blocks_from_dominators() {
         let interner = crate::core::StableKeyInterner::default();
         let mut builder = CfgBuilder::new();
-        builder.start_function(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            &body(&interner),
-            false,
-        );
+        builder.start_function(&interner, &body(&interner), false);
         let entry = builder.current_block();
-        let reachable = builder.start_block(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            BasicBlockKind::StraightLine,
-        );
+        let reachable = builder.start_block(&interner, BasicBlockKind::StraightLine);
         builder.append_operation_node(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &interner,
             Some(&op(&interner, 1, 1)),
             CfgNodeKind::Operation,
             Some(span()),
         );
-        let unreachable = builder.start_block(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            BasicBlockKind::Unreachable,
-        );
+        let unreachable = builder.start_block(&interner, BasicBlockKind::Unreachable);
         builder.append_operation_node(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &interner,
             Some(&op(&interner, 2, 2)),
             CfgNodeKind::Operation,
             Some(span()),
         );
         builder.mark_unreachable(unreachable);
-        builder.add_edge(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            entry,
-            reachable,
-            CfgEdgeKind::Normal,
-        );
+        builder.add_edge(&interner, entry, reachable, CfgEdgeKind::Normal);
         builder.finish_function();
-        let output = builder.finish();
+        let output = builder.finish(&interner);
 
-        let reachability = derive_reachability(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            &output,
-            CfgView::NormalControl,
-        );
+        let reachability = derive_reachability(&interner, &output, CfgView::NormalControl);
         assert!(
             reachability
                 .iter()
@@ -682,11 +628,7 @@ mod tests {
                 .any(|fact| fact.block == unreachable && !fact.reachable)
         );
 
-        let dominators = derive_dominators(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            &output,
-            CfgView::NormalControl,
-        );
+        let dominators = derive_dominators(&interner, &output, CfgView::NormalControl);
         assert!(
             !dominators
                 .iter()
@@ -696,17 +638,10 @@ mod tests {
 
     #[test]
     fn dominators_are_deterministic_for_branch_join_graphs() {
-        let output = if_else_graph();
-        let first = derive_dominators(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            &output,
-            CfgView::NormalControl,
-        );
-        let second = derive_dominators(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            &output,
-            CfgView::NormalControl,
-        );
+        let interner = crate::core::StableKeyInterner::default();
+        let output = if_else_graph(&interner);
+        let first = derive_dominators(&interner, &output, CfgView::NormalControl);
+        let second = derive_dominators(&interner, &output, CfgView::NormalControl);
         assert_eq!(first, second);
         assert!(first.iter().any(|fact| fact.immediate));
     }
@@ -715,65 +650,31 @@ mod tests {
     fn postdominators_handle_multiple_returns_and_unified_exit() {
         let interner = crate::core::StableKeyInterner::default();
         let mut builder = CfgBuilder::new();
-        builder.start_function(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            &body(&interner),
-            false,
-        );
+        builder.start_function(&interner, &body(&interner), false);
         let entry = builder.current_block();
-        let first_return = builder.start_block(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            BasicBlockKind::StraightLine,
-        );
+        let first_return = builder.start_block(&interner, BasicBlockKind::StraightLine);
         builder.append_operation_node(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &interner,
             Some(&op(&interner, 1, 1)),
             CfgNodeKind::Return,
             Some(span()),
         );
-        let second_return = builder.start_block(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            BasicBlockKind::StraightLine,
-        );
+        let second_return = builder.start_block(&interner, BasicBlockKind::StraightLine);
         builder.append_operation_node(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &interner,
             Some(&op(&interner, 2, 2)),
             CfgNodeKind::Return,
             Some(span()),
         );
         let exit = builder.normal_exit_block();
-        builder.add_edge(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            entry,
-            first_return,
-            CfgEdgeKind::True,
-        );
-        builder.add_edge(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            entry,
-            second_return,
-            CfgEdgeKind::False,
-        );
-        builder.add_edge(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            first_return,
-            exit,
-            CfgEdgeKind::Return,
-        );
-        builder.add_edge(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            second_return,
-            exit,
-            CfgEdgeKind::Return,
-        );
+        builder.add_edge(&interner, entry, first_return, CfgEdgeKind::True);
+        builder.add_edge(&interner, entry, second_return, CfgEdgeKind::False);
+        builder.add_edge(&interner, first_return, exit, CfgEdgeKind::Return);
+        builder.add_edge(&interner, second_return, exit, CfgEdgeKind::Return);
         builder.finish_function();
-        let output = builder.finish();
+        let output = builder.finish(&interner);
 
-        let postdominators = derive_postdominators(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            &output,
-            CfgView::NormalControl,
-        );
+        let postdominators = derive_postdominators(&interner, &output, CfgView::NormalControl);
         assert!(postdominators.iter().any(|fact| fact.immediate));
         assert_eq!(
             postdominators
@@ -786,12 +687,9 @@ mod tests {
 
     #[test]
     fn control_dependence_records_branch_edges_without_unreachable_tails() {
-        let output = if_else_graph();
-        let dependence = derive_control_dependence(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            &output,
-            CfgView::NormalControl,
-        );
+        let interner = crate::core::StableKeyInterner::default();
+        let output = if_else_graph(&interner);
+        let dependence = derive_control_dependence(&interner, &output, CfgView::NormalControl);
         assert!(
             dependence
                 .iter()
@@ -813,77 +711,40 @@ mod tests {
     fn loop_control_dependence_deduplicates_structurally_identical_rows() {
         let interner = crate::core::StableKeyInterner::default();
         let mut builder = CfgBuilder::new();
-        builder.start_function(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            &body(&interner),
-            false,
-        );
+        builder.start_function(&interner, &body(&interner), false);
         let entry = builder.current_block();
-        let header = builder.start_block(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            BasicBlockKind::LoopHeader,
-        );
+        let header = builder.start_block(&interner, BasicBlockKind::LoopHeader);
         builder.append_operation_node(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &interner,
             Some(&op(&interner, 1, 1)),
             CfgNodeKind::Condition,
             Some(span()),
         );
-        let body_block = builder.start_block(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            BasicBlockKind::LoopBody,
-        );
+        let body_block = builder.start_block(&interner, BasicBlockKind::LoopBody);
         builder.append_operation_node(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &interner,
             Some(&op(&interner, 2, 2)),
             CfgNodeKind::Operation,
             Some(span()),
         );
-        let exit_block = builder.start_block(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            BasicBlockKind::Join,
-        );
+        let exit_block = builder.start_block(&interner, BasicBlockKind::Join);
         builder.append_operation_node(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &interner,
             Some(&op(&interner, 3, 3)),
             CfgNodeKind::Operation,
             Some(span()),
         );
-        builder.add_edge(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            entry,
-            header,
-            CfgEdgeKind::LoopEnter,
-        );
-        builder.add_edge(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            header,
-            body_block,
-            CfgEdgeKind::True,
-        );
-        builder.add_edge(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            header,
-            exit_block,
-            CfgEdgeKind::LoopExit,
-        );
-        builder.add_edge(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            body_block,
-            header,
-            CfgEdgeKind::LoopBack,
-        );
+        builder.add_edge(&interner, entry, header, CfgEdgeKind::LoopEnter);
+        builder.add_edge(&interner, header, body_block, CfgEdgeKind::True);
+        builder.add_edge(&interner, header, exit_block, CfgEdgeKind::LoopExit);
+        builder.add_edge(&interner, body_block, header, CfgEdgeKind::LoopBack);
         builder.finish_function();
-        let output = builder.finish();
+        let output = builder.finish(&interner);
 
-        let dependence = derive_control_dependence(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            &output,
-            CfgView::NormalControl,
-        );
+        let dependence = derive_control_dependence(&interner, &output, CfgView::NormalControl);
         let keys = dependence
             .iter()
-            .map(|fact| fact.stable_key.as_str())
+            .map(|fact| interner.resolve(fact.stable_key))
             .collect::<BTreeSet<_>>();
         assert_eq!(keys.len(), dependence.len());
         assert!(
@@ -895,90 +756,86 @@ mod tests {
 
     #[test]
     fn derived_stable_keys_do_not_depend_on_dense_ids() {
-        let output = if_else_graph();
+        let interner = crate::core::StableKeyInterner::default();
+        let output = if_else_graph(&interner);
         let shifted = shift_dense_ids(output.clone());
 
         assert_eq!(
-            stable_keys(derive_reachability(
-                &crate::core::AnalysisDb::new().stable_key_interner(),
-                &output,
-                CfgView::NormalControl
-            )),
-            stable_keys(derive_reachability(
-                &crate::core::AnalysisDb::new().stable_key_interner(),
-                &shifted,
-                CfgView::NormalControl
-            ))
+            stable_keys(
+                &interner,
+                derive_reachability(&interner, &output, CfgView::NormalControl)
+            ),
+            stable_keys(
+                &interner,
+                derive_reachability(&interner, &shifted, CfgView::NormalControl)
+            )
         );
         assert_eq!(
-            stable_keys(derive_dominators(
-                &crate::core::AnalysisDb::new().stable_key_interner(),
-                &output,
-                CfgView::NormalControl
-            )),
-            stable_keys(derive_dominators(
-                &crate::core::AnalysisDb::new().stable_key_interner(),
-                &shifted,
-                CfgView::NormalControl
-            ))
+            stable_keys(
+                &interner,
+                derive_dominators(&interner, &output, CfgView::NormalControl)
+            ),
+            stable_keys(
+                &interner,
+                derive_dominators(&interner, &shifted, CfgView::NormalControl)
+            )
         );
         assert_eq!(
-            stable_keys(derive_postdominators(
-                &crate::core::AnalysisDb::new().stable_key_interner(),
-                &output,
-                CfgView::NormalControl
-            )),
-            stable_keys(derive_postdominators(
-                &crate::core::AnalysisDb::new().stable_key_interner(),
-                &shifted,
-                CfgView::NormalControl
-            ))
+            stable_keys(
+                &interner,
+                derive_postdominators(&interner, &output, CfgView::NormalControl)
+            ),
+            stable_keys(
+                &interner,
+                derive_postdominators(&interner, &shifted, CfgView::NormalControl)
+            )
         );
         assert_eq!(
-            stable_keys(derive_control_dependence(
-                &crate::core::AnalysisDb::new().stable_key_interner(),
-                &output,
-                CfgView::NormalControl
-            )),
-            stable_keys(derive_control_dependence(
-                &crate::core::AnalysisDb::new().stable_key_interner(),
-                &shifted,
-                CfgView::NormalControl
-            ))
+            stable_keys(
+                &interner,
+                derive_control_dependence(&interner, &output, CfgView::NormalControl)
+            ),
+            stable_keys(
+                &interner,
+                derive_control_dependence(&interner, &shifted, CfgView::NormalControl)
+            )
         );
     }
 
     trait StableKeyRow {
-        fn stable_key(&self) -> &str;
+        fn stable_key(&self) -> crate::core::StableKeyId;
     }
 
     impl StableKeyRow for ReachabilityFact {
-        fn stable_key(&self) -> &str {
-            &self.stable_key
+        fn stable_key(&self) -> crate::core::StableKeyId {
+            self.stable_key
         }
     }
 
     impl StableKeyRow for DominatorFact {
-        fn stable_key(&self) -> &str {
-            &self.stable_key
+        fn stable_key(&self) -> crate::core::StableKeyId {
+            self.stable_key
         }
     }
 
     impl StableKeyRow for PostDominatorFact {
-        fn stable_key(&self) -> &str {
-            &self.stable_key
+        fn stable_key(&self) -> crate::core::StableKeyId {
+            self.stable_key
         }
     }
 
     impl StableKeyRow for ControlDependenceFact {
-        fn stable_key(&self) -> &str {
-            &self.stable_key
+        fn stable_key(&self) -> crate::core::StableKeyId {
+            self.stable_key
         }
     }
 
-    fn stable_keys(rows: impl IntoIterator<Item = impl StableKeyRow>) -> Vec<String> {
+    fn stable_keys(
+        interner: &crate::core::StableKeyInterner,
+        rows: impl IntoIterator<Item = impl StableKeyRow>,
+    ) -> Vec<String> {
         rows.into_iter()
-            .map(|row| row.stable_key().to_string())
+            .map(|row| interner.resolve(row.stable_key()).to_string())
             .collect()
     }
 

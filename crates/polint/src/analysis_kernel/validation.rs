@@ -1314,7 +1314,7 @@ mod abstract_domains {
                 entry_node: CfgNodeId(0),
                 normal_exit_node: CfgNodeId(0),
                 exceptional_exit_node: None,
-                stable_key: "cfg:function:app".to_string(),
+                stable_key: interner.intern("cfg:function:app"),
                 status: CfgStatus::Resolved,
                 precision: CfgPrecision::ExactLowered,
             }],
@@ -1328,7 +1328,7 @@ mod abstract_domains {
                 span: Some(span(file)),
                 generated: false,
                 operation_ordinal: 0,
-                stable_key: "cfg:node:assign".to_string(),
+                stable_key: interner.intern("cfg:node:assign"),
                 status: CfgStatus::Resolved,
                 precision: CfgPrecision::ExactLowered,
             }],
@@ -1340,7 +1340,7 @@ mod abstract_domains {
                 last_node: Some(CfgNodeId(0)),
                 reachable: true,
                 reverse_postorder: 0,
-                stable_key: "cfg:block:app".to_string(),
+                stable_key: interner.intern("cfg:block:app"),
                 status: CfgStatus::Resolved,
                 precision: CfgPrecision::ExactLowered,
             }],
@@ -1969,15 +1969,18 @@ mod cfg {
     #[test]
     fn cfg_validation_reports_malformed_rows_with_required_evidence() {
         let mut db = base_db();
+        let interner = db.stable_key_interner();
         db.replace_cfg_facts(CfgOutput {
             functions: vec![
                 function(
+                    &interner,
                     "cfg:function:dup",
                     CfgFunctionId(0),
                     CfgNodeId(404),
                     CfgNodeId(405),
                 ),
                 function(
+                    &interner,
                     "cfg:function:dup",
                     CfgFunctionId(1),
                     CfgNodeId(0),
@@ -2002,7 +2005,7 @@ mod cfg {
                 }),
                 generated: false,
                 operation_ordinal: 0,
-                stable_key: "cfg:node:bad".to_string(),
+                stable_key: interner.intern("cfg:node:bad"),
                 status: CfgStatus::Resolved,
                 precision: CfgPrecision::ExactLowered,
             }],
@@ -2014,18 +2017,20 @@ mod cfg {
                 last_node: None,
                 reachable: true,
                 reverse_postorder: 0,
-                stable_key: "cfg:block:bad".to_string(),
+                stable_key: interner.intern("cfg:block:bad"),
                 status: CfgStatus::Resolved,
                 precision: CfgPrecision::ExactLowered,
             }],
             edges: vec![
                 edge(
+                    &interner,
                     "cfg:edge:one",
                     CfgEdgeId(0),
                     BasicBlockId(0),
                     BasicBlockId(1),
                 ),
                 edge(
+                    &interner,
                     "cfg:edge:two",
                     CfgEdgeId(1),
                     BasicBlockId(0),
@@ -2055,8 +2060,10 @@ mod cfg {
     #[test]
     fn cfg_validation_rejects_missing_exit_and_bad_reachability() {
         let mut db = base_db();
+        let interner = db.stable_key_interner();
         db.replace_cfg_facts(CfgOutput {
             functions: vec![function(
+                &interner,
                 "cfg:function:shape",
                 CfgFunctionId(0),
                 CfgNodeId(0),
@@ -2064,12 +2071,14 @@ mod cfg {
             )],
             nodes: vec![
                 node(
+                    &interner,
                     CfgNodeId(0),
                     BasicBlockId(0),
                     CfgNodeKind::Entry,
                     "cfg:node:entry",
                 ),
                 node(
+                    &interner,
                     CfgNodeId(1),
                     BasicBlockId(1),
                     CfgNodeKind::Operation,
@@ -2078,6 +2087,7 @@ mod cfg {
             ],
             blocks: vec![
                 block(
+                    &interner,
                     BasicBlockId(0),
                     BasicBlockKind::Entry,
                     CfgNodeId(0),
@@ -2085,6 +2095,7 @@ mod cfg {
                     "cfg:block:entry",
                 ),
                 block(
+                    &interner,
                     BasicBlockId(1),
                     BasicBlockKind::StraightLine,
                     CfgNodeId(1),
@@ -2094,12 +2105,14 @@ mod cfg {
             ],
             edges: vec![
                 edge(
+                    &interner,
                     "cfg:edge:entry-body",
                     CfgEdgeId(0),
                     BasicBlockId(0),
                     BasicBlockId(1),
                 ),
                 edge(
+                    &interner,
                     "cfg:edge:body-entry",
                     CfgEdgeId(1),
                     BasicBlockId(1),
@@ -2129,8 +2142,10 @@ mod cfg {
     #[test]
     fn cfg_validation_rejects_exact_provider_precision() {
         let mut db = base_db();
+        let interner = db.stable_key_interner();
         db.replace_cfg_facts(CfgOutput {
             functions: vec![function(
+                &interner,
                 "cfg:function:ok",
                 CfgFunctionId(0),
                 CfgNodeId(0),
@@ -2191,6 +2206,7 @@ mod cfg {
     }
 
     fn function(
+        interner: &crate::core::StableKeyInterner,
         stable_key: &str,
         id: CfgFunctionId,
         entry_node: CfgNodeId,
@@ -2206,13 +2222,14 @@ mod cfg {
             entry_node,
             normal_exit_node,
             exceptional_exit_node: None,
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key),
             status: CfgStatus::Resolved,
             precision: CfgPrecision::ExactLowered,
         }
     }
 
     fn edge(
+        interner: &crate::core::StableKeyInterner,
         stable_key: &str,
         id: CfgEdgeId,
         from_block: BasicBlockId,
@@ -2228,13 +2245,14 @@ mod cfg {
             to_block,
             kind: CfgEdgeKind::Normal,
             label: None,
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key),
             status: CfgStatus::Resolved,
             precision: CfgPrecision::ExactLowered,
         }
     }
 
     fn node(
+        interner: &crate::core::StableKeyInterner,
         id: CfgNodeId,
         block: BasicBlockId,
         kind: CfgNodeKind,
@@ -2250,13 +2268,14 @@ mod cfg {
             span: Some(span(FileId(0))),
             generated: true,
             operation_ordinal: 0,
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key),
             status: CfgStatus::Resolved,
             precision: CfgPrecision::ExactLowered,
         }
     }
 
     fn block(
+        interner: &crate::core::StableKeyInterner,
         id: BasicBlockId,
         kind: BasicBlockKind,
         node: CfgNodeId,
@@ -2271,7 +2290,7 @@ mod cfg {
             last_node: Some(node),
             reachable,
             reverse_postorder: id.0 as u32,
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key),
             status: CfgStatus::Resolved,
             precision: CfgPrecision::ExactLowered,
         }

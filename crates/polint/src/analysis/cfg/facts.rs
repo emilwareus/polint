@@ -5,9 +5,9 @@ use crate::analysis::cfg::ids::{
     PostDominatorId, ReachabilityId, UnsupportedControlFlowId,
 };
 use crate::analysis::ids::{MirBodyId, MirOpId};
-use crate::core::{FileId, FunctionId, Language, Span};
+use crate::core::{FileId, FunctionId, Language, Span, StableKeyId};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CfgFunctionFact {
     pub(crate) id: CfgFunctionId,
     pub(crate) body: MirBodyId,
@@ -18,12 +18,12 @@ pub(crate) struct CfgFunctionFact {
     pub(crate) entry_node: CfgNodeId,
     pub(crate) normal_exit_node: CfgNodeId,
     pub(crate) exceptional_exit_node: Option<CfgNodeId>,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub(crate) status: CfgStatus,
     pub(crate) precision: CfgPrecision,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CfgNodeFact {
     pub(crate) id: CfgNodeId,
     pub(crate) cfg_function: CfgFunctionId,
@@ -34,12 +34,12 @@ pub(crate) struct CfgNodeFact {
     pub(crate) span: Option<Span>,
     pub(crate) generated: bool,
     pub(crate) operation_ordinal: u32,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub(crate) status: CfgStatus,
     pub(crate) precision: CfgPrecision,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BasicBlockFact {
     pub(crate) id: BasicBlockId,
     pub(crate) cfg_function: CfgFunctionId,
@@ -48,12 +48,12 @@ pub(crate) struct BasicBlockFact {
     pub(crate) last_node: Option<CfgNodeId>,
     pub(crate) reachable: bool,
     pub(crate) reverse_postorder: u32,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub(crate) status: CfgStatus,
     pub(crate) precision: CfgPrecision,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CfgEdgeFact {
     pub(crate) id: CfgEdgeId,
     pub(crate) cfg_function: CfgFunctionId,
@@ -64,24 +64,24 @@ pub(crate) struct CfgEdgeFact {
     pub(crate) to_block: BasicBlockId,
     pub(crate) kind: CfgEdgeKind,
     pub(crate) label: Option<String>,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub(crate) status: CfgStatus,
     pub(crate) precision: CfgPrecision,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ReachabilityFact {
     pub(crate) id: ReachabilityId,
     pub(crate) cfg_function: CfgFunctionId,
     pub(crate) view: CfgView,
     pub(crate) block: BasicBlockId,
     pub(crate) reachable: bool,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub(crate) status: CfgStatus,
     pub(crate) precision: CfgPrecision,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DominatorFact {
     pub(crate) id: DominatorId,
     pub(crate) cfg_function: CfgFunctionId,
@@ -89,12 +89,12 @@ pub(crate) struct DominatorFact {
     pub(crate) dominator: BasicBlockId,
     pub(crate) dominated: BasicBlockId,
     pub(crate) immediate: bool,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub(crate) status: CfgStatus,
     pub(crate) precision: CfgPrecision,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PostDominatorFact {
     pub(crate) id: PostDominatorId,
     pub(crate) cfg_function: CfgFunctionId,
@@ -102,12 +102,12 @@ pub(crate) struct PostDominatorFact {
     pub(crate) postdominator: BasicBlockId,
     pub(crate) postdominated: BasicBlockId,
     pub(crate) immediate: bool,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub(crate) status: CfgStatus,
     pub(crate) precision: CfgPrecision,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ControlDependenceFact {
     pub(crate) id: ControlDependenceId,
     pub(crate) cfg_function: CfgFunctionId,
@@ -115,12 +115,12 @@ pub(crate) struct ControlDependenceFact {
     pub(crate) controlling_edge: CfgEdgeId,
     pub(crate) controlling_edge_kind: CfgEdgeKind,
     pub(crate) controlled_block: BasicBlockId,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub(crate) status: CfgStatus,
     pub(crate) precision: CfgPrecision,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct UnsupportedControlFlowFact {
     pub(crate) id: UnsupportedControlFlowId,
     pub(crate) cfg_function: Option<CfgFunctionId>,
@@ -132,7 +132,7 @@ pub(crate) struct UnsupportedControlFlowFact {
     pub(crate) construct: String,
     pub(crate) source_evidence: String,
     pub(crate) conservative_action: ControlFlowAction,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub(crate) status: CfgStatus,
     pub(crate) precision: CfgPrecision,
 }
@@ -266,6 +266,7 @@ mod tests {
 
     #[test]
     fn cfg_facts_keep_stable_keys_separate_from_dense_ids() {
+        let interner = crate::core::StableKeyInterner::default();
         let function = CfgFunctionFact {
             id: CfgFunctionId(7),
             body: MirBodyId(9),
@@ -276,12 +277,16 @@ mod tests {
             entry_node: CfgNodeId(1),
             normal_exit_node: CfgNodeId(2),
             exceptional_exit_node: None,
-            stable_key: "cfg:function:src/app.go:f".to_string(),
+            stable_key: interner.intern("cfg:function:src/app.go:f"),
             status: CfgStatus::Resolved,
             precision: CfgPrecision::ExactSyntax,
         };
 
-        assert!(!function.stable_key.contains(&function.id.0.to_string()));
+        assert!(
+            !interner
+                .resolve(function.stable_key)
+                .contains(&function.id.0.to_string())
+        );
     }
 
     #[test]
@@ -305,6 +310,7 @@ mod tests {
 
     #[test]
     fn edge_facts_carry_view_and_block_endpoints() {
+        let interner = crate::core::StableKeyInterner::default();
         let edge = CfgEdgeFact {
             id: CfgEdgeId(1),
             cfg_function: CfgFunctionId(1),
@@ -315,7 +321,7 @@ mod tests {
             to_block: BasicBlockId(2),
             kind: CfgEdgeKind::Return,
             label: Some("return".to_string()),
-            stable_key: "edge:return".to_string(),
+            stable_key: interner.intern("edge:return"),
             status: CfgStatus::Resolved,
             precision: CfgPrecision::ExactLowered,
         };

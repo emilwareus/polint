@@ -480,7 +480,7 @@ impl<'db> CfgLowering<'db> {
     fn finish(self, interner: &crate::core::StableKeyInterner) -> CfgOutput {
         let body_to_function = self.body_to_function;
         let db = self.db;
-        let mut output = self.builder.finish();
+        let mut output = self.builder.finish(interner);
         let mut unsupported = db
             .unsupported_semantics()
             .iter()
@@ -491,7 +491,7 @@ impl<'db> CfgLowering<'db> {
             })
             .collect::<Vec<_>>();
         output.unsupported.append(&mut unsupported);
-        output.normalized()
+        output.normalized(interner)
     }
 }
 
@@ -522,20 +522,22 @@ fn unsupported_control_flow_fact(
         construct: row.construct.clone(),
         source_evidence: row.source_evidence.clone(),
         conservative_action: control_flow_action(row.conservative_action),
-        stable_key: semantic_stable_key(
-            interner,
-            FactFamily::UnsupportedControlFlow,
-            &[
-                ("language", language_label(row.language).to_string()),
-                ("construct", row.construct.clone()),
-                (
-                    "span",
-                    format!("{}..{}", row.span.start_byte, row.span.end_byte),
-                ),
-                ("source", interner.resolve(row.stable_key).to_string()),
-            ],
-        )
-        .into_string(),
+        stable_key: interner.intern(
+            semantic_stable_key(
+                interner,
+                FactFamily::UnsupportedControlFlow,
+                &[
+                    ("language", language_label(row.language).to_string()),
+                    ("construct", row.construct.clone()),
+                    (
+                        "span",
+                        format!("{}..{}", row.span.start_byte, row.span.end_byte),
+                    ),
+                    ("source", interner.resolve(row.stable_key).to_string()),
+                ],
+            )
+            .into_string(),
+        ),
         status: cfg_status(row.status),
         precision: cfg_precision(row.precision),
     }

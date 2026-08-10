@@ -229,14 +229,17 @@ fn derive_control_dependence_evidence(db: &AnalysisDb, output: &mut EvidenceOutp
             confidence: EvidenceConfidence::High,
             compact_label: Some(format!("control:{:?}", dependence.controlling_edge_kind)),
             source_fact_stable_keys: vec![
-                dependence.stable_key.clone(),
-                controlling_edge.stable_key.clone(),
+                interner.resolve(dependence.stable_key).to_string(),
+                interner.resolve(controlling_edge.stable_key).to_string(),
             ],
             stable_key: stable_key_text_from_parts(
                 interner,
                 FactFamily::EvidenceNode,
                 &[
-                    ("control_dependence", dependence.stable_key.clone()),
+                    (
+                        "control_dependence",
+                        interner.resolve(dependence.stable_key).to_string(),
+                    ),
                     ("role", "controller".to_string()),
                 ],
             ),
@@ -262,12 +265,15 @@ fn derive_control_dependence_evidence(db: &AnalysisDb, output: &mut EvidenceOutp
             validation: EvidenceValidation::ReferentiallyValidated,
             confidence: EvidenceConfidence::High,
             compact_label: Some("controlled_block".to_string()),
-            source_fact_stable_keys: vec![dependence.stable_key.clone()],
+            source_fact_stable_keys: vec![interner.resolve(dependence.stable_key).to_string()],
             stable_key: stable_key_text_from_parts(
                 interner,
                 FactFamily::EvidenceNode,
                 &[
-                    ("control_dependence", dependence.stable_key.clone()),
+                    (
+                        "control_dependence",
+                        interner.resolve(dependence.stable_key).to_string(),
+                    ),
                     ("role", "controlled".to_string()),
                 ],
             ),
@@ -288,13 +294,16 @@ fn derive_control_dependence_evidence(db: &AnalysisDb, output: &mut EvidenceOutp
             expansion: EvidenceExpansion::None,
             compact_label: Some(format!("{:?}", dependence.controlling_edge_kind)),
             source_fact_stable_keys: vec![
-                dependence.stable_key.clone(),
-                controlling_edge.stable_key.clone(),
+                interner.resolve(dependence.stable_key).to_string(),
+                interner.resolve(controlling_edge.stable_key).to_string(),
             ],
             stable_key: stable_key_text_from_parts(
                 interner,
                 FactFamily::EvidenceEdge,
-                &[("control_dependence", dependence.stable_key.clone())],
+                &[(
+                    "control_dependence",
+                    interner.resolve(dependence.stable_key).to_string(),
+                )],
             ),
         });
     }
@@ -736,12 +745,13 @@ mod tests {
     #[test]
     fn control_dependence_rows_become_control_evidence_edges() {
         let mut db = AnalysisDb::new();
+        let interner = db.stable_key_interner();
         db.replace_cfg_facts(CfgOutput {
-            functions: vec![cfg_function()],
-            nodes: vec![cfg_node(1), cfg_node(2)],
-            blocks: vec![basic_block(1), basic_block(2)],
-            edges: vec![cfg_edge()],
-            control_dependence: vec![control_dependence()],
+            functions: vec![cfg_function(&interner)],
+            nodes: vec![cfg_node(&interner, 1), cfg_node(&interner, 2)],
+            blocks: vec![basic_block(&interner, 1), basic_block(&interner, 2)],
+            edges: vec![cfg_edge(&interner)],
+            control_dependence: vec![control_dependence(&interner)],
             ..CfgOutput::empty()
         })
         .expect("valid cfg output");
@@ -761,13 +771,22 @@ mod tests {
     #[test]
     fn control_dependence_controlled_node_anchors_to_controlled_block() {
         let mut db = AnalysisDb::new();
-        let mut dependence = control_dependence();
+        let interner = db.stable_key_interner();
+        let mut dependence = control_dependence(&interner);
         dependence.controlled_block = BasicBlockId(3);
         db.replace_cfg_facts(CfgOutput {
-            functions: vec![cfg_function()],
-            nodes: vec![cfg_node(1), cfg_node(2), cfg_node(3)],
-            blocks: vec![basic_block(1), basic_block(2), basic_block(3)],
-            edges: vec![cfg_edge()],
+            functions: vec![cfg_function(&interner)],
+            nodes: vec![
+                cfg_node(&interner, 1),
+                cfg_node(&interner, 2),
+                cfg_node(&interner, 3),
+            ],
+            blocks: vec![
+                basic_block(&interner, 1),
+                basic_block(&interner, 2),
+                basic_block(&interner, 3),
+            ],
+            edges: vec![cfg_edge(&interner)],
             control_dependence: vec![dependence],
             ..CfgOutput::empty()
         })
@@ -877,7 +896,7 @@ mod tests {
         }
     }
 
-    fn cfg_function() -> CfgFunctionFact {
+    fn cfg_function(interner: &crate::core::StableKeyInterner) -> CfgFunctionFact {
         CfgFunctionFact {
             id: CfgFunctionId(1),
             body: MirBodyId(1),
@@ -888,13 +907,13 @@ mod tests {
             entry_node: CfgNodeId(1),
             normal_exit_node: CfgNodeId(2),
             exceptional_exit_node: None,
-            stable_key: "cfg:function".to_string(),
+            stable_key: interner.intern("cfg:function"),
             status: CfgStatus::Resolved,
             precision: CfgPrecision::ExactSyntax,
         }
     }
 
-    fn cfg_node(id: u64) -> CfgNodeFact {
+    fn cfg_node(interner: &crate::core::StableKeyInterner, id: u64) -> CfgNodeFact {
         CfgNodeFact {
             id: CfgNodeId(id),
             cfg_function: CfgFunctionId(1),
@@ -905,13 +924,13 @@ mod tests {
             span: Some(span()),
             generated: false,
             operation_ordinal: id as u32,
-            stable_key: format!("cfg:node:{id}"),
+            stable_key: interner.intern(format!("cfg:node:{id}")),
             status: CfgStatus::Resolved,
             precision: CfgPrecision::ExactSyntax,
         }
     }
 
-    fn basic_block(id: u64) -> BasicBlockFact {
+    fn basic_block(interner: &crate::core::StableKeyInterner, id: u64) -> BasicBlockFact {
         BasicBlockFact {
             id: BasicBlockId(id),
             cfg_function: CfgFunctionId(1),
@@ -920,13 +939,13 @@ mod tests {
             last_node: Some(CfgNodeId(id)),
             reachable: true,
             reverse_postorder: id as u32,
-            stable_key: format!("cfg:block:{id}"),
+            stable_key: interner.intern(format!("cfg:block:{id}")),
             status: CfgStatus::Resolved,
             precision: CfgPrecision::ExactSyntax,
         }
     }
 
-    fn cfg_edge() -> CfgEdgeFact {
+    fn cfg_edge(interner: &crate::core::StableKeyInterner) -> CfgEdgeFact {
         CfgEdgeFact {
             id: CfgEdgeId(1),
             cfg_function: CfgFunctionId(1),
@@ -937,13 +956,13 @@ mod tests {
             to_block: BasicBlockId(2),
             kind: CfgEdgeKind::True,
             label: Some("if".to_string()),
-            stable_key: "cfg:edge".to_string(),
+            stable_key: interner.intern("cfg:edge"),
             status: CfgStatus::Resolved,
             precision: CfgPrecision::ExactSyntax,
         }
     }
 
-    fn control_dependence() -> ControlDependenceFact {
+    fn control_dependence(interner: &crate::core::StableKeyInterner) -> ControlDependenceFact {
         ControlDependenceFact {
             id: ControlDependenceId(1),
             cfg_function: CfgFunctionId(1),
@@ -951,7 +970,7 @@ mod tests {
             controlling_edge: CfgEdgeId(1),
             controlling_edge_kind: CfgEdgeKind::True,
             controlled_block: BasicBlockId(2),
-            stable_key: "cfg:control".to_string(),
+            stable_key: interner.intern("cfg:control"),
             status: CfgStatus::Resolved,
             precision: CfgPrecision::ExactSyntax,
         }

@@ -354,8 +354,14 @@ impl<'a> SolverFactIndex<'a> {
                 .map_or_else(String::new, |body| {
                     interner.resolve(body.stable_key).to_string()
                 });
-            (left_body.as_str(), left.stable_key.as_str())
-                .cmp(&(right_body.as_str(), right.stable_key.as_str()))
+            (
+                left_body.as_str(),
+                interner.resolve(left.stable_key).as_ref(),
+            )
+                .cmp(&(
+                    right_body.as_str(),
+                    interner.resolve(right.stable_key).as_ref(),
+                ))
         });
 
         let function_by_cfg = functions
@@ -680,7 +686,7 @@ fn materialize_results(
             }
         }
         let body_key = facts.body_by_id.get(&function.body).map_or_else(
-            || function.stable_key.clone(),
+            || facts.interner.resolve(function.stable_key).to_string(),
             |body| facts.interner.resolve(body.stable_key).to_string(),
         );
         results.insert_function(
@@ -702,7 +708,7 @@ fn materialize_results(
         results.insert_block_state(
             function.body,
             block.id,
-            block.stable_key.clone(),
+            facts.interner.resolve(block.stable_key).to_string(),
             materialization
                 .block_entries
                 .get(&block.id)
@@ -930,7 +936,7 @@ mod tests {
             let interner = db.stable_key_interner();
             db.replace_semantic_mir(mir_output(&interner, shuffled))
                 .expect("semantic MIR should store");
-            db.replace_cfg_facts(cfg_output(shuffled, false))
+            db.replace_cfg_facts(cfg_output(&interner, shuffled, false))
                 .expect("CFG should store");
             let db = Box::leak(Box::new(db));
             (&*db).into()
@@ -941,7 +947,7 @@ mod tests {
             let interner = db.stable_key_interner();
             db.replace_semantic_mir(mir_output(&interner, false))
                 .expect("semantic MIR should store");
-            db.replace_cfg_facts(cfg_output(false, true))
+            db.replace_cfg_facts(cfg_output(&interner, false, true))
                 .expect("CFG should store");
             let db = Box::leak(Box::new(db));
             (&*db).into()
@@ -952,7 +958,7 @@ mod tests {
             let interner = db.stable_key_interner();
             db.replace_semantic_mir(mir_output(&interner, false))
                 .expect("semantic MIR should store");
-            let mut cfg = cfg_output(false, false);
+            let mut cfg = cfg_output(&interner, false, false);
             cfg.blocks.push(BasicBlockFact {
                 id: BasicBlockId(4),
                 cfg_function: CfgFunctionId(1),
@@ -961,11 +967,12 @@ mod tests {
                 last_node: Some(CfgNodeId(4)),
                 reachable: false,
                 reverse_postorder: 3,
-                stable_key: "block:unreachable".to_string(),
+                stable_key: interner.intern("block:unreachable"),
                 status: CfgStatus::Resolved,
                 precision: CfgPrecision::ExactLowered,
             });
-            cfg.nodes.push(node(4, 4, None, 3, "node:unreachable"));
+            cfg.nodes
+                .push(node(&interner, 4, 4, None, 3, "node:unreachable"));
             db.replace_cfg_facts(cfg).expect("CFG should store");
             let db = Box::leak(Box::new(db));
             (&*db).into()
@@ -1045,7 +1052,7 @@ mod tests {
                 ..MirOutput::default()
             })
             .expect("semantic MIR should store");
-            db.replace_cfg_facts(interprocedural_cfg(caller, callee))
+            db.replace_cfg_facts(interprocedural_cfg(&interner, caller, callee))
                 .expect("CFG should store");
             db.replace_call_facts(CallOutput {
                 sites: vec![call_site(site, caller)],
@@ -1121,35 +1128,39 @@ mod tests {
             }
         }
 
-        fn interprocedural_cfg(caller: FunctionId, callee: FunctionId) -> CfgOutput {
+        fn interprocedural_cfg(
+            interner: &crate::core::StableKeyInterner,
+            caller: FunctionId,
+            callee: FunctionId,
+        ) -> CfgOutput {
             let functions = vec![
-                cfg_function_for(1, 0, caller, 1, 4, "cfg:caller"),
-                cfg_function_for(2, 1, callee, 10, 12, "cfg:callee"),
+                cfg_function_for(interner, 1, 0, caller, 1, 4, "cfg:caller"),
+                cfg_function_for(interner, 2, 1, callee, 10, 12, "cfg:callee"),
             ];
             let blocks = vec![
-                cfg_block(1, 1, BasicBlockKind::Entry, 0),
-                cfg_block(2, 1, BasicBlockKind::StraightLine, 1),
-                cfg_block(3, 1, BasicBlockKind::StraightLine, 2),
-                cfg_block(4, 1, BasicBlockKind::ExitNormal, 3),
-                cfg_block(10, 2, BasicBlockKind::Entry, 0),
-                cfg_block(11, 2, BasicBlockKind::StraightLine, 1),
-                cfg_block(12, 2, BasicBlockKind::ExitNormal, 2),
+                cfg_block(interner, 1, 1, BasicBlockKind::Entry, 0),
+                cfg_block(interner, 2, 1, BasicBlockKind::StraightLine, 1),
+                cfg_block(interner, 3, 1, BasicBlockKind::StraightLine, 2),
+                cfg_block(interner, 4, 1, BasicBlockKind::ExitNormal, 3),
+                cfg_block(interner, 10, 2, BasicBlockKind::Entry, 0),
+                cfg_block(interner, 11, 2, BasicBlockKind::StraightLine, 1),
+                cfg_block(interner, 12, 2, BasicBlockKind::ExitNormal, 2),
             ];
             let nodes = vec![
-                cfg_node_for(1, 1, 1, 0, None),
-                cfg_node_for(2, 1, 2, 1, Some(MirOpId(0))),
-                cfg_node_for(3, 1, 3, 2, Some(MirOpId(1))),
-                cfg_node_for(4, 1, 4, 3, None),
-                cfg_node_for(10, 2, 10, 0, None),
-                cfg_node_for(11, 2, 11, 1, Some(MirOpId(2))),
-                cfg_node_for(12, 2, 12, 2, None),
+                cfg_node_for(interner, 1, 1, 1, 0, None),
+                cfg_node_for(interner, 2, 1, 2, 1, Some(MirOpId(0))),
+                cfg_node_for(interner, 3, 1, 3, 2, Some(MirOpId(1))),
+                cfg_node_for(interner, 4, 1, 4, 3, None),
+                cfg_node_for(interner, 10, 2, 10, 0, None),
+                cfg_node_for(interner, 11, 2, 11, 1, Some(MirOpId(2))),
+                cfg_node_for(interner, 12, 2, 12, 2, None),
             ];
             let edges = vec![
-                cfg_edge_for(1, 1, 1, 2),
-                cfg_edge_for(2, 1, 2, 3),
-                cfg_edge_for(3, 1, 3, 4),
-                cfg_edge_for(4, 2, 10, 11),
-                cfg_edge_for(5, 2, 11, 12),
+                cfg_edge_for(interner, 1, 1, 1, 2),
+                cfg_edge_for(interner, 2, 1, 2, 3),
+                cfg_edge_for(interner, 3, 1, 3, 4),
+                cfg_edge_for(interner, 4, 2, 10, 11),
+                cfg_edge_for(interner, 5, 2, 11, 12),
             ];
             CfgOutput {
                 functions,
@@ -1161,6 +1172,7 @@ mod tests {
         }
 
         fn cfg_function_for(
+            interner: &crate::core::StableKeyInterner,
             id: u64,
             body: u64,
             function: FunctionId,
@@ -1178,13 +1190,14 @@ mod tests {
                 entry_node: CfgNodeId(entry),
                 normal_exit_node: CfgNodeId(exit),
                 exceptional_exit_node: None,
-                stable_key: stable_key.to_string(),
+                stable_key: interner.intern(stable_key),
                 status: CfgStatus::Resolved,
                 precision: CfgPrecision::ExactLowered,
             }
         }
 
         fn cfg_block(
+            interner: &crate::core::StableKeyInterner,
             id: u64,
             function: u64,
             kind: BasicBlockKind,
@@ -1198,13 +1211,14 @@ mod tests {
                 last_node: Some(CfgNodeId(id)),
                 reachable: true,
                 reverse_postorder,
-                stable_key: format!("block:{function}:{id}"),
+                stable_key: interner.intern(format!("block:{function}:{id}")),
                 status: CfgStatus::Resolved,
                 precision: CfgPrecision::ExactLowered,
             }
         }
 
         fn cfg_node_for(
+            interner: &crate::core::StableKeyInterner,
             id: u64,
             function: u64,
             block: u64,
@@ -1225,13 +1239,19 @@ mod tests {
                 span: Some(span()),
                 generated: operation.is_none(),
                 operation_ordinal: ordinal,
-                stable_key: format!("node:{function}:{id}"),
+                stable_key: interner.intern(format!("node:{function}:{id}")),
                 status: CfgStatus::Resolved,
                 precision: CfgPrecision::ExactLowered,
             }
         }
 
-        fn cfg_edge_for(id: u64, function: u64, from: u64, to: u64) -> CfgEdgeFact {
+        fn cfg_edge_for(
+            interner: &crate::core::StableKeyInterner,
+            id: u64,
+            function: u64,
+            from: u64,
+            to: u64,
+        ) -> CfgEdgeFact {
             CfgEdgeFact {
                 id: CfgEdgeId(id),
                 cfg_function: CfgFunctionId(function),
@@ -1242,7 +1262,7 @@ mod tests {
                 to_block: BasicBlockId(to),
                 kind: CfgEdgeKind::Normal,
                 label: None,
-                stable_key: format!("edge:{function}:{from}:{to}"),
+                stable_key: interner.intern(format!("edge:{function}:{from}:{to}")),
                 status: CfgStatus::Resolved,
                 precision: CfgPrecision::ExactLowered,
             }
@@ -1368,7 +1388,11 @@ mod tests {
             }
         }
 
-        fn cfg_output(shuffled: bool, loop_back: bool) -> CfgOutput {
+        fn cfg_output(
+            interner: &crate::core::StableKeyInterner,
+            shuffled: bool,
+            loop_back: bool,
+        ) -> CfgOutput {
             let function = CfgFunctionFact {
                 id: CfgFunctionId(1),
                 body: MirBodyId(0),
@@ -1379,24 +1403,31 @@ mod tests {
                 entry_node: CfgNodeId(1),
                 normal_exit_node: CfgNodeId(3),
                 exceptional_exit_node: None,
-                stable_key: "cfg:function:test".to_string(),
+                stable_key: interner.intern("cfg:function:test"),
                 status: CfgStatus::Resolved,
                 precision: CfgPrecision::ExactLowered,
             };
-            let entry = block(1, BasicBlockKind::Entry, 0, "block:entry");
-            let body = block(2, BasicBlockKind::LoopHeader, 1, "block:body");
-            let exit = block(3, BasicBlockKind::ExitNormal, 2, "block:exit");
+            let entry = block(interner, 1, BasicBlockKind::Entry, 0, "block:entry");
+            let body = block(interner, 2, BasicBlockKind::LoopHeader, 1, "block:body");
+            let exit = block(interner, 3, BasicBlockKind::ExitNormal, 2, "block:exit");
             let nodes = vec![
-                node(1, 1, None, 0, "node:entry"),
-                node(2, 2, Some(MirOpId(0)), 1, "node:op"),
-                node(3, 3, None, u32::MAX - 1, "node:exit"),
+                node(interner, 1, 1, None, 0, "node:entry"),
+                node(interner, 2, 2, Some(MirOpId(0)), 1, "node:op"),
+                node(interner, 3, 3, None, u32::MAX - 1, "node:exit"),
             ];
             let mut edges = vec![
-                edge(1, 1, 2, CfgEdgeKind::Normal, "edge:entry-body"),
-                edge(2, 2, 3, CfgEdgeKind::Return, "edge:body-exit"),
+                edge(interner, 1, 1, 2, CfgEdgeKind::Normal, "edge:entry-body"),
+                edge(interner, 2, 2, 3, CfgEdgeKind::Return, "edge:body-exit"),
             ];
             if loop_back {
-                edges.push(edge(3, 2, 2, CfgEdgeKind::LoopBack, "edge:loop-back"));
+                edges.push(edge(
+                    interner,
+                    3,
+                    2,
+                    2,
+                    CfgEdgeKind::LoopBack,
+                    "edge:loop-back",
+                ));
             }
             if shuffled {
                 edges.reverse();
@@ -1411,6 +1442,7 @@ mod tests {
         }
 
         fn block(
+            interner: &crate::core::StableKeyInterner,
             id: u64,
             kind: BasicBlockKind,
             reverse_postorder: u32,
@@ -1424,13 +1456,14 @@ mod tests {
                 last_node: Some(CfgNodeId(id)),
                 reachable: true,
                 reverse_postorder,
-                stable_key: stable_key.to_string(),
+                stable_key: interner.intern(stable_key),
                 status: CfgStatus::Resolved,
                 precision: CfgPrecision::ExactLowered,
             }
         }
 
         fn node(
+            interner: &crate::core::StableKeyInterner,
             id: u64,
             block: u64,
             operation: Option<MirOpId>,
@@ -1451,13 +1484,14 @@ mod tests {
                 span: Some(span()),
                 generated: operation.is_none(),
                 operation_ordinal: ordinal,
-                stable_key: stable_key.to_string(),
+                stable_key: interner.intern(stable_key),
                 status: CfgStatus::Resolved,
                 precision: CfgPrecision::ExactLowered,
             }
         }
 
         fn edge(
+            interner: &crate::core::StableKeyInterner,
             id: u64,
             from_block: u64,
             to_block: u64,
@@ -1474,7 +1508,7 @@ mod tests {
                 to_block: BasicBlockId(to_block),
                 kind,
                 label: None,
-                stable_key: stable_key.to_string(),
+                stable_key: interner.intern(stable_key),
                 status: CfgStatus::Resolved,
                 precision: CfgPrecision::ExactLowered,
             }

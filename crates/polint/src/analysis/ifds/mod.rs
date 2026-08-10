@@ -526,11 +526,18 @@ mod tests {
 
     #[test]
     fn icfg_builds_call_to_return_and_matched_return_edges() {
+        let interner = crate::core::StableKeyInterner::default();
         let sites = vec![call_site(1)];
         let refined = vec![refined_edge(1)];
-        let functions = vec![cfg_function(0, 0, 0, 3), cfg_function(1, 1, 4, 5)];
-        let nodes = vec![cfg_node(1, 0, Some(MirOpId(1))), cfg_node(2, 0, None)];
-        let edges = vec![cfg_edge(1, 2)];
+        let functions = vec![
+            cfg_function(&interner, 0, 0, 0, 3),
+            cfg_function(&interner, 1, 1, 4, 5),
+        ];
+        let nodes = vec![
+            cfg_node(&interner, 1, 0, Some(MirOpId(1))),
+            cfg_node(&interner, 2, 0, None),
+        ];
+        let edges = vec![cfg_edge(&interner, 1, 2)];
 
         let icfg = Icfg::from_facts(&functions, &nodes, &edges, &sites, &refined);
         let actual = [
@@ -745,7 +752,13 @@ mod tests {
         }
     }
 
-    fn cfg_function(id: u64, function: u64, entry: u64, exit: u64) -> CfgFunctionFact {
+    fn cfg_function(
+        interner: &crate::core::StableKeyInterner,
+        id: u64,
+        function: u64,
+        entry: u64,
+        exit: u64,
+    ) -> CfgFunctionFact {
         CfgFunctionFact {
             id: CfgFunctionId(id),
             body: MirBodyId(id),
@@ -756,13 +769,18 @@ mod tests {
             entry_node: CfgNodeId(entry),
             normal_exit_node: CfgNodeId(exit),
             exceptional_exit_node: None,
-            stable_key: format!("cfg-function:{id}"),
+            stable_key: interner.intern(format!("cfg-function:{id}")),
             status: CfgStatus::Resolved,
             precision: CfgPrecision::ExactLowered,
         }
     }
 
-    fn cfg_node(id: u64, function: u64, operation: Option<MirOpId>) -> CfgNodeFact {
+    fn cfg_node(
+        interner: &crate::core::StableKeyInterner,
+        id: u64,
+        function: u64,
+        operation: Option<MirOpId>,
+    ) -> CfgNodeFact {
         CfgNodeFact {
             id: CfgNodeId(id),
             cfg_function: CfgFunctionId(function),
@@ -773,13 +791,13 @@ mod tests {
             span: None,
             generated: false,
             operation_ordinal: id as u32,
-            stable_key: format!("cfg-node:{id}"),
+            stable_key: interner.intern(format!("cfg-node:{id}")),
             status: CfgStatus::Resolved,
             precision: CfgPrecision::ExactLowered,
         }
     }
 
-    fn cfg_edge(from: u64, to: u64) -> CfgEdgeFact {
+    fn cfg_edge(interner: &crate::core::StableKeyInterner, from: u64, to: u64) -> CfgEdgeFact {
         CfgEdgeFact {
             id: CfgEdgeId(0),
             cfg_function: CfgFunctionId(0),
@@ -790,7 +808,7 @@ mod tests {
             to_block: BasicBlockId(to),
             kind: CfgEdgeKind::Normal,
             label: None,
-            stable_key: format!("cfg-edge:{from}:{to}"),
+            stable_key: interner.intern(format!("cfg-edge:{from}:{to}")),
             status: CfgStatus::Resolved,
             precision: CfgPrecision::ExactLowered,
         }

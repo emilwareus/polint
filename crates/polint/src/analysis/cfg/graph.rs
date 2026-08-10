@@ -8,6 +8,7 @@ use crate::analysis::cfg::store::CfgOutput;
 
 #[derive(Debug)]
 pub(crate) struct CfgGraphIndex<'a> {
+    interner: &'a crate::core::StableKeyInterner,
     output: &'a CfgOutput,
     functions: Vec<&'a CfgFunctionFact>,
     function_by_id: BTreeMap<CfgFunctionId, &'a CfgFunctionFact>,
@@ -17,9 +18,9 @@ pub(crate) struct CfgGraphIndex<'a> {
 }
 
 impl<'a> CfgGraphIndex<'a> {
-    pub(crate) fn new(output: &'a CfgOutput) -> Self {
+    pub(crate) fn new(interner: &'a crate::core::StableKeyInterner, output: &'a CfgOutput) -> Self {
         let mut functions = output.functions.iter().collect::<Vec<_>>();
-        functions.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+        functions.sort_by_cached_key(|row| interner.resolve(row.stable_key));
         let function_by_id = output
             .functions
             .iter()
@@ -34,12 +35,12 @@ impl<'a> CfgGraphIndex<'a> {
                 .push(node);
         }
         for nodes in nodes_by_function.values_mut() {
-            nodes.sort_by(|left, right| {
-                (left.block, left.operation_ordinal, left.stable_key.as_str()).cmp(&(
-                    right.block,
-                    right.operation_ordinal,
-                    right.stable_key.as_str(),
-                ))
+            nodes.sort_by_cached_key(|row| {
+                (
+                    row.block,
+                    row.operation_ordinal,
+                    interner.resolve(row.stable_key),
+                )
             });
         }
 
@@ -51,9 +52,8 @@ impl<'a> CfgGraphIndex<'a> {
                 .push(block);
         }
         for blocks in blocks_by_function.values_mut() {
-            blocks.sort_by(|left, right| {
-                (left.reverse_postorder, left.stable_key.as_str())
-                    .cmp(&(right.reverse_postorder, right.stable_key.as_str()))
+            blocks.sort_by_cached_key(|row| {
+                (row.reverse_postorder, interner.resolve(row.stable_key))
             });
         }
 
@@ -66,23 +66,18 @@ impl<'a> CfgGraphIndex<'a> {
                 .push(edge);
         }
         for edges in edges_by_function_view.values_mut() {
-            edges.sort_by(|left, right| {
+            edges.sort_by_cached_key(|row| {
                 (
-                    left.from_block,
-                    left.to_block,
-                    left.kind,
-                    left.stable_key.as_str(),
+                    row.from_block,
+                    row.to_block,
+                    row.kind,
+                    interner.resolve(row.stable_key),
                 )
-                    .cmp(&(
-                        right.from_block,
-                        right.to_block,
-                        right.kind,
-                        right.stable_key.as_str(),
-                    ))
             });
         }
 
         Self {
+            interner,
             output,
             functions,
             function_by_id,
@@ -101,6 +96,7 @@ impl<'a> CfgGraphIndex<'a> {
 
     fn graph(&self, function: CfgFunctionId, view: CfgView) -> CfgGraph<'a> {
         CfgGraph::from_grouped(
+            self.interner,
             self.output,
             function,
             self.function_by_id.get(&function).copied(),
@@ -122,6 +118,7 @@ impl<'a> CfgGraphIndex<'a> {
 
 #[derive(Debug, Clone)]
 pub(crate) struct CfgGraph<'a> {
+    interner: &'a crate::core::StableKeyInterner,
     output: &'a CfgOutput,
     function: CfgFunctionId,
     function_fact: Option<&'a CfgFunctionFact>,
@@ -133,7 +130,12 @@ pub(crate) struct CfgGraph<'a> {
 }
 
 impl<'a> CfgGraph<'a> {
-    pub(crate) fn new(output: &'a CfgOutput, function: CfgFunctionId, view: CfgView) -> Self {
+    pub(crate) fn new(
+        interner: &'a crate::core::StableKeyInterner,
+        output: &'a CfgOutput,
+        function: CfgFunctionId,
+        view: CfgView,
+    ) -> Self {
         let function_fact = output
             .functions
             .iter()
@@ -144,12 +146,12 @@ impl<'a> CfgGraph<'a> {
             .iter()
             .filter(|node| node.cfg_function == function)
             .collect::<Vec<_>>();
-        nodes.sort_by(|left, right| {
-            (left.block, left.operation_ordinal, left.stable_key.as_str()).cmp(&(
-                right.block,
-                right.operation_ordinal,
-                right.stable_key.as_str(),
-            ))
+        nodes.sort_by_cached_key(|row| {
+            (
+                row.block,
+                row.operation_ordinal,
+                interner.resolve(row.stable_key),
+            )
         });
 
         let mut blocks = output
@@ -157,29 +159,20 @@ impl<'a> CfgGraph<'a> {
             .iter()
             .filter(|block| block.cfg_function == function)
             .collect::<Vec<_>>();
-        blocks.sort_by(|left, right| {
-            (left.reverse_postorder, left.stable_key.as_str())
-                .cmp(&(right.reverse_postorder, right.stable_key.as_str()))
-        });
+        blocks.sort_by_cached_key(|row| (row.reverse_postorder, interner.resolve(row.stable_key)));
 
         let mut edges = output
             .edges
             .iter()
             .filter(|edge| edge.cfg_function == function && edge.view == view)
             .collect::<Vec<_>>();
-        edges.sort_by(|left, right| {
+        edges.sort_by_cached_key(|row| {
             (
-                left.from_block,
-                left.to_block,
-                left.kind,
-                left.stable_key.as_str(),
+                row.from_block,
+                row.to_block,
+                row.kind,
+                interner.resolve(row.stable_key),
             )
-                .cmp(&(
-                    right.from_block,
-                    right.to_block,
-                    right.kind,
-                    right.stable_key.as_str(),
-                ))
         });
 
         let mut successors = BTreeMap::<BasicBlockId, Vec<BasicBlockId>>::new();
@@ -207,6 +200,7 @@ impl<'a> CfgGraph<'a> {
         }
 
         Self {
+            interner,
             output,
             function,
             function_fact,
@@ -219,6 +213,7 @@ impl<'a> CfgGraph<'a> {
     }
 
     fn from_grouped(
+        interner: &'a crate::core::StableKeyInterner,
         output: &'a CfgOutput,
         function: CfgFunctionId,
         function_fact: Option<&'a CfgFunctionFact>,
@@ -251,6 +246,7 @@ impl<'a> CfgGraph<'a> {
         }
 
         Self {
+            interner,
             output,
             function,
             function_fact,
@@ -268,7 +264,7 @@ impl<'a> CfgGraph<'a> {
 
     pub(crate) fn function_stable_key(&self) -> String {
         self.function_fact
-            .map(|function| function.stable_key.clone())
+            .map(|function| self.interner.resolve(function.stable_key).to_string())
             .unwrap_or_else(|| format!("<missing-function:{}>", self.function.0))
     }
 
@@ -396,59 +392,35 @@ mod tests {
         let mut builder = CfgBuilder::new();
         let function = builder.start_function(&interner, &body(&interner), false);
         let entry = builder.current_block();
-        let branch = builder.start_block(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            BasicBlockKind::Branch,
-        );
+        let branch = builder.start_block(&interner, BasicBlockKind::Branch);
         builder.append_operation_node(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &interner,
             Some(&op(&interner, 1, 1)),
             CfgNodeKind::Condition,
             Some(span()),
         );
-        let then_block = builder.start_block(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            BasicBlockKind::StraightLine,
-        );
+        let then_block = builder.start_block(&interner, BasicBlockKind::StraightLine);
         builder.append_operation_node(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &interner,
             Some(&op(&interner, 2, 2)),
             CfgNodeKind::Operation,
             Some(span()),
         );
-        let else_block = builder.start_block(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            BasicBlockKind::StraightLine,
-        );
+        let else_block = builder.start_block(&interner, BasicBlockKind::StraightLine);
         builder.append_operation_node(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
+            &interner,
             Some(&op(&interner, 3, 3)),
             CfgNodeKind::Operation,
             Some(span()),
         );
 
-        builder.add_edge(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            entry,
-            branch,
-            CfgEdgeKind::Normal,
-        );
-        builder.add_edge(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            branch,
-            else_block,
-            CfgEdgeKind::False,
-        );
-        builder.add_edge(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            branch,
-            then_block,
-            CfgEdgeKind::True,
-        );
+        builder.add_edge(&interner, entry, branch, CfgEdgeKind::Normal);
+        builder.add_edge(&interner, branch, else_block, CfgEdgeKind::False);
+        builder.add_edge(&interner, branch, then_block, CfgEdgeKind::True);
         builder.finish_function();
-        let output = builder.finish();
+        let output = builder.finish(&interner);
 
-        let graph = CfgGraph::new(&output, function, CfgView::NormalControl);
+        let graph = CfgGraph::new(&interner, &output, function, CfgView::NormalControl);
         assert!(graph.function().is_some());
         assert!(!graph.nodes().is_empty());
         assert_eq!(graph.entry_block(), Some(entry));

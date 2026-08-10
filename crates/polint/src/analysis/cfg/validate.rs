@@ -11,36 +11,41 @@ use crate::diagnostics::{Diagnostic, TextRange};
 
 pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
     let index = CfgValidationIndex::from_db(db);
+    let interner = db.stable_key_interner();
 
     check_duplicate_stable_keys(
         diagnostics,
         "CfgFunction",
-        db.cfg_functions().iter().map(|row| row.stable_key.as_str()),
+        &interner,
+        db.cfg_functions().iter().map(|row| row.stable_key),
     );
     check_duplicate_stable_keys(
         diagnostics,
         "CfgNode",
-        db.cfg_nodes().iter().map(|row| row.stable_key.as_str()),
+        &interner,
+        db.cfg_nodes().iter().map(|row| row.stable_key),
     );
     check_duplicate_stable_keys(
         diagnostics,
         "BasicBlock",
-        db.cfg_blocks().iter().map(|row| row.stable_key.as_str()),
+        &interner,
+        db.cfg_blocks().iter().map(|row| row.stable_key),
     );
     check_duplicate_stable_keys(
         diagnostics,
         "CfgEdge",
-        db.cfg_edges().iter().map(|row| row.stable_key.as_str()),
+        &interner,
+        db.cfg_edges().iter().map(|row| row.stable_key),
     );
 
-    validate_function_graph_shapes(&index, diagnostics);
+    validate_function_graph_shapes(&interner, &index, diagnostics);
 
     for function in db.cfg_functions() {
         if !index.nodes.contains_key(&function.entry_node) {
             push_cfg_diagnostic(
                 diagnostics,
                 "CfgFunction",
-                &function.stable_key,
+                interner.resolve(function.stable_key).as_ref(),
                 "entry_node",
                 "dangling entry node",
             );
@@ -49,7 +54,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
             push_cfg_diagnostic(
                 diagnostics,
                 "CfgFunction",
-                &function.stable_key,
+                interner.resolve(function.stable_key).as_ref(),
                 "normal_exit_node",
                 "dangling normal exit node",
             );
@@ -60,7 +65,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
             push_cfg_diagnostic(
                 diagnostics,
                 "CfgFunction",
-                &function.stable_key,
+                interner.resolve(function.stable_key).as_ref(),
                 "exceptional_exit_node",
                 "dangling exceptional exit node",
             );
@@ -69,7 +74,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
             push_cfg_diagnostic(
                 diagnostics,
                 "CfgFunction",
-                &function.stable_key,
+                interner.resolve(function.stable_key).as_ref(),
                 "body",
                 "dangling MIR body reference",
             );
@@ -81,7 +86,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
             push_cfg_diagnostic(
                 diagnostics,
                 "CfgNode",
-                &node.stable_key,
+                interner.resolve(node.stable_key).as_ref(),
                 "cfg_function",
                 "dangling CFG function reference",
             );
@@ -90,7 +95,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
             push_cfg_diagnostic(
                 diagnostics,
                 "CfgNode",
-                &node.stable_key,
+                interner.resolve(node.stable_key).as_ref(),
                 "block",
                 "dangling basic block reference",
             );
@@ -101,7 +106,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
             push_cfg_diagnostic(
                 diagnostics,
                 "CfgNode",
-                &node.stable_key,
+                interner.resolve(node.stable_key).as_ref(),
                 "span",
                 "invalid span byte range",
             );
@@ -113,7 +118,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
             push_cfg_diagnostic(
                 diagnostics,
                 "BasicBlock",
-                &block.stable_key,
+                interner.resolve(block.stable_key).as_ref(),
                 "cfg_function",
                 "dangling CFG function reference",
             );
@@ -124,7 +129,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
             push_cfg_diagnostic(
                 diagnostics,
                 "BasicBlock",
-                &block.stable_key,
+                interner.resolve(block.stable_key).as_ref(),
                 "node_range",
                 "block node ranges are non-empty except synthetic entry/exit blocks",
             );
@@ -134,7 +139,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
             &index.nodes,
             block.first_node,
             "BasicBlock",
-            &block.stable_key,
+            interner.resolve(block.stable_key).as_ref(),
             "first_node",
         );
         check_optional_node(
@@ -142,7 +147,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
             &index.nodes,
             block.last_node,
             "BasicBlock",
-            &block.stable_key,
+            interner.resolve(block.stable_key).as_ref(),
             "last_node",
         );
     }
@@ -153,7 +158,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
             push_cfg_diagnostic(
                 diagnostics,
                 "CfgEdge",
-                &edge.stable_key,
+                interner.resolve(edge.stable_key).as_ref(),
                 "cfg_function",
                 "dangling CFG function reference",
             );
@@ -164,7 +169,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
             edge.from,
             edge.cfg_function,
             "CfgEdge",
-            &edge.stable_key,
+            interner.resolve(edge.stable_key).as_ref(),
             "from",
         );
         check_edge_node(
@@ -173,7 +178,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
             edge.to,
             edge.cfg_function,
             "CfgEdge",
-            &edge.stable_key,
+            interner.resolve(edge.stable_key).as_ref(),
             "to",
         );
         check_edge_block(
@@ -182,7 +187,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
             edge.from_block,
             edge.cfg_function,
             "CfgEdge",
-            &edge.stable_key,
+            interner.resolve(edge.stable_key).as_ref(),
             "from_block",
         );
         check_edge_block(
@@ -191,7 +196,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
             edge.to_block,
             edge.cfg_function,
             "CfgEdge",
-            &edge.stable_key,
+            interner.resolve(edge.stable_key).as_ref(),
             "to_block",
         );
         if !edge_shapes.insert((
@@ -206,7 +211,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
             push_cfg_diagnostic(
                 diagnostics,
                 "CfgEdge",
-                &edge.stable_key,
+                interner.resolve(edge.stable_key).as_ref(),
                 "edge",
                 "duplicate identical edges after normalization",
             );
@@ -220,7 +225,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
             row.block,
             row.cfg_function,
             "CfgReachability",
-            &row.stable_key,
+            interner.resolve(row.stable_key).as_ref(),
             "block",
         );
     }
@@ -231,7 +236,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
             row.dominator,
             row.cfg_function,
             "CfgDominator",
-            &row.stable_key,
+            interner.resolve(row.stable_key).as_ref(),
             "dominator",
         );
         check_block_ref(
@@ -240,7 +245,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
             row.dominated,
             row.cfg_function,
             "CfgDominator",
-            &row.stable_key,
+            interner.resolve(row.stable_key).as_ref(),
             "dominated",
         );
     }
@@ -251,7 +256,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
             row.postdominator,
             row.cfg_function,
             "CfgPostDominator",
-            &row.stable_key,
+            interner.resolve(row.stable_key).as_ref(),
             "postdominator",
         );
         check_block_ref(
@@ -260,7 +265,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
             row.postdominated,
             row.cfg_function,
             "CfgPostDominator",
-            &row.stable_key,
+            interner.resolve(row.stable_key).as_ref(),
             "postdominated",
         );
     }
@@ -271,7 +276,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
             row.controlling_edge,
             row.cfg_function,
             "CfgControlDependence",
-            &row.stable_key,
+            interner.resolve(row.stable_key).as_ref(),
             "controlling_edge",
         );
         check_block_ref(
@@ -280,7 +285,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
             row.controlled_block,
             row.cfg_function,
             "CfgControlDependence",
-            &row.stable_key,
+            interner.resolve(row.stable_key).as_ref(),
             "controlled_block",
         );
     }
@@ -289,7 +294,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
             push_cfg_diagnostic(
                 diagnostics,
                 "UnsupportedControlFlow",
-                &row.stable_key,
+                interner.resolve(row.stable_key).as_ref(),
                 "source_evidence",
                 "unsupported control-flow rows require construct and source evidence",
             );
@@ -303,7 +308,7 @@ pub(crate) fn validate_cfg(db: &AnalysisDb, diagnostics: &mut Vec<Diagnostic>) {
             push_cfg_diagnostic(
                 diagnostics,
                 "UnsupportedControlFlow",
-                &row.stable_key,
+                interner.resolve(row.stable_key).as_ref(),
                 "precision",
                 "unsupported control-flow rows cannot claim exact resolved precision",
             );
@@ -405,6 +410,7 @@ impl<'a> CfgValidationIndex<'a> {
 }
 
 fn validate_function_graph_shapes(
+    interner: &crate::core::StableKeyInterner,
     index: &CfgValidationIndex<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -418,7 +424,7 @@ fn validate_function_graph_shapes(
             push_cfg_diagnostic(
                 diagnostics,
                 "CfgFunction",
-                &function.stable_key,
+                interner.resolve(function.stable_key).as_ref(),
                 "entry_block",
                 "expected exactly one entry block",
             );
@@ -438,7 +444,7 @@ fn validate_function_graph_shapes(
             push_cfg_diagnostic(
                 diagnostics,
                 "CfgFunction",
-                &function.stable_key,
+                interner.resolve(function.stable_key).as_ref(),
                 "exit_block",
                 "expected at least one selected exit block or unsupported boundary",
             );
@@ -450,7 +456,7 @@ fn validate_function_graph_shapes(
                 push_cfg_diagnostic(
                     diagnostics,
                     "BasicBlock",
-                    &block.stable_key,
+                    interner.resolve(block.stable_key).as_ref(),
                     "reachable",
                     "stored reachable flag disagrees with graph reachability",
                 );
@@ -487,10 +493,11 @@ fn reachable_blocks(
     seen
 }
 
-fn check_duplicate_stable_keys<'a>(
+fn check_duplicate_stable_keys(
     diagnostics: &mut Vec<Diagnostic>,
     family: &'static str,
-    stable_keys: impl Iterator<Item = &'a str>,
+    interner: &crate::core::StableKeyInterner,
+    stable_keys: impl Iterator<Item = crate::core::StableKeyId>,
 ) {
     let mut seen = BTreeSet::new();
     for stable_key in stable_keys {
@@ -498,7 +505,7 @@ fn check_duplicate_stable_keys<'a>(
             push_cfg_diagnostic(
                 diagnostics,
                 family,
-                stable_key,
+                interner.resolve(stable_key).as_ref(),
                 "stable_key",
                 "duplicate stable_key",
             );

@@ -11,7 +11,7 @@ use crate::analysis::mir::body::MirBody;
 use crate::analysis::mir::op::MirOperation;
 use crate::analysis::stable_key::semantic_stable_key;
 use crate::analysis_kernel::FactFamily;
-use crate::core::Span;
+use crate::core::{Span, StableKeyId};
 
 #[derive(Debug, Clone)]
 pub(crate) struct CfgBuilder {
@@ -22,7 +22,7 @@ pub(crate) struct CfgBuilder {
     next_edge: u64,
     current_function: Option<CfgFunctionId>,
     current_body: Option<crate::analysis::ids::MirBodyId>,
-    current_body_stable_key: Option<String>,
+    current_body_stable_key: Option<StableKeyId>,
     current_block: Option<BasicBlockId>,
     next_body_block_ordinal: u32,
     next_synthetic_node_ordinal: u32,
@@ -40,7 +40,7 @@ struct CfgNodeDraft {
     span: Option<Span>,
     generated: bool,
     operation_ordinal: u32,
-    stable_key: String,
+    stable_key: StableKeyId,
 }
 
 impl CfgBuilder {
@@ -71,11 +71,11 @@ impl CfgBuilder {
         include_exceptional_exit: bool,
     ) -> CfgFunctionId {
         let function_id = self.alloc_function_id();
-        let body_stable_key = interner.resolve(body.stable_key).to_string();
+        let body_stable_key = body.stable_key;
         let owner_stable_key = interner.resolve(body.owner_stable_key).to_string();
         self.current_function = Some(function_id);
         self.current_body = Some(body.id);
-        self.current_body_stable_key = Some(body_stable_key.clone());
+        self.current_body_stable_key = Some(body_stable_key);
         self.next_body_block_ordinal = 0;
         self.next_synthetic_node_ordinal = 0;
 
@@ -91,7 +91,7 @@ impl CfgBuilder {
                 interner,
                 FactFamily::CfgNode,
                 &[
-                    ("body", body_stable_key.clone()),
+                    ("body", interner.resolve(body_stable_key).to_string()),
                     ("kind", "entry".to_string()),
                 ],
             ),
@@ -106,7 +106,7 @@ impl CfgBuilder {
                 interner,
                 FactFamily::BasicBlock,
                 &[
-                    ("body", body_stable_key.clone()),
+                    ("body", interner.resolve(body_stable_key).to_string()),
                     ("kind", "entry".to_string()),
                 ],
             ),
@@ -124,7 +124,7 @@ impl CfgBuilder {
                 interner,
                 FactFamily::CfgNode,
                 &[
-                    ("body", body_stable_key.clone()),
+                    ("body", interner.resolve(body_stable_key).to_string()),
                     ("kind", "exit-normal".to_string()),
                 ],
             ),
@@ -139,7 +139,7 @@ impl CfgBuilder {
                 interner,
                 FactFamily::BasicBlock,
                 &[
-                    ("body", body_stable_key.clone()),
+                    ("body", interner.resolve(body_stable_key).to_string()),
                     ("kind", "exit-normal".to_string()),
                 ],
             ),
@@ -160,7 +160,7 @@ impl CfgBuilder {
                     interner,
                     FactFamily::CfgNode,
                     &[
-                        ("body", body_stable_key.clone()),
+                        ("body", interner.resolve(body_stable_key).to_string()),
                         ("kind", "exit-exceptional".to_string()),
                     ],
                 ),
@@ -177,7 +177,7 @@ impl CfgBuilder {
                     interner,
                     FactFamily::BasicBlock,
                     &[
-                        ("body", body_stable_key.clone()),
+                        ("body", interner.resolve(body_stable_key).to_string()),
                         ("kind", "exit-exceptional".to_string()),
                     ],
                 ),
@@ -199,7 +199,10 @@ impl CfgBuilder {
             stable_key: stable_key(
                 interner,
                 FactFamily::CfgFunction,
-                &[("body", body_stable_key), ("owner", owner_stable_key)],
+                &[
+                    ("body", interner.resolve(body_stable_key).to_string()),
+                    ("owner", owner_stable_key),
+                ],
             ),
             status: CfgStatus::Resolved,
             precision: CfgPrecision::ExactLowered,
@@ -236,7 +239,7 @@ impl CfgBuilder {
         let function = self.expect_function();
         let ordinal = self.next_body_block_ordinal;
         self.next_body_block_ordinal += 1;
-        let body_key = self.expect_body_stable_key().to_string();
+        let body_key = interner.resolve(self.expect_body_stable_key()).to_string();
         let block_id = self.new_block(
             function,
             kind,
@@ -269,7 +272,7 @@ impl CfgBuilder {
             .current_body
             .expect("CfgBuilder::start_function must be called before append_operation_node");
         let block = self.current_block();
-        let block_key = self.block(block).stable_key.clone();
+        let block_key = interner.resolve(self.block(block).stable_key).to_string();
         let previous_last = self.block_mut(block).last_node;
         let operation_ordinal = operation.map_or_else(
             || self.alloc_synthetic_node_ordinal(),
@@ -280,7 +283,7 @@ impl CfgBuilder {
             || format!("synthetic:{operation_ordinal}"),
             |operation| interner.resolve(operation.stable_key).to_string(),
         );
-        let body_key = self.expect_body_stable_key().to_string();
+        let body_key = interner.resolve(self.expect_body_stable_key()).to_string();
         let node_id = self.new_node(CfgNodeDraft {
             function,
             body,
@@ -355,9 +358,9 @@ impl CfgBuilder {
         self.next_synthetic_node_ordinal = 0;
     }
 
-    pub(crate) fn finish(mut self) -> CfgOutput {
+    pub(crate) fn finish(mut self, interner: &crate::core::StableKeyInterner) -> CfgOutput {
         self.refresh_reachability();
-        self.output.normalized()
+        self.output.normalized(interner)
     }
 
     fn refresh_reachability(&mut self) {
@@ -432,11 +435,15 @@ impl CfgBuilder {
         kind: CfgEdgeKind,
     ) -> CfgEdgeId {
         let function = self.expect_function();
-        let body_key = self.expect_body_stable_key().to_string();
-        let from_block_key = self.block(from_block).stable_key.clone();
-        let to_block_key = self.block(to_block).stable_key.clone();
-        let from_node_key = self.node(from).stable_key.clone();
-        let to_node_key = self.node(to).stable_key.clone();
+        let body_key = interner.resolve(self.expect_body_stable_key()).to_string();
+        let from_block_key = interner
+            .resolve(self.block(from_block).stable_key)
+            .to_string();
+        let to_block_key = interner
+            .resolve(self.block(to_block).stable_key)
+            .to_string();
+        let from_node_key = interner.resolve(self.node(from).stable_key).to_string();
+        let to_node_key = interner.resolve(self.node(to).stable_key).to_string();
         let edge_id = self.alloc_edge_id();
         self.output.edges.push(CfgEdgeFact {
             id: edge_id,
@@ -494,7 +501,7 @@ impl CfgBuilder {
         first_node: Option<CfgNodeId>,
         last_node: Option<CfgNodeId>,
         reverse_postorder: u32,
-        stable_key: String,
+        stable_key: StableKeyId,
     ) -> BasicBlockId {
         let id = self.alloc_block_id();
         for node_id in [first_node, last_node].into_iter().flatten() {
@@ -558,9 +565,10 @@ impl CfgBuilder {
             .expect("CfgBuilder::start_function must be called before adding CFG rows")
     }
 
-    fn expect_body_stable_key(&self) -> &str {
+    fn expect_body_stable_key(&self) -> StableKeyId {
         self.current_body_stable_key
-            .as_deref()
+            .as_ref()
+            .copied()
             .expect("CfgBuilder::start_function must be called before adding CFG rows")
     }
 
@@ -599,8 +607,8 @@ fn stable_key(
     interner: &crate::core::StableKeyInterner,
     family: FactFamily,
     parts: &[(&str, String)],
-) -> String {
-    semantic_stable_key(interner, family, parts).into_string()
+) -> StableKeyId {
+    interner.intern(semantic_stable_key(interner, family, parts).into_string())
 }
 
 #[cfg(test)]
@@ -660,7 +668,7 @@ mod tests {
         let mut builder = CfgBuilder::new();
         let function = builder.start_function(&interner, &body(&interner), true);
         builder.finish_function();
-        let output = builder.finish();
+        let output = builder.finish(&interner);
 
         let function_fact = output
             .functions
@@ -694,7 +702,7 @@ mod tests {
             .expect("exceptional exit block");
         builder.add_edge(&interner, entry, normal_exit, CfgEdgeKind::Normal);
         builder.finish_function();
-        let output = builder.finish();
+        let output = builder.finish(&interner);
 
         let entry_block = output
             .blocks
@@ -737,10 +745,16 @@ mod tests {
             );
             builder.finish_function();
             builder
-                .finish()
+                .finish(&interner)
                 .nodes
                 .into_iter()
-                .map(|node| format!("{}:{}", node.id.0, node.stable_key))
+                .map(|node| {
+                    format!(
+                        "{}:{}",
+                        node.id.0,
+                        interner.resolve(node.stable_key).as_ref()
+                    )
+                })
                 .collect()
         }
 
@@ -810,7 +824,7 @@ mod tests {
         builder.add_edge(&interner, loop_header, loop_header, CfgEdgeKind::LoopBack);
         builder.add_edge(&interner, loop_header, return_block, CfgEdgeKind::LoopExit);
         builder.finish_function();
-        let output = builder.finish();
+        let output = builder.finish(&interner);
 
         assert!(
             output

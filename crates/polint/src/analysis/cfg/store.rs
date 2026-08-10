@@ -21,51 +21,38 @@ impl CfgOutput {
         Self::default()
     }
 
-    pub(crate) fn normalized(mut self) -> Self {
+    pub(crate) fn normalized(mut self, interner: &crate::core::StableKeyInterner) -> Self {
         self.functions
-            .sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
-        self.nodes.sort_by(|left, right| {
+            .sort_by_cached_key(|row| interner.resolve(row.stable_key));
+        self.nodes.sort_by_cached_key(|row| {
             (
-                left.cfg_function,
-                left.operation_ordinal,
-                left.stable_key.as_str(),
+                row.cfg_function,
+                row.operation_ordinal,
+                interner.resolve(row.stable_key),
             )
-                .cmp(&(
-                    right.cfg_function,
-                    right.operation_ordinal,
-                    right.stable_key.as_str(),
-                ))
         });
         self.blocks
-            .sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
-        self.edges.sort_by(|left, right| {
+            .sort_by_cached_key(|row| interner.resolve(row.stable_key));
+        self.edges.sort_by_cached_key(|row| {
             (
-                left.cfg_function,
-                left.view,
-                left.from_block,
-                left.to_block,
-                left.kind,
-                left.stable_key.as_str(),
+                row.cfg_function,
+                row.view,
+                row.from_block,
+                row.to_block,
+                row.kind,
+                interner.resolve(row.stable_key),
             )
-                .cmp(&(
-                    right.cfg_function,
-                    right.view,
-                    right.from_block,
-                    right.to_block,
-                    right.kind,
-                    right.stable_key.as_str(),
-                ))
         });
         self.reachability
-            .sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+            .sort_by_cached_key(|row| interner.resolve(row.stable_key));
         self.dominators
-            .sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+            .sort_by_cached_key(|row| interner.resolve(row.stable_key));
         self.postdominators
-            .sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+            .sort_by_cached_key(|row| interner.resolve(row.stable_key));
         self.control_dependence
-            .sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+            .sort_by_cached_key(|row| interner.resolve(row.stable_key));
         self.unsupported
-            .sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+            .sort_by_cached_key(|row| interner.resolve(row.stable_key));
         self
     }
 }
@@ -90,7 +77,11 @@ mod tests {
         }
     }
 
-    fn function(id: u64, stable_key: &str) -> CfgFunctionFact {
+    fn function(
+        interner: &crate::core::StableKeyInterner,
+        id: u64,
+        stable_key: &str,
+    ) -> CfgFunctionFact {
         CfgFunctionFact {
             id: CfgFunctionId(id),
             body: MirBodyId(id),
@@ -101,13 +92,18 @@ mod tests {
             entry_node: CfgNodeId(1),
             normal_exit_node: CfgNodeId(2),
             exceptional_exit_node: None,
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key),
             status: CfgStatus::Resolved,
             precision: CfgPrecision::ExactSyntax,
         }
     }
 
-    fn node(function: u64, ordinal: u32, stable_key: &str) -> CfgNodeFact {
+    fn node(
+        interner: &crate::core::StableKeyInterner,
+        function: u64,
+        ordinal: u32,
+        stable_key: &str,
+    ) -> CfgNodeFact {
         CfgNodeFact {
             id: CfgNodeId(u64::from(ordinal)),
             cfg_function: CfgFunctionId(function),
@@ -118,13 +114,13 @@ mod tests {
             span: Some(span()),
             generated: false,
             operation_ordinal: ordinal,
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key),
             status: CfgStatus::Resolved,
             precision: CfgPrecision::ExactSyntax,
         }
     }
 
-    fn block(stable_key: &str) -> BasicBlockFact {
+    fn block(interner: &crate::core::StableKeyInterner, stable_key: &str) -> BasicBlockFact {
         BasicBlockFact {
             id: BasicBlockId(1),
             cfg_function: CfgFunctionId(1),
@@ -133,7 +129,7 @@ mod tests {
             last_node: Some(CfgNodeId(1)),
             reachable: true,
             reverse_postorder: 0,
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key),
             status: CfgStatus::Resolved,
             precision: CfgPrecision::ExactSyntax,
         }
@@ -141,21 +137,26 @@ mod tests {
 
     #[test]
     fn normalized_sorts_families_without_deduplicating() {
+        let interner = crate::core::StableKeyInterner::default();
         let output = CfgOutput {
-            functions: vec![function(2, "b"), function(1, "a")],
-            nodes: vec![node(1, 2, "b"), node(1, 1, "a")],
-            blocks: vec![block("b"), block("a"), block("a")],
+            functions: vec![function(&interner, 2, "b"), function(&interner, 1, "a")],
+            nodes: vec![node(&interner, 1, 2, "b"), node(&interner, 1, 1, "a")],
+            blocks: vec![
+                block(&interner, "b"),
+                block(&interner, "a"),
+                block(&interner, "a"),
+            ],
             ..CfgOutput::empty()
         }
-        .normalized();
+        .normalized(&interner);
 
         assert_eq!(
             output
                 .functions
                 .iter()
-                .map(|fact| fact.stable_key.as_str())
+                .map(|fact| interner.resolve(fact.stable_key).to_string())
                 .collect::<Vec<_>>(),
-            vec!["a", "b"]
+            vec!["a".to_string(), "b".to_string()]
         );
         assert_eq!(
             output
@@ -169,15 +170,15 @@ mod tests {
             output
                 .blocks
                 .iter()
-                .map(|fact| fact.stable_key.as_str())
+                .map(|fact| interner.resolve(fact.stable_key).to_string())
                 .collect::<Vec<_>>(),
-            vec!["a", "a", "b"]
+            vec!["a".to_string(), "a".to_string(), "b".to_string()]
         );
     }
 
     #[test]
     fn empty_output_contains_no_rows() {
-        let output = CfgOutput::empty().normalized();
+        let output = CfgOutput::empty().normalized(&crate::core::StableKeyInterner::default());
         assert!(output.functions.is_empty());
         assert!(output.control_dependence.is_empty());
     }

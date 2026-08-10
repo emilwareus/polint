@@ -1750,7 +1750,7 @@ fn cfg_function_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
             cfg_metadata_row(db, FactFamily::CfgFunction, row.id.0).map(|metadata| CfgDebugRow {
                 family: FactFamily::CfgFunction.label(),
                 run_id: row.id.0,
-                stable_key: row.stable_key.clone(),
+                stable_key: db.resolve_stable_key(row.stable_key).to_string(),
                 producer_id: metadata.producer_id,
                 layer_id: metadata.layer_id,
                 status: cfg_status_label(row.status),
@@ -1775,7 +1775,7 @@ fn cfg_node_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
             cfg_metadata_row(db, FactFamily::CfgNode, row.id.0).map(|metadata| CfgDebugRow {
                 family: FactFamily::CfgNode.label(),
                 run_id: row.id.0,
-                stable_key: row.stable_key.clone(),
+                stable_key: db.resolve_stable_key(row.stable_key).to_string(),
                 producer_id: metadata.producer_id,
                 layer_id: metadata.layer_id,
                 status: cfg_status_label(row.status),
@@ -1800,7 +1800,7 @@ fn cfg_block_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
             cfg_metadata_row(db, FactFamily::BasicBlock, row.id.0).map(|metadata| CfgDebugRow {
                 family: FactFamily::BasicBlock.label(),
                 run_id: row.id.0,
-                stable_key: row.stable_key.clone(),
+                stable_key: db.resolve_stable_key(row.stable_key).to_string(),
                 producer_id: metadata.producer_id,
                 layer_id: metadata.layer_id,
                 status: cfg_status_label(row.status),
@@ -1825,7 +1825,7 @@ fn cfg_edge_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
             cfg_metadata_row(db, FactFamily::CfgEdge, row.id.0).map(|metadata| CfgDebugRow {
                 family: FactFamily::CfgEdge.label(),
                 run_id: row.id.0,
-                stable_key: row.stable_key.clone(),
+                stable_key: db.resolve_stable_key(row.stable_key).to_string(),
                 producer_id: metadata.producer_id,
                 layer_id: metadata.layer_id,
                 status: cfg_status_label(row.status),
@@ -1850,7 +1850,7 @@ fn cfg_reachability_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
         cfg_metadata_row(db, FactFamily::CfgReachability, row.id.0).map(|metadata| CfgDebugRow {
             family: FactFamily::CfgReachability.label(),
             run_id: row.id.0,
-            stable_key: row.stable_key.clone(),
+            stable_key: db.resolve_stable_key(row.stable_key).to_string(),
             producer_id: metadata.producer_id,
             layer_id: metadata.layer_id,
             status: cfg_status_label(row.status),
@@ -1871,7 +1871,7 @@ fn cfg_dominator_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
         cfg_metadata_row(db, FactFamily::CfgDominator, row.id.0).map(|metadata| CfgDebugRow {
             family: FactFamily::CfgDominator.label(),
             run_id: row.id.0,
-            stable_key: row.stable_key.clone(),
+            stable_key: db.resolve_stable_key(row.stable_key).to_string(),
             producer_id: metadata.producer_id,
             layer_id: metadata.layer_id,
             status: cfg_status_label(row.status),
@@ -1892,7 +1892,7 @@ fn cfg_postdominator_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
         cfg_metadata_row(db, FactFamily::CfgPostDominator, row.id.0).map(|metadata| CfgDebugRow {
             family: FactFamily::CfgPostDominator.label(),
             run_id: row.id.0,
-            stable_key: row.stable_key.clone(),
+            stable_key: db.resolve_stable_key(row.stable_key).to_string(),
             producer_id: metadata.producer_id,
             layer_id: metadata.layer_id,
             status: cfg_status_label(row.status),
@@ -1913,7 +1913,7 @@ fn cfg_control_dependence_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
         cfg_metadata_row(db, FactFamily::CfgControlDependence, row.id.0).map(|metadata| CfgDebugRow {
             family: FactFamily::CfgControlDependence.label(),
             run_id: row.id.0,
-            stable_key: row.stable_key.clone(),
+            stable_key: db.resolve_stable_key(row.stable_key).to_string(),
             producer_id: metadata.producer_id,
             layer_id: metadata.layer_id,
             status: cfg_status_label(row.status),
@@ -1934,7 +1934,7 @@ fn cfg_unsupported_rows(db: &AnalysisDb) -> Vec<CfgDebugRow> {
         cfg_metadata_row(db, FactFamily::UnsupportedControlFlow, row.id.0).map(|metadata| CfgDebugRow {
             family: FactFamily::UnsupportedControlFlow.label(),
             run_id: row.id.0,
-            stable_key: row.stable_key.clone(),
+            stable_key: db.resolve_stable_key(row.stable_key).to_string(),
             producer_id: metadata.producer_id,
             layer_id: metadata.layer_id,
             status: cfg_status_label(row.status),
@@ -2602,6 +2602,7 @@ mod cfg_debug_json {
             "src/app.ts".to_string(),
             "export function app() { return 1; }\n".to_string(),
         );
+        let interner = db.stable_key_interner();
         db.replace_cfg_facts(CfgOutput {
             functions: vec![CfgFunctionFact {
                 id: CfgFunctionId(0),
@@ -2613,17 +2614,29 @@ mod cfg_debug_json {
                 entry_node: CfgNodeId(0),
                 normal_exit_node: CfgNodeId(1),
                 exceptional_exit_node: None,
-                stable_key: "cfg:function:app".to_string(),
+                stable_key: interner.intern("cfg:function:app"),
                 status: CfgStatus::Resolved,
                 precision: CfgPrecision::ExactLowered,
             }],
             nodes: vec![
-                node(0, CfgNodeKind::Entry, "cfg:node:entry"),
-                node(1, CfgNodeKind::ExitNormal, "cfg:node:exit"),
+                node(&interner, 0, CfgNodeKind::Entry, "cfg:node:entry"),
+                node(&interner, 1, CfgNodeKind::ExitNormal, "cfg:node:exit"),
             ],
             blocks: vec![
-                block(0, BasicBlockKind::Entry, CfgNodeId(0), "cfg:block:entry"),
-                block(1, BasicBlockKind::ExitNormal, CfgNodeId(1), "cfg:block:exit"),
+                block(
+                    &interner,
+                    0,
+                    BasicBlockKind::Entry,
+                    CfgNodeId(0),
+                    "cfg:block:entry",
+                ),
+                block(
+                    &interner,
+                    1,
+                    BasicBlockKind::ExitNormal,
+                    CfgNodeId(1),
+                    "cfg:block:exit",
+                ),
             ],
             edges: vec![CfgEdgeFact {
                 id: CfgEdgeId(0),
@@ -2635,7 +2648,7 @@ mod cfg_debug_json {
                 to_block: BasicBlockId(1),
                 kind: CfgEdgeKind::Normal,
                 label: None,
-                stable_key: "cfg:edge:entry-exit".to_string(),
+                stable_key: interner.intern("cfg:edge:entry-exit"),
                 status: CfgStatus::Resolved,
                 precision: CfgPrecision::ExactLowered,
             }],
@@ -2646,7 +2659,7 @@ mod cfg_debug_json {
                 controlling_edge: CfgEdgeId(0),
                 controlling_edge_kind: CfgEdgeKind::Normal,
                 controlled_block: BasicBlockId(1),
-                stable_key: "cfg:dependence:entry-exit".to_string(),
+                stable_key: interner.intern("cfg:dependence:entry-exit"),
                 status: CfgStatus::Resolved,
                 precision: CfgPrecision::ExactLowered,
             }],
@@ -2685,7 +2698,12 @@ mod cfg_debug_json {
         assert!(!report.to_string().contains(env!("CARGO_MANIFEST_DIR")));
     }
 
-    fn node(id: u64, kind: CfgNodeKind, stable_key: &str) -> CfgNodeFact {
+    fn node(
+        interner: &crate::core::StableKeyInterner,
+        id: u64,
+        kind: CfgNodeKind,
+        stable_key: &str,
+    ) -> CfgNodeFact {
         CfgNodeFact {
             id: CfgNodeId(id),
             cfg_function: CfgFunctionId(0),
@@ -2696,13 +2714,14 @@ mod cfg_debug_json {
             span: Some(span(FileId(0))),
             generated: true,
             operation_ordinal: id as u32,
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key),
             status: CfgStatus::Resolved,
             precision: CfgPrecision::ExactLowered,
         }
     }
 
     fn block(
+        interner: &crate::core::StableKeyInterner,
         id: u64,
         kind: BasicBlockKind,
         node: CfgNodeId,
@@ -2716,7 +2735,7 @@ mod cfg_debug_json {
             last_node: Some(node),
             reachable: true,
             reverse_postorder: id as u32,
-            stable_key: stable_key.to_string(),
+            stable_key: interner.intern(stable_key),
             status: CfgStatus::Resolved,
             precision: CfgPrecision::ExactLowered,
         }
