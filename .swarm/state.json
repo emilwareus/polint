@@ -844,11 +844,11 @@
         "rest-analysis-mid",
         "rest-small-facts"
       ],
-      "updated_at": "2026-08-10T23:04:10+02:00",
+      "updated_at": "2026-08-10T23:04:25+02:00",
       "slices": {
         "rest-small-facts": {
           "commit": "15aaf817",
-          "merged_at": "2026-08-10T23:04:10+02:00"
+          "merged_at": "2026-08-10T23:04:25+02:00"
         }
       }
     },
@@ -935,7 +935,7 @@
   },
   "integration_branch": "static-analysis-architecture-review",
   "never_merge_to_main": true,
-  "integration_head": "4cc51efe",
+  "integration_head": "15aaf817",
   "m0_gate": {
     "status": "PASS",
     "completed_at": "2026-08-08T11:52:00+02:00",
