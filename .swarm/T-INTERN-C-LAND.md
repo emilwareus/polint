@@ -74,5 +74,5 @@ T-INTERN-C **MERGED**. T-SPLIT **READY** (interning complete; structural gate 0)
 
 ## Landing
 
-- Feat commit: 932cfd0bd6dbc74c0e459e714c7b0f8560cedbd8
-- Swarm land: *(filled at commit time)*
+- Feat commit: `932cfd0bd6dbc74c0e459e714c7b0f8560cedbd8`
+- Swarm land: `22263b225b2b0f37f1fd06bc765d5b32ac61e1d0`
