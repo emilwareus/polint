@@ -1,0 +1,39 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (target/debug/deps/polint-af2f858c5d9987a8)
+
+running 1 test
+
+thread 'analysis_kernel::validation::calls::calls_validation_exercises_all_d10_indexes' (36999439) panicked at crates/polint/src/core/stable_key.rs:51:36:
+unknown stable-key id 0
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/panicking.rs:689:5
+   1: core::panicking::panic_fmt
+             at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/panicking.rs:80:14
+   2: polint::core::stable_key::StableKeyInterner::resolve::{{closure}}
+             at ./src/core/stable_key.rs:51:36
+   3: core::option::Option<T>::unwrap_or_else
+             at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/option.rs:1067:21
+   4: polint::core::stable_key::StableKeyInterner::resolve
+             at ./src/core/stable_key.rs:51:18
+   5: polint::analysis::calls::store::CallStore::from_output
+             at ./src/analysis/calls/store.rs:88:34
+   6: polint::analysis_kernel::validation::calls::calls_validation_exercises_all_d10_indexes
+             at ./src/analysis_kernel/validation.rs:2578:23
+   7: polint::analysis_kernel::validation::calls::calls_validation_exercises_all_d10_indexes::{{closure}}
+             at ./src/analysis_kernel/validation.rs:2548:52
+   8: core::ops::function::FnOnce::call_once
+             at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/ops/function.rs:250:5
+   9: <fn() -> core::result::Result<(), alloc::string::String> as core::ops::function::FnOnce<()>>::call_once
+             at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/ops/function.rs:250:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+test analysis_kernel::validation::calls::calls_validation_exercises_all_d10_indexes ... FAILED
+
+failures:
+
+failures:
+    analysis_kernel::validation::calls::calls_validation_exercises_all_d10_indexes
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2343 filtered out; finished in 0.08s
+
+error: test failed, to rerun pass `-p polint --lib`

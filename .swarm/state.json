@@ -865,19 +865,39 @@
       }
     },
     "T-INTERN-C": {
-      "state": "READY",
+      "state": "MERGED",
       "depends_on": [
         "T-INTERN-B"
       ],
       "created_at": "2026-08-10T10:04:15+02:00",
-      "note": "T-INTERN-B complete; stable_key: String count = 6 (C-owned metadata only)"
+      "note": "FactMeta/stable_key_owners StableKeyId; stable_key:String 6\u21920; gates green; lock released",
+      "dispatched_at": "2026-08-11T00:05:40+0200",
+      "attempts": 1,
+      "branch": "static-analysis-architecture-review",
+      "commit": "932cfd0b",
+      "merged_at": "2026-08-11T00:18:22+0200",
+      "done_at": "2026-08-11T00:18:22+0200",
+      "updated_at": "2026-08-11T00:18:22+0200",
+      "gates": {
+        "focused_metadata": "PASS",
+        "focused_validation": "PASS",
+        "focused_debug": "PASS",
+        "check": "PASS",
+        "fmt": "PASS",
+        "clippy": "PASS",
+        "structural_zero": "PASS",
+        "determinism": "PASS",
+        "golden": "PASS",
+        "public_surface_leak": "PASS_markers_7_of_8_probe_sandbox_blocked"
+      }
     },
     "T-SPLIT": {
-      "state": "BLOCKED",
+      "state": "READY",
       "depends_on": [
         "T-INTERN-C"
       ],
-      "created_at": "2026-08-10T10:04:15+02:00"
+      "created_at": "2026-08-10T10:04:15+02:00",
+      "note": "Unblocked by T-INTERN-C MERGED; stable_key:String count=0"
     },
     "T-ARCH-DOC": {
       "state": "BLOCKED",
@@ -900,7 +920,7 @@
   },
   "milestone": "PRE-SHIP",
   "READY": [
-    "T-INTERN-C"
+    "T-SPLIT"
   ],
   "IN_FLIGHT": [],
   "IN_REVIEW": [],
@@ -935,7 +955,8 @@
     "W4.2",
     "W4.3",
     "W4.5",
-    "W4.4"
+    "W4.4",
+    "T-INTERN-C"
   ],
   "HELD": [
     "W2.3"
@@ -948,7 +969,7 @@
   },
   "integration_branch": "static-analysis-architecture-review",
   "never_merge_to_main": true,
-  "integration_head": "1a2d6238",
+  "integration_head": "932cfd0b",
   "m0_gate": {
     "status": "PASS",
     "completed_at": "2026-08-08T11:52:00+02:00",
@@ -1051,7 +1072,10 @@
     "2026-08-10T23:39:00+02:00: integration_head -> 751d6e9a",
     "2026-08-10T23:39:20+02:00: integration_head set to rest-solver-summaries feat 1a2d6238 (T-INTERN-B remains open)",
     "2026-08-10T23:55:00+02:00: T-INTERN-B claimed fact_family:residual_boundaries for rest-boundaries slice",
-    "2026-08-10T23:59:00+02:00: T-INTERN-B rest-boundaries complete; released fact_family:residual_boundaries; T-INTERN-B MERGED; T-INTERN-C READY"
+    "2026-08-10T23:59:00+02:00: T-INTERN-B rest-boundaries complete; released fact_family:residual_boundaries; T-INTERN-B MERGED; T-INTERN-C READY",
+    "2026-08-11T00:05:40+0200: T-INTERN-C claimed fact_family:metadata for FactMeta migration",
+    "2026-08-11T00:17:59+0200: T-INTERN-C implementation complete; preparing commits; fact_family:metadata still held",
+    "2026-08-11T00:18:22+0200: T-INTERN-C MERGED @932cfd0b; released fact_family:metadata; T-SPLIT READY"
   ],
   "events": [
     "2026-08-08T15:10:20+02:00: W2.2d+e landed FF @271ccd15; core/mod.rs 8739 LOC; capability+rule extracted; main untouched",
@@ -1130,6 +1154,16 @@
       "at": "2026-08-10T23:59:00+02:00",
       "event": "T-INTERN-B MERGED",
       "commit": "38c55c3d"
+    },
+    {
+      "at": "2026-08-11T00:18:22+0200",
+      "event": "T-INTERN-C MERGED",
+      "commit": "932cfd0b"
+    },
+    {
+      "at": "2026-08-11T00:18:22+0200",
+      "event": "T-SPLIT READY",
+      "depends_on": "T-INTERN-C"
     }
   ],
   "ready": [],

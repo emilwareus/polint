@@ -1,0 +1,26 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running unittests src/lib.rs (target/debug/deps/polint-af2f858c5d9987a8)
+
+running 19 tests
+test analysis_kernel::debug::calls_debug_json::calls_debug_json_exposes_deterministic_d10_index_counts ... ok
+test analysis_kernel::debug::abstract_domains_debug_json::metadata_debug_json_with_demand_trace_contains_query_rows ... ok
+test analysis_kernel::debug::calls_debug_json::metadata_debug_json_contains_call_rows_counts_and_indexes ... ok
+test analysis_kernel::debug::calls_debug_json::calls_debug_json_omits_source_ast_absolute_paths_and_dense_identity ... ok
+test analysis_kernel::debug::abstract_domains_debug_json::metadata_debug_json_with_scc_closure_result_contains_iteration_and_backdating_rows ... ok
+test analysis_kernel::debug::abstract_domains_debug_json::metadata_debug_json_contains_scc_schedule_and_empty_demand_query_sections ... ok
+test analysis_kernel::debug::cfg_debug_json::cfg_debug_json_contains_deterministic_cfg_arrays ... ok
+test analysis_kernel::debug::calls_debug_json::calls_debug_json_counts_call_site_only_and_unresolved_rows ... ok
+test analysis_kernel::debug::abstract_domains_debug_json::summaries_debug_json_omits_dense_ids_absolute_paths_and_timestamps ... ok
+test analysis_kernel::debug::semantic_mir_debug_json::metadata_debug_json_contains_deterministic_semantic_mir_rows ... ok
+test analysis_kernel::debug::abstract_domains_debug_json::abstract_domains_debug_json_exposes_compact_deterministic_rows ... ok
+test analysis_kernel::debug::abstract_domains_debug_json::summaries_debug_json_contains_summary_rows_counts_and_domain_counts ... ok
+test analysis_kernel::debug::tests::metadata_debug_helpers_are_not_public ... ok
+test analysis_kernel::debug::tests::metadata_debug_json_contains_files_imports_symbols_and_references ... ok
+test analysis_kernel::debug::tests::metadata_debug_json_rows_include_required_metadata_fields ... ok
+test analysis_kernel::debug::semantic_debug_json::semantic_debug_json_rows_include_status_fact_precision_and_nested_metadata ... ok
+test analysis_kernel::debug::semantic_debug_json::metadata_debug_json_contains_semantic_index_families ... ok
+test analysis_kernel::debug::tests::metadata_debug_json_excludes_absolute_paths_and_transient_runtime_details ... ok
+test analysis_kernel::debug::tests::metadata_debug_json_serializes_byte_identically_for_same_database ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 2325 filtered out; finished in 0.02s
+

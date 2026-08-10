@@ -1,0 +1,19 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running tests/golden.rs (target/debug/deps/golden-0b79c88cdf5488ee)
+
+running 8 tests
+test cost_budget_helper_rejects_clear_regression ... ok
+test golden_updates_require_explicit_env_flag ... ok
+test normalize_sorts_diagnostics_by_stable_fingerprint ... ok
+test diagnostic_set_diff_names_lost_fingerprints ... ok
+test ci_workflows_never_set_golden_update_env ... ok
+test scale_cases_are_optional_and_discovered ... ok
+test example_golden_cases_cover_inventory_rule_packs ... ok
+GOLDEN SKIP (loud): case `scale/excalidraw-excalidraw-scale/json` — target missing at /Users/emilwareus/conductor/workspaces/exlint/biarritz/research/evaluation-harness/repos/excalidraw-excalidraw; run `make fetch-scale-repos`
+GOLDEN SKIP (loud): case `scale/gohugoio-hugo-scale/json` — target missing at /Users/emilwareus/conductor/workspaces/exlint/biarritz/research/evaluation-harness/repos/gohugoio-hugo; run `make fetch-scale-repos`
+GOLDEN SKIP (loud): case `scale/grafana-grafana-scale/json` — target missing at /Users/emilwareus/conductor/workspaces/exlint/biarritz/research/evaluation-harness/repos/grafana-grafana; run `make fetch-scale-repos`
+golden harness: ran 17 case(s), skipped 3 optional case(s)
+test characterization_goldens_match_cli ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 34.39s
+

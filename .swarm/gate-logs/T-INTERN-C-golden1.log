@@ -1,0 +1,42 @@
+   Compiling polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.64s
+     Running tests/golden.rs (target/debug/deps/golden-0b79c88cdf5488ee)
+
+running 8 tests
+test golden_updates_require_explicit_env_flag ... ok
+test cost_budget_helper_rejects_clear_regression ... ok
+test diagnostic_set_diff_names_lost_fingerprints ... ok
+test normalize_sorts_diagnostics_by_stable_fingerprint ... ok
+test ci_workflows_never_set_golden_update_env ... ok
+test scale_cases_are_optional_and_discovered ... ok
+test example_golden_cases_cover_inventory_rule_packs ... ok
+test characterization_goldens_match_cli ... FAILED
+
+failures:
+
+---- characterization_goldens_match_cli stdout ----
+
+thread 'characterization_goldens_match_cli' (37023953) panicked at crates/polint/tests/golden.rs:405:5:
+golden mismatch for `examples/go-sensitive-writes/json` — diagnostic set difference:
+  lost diagnostics (present in golden, missing from actual):
+    - 40ae8a169a4046c4  local/no-sensitive-balance-writes @ ledger.go: Direct write to sensitive field `Balance` is not allowed here.
+    - c1ec363fad1f98d4  local/no-sensitive-balance-writes @ ledger.go: Direct write to sensitive field `Balance` is not allowed here.
+  new diagnostics (present in actual, missing from golden):
+    + b8aa40ff88a1ac11  polint/capability @ <workspace>: Rule `local/no-sensitive-balance-writes` requested capability `symbols` for Go, but symbol graph provider support is setup_missing.
+    + dccccb8967eeb628  polint/capability @ <workspace>: Rule `local/no-sensitive-balance-writes` requested capability `references` for Go, but symbol graph provider support is setup_missing.
+
+--- expected (normalized) ---
+{"diagnostics":[{"evidence":[{"label":"field","value":"Balance"},{"label":"symbol_id","value":"1928759191775281228"},{"label":"reference_id","value":"10287571617640216321"},{"label":"reference_kind","value":"Write"},{"label":"precision","value":"ExactSemantic"},{"label":"status","value":"Resolved"}],"file":"ledger.go","fix":null,"help":"Move the mutation into an approved maintenance path or expose a reviewed domain method.","labels":[],"message":"Direct write to sensitive field `Balance` is not allowed here.","range":{"end_col":17,"end_line":8,"start_col":10,"start_line":8},"rule_id":"local/no-sensitive-balance-writes","severity":"error","stable_fingerprint":"40ae8a169a4046c4","suggestions":[]},{"evidence":[{"label":"field","value":"Balance"},{"label":"symbol_id","value":"1928759191775281228"},{"label":"reference_id","value":"13370197928359705535"},{"label":"reference_kind","value":"ReadWrite"},{"label":"precision","value":"ExactSemantic"},{"label":"status","value":"Resolved"}],"file":"ledger.go","fix":null,"help":"Move the mutation into an approved maintenance path or expose a reviewed domain method.","labels":[],"message":"Direct write to sensitive field `Balance` is not allowed here.","range":{"end_col":17,"end_line":4,"start_col":10,"start_line":4},"rule_id":"local/no-sensitive-balance-writes","severity":"error","stable_fingerprint":"c1ec363fad1f98d4","suggestions":[]}],"schema":"https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-report-v1.json","summary":{"rules":[{"capabilities_ok":true,"diagnostics_emitted":2,"files_in_scope":2,"planned":true,"rule_id":"local/no-sensitive-balance-writes"}]},"tool":{"name":"polint","version":"<stripped>"},"version":1}
+
+--- actual (normalized) ---
+{"diagnostics":[{"evidence":[{"label":"rule","value":"local/no-sensitive-balance-writes"},{"label":"capability","value":"symbols"},{"label":"language","value":"Go"},{"label":"status","value":"setup_missing"},{"label":"reason","value":"go sidecar exited with status exit status: 1: go: downloading golang.org/x/tools v0.42.0\ngo: downloading golang.org/x/mod v0.33.0\ninternal/symbols/emit.go:16:2: golang.org/x/mod@v0.33.0: Get \"https://proxy.golang.org/golang.org/x/mod/@v/v0.33.0.zip\": dial tcp: lookup proxy.golang.org: no such host\ninternal/symbols/emit.go:17:2: golang.org/x/tools@v0.42.0: Get \"https://proxy.golang.org/golang.org/x/tools/@v/v0.42.0.zip\": dial tcp: lookup proxy.golang.org: no such host\ninternal/symbols/emit.go:18:2: golang.org/x/tools@v0.42.0: Get \"https://proxy.golang.org/golang.org/x/tools/@v/v0.42.0.zip\": dial tcp: lookup proxy.golang.org: no such host"},{"label":"docs_path","value":"docs/facts/symbols-and-references.md"},{"label":"hint","value":"Ensure Go is installed and the repository can be loaded with the configured package patterns."}],"file":"<workspace>","fix":null,"help":"Capability `symbols` is recognized but the Go symbol/reference provider is not available yet; see docs/facts/symbols-and-references.md.","labels":[],"message":"Rule `local/no-sensitive-balance-writes` requested capability `symbols` for Go, but symbol graph provider support is setup_missing.","range":{"end_col":1,"end_line":1,"start_col":1,"start_line":1},"rule_id":"polint/capability","severity":"error","stable_fingerprint":"b8aa40ff88a1ac11","suggestions":[]},{"evidence":[{"label":"rule","value":"local/no-sensitive-balance-writes"},{"label":"capability","value":"references"},{"label":"language","value":"Go"},{"label":"status","value":"setup_missing"},{"label":"reason","value":"go sidecar exited with status exit status: 1: go: downloading golang.org/x/tools v0.42.0\ngo: downloading golang.org/x/mod v0.33.0\ninternal/symbols/emit.go:16:2: golang.org/x/mod@v0.33.0: Get \"https://proxy.golang.org/golang.org/x/mod/@v/v0.33.0.zip\": dial tcp: lookup proxy.golang.org: no such host\ninternal/symbols/emit.go:17:2: golang.org/x/tools@v0.42.0: Get \"https://proxy.golang.org/golang.org/x/tools/@v/v0.42.0.zip\": dial tcp: lookup proxy.golang.org: no such host\ninternal/symbols/emit.go:18:2: golang.org/x/tools@v0.42.0: Get \"https://proxy.golang.org/golang.org/x/tools/@v/v0.42.0.zip\": dial tcp: lookup proxy.golang.org: no such host"},{"label":"docs_path","value":"docs/facts/symbols-and-references.md"},{"label":"hint","value":"Ensure Go is installed and the repository can be loaded with the configured package patterns."}],"file":"<workspace>","fix":null,"help":"Capability `references` is recognized but the Go symbol/reference provider is not available yet; see docs/facts/symbols-and-references.md.","labels":[],"message":"Rule `local/no-sensitive-balance-writes` requested capability `references` for Go, but symbol graph provider support is setup_missing.","range":{"end_col":1,"end_line":1,"start_col":1,"start_line":1},"rule_id":"polint/capability","severity":"error","stable_fingerprint":"dccccb8967eeb628","suggestions":[]}],"schema":"https://raw.githubusercontent.com/emilwareus/polint/main/docs/schemas/polint-report-v1.json","summary":{"rules":[{"capabilities_ok":true,"diagnostics_emitted":0,"files_in_scope":2,"planned":true,"rule_id":"local/no-sensitive-balance-writes"}]},"tool":{"name":"polint","version":"<stripped>"},"version":1}
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    characterization_goldens_match_cli
+
+test result: FAILED. 7 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 46.87s
+
+error: test failed, to rerun pass `-p polint --test golden`

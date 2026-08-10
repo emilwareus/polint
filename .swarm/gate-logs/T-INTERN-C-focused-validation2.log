@@ -1,0 +1,39 @@
+   Compiling polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.02s
+     Running unittests src/lib.rs (target/debug/deps/polint-af2f858c5d9987a8)
+
+running 31 tests
+test analysis_kernel::validation::fact_metadata_validation_gate::runs_when_opted_in_for_release ... ok
+test analysis_kernel::validation::fact_metadata_validation_gate::runs_in_debug_builds_by_default ... ok
+test analysis_kernel::validation::fact_metadata_validation_gate::skips_release_builds_without_opt_in ... ok
+test analysis_kernel::validation::calls::calls_validation_exercises_all_d10_indexes ... ok
+test analysis_kernel::validation::cfg::cfg_validation_rejects_missing_exit_and_bad_reachability ... ok
+test analysis_kernel::validation::semantic_index::semantic_validation_rejects_symbol_graph_exact_semantic_metadata ... ok
+test analysis_kernel::validation::tests::metadata_validation_conflict_records_render_internal_diagnostics_with_evidence ... ok
+test analysis_kernel::validation::cfg::cfg_validation_rejects_exact_provider_precision ... ok
+test analysis_kernel::validation::tests::metadata_validation_precision_ceiling_violations_name_provider_family_and_precision ... ok
+test analysis_kernel::validation::semantic_index::semantic_validation_rejects_missing_stable_export_symbol_key ... ok
+test analysis_kernel::validation::calls::calls_validation_rejects_exact_provider_precision ... ok
+test analysis_kernel::validation::tests::metadata_validation_accepts_known_extension_producer_and_rejects_exact_without_evidence ... ok
+test analysis_kernel::validation::calls::calls_validation_rejects_unresolved_target_identity_with_reason ... ok
+test analysis_kernel::validation::semantic_index::semantic_validation_reports_malformed_generated_rows_with_evidence ... ok
+test analysis_kernel::validation::semantic_mir::semantic_mir_validation_rejects_exact_provider_precision ... ok
+test analysis_kernel::validation::abstract_domains::abstract_domain_validation_rejects_exact_metadata_precision ... ok
+test analysis_kernel::validation::abstract_domains::abstract_domain_validation_reports_malformed_rows_with_generic_public_diagnostics ... ok
+test analysis_kernel::validation::calls::calls_validation_reports_malformed_rows_with_required_evidence ... ok
+test analysis_kernel::validation::semantic_mir::semantic_mir_validation_reports_malformed_rows_with_required_evidence ... ok
+test analysis_kernel::validation::tests::metadata_validation_reports_evidence_external_reference_failures ... ok
+test analysis_kernel::validation::tests::metadata_validation_reports_unknown_producer_and_layer_ids ... ok
+test analysis_kernel::validation::tests::metadata_validation_reports_evidence_span_failures ... ok
+test analysis_kernel::validation::tests::metadata_validation_span_failures_are_reported_deterministically ... ok
+test analysis_kernel::validation::tests::metadata_validation_reference_failures_cover_current_focused_fields ... ok
+test analysis_kernel::validation::cfg::cfg_validation_reports_malformed_rows_with_required_evidence ... ok
+test analysis_kernel::validation::type_value_alias_validation::type_value_alias_validation_accepts_value_derived_points_to_objects ... ok
+test analysis_kernel::validation::topology::topology_validation_accepts_exact_lockfile_for_lockfile_dependency_rows ... ok
+test analysis_kernel::validation::topology::topology_stable_key_conflicts_reject_nonidentical_duplicate_rows ... ok
+test analysis_kernel::validation::topology::topology_validation_rejects_unsupported_or_dynamic_rows_claiming_exactness ... ok
+test analysis_kernel::validation::topology::topology_validation_reports_invalid_refs_and_malformed_paths ... ok
+test analysis_kernel::validation::type_value_alias_validation::type_value_alias_validation_reports_malformed_rows_deterministically ... ok
+
+test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 2313 filtered out; finished in 0.03s
+

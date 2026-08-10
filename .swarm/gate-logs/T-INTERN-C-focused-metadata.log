@@ -1,0 +1,17 @@
+   Compiling polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 31.65s
+     Running unittests src/lib.rs (target/debug/deps/polint-af2f858c5d9987a8)
+
+running 9 tests
+test analysis_kernel::metadata::tests::fact_ref_keeps_run_local_id_separate_from_stable_key ... ok
+test analysis_kernel::metadata::tests::stable_key_conflict_insert_records_conflicts_deterministically ... ok
+test analysis_kernel::metadata::tests::remove_family_drops_rows_owners_and_conflicts_for_that_family_only ... ok
+test analysis_kernel::metadata::tests::finish_family_insertions_keeps_rows_and_conflicts_but_drops_owner_index ... ok
+test analysis_kernel::metadata::tests::stable_key_conflict_insert_records_duplicate_reference_for_same_payload ... ok
+test analysis_kernel::metadata::tests::stable_key_conflict_insert_is_idempotent_when_same_reference_payload_repeats ... ok
+test analysis_kernel::metadata::tests::fact_meta_store_rows_are_deterministically_ordered ... ok
+test analysis_kernel::metadata::tests::fact_meta_store_accepts_sparse_high_run_ids_without_dense_resize ... ok
+test analysis_kernel::metadata::tests::stable_key_from_parts_sorts_and_normalizes_length_prefixed_parts ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 2335 filtered out; finished in 0.01s
+

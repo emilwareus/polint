@@ -1,0 +1,19 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+     Running unittests src/lib.rs (target/debug/deps/polint-af2f858c5d9987a8)
+
+running 12 tests
+test eval::determinism_gate::permutation_seeds_are_distinct_and_not_all_identity ... ok
+test eval::determinism_gate::shuffled_provider_count_equals_manifest_count ... ok
+test eval::determinism_gate::ts_reachable_fixture_exercises_reachability_roots ... ok
+test eval::determinism_gate::ts_points_to_solver_is_deterministic_and_non_vacuous ... ok
+test eval::determinism_gate::ts_object_model_fixture_is_byte_identical_under_ten_seeded_permutations ... ok
+test eval::determinism_gate::go_reachable_fixture_exercises_reachability_roots ... ok
+test eval::determinism_gate::go_rta_fixture_exercises_reachability_roots ... ok
+test eval::determinism_gate::go_rta_solver_output_is_byte_identical_under_permuted_fact_insertion_order ... ok
+test eval::determinism_gate::ts_reachable_fixture_is_byte_identical_under_ten_seeded_permutations ... ok
+test eval::determinism_gate::ts_tokens_fixture_is_byte_identical_under_ten_seeded_permutations ... ok
+test eval::determinism_gate::go_reachable_fixture_is_byte_identical_under_ten_seeded_permutations ... ok
+test eval::determinism_gate::go_rta_fixture_is_byte_identical_under_ten_seeded_permutations ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 2332 filtered out; finished in 8.97s
+

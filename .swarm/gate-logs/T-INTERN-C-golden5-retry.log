@@ -1,0 +1,21 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
+     Running tests/golden.rs (target/debug/deps/golden-0b79c88cdf5488ee)
+
+running 1 test
+
+thread 'characterization_goldens_match_cli' (37038247) panicked at crates/polint/tests/golden.rs:494:9:
+golden cost budget breached for `examples/go-sensitive-writes/json`:
+  wall_clock_ms: measured 522 exceeds budget (baseline 358, ratio 1.4581, max 1.2, abs floor +50)
+baseline=GoldenCostRecord { schema_version: "polint-golden-cost-1", wall_clock_ms: 358, peak_rss_bytes: 30375936, peak_rss_delta_bytes: 23511040 }
+measured=GoldenCostRecord { schema_version: "polint-golden-cost-1", wall_clock_ms: 522, peak_rss_bytes: 30801920, peak_rss_delta_bytes: 23724032 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test characterization_goldens_match_cli ... FAILED
+
+failures:
+
+failures:
+    characterization_goldens_match_cli
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 7 filtered out; finished in 18.17s
+
+error: test failed, to rerun pass `-p polint --test golden`

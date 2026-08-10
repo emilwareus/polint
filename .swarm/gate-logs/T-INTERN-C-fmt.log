@@ -1,0 +1,535 @@
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis/data_flow/local.rs:645:
+                 stable_key_from_parts(
+                     interner,
+                     FactFamily::DataFlowNode,
+-                    &[("place", db.resolve_stable_key(metadata.stable_key).to_string())],
++                    &[(
++                        "place",
++                        db.resolve_stable_key(metadata.stable_key).to_string(),
++                    )],
+                 )
+             })
+             .unwrap_or_else(|| {
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis_kernel/validation.rs:1235:
+         });
+         db.fact_meta_mut_for_test()
+             .remove_for_test(FactRef::new(FactFamily::DomainObservation, 0));
+-        let stable_key = db.stable_key_interner().intern("domain:exact-local-payload");
++        let stable_key = db
++            .stable_key_interner()
++            .intern("domain:exact-local-payload");
+         db.fact_meta_mut_for_test().insert(
+             FactRef::new(FactFamily::DomainObservation, 0),
+             FactMeta {
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/analysis_kernel/validation.rs:5540:
+         let incoming = FactRef::new(FactFamily::Import, 2);
+ 
+         let meta = test_meta(&db, FactFamily::Import, "import:key", "payload:a");
+-        db.fact_meta_mut_for_test().insert(
+-            existing,
+-            meta,
+-        );
++        db.fact_meta_mut_for_test().insert(existing, meta);
+         let meta = test_meta(&db, FactFamily::Import, "import:key", "payload:b");
+-        db.fact_meta_mut_for_test().insert(
+-            incoming,
+-            meta,
+-        );
++        db.fact_meta_mut_for_test().insert(incoming, meta);
+ 
+         let diagnostics = validate_fact_metadata(&db, AnalysisKernel::provider_manifests());
+ 
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:1993:
+             TYPE_VALUE_ALIAS_PROVIDER_ID,
+             precision,
+             confidence,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("status", format!("{:?}", fact.status)),
+                 ("precision", format!("{:?}", fact.precision)),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:2021:
+             TYPE_VALUE_ALIAS_PROVIDER_ID,
+             precision,
+             confidence,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("status", format!("{:?}", fact.status)),
+                 ("precision", format!("{:?}", fact.precision)),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:2051:
+             TYPE_VALUE_ALIAS_PROVIDER_ID,
+             precision,
+             confidence,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("status", format!("{:?}", fact.status)),
+                 ("precision", format!("{:?}", fact.precision)),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:2070:
+             TYPE_VALUE_ALIAS_PROVIDER_ID,
+             FactPrecision::SetupAware,
+             FactConfidence::Medium,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("kind", format!("{:?}", fact.kind)),
+                 ("language", language_label(fact.language).to_string()),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:2109:
+             TYPE_VALUE_ALIAS_PROVIDER_ID,
+             precision,
+             FactConfidence::Medium,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("status", format!("{:?}", fact.status)),
+                 ("language", language_label(fact.language).to_string()),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:2130:
+             TYPE_VALUE_ALIAS_PROVIDER_ID,
+             precision,
+             confidence,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("status", format!("{:?}", fact.status)),
+                 ("precision", format!("{:?}", fact.precision)),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:2147:
+             TYPE_VALUE_ALIAS_PROVIDER_ID,
+             precision,
+             confidence,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("status", format!("{:?}", fact.status)),
+                 ("precision", format!("{:?}", fact.precision)),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:2166:
+             TYPE_VALUE_ALIAS_PROVIDER_ID,
+             precision,
+             confidence,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("status", format!("{:?}", fact.status)),
+                 ("precision", format!("{:?}", fact.precision)),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:2190:
+             ENTRYPOINTS_PROVIDER_ID,
+             precision,
+             confidence,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("status", format!("{:?}", fact.status)),
+                 ("precision", format!("{:?}", fact.precision)),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:2225:
+             ENTRYPOINTS_PROVIDER_ID,
+             precision,
+             confidence,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("source_kind", format!("{:?}", fact.source_kind)),
+                 (
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:2252:
+             ENTRYPOINTS_PROVIDER_ID,
+             precision,
+             confidence,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("edge_kind", format!("{:?}", fact.edge_kind)),
+                 ("from_source", fact.from_source.clone()),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:2274:
+             ENTRYPOINTS_PROVIDER_ID,
+             FactPrecision::SetupAware,
+             FactConfidence::Medium,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("reason", format!("{:?}", fact.reason)),
+                 ("framework", fact.framework_id.clone()),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:4005:
+             SYMBOL_GRAPH_PROVIDER_ID,
+             precision,
+             confidence,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("id", fact.id.0.to_string()),
+                 ("language", language_label(fact.language).to_string()),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:4032:
+             SYMBOL_GRAPH_PROVIDER_ID,
+             precision,
+             confidence,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("id", fact.id.0.to_string()),
+                 ("symbol", fact.symbol.0.to_string()),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:4060:
+             SYMBOL_GRAPH_PROVIDER_ID,
+             precision,
+             confidence,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("id", fact.id.0.to_string()),
+                 ("language", language_label(fact.language).to_string()),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:4102:
+             SYMBOL_GRAPH_PROVIDER_ID,
+             precision,
+             confidence,
+-stable_key,
++            stable_key,
+             stable_parts([("status", semantic_status_label(status).to_string())]),
+         )
+     }
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:4119:
+             SEMANTIC_MIR_PROVIDER_ID,
+             precision,
+             confidence,
+-body.stable_key,
++            body.stable_key,
+             stable_parts([
+                 ("status", mir_status_label(body.status).to_string()),
+                 ("language", language_label(body.language).to_string()),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:4157:
+             SEMANTIC_MIR_PROVIDER_ID,
+             precision,
+             confidence,
+-operation.stable_key,
++            operation.stable_key,
+             stable_parts([
+                 ("status", mir_status_label(operation.status).to_string()),
+                 (
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:4180:
+             SEMANTIC_MIR_PROVIDER_ID,
+             precision,
+             confidence,
+-place.stable_key,
++            place.stable_key,
+             stable_parts([
+                 ("status", place_status_label(place.status).to_string()),
+                 ("language", language_label(place.language).to_string()),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:4199:
+             SEMANTIC_MIR_PROVIDER_ID,
+             precision,
+             confidence,
+-row.stable_key,
++            row.stable_key,
+             stable_parts([
+                 ("status", mir_status_label(row.status).to_string()),
+                 ("language", language_label(row.language).to_string()),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:4245:
+             CALLS_PROVIDER_ID,
+             precision,
+             confidence,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("status", call_status_label(fact.status).to_string()),
+                 (
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:4290:
+             CALLS_PROVIDER_ID,
+             precision,
+             confidence,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("status", call_status_label(fact.status).to_string()),
+                 (
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:4347:
+             precision,
+             confidence,
+             validation,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("status", call_status_label(fact.status).to_string()),
+                 (
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:4447:
+             precision,
+             confidence,
+             validation,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("kind", format!("{:?}", fact.kind)),
+                 ("status", data_flow_status_label(status).to_string()),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:4517:
+             precision,
+             confidence,
+             validation,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("kind", format!("{:?}", fact.kind)),
+                 ("algorithm", format!("{:?}", fact.algorithm)),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:4577:
+             precision,
+             confidence,
+             validation,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("kind", format!("{:?}", fact.kind)),
+                 ("language", language_label(fact.language).to_string()),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:4604:
+             DATA_FLOW_PROVIDER_ID,
+             FactPrecision::Heuristic,
+             FactConfidence::Medium,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("reason", format!("{:?}", fact.reason)),
+                 ("status", data_flow_status_label(fact.status).to_string()),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:4629:
+             precision,
+             confidence,
+             validation,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("kind", format!("{:?}", fact.kind)),
+                 ("status", evidence_status_label(fact.status).to_string()),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:4693:
+             precision,
+             confidence,
+             validation,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("kind", format!("{:?}", fact.kind)),
+                 ("query_mode", format!("{:?}", fact.query_mode)),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:4748:
+             precision,
+             confidence,
+             validation,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 (
+                     "diagnostic_key",
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:4783:
+             EVIDENCE_PROVIDER_ID,
+             precision,
+             confidence,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("query_mode", format!("{:?}", fact.query_mode)),
+                 ("status", evidence_status_label(fact.status).to_string()),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:4808:
+             EVIDENCE_PROVIDER_ID,
+             precision,
+             confidence,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("query_mode", format!("{:?}", fact.query_mode)),
+                 ("status", evidence_status_label(fact.status).to_string()),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:4830:
+             EVIDENCE_PROVIDER_ID,
+             FactPrecision::Unresolved,
+             FactConfidence::Low,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("reason", format!("{:?}", fact.reason)),
+                 ("message", fact.message.clone()),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:4850:
+             EVIDENCE_PROVIDER_ID,
+             FactPrecision::Unresolved,
+             FactConfidence::Low,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("reason", format!("{:?}", fact.reason)),
+                 ("hidden_node_count", fact.hidden_node_count.to_string()),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:4874:
+             EVIDENCE_PROVIDER_ID,
+             FactPrecision::Heuristic,
+             FactConfidence::Medium,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("query_mode", format!("{:?}", fact.query_mode)),
+                 ("graph_schema", fact.graph_schema.clone()),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:4903:
+             CALLS_PROVIDER_ID,
+             precision,
+             confidence,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("status", call_status_label(fact.status).to_string()),
+                 (
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:4942:
+             POLINT_ABSTRACT_DOMAINS_PROVIDER_ID,
+             precision,
+             confidence,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("status", fact.status.as_str().to_string()),
+                 ("precision", fact.precision.as_str().to_string()),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:4989:
+             POLINT_ABSTRACT_DOMAINS_PROVIDER_ID,
+             precision,
+             confidence,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("status", fact.status.as_str().to_string()),
+                 ("precision", fact.precision.as_str().to_string()),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:5030:
+             CFG_PROVIDER_ID,
+             precision,
+             confidence,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("status", cfg_status_label(fact.status).to_string()),
+                 ("precision", cfg_precision_label(fact.precision).to_string()),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:5053:
+             CFG_PROVIDER_ID,
+             precision,
+             confidence,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("status", cfg_status_label(fact.status).to_string()),
+                 ("precision", cfg_precision_label(fact.precision).to_string()),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:5076:
+             CFG_PROVIDER_ID,
+             precision,
+             confidence,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("status", cfg_status_label(fact.status).to_string()),
+                 ("precision", cfg_precision_label(fact.precision).to_string()),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:5099:
+             CFG_PROVIDER_ID,
+             precision,
+             confidence,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("status", cfg_status_label(fact.status).to_string()),
+                 ("precision", cfg_precision_label(fact.precision).to_string()),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:5123:
+             CFG_PROVIDER_ID,
+             precision,
+             confidence,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("status", cfg_status_label(fact.status).to_string()),
+                 ("precision", cfg_precision_label(fact.precision).to_string()),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:5142:
+             CFG_PROVIDER_ID,
+             precision,
+             confidence,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("status", cfg_status_label(fact.status).to_string()),
+                 ("precision", cfg_precision_label(fact.precision).to_string()),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:5162:
+             CFG_PROVIDER_ID,
+             precision,
+             confidence,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("status", cfg_status_label(fact.status).to_string()),
+                 ("precision", cfg_precision_label(fact.precision).to_string()),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:5182:
+             CFG_PROVIDER_ID,
+             precision,
+             confidence,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("status", cfg_status_label(fact.status).to_string()),
+                 ("precision", cfg_precision_label(fact.precision).to_string()),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/core/db.rs:5205:
+             CFG_PROVIDER_ID,
+             precision,
+             confidence,
+-fact.stable_key,
++            fact.stable_key,
+             stable_parts([
+                 ("status", cfg_status_label(fact.status).to_string()),
+                 ("precision", cfg_precision_label(fact.precision).to_string()),
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/metrics.rs:934:
+         assert_eq!(file_metric.precision, FactPrecision::Syntax);
+         assert_eq!(file_metric.confidence, FactConfidence::High);
+         assert_eq!(file_metric.validation, ValidationStatus::NativeTrusted);
+-        assert!(db.resolve_stable_key(file_metric.stable_key).contains(&file_key));
+-        assert!(db.resolve_stable_key(function_metric.stable_key).contains(&function_key));
+-        assert!(db.resolve_stable_key(function_metric.stable_key).contains("metric_name"));
+-        assert!(db.resolve_stable_key(function_metric.stable_key).contains("function_size"));
+-        assert!(db.resolve_stable_key(complexity_metric.stable_key).contains(&function_key));
+-        assert!(db.resolve_stable_key(complexity_metric.stable_key).contains("metric_name"));
++        assert!(
++            db.resolve_stable_key(file_metric.stable_key)
++                .contains(&file_key)
++        );
++        assert!(
++            db.resolve_stable_key(function_metric.stable_key)
++                .contains(&function_key)
++        );
++        assert!(
++            db.resolve_stable_key(function_metric.stable_key)
++                .contains("metric_name")
++        );
++        assert!(
++            db.resolve_stable_key(function_metric.stable_key)
++                .contains("function_size")
++        );
++        assert!(
++            db.resolve_stable_key(complexity_metric.stable_key)
++                .contains(&function_key)
++        );
++        assert!(
++            db.resolve_stable_key(complexity_metric.stable_key)
++                .contains("metric_name")
++        );
+         assert!(
+             db.resolve_stable_key(complexity_metric.stable_key)
+                 .contains("cyclomatic_complexity")
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/module_graph/mod.rs:3265:
+         assert_eq!(resolved.precision, FactPrecision::SetupAware);
+         assert_eq!(resolved.confidence, FactConfidence::High);
+         assert_eq!(resolved.validation, ValidationStatus::NativeTrusted);
+-        assert!(db.resolve_stable_key(resolved.stable_key).contains(&import_key));
++        assert!(
++            db.resolve_stable_key(resolved.stable_key)
++                .contains(&import_key)
++        );
+         assert_eq!(node.producer_id, "polint.module_graph");
+         assert_eq!(edge.producer_id, "polint.module_graph");
+     }
+Diff in /Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint/src/symbol_graph/mod.rs:1529:
+         assert_eq!(symbol_meta.precision, FactPrecision::SetupAware);
+         assert_eq!(symbol_meta.confidence, FactConfidence::High);
+         assert_eq!(symbol_meta.validation, ValidationStatus::NativeTrusted);
+-        assert_eq!(db.resolve_stable_key(symbol_meta.stable_key).as_ref(), "symbol:key:value");
+-        assert_eq!(db.resolve_stable_key(definition_meta.stable_key).as_ref(), "definition:key:value");
+-        assert_eq!(db.resolve_stable_key(reference_meta.stable_key).as_ref(), "reference:key:value");
++        assert_eq!(
++            db.resolve_stable_key(symbol_meta.stable_key).as_ref(),
++            "symbol:key:value"
++        );
++        assert_eq!(
++            db.resolve_stable_key(definition_meta.stable_key).as_ref(),
++            "definition:key:value"
++        );
++        assert_eq!(
++            db.resolve_stable_key(reference_meta.stable_key).as_ref(),
++            "reference:key:value"
++        );
+     }
+ 
+     #[test]
