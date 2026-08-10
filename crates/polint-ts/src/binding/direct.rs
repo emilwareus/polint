@@ -2,41 +2,41 @@
 
 use std::collections::BTreeMap;
 
-use crate::analysis::ids::TsDirectBindingId;
-use crate::core::{
-    FileId, ImportFact, ModuleNode, ModuleNodeId, ModuleNodeKind, ResolutionStatus,
-    ResolvedImportFact, StableKeyId, StableKeyInterner,
-};
-use crate::ts::binding::facts::{
+use crate::binding::facts::{
     TsDirectBindingFact, TsDirectBindingKind, TsDirectBindingReason, TsDirectBindingStatus,
 };
-use crate::ts::binding::store::TsDirectBindingOutput;
-use crate::ts::inventory::facts::{
+use crate::binding::store::TsDirectBindingOutput;
+use crate::ids::TsDirectBindingId;
+use crate::inventory::facts::{
     TsCallsiteInventoryKind, TsInventoryCallsiteFact, TsInventoryFunctionFact, TsInventoryStatus,
 };
-use crate::ts::inventory::store::TsInventoryOutput;
-use crate::ts::scope::facts::{
+use crate::inventory::store::TsInventoryOutput;
+use crate::scope::facts::{
     TsBindingFact, TsBindingKind, TsBindingStatus, TsScopeFact, TsScopeKind,
 };
-use crate::ts::scope::store::TsScopeOutput;
+use crate::scope::store::TsScopeOutput;
+use polint_analysis_api::{
+    ImportFact, ModuleNode, ModuleNodeKind, ResolutionStatus, ResolvedImportFact,
+};
+use polint_core::{FileId, ModuleNodeId, StableKeyId, StableKeyInterner};
 
 #[derive(Clone, Copy)]
-pub(crate) struct TsDirectBindingModuleFile<'a> {
-    pub(crate) module_node: ModuleNodeId,
-    pub(crate) inventory: &'a TsInventoryOutput,
-    pub(crate) scope: &'a TsScopeOutput,
+pub struct TsDirectBindingModuleFile<'a> {
+    pub module_node: ModuleNodeId,
+    pub inventory: &'a TsInventoryOutput,
+    pub scope: &'a TsScopeOutput,
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct TsDirectBindingModuleInput<'a> {
-    pub(crate) imports: &'a [ImportFact],
-    pub(crate) resolved_imports: &'a [ResolvedImportFact],
-    pub(crate) module_nodes: &'a [ModuleNode],
-    pub(crate) module_files: &'a [TsDirectBindingModuleFile<'a>],
+pub struct TsDirectBindingModuleInput<'a> {
+    pub imports: &'a [ImportFact],
+    pub resolved_imports: &'a [ResolvedImportFact],
+    pub module_nodes: &'a [ModuleNode],
+    pub module_files: &'a [TsDirectBindingModuleFile<'a>],
 }
 
 impl<'a> TsDirectBindingModuleInput<'a> {
-    pub(crate) fn empty() -> Self {
+    pub fn empty() -> Self {
         Self {
             imports: &[],
             resolved_imports: &[],
@@ -46,7 +46,7 @@ impl<'a> TsDirectBindingModuleInput<'a> {
     }
 }
 
-pub(crate) fn resolve_direct_bindings(
+pub fn resolve_direct_bindings(
     interner: &StableKeyInterner,
     inventory: &TsInventoryOutput,
     scope: &TsScopeOutput,
@@ -59,13 +59,13 @@ pub(crate) fn resolve_direct_bindings(
     )
 }
 
-pub(crate) fn resolve_direct_bindings_with_modules(
+pub fn resolve_direct_bindings_with_modules(
     interner: &StableKeyInterner,
     inventory: &TsInventoryOutput,
     scope: &TsScopeOutput,
     module_input: &TsDirectBindingModuleInput<'_>,
 ) -> TsDirectBindingOutput {
-    crate::ts::with_frontend_stable_keys(interner, || {
+    crate::with_frontend_stable_keys(interner, || {
         let index = DirectBindingIndex::new(inventory, scope, module_input);
         let mut rows = Vec::new();
 
@@ -718,13 +718,13 @@ fn is_import_binding(binding: &TsBindingFact) -> bool {
         )
 }
 
-fn span_contains(container: &crate::core::Span, span: &crate::core::Span) -> bool {
+fn span_contains(container: &polint_core::Span, span: &polint_core::Span) -> bool {
     container.file == span.file
         && container.start_byte <= span.start_byte
         && container.end_byte >= span.end_byte
 }
 
-fn spans_overlap(left: &crate::core::Span, right: &crate::core::Span) -> bool {
+fn spans_overlap(left: &polint_core::Span, right: &polint_core::Span) -> bool {
     left.file == right.file
         && left.start_byte <= right.end_byte
         && right.start_byte <= left.end_byte
@@ -977,11 +977,11 @@ fn direct_binding_key(
     status: TsDirectBindingStatus,
     reason: Option<TsDirectBindingReason>,
 ) -> StableKeyId {
-    let callsite_key = crate::ts::resolve_frontend_stable_key(callsite_key);
+    let callsite_key = crate::resolve_frontend_stable_key(callsite_key);
     let target_key = target_key
-        .map(crate::ts::resolve_frontend_stable_key)
+        .map(crate::resolve_frontend_stable_key)
         .unwrap_or_else(|| "<unresolved>".into());
-    crate::ts::intern_frontend_stable_key(format!(
+    crate::intern_frontend_stable_key(format!(
         "ts_direct_binding|callsite={callsite_key}|target={target_key}|kind={kind:?}|status={}|reason={}",
         status.as_str(),
         reason.map(TsDirectBindingReason::as_str).unwrap_or("none")

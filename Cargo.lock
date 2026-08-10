@@ -1179,6 +1179,7 @@ dependencies = [
  "polint-go",
  "polint-ir",
  "polint-macros",
+ "polint-ts",
  "predicates",
  "proptest",
  "rayon",
@@ -1386,6 +1387,26 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "polint-ts"
+version = "0.1.17"
+dependencies = [
+ "anyhow",
+ "oxc_allocator",
+ "oxc_ast",
+ "oxc_parser",
+ "oxc_semantic",
+ "oxc_span",
+ "polint-analysis-api",
+ "polint-core",
+ "polint-frontend-api",
+ "rayon",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
 ]
 
 [[package]]

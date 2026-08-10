@@ -27,6 +27,22 @@ impl From<polint_go::error::AnalysisError> for AnalysisError {
     }
 }
 
+impl From<polint_ts::error::AnalysisError> for AnalysisError {
+    fn from(error: polint_ts::error::AnalysisError) -> Self {
+        match error {
+            polint_ts::error::AnalysisError::MissingFactFamily { family } => {
+                Self::MissingFactFamily { family }
+            }
+            polint_ts::error::AnalysisError::InvalidFact { provider, reason } => {
+                Self::InvalidFact { provider, reason }
+            }
+            polint_ts::error::AnalysisError::CacheSchemaMismatch { schema } => {
+                Self::CacheSchemaMismatch { schema }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

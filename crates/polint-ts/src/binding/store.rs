@@ -2,14 +2,14 @@
 
 use std::collections::BTreeMap;
 
-use crate::analysis::ids::TsDirectBindingId;
-use crate::analysis_kernel::incremental::{Digest, DigestKind};
-use crate::core::{ModuleNodeId, StableKeyId, StableKeyInterner};
-use crate::ts::binding::facts::{TsDirectBindingFact, TsDirectBindingReason};
+use crate::binding::facts::{TsDirectBindingFact, TsDirectBindingReason};
+use crate::ids::TsDirectBindingId;
+use polint_analysis_api::{Digest, DigestKind};
+use polint_core::{ModuleNodeId, StableKeyId, StableKeyInterner};
 
-pub(crate) const TS_DIRECT_BINDING_SCHEMA_LABEL: &str = "ts-direct-binding-facts-1";
+pub const TS_DIRECT_BINDING_SCHEMA_LABEL: &str = "ts-direct-binding-facts-1";
 
-pub(crate) fn ts_direct_binding_provider_parameter_digest() -> Digest {
+pub fn ts_direct_binding_provider_parameter_digest() -> Digest {
     Digest::from_parts(
         DigestKind::ProviderParameters,
         "ts_direct_binding_provider_parameters",
@@ -35,7 +35,7 @@ pub(crate) fn ts_direct_binding_provider_parameter_digest() -> Digest {
     )
 }
 
-pub(crate) fn ts_direct_binding_output_digest(
+pub fn ts_direct_binding_output_digest(
     output: &TsDirectBindingOutput,
     interner: &StableKeyInterner,
 ) -> Digest {
@@ -85,12 +85,12 @@ pub(crate) fn ts_direct_binding_output_digest(
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct TsDirectBindingOutput {
-    pub(crate) bindings: Vec<TsDirectBindingFact>,
+pub struct TsDirectBindingOutput {
+    pub bindings: Vec<TsDirectBindingFact>,
 }
 
 impl TsDirectBindingOutput {
-    pub(crate) fn normalized(mut self, interner: &StableKeyInterner) -> Self {
+    pub fn normalized(mut self, interner: &StableKeyInterner) -> Self {
         self.bindings.sort_by_cached_key(|binding| {
             (
                 interner.resolve(binding.stable_key),
@@ -105,7 +105,7 @@ impl TsDirectBindingOutput {
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct TsDirectBindingStore {
+pub struct TsDirectBindingStore {
     output: TsDirectBindingOutput,
     bindings_by_callsite_stable_key: BTreeMap<StableKeyId, Vec<usize>>,
     bindings_by_target_function_stable_key: BTreeMap<StableKeyId, Vec<usize>>,
@@ -115,7 +115,7 @@ pub(crate) struct TsDirectBindingStore {
 }
 
 impl TsDirectBindingStore {
-    pub(crate) fn from_output(output: TsDirectBindingOutput, interner: &StableKeyInterner) -> Self {
+    pub fn from_output(output: TsDirectBindingOutput, interner: &StableKeyInterner) -> Self {
         let output = output.normalized(interner);
         let mut store = Self {
             output,
@@ -157,11 +157,11 @@ impl TsDirectBindingStore {
         store
     }
 
-    pub(crate) fn bindings(&self) -> &[TsDirectBindingFact] {
+    pub fn bindings(&self) -> &[TsDirectBindingFact] {
         &self.output.bindings
     }
 
-    pub(crate) fn bindings_by_callsite_stable_key(
+    pub fn bindings_by_callsite_stable_key(
         &self,
         callsite_stable_key: StableKeyId,
     ) -> Vec<&TsDirectBindingFact> {
@@ -171,7 +171,7 @@ impl TsDirectBindingStore {
         )
     }
 
-    pub(crate) fn bindings_by_target_function_stable_key(
+    pub fn bindings_by_target_function_stable_key(
         &self,
         target_function_stable_key: StableKeyId,
     ) -> Vec<&TsDirectBindingFact> {
@@ -181,24 +181,18 @@ impl TsDirectBindingStore {
         )
     }
 
-    pub(crate) fn bindings_by_unresolved_reason(
+    pub fn bindings_by_unresolved_reason(
         &self,
         reason: TsDirectBindingReason,
     ) -> Vec<&TsDirectBindingFact> {
         self.binding_refs(self.bindings_by_unresolved_reason.get(&reason))
     }
 
-    pub(crate) fn bindings_by_module_node(
-        &self,
-        module_node: ModuleNodeId,
-    ) -> Vec<&TsDirectBindingFact> {
+    pub fn bindings_by_module_node(&self, module_node: ModuleNodeId) -> Vec<&TsDirectBindingFact> {
         self.binding_refs(self.bindings_by_module_node.get(&module_node))
     }
 
-    pub(crate) fn binding_by_stable_key(
-        &self,
-        stable_key: StableKeyId,
-    ) -> Option<&TsDirectBindingFact> {
+    pub fn binding_by_stable_key(&self, stable_key: StableKeyId) -> Option<&TsDirectBindingFact> {
         self.bindings_by_stable_key
             .get(&stable_key)
             .map(|index| &self.output.bindings[*index])
@@ -216,14 +210,14 @@ impl TsDirectBindingStore {
 
 #[cfg(test)]
 mod tests {
-    use crate::analysis::ids::{
-        TsBindingId, TsDirectBindingId, TsInventoryCallsiteId, TsInventoryFunctionId,
-    };
-    use crate::analysis_kernel::incremental::{Digest, DigestKind};
-    use crate::core::{ModuleNodeId, ResolvedImportId};
-    use crate::ts::binding::facts::{
+    use crate::binding::facts::{
         TsDirectBindingKind, TsDirectBindingReason, TsDirectBindingStatus,
     };
+    use crate::ids::{
+        TsBindingId, TsDirectBindingId, TsInventoryCallsiteId, TsInventoryFunctionId,
+    };
+    use polint_analysis_api::{Digest, DigestKind};
+    use polint_core::{ModuleNodeId, ResolvedImportId};
 
     use super::*;
 

@@ -1,15 +1,15 @@
-pub(crate) mod extract;
-pub(crate) mod facts;
-pub(crate) mod store;
+pub mod extract;
+pub mod facts;
+pub mod store;
 
 #[cfg(test)]
 mod extract_function_forms {
     use std::collections::BTreeSet;
     use std::path::PathBuf;
 
-    use crate::core::AnalysisDb;
-    use crate::ts::inventory::extract::extract_ts_inventory;
-    use crate::ts::inventory::facts::TsFunctionInventoryKind;
+    use crate::inventory::extract::extract_ts_inventory;
+    use crate::inventory::facts::TsFunctionInventoryKind;
+    use crate::local_db::LocalFactDb;
 
     #[test]
     fn extracts_every_required_function_form() {
@@ -30,7 +30,7 @@ class Box {
 "#,
         );
 
-        let interner = crate::core::StableKeyInterner::default();
+        let interner = polint_core::StableKeyInterner::default();
         let output = extract_ts_inventory(&interner, file);
         let kinds = output
             .functions
@@ -59,7 +59,7 @@ const second = () => {};
 function first() {}
 "#,
         );
-        let interner = crate::core::StableKeyInterner::default();
+        let interner = polint_core::StableKeyInterner::default();
         let mut output = extract_ts_inventory(&interner, file);
         output.functions.reverse();
 
@@ -90,7 +90,7 @@ function outer() {
 }
 "#,
         );
-        let interner = crate::core::StableKeyInterner::default();
+        let interner = polint_core::StableKeyInterner::default();
         let output = extract_ts_inventory(&interner, file);
         let inner = output
             .functions
@@ -117,7 +117,7 @@ class Box {
 }
 "#,
         );
-        let interner = crate::core::StableKeyInterner::default();
+        let interner = polint_core::StableKeyInterner::default();
         let output = extract_ts_inventory(&interner, file);
         let names = output
             .functions
@@ -130,8 +130,8 @@ class Box {
         assert!(names.contains("staticG"), "missing names in {names:?}");
     }
 
-    fn fixture_file(source: &str) -> &'static crate::core::SourceFile {
-        let mut db = Box::new(AnalysisDb::new());
+    fn fixture_file(source: &str) -> &'static polint_analysis_api::SourceFile {
+        let mut db = Box::new(LocalFactDb::new());
         let file_id = db.add_file(
             PathBuf::from("src/forms.ts"),
             "src/forms.ts".to_string(),
@@ -147,9 +147,9 @@ mod extract_callsite_forms {
     use std::collections::BTreeSet;
     use std::path::PathBuf;
 
-    use crate::core::AnalysisDb;
-    use crate::ts::inventory::extract::extract_ts_inventory;
-    use crate::ts::inventory::facts::{TsCallsiteInventoryKind, TsInventoryStatus};
+    use crate::inventory::extract::extract_ts_inventory;
+    use crate::inventory::facts::{TsCallsiteInventoryKind, TsInventoryStatus};
+    use crate::local_db::LocalFactDb;
 
     #[test]
     fn extracts_every_required_callsite_form() {
@@ -167,7 +167,7 @@ function invoke(dynamicSpecifier, maybe) {
 "#,
         );
 
-        let interner = crate::core::StableKeyInterner::default();
+        let interner = polint_core::StableKeyInterner::default();
         let output = extract_ts_inventory(&interner, file);
         let kinds = output
             .callsites
@@ -197,7 +197,7 @@ function load(path) {
 "#,
         );
 
-        let interner = crate::core::StableKeyInterner::default();
+        let interner = polint_core::StableKeyInterner::default();
         let output = extract_ts_inventory(&interner, file);
         let dynamic_import = output
             .callsites
@@ -221,7 +221,7 @@ function invoke() {
 "#,
         );
 
-        let interner = crate::core::StableKeyInterner::default();
+        let interner = polint_core::StableKeyInterner::default();
         let output = extract_ts_inventory(&interner, file);
         let call = output
             .callsites
@@ -249,7 +249,7 @@ function h() {}
 "#;
         let file = fixture_file(source);
 
-        let interner = crate::core::StableKeyInterner::default();
+        let interner = polint_core::StableKeyInterner::default();
         let output = extract_ts_inventory(&interner, file);
         let spans = output
             .callsites
@@ -288,8 +288,8 @@ function h() {}
         );
     }
 
-    fn fixture_file(source: &str) -> &'static crate::core::SourceFile {
-        let mut db = Box::new(AnalysisDb::new());
+    fn fixture_file(source: &str) -> &'static polint_analysis_api::SourceFile {
+        let mut db = Box::new(LocalFactDb::new());
         let file_id = db.add_file(
             PathBuf::from("src/calls.ts"),
             "src/calls.ts".to_string(),

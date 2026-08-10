@@ -4399,7 +4399,13 @@ mod places {
     fn lower(path: &str, source: &str) -> (MirOutput, crate::core::StableKeyInterner) {
         let mut db = AnalysisDb::new();
         db.add_file(PathBuf::from(path), path.to_string(), source.to_string());
-        let diagnostics = crate::ts::analyze(&mut db);
+        let diagnostics = crate::ts::analyze_with_options(
+            &mut db,
+            &polint_analysis_api::DisabledAnalysisCache,
+            "",
+            "",
+            false,
+        );
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         let output = lower_ts_mir(&db);
         (output, db.stable_key_interner())
@@ -4408,7 +4414,13 @@ mod places {
     fn lower_allowing_parser_diagnostics(path: &str, source: &str) -> (AnalysisDb, MirOutput) {
         let mut db = AnalysisDb::new();
         db.add_file(PathBuf::from(path), path.to_string(), source.to_string());
-        let _diagnostics = crate::ts::analyze(&mut db);
+        let _diagnostics = crate::ts::analyze_with_options(
+            &mut db,
+            &polint_analysis_api::DisabledAnalysisCache,
+            "",
+            "",
+            false,
+        );
         let output = lower_ts_mir(&db);
         (db, output)
     }
@@ -4426,7 +4438,13 @@ mod places {
             "broken.tsx".to_string(),
             "const x = <div></span>;".to_string(),
         );
-        let diagnostics = crate::ts::analyze(&mut db);
+        let diagnostics = crate::ts::analyze_with_options(
+            &mut db,
+            &polint_analysis_api::DisabledAnalysisCache,
+            "",
+            "",
+            false,
+        );
         assert!(
             diagnostics
                 .iter()
@@ -4631,7 +4649,13 @@ class View {
             "src/view.tsx".to_string(),
             source.to_string(),
         );
-        let diagnostics = crate::ts::analyze(&mut db);
+        let diagnostics = crate::ts::analyze_with_options(
+            &mut db,
+            &polint_analysis_api::DisabledAnalysisCache,
+            "",
+            "",
+            false,
+        );
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
 
         let arrow = db
@@ -4715,7 +4739,13 @@ mod operations {
     fn lower(path: &str, source: &str) -> (MirOutput, crate::core::StableKeyInterner) {
         let mut db = AnalysisDb::new();
         db.add_file(PathBuf::from(path), path.to_string(), source.to_string());
-        let diagnostics = crate::ts::analyze(&mut db);
+        let diagnostics = crate::ts::analyze_with_options(
+            &mut db,
+            &polint_analysis_api::DisabledAnalysisCache,
+            "",
+            "",
+            false,
+        );
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         let output = lower_ts_mir(&db);
         (output, db.stable_key_interner())

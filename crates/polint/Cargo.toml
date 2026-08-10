@@ -31,6 +31,7 @@ polint-ir.workspace = true
 polint-analysis-api.workspace = true
 polint-frontend-api.workspace = true
 polint-go.workspace = true
+polint-ts.workspace = true
 polint-macros = { path = "../polint-macros", version = "0.1.7" }
 rayon.workspace = true
 rusqlite.workspace = true

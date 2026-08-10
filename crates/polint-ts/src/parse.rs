@@ -10,50 +10,50 @@ use oxc_parser::{Parser, ParserReturn};
 use oxc_span::SourceType;
 use std::path::Path;
 
-use crate::core::SourceFile;
+use polint_analysis_api::SourceFile;
 
 /// Construct name for unsupported-semantic rows recorded on recoverable Oxc errors.
-pub(crate) const PARSER_RECOVERY_CONSTRUCT: &str = "parser recovery";
+pub const PARSER_RECOVERY_CONSTRUCT: &str = "parser recovery";
 
 /// Status reason secondary extractors use when they continue on a partial AST.
-pub(crate) const PARTIAL_AST_REASON: &str = "partial AST from parse errors";
+pub const PARTIAL_AST_REASON: &str = "partial AST from parse errors";
 
 /// Owned parse-error summary taken from Oxc diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ParseError {
-    pub(crate) message: String,
-    pub(crate) start_byte: Option<usize>,
-    pub(crate) end_byte: Option<usize>,
+pub struct ParseError {
+    pub message: String,
+    pub start_byte: Option<usize>,
+    pub end_byte: Option<usize>,
 }
 
 /// Result of [`parse_ts_source`].
 ///
 /// `fully_parsed == false` means the AST is partial (recoverable errors) or empty
 /// (catastrophic panic). Downstream analysis may continue, but must declare the gap.
-pub(crate) struct ParsedTsSource<'a> {
-    pub(crate) raw: ParserReturn<'a>,
-    pub(crate) errors: Vec<ParseError>,
-    pub(crate) fully_parsed: bool,
+pub struct ParsedTsSource<'a> {
+    pub raw: ParserReturn<'a>,
+    pub errors: Vec<ParseError>,
+    pub fully_parsed: bool,
 }
 
 impl<'a> ParsedTsSource<'a> {
-    pub(crate) fn program(&self) -> &Program<'a> {
+    pub fn program(&self) -> &Program<'a> {
         &self.raw.program
     }
 
     /// True when Oxc aborted and left an empty program body.
-    pub(crate) fn is_catastrophic(&self) -> bool {
+    pub fn is_catastrophic(&self) -> bool {
         self.raw.panicked && self.raw.program.body.is_empty()
     }
 }
 
 /// Derive Oxc [`SourceType`] from the file path. All parse sites must use this.
-pub(crate) fn source_type(path: &Path) -> SourceType {
+pub fn source_type(path: &Path) -> SourceType {
     SourceType::from_path(path).unwrap_or_default()
 }
 
 /// The only sanctioned way to parse TS/JS in this crate.
-pub(crate) fn parse_ts_source<'a>(
+pub fn parse_ts_source<'a>(
     allocator: &'a Allocator,
     path: &Path,
     source: &'a str,
@@ -88,10 +88,7 @@ pub(crate) fn parse_ts_source<'a>(
 }
 
 /// Parse a [`SourceFile`] through [`parse_ts_source`].
-pub(crate) fn parse_ts_file<'a>(
-    allocator: &'a Allocator,
-    file: &'a SourceFile,
-) -> ParsedTsSource<'a> {
+pub fn parse_ts_file<'a>(allocator: &'a Allocator, file: &'a SourceFile) -> ParsedTsSource<'a> {
     parse_ts_source(allocator, &file.path, file.source.as_ref())
 }
 
@@ -158,16 +155,12 @@ mod tests {
                 .strip_prefix(&src_root)
                 .expect("file under src")
                 .to_path_buf();
-            // tree-sitter Go sites use tree_sitter::Parser::new() — skip those files.
-            if rel == Path::new("go/adapter.rs") || rel == Path::new("analysis/mir/lower_go.rs") {
-                continue;
-            }
             parser_new_relpaths.push(rel);
         }
         assert_eq!(
             parser_new_relpaths,
-            vec![Path::new("ts/parse.rs").to_path_buf()],
-            "Oxc Parser::new must live only in crate::ts::parse_ts_source; found {parser_new_relpaths:?}"
+            vec![Path::new("parse.rs").to_path_buf()],
+            "Oxc Parser::new must live only in crate::parse::parse_ts_source; found {parser_new_relpaths:?}"
         );
     }
 

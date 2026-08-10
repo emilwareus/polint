@@ -5,89 +5,28 @@
 
 mod registry;
 
-use std::path::Path;
 use std::sync::OnceLock;
 
-use crate::analysis_kernel::{PrecisionCeiling, ProviderCtx, ProviderRunResult};
 use crate::core::Language;
 
-pub(crate) use polint_frontend_api::{AnalysisUnit, FrontendProfile, LanguageFrontend};
+#[cfg(test)]
+use crate::analysis_kernel::PrecisionCeiling;
+pub(crate) use polint_frontend_api::AnalysisUnit;
+#[cfg(test)]
+pub(crate) use polint_frontend_api::{FrontendProfile, LanguageFrontend};
 pub(crate) use registry::{
     FrontendRegistry, FrontendRegistryExt, LANGUAGE_IDS_GO, LANGUAGE_IDS_GO_AND_TS,
     LANGUAGE_IDS_NONE, LANGUAGE_IDS_TS, LanguageId, build_default_registry,
 };
 
 pub(crate) use polint_go::{FAMILY_GO, GoFrontend};
-pub(crate) const FAMILY_TYPESCRIPT_JAVASCRIPT: &str = "typescript_javascript";
-
-const TS_PRODUCES: &[&str] = &[
-    "functions",
-    "imports",
-    "ts_components",
-    "ts_classes",
-    "string_literals",
-    "jsx_attributes",
-];
-
-pub(crate) const TS_FRONTEND_PROFILE: FrontendProfile = FrontendProfile {
-    name: "ts",
-    family: FAMILY_TYPESCRIPT_JAVASCRIPT,
-    produces: TS_PRODUCES,
-    precision_ceiling: PrecisionCeiling::Syntax,
-};
+pub(crate) use polint_ts::{FAMILY_TYPESCRIPT_JAVASCRIPT, TsJsFrontend};
 
 static DEFAULT_REGISTRY: OnceLock<FrontendRegistry> = OnceLock::new();
 
 /// Process-wide default frontend registry (Go then TS/JS in registration order).
 pub(crate) fn frontend_registry() -> &'static FrontendRegistry {
     DEFAULT_REGISTRY.get_or_init(build_default_registry)
-}
-
-pub(crate) struct TsJsFrontend {
-    id: LanguageId,
-}
-
-impl TsJsFrontend {
-    pub(crate) fn new(id: LanguageId) -> Self {
-        Self { id }
-    }
-}
-
-impl LanguageFrontend for TsJsFrontend {
-    fn id(&self) -> LanguageId {
-        self.id
-    }
-
-    fn handles(&self, path: &Path) -> bool {
-        Language::from_path(path).is_ts_family()
-    }
-
-    fn profile(&self) -> &'static FrontendProfile {
-        &TS_FRONTEND_PROFILE
-    }
-
-    fn analyze(&self, ctx: &mut ProviderCtx<'_>, unit: &AnalysisUnit<'_>) -> ProviderRunResult {
-        let _ = unit.root;
-        let config_digest = ctx.config_digest;
-        let rule_digest = ctx.rule_digest;
-        let parallel = ctx.parallel;
-        let db = polint_analysis_api::FactDatabase::as_any_mut(ctx.facts)
-            .downcast_mut::<crate::core::AnalysisDb>()
-            .expect("facade AnalysisDb host");
-        let (cache, plan) =
-            crate::analysis_kernel::host::with_provider_host_session_mut(|session| {
-                (session.cache.clone(), session.plan.clone())
-            });
-        crate::ts::analyze_files_with_plan_options_and_cache_stats(
-            db,
-            unit.files,
-            &cache,
-            config_digest,
-            rule_digest,
-            &plan,
-            parallel,
-        )
-    }
 }
 
 pub(crate) trait LanguageRegistryExt {

@@ -2,11 +2,11 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::analysis::ids::{TsBindingId, TsScopeId};
-use crate::core::{FileId, Span, StableKeyId};
+use crate::ids::{TsBindingId, TsScopeId};
+use polint_core::{FileId, Span, StableKeyId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub(crate) enum TsScopeKind {
+pub enum TsScopeKind {
     Module,
     Function,
     Class,
@@ -20,7 +20,7 @@ pub(crate) enum TsScopeKind {
 }
 
 impl TsScopeKind {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Module => "module",
             Self::Function => "function",
@@ -37,7 +37,7 @@ impl TsScopeKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub(crate) enum TsDeclarationKind {
+pub enum TsDeclarationKind {
     Var,
     Let,
     Const,
@@ -56,7 +56,7 @@ pub(crate) enum TsDeclarationKind {
 }
 
 impl TsDeclarationKind {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Var => "var",
             Self::Let => "let",
@@ -78,7 +78,7 @@ impl TsDeclarationKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub(crate) enum TsBindingKind {
+pub enum TsBindingKind {
     Var,
     Let,
     Const,
@@ -100,7 +100,7 @@ pub(crate) enum TsBindingKind {
 }
 
 impl TsBindingKind {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Var => "var",
             Self::Let => "let",
@@ -125,7 +125,7 @@ impl TsBindingKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub(crate) enum TsImportExportKind {
+pub enum TsImportExportKind {
     None,
     ImportDefault,
     ImportNamed,
@@ -140,7 +140,7 @@ pub(crate) enum TsImportExportKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub(crate) enum TsBindingStatus {
+pub enum TsBindingStatus {
     Present,
     Unresolved { reason: String },
     UnsupportedDynamic { reason: String },
@@ -148,29 +148,29 @@ pub(crate) enum TsBindingStatus {
 }
 
 impl TsBindingStatus {
-    pub(crate) fn present() -> Self {
+    pub fn present() -> Self {
         Self::Present
     }
 
-    pub(crate) fn unresolved(reason: impl Into<String>) -> Self {
+    pub fn unresolved(reason: impl Into<String>) -> Self {
         Self::Unresolved {
             reason: reason.into(),
         }
     }
 
-    pub(crate) fn unsupported_dynamic(reason: impl Into<String>) -> Self {
+    pub fn unsupported_dynamic(reason: impl Into<String>) -> Self {
         Self::UnsupportedDynamic {
             reason: reason.into(),
         }
     }
 
-    pub(crate) fn external(module: impl Into<String>) -> Self {
+    pub fn external(module: impl Into<String>) -> Self {
         Self::External {
             module: module.into(),
         }
     }
 
-    pub(crate) fn as_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             Self::Present => "present",
             Self::Unresolved { .. } => "unresolved",
@@ -181,39 +181,39 @@ impl TsBindingStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TsScopeFact {
-    pub(crate) id: TsScopeId,
-    pub(crate) file: FileId,
-    pub(crate) span: Span,
-    pub(crate) stable_key: StableKeyId,
-    pub(crate) parent_scope_key: Option<StableKeyId>,
-    pub(crate) kind: TsScopeKind,
+pub struct TsScopeFact {
+    pub id: TsScopeId,
+    pub file: FileId,
+    pub span: Span,
+    pub stable_key: StableKeyId,
+    pub parent_scope_key: Option<StableKeyId>,
+    pub kind: TsScopeKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TsBindingFact {
-    pub(crate) id: TsBindingId,
-    pub(crate) file: FileId,
-    pub(crate) span: Span,
-    pub(crate) stable_key: StableKeyId,
-    pub(crate) scope_key: StableKeyId,
-    pub(crate) parent_scope_key: Option<StableKeyId>,
-    pub(crate) name: String,
-    pub(crate) declaration_kind: TsDeclarationKind,
-    pub(crate) binding_kind: TsBindingKind,
-    pub(crate) import_export_kind: TsImportExportKind,
-    pub(crate) module_source: Option<String>,
-    pub(crate) imported_name: Option<String>,
-    pub(crate) exported_name: Option<String>,
-    pub(crate) inventory_function_key: Option<StableKeyId>,
-    pub(crate) inventory_callsite_key: Option<StableKeyId>,
-    pub(crate) status: TsBindingStatus,
+pub struct TsBindingFact {
+    pub id: TsBindingId,
+    pub file: FileId,
+    pub span: Span,
+    pub stable_key: StableKeyId,
+    pub scope_key: StableKeyId,
+    pub parent_scope_key: Option<StableKeyId>,
+    pub name: String,
+    pub declaration_kind: TsDeclarationKind,
+    pub binding_kind: TsBindingKind,
+    pub import_export_kind: TsImportExportKind,
+    pub module_source: Option<String>,
+    pub imported_name: Option<String>,
+    pub exported_name: Option<String>,
+    pub inventory_function_key: Option<StableKeyId>,
+    pub inventory_callsite_key: Option<StableKeyId>,
+    pub status: TsBindingStatus,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{FileId, Span};
+    use polint_core::{FileId, Span};
 
     #[test]
     fn binding_status_covers_present_unresolved_unsupported_and_external() {
@@ -260,7 +260,7 @@ mod tests {
 
     #[test]
     fn scope_and_binding_rows_keep_dense_ids_separate_from_stable_keys() {
-        let interner = crate::core::StableKeyInterner::default();
+        let interner = polint_core::StableKeyInterner::default();
         let span = Span::point(FileId(1), 1, 1);
         let scope = TsScopeFact {
             id: TsScopeId(99),

@@ -9,19 +9,17 @@ use oxc_ast::ast::{
 use oxc_semantic::{AstNodes, NodeId, SemanticBuilder};
 use oxc_span::GetSpan;
 
-use crate::analysis::ids::{TsInventoryCallsiteId, TsInventoryFunctionId};
-use crate::core::{SourceFile, Span, StableKeyInterner, span_from_byte_range};
-use crate::ts::inventory::facts::{
+use crate::ids::{TsInventoryCallsiteId, TsInventoryFunctionId};
+use crate::inventory::facts::{
     TsCallsiteInventoryKind, TsFunctionInventoryKind, TsInventoryCallsiteFact,
     TsInventoryFunctionFact, TsInventoryStatus,
 };
-use crate::ts::inventory::store::TsInventoryOutput;
-use crate::ts::parse::{PARTIAL_AST_REASON, parse_ts_file};
+use crate::inventory::store::TsInventoryOutput;
+use crate::parse::{PARTIAL_AST_REASON, parse_ts_file};
+use polint_analysis_api::SourceFile;
+use polint_core::{Span, StableKeyInterner, span_from_byte_range};
 
-pub(crate) fn extract_ts_inventory(
-    interner: &StableKeyInterner,
-    file: &SourceFile,
-) -> TsInventoryOutput {
+pub fn extract_ts_inventory(interner: &StableKeyInterner, file: &SourceFile) -> TsInventoryOutput {
     let source = file.source.as_ref();
     let allocator = Allocator::default();
     let parsed = parse_ts_file(&allocator, file);
@@ -45,7 +43,7 @@ pub(crate) fn extract_ts_inventory(
     output
 }
 
-pub(crate) fn mark_inventory_partial_ast(output: &mut TsInventoryOutput) {
+pub fn mark_inventory_partial_ast(output: &mut TsInventoryOutput) {
     for function in &mut output.functions {
         if matches!(function.status, TsInventoryStatus::Resolved) {
             function.status = TsInventoryStatus::unsupported(PARTIAL_AST_REASON);
@@ -58,7 +56,7 @@ pub(crate) fn mark_inventory_partial_ast(output: &mut TsInventoryOutput) {
     }
 }
 
-pub(crate) fn extract_ts_inventory_from_program(
+pub fn extract_ts_inventory_from_program(
     interner: &StableKeyInterner,
     file: &SourceFile,
     source: &str,
@@ -106,7 +104,7 @@ pub(crate) fn extract_ts_inventory_from_program(
         .iter_enumerated()
         .filter_map(|(node_id, node)| {
             let kind = callsite_inventory_kind(node.kind())?;
-            let span = crate::ts::spans::normalized_callsite_span(source, node.kind())?;
+            let span = crate::spans::normalized_callsite_span(source, node.kind())?;
             Some((span.start, span.end, kind, node_id, node.kind()))
         })
         .collect::<Vec<_>>();
@@ -117,7 +115,7 @@ pub(crate) fn extract_ts_inventory_from_program(
         let span = span_from_oxc(
             file.id,
             source,
-            crate::ts::spans::normalized_callsite_span(source, ast_kind)
+            crate::spans::normalized_callsite_span(source, ast_kind)
                 .expect("callsite entries have normalized callsite spans"),
         );
         let display_name = callsite_display_name(ast_kind);
@@ -454,6 +452,6 @@ fn length_prefixed(value: &str) -> String {
     format!("{}:{}", value.len(), value)
 }
 
-fn span_from_oxc(file: crate::core::FileId, source: &str, span: oxc_span::Span) -> Span {
+fn span_from_oxc(file: polint_core::FileId, source: &str, span: oxc_span::Span) -> Span {
     span_from_byte_range(file, source, span.start as usize, span.end as usize)
 }

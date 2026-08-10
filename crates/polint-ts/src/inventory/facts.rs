@@ -1,14 +1,14 @@
 use serde::{Deserialize, Serialize};
 
-use crate::analysis::ids::{TsInventoryCallsiteId, TsInventoryFunctionId};
-use crate::core::{FileId, Span, StableKeyId};
+use crate::ids::{TsInventoryCallsiteId, TsInventoryFunctionId};
+use polint_core::{FileId, Span, StableKeyId};
 
 #[allow(
     dead_code,
     reason = " defines private inventory rows before extraction/store consumers land"
 )]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub(crate) enum TsFunctionInventoryKind {
+pub enum TsFunctionInventoryKind {
     Declaration,
     FunctionExpression,
     Arrow,
@@ -23,7 +23,7 @@ pub(crate) enum TsFunctionInventoryKind {
     reason = " defines private inventory rows before extraction/store consumers land"
 )]
 impl TsFunctionInventoryKind {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Declaration => "declaration",
             Self::FunctionExpression => "function_expression",
@@ -41,7 +41,7 @@ impl TsFunctionInventoryKind {
     reason = " defines private inventory rows before extraction/store consumers land"
 )]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub(crate) enum TsCallsiteInventoryKind {
+pub enum TsCallsiteInventoryKind {
     Call,
     New,
     TaggedTemplate,
@@ -55,7 +55,7 @@ pub(crate) enum TsCallsiteInventoryKind {
     reason = " defines private inventory rows before extraction/store consumers land"
 )]
 impl TsCallsiteInventoryKind {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Call => "call",
             Self::New => "new",
@@ -72,7 +72,7 @@ impl TsCallsiteInventoryKind {
     reason = " defines private inventory rows before extraction/store consumers land"
 )]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub(crate) enum TsInventoryStatus {
+pub enum TsInventoryStatus {
     Resolved,
     Unresolved { reason: String },
     Unsupported { reason: String },
@@ -83,17 +83,17 @@ pub(crate) enum TsInventoryStatus {
     reason = " defines private inventory rows before extraction/store consumers land"
 )]
 impl TsInventoryStatus {
-    pub(crate) fn resolved() -> Self {
+    pub fn resolved() -> Self {
         Self::Resolved
     }
 
-    pub(crate) fn unresolved(reason: impl Into<String>) -> Self {
+    pub fn unresolved(reason: impl Into<String>) -> Self {
         Self::Unresolved {
             reason: reason.into(),
         }
     }
 
-    pub(crate) fn unsupported(reason: impl Into<String>) -> Self {
+    pub fn unsupported(reason: impl Into<String>) -> Self {
         Self::Unsupported {
             reason: reason.into(),
         }
@@ -105,15 +105,15 @@ impl TsInventoryStatus {
     reason = " defines private inventory rows before extraction/store consumers land"
 )]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TsInventoryFunctionFact {
-    pub(crate) id: TsInventoryFunctionId,
-    pub(crate) file: FileId,
-    pub(crate) span: Span,
-    pub(crate) stable_key: StableKeyId,
-    pub(crate) lexical_parent_key: Option<StableKeyId>,
-    pub(crate) display_name: Option<String>,
-    pub(crate) kind: TsFunctionInventoryKind,
-    pub(crate) status: TsInventoryStatus,
+pub struct TsInventoryFunctionFact {
+    pub id: TsInventoryFunctionId,
+    pub file: FileId,
+    pub span: Span,
+    pub stable_key: StableKeyId,
+    pub lexical_parent_key: Option<StableKeyId>,
+    pub display_name: Option<String>,
+    pub kind: TsFunctionInventoryKind,
+    pub status: TsInventoryStatus,
 }
 
 #[allow(
@@ -121,21 +121,21 @@ pub(crate) struct TsInventoryFunctionFact {
     reason = " defines private inventory rows before extraction/store consumers land"
 )]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TsInventoryCallsiteFact {
-    pub(crate) id: TsInventoryCallsiteId,
-    pub(crate) file: FileId,
-    pub(crate) span: Span,
-    pub(crate) stable_key: StableKeyId,
-    pub(crate) lexical_parent_key: Option<StableKeyId>,
-    pub(crate) display_name: Option<String>,
-    pub(crate) kind: TsCallsiteInventoryKind,
-    pub(crate) status: TsInventoryStatus,
+pub struct TsInventoryCallsiteFact {
+    pub id: TsInventoryCallsiteId,
+    pub file: FileId,
+    pub span: Span,
+    pub stable_key: StableKeyId,
+    pub lexical_parent_key: Option<StableKeyId>,
+    pub display_name: Option<String>,
+    pub kind: TsCallsiteInventoryKind,
+    pub status: TsInventoryStatus,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{FileId, Span};
+    use polint_core::{FileId, Span};
 
     #[test]
     fn function_inventory_kind_labels_are_stable() {
@@ -186,7 +186,7 @@ mod tests {
 
     #[test]
     fn fact_rows_keep_dense_ids_separate_from_stable_keys() {
-        let interner = crate::core::StableKeyInterner::default();
+        let interner = polint_core::StableKeyInterner::default();
         let span = Span::point(FileId(3), 10, 4);
         let function = TsInventoryFunctionFact {
             id: TsInventoryFunctionId(99),

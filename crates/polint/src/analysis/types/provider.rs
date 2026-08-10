@@ -591,7 +591,13 @@ export function flow(input, key) {
 "#
             .to_string(),
         );
-        let diagnostics = crate::ts::analyze(&mut db);
+        let diagnostics = crate::ts::analyze_with_options(
+            &mut db,
+            &polint_analysis_api::DisabledAnalysisCache,
+            "",
+            "",
+            false,
+        );
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
         db.replace_semantic_mir(mir)

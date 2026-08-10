@@ -44,7 +44,7 @@ pub(crate) mod rule_error;
 pub(crate) mod rule_manifest;
 pub(crate) mod rule_test;
 pub(crate) mod symbol_graph;
-pub(crate) mod ts;
+pub(crate) use polint_ts as ts;
 
 /// Internal surfaces for `polint-bench` (`feature = "bench"`). Not part of the supported API.
 #[cfg(feature = "bench")]
@@ -86,7 +86,21 @@ pub mod _bench {
     }
 
     pub mod ts {
-        pub use crate::ts::analyze_with_options;
+        use crate::cache::CacheAnalysisCache;
+        use crate::core::AnalysisDb;
+        use crate::diagnostics::Diagnostic;
+
+        /// Bench entry: adapts facade [`Cache`](crate::cache::Cache) to the ts frontend cache trait.
+        pub fn analyze_with_options(
+            db: &mut AnalysisDb,
+            cache: &crate::cache::Cache,
+            config_hash: &str,
+            rule_hash: &str,
+            parallel: bool,
+        ) -> Vec<Diagnostic> {
+            let cache = CacheAnalysisCache::new(cache.clone());
+            crate::ts::analyze_with_options(db, cache.as_ref(), config_hash, rule_hash, parallel)
+        }
     }
     #[doc(hidden)]
     pub mod keys {

@@ -1,17 +1,17 @@
 #![allow(dead_code, reason = "kept for private internal consumers")]
 
-use crate::analysis::ids::{TsBindingId, TsScopeId};
-use crate::core::{FileId, StableKeyId, StableKeyInterner};
-use crate::ts::scope::facts::{TsBindingFact, TsBindingKind, TsScopeFact};
+use crate::ids::{TsBindingId, TsScopeId};
+use crate::scope::facts::{TsBindingFact, TsBindingKind, TsScopeFact};
+use polint_core::{FileId, StableKeyId, StableKeyInterner};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct TsScopeOutput {
-    pub(crate) scopes: Vec<TsScopeFact>,
-    pub(crate) bindings: Vec<TsBindingFact>,
+pub struct TsScopeOutput {
+    pub scopes: Vec<TsScopeFact>,
+    pub bindings: Vec<TsBindingFact>,
 }
 
 impl TsScopeOutput {
-    pub(crate) fn normalized(mut self, interner: &StableKeyInterner) -> Self {
+    pub fn normalized(mut self, interner: &StableKeyInterner) -> Self {
         self.scopes.sort_by_cached_key(|scope| {
             (
                 interner.resolve(scope.stable_key),
@@ -39,7 +39,7 @@ impl TsScopeOutput {
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct TsScopeStore {
+pub struct TsScopeStore {
     output: TsScopeOutput,
     scopes_by_file: std::collections::BTreeMap<FileId, Vec<usize>>,
     scopes_by_stable_key: std::collections::BTreeMap<StableKeyId, usize>,
@@ -52,7 +52,7 @@ pub(crate) struct TsScopeStore {
 }
 
 impl TsScopeStore {
-    pub(crate) fn from_output(output: TsScopeOutput, interner: &StableKeyInterner) -> Self {
+    pub fn from_output(output: TsScopeOutput, interner: &StableKeyInterner) -> Self {
         let output = output.normalized(interner);
         let mut store = Self {
             output,
@@ -109,33 +109,33 @@ impl TsScopeStore {
         store
     }
 
-    pub(crate) fn scopes(&self) -> &[TsScopeFact] {
+    pub fn scopes(&self) -> &[TsScopeFact] {
         &self.output.scopes
     }
 
-    pub(crate) fn bindings(&self) -> &[TsBindingFact] {
+    pub fn bindings(&self) -> &[TsBindingFact] {
         &self.output.bindings
     }
 
-    pub(crate) fn scopes_for_file(&self, file: FileId) -> Vec<&TsScopeFact> {
+    pub fn scopes_for_file(&self, file: FileId) -> Vec<&TsScopeFact> {
         self.scope_refs(self.scopes_by_file.get(&file))
     }
 
-    pub(crate) fn bindings_for_file(&self, file: FileId) -> Vec<&TsBindingFact> {
+    pub fn bindings_for_file(&self, file: FileId) -> Vec<&TsBindingFact> {
         self.binding_refs(self.bindings_by_file.get(&file))
     }
 
-    pub(crate) fn scope_by_stable_key(&self, stable_key: StableKeyId) -> Option<&TsScopeFact> {
+    pub fn scope_by_stable_key(&self, stable_key: StableKeyId) -> Option<&TsScopeFact> {
         self.scopes_by_stable_key
             .get(&stable_key)
             .map(|index| &self.output.scopes[*index])
     }
 
-    pub(crate) fn bindings_by_name(&self, name: &str) -> Vec<&TsBindingFact> {
+    pub fn bindings_by_name(&self, name: &str) -> Vec<&TsBindingFact> {
         self.binding_refs(self.bindings_by_name.get(name))
     }
 
-    pub(crate) fn lookup_binding_in_scope(
+    pub fn lookup_binding_in_scope(
         &self,
         scope_key: StableKeyId,
         name: &str,
@@ -146,22 +146,18 @@ impl TsScopeStore {
         )
     }
 
-    pub(crate) fn bindings_by_kind(&self, kind: TsBindingKind) -> Vec<&TsBindingFact> {
+    pub fn bindings_by_kind(&self, kind: TsBindingKind) -> Vec<&TsBindingFact> {
         self.binding_refs(self.bindings_by_kind.get(&kind))
     }
 
-    pub(crate) fn import_aliases(
-        &self,
-        module_source: &str,
-        imported_name: &str,
-    ) -> Vec<&TsBindingFact> {
+    pub fn import_aliases(&self, module_source: &str, imported_name: &str) -> Vec<&TsBindingFact> {
         self.binding_refs(
             self.imports_by_module_imported
                 .get(&(module_source.to_string(), imported_name.to_string())),
         )
     }
 
-    pub(crate) fn exports_by_name(&self, exported_name: &str) -> Vec<&TsBindingFact> {
+    pub fn exports_by_name(&self, exported_name: &str) -> Vec<&TsBindingFact> {
         self.binding_refs(self.exports_by_name.get(exported_name))
     }
 
@@ -186,10 +182,10 @@ impl TsScopeStore {
 
 #[cfg(test)]
 mod tests {
-    use crate::core::{FileId, Span};
-    use crate::ts::scope::facts::{
+    use crate::scope::facts::{
         TsBindingStatus, TsDeclarationKind, TsImportExportKind, TsScopeKind,
     };
+    use polint_core::{FileId, Span};
 
     use super::*;
 

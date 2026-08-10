@@ -2,27 +2,29 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::analysis::error::AnalysisError;
-use crate::core::{FileId, StableKeyId, StableKeyInterner};
-use crate::ts::object_model::facts::{
+use crate::error::AnalysisError;
+use crate::object_model::facts::{
     TsObjectAllocationFact, TsObjectAllocationId, TsPropertyReadFact, TsPropertyReadId,
     TsPropertyWriteFact, TsPropertyWriteId, TsPrototypeLinkFact, TsPrototypeLinkId,
     TsReceiverBindingFact, TsReceiverBindingId,
 };
+use polint_analysis_api::{FactFamily, FactStore};
+use polint_core::{FileId, StableKeyId, StableKeyInterner};
+use std::any::Any;
 
-pub(crate) const TS_OBJECT_MODEL_PROVIDER_ID: &str = "polint.ts.object_model";
+pub const TS_OBJECT_MODEL_PROVIDER_ID: &str = "polint.ts.object_model";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct TsObjectModelOutput {
-    pub(crate) allocations: Vec<TsObjectAllocationFact>,
-    pub(crate) property_writes: Vec<TsPropertyWriteFact>,
-    pub(crate) property_reads: Vec<TsPropertyReadFact>,
-    pub(crate) receiver_bindings: Vec<TsReceiverBindingFact>,
-    pub(crate) prototype_links: Vec<TsPrototypeLinkFact>,
+pub struct TsObjectModelOutput {
+    pub allocations: Vec<TsObjectAllocationFact>,
+    pub property_writes: Vec<TsPropertyWriteFact>,
+    pub property_reads: Vec<TsPropertyReadFact>,
+    pub receiver_bindings: Vec<TsReceiverBindingFact>,
+    pub prototype_links: Vec<TsPrototypeLinkFact>,
 }
 
 impl TsObjectModelOutput {
-    pub(crate) fn normalized(mut self, interner: &StableKeyInterner) -> Self {
+    pub fn normalized(mut self, interner: &StableKeyInterner) -> Self {
         normalize_rows(&mut self.allocations, |allocation| {
             (
                 interner.resolve(allocation.stable_key),
@@ -88,7 +90,7 @@ fn normalize_rows<T>(rows: &mut Vec<T>, key: impl Fn(&T) -> (std::sync::Arc<str>
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct TsObjectModelStore {
+pub struct TsObjectModelStore {
     output: TsObjectModelOutput,
     allocations_by_file: BTreeMap<FileId, Vec<usize>>,
     allocations_by_stable_key: BTreeMap<StableKeyId, usize>,
@@ -100,7 +102,7 @@ pub(crate) struct TsObjectModelStore {
 }
 
 impl TsObjectModelStore {
-    pub(crate) fn from_output(output: TsObjectModelOutput, interner: &StableKeyInterner) -> Self {
+    pub fn from_output(output: TsObjectModelOutput, interner: &StableKeyInterner) -> Self {
         let output = output.normalized(interner);
         let mut store = Self {
             output,
@@ -160,7 +162,7 @@ impl TsObjectModelStore {
         store
     }
 
-    pub(crate) fn try_from_output(
+    pub fn try_from_output(
         output: TsObjectModelOutput,
         interner: &StableKeyInterner,
     ) -> Result<Self, AnalysisError> {
@@ -199,31 +201,31 @@ impl TsObjectModelStore {
         Ok(Self::from_output(output, interner))
     }
 
-    pub(crate) fn allocations(&self) -> &[TsObjectAllocationFact] {
+    pub fn allocations(&self) -> &[TsObjectAllocationFact] {
         &self.output.allocations
     }
 
-    pub(crate) fn property_writes(&self) -> &[TsPropertyWriteFact] {
+    pub fn property_writes(&self) -> &[TsPropertyWriteFact] {
         &self.output.property_writes
     }
 
-    pub(crate) fn property_reads(&self) -> &[TsPropertyReadFact] {
+    pub fn property_reads(&self) -> &[TsPropertyReadFact] {
         &self.output.property_reads
     }
 
-    pub(crate) fn receiver_bindings(&self) -> &[TsReceiverBindingFact] {
+    pub fn receiver_bindings(&self) -> &[TsReceiverBindingFact] {
         &self.output.receiver_bindings
     }
 
-    pub(crate) fn prototype_links(&self) -> &[TsPrototypeLinkFact] {
+    pub fn prototype_links(&self) -> &[TsPrototypeLinkFact] {
         &self.output.prototype_links
     }
 
-    pub(crate) fn allocations_for_file(&self, file: FileId) -> Vec<&TsObjectAllocationFact> {
+    pub fn allocations_for_file(&self, file: FileId) -> Vec<&TsObjectAllocationFact> {
         self.allocation_refs(self.allocations_by_file.get(&file))
     }
 
-    pub(crate) fn allocation_by_stable_key(
+    pub fn allocation_by_stable_key(
         &self,
         stable_key: StableKeyId,
     ) -> Option<&TsObjectAllocationFact> {
@@ -232,35 +234,35 @@ impl TsObjectModelStore {
             .map(|index| &self.output.allocations[*index])
     }
 
-    pub(crate) fn property_writes_for_base(
+    pub fn property_writes_for_base(
         &self,
         base_object_stable_key: StableKeyId,
     ) -> Vec<&TsPropertyWriteFact> {
         self.write_refs(self.property_writes_by_base.get(&base_object_stable_key))
     }
 
-    pub(crate) fn property_reads_for_base(
+    pub fn property_reads_for_base(
         &self,
         base_object_stable_key: StableKeyId,
     ) -> Vec<&TsPropertyReadFact> {
         self.read_refs(self.property_reads_by_base.get(&base_object_stable_key))
     }
 
-    pub(crate) fn receiver_bindings_for_callsite(
+    pub fn receiver_bindings_for_callsite(
         &self,
         callsite_stable_key: StableKeyId,
     ) -> Vec<&TsReceiverBindingFact> {
         self.receiver_refs(self.receiver_bindings_by_callsite.get(&callsite_stable_key))
     }
 
-    pub(crate) fn prototype_links_for_object(
+    pub fn prototype_links_for_object(
         &self,
         object_stable_key: StableKeyId,
     ) -> Vec<&TsPrototypeLinkFact> {
         self.prototype_refs(self.prototype_links_by_object.get(&object_stable_key))
     }
 
-    pub(crate) fn prototype_links_for_prototype(
+    pub fn prototype_links_for_prototype(
         &self,
         prototype_stable_key: StableKeyId,
     ) -> Vec<&TsPrototypeLinkFact> {
@@ -333,12 +335,37 @@ fn validate_unique_stable_keys(
     Ok(())
 }
 
+/// Registry key used for [`TsObjectModelStore`] in the host fact-store map.
+pub const TS_OBJECT_MODEL_STORE_FAMILY: FactFamily = FactFamily::TsObjectModel;
+
+impl FactStore for TsObjectModelStore {
+    fn family(&self) -> FactFamily {
+        FactFamily::TsObjectModel
+    }
+
+    fn clear(&mut self) {
+        *self = TsObjectModelStore::default();
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn clone_box(&self) -> Box<dyn FactStore> {
+        Box::new(self.clone())
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::core::{FileId, Span};
-    use crate::ts::object_model::facts::{
+    use crate::object_model::facts::{
         TsObjectAllocationKind, TsObjectModelStatus, TsPropertyKey, TsPropertyKeyKind,
     };
+    use polint_core::{FileId, Span};
 
     use super::*;
 
@@ -461,7 +488,7 @@ mod tests {
 
         assert_eq!(
             error.to_string(),
-            "invalid semantic fact from `polint.ts.object_model`: duplicate object allocation stable key `object:a`"
+            "invalid fact from `polint.ts.object_model`: duplicate object allocation stable key `object:a`"
         );
     }
 

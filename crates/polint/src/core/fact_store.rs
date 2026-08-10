@@ -36,8 +36,7 @@ use crate::analysis::values::store::ValueStore;
 use crate::analysis_kernel::FactFamily;
 use crate::core::facts::{
     ComplexityMetricFact, CoverageFact, DefinitionFact, FileMetricFact, FunctionMetricFact,
-    JsxAttributeFact, ModuleEdge, ModuleNode, ReferenceFact, ResolvedImportFact, StringLiteralFact,
-    SymbolFact, TsClassFact, TsComponentFact,
+    ModuleEdge, ModuleNode, ReferenceFact, ResolvedImportFact, SymbolFact,
 };
 use crate::core::ids::{FileId, SymbolId};
 use crate::module_graph::topology::{
@@ -50,90 +49,12 @@ use crate::symbol_graph::semantic::{
     ResolutionFact, ResolutionId, ScopeFact, ScopeId, SemanticImportFact, SemanticImportId,
     StableExportId, StableExportIdentity,
 };
-use crate::ts::object_model::store::TsObjectModelStore;
+pub(crate) use crate::ts::object_model::store::TS_OBJECT_MODEL_STORE_FAMILY;
 pub(crate) use polint_go::semantic::store::GO_SEMANTIC_STORE_FAMILY;
 pub(crate) use polint_go::{GO_SYNTAX_STORE_FAMILY, GoSyntaxStore};
+pub(crate) use polint_ts::{TS_SYNTAX_STORE_FAMILY, TsSyntaxStore};
 
 pub(crate) use polint_analysis_api::{FactStore, FactStoreEntry};
-
-/// TS/JSX syntax facts produced by `polint.ts.syntax`.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct TsSyntaxStore {
-    pub(crate) ts_components: Vec<TsComponentFact>,
-    pub(crate) ts_classes: Vec<TsClassFact>,
-    pub(crate) string_literals: Vec<StringLiteralFact>,
-    pub(crate) jsx_attributes: Vec<JsxAttributeFact>,
-}
-
-impl TsSyntaxStore {
-    pub(crate) fn ts_components(&self) -> &[TsComponentFact] {
-        &self.ts_components
-    }
-
-    pub(crate) fn ts_classes(&self) -> &[TsClassFact] {
-        &self.ts_classes
-    }
-
-    pub(crate) fn string_literals(&self) -> &[StringLiteralFact] {
-        &self.string_literals
-    }
-
-    pub(crate) fn jsx_attributes(&self) -> &[JsxAttributeFact] {
-        &self.jsx_attributes
-    }
-
-    pub(crate) fn push_ts_component(&mut self, fact: TsComponentFact) -> u64 {
-        let run_id = self.ts_components.len() as u64;
-        self.ts_components.push(fact);
-        run_id
-    }
-
-    pub(crate) fn push_ts_class(&mut self, fact: TsClassFact) -> u64 {
-        let run_id = self.ts_classes.len() as u64;
-        self.ts_classes.push(fact);
-        run_id
-    }
-
-    pub(crate) fn push_string_literal(&mut self, fact: StringLiteralFact) -> u64 {
-        let run_id = self.string_literals.len() as u64;
-        self.string_literals.push(fact);
-        run_id
-    }
-
-    pub(crate) fn push_jsx_attribute(&mut self, fact: JsxAttributeFact) -> u64 {
-        let run_id = self.jsx_attributes.len() as u64;
-        self.jsx_attributes.push(fact);
-        run_id
-    }
-}
-
-impl FactStore for TsSyntaxStore {
-    fn family(&self) -> FactFamily {
-        FactFamily::TsComponent
-    }
-
-    fn clear(&mut self) {
-        self.ts_components.clear();
-        self.ts_classes.clear();
-        self.string_literals.clear();
-        self.jsx_attributes.clear();
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-
-    fn clone_box(&self) -> Box<dyn FactStore> {
-        Box::new(self.clone())
-    }
-}
-
-/// Registry key used for [`TsSyntaxStore`] in `AnalysisDb::fact_stores`.
-pub(crate) const TS_SYNTAX_STORE_FAMILY: FactFamily = FactFamily::TsComponent;
 
 /// CFG facts produced by `polint.cfg`.
 #[derive(Debug, Clone, Default)]
@@ -748,31 +669,6 @@ impl FactStore for MetricsStore {
 
 /// Registry key used for [`MetricsStore`] in `AnalysisDb::fact_stores`.
 pub(crate) const METRICS_STORE_FAMILY: FactFamily = FactFamily::FileMetric;
-
-impl FactStore for TsObjectModelStore {
-    fn family(&self) -> FactFamily {
-        FactFamily::TsObjectModel
-    }
-
-    fn clear(&mut self) {
-        *self = TsObjectModelStore::default();
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-
-    fn clone_box(&self) -> Box<dyn FactStore> {
-        Box::new(self.clone())
-    }
-}
-
-/// Registry key used for [`TsObjectModelStore`] in `AnalysisDb::fact_stores`.
-pub(crate) const TS_OBJECT_MODEL_STORE_FAMILY: FactFamily = FactFamily::TsObjectModel;
 
 impl FactStore for IdentityStore {
     fn family(&self) -> FactFamily {

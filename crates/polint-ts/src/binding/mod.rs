@@ -1,23 +1,23 @@
-pub(crate) mod direct;
-pub(crate) mod facts;
-pub(crate) mod store;
+pub mod direct;
+pub mod facts;
+pub mod store;
 
 #[cfg(test)]
 mod direct_local {
     use std::path::PathBuf;
 
-    use crate::core::AnalysisDb;
-    use crate::ts::binding::direct::resolve_direct_bindings;
-    use crate::ts::binding::facts::{
+    use crate::binding::direct::resolve_direct_bindings;
+    use crate::binding::facts::{
         TsDirectBindingFact, TsDirectBindingReason, TsDirectBindingStatus,
     };
-    use crate::ts::inventory::extract::extract_ts_inventory;
-    use crate::ts::inventory::store::TsInventoryOutput;
-    use crate::ts::scope::extract::extract_ts_scope;
+    use crate::inventory::extract::extract_ts_inventory;
+    use crate::inventory::store::TsInventoryOutput;
+    use crate::local_db::LocalFactDb;
+    use crate::scope::extract::extract_ts_scope;
 
     #[test]
     fn resolves_same_file_function_alias_and_static_member_calls() {
-        let interner = crate::core::StableKeyInterner::default();
+        let interner = polint_core::StableKeyInterner::default();
         let file = fixture_file(
             r#"
 function f() {}
@@ -61,7 +61,7 @@ function run() {
 
     #[test]
     fn arbitrary_static_member_does_not_bind_to_same_named_function() {
-        let interner = crate::core::StableKeyInterner::default();
+        let interner = polint_core::StableKeyInterner::default();
         let file = fixture_file(
             r#"
 function f() {}
@@ -82,7 +82,7 @@ function run(obj) {
 
     #[test]
     fn block_scoped_alias_does_not_escape_into_other_function() {
-        let interner = crate::core::StableKeyInterner::default();
+        let interner = polint_core::StableKeyInterner::default();
         let file = fixture_file(
             r#"
 function target() {}
@@ -106,7 +106,7 @@ function run() {
 
     #[test]
     fn non_function_local_alias_blocks_outer_function_resolution() {
-        let interner = crate::core::StableKeyInterner::default();
+        let interner = polint_core::StableKeyInterner::default();
         let file = fixture_file(
             r#"
 function target() {}
@@ -128,7 +128,7 @@ function run() {
 
     #[test]
     fn alias_target_resolution_respects_shadowing_scope() {
-        let interner = crate::core::StableKeyInterner::default();
+        let interner = polint_core::StableKeyInterner::default();
         let file = fixture_file(
             r#"
 function f() {}
@@ -150,7 +150,7 @@ function run(f) {
 
     #[test]
     fn parameter_callback_boundary_is_scope_aware() {
-        let interner = crate::core::StableKeyInterner::default();
+        let interner = polint_core::StableKeyInterner::default();
         let file = fixture_file(
             r#"
 function cb() {}
@@ -181,7 +181,7 @@ function invoke(cb) {
 
     #[test]
     fn local_function_expression_binding_resolves_by_lexical_binding() {
-        let interner = crate::core::StableKeyInterner::default();
+        let interner = polint_core::StableKeyInterner::default();
         let file = fixture_file(
             r#"
 const f = function() {};
@@ -202,7 +202,7 @@ function run() {
 
     #[test]
     fn resolves_object_literal_destructuring_alias_call() {
-        let interner = crate::core::StableKeyInterner::default();
+        let interner = polint_core::StableKeyInterner::default();
         let file = fixture_file(
             r#"
 function localTarget() {}
@@ -233,7 +233,7 @@ function run() {
 
     #[test]
     fn computed_property_and_parameter_callback_remain_unresolved() {
-        let interner = crate::core::StableKeyInterner::default();
+        let interner = polint_core::StableKeyInterner::default();
         let file = fixture_file(
             r#"
 function run(cb, obj, key) {
@@ -258,8 +258,8 @@ function run(cb, obj, key) {
         assert!(reasons.contains(&TsDirectBindingReason::TokenFlowRequired));
     }
 
-    fn fixture_file(source: &str) -> &'static crate::core::SourceFile {
-        let mut db = Box::new(AnalysisDb::new());
+    fn fixture_file(source: &str) -> &'static polint_analysis_api::SourceFile {
+        let mut db = Box::new(LocalFactDb::new());
         let file_id = db.add_file(
             PathBuf::from("src/direct.ts"),
             "src/direct.ts".to_string(),
@@ -270,7 +270,7 @@ function run(cb, obj, key) {
     }
 
     fn binding_for_display<'a>(
-        output: &'a crate::ts::binding::store::TsDirectBindingOutput,
+        output: &'a crate::binding::store::TsDirectBindingOutput,
         inventory: &TsInventoryOutput,
         display_name: &str,
     ) -> &'a TsDirectBindingFact {
@@ -287,7 +287,7 @@ function run(cb, obj, key) {
     }
 
     fn bindings_for_display<'a>(
-        output: &'a crate::ts::binding::store::TsDirectBindingOutput,
+        output: &'a crate::binding::store::TsDirectBindingOutput,
         inventory: &TsInventoryOutput,
         display_name: &str,
     ) -> Vec<&'a TsDirectBindingFact> {
@@ -309,26 +309,28 @@ function run(cb, obj, key) {
 mod direct_modules {
     use std::path::PathBuf;
 
-    use crate::core::{
-        AnalysisDb, FileId, ImportFact, ImportId, Language, ModuleNode, ModuleNodeId,
-        ModuleNodeKind, ResolutionPrecision, ResolutionStatus, ResolvedImportFact, Span,
-    };
-    use crate::ts::binding::direct::{
+    use crate::binding::direct::{
         TsDirectBindingModuleFile, TsDirectBindingModuleInput, resolve_direct_bindings_with_modules,
     };
-    use crate::ts::binding::facts::{
+    use crate::binding::facts::{
         TsDirectBindingKind, TsDirectBindingReason, TsDirectBindingStatus,
     };
-    use crate::ts::binding::store::TsDirectBindingOutput;
-    use crate::ts::inventory::extract::extract_ts_inventory;
-    use crate::ts::inventory::store::TsInventoryOutput;
-    use crate::ts::scope::extract::extract_ts_scope;
-    use crate::ts::scope::store::TsScopeOutput;
+    use crate::binding::store::TsDirectBindingOutput;
+    use crate::inventory::extract::extract_ts_inventory;
+    use crate::inventory::store::TsInventoryOutput;
+    use crate::local_db::LocalFactDb;
+    use crate::scope::extract::extract_ts_scope;
+    use crate::scope::store::TsScopeOutput;
+    use polint_analysis_api::{
+        ImportFact, ModuleNode, ModuleNodeKind, ResolutionPrecision, ResolutionStatus,
+        ResolvedImportFact,
+    };
+    use polint_core::{FileId, ImportId, Language, ModuleNodeId, Span};
 
     #[test]
     fn resolves_esm_reexports_commonjs_and_path_aliases_from_module_graph_facts() {
-        let interner = crate::core::StableKeyInterner::default();
-        let mut db = Box::new(AnalysisDb::new());
+        let interner = polint_core::StableKeyInterner::default();
+        let mut db = Box::new(LocalFactDb::new());
         let app_file = db.add_file(
             PathBuf::from("src/app.ts"),
             "src/app.ts".to_string(),
@@ -537,8 +539,8 @@ function run() {
 
     #[test]
     fn local_parameter_shadowing_import_requires_token_flow() {
-        let interner = crate::core::StableKeyInterner::default();
-        let mut db = Box::new(AnalysisDb::new());
+        let interner = polint_core::StableKeyInterner::default();
+        let mut db = Box::new(LocalFactDb::new());
         let app_file = db.add_file(
             PathBuf::from("src/app.ts"),
             "src/app.ts".to_string(),
@@ -602,8 +604,8 @@ function run(f) {
 
     #[test]
     fn module_imports_resolve_only_explicit_exports_and_local_export_aliases() {
-        let interner = crate::core::StableKeyInterner::default();
-        let mut db = Box::new(AnalysisDb::new());
+        let interner = polint_core::StableKeyInterner::default();
+        let mut db = Box::new(LocalFactDb::new());
         let app_file = db.add_file(
             PathBuf::from("src/app.ts"),
             "src/app.ts".to_string(),
@@ -681,8 +683,8 @@ export { real as g };
 
     #[test]
     fn local_export_alias_does_not_resolve_non_visible_nested_function() {
-        let interner = crate::core::StableKeyInterner::default();
-        let mut db = Box::new(AnalysisDb::new());
+        let interner = polint_core::StableKeyInterner::default();
+        let mut db = Box::new(LocalFactDb::new());
         let app_file = db.add_file(
             PathBuf::from("src/app.ts"),
             "src/app.ts".to_string(),
@@ -798,7 +800,7 @@ export { hidden as g };
         status: ResolutionStatus,
     ) -> ResolvedImportFact {
         ResolvedImportFact {
-            id: crate::core::ResolvedImportId(id),
+            id: polint_core::ResolvedImportId(id),
             import: ImportId(import),
             from_file,
             target_node,

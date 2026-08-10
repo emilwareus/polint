@@ -1,20 +1,20 @@
 use super::StableKeyId;
 use super::ids::{
-    DefinitionId, FileId, FunctionId, ImportId, ModuleEdgeId, ModuleNodeId, PackageId, ReferenceId,
-    ResolvedImportId, SymbolId,
+    DefinitionId, FileId, FunctionId, ModuleNodeId, PackageId, ReferenceId, SymbolId,
 };
 use super::lang::Language;
 use super::span::Span;
 use serde::{Deserialize, Serialize};
 
 pub use polint_analysis_api::{
-    BranchObligation, CoverageFact, FunctionFact, ImportFact, JsxAttributeFact, PackageFact,
-    SourceFile, StringLiteralFact, TestFact, TsClassFact, TsComponentFact,
+    BranchObligation, CoverageFact, FunctionFact, ImportFact, JsxAttributeFact, ModuleEdge,
+    ModuleEdgeKind, ModuleNode, ModuleNodeKind, PackageFact, ResolutionPrecision, ResolutionStatus,
+    ResolvedImportFact, SourceFile, StringLiteralFact, TestFact, TsClassFact, TsComponentFact,
+    UnresolvedReason,
 };
-pub(crate) use polint_analysis_api::{
-    CachedFileAnalysis, CachedFileFacts, TS_JS_MODULE_FUNCTION_NAME,
-    is_synthetic_ts_js_module_function,
-};
+#[cfg(test)]
+pub(crate) use polint_analysis_api::{CachedFileAnalysis, TS_JS_MODULE_FUNCTION_NAME};
+pub(crate) use polint_analysis_api::{CachedFileFacts, is_synthetic_ts_js_module_function};
 
 /// Source-file size and aggregate function metrics derived from parsed facts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,94 +51,6 @@ pub struct ComplexityMetricFact {
     pub span: Span,
     pub language: Language,
     pub cyclomatic_complexity: u32,
-}
-
-/// File, package, module, or external target participating in the module graph.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct ModuleNode {
-    pub id: ModuleNodeId,
-    pub kind: ModuleNodeKind,
-    pub label: String,
-    pub file: Option<FileId>,
-    pub package: Option<PackageId>,
-    pub language: Option<Language>,
-}
-
-/// Relationship edge between two module graph nodes.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct ModuleEdge {
-    pub id: ModuleEdgeId,
-    pub from: ModuleNodeId,
-    pub to: ModuleNodeId,
-    pub import: Option<ImportId>,
-    pub resolved_import: Option<ResolvedImportId>,
-    pub kind: ModuleEdgeKind,
-    pub status: ResolutionStatus,
-}
-
-/// Setup-aware resolution result for one syntactic import fact.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct ResolvedImportFact {
-    pub id: ResolvedImportId,
-    pub import: ImportId,
-    pub from_file: FileId,
-    pub target_node: Option<ModuleNodeId>,
-    pub status: ResolutionStatus,
-    pub precision: ResolutionPrecision,
-    pub reason: Option<UnresolvedReason>,
-}
-
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ModuleNodeKind {
-    File,
-    Package,
-    Module,
-    External,
-}
-
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ModuleEdgeKind {
-    Contains,
-    Imports,
-    DependsOn,
-}
-
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ResolutionStatus {
-    Resolved,
-    External,
-    Unresolved,
-    SetupMissing,
-    Dynamic,
-    Unsupported,
-}
-
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ResolutionPrecision {
-    ExactFile,
-    Package,
-    ExternalPackage,
-    Heuristic,
-    None,
-}
-
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum UnresolvedReason {
-    NotFound,
-    SetupMissing,
-    DynamicExpression,
-    UnsupportedLanguage,
-    UnsupportedImport,
-    ResolverError,
-    OutsideWorkspace,
 }
 
 #[non_exhaustive]

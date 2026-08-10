@@ -6,6 +6,7 @@ mod cache_api;
 mod digest;
 mod fact_store;
 mod metadata;
+mod module_facts;
 mod provider;
 mod source_file;
 mod syntax_facts;
@@ -21,6 +22,10 @@ pub use metadata::{
     FactConfidence, FactFamily, FactMeta, FactMetaInsert, FactMetaStore, FactPrecision, FactRef,
     MissingFactMeta, StableKeyConflict, StableKeyOwner, ValidationStatus, stable_key_from_parts,
     stable_key_text_from_parts,
+};
+pub use module_facts::{
+    ModuleEdge, ModuleEdgeKind, ModuleNode, ModuleNodeKind, ResolutionPrecision, ResolutionStatus,
+    ResolvedImportFact, UnresolvedReason,
 };
 pub use provider::{
     CachePolicy, FactDatabase, HostAttachment, NullHostAttachment, PrecisionCeiling, Provider,

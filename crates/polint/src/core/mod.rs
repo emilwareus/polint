@@ -65,6 +65,7 @@ pub(crate) mod rule;
 mod span;
 mod stable_key;
 
+pub(crate) use facts::is_synthetic_ts_js_module_function;
 pub use facts::{
     BranchObligation, ComplexityMetricFact, CoverageFact, DefinitionFact, DefinitionKind,
     FileMetricFact, FunctionFact, FunctionMetricFact, ImportFact, JsxAttributeFact, ModuleEdge,
@@ -73,10 +74,8 @@ pub use facts::{
     SymbolFact, SymbolKind, SymbolNamespace, SymbolPrecision, SymbolResolutionStatus, TestFact,
     TsClassFact, TsComponentFact, UnresolvedReason,
 };
-pub(crate) use facts::{
-    CachedFileAnalysis, CachedFileFacts, TS_JS_MODULE_FUNCTION_NAME,
-    is_synthetic_ts_js_module_function,
-};
+#[cfg(test)]
+pub(crate) use facts::{CachedFileAnalysis, CachedFileFacts, TS_JS_MODULE_FUNCTION_NAME};
 pub use ids::{
     BranchId, DefinitionId, FileId, FunctionId, ImportId, ModuleEdgeId, ModuleNodeId, NodeId,
     PackageId, ReferenceId, ResolvedImportId, RuleId, SymbolId,

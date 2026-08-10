@@ -2833,8 +2833,8 @@ function run() {
             reason: TsDirectBindingReason,
         ) -> TsDirectBindingFact {
             TsDirectBindingFact {
-                id: crate::analysis::ids::TsDirectBindingId(0),
-                callsite: crate::analysis::ids::TsInventoryCallsiteId(1),
+                id: crate::ts::ids::TsDirectBindingId(0),
+                callsite: crate::ts::ids::TsInventoryCallsiteId(1),
                 callsite_stable_key: interner.intern(format!("callsite:{}", reason.as_str())),
                 target_function: None,
                 target_function_stable_key: None,

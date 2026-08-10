@@ -2,21 +2,21 @@
 
 use std::collections::BTreeMap;
 
-use crate::analysis::ids::{TsInventoryCallsiteId, TsInventoryFunctionId};
-use crate::core::{FileId, StableKeyId, StableKeyInterner};
-use crate::ts::inventory::facts::{
+use crate::ids::{TsInventoryCallsiteId, TsInventoryFunctionId};
+use crate::inventory::facts::{
     TsCallsiteInventoryKind, TsFunctionInventoryKind, TsInventoryCallsiteFact,
     TsInventoryFunctionFact,
 };
+use polint_core::{FileId, StableKeyId, StableKeyInterner};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct TsInventoryOutput {
-    pub(crate) functions: Vec<TsInventoryFunctionFact>,
-    pub(crate) callsites: Vec<TsInventoryCallsiteFact>,
+pub struct TsInventoryOutput {
+    pub functions: Vec<TsInventoryFunctionFact>,
+    pub callsites: Vec<TsInventoryCallsiteFact>,
 }
 
 impl TsInventoryOutput {
-    pub(crate) fn normalized(mut self, interner: &StableKeyInterner) -> Self {
+    pub fn normalized(mut self, interner: &StableKeyInterner) -> Self {
         self.functions.sort_by_cached_key(|function| {
             (
                 interner.resolve(function.stable_key),
@@ -44,7 +44,7 @@ impl TsInventoryOutput {
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct TsInventoryStore {
+pub struct TsInventoryStore {
     output: TsInventoryOutput,
     functions_by_file: BTreeMap<FileId, Vec<usize>>,
     callsites_by_file: BTreeMap<FileId, Vec<usize>>,
@@ -55,7 +55,7 @@ pub(crate) struct TsInventoryStore {
 }
 
 impl TsInventoryStore {
-    pub(crate) fn from_output(output: TsInventoryOutput, interner: &StableKeyInterner) -> Self {
+    pub fn from_output(output: TsInventoryOutput, interner: &StableKeyInterner) -> Self {
         let output = output.normalized(interner);
         let mut store = Self {
             output,
@@ -97,23 +97,23 @@ impl TsInventoryStore {
         store
     }
 
-    pub(crate) fn functions(&self) -> &[TsInventoryFunctionFact] {
+    pub fn functions(&self) -> &[TsInventoryFunctionFact] {
         &self.output.functions
     }
 
-    pub(crate) fn callsites(&self) -> &[TsInventoryCallsiteFact] {
+    pub fn callsites(&self) -> &[TsInventoryCallsiteFact] {
         &self.output.callsites
     }
 
-    pub(crate) fn functions_for_file(&self, file: FileId) -> Vec<&TsInventoryFunctionFact> {
+    pub fn functions_for_file(&self, file: FileId) -> Vec<&TsInventoryFunctionFact> {
         self.function_refs(self.functions_by_file.get(&file))
     }
 
-    pub(crate) fn callsites_for_file(&self, file: FileId) -> Vec<&TsInventoryCallsiteFact> {
+    pub fn callsites_for_file(&self, file: FileId) -> Vec<&TsInventoryCallsiteFact> {
         self.callsite_refs(self.callsites_by_file.get(&file))
     }
 
-    pub(crate) fn function_by_stable_key(
+    pub fn function_by_stable_key(
         &self,
         stable_key: StableKeyId,
     ) -> Option<&TsInventoryFunctionFact> {
@@ -122,7 +122,7 @@ impl TsInventoryStore {
             .map(|index| &self.output.functions[*index])
     }
 
-    pub(crate) fn callsite_by_stable_key(
+    pub fn callsite_by_stable_key(
         &self,
         stable_key: StableKeyId,
     ) -> Option<&TsInventoryCallsiteFact> {
@@ -131,14 +131,14 @@ impl TsInventoryStore {
             .map(|index| &self.output.callsites[*index])
     }
 
-    pub(crate) fn functions_by_kind(
+    pub fn functions_by_kind(
         &self,
         kind: TsFunctionInventoryKind,
     ) -> Vec<&TsInventoryFunctionFact> {
         self.function_refs(self.functions_by_kind.get(&kind))
     }
 
-    pub(crate) fn callsites_by_kind(
+    pub fn callsites_by_kind(
         &self,
         kind: TsCallsiteInventoryKind,
     ) -> Vec<&TsInventoryCallsiteFact> {
@@ -166,12 +166,12 @@ impl TsInventoryStore {
 
 #[cfg(test)]
 mod tests {
-    use crate::analysis::ids::{TsInventoryCallsiteId, TsInventoryFunctionId};
-    use crate::core::{FileId, Span};
-    use crate::ts::inventory::facts::{
+    use crate::ids::{TsInventoryCallsiteId, TsInventoryFunctionId};
+    use crate::inventory::facts::{
         TsCallsiteInventoryKind, TsFunctionInventoryKind, TsInventoryCallsiteFact,
         TsInventoryFunctionFact, TsInventoryStatus,
     };
+    use polint_core::{FileId, Span};
 
     use super::*;
 

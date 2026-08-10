@@ -12,19 +12,20 @@ use oxc_ast::ast::{
 use oxc_semantic::{AstNodes, NodeId, Scoping, SemanticBuilder, SymbolId as OxcSymbolId};
 use oxc_span::GetSpan;
 
-use crate::core::{SourceFile, Span, StableKeyInterner, span_from_byte_range};
-use crate::ts::inventory::extract::extract_ts_inventory_from_program;
-use crate::ts::inventory::store::TsInventoryOutput;
-use crate::ts::object_model::facts::{
+use crate::inventory::extract::extract_ts_inventory_from_program;
+use crate::inventory::store::TsInventoryOutput;
+use crate::object_model::facts::{
     TsObjectAllocationFact, TsObjectAllocationId, TsObjectAllocationKind, TsObjectModelStatus,
     TsPropertyKey, TsPropertyKeyKind, TsPropertyReadFact, TsPropertyReadId, TsPropertyWriteFact,
     TsPropertyWriteId, TsPrototypeLinkFact, TsPrototypeLinkId, TsPrototypeLinkKind,
     TsReceiverBindingFact, TsReceiverBindingId, TsReceiverBindingKind,
 };
-use crate::ts::object_model::store::TsObjectModelOutput;
-use crate::ts::parse::{PARTIAL_AST_REASON, parse_ts_file};
+use crate::object_model::store::TsObjectModelOutput;
+use crate::parse::{PARTIAL_AST_REASON, parse_ts_file};
+use polint_analysis_api::SourceFile;
+use polint_core::{Span, StableKeyInterner, span_from_byte_range};
 
-pub(crate) fn extract_ts_object_model(
+pub fn extract_ts_object_model(
     interner: &StableKeyInterner,
     file: &SourceFile,
 ) -> TsObjectModelOutput {
@@ -60,7 +61,7 @@ pub(crate) fn extract_ts_object_model(
     output
 }
 
-pub(crate) fn mark_object_model_partial_ast(output: &mut TsObjectModelOutput) {
+pub fn mark_object_model_partial_ast(output: &mut TsObjectModelOutput) {
     let unsupported = TsObjectModelStatus::unsupported(PARTIAL_AST_REASON);
     for row in &mut output.allocations {
         if matches!(row.status, TsObjectModelStatus::Resolved) {
@@ -89,7 +90,7 @@ pub(crate) fn mark_object_model_partial_ast(output: &mut TsObjectModelOutput) {
     }
 }
 
-pub(crate) fn extract_ts_object_model_from_program(
+pub fn extract_ts_object_model_from_program(
     interner: &StableKeyInterner,
     file: &SourceFile,
     source: &str,
@@ -98,7 +99,7 @@ pub(crate) fn extract_ts_object_model_from_program(
     nodes: &AstNodes<'_>,
     inventory: &TsInventoryOutput,
 ) -> TsObjectModelOutput {
-    crate::ts::with_frontend_stable_keys(interner, || {
+    crate::with_frontend_stable_keys(interner, || {
         let mut extractor = ObjectModelExtractor::new(file, source, scoping, nodes, inventory);
         extractor.build()
     })
@@ -345,25 +346,23 @@ impl<'a> ObjectModelExtractor<'a> {
                         id: TsPropertyWriteId(0),
                         file: self.file.id,
                         span: span_from_oxc(self.file.id, self.source, property.span),
-                        stable_key: crate::ts::intern_frontend_stable_key(
-                            self.operation_stable_key(
-                                "ts_object_property_write",
-                                property.span,
-                                &base_stable_key,
-                                &property_key.stable_label(),
-                            ),
-                        ),
-                        base_object_stable_key: crate::ts::intern_frontend_stable_key(
+                        stable_key: crate::intern_frontend_stable_key(self.operation_stable_key(
+                            "ts_object_property_write",
+                            property.span,
+                            &base_stable_key,
+                            &property_key.stable_label(),
+                        )),
+                        base_object_stable_key: crate::intern_frontend_stable_key(
                             base_stable_key.clone(),
                         ),
                         property_key,
                         value_function: None,
                         value_function_stable_key: self
                             .object_property_function_key(property)
-                            .map(crate::ts::intern_frontend_stable_key),
+                            .map(crate::intern_frontend_stable_key),
                         value_object_stable_key: self
                             .object_key_for_expression(&property.value)
-                            .map(crate::ts::intern_frontend_stable_key),
+                            .map(crate::intern_frontend_stable_key),
                         status: TsObjectModelStatus::resolved(),
                     });
                 }
@@ -376,15 +375,13 @@ impl<'a> ObjectModelExtractor<'a> {
                         id: TsPropertyWriteId(0),
                         file: self.file.id,
                         span: span_from_oxc(self.file.id, self.source, spread.span),
-                        stable_key: crate::ts::intern_frontend_stable_key(
-                            self.operation_stable_key(
-                                "ts_object_property_write",
-                                spread.span,
-                                &base_stable_key,
-                                "computed_bucket",
-                            ),
-                        ),
-                        base_object_stable_key: crate::ts::intern_frontend_stable_key(
+                        stable_key: crate::intern_frontend_stable_key(self.operation_stable_key(
+                            "ts_object_property_write",
+                            spread.span,
+                            &base_stable_key,
+                            "computed_bucket",
+                        )),
+                        base_object_stable_key: crate::intern_frontend_stable_key(
                             base_stable_key.clone(),
                         ),
                         property_key,
@@ -392,7 +389,7 @@ impl<'a> ObjectModelExtractor<'a> {
                         value_function_stable_key: None,
                         value_object_stable_key: self
                             .object_key_for_expression(&spread.argument)
-                            .map(crate::ts::intern_frontend_stable_key),
+                            .map(crate::intern_frontend_stable_key),
                         status: TsObjectModelStatus::unknown("spread property"),
                     });
                 }
@@ -425,10 +422,10 @@ impl<'a> ObjectModelExtractor<'a> {
             id: TsObjectAllocationId(0),
             file: self.file.id,
             span: span_from_oxc(self.file.id, self.source, class.body.span),
-            stable_key: crate::ts::intern_frontend_stable_key(prototype_key.clone()),
+            stable_key: crate::intern_frontend_stable_key(prototype_key.clone()),
             lexical_parent_key: self
                 .lexical_parent_key(node_id)
-                .map(crate::ts::intern_frontend_stable_key),
+                .map(crate::intern_frontend_stable_key),
             inventory_function: None,
             inventory_function_stable_key: None,
             inventory_callsite: None,
@@ -440,15 +437,15 @@ impl<'a> ObjectModelExtractor<'a> {
             id: TsPrototypeLinkId(0),
             file: self.file.id,
             span: span_from_oxc(self.file.id, self.source, class.span),
-            stable_key: crate::ts::intern_frontend_stable_key(self.operation_stable_key(
+            stable_key: crate::intern_frontend_stable_key(self.operation_stable_key(
                 "ts_object_prototype_link",
                 class.span,
                 &class_key,
                 &prototype_key,
             )),
             kind: TsPrototypeLinkKind::ClassPrototype,
-            object_stable_key: crate::ts::intern_frontend_stable_key(class_key.clone()),
-            prototype_stable_key: crate::ts::intern_frontend_stable_key(prototype_key.clone()),
+            object_stable_key: crate::intern_frontend_stable_key(class_key.clone()),
+            prototype_stable_key: crate::intern_frontend_stable_key(prototype_key.clone()),
             property_key: None,
             status: TsObjectModelStatus::resolved(),
         });
@@ -463,15 +460,15 @@ impl<'a> ObjectModelExtractor<'a> {
                 id: TsPrototypeLinkId(0),
                 file: self.file.id,
                 span: span_from_oxc(self.file.id, self.source, super_class.span()),
-                stable_key: crate::ts::intern_frontend_stable_key(self.operation_stable_key(
+                stable_key: crate::intern_frontend_stable_key(self.operation_stable_key(
                     "ts_object_prototype_link",
                     super_class.span(),
                     &prototype_key,
                     &super_prototype,
                 )),
                 kind: TsPrototypeLinkKind::ClassExtends,
-                object_stable_key: crate::ts::intern_frontend_stable_key(prototype_key.clone()),
-                prototype_stable_key: crate::ts::intern_frontend_stable_key(super_prototype),
+                object_stable_key: crate::intern_frontend_stable_key(prototype_key.clone()),
+                prototype_stable_key: crate::intern_frontend_stable_key(super_prototype),
                 property_key: None,
                 status: TsObjectModelStatus::resolved(),
             });
@@ -502,18 +499,18 @@ impl<'a> ObjectModelExtractor<'a> {
             id: TsPropertyWriteId(0),
             file: self.file.id,
             span: span_from_oxc(self.file.id, self.source, method.span),
-            stable_key: crate::ts::intern_frontend_stable_key(self.operation_stable_key(
+            stable_key: crate::intern_frontend_stable_key(self.operation_stable_key(
                 "ts_object_property_write",
                 method.span,
                 &base_object_stable_key,
                 &property_key.stable_label(),
             )),
-            base_object_stable_key: crate::ts::intern_frontend_stable_key(base_object_stable_key),
+            base_object_stable_key: crate::intern_frontend_stable_key(base_object_stable_key),
             property_key,
             value_function: None,
             value_function_stable_key: self
                 .method_function_key(method)
-                .map(crate::ts::intern_frontend_stable_key),
+                .map(crate::intern_frontend_stable_key),
             value_object_stable_key: None,
             status: TsObjectModelStatus::resolved(),
         });
@@ -548,15 +545,15 @@ impl<'a> ObjectModelExtractor<'a> {
                 id: TsPrototypeLinkId(0),
                 file: self.file.id,
                 span: span_from_oxc(self.file.id, self.source, expression.span),
-                stable_key: crate::ts::intern_frontend_stable_key(self.operation_stable_key(
+                stable_key: crate::intern_frontend_stable_key(self.operation_stable_key(
                     "ts_object_prototype_link",
                     expression.span,
                     &instance_key,
                     &prototype_key,
                 )),
                 kind: TsPrototypeLinkKind::ConstructorPrototypeProperty,
-                object_stable_key: crate::ts::intern_frontend_stable_key(instance_key),
-                prototype_stable_key: crate::ts::intern_frontend_stable_key(prototype_key.clone()),
+                object_stable_key: crate::intern_frontend_stable_key(instance_key),
+                prototype_stable_key: crate::intern_frontend_stable_key(prototype_key.clone()),
                 property_key: None,
                 status: TsObjectModelStatus::resolved(),
             });
@@ -611,17 +608,17 @@ impl<'a> ObjectModelExtractor<'a> {
             id: TsPropertyReadId(0),
             file: self.file.id,
             span: span_from_oxc(self.file.id, self.source, span),
-            stable_key: crate::ts::intern_frontend_stable_key(self.operation_stable_key(
+            stable_key: crate::intern_frontend_stable_key(self.operation_stable_key(
                 "ts_object_property_read",
                 span,
                 &base_object_stable_key,
                 &property_key.stable_label(),
             )),
-            base_object_stable_key: crate::ts::intern_frontend_stable_key(base_object_stable_key),
+            base_object_stable_key: crate::intern_frontend_stable_key(base_object_stable_key),
             property_key,
             destination_stable_key: None,
             callsite: None,
-            callsite_stable_key: callsite_stable_key.map(crate::ts::intern_frontend_stable_key),
+            callsite_stable_key: callsite_stable_key.map(crate::intern_frontend_stable_key),
             status: TsObjectModelStatus::resolved(),
         }
     }
@@ -662,21 +659,21 @@ impl<'a> ObjectModelExtractor<'a> {
             id: TsPropertyWriteId(0),
             file: self.file.id,
             span: span_from_oxc(self.file.id, self.source, span),
-            stable_key: crate::ts::intern_frontend_stable_key(self.operation_stable_key(
+            stable_key: crate::intern_frontend_stable_key(self.operation_stable_key(
                 "ts_object_property_write",
                 span,
                 &base_object_stable_key,
                 &property_key.stable_label(),
             )),
-            base_object_stable_key: crate::ts::intern_frontend_stable_key(base_object_stable_key),
+            base_object_stable_key: crate::intern_frontend_stable_key(base_object_stable_key),
             property_key,
             value_function: None,
             value_function_stable_key: self
                 .value_function_key(right)
-                .map(crate::ts::intern_frontend_stable_key),
+                .map(crate::intern_frontend_stable_key),
             value_object_stable_key: self
                 .object_key_for_expression(right)
-                .map(crate::ts::intern_frontend_stable_key),
+                .map(crate::intern_frontend_stable_key),
             status: TsObjectModelStatus::resolved(),
         })
     }
@@ -729,7 +726,7 @@ impl<'a> ObjectModelExtractor<'a> {
             id: TsReceiverBindingId(0),
             file: self.file.id,
             span: span_from_oxc(self.file.id, self.source, span),
-            stable_key: crate::ts::intern_frontend_stable_key(
+            stable_key: crate::intern_frontend_stable_key(
                 self.operation_stable_key(
                     "ts_object_receiver_binding",
                     span,
@@ -741,14 +738,14 @@ impl<'a> ObjectModelExtractor<'a> {
             ),
             kind,
             callsite: None,
-            callsite_stable_key: callsite_stable_key.map(crate::ts::intern_frontend_stable_key),
+            callsite_stable_key: callsite_stable_key.map(crate::intern_frontend_stable_key),
             callee_function: None,
             callee_function_stable_key: callee_function_stable_key
-                .map(crate::ts::intern_frontend_stable_key),
+                .map(crate::intern_frontend_stable_key),
             receiver_object_stable_key: receiver_object_stable_key
-                .map(crate::ts::intern_frontend_stable_key),
+                .map(crate::intern_frontend_stable_key),
             receiver_place_stable_key: None,
-            lexical_parent_key: lexical_parent_key.map(crate::ts::intern_frontend_stable_key),
+            lexical_parent_key: lexical_parent_key.map(crate::intern_frontend_stable_key),
             status: TsObjectModelStatus::resolved(),
         }
     }
@@ -764,7 +761,7 @@ impl<'a> ObjectModelExtractor<'a> {
             id: TsObjectAllocationId(0),
             file: self.file.id,
             span: span_from_oxc(self.file.id, self.source, span),
-            stable_key: crate::ts::intern_frontend_stable_key(self.allocation_stable_key(
+            stable_key: crate::intern_frontend_stable_key(self.allocation_stable_key(
                 span,
                 kind,
                 self.lexical_parent_key(node_id).as_deref(),
@@ -772,7 +769,7 @@ impl<'a> ObjectModelExtractor<'a> {
             )),
             lexical_parent_key: self
                 .lexical_parent_key(node_id)
-                .map(crate::ts::intern_frontend_stable_key),
+                .map(crate::intern_frontend_stable_key),
             inventory_function: None,
             inventory_function_stable_key: None,
             inventory_callsite: None,
@@ -1071,20 +1068,20 @@ impl ObjectModelInventoryIndex {
         for function in &output.functions {
             index.function_key_by_span.insert(
                 (function.span.start_byte, function.span.end_byte),
-                crate::ts::resolve_frontend_stable_key(function.stable_key).to_string(),
+                crate::resolve_frontend_stable_key(function.stable_key).to_string(),
             );
             if let Some(name) = &function.display_name {
                 insert_unique(
                     &mut index.unique_function_key_by_name,
                     name.clone(),
-                    crate::ts::resolve_frontend_stable_key(function.stable_key).to_string(),
+                    crate::resolve_frontend_stable_key(function.stable_key).to_string(),
                 );
             }
         }
         for callsite in &output.callsites {
             index.callsite_key_by_span.insert(
                 (callsite.span.start_byte, callsite.span.end_byte),
-                crate::ts::resolve_frontend_stable_key(callsite.stable_key).to_string(),
+                crate::resolve_frontend_stable_key(callsite.stable_key).to_string(),
             );
         }
         index
@@ -1400,7 +1397,7 @@ fn length_prefixed(value: &str) -> String {
     format!("{}:{}", value.len(), value)
 }
 
-fn span_from_oxc(file: crate::core::FileId, source: &str, span: oxc_span::Span) -> Span {
+fn span_from_oxc(file: polint_core::FileId, source: &str, span: oxc_span::Span) -> Span {
     span_from_byte_range(file, source, span.start as usize, span.end as usize)
 }
 
@@ -1408,8 +1405,8 @@ fn span_from_oxc(file: crate::core::FileId, source: &str, span: oxc_span::Span) 
 mod tests {
     use std::path::PathBuf;
 
-    use crate::core::AnalysisDb;
-    use crate::ts::object_model::facts::{
+    use crate::local_db::LocalFactDb;
+    use crate::object_model::facts::{
         TsObjectAllocationKind, TsPropertyKeyKind, TsReceiverBindingKind,
     };
 
@@ -1698,7 +1695,7 @@ holder.methodTarget();
     }
 
     fn extract_with_interner(source: &str) -> (TsObjectModelOutput, StableKeyInterner) {
-        let mut db = AnalysisDb::new();
+        let mut db = LocalFactDb::new();
         let file_id = db.add_file(
             PathBuf::from("fixture.ts"),
             "fixture.ts".to_string(),

@@ -830,7 +830,16 @@ mod tests {
             "export function flow(x) { if (x) {} while (x) {} switch (x) { case true: break; } }"
                 .to_string(),
         );
-        assert!(crate::ts::analyze(&mut db).is_empty());
+        assert!(
+            crate::ts::analyze_with_options(
+                &mut db,
+                &polint_analysis_api::DisabledAnalysisCache,
+                "",
+                "",
+                false
+            )
+            .is_empty()
+        );
         let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
         db.replace_semantic_mir(mir)
             .expect("MIR output should store");
@@ -855,7 +864,16 @@ mod tests {
             "throw.ts".to_string(),
             "export function fail(value) { throw new Error(value); value = 1; }".to_string(),
         );
-        assert!(crate::ts::analyze(&mut db).is_empty());
+        assert!(
+            crate::ts::analyze_with_options(
+                &mut db,
+                &polint_analysis_api::DisabledAnalysisCache,
+                "",
+                "",
+                false
+            )
+            .is_empty()
+        );
         let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
         db.replace_semantic_mir(mir)
             .expect("MIR output should store");
@@ -907,7 +925,16 @@ export function* values(value) { yield value; }
 "#
             .to_string(),
         );
-        assert!(crate::ts::analyze(&mut db).is_empty());
+        assert!(
+            crate::ts::analyze_with_options(
+                &mut db,
+                &polint_analysis_api::DisabledAnalysisCache,
+                "",
+                "",
+                false
+            )
+            .is_empty()
+        );
         let mir = crate::analysis::mir::lower_ts::lower_ts_mir(&db);
         db.replace_semantic_mir(mir)
             .expect("MIR output should store");
