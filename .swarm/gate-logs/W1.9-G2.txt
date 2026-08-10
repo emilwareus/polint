@@ -1,0 +1,23 @@
+    Checking polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.9/crates/polint)
+    Checking polint-bench v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.9/crates/polint-bench)
+    Checking polint-example-review-rules v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.9/examples/review-rules/.polint/rules)
+    Checking polint-example-go-import-boundaries-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.9/examples/go-import-boundaries/.polint/rules)
+    Checking polint-example-basic-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.9/examples/basic/.polint/rules)
+    Checking polint-example-multiple-rules v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.9/examples/multiple-rules/.polint/rules)
+    Checking polint-example-ts-complexity-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.9/examples/ts-complexity/.polint/rules)
+    Checking polint-example-custom-go-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.9/examples/custom-rule-go/.polint/rules)
+    Checking polint-example-config-denied-literal-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.9/examples/config-denied-literal/.polint/rules)
+    Checking polint-example-gorm-review-indexes v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.9/examples/gorm-review-indexes/.polint/rules)
+    Checking polint-example-ts-design-tokens-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.9/examples/ts-design-tokens/.polint/rules)
+    Checking polint-example-go-complexity-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.9/examples/go-complexity/.polint/rules)
+    Checking polint-example-code-quality-metrics-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.9/examples/code-quality-metrics/.polint/rules)
+    Checking polint-example-custom-ts-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.9/examples/custom-rule-ts/.polint/rules)
+    Checking polint-example-go-test-quality-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.9/examples/go-test-quality/.polint/rules)
+    Checking polint-example-ts-no-raw-api-calls-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.9/examples/ts-no-raw-api-calls/.polint/rules)
+    Checking polint-example-comment-ignores-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.9/examples/comment-ignores/.polint/rules)
+    Checking polint-example-go-sensitive-writes-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.9/examples/go-sensitive-writes/.polint/rules)
+    Checking polint-example-go-branch-obligations-rule v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.9/examples/go-branch-obligations/.polint/rules)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 33.95s
+real 34.19
+user 25.41
+sys 3.98

@@ -1,0 +1,124 @@
+    Checking polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.2/crates/polint)
+error[E0433]: cannot find type `MirStatus` in this scope
+    --> crates/polint/src/core/mod.rs:5532:21
+     |
+5532 |             status: MirStatus::Resolved,
+     |                     ^^^^^^^^^ use of undeclared type `MirStatus`
+     |
+help: consider importing this enum
+     |
+5296 +     use crate::analysis::mir::body::MirStatus;
+     |
+
+error[E0433]: cannot find type `MirStatus` in this scope
+    --> crates/polint/src/core/mod.rs:5570:21
+     |
+5570 |             status: MirStatus::Resolved,
+     |                     ^^^^^^^^^ use of undeclared type `MirStatus`
+     |
+help: consider importing this enum
+     |
+5296 +     use crate::analysis::mir::body::MirStatus;
+     |
+
+error[E0433]: cannot find type `MirStatus` in this scope
+    --> crates/polint/src/core/mod.rs:5592:21
+     |
+5592 |             status: MirStatus::Unsupported,
+     |                     ^^^^^^^^^ use of undeclared type `MirStatus`
+     |
+help: consider importing this enum
+     |
+5296 +     use crate::analysis::mir::body::MirStatus;
+     |
+
+error[E0433]: cannot find type `MirStatus` in this scope
+    --> crates/polint/src/core/mod.rs:6477:27
+     |
+6477 |             body.status = MirStatus::Unknown;
+     |                           ^^^^^^^^^ use of undeclared type `MirStatus`
+     |
+help: consider importing this enum
+     |
+6381 +         use crate::analysis::mir::body::MirStatus;
+     |
+
+error[E0433]: cannot find type `TopologyPrecision` in this scope
+    --> crates/polint/src/core/mod.rs:6604:28
+     |
+6604 |                 precision: TopologyPrecision::ExactStatic,
+     |                            ^^^^^^^^^^^^^^^^^ use of undeclared type `TopologyPrecision`
+     |
+help: consider importing this enum
+     |
+5296 +     use crate::module_graph::topology::TopologyPrecision;
+     |
+
+error[E0433]: cannot find type `TopologyPrecision` in this scope
+    --> crates/polint/src/core/mod.rs:6619:28
+     |
+6619 |                 precision: TopologyPrecision::ExactStatic,
+     |                            ^^^^^^^^^^^^^^^^^ use of undeclared type `TopologyPrecision`
+     |
+help: consider importing this enum
+     |
+5296 +     use crate::module_graph::topology::TopologyPrecision;
+     |
+
+error[E0433]: cannot find type `TopologyPrecision` in this scope
+    --> crates/polint/src/core/mod.rs:6632:28
+     |
+6632 |                 precision: TopologyPrecision::ExactStatic,
+     |                            ^^^^^^^^^^^^^^^^^ use of undeclared type `TopologyPrecision`
+     |
+help: consider importing this enum
+     |
+5296 +     use crate::module_graph::topology::TopologyPrecision;
+     |
+
+error[E0433]: cannot find type `TopologyPrecision` in this scope
+    --> crates/polint/src/core/mod.rs:6645:28
+     |
+6645 |                 precision: TopologyPrecision::ExactStatic,
+     |                            ^^^^^^^^^^^^^^^^^ use of undeclared type `TopologyPrecision`
+     |
+help: consider importing this enum
+     |
+5296 +     use crate::module_graph::topology::TopologyPrecision;
+     |
+
+error[E0433]: cannot find type `TopologyPrecision` in this scope
+    --> crates/polint/src/core/mod.rs:6658:28
+     |
+6658 |                 precision: TopologyPrecision::ExactLockfile,
+     |                            ^^^^^^^^^^^^^^^^^ use of undeclared type `TopologyPrecision`
+     |
+help: consider importing this enum
+     |
+5296 +     use crate::module_graph::topology::TopologyPrecision;
+     |
+
+error[E0433]: cannot find type `TopologyPrecision` in this scope
+    --> crates/polint/src/core/mod.rs:6677:28
+     |
+6677 |                 precision: TopologyPrecision::ExactStatic,
+     |                            ^^^^^^^^^^^^^^^^^ use of undeclared type `TopologyPrecision`
+     |
+help: consider importing this enum
+     |
+5296 +     use crate::module_graph::topology::TopologyPrecision;
+     |
+
+error[E0433]: cannot find type `TopologyPrecision` in this scope
+    --> crates/polint/src/core/mod.rs:6690:28
+     |
+6690 |                 precision: TopologyPrecision::Heuristic,
+     |                            ^^^^^^^^^^^^^^^^^ use of undeclared type `TopologyPrecision`
+     |
+help: consider importing this enum
+     |
+5296 +     use crate::module_graph::topology::TopologyPrecision;
+     |
+
+For more information about this error, try `rustc --explain E0433`.
+error: could not compile `polint` (lib test) due to 11 previous errors

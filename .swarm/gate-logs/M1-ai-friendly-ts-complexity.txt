@@ -1,0 +1,20 @@
+polint: 1 diagnostic across 1 rule. Full JSON: .polint/output/latest.json
+
+By rule
+  warn local/ts-cyclomatic-complexity: 1
+
+Examples, max 10
+  warn[local/ts-cyclomatic-complexity]: TS/JS function `label` has cyclomatic complexity 3, max 1.
+    --> label.ts:5:8-15:2
+    evidence function: label
+    evidence complexity: 3
+    help: Split condition-heavy UI or business logic into smaller named helpers.
+    fingerprint: f3bc37c5168a1978
+
+
+JSON format: versioned object with `summary`, `examples`, and `diagnostics`.
+Do not read the whole file into an AI prompt. Query it with bounded commands:
+  jq '.summary.by_rule' .polint/output/latest.json
+  jq '.summary.rules[] | select(.diagnostics_emitted == 0)' .polint/output/latest.json
+  jq '[.diagnostics[] | select(.rule_id=="local/ts-cyclomatic-complexity")][0:20]' .polint/output/latest.json
+  jq '.diagnostics[] | select(.file=="label.ts") | {rule_id, range, message}' .polint/output/latest.json | head -c 12000

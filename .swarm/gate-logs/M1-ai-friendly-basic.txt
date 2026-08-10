@@ -1,0 +1,20 @@
+polint: 2 diagnostics across 1 rule. Full JSON: .polint/output/latest.json
+
+By rule
+  error local/no-raw-colors: 2
+
+Examples, max 10
+  error[local/no-raw-colors]: Raw color literal `#ff00aa` should use a design token.
+    --> Button.tsx:6:18-6:38
+    evidence literal: #ff00aa
+    evidence source: jsx-attribute
+    help: Move this value to a theme/design-token file or use an existing token.
+    fingerprint: 045fbb3f0c7f6401
+
+
+JSON format: versioned object with `summary`, `examples`, and `diagnostics`.
+Do not read the whole file into an AI prompt. Query it with bounded commands:
+  jq '.summary.by_rule' .polint/output/latest.json
+  jq '.summary.rules[] | select(.diagnostics_emitted == 0)' .polint/output/latest.json
+  jq '[.diagnostics[] | select(.rule_id=="local/no-raw-colors")][0:20]' .polint/output/latest.json
+  jq '.diagnostics[] | select(.file=="Button.tsx") | {rule_id, range, message}' .polint/output/latest.json | head -c 12000

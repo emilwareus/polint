@@ -1,0 +1,19 @@
+   Compiling polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.2/crates/polint)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 49.76s
+     Running unittests src/lib.rs (target/debug/deps/polint-af2f858c5d9987a8)
+
+running 1 test
+
+thread 'policy_queries::tests::policy_query_findings_carry_replayable_evidence' (4531183) panicked at crates/polint/src/policy_queries.rs:1985:9:
+expected >90% policy-query findings with evidence paths, got 0.0% (0/1)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test policy_queries::tests::policy_query_findings_carry_replayable_evidence ... FAILED
+
+failures:
+
+failures:
+    policy_queries::tests::policy_query_findings_carry_replayable_evidence
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2513 filtered out; finished in 0.04s
+
+error: test failed, to rerun pass `-p polint --lib`

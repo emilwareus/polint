@@ -1,0 +1,11 @@
+=== R1 budget ===
+ 3 files changed, 50 insertions(+), 41 deletions(-)
+=== R2 suppressions ===
+PASS
+=== R3 goldens ===
+PASS
+=== R4 ignore/deleted tests ===
+PASS
+PASS
+=== R5 delivery history ===
+PASS

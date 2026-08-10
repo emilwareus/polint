@@ -1,0 +1,55 @@
+
+=== pass 1 exit=0 ===
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s
+     Running tests/golden.rs (target/debug/deps/golden-0b79c88cdf5488ee)
+
+running 1 test
+test characterization_goldens_match_cli ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 34.66s
+
+
+
+=== pass 2 exit=0 ===
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/golden.rs (target/debug/deps/golden-0b79c88cdf5488ee)
+
+running 1 test
+test characterization_goldens_match_cli ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 33.45s
+
+
+
+=== pass 3 exit=0 ===
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running tests/golden.rs (target/debug/deps/golden-0b79c88cdf5488ee)
+
+running 1 test
+test characterization_goldens_match_cli ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 40.02s
+
+
+
+=== pass 4 exit=0 ===
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.52s
+     Running tests/golden.rs (target/debug/deps/golden-0b79c88cdf5488ee)
+
+running 1 test
+test characterization_goldens_match_cli ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 30.82s
+
+
+
+=== pass 5 exit=0 ===
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/golden.rs (target/debug/deps/golden-0b79c88cdf5488ee)
+
+running 1 test
+test characterization_goldens_match_cli ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 29.67s
+
+

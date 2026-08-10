@@ -1,0 +1,6 @@
+=== Parser::new sanity ===
+crates/polint/src/ts/parse.rs:61:    let raw = Parser::new(allocator, source, source_type(path)).parse();
+crates/polint/src/ts/parse.rs:154:            if !source.contains("Parser::new(") {
+crates/polint/src/ts/parse.rs:161:            // tree-sitter Go sites use tree_sitter::Parser::new() — skip those files.
+crates/polint/src/analysis/mir/lower_go.rs:61:        let mut parser = Parser::new();
+crates/polint/src/go/adapter.rs:460:                let mut parser = Parser::new();

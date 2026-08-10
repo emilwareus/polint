@@ -1,0 +1,19 @@
+    Checking polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.2/crates/polint)
+error: unused import: `MirStatus`
+  --> crates/polint/src/core/mod.rs:43:54
+   |
+43 | use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
+   |                                                      ^^^^^^^^^
+   |
+   = note: `-D unused-imports` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unused_imports)]`
+
+error: unused import: `TopologyPrecision`
+  --> crates/polint/src/core/mod.rs:82:5
+   |
+82 |     TopologyPrecision, WorkspaceRootFact,
+   |     ^^^^^^^^^^^^^^^^^
+
+error: could not compile `polint` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `polint` (lib test) due to 1 previous error

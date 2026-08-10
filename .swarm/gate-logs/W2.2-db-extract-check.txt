@@ -1,0 +1,110 @@
+    Checking polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.2/crates/polint)
+error[E0432]: unresolved import `crate::core::SEMANTIC_MIR_PROVIDER_ID`
+ --> crates/polint/src/analysis/store.rs:8:5
+  |
+8 | use crate::core::SEMANTIC_MIR_PROVIDER_ID;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `SEMANTIC_MIR_PROVIDER_ID` in `core`
+
+error[E0432]: unresolved import `crate::core::SEMANTIC_MIR_PROVIDER_ID`
+  --> crates/polint/src/analysis/validate.rs:11:62
+   |
+11 |     AnalysisDb, FileId, FunctionId, ModuleNodeId, PackageId, SEMANTIC_MIR_PROVIDER_ID, Span,
+   |                                                              ^^^^^^^^^^^^^^^^^^^^^^^^ no `SEMANTIC_MIR_PROVIDER_ID` in `core`
+
+error[E0432]: unresolved imports `super::SOURCE_PROVIDER_ID`, `super::none_value`, `super::topology_precision_metadata`
+  --> crates/polint/src/core/metadata.rs:12:13
+   |
+12 | use super::{SOURCE_PROVIDER_ID, none_value, topology_precision_metadata};
+   |             ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `topology_precision_metadata` in `core`
+   |             |                   |
+   |             |                   no `none_value` in `core`
+   |             no `SOURCE_PROVIDER_ID` in `core`
+
+error[E0425]: cannot find value `CALLS_PROVIDER_ID` in module `crate::core`
+   --> crates/polint/src/analysis/calls/direct.rs:425:39
+    |
+425 |             ("provider", crate::core::CALLS_PROVIDER_ID.to_string()),
+    |                                       ^^^^^^^^^^^^^^^^^ not found in `crate::core`
+    |
+note: constant `crate::core::db::CALLS_PROVIDER_ID` exists but is inaccessible
+   --> crates/polint/src/core/db.rs:109:1
+    |
+109 | pub(crate) const CALLS_PROVIDER_ID: &str = "polint.calls";
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not accessible
+
+error[E0425]: cannot find value `CALLS_PROVIDER_ID` in module `crate::core`
+   --> crates/polint/src/analysis/calls/direct.rs:450:39
+    |
+450 |             ("provider", crate::core::CALLS_PROVIDER_ID.to_string()),
+    |                                       ^^^^^^^^^^^^^^^^^ not found in `crate::core`
+    |
+note: constant `crate::core::db::CALLS_PROVIDER_ID` exists but is inaccessible
+   --> crates/polint/src/core/db.rs:109:1
+    |
+109 | pub(crate) const CALLS_PROVIDER_ID: &str = "polint.calls";
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not accessible
+
+error[E0425]: cannot find value `CALLS_PROVIDER_ID` in module `crate::core`
+    --> crates/polint/src/analysis/calls/ts_value_flows.rs:8513:39
+     |
+8513 |             ("provider", crate::core::CALLS_PROVIDER_ID.to_string()),
+     |                                       ^^^^^^^^^^^^^^^^^ not found in `crate::core`
+     |
+note: constant `crate::core::db::CALLS_PROVIDER_ID` exists but is inaccessible
+    --> crates/polint/src/core/db.rs:109:1
+     |
+ 109 | pub(crate) const CALLS_PROVIDER_ID: &str = "polint.calls";
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not accessible
+
+warning: unused imports: `Capabilities`, `CapabilitySupportStatus`, `CapabilitySupportView`, and `CapabilitySupport`
+   --> crates/polint/src/core/db.rs:118:25
+    |
+118 | use super::capability::{Capabilities, CapabilitySupport, CapabilitySupportStatus, CapabilitySupportView};
+    |                         ^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `CachedFileAnalysis`, `DefinitionKind`, `ModuleEdgeKind`, `ModuleNodeKind`, `ReferenceKind`, `ResolutionPrecision`, `ResolutionStatus`, `SymbolKind`, `SymbolNamespace`, `SymbolPrecision`, `SymbolResolutionStatus`, `TS_JS_MODULE_FUNCTION_NAME`, `UnresolvedReason`, and `is_synthetic_ts_js_module_function`
+   --> crates/polint/src/core/db.rs:120:23
+    |
+120 |     BranchObligation, CachedFileAnalysis, CachedFileFacts, ComplexityMetricFact, CoverageFact,
+    |                       ^^^^^^^^^^^^^^^^^^
+121 |     DefinitionFact, DefinitionKind, FileMetricFact, FunctionFact, FunctionMetricFact, ImportFact,
+    |                     ^^^^^^^^^^^^^^
+122 |     JsxAttributeFact, ModuleEdge, ModuleEdgeKind, ModuleNode, ModuleNodeKind, PackageFact,
+    |                                   ^^^^^^^^^^^^^^              ^^^^^^^^^^^^^^
+123 |     ReferenceFact, ReferenceKind, ResolutionPrecision, ResolutionStatus, ResolvedImportFact,
+    |                    ^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^
+124 |     SourceFile, StringLiteralFact, SymbolFact, SymbolKind, SymbolNamespace, SymbolPrecision,
+    |                                                ^^^^^^^^^^  ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^
+125 |     SymbolResolutionStatus, TS_JS_MODULE_FUNCTION_NAME, TestFact, TsClassFact, TsComponentFact,
+    |     ^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^
+126 |     UnresolvedReason, is_synthetic_ts_js_module_function,
+    |     ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `DefinitionId`, `NodeId`, `ReferenceId`, and `RuleId`
+   --> crates/polint/src/core/db.rs:129:15
+    |
+129 |     BranchId, DefinitionId, FileId, FunctionId, ImportId, ModuleEdgeId, ModuleNodeId, NodeId,
+    |               ^^^^^^^^^^^^                                                            ^^^^^^
+130 |     PackageId, ReferenceId, ResolvedImportId, RuleId, SymbolId,
+    |                ^^^^^^^^^^^                    ^^^^^^
+
+warning: unused imports: `RuleConfigValue`, `RuleCtx`, `RuleKind`, `RuleMeta`, `RuleOptions`, `Rule`, `rule_id_matches`, `run_rules_with_capability_support`, and `span_from_byte_range`
+   --> crates/polint/src/core/db.rs:136:5
+    |
+136 |     Rule, RuleConfigValue, RuleCtx, RuleKind, RuleMeta, RuleOptions, rule_id_matches,
+    |     ^^^^  ^^^^^^^^^^^^^^^  ^^^^^^^  ^^^^^^^^  ^^^^^^^^  ^^^^^^^^^^^  ^^^^^^^^^^^^^^^
+137 |     run_rules_with_capability_support, span_from_byte_range,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `TextRange`
+   --> crates/polint/src/core/db.rs:139:25
+    |
+139 | use super::span::{Span, TextRange};
+    |                         ^^^^^^^^^
+
+Some errors have detailed explanations: E0425, E0432.
+For more information about an error, try `rustc --explain E0425`.
+warning: `polint` (lib) generated 5 warnings
+error: could not compile `polint` (lib) due to 6 previous errors; 5 warnings emitted

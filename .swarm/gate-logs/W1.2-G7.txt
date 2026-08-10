@@ -1,0 +1,34 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.2/crates/polint)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 54.52s
+     Running tests/golden.rs (target/debug/deps/golden-0b79c88cdf5488ee)
+
+running 8 tests
+test golden_updates_require_explicit_env_flag ... ok
+test cost_budget_helper_rejects_clear_regression ... ok
+test ci_workflows_never_set_golden_update_env ... ok
+test normalize_sorts_diagnostics_by_stable_fingerprint ... ok
+test diagnostic_set_diff_names_lost_fingerprints ... ok
+test example_golden_cases_cover_inventory_rule_packs ... ok
+test scale_cases_are_optional_and_discovered ... ok
+test characterization_goldens_match_cli has been running for over 60 seconds
+test characterization_goldens_match_cli ... FAILED
+
+failures:
+
+---- characterization_goldens_match_cli stdout ----
+
+thread 'characterization_goldens_match_cli' (4586562) panicked at crates/polint/tests/golden.rs:494:9:
+golden cost budget breached for `examples/go-sensitive-writes/json`:
+  wall_clock_ms: measured 664 exceeds budget (baseline 330, ratio 2.0121, max 1.2, abs floor +50)
+baseline=GoldenCostRecord { schema_version: "polint-golden-cost-1", wall_clock_ms: 330, peak_rss_bytes: 30097408, peak_rss_delta_bytes: 23183360 }
+measured=GoldenCostRecord { schema_version: "polint-golden-cost-1", wall_clock_ms: 664, peak_rss_bytes: 29966336, peak_rss_delta_bytes: 22953984 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    characterization_goldens_match_cli
+
+test result: FAILED. 7 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 61.83s
+
+error: test failed, to rerun pass `-p polint --test golden`

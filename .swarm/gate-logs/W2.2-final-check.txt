@@ -1,0 +1,11 @@
+    Checking polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.2-finish/crates/polint)
+warning: unused import: `rule::RuleRegistry`
+  --> crates/polint/src/core/mod.rs:56:16
+   |
+56 | pub(crate) use rule::RuleRegistry;
+   |                ^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `polint` (lib test) generated 1 warning (run `cargo fix --lib -p polint --tests` to apply 1 suggestion)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.95s

@@ -1,0 +1,24 @@
+=== R1-R6 post-rebase ===
+ .../src/analysis/calls/js_points_to/provider.rs    |  16 +-
+ crates/polint/src/analysis/calls/ts_value_flows.rs |  37 ++--
+ crates/polint/src/analysis/mir/lower_ts.rs         | 151 ++++++++++++----
+ crates/polint/src/analysis/semantic_graph/build.rs |  66 +++----
+ .../src/analysis/unknown_taxonomy/collect.rs       |  23 +++
+ crates/polint/src/symbol_graph/ts.rs               |  74 ++++----
+ crates/polint/src/ts/adapter.rs                    |  46 ++---
+ crates/polint/src/ts/inventory/extract.rs          |  36 ++--
+ crates/polint/src/ts/mod.rs                        |   3 +
+ crates/polint/src/ts/object_model/extract.rs       |  56 ++++--
+ crates/polint/src/ts/parse.rs                      | 193 +++++++++++++++++++++
+ crates/polint/src/ts/scope/extract.rs              |  35 ++--
+ crates/polint/src/ts/tests.rs                      |  12 +-
+ 13 files changed, 536 insertions(+), 212 deletions(-)
+---R2---
+PASS
+---R3---
+PASS_no_golden
+---R4---
+PASS_no_ignore
+PASS_no_deleted
+---R5---
+PASS

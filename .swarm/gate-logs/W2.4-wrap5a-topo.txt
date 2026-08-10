@@ -1,0 +1,9 @@
+   Compiling polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.4/crates/polint)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 31.59s
+     Running unittests src/lib.rs (target/debug/deps/polint-af2f858c5d9987a8)
+
+running 1 test
+test analysis_kernel::provider::tests::topological_order_matches_declared_manifest_order ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2523 filtered out; finished in 0.01s
+

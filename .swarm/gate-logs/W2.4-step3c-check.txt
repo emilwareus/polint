@@ -1,0 +1,71 @@
+    Checking polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.4/crates/polint)
+warning: unused variable: `go_semantic_dependency_output_digest`
+   --> crates/polint/src/analysis_kernel/mod.rs:564:13
+    |
+564 |         let go_semantic_dependency_output_digest = go_semantic_output_digest.unwrap_or_else(|| {
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_go_semantic_dependency_output_digest`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `identity_dependency_output_digest`
+   --> crates/polint/src/analysis_kernel/mod.rs:607:13
+    |
+607 |         let identity_dependency_output_digest = identity_output_digest.unwrap_or_else(|| {
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_identity_dependency_output_digest`
+
+warning: unused variable: `direct_summaries_dependency_output_digest`
+   --> crates/polint/src/analysis_kernel/mod.rs:772:13
+    |
+772 |         let direct_summaries_dependency_output_digest = direct_summaries_output_digest;
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_direct_summaries_dependency_output_digest`
+
+warning: unused variable: `entrypoints_dependency_output_digest`
+   --> crates/polint/src/analysis_kernel/mod.rs:773:13
+    |
+773 |         let entrypoints_dependency_output_digest = entrypoints_output_digest.unwrap_or_else(|| {
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_entrypoints_dependency_output_digest`
+
+warning: unused variable: `reachability_dependency_output_digest`
+   --> crates/polint/src/analysis_kernel/mod.rs:814:13
+    |
+814 |         let reachability_dependency_output_digest =
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_reachability_dependency_output_digest`
+
+warning: unused variable: `extensions_dependency_output_digest`
+   --> crates/polint/src/analysis_kernel/mod.rs:864:13
+    |
+864 |         let extensions_dependency_output_digest = extensions_output_digest.unwrap_or_else(|| {
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_extensions_dependency_output_digest`
+
+warning: unused variable: `type_value_alias_dependency_output_digest`
+   --> crates/polint/src/analysis_kernel/mod.rs:908:13
+    |
+908 |         let type_value_alias_dependency_output_digest = type_value_alias_output_digest
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_type_value_alias_dependency_output_digest`
+
+warning: unused variable: `semantic_graph_dependency_output_digest`
+   --> crates/polint/src/analysis_kernel/mod.rs:953:13
+    |
+953 |         let semantic_graph_dependency_output_digest =
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_semantic_graph_dependency_output_digest`
+
+warning: unused variable: `solver_dependency_output_digest`
+   --> crates/polint/src/analysis_kernel/mod.rs:997:13
+    |
+997 |         let solver_dependency_output_digest = solver_output_digest.unwrap_or_else(|| {
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_solver_dependency_output_digest`
+
+warning: unused variable: `refined_calls_dependency_output_digest`
+    --> crates/polint/src/analysis_kernel/mod.rs:1038:13
+     |
+1038 |         let refined_calls_dependency_output_digest =
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_refined_calls_dependency_output_digest`
+
+warning: unused variable: `data_flow_dependency_output_digest`
+    --> crates/polint/src/analysis_kernel/mod.rs:1082:13
+     |
+1082 |         let data_flow_dependency_output_digest = data_flow_output_digest.unwrap_or_else(|| {
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_data_flow_dependency_output_digest`
+
+warning: `polint` (lib) generated 11 warnings (run `cargo fix --lib -p polint` to apply 11 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.76s

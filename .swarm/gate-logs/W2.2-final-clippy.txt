@@ -1,0 +1,11 @@
+    Checking polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.2-finish/crates/polint)
+error: unused import: `rule::RuleRegistry`
+  --> crates/polint/src/core/mod.rs:56:16
+   |
+56 | pub(crate) use rule::RuleRegistry;
+   |                ^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D unused-imports` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unused_imports)]`
+
+error: could not compile `polint` (lib test) due to 1 previous error

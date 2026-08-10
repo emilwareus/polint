@@ -1,0 +1,24 @@
+    Checking polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.2/crates/polint)
+warning: unused import: `MirStatus`
+  --> crates/polint/src/core/mod.rs:43:54
+   |
+43 | use crate::analysis::mir::body::{MirBody, MirOutput, MirStatus};
+   |                                                      ^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `PlaceStatus`
+  --> crates/polint/src/core/mod.rs:45:42
+   |
+45 | use crate::analysis::places::{PlaceFact, PlaceStatus};
+   |                                          ^^^^^^^^^^^
+
+warning: unused import: `TopologyPrecision`
+  --> crates/polint/src/core/mod.rs:82:5
+   |
+82 |     TopologyPrecision, WorkspaceRootFact,
+   |     ^^^^^^^^^^^^^^^^^
+
+warning: `polint` (lib) generated 3 warnings (run `cargo fix --lib -p polint` to apply 3 suggestions)
+warning: `polint` (lib test) generated 3 warnings (3 duplicates)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 8.74s

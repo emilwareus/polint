@@ -1,0 +1,10 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W1.9/crates/polint)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 33.08s
+     Running unittests src/lib.rs (target/debug/deps/polint-af2f858c5d9987a8)
+
+running 1 test
+test cli::skill::tests::checked_in_skills_match_generated_skill_markdown_byte_for_byte ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2508 filtered out; finished in 0.00s
+

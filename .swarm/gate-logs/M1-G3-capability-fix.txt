@@ -1,0 +1,27 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
+     Running tests/cli.rs (target/debug/deps/cli-05cf7bb24a423286)
+
+running 20 tests
+test capability_planning::call_graph_capability_remains_unsupported ... ok
+test capability_planning::capability_change_changes_cache_entries ... ok
+test capability_planning::cfg_capability_remains_unsupported ... ok
+test capability_planning::check_only_rule_keeps_selected_capability_diagnostic ... ok
+test capability_planning::check_reports_unsupported_reserved_capability ... ok
+test capability_planning::external_rule_consumes_go_symbols_and_references_through_public_sdk ... ok
+test capability_planning::external_rule_consumes_go_symbols_from_monorepo_submodule_without_repo_go_mod ... ok
+test capability_planning::external_rule_consumes_go_symbols_from_multiple_monorepo_modules_with_one_polint_setup ... ok
+test capability_planning::external_rule_consumes_module_relationship_facts_through_public_sdk ... ok
+test capability_planning::external_rule_consumes_ts_symbols_and_references_through_public_sdk ... ok
+test capability_planning::kernel_delegation_preserves_existing_rule_facts ... ok
+test capability_planning::kernel_metadata_preserves_public_check_behavior ... ok
+test capability_planning::module_relationship_setup_missing_and_determinism ... ok
+test capability_planning::provider_setup_missing_support_blocks_requesting_rule ... ok
+test capability_planning::relationship_capability_rule_runs_on_empty_repo ... ok
+test capability_planning::reserved_cfg_and_call_graph_remain_unsupported ... ok
+test capability_planning::symbol_provider_support_allows_requesting_rule_before_supported_rules ... ok
+test capability_planning::symbol_reference_cache_and_setup_keeps_stable_ids_across_cached_runs ... ok
+test capability_planning::symbol_reference_cache_and_setup_reports_go_setup_missing ... ok
+test capability_planning::symbol_reference_macro_mapping_and_determinism ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 146 filtered out; finished in 128.04s
+

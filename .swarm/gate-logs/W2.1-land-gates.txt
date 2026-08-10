@@ -1,0 +1,11 @@
+BASE=92be8bbf TIP=8d6b7fa1
+R1: 4 FF batches onto integration (23+9+23+5 files); branch total 47 files / +79 −39
+R2 PASS
+R3: tests/golden/README.md path-doc only (measure.rs relocate)
+R4 PASS
+R5 PASS
+R6 structure-only
+G1 PASS / G2 PASS / G4 PASS / G5 PASS / G7 PASS
+acceptance: cargo build --release -p polint does not compile polint-eval/harness
+pushed: origin/static-analysis-architecture-review 92be8bbf..8d6b7fa1
+main: untouched

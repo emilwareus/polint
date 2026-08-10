@@ -1,0 +1,3565 @@
+    Checking polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.2/crates/polint)
+error[E0425]: cannot find function `source_file_metadata` in this scope
+   --> crates/polint/src/core/mod.rs:208:24
+    |
+208 |         let metadata = source_file_metadata(&relative_path, language, &content_hash);
+    |                        ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this function
+    |
+  1 + use crate::core::metadata::source_file_metadata;
+    |
+
+error[E0425]: cannot find function `normalize_scope_facts` in this scope
+   --> crates/polint/src/core/mod.rs:381:9
+    |
+381 |         normalize_scope_facts(&mut scopes);
+    |         ^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this function
+    |
+  1 + use crate::core::metadata::normalize_scope_facts;
+    |
+
+error[E0425]: cannot find function `normalize_semantic_import_facts` in this scope
+   --> crates/polint/src/core/mod.rs:396:9
+    |
+396 |         normalize_semantic_import_facts(&mut semantic_imports);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this function
+    |
+  1 + use crate::core::metadata::normalize_semantic_import_facts;
+    |
+
+error[E0425]: cannot find function `normalize_export_facts` in this scope
+   --> crates/polint/src/core/mod.rs:406:9
+    |
+406 |         normalize_export_facts(&mut exports);
+    |         ^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this function
+    |
+  1 + use crate::core::metadata::normalize_export_facts;
+    |
+
+error[E0425]: cannot find function `normalize_alias_facts` in this scope
+   --> crates/polint/src/core/mod.rs:421:9
+    |
+421 |         normalize_alias_facts(&mut aliases);
+    |         ^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this function
+    |
+  1 + use crate::core::metadata::normalize_alias_facts;
+    |
+
+error[E0425]: cannot find function `normalize_resolution_facts` in this scope
+   --> crates/polint/src/core/mod.rs:426:9
+    |
+426 |         normalize_resolution_facts(&mut resolutions);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this function
+    |
+  1 + use crate::core::metadata::normalize_resolution_facts;
+    |
+
+error[E0425]: cannot find function `normalize_generated_symbol_facts` in this scope
+   --> crates/polint/src/core/mod.rs:431:9
+    |
+431 |         normalize_generated_symbol_facts(&mut generated_symbols);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this function
+    |
+  1 + use crate::core::metadata::normalize_generated_symbol_facts;
+    |
+
+error[E0425]: cannot find function `normalize_stable_export_identities` in this scope
+   --> crates/polint/src/core/mod.rs:436:9
+    |
+436 |         normalize_stable_export_identities(&mut stable_exports);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this function
+    |
+  1 + use crate::core::metadata::normalize_stable_export_identities;
+    |
+
+error[E0425]: cannot find function `summary_domain_to_fact_family` in this scope
+    --> crates/polint/src/core/mod.rs:1538:30
+     |
+1538 |                 let family = summary_domain_to_fact_family(fact.domain);
+     |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+note: function `crate::analysis::summaries::validate::summary_domain_to_fact_family` exists but is inaccessible
+    --> crates/polint/src/analysis/summaries/validate.rs:353:1
+     |
+ 353 | fn summary_domain_to_fact_family(domain: SummaryDomainKind) -> FactFamily {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not accessible
+help: consider importing this function
+     |
+   1 + use crate::core::labels::summary_domain_to_fact_family;
+     |
+
+error[E0425]: cannot find function `summary_domain_to_fact_family` in this scope
+    --> crates/polint/src/core/mod.rs:1565:21
+     |
+1565 |                     summary_domain_to_fact_family(fact.domain),
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+note: function `crate::analysis::summaries::validate::summary_domain_to_fact_family` exists but is inaccessible
+    --> crates/polint/src/analysis/summaries/validate.rs:353:1
+     |
+ 353 | fn summary_domain_to_fact_family(domain: SummaryDomainKind) -> FactFamily {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not accessible
+help: consider importing this function
+     |
+   1 + use crate::core::labels::summary_domain_to_fact_family;
+     |
+
+error[E0425]: cannot find function `extension_fact_metadata` in this scope
+    --> crates/polint/src/core/mod.rs:1599:49
+     |
+1599 |             .map(|(index, fact)| (index as u64, extension_fact_metadata(fact)))
+     |                                                 ^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::extension_fact_metadata;
+     |
+
+error[E0425]: cannot find function `adaptation_model_fact_metadata` in this scope
+    --> crates/polint/src/core/mod.rs:1613:49
+     |
+1613 |             .map(|(index, fact)| (index as u64, adaptation_model_fact_metadata(fact)))
+     |                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::adaptation_model_fact_metadata;
+     |
+
+error[E0425]: cannot find function `type_metadata_precision` in this scope
+    --> crates/polint/src/core/mod.rs:1763:13
+     |
+1763 |             type_metadata_precision(fact.status, fact.precision, Some(fact.confidence));
+     |             ^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::labels::type_metadata_precision;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_stable_key` in this scope
+    --> crates/polint/src/core/mod.rs:1764:9
+     |
+1764 |         fact_meta_from_stable_key(
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_stable_key;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:1770:13
+     |
+1770 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `language_label` in this scope
+    --> crates/polint/src/core/mod.rs:1774:30
+     |
+1774 |                 ("language", language_label(fact.language).to_string()),
+     |                              ^^^^^^^^^^^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/polint/src/analysis/cfg/lower_ts.rs:486:1
+     |
+ 486 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::cfg::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/mir/lower_ts.rs:3109:1
+     |
+3109 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::mir::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/ts_js.rs:979:1
+     |
+ 979 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::ts_js::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/validate.rs:735:1
+     |
+ 735 | fn language_label(value: Option<&str>) -> Language {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::validate::language_label`: not accessible
+     |
+    ::: crates/polint/src/cli/mod.rs:3444:1
+     |
+3444 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::cli::language_label`: not accessible
+     |
+    ::: crates/polint/src/module_graph/model.rs:520:1
+     |
+ 520 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::module_graph::model::language_label`: not accessible
+     |
+    ::: crates/polint/src/symbol_graph/semantic.rs:870:1
+     |
+ 870 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::symbol_graph::semantic::language_label`: not accessible
+help: consider importing one of these functions
+     |
+   1 + use crate::analysis::reachability::facts::language_label;
+     |
+   1 + use crate::core::metadata::language_label;
+     |
+
+error[E0425]: cannot find function `type_metadata_precision` in this scope
+    --> crates/polint/src/core/mod.rs:1790:39
+     |
+1790 |         let (precision, confidence) = type_metadata_precision(fact.status, fact.precision, None);
+     |                                       ^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::labels::type_metadata_precision;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_stable_key` in this scope
+    --> crates/polint/src/core/mod.rs:1791:9
+     |
+1791 |         fact_meta_from_stable_key(
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_stable_key;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:1797:13
+     |
+1797 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `language_label` in this scope
+    --> crates/polint/src/core/mod.rs:1800:30
+     |
+1800 |                 ("language", language_label(fact.language).to_string()),
+     |                              ^^^^^^^^^^^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/polint/src/analysis/cfg/lower_ts.rs:486:1
+     |
+ 486 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::cfg::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/mir/lower_ts.rs:3109:1
+     |
+3109 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::mir::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/ts_js.rs:979:1
+     |
+ 979 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::ts_js::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/validate.rs:735:1
+     |
+ 735 | fn language_label(value: Option<&str>) -> Language {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::validate::language_label`: not accessible
+     |
+    ::: crates/polint/src/cli/mod.rs:3444:1
+     |
+3444 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::cli::language_label`: not accessible
+     |
+    ::: crates/polint/src/module_graph/model.rs:520:1
+     |
+ 520 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::module_graph::model::language_label`: not accessible
+     |
+    ::: crates/polint/src/symbol_graph/semantic.rs:870:1
+     |
+ 870 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::symbol_graph::semantic::language_label`: not accessible
+help: consider importing one of these functions
+     |
+   1 + use crate::analysis::reachability::facts::language_label;
+     |
+   1 + use crate::core::metadata::language_label;
+     |
+
+error[E0425]: cannot find function `value_metadata_precision` in this scope
+    --> crates/polint/src/core/mod.rs:1819:39
+     |
+1819 |         let (precision, confidence) = value_metadata_precision(fact.status, fact.precision);
+     |                                       ^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::labels::value_metadata_precision;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_stable_key` in this scope
+    --> crates/polint/src/core/mod.rs:1820:9
+     |
+1820 |         fact_meta_from_stable_key(
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_stable_key;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:1826:13
+     |
+1826 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `language_label` in this scope
+    --> crates/polint/src/core/mod.rs:1829:30
+     |
+1829 |                 ("language", language_label(fact.language).to_string()),
+     |                              ^^^^^^^^^^^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/polint/src/analysis/cfg/lower_ts.rs:486:1
+     |
+ 486 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::cfg::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/mir/lower_ts.rs:3109:1
+     |
+3109 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::mir::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/ts_js.rs:979:1
+     |
+ 979 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::ts_js::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/validate.rs:735:1
+     |
+ 735 | fn language_label(value: Option<&str>) -> Language {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::validate::language_label`: not accessible
+     |
+    ::: crates/polint/src/cli/mod.rs:3444:1
+     |
+3444 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::cli::language_label`: not accessible
+     |
+    ::: crates/polint/src/module_graph/model.rs:520:1
+     |
+ 520 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::module_graph::model::language_label`: not accessible
+     |
+    ::: crates/polint/src/symbol_graph/semantic.rs:870:1
+     |
+ 870 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::symbol_graph::semantic::language_label`: not accessible
+help: consider importing one of these functions
+     |
+   1 + use crate::analysis::reachability::facts::language_label;
+     |
+   1 + use crate::core::metadata::language_label;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_stable_key` in this scope
+    --> crates/polint/src/core/mod.rs:1838:9
+     |
+1838 |         fact_meta_from_stable_key(
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_stable_key;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:1844:13
+     |
+1844 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `language_label` in this scope
+    --> crates/polint/src/core/mod.rs:1846:30
+     |
+1846 |                 ("language", language_label(fact.language).to_string()),
+     |                              ^^^^^^^^^^^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/polint/src/analysis/cfg/lower_ts.rs:486:1
+     |
+ 486 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::cfg::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/mir/lower_ts.rs:3109:1
+     |
+3109 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::mir::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/ts_js.rs:979:1
+     |
+ 979 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::ts_js::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/validate.rs:735:1
+     |
+ 735 | fn language_label(value: Option<&str>) -> Language {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::validate::language_label`: not accessible
+     |
+    ::: crates/polint/src/cli/mod.rs:3444:1
+     |
+3444 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::cli::language_label`: not accessible
+     |
+    ::: crates/polint/src/module_graph/model.rs:520:1
+     |
+ 520 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::module_graph::model::language_label`: not accessible
+     |
+    ::: crates/polint/src/symbol_graph/semantic.rs:870:1
+     |
+ 870 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::symbol_graph::semantic::language_label`: not accessible
+help: consider importing one of these functions
+     |
+   1 + use crate::analysis::reachability::facts::language_label;
+     |
+   1 + use crate::core::metadata::language_label;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_stable_key` in this scope
+    --> crates/polint/src/core/mod.rs:1876:9
+     |
+1876 |         fact_meta_from_stable_key(
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_stable_key;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:1882:13
+     |
+1882 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `language_label` in this scope
+    --> crates/polint/src/core/mod.rs:1884:30
+     |
+1884 |                 ("language", language_label(fact.language).to_string()),
+     |                              ^^^^^^^^^^^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/polint/src/analysis/cfg/lower_ts.rs:486:1
+     |
+ 486 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::cfg::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/mir/lower_ts.rs:3109:1
+     |
+3109 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::mir::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/ts_js.rs:979:1
+     |
+ 979 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::ts_js::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/validate.rs:735:1
+     |
+ 735 | fn language_label(value: Option<&str>) -> Language {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::validate::language_label`: not accessible
+     |
+    ::: crates/polint/src/cli/mod.rs:3444:1
+     |
+3444 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::cli::language_label`: not accessible
+     |
+    ::: crates/polint/src/module_graph/model.rs:520:1
+     |
+ 520 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::module_graph::model::language_label`: not accessible
+     |
+    ::: crates/polint/src/symbol_graph/semantic.rs:870:1
+     |
+ 870 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::symbol_graph::semantic::language_label`: not accessible
+help: consider importing one of these functions
+     |
+   1 + use crate::analysis::reachability::facts::language_label;
+     |
+   1 + use crate::core::metadata::language_label;
+     |
+
+error[E0425]: cannot find function `points_to_metadata_precision` in this scope
+    --> crates/polint/src/core/mod.rs:1895:39
+     |
+1895 |         let (precision, confidence) = points_to_metadata_precision(fact.status, fact.precision);
+     |                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::labels::points_to_metadata_precision;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_stable_key` in this scope
+    --> crates/polint/src/core/mod.rs:1896:9
+     |
+1896 |         fact_meta_from_stable_key(
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_stable_key;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:1902:13
+     |
+1902 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `points_to_metadata_precision` in this scope
+    --> crates/polint/src/core/mod.rs:1911:39
+     |
+1911 |         let (precision, confidence) = points_to_metadata_precision(fact.status, fact.precision);
+     |                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::labels::points_to_metadata_precision;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_stable_key` in this scope
+    --> crates/polint/src/core/mod.rs:1912:9
+     |
+1912 |         fact_meta_from_stable_key(
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_stable_key;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:1918:13
+     |
+1918 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `alias_metadata_precision` in this scope
+    --> crates/polint/src/core/mod.rs:1929:39
+     |
+1929 |         let (precision, confidence) = alias_metadata_precision(fact.status, fact.precision);
+     |                                       ^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::labels::alias_metadata_precision;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_stable_key` in this scope
+    --> crates/polint/src/core/mod.rs:1930:9
+     |
+1930 |         fact_meta_from_stable_key(
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_stable_key;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:1936:13
+     |
+1936 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `entrypoint_precision_metadata` in this scope
+    --> crates/polint/src/core/mod.rs:1948:39
+     |
+1948 |         let (precision, confidence) = entrypoint_precision_metadata(fact.status, fact.precision);
+     |                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+4979 | fn topology_precision_metadata(precision: TopologyPrecision) -> (FactPrecision, FactConfidence) {
+     | ----------------------------------------------------------------------------------------------- similarly named function `topology_precision_metadata` defined here
+     |
+help: a function with a similar name exists
+     |
+1948 -         let (precision, confidence) = entrypoint_precision_metadata(fact.status, fact.precision);
+1948 +         let (precision, confidence) = topology_precision_metadata(fact.status, fact.precision);
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::entrypoint_precision_metadata;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_stable_key` in this scope
+    --> crates/polint/src/core/mod.rs:1949:9
+     |
+1949 |         fact_meta_from_stable_key(
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_stable_key;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:1955:13
+     |
+1955 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `language_label` in this scope
+    --> crates/polint/src/core/mod.rs:1959:30
+     |
+1959 |                 ("language", language_label(fact.language).to_string()),
+     |                              ^^^^^^^^^^^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/polint/src/analysis/cfg/lower_ts.rs:486:1
+     |
+ 486 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::cfg::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/mir/lower_ts.rs:3109:1
+     |
+3109 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::mir::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/ts_js.rs:979:1
+     |
+ 979 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::ts_js::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/validate.rs:735:1
+     |
+ 735 | fn language_label(value: Option<&str>) -> Language {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::validate::language_label`: not accessible
+     |
+    ::: crates/polint/src/cli/mod.rs:3444:1
+     |
+3444 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::cli::language_label`: not accessible
+     |
+    ::: crates/polint/src/module_graph/model.rs:520:1
+     |
+ 520 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::module_graph::model::language_label`: not accessible
+     |
+    ::: crates/polint/src/symbol_graph/semantic.rs:870:1
+     |
+ 870 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::symbol_graph::semantic::language_label`: not accessible
+help: consider importing one of these functions
+     |
+   1 + use crate::analysis::reachability::facts::language_label;
+     |
+   1 + use crate::core::metadata::language_label;
+     |
+
+error[E0425]: cannot find function `entrypoint_precision_metadata` in this scope
+    --> crates/polint/src/core/mod.rs:1977:13
+     |
+1977 |             entrypoint_precision_metadata(EntrypointStatus::Resolved, fact.precision);
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+4979 | fn topology_precision_metadata(precision: TopologyPrecision) -> (FactPrecision, FactConfidence) {
+     | ----------------------------------------------------------------------------------------------- similarly named function `topology_precision_metadata` defined here
+     |
+help: a function with a similar name exists
+     |
+1977 -             entrypoint_precision_metadata(EntrypointStatus::Resolved, fact.precision);
+1977 +             topology_precision_metadata(EntrypointStatus::Resolved, fact.precision);
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::entrypoint_precision_metadata;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_stable_key` in this scope
+    --> crates/polint/src/core/mod.rs:1978:9
+     |
+1978 |         fact_meta_from_stable_key(
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_stable_key;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:1984:13
+     |
+1984 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `language_label` in this scope
+    --> crates/polint/src/core/mod.rs:1988:30
+     |
+1988 |                 ("language", language_label(fact.language).to_string()),
+     |                              ^^^^^^^^^^^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/polint/src/analysis/cfg/lower_ts.rs:486:1
+     |
+ 486 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::cfg::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/mir/lower_ts.rs:3109:1
+     |
+3109 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::mir::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/ts_js.rs:979:1
+     |
+ 979 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::ts_js::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/validate.rs:735:1
+     |
+ 735 | fn language_label(value: Option<&str>) -> Language {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::validate::language_label`: not accessible
+     |
+    ::: crates/polint/src/cli/mod.rs:3444:1
+     |
+3444 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::cli::language_label`: not accessible
+     |
+    ::: crates/polint/src/module_graph/model.rs:520:1
+     |
+ 520 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::module_graph::model::language_label`: not accessible
+     |
+    ::: crates/polint/src/symbol_graph/semantic.rs:870:1
+     |
+ 870 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::symbol_graph::semantic::language_label`: not accessible
+help: consider importing one of these functions
+     |
+   1 + use crate::analysis::reachability::facts::language_label;
+     |
+   1 + use crate::core::metadata::language_label;
+     |
+
+error[E0425]: cannot find function `entrypoint_precision_metadata` in this scope
+    --> crates/polint/src/core/mod.rs:1996:13
+     |
+1996 |             entrypoint_precision_metadata(EntrypointStatus::Resolved, fact.precision);
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+4979 | fn topology_precision_metadata(precision: TopologyPrecision) -> (FactPrecision, FactConfidence) {
+     | ----------------------------------------------------------------------------------------------- similarly named function `topology_precision_metadata` defined here
+     |
+help: a function with a similar name exists
+     |
+1996 -             entrypoint_precision_metadata(EntrypointStatus::Resolved, fact.precision);
+1996 +             topology_precision_metadata(EntrypointStatus::Resolved, fact.precision);
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::entrypoint_precision_metadata;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_stable_key` in this scope
+    --> crates/polint/src/core/mod.rs:1997:9
+     |
+1997 |         fact_meta_from_stable_key(
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_stable_key;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:2003:13
+     |
+2003 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `language_label` in this scope
+    --> crates/polint/src/core/mod.rs:2007:30
+     |
+2007 |                 ("language", language_label(fact.language).to_string()),
+     |                              ^^^^^^^^^^^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/polint/src/analysis/cfg/lower_ts.rs:486:1
+     |
+ 486 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::cfg::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/mir/lower_ts.rs:3109:1
+     |
+3109 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::mir::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/ts_js.rs:979:1
+     |
+ 979 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::ts_js::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/validate.rs:735:1
+     |
+ 735 | fn language_label(value: Option<&str>) -> Language {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::validate::language_label`: not accessible
+     |
+    ::: crates/polint/src/cli/mod.rs:3444:1
+     |
+3444 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::cli::language_label`: not accessible
+     |
+    ::: crates/polint/src/module_graph/model.rs:520:1
+     |
+ 520 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::module_graph::model::language_label`: not accessible
+     |
+    ::: crates/polint/src/symbol_graph/semantic.rs:870:1
+     |
+ 870 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::symbol_graph::semantic::language_label`: not accessible
+help: consider importing one of these functions
+     |
+   1 + use crate::analysis::reachability::facts::language_label;
+     |
+   1 + use crate::core::metadata::language_label;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_stable_key` in this scope
+    --> crates/polint/src/core/mod.rs:2014:9
+     |
+2014 |         fact_meta_from_stable_key(
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_stable_key;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:2020:13
+     |
+2020 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `language_label` in this scope
+    --> crates/polint/src/core/mod.rs:2024:30
+     |
+2024 |                 ("language", language_label(fact.language).to_string()),
+     |                              ^^^^^^^^^^^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/polint/src/analysis/cfg/lower_ts.rs:486:1
+     |
+ 486 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::cfg::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/mir/lower_ts.rs:3109:1
+     |
+3109 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::mir::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/ts_js.rs:979:1
+     |
+ 979 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::ts_js::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/validate.rs:735:1
+     |
+ 735 | fn language_label(value: Option<&str>) -> Language {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::validate::language_label`: not accessible
+     |
+    ::: crates/polint/src/cli/mod.rs:3444:1
+     |
+3444 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::cli::language_label`: not accessible
+     |
+    ::: crates/polint/src/module_graph/model.rs:520:1
+     |
+ 520 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::module_graph::model::language_label`: not accessible
+     |
+    ::: crates/polint/src/symbol_graph/semantic.rs:870:1
+     |
+ 870 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::symbol_graph::semantic::language_label`: not accessible
+help: consider importing one of these functions
+     |
+   1 + use crate::analysis::reachability::facts::language_label;
+     |
+   1 + use crate::core::metadata::language_label;
+     |
+
+error[E0425]: cannot find function `summary_precision_metadata` in this scope
+    --> crates/polint/src/core/mod.rs:2031:39
+     |
+2031 |         let (precision, confidence) = summary_precision_metadata(fact.status, fact.precision);
+     |                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+4979 | fn topology_precision_metadata(precision: TopologyPrecision) -> (FactPrecision, FactConfidence) {
+     | ----------------------------------------------------------------------------------------------- similarly named function `topology_precision_metadata` defined here
+     |
+help: a function with a similar name exists
+     |
+2031 -         let (precision, confidence) = summary_precision_metadata(fact.status, fact.precision);
+2031 +         let (precision, confidence) = topology_precision_metadata(fact.status, fact.precision);
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::labels::summary_precision_metadata;
+     |
+
+error[E0425]: cannot find function `summary_fact_payload_metadata_digest` in this scope
+    --> crates/polint/src/core/mod.rs:2039:29
+     |
+2039 |             payload_digest: summary_fact_payload_metadata_digest(fact),
+     |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::summary_fact_payload_metadata_digest;
+     |
+
+error[E0425]: cannot find function `summary_precision_metadata` in this scope
+    --> crates/polint/src/core/mod.rs:2044:39
+     |
+2044 |         let (precision, confidence) = summary_precision_metadata(fact.status, fact.precision);
+     |                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+4979 | fn topology_precision_metadata(precision: TopologyPrecision) -> (FactPrecision, FactConfidence) {
+     | ----------------------------------------------------------------------------------------------- similarly named function `topology_precision_metadata` defined here
+     |
+help: a function with a similar name exists
+     |
+2044 -         let (precision, confidence) = summary_precision_metadata(fact.status, fact.precision);
+2044 +         let (precision, confidence) = topology_precision_metadata(fact.status, fact.precision);
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::labels::summary_precision_metadata;
+     |
+
+error[E0425]: cannot find function `summary_event_payload_metadata_digest` in this scope
+    --> crates/polint/src/core/mod.rs:2052:29
+     |
+2052 |             payload_digest: summary_event_payload_metadata_digest(fact),
+     |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::summary_event_payload_metadata_digest;
+     |
+
+error[E0425]: cannot find function `topology_fact_metadata` in this scope
+    --> crates/polint/src/core/mod.rs:2257:21
+     |
+2257 |                     topology_fact_metadata(
+     |                     ^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::topology_fact_metadata;
+     |
+
+error[E0425]: cannot find function `topology_fact_metadata` in this scope
+    --> crates/polint/src/core/mod.rs:2276:21
+     |
+2276 |                     topology_fact_metadata(
+     |                     ^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::topology_fact_metadata;
+     |
+
+error[E0425]: cannot find function `topology_fact_metadata` in this scope
+    --> crates/polint/src/core/mod.rs:2295:21
+     |
+2295 |                     topology_fact_metadata(
+     |                     ^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::topology_fact_metadata;
+     |
+
+error[E0425]: cannot find function `topology_fact_metadata` in this scope
+    --> crates/polint/src/core/mod.rs:2314:21
+     |
+2314 |                     topology_fact_metadata(
+     |                     ^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::topology_fact_metadata;
+     |
+
+error[E0425]: cannot find function `topology_fact_metadata` in this scope
+    --> crates/polint/src/core/mod.rs:2333:21
+     |
+2333 |                     topology_fact_metadata(
+     |                     ^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::topology_fact_metadata;
+     |
+
+error[E0425]: cannot find function `topology_fact_metadata` in this scope
+    --> crates/polint/src/core/mod.rs:2352:21
+     |
+2352 |                     topology_fact_metadata(
+     |                     ^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::topology_fact_metadata;
+     |
+
+error[E0425]: cannot find function `topology_fact_metadata` in this scope
+    --> crates/polint/src/core/mod.rs:2383:21
+     |
+2383 |                     topology_fact_metadata(
+     |                     ^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::topology_fact_metadata;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3464:9
+     |
+3464 |         fact_meta_from_parts(
+     |         ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_parts;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3469:13
+     |
+3469 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `language_label` in this scope
+    --> crates/polint/src/core/mod.rs:3471:30
+     |
+3471 |                 ("language", language_label(fact.language).to_string()),
+     |                              ^^^^^^^^^^^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/polint/src/analysis/cfg/lower_ts.rs:486:1
+     |
+ 486 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::cfg::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/mir/lower_ts.rs:3109:1
+     |
+3109 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::mir::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/ts_js.rs:979:1
+     |
+ 979 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::ts_js::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/validate.rs:735:1
+     |
+ 735 | fn language_label(value: Option<&str>) -> Language {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::validate::language_label`: not accessible
+     |
+    ::: crates/polint/src/cli/mod.rs:3444:1
+     |
+3444 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::cli::language_label`: not accessible
+     |
+    ::: crates/polint/src/module_graph/model.rs:520:1
+     |
+ 520 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::module_graph::model::language_label`: not accessible
+     |
+    ::: crates/polint/src/symbol_graph/semantic.rs:870:1
+     |
+ 870 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::symbol_graph::semantic::language_label`: not accessible
+help: consider importing one of these functions
+     |
+   1 + use crate::analysis::reachability::facts::language_label;
+     |
+   1 + use crate::core::metadata::language_label;
+     |
+
+error[E0425]: cannot find function `span_metadata_value` in this scope
+    --> crates/polint/src/core/mod.rs:3473:26
+     |
+3473 |                 ("span", span_metadata_value(&fact.span)),
+     |                          ^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::span_metadata_value;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3475:13
+     |
+3475 |             stable_parts([]),
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3480:9
+     |
+3480 |         fact_meta_from_parts(
+     |         ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_parts;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3485:13
+     |
+3485 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `language_label` in this scope
+    --> crates/polint/src/core/mod.rs:3487:30
+     |
+3487 |                 ("language", language_label(fact.language).to_string()),
+     |                              ^^^^^^^^^^^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/polint/src/analysis/cfg/lower_ts.rs:486:1
+     |
+ 486 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::cfg::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/mir/lower_ts.rs:3109:1
+     |
+3109 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::mir::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/ts_js.rs:979:1
+     |
+ 979 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::ts_js::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/validate.rs:735:1
+     |
+ 735 | fn language_label(value: Option<&str>) -> Language {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::validate::language_label`: not accessible
+     |
+    ::: crates/polint/src/cli/mod.rs:3444:1
+     |
+3444 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::cli::language_label`: not accessible
+     |
+    ::: crates/polint/src/module_graph/model.rs:520:1
+     |
+ 520 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::module_graph::model::language_label`: not accessible
+     |
+    ::: crates/polint/src/symbol_graph/semantic.rs:870:1
+     |
+ 870 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::symbol_graph::semantic::language_label`: not accessible
+help: consider importing one of these functions
+     |
+   1 + use crate::analysis::reachability::facts::language_label;
+     |
+   1 + use crate::core::metadata::language_label;
+     |
+
+error[E0425]: cannot find function `span_metadata_value` in this scope
+    --> crates/polint/src/core/mod.rs:3489:26
+     |
+3489 |                 ("span", span_metadata_value(&fact.span)),
+     |                          ^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::span_metadata_value;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3491:13
+     |
+3491 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3504:9
+     |
+3504 |         fact_meta_from_parts(
+     |         ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_parts;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3509:13
+     |
+3509 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `language_label` in this scope
+    --> crates/polint/src/core/mod.rs:3511:30
+     |
+3511 |                 ("language", language_label(fact.language).to_string()),
+     |                              ^^^^^^^^^^^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/polint/src/analysis/cfg/lower_ts.rs:486:1
+     |
+ 486 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::cfg::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/mir/lower_ts.rs:3109:1
+     |
+3109 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::mir::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/ts_js.rs:979:1
+     |
+ 979 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::ts_js::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/validate.rs:735:1
+     |
+ 735 | fn language_label(value: Option<&str>) -> Language {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::validate::language_label`: not accessible
+     |
+    ::: crates/polint/src/cli/mod.rs:3444:1
+     |
+3444 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::cli::language_label`: not accessible
+     |
+    ::: crates/polint/src/module_graph/model.rs:520:1
+     |
+ 520 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::module_graph::model::language_label`: not accessible
+     |
+    ::: crates/polint/src/symbol_graph/semantic.rs:870:1
+     |
+ 870 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::symbol_graph::semantic::language_label`: not accessible
+help: consider importing one of these functions
+     |
+   1 + use crate::analysis::reachability::facts::language_label;
+     |
+   1 + use crate::core::metadata::language_label;
+     |
+
+error[E0425]: cannot find function `span_metadata_value` in this scope
+    --> crates/polint/src/core/mod.rs:3513:26
+     |
+3513 |                 ("span", span_metadata_value(&fact.span)),
+     |                          ^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::span_metadata_value;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3515:13
+     |
+3515 |             stable_parts([(
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3523:9
+     |
+3523 |         fact_meta_from_parts(
+     |         ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_parts;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3528:13
+     |
+3528 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3532:13
+     |
+3532 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `span_metadata_value` in this scope
+    --> crates/polint/src/core/mod.rs:3534:26
+     |
+3534 |                 ("span", span_metadata_value(&fact.decision_span)),
+     |                          ^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::span_metadata_value;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3543:9
+     |
+3543 |         fact_meta_from_parts(
+     |         ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_parts;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3548:13
+     |
+3548 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `span_metadata_value` in this scope
+    --> crates/polint/src/core/mod.rs:3551:26
+     |
+3551 |                 ("span", span_metadata_value(&fact.span)),
+     |                          ^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::span_metadata_value;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3553:13
+     |
+3553 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3582:9
+     |
+3582 |         fact_meta_from_parts(
+     |         ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_parts;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3589:13
+     |
+3589 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3594:13
+     |
+3594 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3602:9
+     |
+3602 |         fact_meta_from_parts(
+     |         ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_parts;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3607:13
+     |
+3607 |             stable_parts([("file_key", self.source_file_key(fact.file))]),
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3608:13
+     |
+3608 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `language_label` in this scope
+    --> crates/polint/src/core/mod.rs:3609:30
+     |
+3609 |                 ("language", language_label(fact.language).to_string()),
+     |                              ^^^^^^^^^^^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/polint/src/analysis/cfg/lower_ts.rs:486:1
+     |
+ 486 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::cfg::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/mir/lower_ts.rs:3109:1
+     |
+3109 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::mir::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/ts_js.rs:979:1
+     |
+ 979 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::ts_js::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/validate.rs:735:1
+     |
+ 735 | fn language_label(value: Option<&str>) -> Language {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::validate::language_label`: not accessible
+     |
+    ::: crates/polint/src/cli/mod.rs:3444:1
+     |
+3444 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::cli::language_label`: not accessible
+     |
+    ::: crates/polint/src/module_graph/model.rs:520:1
+     |
+ 520 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::module_graph::model::language_label`: not accessible
+     |
+    ::: crates/polint/src/symbol_graph/semantic.rs:870:1
+     |
+ 870 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::symbol_graph::semantic::language_label`: not accessible
+help: consider importing one of these functions
+     |
+   1 + use crate::analysis::reachability::facts::language_label;
+     |
+   1 + use crate::core::metadata::language_label;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3622:9
+     |
+3622 |         fact_meta_from_parts(
+     |         ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_parts;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3627:13
+     |
+3627 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3634:13
+     |
+3634 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `language_label` in this scope
+    --> crates/polint/src/core/mod.rs:3636:30
+     |
+3636 |                 ("language", language_label(fact.language).to_string()),
+     |                              ^^^^^^^^^^^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/polint/src/analysis/cfg/lower_ts.rs:486:1
+     |
+ 486 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::cfg::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/mir/lower_ts.rs:3109:1
+     |
+3109 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::mir::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/ts_js.rs:979:1
+     |
+ 979 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::ts_js::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/validate.rs:735:1
+     |
+ 735 | fn language_label(value: Option<&str>) -> Language {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::validate::language_label`: not accessible
+     |
+    ::: crates/polint/src/cli/mod.rs:3444:1
+     |
+3444 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::cli::language_label`: not accessible
+     |
+    ::: crates/polint/src/module_graph/model.rs:520:1
+     |
+ 520 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::module_graph::model::language_label`: not accessible
+     |
+    ::: crates/polint/src/symbol_graph/semantic.rs:870:1
+     |
+ 870 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::symbol_graph::semantic::language_label`: not accessible
+help: consider importing one of these functions
+     |
+   1 + use crate::analysis::reachability::facts::language_label;
+     |
+   1 + use crate::core::metadata::language_label;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3644:9
+     |
+3644 |         fact_meta_from_parts(
+     |         ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_parts;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3649:13
+     |
+3649 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3656:13
+     |
+3656 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `language_label` in this scope
+    --> crates/polint/src/core/mod.rs:3658:30
+     |
+3658 |                 ("language", language_label(fact.language).to_string()),
+     |                              ^^^^^^^^^^^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/polint/src/analysis/cfg/lower_ts.rs:486:1
+     |
+ 486 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::cfg::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/mir/lower_ts.rs:3109:1
+     |
+3109 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::mir::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/ts_js.rs:979:1
+     |
+ 979 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::ts_js::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/validate.rs:735:1
+     |
+ 735 | fn language_label(value: Option<&str>) -> Language {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::validate::language_label`: not accessible
+     |
+    ::: crates/polint/src/cli/mod.rs:3444:1
+     |
+3444 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::cli::language_label`: not accessible
+     |
+    ::: crates/polint/src/module_graph/model.rs:520:1
+     |
+ 520 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::module_graph::model::language_label`: not accessible
+     |
+    ::: crates/polint/src/symbol_graph/semantic.rs:870:1
+     |
+ 870 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::symbol_graph::semantic::language_label`: not accessible
+help: consider importing one of these functions
+     |
+   1 + use crate::analysis::reachability::facts::language_label;
+     |
+   1 + use crate::core::metadata::language_label;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3668:9
+     |
+3668 |         fact_meta_from_parts(
+     |         ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_parts;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3673:13
+     |
+3673 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `module_node_kind_label` in this scope
+    --> crates/polint/src/core/mod.rs:3674:26
+     |
+3674 |                 ("kind", module_node_kind_label(node.kind).to_string()),
+     |                          ^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::module_node_kind_label;
+     |
+
+error[E0425]: cannot find function `language_label` in this scope
+    --> crates/polint/src/core/mod.rs:3686:41
+     |
+3686 |                         .map(|language| language_label(language).to_string())
+     |                                         ^^^^^^^^^^^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/polint/src/analysis/cfg/lower_ts.rs:486:1
+     |
+ 486 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::cfg::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/mir/lower_ts.rs:3109:1
+     |
+3109 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::mir::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/ts_js.rs:979:1
+     |
+ 979 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::ts_js::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/validate.rs:735:1
+     |
+ 735 | fn language_label(value: Option<&str>) -> Language {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::validate::language_label`: not accessible
+     |
+    ::: crates/polint/src/cli/mod.rs:3444:1
+     |
+3444 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::cli::language_label`: not accessible
+     |
+    ::: crates/polint/src/module_graph/model.rs:520:1
+     |
+ 520 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::module_graph::model::language_label`: not accessible
+     |
+    ::: crates/polint/src/symbol_graph/semantic.rs:870:1
+     |
+ 870 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::symbol_graph::semantic::language_label`: not accessible
+help: consider importing one of these functions
+     |
+   1 + use crate::analysis::reachability::facts::language_label;
+     |
+   1 + use crate::core::metadata::language_label;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3690:13
+     |
+3690 |             stable_parts([("id", node.id.0.to_string())]),
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3696:9
+     |
+3696 |         fact_meta_from_parts(
+     |         ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_parts;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3701:13
+     |
+3701 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `resolution_status_label` in this scope
+    --> crates/polint/src/core/mod.rs:3713:28
+     |
+3713 |                   ("status", resolution_status_label(fact.status).to_string()),
+     |                              ^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/polint/src/analysis_kernel/metadata.rs:500:1
+     |
+ 500 | / pub(crate) fn resolution_status_metadata(
+ 501 | |     status: ResolutionStatus,
+ 502 | | ) -> (FactPrecision, FactConfidence) {
+ 503 | |     match status {
+...    |
+ 512 | | }
+     | |_- similarly named function `resolution_status_metadata` defined here
+     |
+note: function `crate::analysis::unknown_taxonomy::collect::resolution_status_label` exists but is inaccessible
+    --> crates/polint/src/analysis/unknown_taxonomy/collect.rs:668:1
+     |
+ 668 | fn resolution_status_label(status: ResolutionStatus) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not accessible
+help: a function with a similar name exists
+     |
+3713 -                 ("status", resolution_status_label(fact.status).to_string()),
+3713 +                 ("status", resolution_status_metadata(fact.status).to_string()),
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::resolution_status_label;
+     |
+
+error[E0425]: cannot find function `resolution_precision_label` in this scope
+    --> crates/polint/src/core/mod.rs:3716:21
+     |
+3716 |                     resolution_precision_label(fact.precision).to_string(),
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/polint/src/analysis/unknown_taxonomy/collect.rs:679:1
+     |
+ 679 | fn resolution_precision_label(precision: ResolutionPrecision) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::unknown_taxonomy::collect::resolution_precision_label`: not accessible
+     |
+    ::: crates/polint/src/cli/mod.rs:3029:1
+     |
+3029 | fn resolution_precision_label(precision: crate::core::ResolutionPrecision) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::cli::resolution_precision_label`: not accessible
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::resolution_precision_label;
+     |
+
+error[E0425]: cannot find function `unresolved_reason_label` in this scope
+    --> crates/polint/src/core/mod.rs:3721:39
+     |
+3721 |                         .map(|reason| unresolved_reason_label(reason).to_string())
+     |                                       ^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+note: function `crate::analysis::unknown_taxonomy::collect::unresolved_reason_label` exists but is inaccessible
+    --> crates/polint/src/analysis/unknown_taxonomy/collect.rs:689:1
+     |
+ 689 | fn unresolved_reason_label(reason: UnresolvedReason) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not accessible
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::unresolved_reason_label;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3725:13
+     |
+3725 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3741:9
+     |
+3741 |         fact_meta_from_parts(
+     |         ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_parts;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3746:13
+     |
+3746 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `module_edge_kind_label` in this scope
+    --> crates/polint/src/core/mod.rs:3769:26
+     |
+3769 |                 ("kind", module_edge_kind_label(edge.kind).to_string()),
+     |                          ^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::module_edge_kind_label;
+     |
+
+error[E0425]: cannot find function `resolution_status_label` in this scope
+    --> crates/polint/src/core/mod.rs:3770:28
+     |
+3770 |                   ("status", resolution_status_label(edge.status).to_string()),
+     |                              ^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/polint/src/analysis_kernel/metadata.rs:500:1
+     |
+ 500 | / pub(crate) fn resolution_status_metadata(
+ 501 | |     status: ResolutionStatus,
+ 502 | | ) -> (FactPrecision, FactConfidence) {
+ 503 | |     match status {
+...    |
+ 512 | | }
+     | |_- similarly named function `resolution_status_metadata` defined here
+     |
+note: function `crate::analysis::unknown_taxonomy::collect::resolution_status_label` exists but is inaccessible
+    --> crates/polint/src/analysis/unknown_taxonomy/collect.rs:668:1
+     |
+ 668 | fn resolution_status_label(status: ResolutionStatus) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not accessible
+help: a function with a similar name exists
+     |
+3770 -                 ("status", resolution_status_label(edge.status).to_string()),
+3770 +                 ("status", resolution_status_metadata(edge.status).to_string()),
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::resolution_status_label;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3772:13
+     |
+3772 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_stable_key` in this scope
+    --> crates/polint/src/core/mod.rs:3782:9
+     |
+3782 |         fact_meta_from_stable_key(
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_stable_key;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3788:13
+     |
+3788 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `language_label` in this scope
+    --> crates/polint/src/core/mod.rs:3790:30
+     |
+3790 |                 ("language", language_label(fact.language).to_string()),
+     |                              ^^^^^^^^^^^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/polint/src/analysis/cfg/lower_ts.rs:486:1
+     |
+ 486 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::cfg::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/mir/lower_ts.rs:3109:1
+     |
+3109 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::mir::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/ts_js.rs:979:1
+     |
+ 979 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::ts_js::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/validate.rs:735:1
+     |
+ 735 | fn language_label(value: Option<&str>) -> Language {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::validate::language_label`: not accessible
+     |
+    ::: crates/polint/src/cli/mod.rs:3444:1
+     |
+3444 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::cli::language_label`: not accessible
+     |
+    ::: crates/polint/src/module_graph/model.rs:520:1
+     |
+ 520 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::module_graph::model::language_label`: not accessible
+     |
+    ::: crates/polint/src/symbol_graph/semantic.rs:870:1
+     |
+ 870 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::symbol_graph::semantic::language_label`: not accessible
+help: consider importing one of these functions
+     |
+   1 + use crate::analysis::reachability::facts::language_label;
+     |
+   1 + use crate::core::metadata::language_label;
+     |
+
+error[E0425]: cannot find function `symbol_precision_label` in this scope
+    --> crates/polint/src/core/mod.rs:3795:21
+     |
+3795 |                     symbol_precision_label(fact.precision).to_string(),
+     |                     ^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/polint/src/analysis/unknown_taxonomy/collect.rs:711:1
+     |
+ 711 | fn symbol_precision_label(precision: SymbolPrecision) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::unknown_taxonomy::collect::symbol_precision_label`: not accessible
+     |
+    ::: crates/polint/src/cli/mod.rs:3049:1
+     |
+3049 | fn symbol_precision_label(precision: SymbolPrecision) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::cli::symbol_precision_label`: not accessible
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::symbol_precision_label;
+     |
+
+error[E0425]: cannot find function `option_span_metadata_value` in this scope
+    --> crates/polint/src/core/mod.rs:3800:21
+     |
+3800 |                     option_span_metadata_value(fact.primary_span.as_ref()),
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::option_span_metadata_value;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_stable_key` in this scope
+    --> crates/polint/src/core/mod.rs:3808:9
+     |
+3808 |         fact_meta_from_stable_key(
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_stable_key;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3814:13
+     |
+3814 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `language_label` in this scope
+    --> crates/polint/src/core/mod.rs:3817:30
+     |
+3817 |                 ("language", language_label(fact.language).to_string()),
+     |                              ^^^^^^^^^^^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/polint/src/analysis/cfg/lower_ts.rs:486:1
+     |
+ 486 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::cfg::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/mir/lower_ts.rs:3109:1
+     |
+3109 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::mir::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/ts_js.rs:979:1
+     |
+ 979 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::ts_js::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/validate.rs:735:1
+     |
+ 735 | fn language_label(value: Option<&str>) -> Language {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::validate::language_label`: not accessible
+     |
+    ::: crates/polint/src/cli/mod.rs:3444:1
+     |
+3444 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::cli::language_label`: not accessible
+     |
+    ::: crates/polint/src/module_graph/model.rs:520:1
+     |
+ 520 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::module_graph::model::language_label`: not accessible
+     |
+    ::: crates/polint/src/symbol_graph/semantic.rs:870:1
+     |
+ 870 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::symbol_graph::semantic::language_label`: not accessible
+help: consider importing one of these functions
+     |
+   1 + use crate::analysis::reachability::facts::language_label;
+     |
+   1 + use crate::core::metadata::language_label;
+     |
+
+error[E0425]: cannot find function `symbol_precision_label` in this scope
+    --> crates/polint/src/core/mod.rs:3822:21
+     |
+3822 |                     symbol_precision_label(fact.precision).to_string(),
+     |                     ^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/polint/src/analysis/unknown_taxonomy/collect.rs:711:1
+     |
+ 711 | fn symbol_precision_label(precision: SymbolPrecision) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::unknown_taxonomy::collect::symbol_precision_label`: not accessible
+     |
+    ::: crates/polint/src/cli/mod.rs:3049:1
+     |
+3049 | fn symbol_precision_label(precision: SymbolPrecision) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::cli::symbol_precision_label`: not accessible
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::symbol_precision_label;
+     |
+
+error[E0425]: cannot find function `option_span_metadata_value` in this scope
+    --> crates/polint/src/core/mod.rs:3827:21
+     |
+3827 |                     option_span_metadata_value(fact.primary_span.as_ref()),
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::option_span_metadata_value;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_stable_key` in this scope
+    --> crates/polint/src/core/mod.rs:3835:9
+     |
+3835 |         fact_meta_from_stable_key(
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_stable_key;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3841:13
+     |
+3841 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `language_label` in this scope
+    --> crates/polint/src/core/mod.rs:3843:30
+     |
+3843 |                 ("language", language_label(fact.language).to_string()),
+     |                              ^^^^^^^^^^^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/polint/src/analysis/cfg/lower_ts.rs:486:1
+     |
+ 486 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::cfg::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/mir/lower_ts.rs:3109:1
+     |
+3109 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::mir::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/ts_js.rs:979:1
+     |
+ 979 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::ts_js::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/validate.rs:735:1
+     |
+ 735 | fn language_label(value: Option<&str>) -> Language {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::validate::language_label`: not accessible
+     |
+    ::: crates/polint/src/cli/mod.rs:3444:1
+     |
+3444 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::cli::language_label`: not accessible
+     |
+    ::: crates/polint/src/module_graph/model.rs:520:1
+     |
+ 520 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::module_graph::model::language_label`: not accessible
+     |
+    ::: crates/polint/src/symbol_graph/semantic.rs:870:1
+     |
+ 870 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::symbol_graph::semantic::language_label`: not accessible
+help: consider importing one of these functions
+     |
+   1 + use crate::analysis::reachability::facts::language_label;
+     |
+   1 + use crate::core::metadata::language_label;
+     |
+
+error[E0425]: cannot find function `symbol_precision_label` in this scope
+    --> crates/polint/src/core/mod.rs:3848:21
+     |
+3848 |                     symbol_precision_label(fact.precision).to_string(),
+     |                     ^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/polint/src/analysis/unknown_taxonomy/collect.rs:711:1
+     |
+ 711 | fn symbol_precision_label(precision: SymbolPrecision) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::unknown_taxonomy::collect::symbol_precision_label`: not accessible
+     |
+    ::: crates/polint/src/cli/mod.rs:3049:1
+     |
+3049 | fn symbol_precision_label(precision: SymbolPrecision) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::cli::symbol_precision_label`: not accessible
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::symbol_precision_label;
+     |
+
+error[E0425]: cannot find function `symbol_resolution_status_label` in this scope
+    --> crates/polint/src/core/mod.rs:3852:21
+     |
+3852 |                     symbol_resolution_status_label(fact.status).to_string(),
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::symbol_resolution_status_label;
+     |
+
+error[E0425]: cannot find function `option_span_metadata_value` in this scope
+    --> crates/polint/src/core/mod.rs:3857:21
+     |
+3857 |                     option_span_metadata_value(fact.primary_span.as_ref()),
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::option_span_metadata_value;
+     |
+
+error[E0425]: cannot find function `semantic_status_metadata` in this scope
+    --> crates/polint/src/core/mod.rs:3875:39
+     |
+3875 |           let (precision, confidence) = semantic_status_metadata(status);
+     |                                         ^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/polint/src/analysis_kernel/metadata.rs:500:1
+     |
+ 500 | / pub(crate) fn resolution_status_metadata(
+ 501 | |     status: ResolutionStatus,
+ 502 | | ) -> (FactPrecision, FactConfidence) {
+ 503 | |     match status {
+...    |
+ 512 | | }
+     | |_- similarly named function `resolution_status_metadata` defined here
+     |
+help: a function with a similar name exists
+     |
+3875 -         let (precision, confidence) = semantic_status_metadata(status);
+3875 +         let (precision, confidence) = resolution_status_metadata(status);
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::semantic_status_metadata;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_stable_key` in this scope
+    --> crates/polint/src/core/mod.rs:3876:9
+     |
+3876 |         fact_meta_from_stable_key(
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_stable_key;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3882:13
+     |
+3882 |             stable_parts([("status", semantic_status_label(status).to_string())]),
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `mir_status_metadata` in this scope
+    --> crates/polint/src/core/mod.rs:3887:39
+     |
+3887 |         let (precision, confidence) = mir_status_metadata(body.status);
+     |                                       ^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::mir_status_metadata;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_stable_key` in this scope
+    --> crates/polint/src/core/mod.rs:3888:9
+     |
+3888 |         fact_meta_from_stable_key(
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_stable_key;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3894:13
+     |
+3894 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `language_label` in this scope
+    --> crates/polint/src/core/mod.rs:3896:30
+     |
+3896 |                 ("language", language_label(body.language).to_string()),
+     |                              ^^^^^^^^^^^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/polint/src/analysis/cfg/lower_ts.rs:486:1
+     |
+ 486 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::cfg::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/mir/lower_ts.rs:3109:1
+     |
+3109 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::mir::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/ts_js.rs:979:1
+     |
+ 979 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::ts_js::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/validate.rs:735:1
+     |
+ 735 | fn language_label(value: Option<&str>) -> Language {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::validate::language_label`: not accessible
+     |
+    ::: crates/polint/src/cli/mod.rs:3444:1
+     |
+3444 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::cli::language_label`: not accessible
+     |
+    ::: crates/polint/src/module_graph/model.rs:520:1
+     |
+ 520 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::module_graph::model::language_label`: not accessible
+     |
+    ::: crates/polint/src/symbol_graph/semantic.rs:870:1
+     |
+ 870 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::symbol_graph::semantic::language_label`: not accessible
+help: consider importing one of these functions
+     |
+   1 + use crate::analysis::reachability::facts::language_label;
+     |
+   1 + use crate::core::metadata::language_label;
+     |
+
+error[E0425]: cannot find function `span_metadata_value` in this scope
+    --> crates/polint/src/core/mod.rs:3915:26
+     |
+3915 |                 ("span", span_metadata_value(&body.span)),
+     |                          ^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::span_metadata_value;
+     |
+
+error[E0425]: cannot find function `mir_status_metadata` in this scope
+    --> crates/polint/src/core/mod.rs:3921:39
+     |
+3921 |         let (precision, confidence) = mir_status_metadata(operation.status);
+     |                                       ^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::mir_status_metadata;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_stable_key` in this scope
+    --> crates/polint/src/core/mod.rs:3922:9
+     |
+3922 |         fact_meta_from_stable_key(
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_stable_key;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3928:13
+     |
+3928 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `span_metadata_value` in this scope
+    --> crates/polint/src/core/mod.rs:3935:26
+     |
+3935 |                 ("span", span_metadata_value(&operation.span)),
+     |                          ^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::span_metadata_value;
+     |
+
+error[E0425]: cannot find function `place_status_metadata` in this scope
+    --> crates/polint/src/core/mod.rs:3941:39
+     |
+3941 |         let (precision, confidence) = place_status_metadata(place.status);
+     |                                       ^^^^^^^^^^^^^^^^^^^^^
+...
+5013 | fn place_status_label(status: PlaceStatus) -> &'static str {
+     | ---------------------------------------------------------- similarly named function `place_status_label` defined here
+     |
+help: a function with a similar name exists
+     |
+3941 -         let (precision, confidence) = place_status_metadata(place.status);
+3941 +         let (precision, confidence) = place_status_label(place.status);
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::place_status_metadata;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_stable_key` in this scope
+    --> crates/polint/src/core/mod.rs:3942:9
+     |
+3942 |         fact_meta_from_stable_key(
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_stable_key;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3948:13
+     |
+3948 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `language_label` in this scope
+    --> crates/polint/src/core/mod.rs:3950:30
+     |
+3950 |                 ("language", language_label(place.language).to_string()),
+     |                              ^^^^^^^^^^^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/polint/src/analysis/cfg/lower_ts.rs:486:1
+     |
+ 486 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::cfg::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/mir/lower_ts.rs:3109:1
+     |
+3109 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::mir::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/ts_js.rs:979:1
+     |
+ 979 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::ts_js::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/validate.rs:735:1
+     |
+ 735 | fn language_label(value: Option<&str>) -> Language {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::validate::language_label`: not accessible
+     |
+    ::: crates/polint/src/cli/mod.rs:3444:1
+     |
+3444 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::cli::language_label`: not accessible
+     |
+    ::: crates/polint/src/module_graph/model.rs:520:1
+     |
+ 520 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::module_graph::model::language_label`: not accessible
+     |
+    ::: crates/polint/src/symbol_graph/semantic.rs:870:1
+     |
+ 870 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::symbol_graph::semantic::language_label`: not accessible
+help: consider importing one of these functions
+     |
+   1 + use crate::analysis::reachability::facts::language_label;
+     |
+   1 + use crate::core::metadata::language_label;
+     |
+
+error[E0425]: cannot find function `mir_status_metadata` in this scope
+    --> crates/polint/src/core/mod.rs:3959:39
+     |
+3959 |         let (precision, confidence) = mir_status_metadata(row.status);
+     |                                       ^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::mir_status_metadata;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_stable_key` in this scope
+    --> crates/polint/src/core/mod.rs:3960:9
+     |
+3960 |         fact_meta_from_stable_key(
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_stable_key;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:3966:13
+     |
+3966 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `language_label` in this scope
+    --> crates/polint/src/core/mod.rs:3968:30
+     |
+3968 |                 ("language", language_label(row.language).to_string()),
+     |                              ^^^^^^^^^^^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/polint/src/analysis/cfg/lower_ts.rs:486:1
+     |
+ 486 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::cfg::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/mir/lower_ts.rs:3109:1
+     |
+3109 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::mir::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/ts_js.rs:979:1
+     |
+ 979 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::ts_js::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/validate.rs:735:1
+     |
+ 735 | fn language_label(value: Option<&str>) -> Language {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::validate::language_label`: not accessible
+     |
+    ::: crates/polint/src/cli/mod.rs:3444:1
+     |
+3444 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::cli::language_label`: not accessible
+     |
+    ::: crates/polint/src/module_graph/model.rs:520:1
+     |
+ 520 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::module_graph::model::language_label`: not accessible
+     |
+    ::: crates/polint/src/symbol_graph/semantic.rs:870:1
+     |
+ 870 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::symbol_graph::semantic::language_label`: not accessible
+help: consider importing one of these functions
+     |
+   1 + use crate::analysis::reachability::facts::language_label;
+     |
+   1 + use crate::core::metadata::language_label;
+     |
+
+error[E0425]: cannot find function `span_metadata_value` in this scope
+    --> crates/polint/src/core/mod.rs:3970:26
+     |
+3970 |                 ("span", span_metadata_value(&row.span)),
+     |                          ^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::span_metadata_value;
+     |
+
+error[E0425]: cannot find function `call_status_metadata` in this scope
+    --> crates/polint/src/core/mod.rs:4000:39
+     |
+4000 |         let (precision, confidence) = call_status_metadata(fact.status, fact.precision);
+     |                                       ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::call_status_metadata;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_stable_key` in this scope
+    --> crates/polint/src/core/mod.rs:4001:9
+     |
+4001 |         fact_meta_from_stable_key(
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_stable_key;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:4007:13
+     |
+4007 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `call_status_label` in this scope
+    --> crates/polint/src/core/mod.rs:4008:28
+     |
+4008 |                 ("status", call_status_label(fact.status).to_string()),
+     |                            ^^^^^^^^^^^^^^^^^
+...
+5004 | fn mir_status_label(status: MirStatus) -> &'static str {
+     | ------------------------------------------------------ similarly named function `mir_status_label` defined here
+     |
+note: these functions exist but are inaccessible
+    --> crates/polint/src/analysis/unknown_taxonomy/collect.rs:754:1
+     |
+ 754 | fn call_status_label(status: CallTargetStatus) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::unknown_taxonomy::collect::call_status_label`: not accessible
+     |
+    ::: crates/polint/src/policy_queries.rs:1820:1
+     |
+1820 | fn call_status_label(status: CallTargetStatus) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::policy_queries::call_status_label`: not accessible
+help: a function with a similar name exists
+     |
+4008 -                 ("status", call_status_label(fact.status).to_string()),
+4008 +                 ("status", mir_status_label(fact.status).to_string()),
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::labels::call_status_label;
+     |
+
+error[E0425]: cannot find function `call_precision_label` in this scope
+    --> crates/polint/src/core/mod.rs:4011:21
+     |
+4011 |                     call_precision_label(fact.precision).to_string(),
+     |                     ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/polint/src/analysis/unknown_taxonomy/collect.rs:766:1
+     |
+ 766 | fn call_precision_label(precision: crate::analysis::calls::facts::CallPrecision) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::unknown_taxonomy::collect::call_precision_label`: not accessible
+     |
+    ::: crates/polint/src/policy_queries.rs:1832:1
+     |
+1832 | fn call_precision_label(precision: CallPrecision) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::policy_queries::call_precision_label`: not accessible
+help: consider importing this function
+     |
+   1 + use crate::core::labels::call_precision_label;
+     |
+
+error[E0425]: cannot find function `call_syntax_kind_label` in this scope
+    --> crates/polint/src/core/mod.rs:4013:26
+     |
+4013 |                 ("kind", call_syntax_kind_label(fact.kind).to_string()),
+     |                          ^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::labels::call_syntax_kind_label;
+     |
+
+error[E0425]: cannot find function `language_label` in this scope
+    --> crates/polint/src/core/mod.rs:4014:30
+     |
+4014 |                 ("language", language_label(fact.language).to_string()),
+     |                              ^^^^^^^^^^^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/polint/src/analysis/cfg/lower_ts.rs:486:1
+     |
+ 486 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::cfg::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/mir/lower_ts.rs:3109:1
+     |
+3109 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::mir::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/ts_js.rs:979:1
+     |
+ 979 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::ts_js::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/validate.rs:735:1
+     |
+ 735 | fn language_label(value: Option<&str>) -> Language {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::validate::language_label`: not accessible
+     |
+    ::: crates/polint/src/cli/mod.rs:3444:1
+     |
+3444 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::cli::language_label`: not accessible
+     |
+    ::: crates/polint/src/module_graph/model.rs:520:1
+     |
+ 520 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::module_graph::model::language_label`: not accessible
+     |
+    ::: crates/polint/src/symbol_graph/semantic.rs:870:1
+     |
+ 870 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::symbol_graph::semantic::language_label`: not accessible
+help: consider importing one of these functions
+     |
+   1 + use crate::analysis::reachability::facts::language_label;
+     |
+   1 + use crate::core::metadata::language_label;
+     |
+
+error[E0425]: cannot find function `span_metadata_value` in this scope
+    --> crates/polint/src/core/mod.rs:4031:26
+     |
+4031 |                 ("span", span_metadata_value(&fact.span)),
+     |                          ^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::span_metadata_value;
+     |
+
+error[E0425]: cannot find function `call_status_metadata` in this scope
+    --> crates/polint/src/core/mod.rs:4037:39
+     |
+4037 |         let (precision, confidence) = call_status_metadata(fact.status, fact.precision);
+     |                                       ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::call_status_metadata;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_stable_key` in this scope
+    --> crates/polint/src/core/mod.rs:4038:9
+     |
+4038 |         fact_meta_from_stable_key(
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_stable_key;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:4044:13
+     |
+4044 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `call_status_label` in this scope
+    --> crates/polint/src/core/mod.rs:4045:28
+     |
+4045 |                 ("status", call_status_label(fact.status).to_string()),
+     |                            ^^^^^^^^^^^^^^^^^
+...
+5004 | fn mir_status_label(status: MirStatus) -> &'static str {
+     | ------------------------------------------------------ similarly named function `mir_status_label` defined here
+     |
+note: these functions exist but are inaccessible
+    --> crates/polint/src/analysis/unknown_taxonomy/collect.rs:754:1
+     |
+ 754 | fn call_status_label(status: CallTargetStatus) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::unknown_taxonomy::collect::call_status_label`: not accessible
+     |
+    ::: crates/polint/src/policy_queries.rs:1820:1
+     |
+1820 | fn call_status_label(status: CallTargetStatus) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::policy_queries::call_status_label`: not accessible
+help: a function with a similar name exists
+     |
+4045 -                 ("status", call_status_label(fact.status).to_string()),
+4045 +                 ("status", mir_status_label(fact.status).to_string()),
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::labels::call_status_label;
+     |
+
+error[E0425]: cannot find function `call_precision_label` in this scope
+    --> crates/polint/src/core/mod.rs:4048:21
+     |
+4048 |                     call_precision_label(fact.precision).to_string(),
+     |                     ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/polint/src/analysis/unknown_taxonomy/collect.rs:766:1
+     |
+ 766 | fn call_precision_label(precision: crate::analysis::calls::facts::CallPrecision) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::unknown_taxonomy::collect::call_precision_label`: not accessible
+     |
+    ::: crates/polint/src/policy_queries.rs:1832:1
+     |
+1832 | fn call_precision_label(precision: CallPrecision) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::policy_queries::call_precision_label`: not accessible
+help: consider importing this function
+     |
+   1 + use crate::core::labels::call_precision_label;
+     |
+
+error[E0425]: cannot find function `call_algorithm_label` in this scope
+    --> crates/polint/src/core/mod.rs:4052:21
+     |
+4052 |                     call_algorithm_label(fact.algorithm).to_string(),
+     |                     ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::labels::call_algorithm_label;
+     |
+
+error[E0425]: cannot find function `call_edge_kind_label` in this scope
+    --> crates/polint/src/core/mod.rs:4056:21
+     |
+4056 |                     call_edge_kind_label(fact.edge_kind).to_string(),
+     |                     ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::labels::call_edge_kind_label;
+     |
+
+error[E0425]: cannot find value `call_unresolved_reason_label` in this scope
+    --> crates/polint/src/core/mod.rs:4061:30
+     |
+4061 |                         .map(call_unresolved_reason_label)
+     |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::labels::call_unresolved_reason_label;
+     |
+
+error[E0425]: cannot find function `call_status_metadata` in this scope
+    --> crates/polint/src/core/mod.rs:4090:46
+     |
+4090 |         let (precision, status_confidence) = call_status_metadata(fact.status, fact.precision);
+     |                                              ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::call_status_metadata;
+     |
+
+error[E0425]: cannot find function `refined_call_confidence_metadata` in this scope
+    --> crates/polint/src/core/mod.rs:4091:26
+     |
+4091 |         let confidence = refined_call_confidence_metadata(fact.confidence, status_confidence);
+     |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::labels::refined_call_confidence_metadata;
+     |
+
+error[E0425]: cannot find function `refined_call_validation_metadata` in this scope
+    --> crates/polint/src/core/mod.rs:4092:26
+     |
+4092 |         let validation = refined_call_validation_metadata(fact.validation);
+     |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::labels::refined_call_validation_metadata;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_stable_key_with_validation` in this scope
+    --> crates/polint/src/core/mod.rs:4093:9
+     |
+4093 |         fact_meta_from_stable_key_with_validation(
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_stable_key_with_validation;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:4100:13
+     |
+4100 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `call_status_label` in this scope
+    --> crates/polint/src/core/mod.rs:4101:28
+     |
+4101 |                 ("status", call_status_label(fact.status).to_string()),
+     |                            ^^^^^^^^^^^^^^^^^
+...
+5004 | fn mir_status_label(status: MirStatus) -> &'static str {
+     | ------------------------------------------------------ similarly named function `mir_status_label` defined here
+     |
+note: these functions exist but are inaccessible
+    --> crates/polint/src/analysis/unknown_taxonomy/collect.rs:754:1
+     |
+ 754 | fn call_status_label(status: CallTargetStatus) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::unknown_taxonomy::collect::call_status_label`: not accessible
+     |
+    ::: crates/polint/src/policy_queries.rs:1820:1
+     |
+1820 | fn call_status_label(status: CallTargetStatus) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::policy_queries::call_status_label`: not accessible
+help: a function with a similar name exists
+     |
+4101 -                 ("status", call_status_label(fact.status).to_string()),
+4101 +                 ("status", mir_status_label(fact.status).to_string()),
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::labels::call_status_label;
+     |
+
+error[E0425]: cannot find function `call_precision_label` in this scope
+    --> crates/polint/src/core/mod.rs:4104:21
+     |
+4104 |                     call_precision_label(fact.precision).to_string(),
+     |                     ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/polint/src/analysis/unknown_taxonomy/collect.rs:766:1
+     |
+ 766 | fn call_precision_label(precision: crate::analysis::calls::facts::CallPrecision) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::unknown_taxonomy::collect::call_precision_label`: not accessible
+     |
+    ::: crates/polint/src/policy_queries.rs:1832:1
+     |
+1832 | fn call_precision_label(precision: CallPrecision) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::policy_queries::call_precision_label`: not accessible
+help: consider importing this function
+     |
+   1 + use crate::core::labels::call_precision_label;
+     |
+
+error[E0425]: cannot find function `call_algorithm_label` in this scope
+    --> crates/polint/src/core/mod.rs:4108:21
+     |
+4108 |                     call_algorithm_label(fact.algorithm).to_string(),
+     |                     ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::labels::call_algorithm_label;
+     |
+
+error[E0425]: cannot find function `call_edge_kind_label` in this scope
+    --> crates/polint/src/core/mod.rs:4112:21
+     |
+4112 |                     call_edge_kind_label(fact.edge_kind).to_string(),
+     |                     ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::labels::call_edge_kind_label;
+     |
+
+error[E0425]: cannot find function `refined_call_tier_label` in this scope
+    --> crates/polint/src/core/mod.rs:4114:26
+     |
+4114 |                 ("tier", refined_call_tier_label(fact.tier).to_string()),
+     |                          ^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::labels::refined_call_tier_label;
+     |
+
+error[E0425]: cannot find function `refined_call_validation_label` in this scope
+    --> crates/polint/src/core/mod.rs:4117:21
+     |
+4117 |                     refined_call_validation_label(fact.validation).to_string(),
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::labels::refined_call_validation_label;
+     |
+
+error[E0425]: cannot find value `call_unresolved_reason_label` in this scope
+    --> crates/polint/src/core/mod.rs:4122:30
+     |
+4122 |                         .map(call_unresolved_reason_label)
+     |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::labels::call_unresolved_reason_label;
+     |
+
+error[E0425]: cannot find function `data_flow_status_metadata` in this scope
+    --> crates/polint/src/core/mod.rs:4185:46
+     |
+4185 |         let (precision, status_confidence) = data_flow_status_metadata(status, data_flow_precision);
+     |                                              ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::labels::data_flow_status_metadata;
+     |
+
+error[E0425]: cannot find function `data_flow_confidence_metadata` in this scope
+    --> crates/polint/src/core/mod.rs:4186:26
+     |
+4186 |         let confidence = data_flow_confidence_metadata(data_flow_confidence, status_confidence);
+     |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: a local variable with a similar name exists
+     |
+4186 -         let confidence = data_flow_confidence_metadata(data_flow_confidence, status_confidence);
+4186 +         let confidence = data_flow_confidence(data_flow_confidence, status_confidence);
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::labels::data_flow_confidence_metadata;
+     |
+
+error[E0425]: cannot find function `data_flow_validation_metadata` in this scope
+    --> crates/polint/src/core/mod.rs:4187:26
+     |
+4187 |         let validation = data_flow_validation_metadata(data_flow_validation);
+     |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: a local variable with a similar name exists
+     |
+4187 -         let validation = data_flow_validation_metadata(data_flow_validation);
+4187 +         let validation = data_flow_validation(data_flow_validation);
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::labels::data_flow_validation_metadata;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_stable_key_with_validation` in this scope
+    --> crates/polint/src/core/mod.rs:4188:9
+     |
+4188 |         fact_meta_from_stable_key_with_validation(
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_stable_key_with_validation;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:4195:13
+     |
+4195 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `data_flow_status_label` in this scope
+    --> crates/polint/src/core/mod.rs:4197:28
+     |
+4197 |                 ("status", data_flow_status_label(status).to_string()),
+     |                            ^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+note: function `crate::analysis::unknown_taxonomy::collect::data_flow_status_label` exists but is inaccessible
+    --> crates/polint/src/analysis/unknown_taxonomy/collect.rs:778:1
+     |
+ 778 | fn data_flow_status_label(status: DataFlowStatus) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not accessible
+help: consider importing this function
+     |
+   1 + use crate::core::labels::data_flow_status_label;
+     |
+
+error[E0425]: cannot find function `data_flow_precision_label` in this scope
+    --> crates/polint/src/core/mod.rs:4200:21
+     |
+4200 |                     data_flow_precision_label(data_flow_precision).to_string(),
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+note: function `crate::analysis::unknown_taxonomy::collect::data_flow_precision_label` exists but is inaccessible
+    --> crates/polint/src/analysis/unknown_taxonomy/collect.rs:789:1
+     |
+ 789 | fn data_flow_precision_label(precision: DataFlowPrecision) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not accessible
+help: a local variable with a similar name exists
+     |
+4200 -                     data_flow_precision_label(data_flow_precision).to_string(),
+4200 +                     data_flow_precision(data_flow_precision).to_string(),
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::labels::data_flow_precision_label;
+     |
+
+error[E0425]: cannot find function `data_flow_validation_label` in this scope
+    --> crates/polint/src/core/mod.rs:4204:21
+     |
+4204 |                     data_flow_validation_label(data_flow_validation).to_string(),
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: a local variable with a similar name exists
+     |
+4204 -                     data_flow_validation_label(data_flow_validation).to_string(),
+4204 +                     data_flow_validation(data_flow_validation).to_string(),
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::labels::data_flow_validation_label;
+     |
+
+error[E0425]: cannot find function `language_label` in this scope
+    --> crates/polint/src/core/mod.rs:4206:30
+     |
+4206 |                 ("language", language_label(fact.language).to_string()),
+     |                              ^^^^^^^^^^^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/polint/src/analysis/cfg/lower_ts.rs:486:1
+     |
+ 486 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::cfg::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/mir/lower_ts.rs:3109:1
+     |
+3109 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::mir::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/ts_js.rs:979:1
+     |
+ 979 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::ts_js::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/validate.rs:735:1
+     |
+ 735 | fn language_label(value: Option<&str>) -> Language {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::validate::language_label`: not accessible
+     |
+    ::: crates/polint/src/cli/mod.rs:3444:1
+     |
+3444 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::cli::language_label`: not accessible
+     |
+    ::: crates/polint/src/module_graph/model.rs:520:1
+     |
+ 520 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::module_graph::model::language_label`: not accessible
+     |
+    ::: crates/polint/src/symbol_graph/semantic.rs:870:1
+     |
+ 870 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::symbol_graph::semantic::language_label`: not accessible
+help: consider importing one of these functions
+     |
+   1 + use crate::analysis::reachability::facts::language_label;
+     |
+   1 + use crate::core::metadata::language_label;
+     |
+
+error[E0425]: cannot find function `option_span_metadata_value` in this scope
+    --> crates/polint/src/core/mod.rs:4244:26
+     |
+4244 |                 ("span", option_span_metadata_value(fact.span.as_ref())),
+     |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::option_span_metadata_value;
+     |
+
+error[E0425]: cannot find function `data_flow_status_metadata` in this scope
+    --> crates/polint/src/core/mod.rs:4250:46
+     |
+4250 |         let (precision, status_confidence) = data_flow_status_metadata(fact.status, fact.precision);
+     |                                              ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::labels::data_flow_status_metadata;
+     |
+
+error[E0425]: cannot find function `data_flow_confidence_metadata` in this scope
+    --> crates/polint/src/core/mod.rs:4251:26
+     |
+4251 |         let confidence = data_flow_confidence_metadata(fact.confidence, status_confidence);
+     |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::labels::data_flow_confidence_metadata;
+     |
+
+error[E0425]: cannot find function `data_flow_validation_metadata` in this scope
+    --> crates/polint/src/core/mod.rs:4252:26
+     |
+4252 |         let validation = data_flow_validation_metadata(fact.validation);
+     |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::labels::data_flow_validation_metadata;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_stable_key_with_validation` in this scope
+    --> crates/polint/src/core/mod.rs:4253:9
+     |
+4253 |         fact_meta_from_stable_key_with_validation(
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_stable_key_with_validation;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:4260:13
+     |
+4260 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `data_flow_status_label` in this scope
+    --> crates/polint/src/core/mod.rs:4263:28
+     |
+4263 |                 ("status", data_flow_status_label(fact.status).to_string()),
+     |                            ^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+note: function `crate::analysis::unknown_taxonomy::collect::data_flow_status_label` exists but is inaccessible
+    --> crates/polint/src/analysis/unknown_taxonomy/collect.rs:778:1
+     |
+ 778 | fn data_flow_status_label(status: DataFlowStatus) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not accessible
+help: consider importing this function
+     |
+   1 + use crate::core::labels::data_flow_status_label;
+     |
+
+error[E0425]: cannot find function `data_flow_precision_label` in this scope
+    --> crates/polint/src/core/mod.rs:4266:21
+     |
+4266 |                     data_flow_precision_label(fact.precision).to_string(),
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+note: function `crate::analysis::unknown_taxonomy::collect::data_flow_precision_label` exists but is inaccessible
+    --> crates/polint/src/analysis/unknown_taxonomy/collect.rs:789:1
+     |
+ 789 | fn data_flow_precision_label(precision: DataFlowPrecision) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not accessible
+help: consider importing this function
+     |
+   1 + use crate::core::labels::data_flow_precision_label;
+     |
+
+error[E0425]: cannot find function `data_flow_validation_label` in this scope
+    --> crates/polint/src/core/mod.rs:4270:21
+     |
+4270 |                     data_flow_validation_label(fact.validation).to_string(),
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::labels::data_flow_validation_label;
+     |
+
+error[E0425]: cannot find function `data_flow_status_metadata` in this scope
+    --> crates/polint/src/core/mod.rs:4305:46
+     |
+4305 |         let (precision, status_confidence) = data_flow_status_metadata(fact.status, fact.precision);
+     |                                              ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::labels::data_flow_status_metadata;
+     |
+
+error[E0425]: cannot find function `data_flow_confidence_metadata` in this scope
+    --> crates/polint/src/core/mod.rs:4306:26
+     |
+4306 |         let confidence = data_flow_confidence_metadata(fact.confidence, status_confidence);
+     |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::labels::data_flow_confidence_metadata;
+     |
+
+error[E0425]: cannot find function `data_flow_validation_metadata` in this scope
+    --> crates/polint/src/core/mod.rs:4307:26
+     |
+4307 |         let validation = data_flow_validation_metadata(fact.validation);
+     |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::labels::data_flow_validation_metadata;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_stable_key_with_validation` in this scope
+    --> crates/polint/src/core/mod.rs:4308:9
+     |
+4308 |         fact_meta_from_stable_key_with_validation(
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_stable_key_with_validation;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:4315:13
+     |
+4315 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `language_label` in this scope
+    --> crates/polint/src/core/mod.rs:4317:30
+     |
+4317 |                 ("language", language_label(fact.language).to_string()),
+     |                              ^^^^^^^^^^^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/polint/src/analysis/cfg/lower_ts.rs:486:1
+     |
+ 486 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::cfg::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/mir/lower_ts.rs:3109:1
+     |
+3109 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::mir::lower_ts::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/ts_js.rs:979:1
+     |
+ 979 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::ts_js::language_label`: not accessible
+     |
+    ::: crates/polint/src/analysis/types/validate.rs:735:1
+     |
+ 735 | fn language_label(value: Option<&str>) -> Language {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::analysis::types::validate::language_label`: not accessible
+     |
+    ::: crates/polint/src/cli/mod.rs:3444:1
+     |
+3444 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::cli::language_label`: not accessible
+     |
+    ::: crates/polint/src/module_graph/model.rs:520:1
+     |
+ 520 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::module_graph::model::language_label`: not accessible
+     |
+    ::: crates/polint/src/symbol_graph/semantic.rs:870:1
+     |
+ 870 | fn language_label(language: Language) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::symbol_graph::semantic::language_label`: not accessible
+help: consider importing one of these functions
+     |
+   1 + use crate::analysis::reachability::facts::language_label;
+     |
+   1 + use crate::core::metadata::language_label;
+     |
+
+error[E0425]: cannot find function `fact_meta_from_stable_key` in this scope
+    --> crates/polint/src/core/mod.rs:4331:9
+     |
+4331 |         fact_meta_from_stable_key(
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::fact_meta_from_stable_key;
+     |
+
+error[E0425]: cannot find function `stable_parts` in this scope
+    --> crates/polint/src/core/mod.rs:4337:13
+     |
+4337 |             stable_parts([
+     |             ^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::metadata::stable_parts;
+     |
+
+error[E0425]: cannot find function `data_flow_status_label` in this scope
+    --> crates/polint/src/core/mod.rs:4339:28
+     |
+4339 |                 ("status", data_flow_status_label(fact.status).to_string()),
+     |                            ^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+note: function `crate::analysis::unknown_taxonomy::collect::data_flow_status_label` exists but is inaccessible
+    --> crates/polint/src/analysis/unknown_taxonomy/collect.rs:778:1
+     |
+ 778 | fn data_flow_status_label(status: DataFlowStatus) -> &'static str {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not accessible
+help: consider importing this function
+     |
+   1 + use crate::core::labels::data_flow_status_label;
+     |
+
+error[E0425]: cannot find function `evidence_status_metadata` in this scope
+    --> crates/polint/src/core/mod.rs:4347:46
+     |
+4347 |         let (precision, status_confidence) = evidence_status_metadata(fact.status, fact.precision);
+     |                                              ^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::labels::evidence_status_metadata;
+     |
+
+error[E0425]: cannot find function `evidence_confidence_metadata` in this scope
+    --> crates/polint/src/core/mod.rs:4348:26
+     |
+4348 |         let confidence = evidence_confidence_metadata(fact.confidence, status_confidence);
+     |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 + use crate::core::labels::evidence_confidence_metadata;
+     |
+
+error[E0425]: cannot find function `evidence_validation_metadata` in this scope
+    --> crates/polint/src/core/mod.rs:4349:26
+     |
+4349 |         let validation = evidence_validation_metadata(fact.validation);
+     |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+   1 

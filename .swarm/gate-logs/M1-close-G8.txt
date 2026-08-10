@@ -1,0 +1,5 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.15s
+   Generated /Users/emilwareus/conductor/workspaces/exlint/biarritz/target/doc/polint/index.html and 19 other files
+real 0.18
+user 0.07
+sys 0.05

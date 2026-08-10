@@ -1,0 +1,56 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running tests/golden.rs (target/debug/deps/golden-0b79c88cdf5488ee)
+
+running 8 tests
+test golden_updates_require_explicit_env_flag ... ok
+test cost_budget_helper_rejects_clear_regression ... ok
+test diagnostic_set_diff_names_lost_fingerprints ... ok
+test normalize_sorts_diagnostics_by_stable_fingerprint ... ok
+test ci_workflows_never_set_golden_update_env ... ok
+test scale_cases_are_optional_and_discovered ... ok
+test example_golden_cases_cover_inventory_rule_packs ... ok
+test characterization_goldens_match_cli has been running for over 60 seconds
+test characterization_goldens_match_cli ... FAILED
+
+failures:
+
+---- characterization_goldens_match_cli stdout ----
+
+thread 'characterization_goldens_match_cli' (4853695) panicked at crates/polint/tests/golden.rs:494:9:
+golden cost budget breached for `examples/go-sensitive-writes/json`:
+  wall_clock_ms: measured 671 exceeds budget (baseline 321, ratio 2.0903, max 1.2, abs floor +50)
+baseline=GoldenCostRecord { schema_version: "polint-golden-cost-1", wall_clock_ms: 321, peak_rss_bytes: 30359552, peak_rss_delta_bytes: 23347200 }
+measured=GoldenCostRecord { schema_version: "polint-golden-cost-1", wall_clock_ms: 671, peak_rss_bytes: 30441472, peak_rss_delta_bytes: 23461888 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    characterization_goldens_match_cli
+
+test result: FAILED. 7 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 80.38s
+
+error: test failed, to rerun pass `-p polint --test golden`
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running tests/golden.rs (target/debug/deps/golden-0b79c88cdf5488ee)
+
+running 1 test
+test characterization_goldens_match_cli ... FAILED
+
+failures:
+
+---- characterization_goldens_match_cli stdout ----
+
+thread 'characterization_goldens_match_cli' (4883707) panicked at crates/polint/tests/golden.rs:494:9:
+golden cost budget breached for `examples/basic/json`:
+  wall_clock_ms: measured 108 exceeds budget (baseline 20, ratio 5.4000, max 1.2, abs floor +50)
+baseline=GoldenCostRecord { schema_version: "polint-golden-cost-1", wall_clock_ms: 20, peak_rss_bytes: 25116672, peak_rss_delta_bytes: 18038784 }
+measured=GoldenCostRecord { schema_version: "polint-golden-cost-1", wall_clock_ms: 108, peak_rss_bytes: 25247744, peak_rss_delta_bytes: 18153472 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    characterization_goldens_match_cli
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 7 filtered out; finished in 13.84s
+
+error: test failed, to rerun pass `-p polint --test golden`

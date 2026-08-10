@@ -1,0 +1,20 @@
+===== code-quality-metrics =====
+rules=3 zero_finding=0
+3:By rule
+32:  jq '.summary.rules[] | select(.diagnostics_emitted == 0)' .polint/output/latest.json
+===== review-rules =====
+rules=0 zero_finding=0
+3:By rule
+12:  jq '.summary.rules[] | select(.diagnostics_emitted == 0)' .polint/output/latest.json
+===== multiple-rules =====
+rules=2 zero_finding=0
+3:By rule
+25:  jq '.summary.rules[] | select(.diagnostics_emitted == 0)' .polint/output/latest.json
+===== go-complexity =====
+rules=1 zero_finding=0
+3:By rule
+18:  jq '.summary.rules[] | select(.diagnostics_emitted == 0)' .polint/output/latest.json
+===== basic =====
+rules=1 zero_finding=0
+3:By rule
+18:  jq '.summary.rules[] | select(.diagnostics_emitted == 0)' .polint/output/latest.json

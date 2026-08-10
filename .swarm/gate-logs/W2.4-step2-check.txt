@@ -1,0 +1,28 @@
+    Checking polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.4/crates/polint)
+warning: method `manifest` is never used
+  --> crates/polint/src/analysis_kernel/provider.rs:28:8
+   |
+27 | pub(crate) trait Provider: Send + Sync {
+   |                  -------- method in this trait
+28 |     fn manifest(&self) -> &'static ProviderManifest;
+   |        ^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `upstream_digests` is never read
+  --> crates/polint/src/analysis_kernel/provider.rs:40:16
+   |
+32 | pub(crate) struct ProviderCtx<'a> {
+   |                   ----------- field in this struct
+...
+40 |     pub(crate) upstream_digests: &'a BTreeMap<&'static str, Digest>,
+   |                ^^^^^^^^^^^^^^^^
+
+warning: function `manifest_by_id` is never used
+  --> crates/polint/src/analysis_kernel/provider.rs:43:4
+   |
+43 | fn manifest_by_id(id: &'static str) -> &'static ProviderManifest {
+   |    ^^^^^^^^^^^^^^
+
+warning: `polint` (lib) generated 3 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.35s

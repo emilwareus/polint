@@ -1,0 +1,73 @@
+    Blocking waiting for file lock on build directory
+    Checking polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.2/crates/polint)
+error[E0432]: unresolved imports `super::none_value`, `super::topology_precision_metadata`
+  --> crates/polint/src/core/metadata.rs:12:33
+   |
+12 | use super::{SOURCE_PROVIDER_ID, none_value, topology_precision_metadata};
+   |                                 ^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `topology_precision_metadata` in `core`
+   |                                 |
+   |                                 no `none_value` in `core`
+
+warning: unused imports: `DefinitionKind`, `ModuleEdgeKind`, `ModuleNodeKind`, `ReferenceKind`, `ResolutionPrecision`, `ResolutionStatus`, `SymbolKind`, `SymbolNamespace`, `SymbolPrecision`, `SymbolResolutionStatus`, and `UnresolvedReason`
+   --> crates/polint/src/core/db.rs:104:75
+    |
+104 |     BranchObligation, ComplexityMetricFact, CoverageFact, DefinitionFact, DefinitionKind,
+    |                                                                           ^^^^^^^^^^^^^^
+105 |     FileMetricFact, FunctionFact, FunctionMetricFact, ImportFact, JsxAttributeFact, ModuleEdge,
+106 |     ModuleEdgeKind, ModuleNode, ModuleNodeKind, PackageFact, ReferenceFact, ReferenceKind,
+    |     ^^^^^^^^^^^^^^              ^^^^^^^^^^^^^^                              ^^^^^^^^^^^^^
+107 |     ResolutionPrecision, ResolutionStatus, ResolvedImportFact, SourceFile, StringLiteralFact,
+    |     ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^
+108 |     SymbolFact, SymbolKind, SymbolNamespace, SymbolPrecision, SymbolResolutionStatus, TestFact,
+    |                 ^^^^^^^^^^  ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^
+109 |     TsClassFact, TsComponentFact, UnresolvedReason,
+    |                                   ^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `CachedFileAnalysis`, `TS_JS_MODULE_FUNCTION_NAME`, and `is_synthetic_ts_js_module_function`
+   --> crates/polint/src/core/db.rs:112:5
+    |
+112 |     CachedFileAnalysis, CachedFileFacts, TS_JS_MODULE_FUNCTION_NAME,
+    |     ^^^^^^^^^^^^^^^^^^                   ^^^^^^^^^^^^^^^^^^^^^^^^^^
+113 |     is_synthetic_ts_js_module_function,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `DefinitionId`, `NodeId`, `ReferenceId`, and `RuleId`
+   --> crates/polint/src/core/db.rs:116:15
+    |
+116 |     BranchId, DefinitionId, FileId, FunctionId, ImportId, ModuleEdgeId, ModuleNodeId, NodeId,
+    |               ^^^^^^^^^^^^                                                            ^^^^^^
+117 |     PackageId, ReferenceId, ResolvedImportId, RuleId, SymbolId,
+    |                ^^^^^^^^^^^                    ^^^^^^
+
+warning: unused imports: `TS_JS_MODULE_FUNCTION_NAME` and `is_synthetic_ts_js_module_function`
+   --> crates/polint/src/core/db.rs:112:42
+    |
+112 |     CachedFileAnalysis, CachedFileFacts, TS_JS_MODULE_FUNCTION_NAME,
+    |                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^
+113 |     is_synthetic_ts_js_module_function,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `NodeId` and `RuleId`
+   --> crates/polint/src/core/db.rs:116:87
+    |
+116 |     BranchId, DefinitionId, FileId, FunctionId, ImportId, ModuleEdgeId, ModuleNodeId, NodeId,
+    |                                                                                       ^^^^^^
+117 |     PackageId, ReferenceId, ResolvedImportId, RuleId, SymbolId,
+    |                                               ^^^^^^
+
+warning: unused import: `rule::RuleRegistry`
+  --> crates/polint/src/core/mod.rs:52:16
+   |
+52 | pub(crate) use rule::RuleRegistry;
+   |                ^^^^^^^^^^^^^^^^^^
+
+For more information about this error, try `rustc --explain E0432`.
+warning: `polint` (lib) generated 3 warnings
+error: could not compile `polint` (lib) due to 1 previous error; 3 warnings emitted
+warning: build failed, waiting for other jobs to finish...
+warning: `polint` (lib test) generated 3 warnings
+error: could not compile `polint` (lib test) due to 1 previous error; 3 warnings emitted

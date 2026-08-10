@@ -1,0 +1,55 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running tests/cli.rs (target/debug/deps/cli-05cf7bb24a423286)
+
+running 1 test
+
+thread 'capability_planning::cfg_capability_remains_unsupported' (7999268) panicked at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/ops/function.rs:250:5:
+Unexpected failure.
+code=2
+stderr=``````
+polint: polint: rules host: failed: /private/var/folders/29/pcyz866953x2yj32jdbd6wbc0000gn/T/.tmp5tiaWC/.polint/rules/Cargo.toml
+status: exit status: 101
+stdout:
+
+stderr:
+error[E0423]: cannot initialize a tuple struct which contains private fields
+  --> src/main.rs:22:22
+   |
+22 |         &Span::point(FileId(0), 1, 1),
+   |                      ^^^^^^
+
+For more information about this error, try `rustc --explain E0423`.
+error: could not compile `polint-local-rules-1fde8f337911a166` (bin \"polint-local-rules-1fde8f337911a166\") due to 1 previous error
+```
+```
+command=`cd "/var/folders/29/pcyz866953x2yj32jdbd6wbc0000gn/T/.tmp5tiaWC" && CARGO_TARGET_DIR="/Users/emilwareus/conductor/workspaces/exlint/biarritz/target/polint-cli-test-cargo" POLINT_RULES_PROFILE="dev" POLINT_RULES_TARGET_DIR="/Users/emilwareus/conductor/workspaces/exlint/biarritz/target/polint-cli-test-rules" "/Users/emilwareus/conductor/workspaces/exlint/biarritz/target/debug/polint" "check" "--format" "json" "--fail-on" "none"`
+code=2
+stdout=""
+stderr=```
+polint: polint: rules host: failed: /private/var/folders/29/pcyz866953x2yj32jdbd6wbc0000gn/T/.tmp5tiaWC/.polint/rules/Cargo.toml
+status: exit status: 101
+stdout:
+
+stderr:
+error[E0423]: cannot initialize a tuple struct which contains private fields
+  --> src/main.rs:22:22
+   |
+22 |         &Span::point(FileId(0), 1, 1),
+   |                      ^^^^^^
+
+For more information about this error, try `rustc --explain E0423`.
+error: could not compile `polint-local-rules-1fde8f337911a166` (bin \"polint-local-rules-1fde8f337911a166\") due to 1 previous error
+```
+
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test capability_planning::cfg_capability_remains_unsupported ... FAILED
+
+failures:
+
+failures:
+    capability_planning::cfg_capability_remains_unsupported
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 165 filtered out; finished in 18.47s
+
+error: test failed, to rerun pass `-p polint --test cli`

@@ -1,0 +1,28 @@
+    Checking polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.4/crates/polint)
+error: function `scheduled_order` is never used
+   --> crates/polint/src/analysis_kernel/provider.rs:112:15
+    |
+112 | pub(crate) fn scheduled_order() -> Vec<&'static str> {
+    |               ^^^^^^^^^^^^^^^
+    |
+    = note: `-D dead-code` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: the loop variable `index` is used to index `indegree`
+   --> crates/polint/src/analysis_kernel/provider.rs:147:18
+    |
+147 |     for index in 0..n {
+    |                  ^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#needless_range_loop
+    = note: `-D clippy::needless-range-loop` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_range_loop)]`
+help: consider using an iterator and enumerate()
+    |
+147 -     for index in 0..n {
+147 +     for (index, <item>) in indegree.iter().enumerate().take(n) {
+    |
+
+error: could not compile `polint` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `polint` (lib test) due to 1 previous error

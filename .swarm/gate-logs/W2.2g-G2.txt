@@ -1,0 +1,2 @@
+    Checking polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.2/crates/polint)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.20s

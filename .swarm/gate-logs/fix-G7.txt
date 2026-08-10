@@ -1,0 +1,66 @@
+warning: constant `MAX_COST_RATIO` is never used
+  --> crates/polint/src/golden_cost.rs:25:18
+   |
+25 | pub(crate) const MAX_COST_RATIO: f64 = 1.20;
+   |                  ^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: constant `RUNTIME_ABS_FLOOR_MS` is never used
+  --> crates/polint/src/golden_cost.rs:28:18
+   |
+28 | pub(crate) const RUNTIME_ABS_FLOOR_MS: u64 = 50;
+   |                  ^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `PEAK_RSS_ABS_FLOOR_BYTES` is never used
+  --> crates/polint/src/golden_cost.rs:31:18
+   |
+31 | pub(crate) const PEAK_RSS_ABS_FLOOR_BYTES: u64 = GATE_PEAK_RSS_ABS_FLOOR_BYTES;
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `budget_failure` is never used
+  --> crates/polint/src/golden_cost.rs:97:15
+   |
+97 | pub(crate) fn budget_failure(
+   |               ^^^^^^^^^^^^^^
+
+warning: function `metric_over_budget` is never used
+   --> crates/polint/src/golden_cost.rs:130:4
+    |
+130 | fn metric_over_budget(
+    |    ^^^^^^^^^^^^^^^^^^
+
+warning: `polint` (lib) generated 5 warnings
+   Compiling polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/biarritz/crates/polint)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.56s
+     Running tests/golden.rs (target/debug/deps/golden-0b79c88cdf5488ee)
+
+running 8 tests
+test golden_updates_require_explicit_env_flag ... ok
+test cost_budget_helper_rejects_clear_regression ... ok
+test diagnostic_set_diff_names_lost_fingerprints ... ok
+test normalize_sorts_diagnostics_by_stable_fingerprint ... ok
+test scale_cases_are_optional_and_discovered ... ok
+test ci_workflows_never_set_golden_update_env ... ok
+test example_golden_cases_cover_inventory_rule_packs ... ok
+test characterization_goldens_match_cli has been running for over 60 seconds
+test characterization_goldens_match_cli ... FAILED
+
+failures:
+
+---- characterization_goldens_match_cli stdout ----
+
+thread 'characterization_goldens_match_cli' (2447044) panicked at crates/polint/tests/golden.rs:494:9:
+golden cost budget breached for `examples/go-sensitive-writes/json`:
+  wall_clock_ms: measured 417 exceeds budget (baseline 211, ratio 1.9763, max 1.2, abs floor +50)
+baseline=GoldenCostRecord { schema_version: "polint-golden-cost-1", wall_clock_ms: 211, peak_rss_bytes: 30408704, peak_rss_delta_bytes: 23396352 }
+measured=GoldenCostRecord { schema_version: "polint-golden-cost-1", wall_clock_ms: 417, peak_rss_bytes: 30228480, peak_rss_delta_bytes: 23314432 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    characterization_goldens_match_cli
+
+test result: FAILED. 7 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 83.40s
+
+error: test failed, to rerun pass `-p polint --test golden`

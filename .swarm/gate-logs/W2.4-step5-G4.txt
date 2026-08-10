@@ -1,0 +1,61 @@
+   Compiling polint v0.1.17 (/Users/emilwareus/conductor/workspaces/exlint/swarm-W2.4/crates/polint)
+warning: constant `BASELINE_PROVIDER_SEEDS` is never used
+   --> crates/polint/src/analysis_kernel/provider.rs:815:7
+    |
+815 | const BASELINE_PROVIDER_SEEDS: &[&str] = &[
+    |       ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: constant `DEEP_PROVIDER_SEEDS` is never used
+   --> crates/polint/src/analysis_kernel/provider.rs:822:7
+    |
+822 | const DEEP_PROVIDER_SEEDS: &[&str] = &[
+    |       ^^^^^^^^^^^^^^^^^^^
+
+warning: constant `DEEP_TRIGGER_CAPABILITIES` is never used
+   --> crates/polint/src/analysis_kernel/provider.rs:830:7
+    |
+830 | const DEEP_TRIGGER_CAPABILITIES: &[&str] = &["calls", "control_flow", "dataflow"];
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `providers_enabled_by_boolean_gates` is never used
+   --> crates/polint/src/analysis_kernel/provider.rs:833:15
+    |
+833 | pub(crate) fn providers_enabled_by_boolean_gates(
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `seed_providers_for_capability` is never used
+   --> crates/polint/src/analysis_kernel/provider.rs:873:4
+    |
+873 | fn seed_providers_for_capability(capability: &str) -> &'static [&'static str] {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `providers_enabled_by_capability_closure` is never used
+   --> crates/polint/src/analysis_kernel/provider.rs:897:15
+    |
+897 | pub(crate) fn providers_enabled_by_capability_closure(
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `scheduled_order_for` is never used
+   --> crates/polint/src/analysis_kernel/provider.rs:936:15
+    |
+936 | pub(crate) fn scheduled_order_for(
+    |               ^^^^^^^^^^^^^^^^^^^
+
+warning: `polint` (lib) generated 7 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.88s
+     Running tests/public_surface_leak.rs (target/debug/deps/public_surface_leak-18657f7a71d52b19)
+
+running 8 tests
+test semantic_store_marker_scanner_negative_controls_cover_every_family ... ok
+test parser_self_test_detects_synthetic_leak ... ok
+test allowlist_has_no_duplicates_and_expected_count ... ok
+test allowlist_matches_prelude_source ... ok
+test ensure_no_private_namespace_in_probe ... ok
+test prelude_structs_and_language_are_non_exhaustive ... ok
+test semantic_store_markers_do_not_leak_into_supported_public_surfaces ... ok
+test probe_crate_compiles_against_prelude_only ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.92s
+
