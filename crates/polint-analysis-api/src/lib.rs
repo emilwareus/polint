@@ -6,6 +6,7 @@ mod digest;
 mod fact_store;
 mod metadata;
 mod provider;
+mod source_file;
 
 pub use digest::{CacheStats, Digest, DigestBuilder, DigestKind};
 pub use fact_store::{FactStore, FactStoreEntry};
@@ -19,6 +20,7 @@ pub use provider::{
     ProviderCtx, ProviderHostServices, ProviderKind, ProviderManifest, ProviderRunResult,
     SchemaVersion,
 };
+pub use source_file::SourceFile;
 
 /// MIR identifiers shared with analysis contracts.
 pub use polint_ir::{MirBodyId, PlaceId};

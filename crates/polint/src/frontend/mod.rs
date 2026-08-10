@@ -9,41 +9,16 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 use crate::analysis_kernel::{PrecisionCeiling, ProviderCtx, ProviderRunResult};
-use crate::core::{Language, SourceFile};
+use crate::core::Language;
 
+pub(crate) use polint_frontend_api::{AnalysisUnit, FrontendProfile, LanguageFrontend};
 pub(crate) use registry::{
-    FrontendRegistry, LANGUAGE_IDS_GO, LANGUAGE_IDS_GO_AND_TS, LANGUAGE_IDS_NONE, LANGUAGE_IDS_TS,
-    LanguageId, build_default_registry,
+    FrontendRegistry, FrontendRegistryExt, LANGUAGE_IDS_GO, LANGUAGE_IDS_GO_AND_TS,
+    LANGUAGE_IDS_NONE, LANGUAGE_IDS_TS, LanguageId, build_default_registry,
 };
 
 pub(crate) const FAMILY_GO: &str = "go";
 pub(crate) const FAMILY_TYPESCRIPT_JAVASCRIPT: &str = "typescript_javascript";
-
-/// Declared fact families and precision for a language frontend.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct FrontendProfile {
-    /// Stable name used for sorting (`go`, `ts`). Never sort by [`LanguageId`].
-    pub(crate) name: &'static str,
-    /// Language-family tag for comparisons that used to call `Language::is_ts_family`.
-    pub(crate) family: &'static str,
-    pub(crate) produces: &'static [&'static str],
-    pub(crate) precision_ceiling: PrecisionCeiling,
-}
-
-/// Analysis input for a frontend. Today this wraps a file slice; the shape also
-/// admits future index adapters (SCIP/LSIF/LSP) that are not AST parsers.
-pub(crate) struct AnalysisUnit<'a> {
-    pub(crate) files: &'a [&'a SourceFile],
-    pub(crate) root: &'a Path,
-}
-
-/// Pluggable language (or index) frontend.
-pub(crate) trait LanguageFrontend: Send + Sync {
-    fn id(&self) -> LanguageId;
-    fn handles(&self, path: &Path) -> bool;
-    fn profile(&self) -> &'static FrontendProfile;
-    fn analyze(&self, ctx: &mut ProviderCtx<'_>, unit: &AnalysisUnit<'_>) -> ProviderRunResult;
-}
 
 const GO_PRODUCES: &[&str] = &[
     "packages",

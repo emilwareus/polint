@@ -7,19 +7,8 @@ use super::lang::Language;
 use super::span::Span;
 use crate::diagnostics::Diagnostic;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
-use std::sync::Arc;
 
-#[derive(Debug, Clone)]
-#[non_exhaustive]
-pub struct SourceFile {
-    pub id: FileId,
-    pub path: PathBuf,
-    pub relative_path: String,
-    pub language: Language,
-    pub source: Arc<str>,
-    pub content_hash: String,
-}
+pub use polint_analysis_api::SourceFile;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
