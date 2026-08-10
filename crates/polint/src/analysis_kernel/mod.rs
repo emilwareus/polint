@@ -586,6 +586,7 @@ mod tests {
                 status: ResolutionStatus::Resolved,
             }],
         );
+        let interner = db.stable_key_interner();
         db.replace_symbol_graph_facts(
             vec![SymbolFact {
                 id: SymbolId(0),
@@ -600,7 +601,7 @@ mod tests {
                 owner: None,
                 primary_span: Some(span(file, 27)),
                 is_exported: true,
-                stable_key: "symbol:Button".to_string(),
+                stable_key: interner.intern("symbol:Button".to_string()),
                 precision: SymbolPrecision::ExactLocal,
             }],
             vec![DefinitionFact {
@@ -618,7 +619,7 @@ mod tests {
                 primary_span: Some(span(file, 27)),
                 is_primary: true,
                 is_exported: true,
-                stable_key: "definition:Button".to_string(),
+                stable_key: interner.intern("definition:Button".to_string()),
                 precision: SymbolPrecision::ExactLocal,
             }],
             vec![ReferenceFact {
@@ -635,7 +636,7 @@ mod tests {
                 primary_span: Some(span(file, 27)),
                 target: Some(SymbolId(0)),
                 candidates: Vec::new(),
-                stable_key: "reference:Button".to_string(),
+                stable_key: interner.intern("reference:Button".to_string()),
                 status: SymbolResolutionStatus::Resolved,
                 precision: SymbolPrecision::ExactLocal,
             }],

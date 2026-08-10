@@ -55,22 +55,28 @@ fn references_with_status(
         .iter()
         .filter(move |reference| reference.status == status)
         .collect::<Vec<_>>();
-    references.sort_by(|left, right| reference_order(left, right));
+    references.sort_by(|left, right| reference_order(db, left, right));
     references.into_iter()
 }
 
-fn reference_order(left: &ReferenceFact, right: &ReferenceFact) -> std::cmp::Ordering {
+fn reference_order(
+    db: &AnalysisDb,
+    left: &ReferenceFact,
+    right: &ReferenceFact,
+) -> std::cmp::Ordering {
+    let left_stable_key = db.resolve_stable_key(left.stable_key);
+    let right_stable_key = db.resolve_stable_key(right.stable_key);
     (
         left.id,
         left.name.as_str(),
         span_key(left.primary_span.as_ref()),
-        left.stable_key.as_str(),
+        left_stable_key.as_ref(),
     )
         .cmp(&(
             right.id,
             right.name.as_str(),
             span_key(right.primary_span.as_ref()),
-            right.stable_key.as_str(),
+            right_stable_key.as_ref(),
         ))
 }
 
@@ -104,14 +110,37 @@ mod symbol_graph_query {
         );
         let button = SymbolId(20);
         let theme = SymbolId(10);
+        let interner = db.stable_key_interner();
 
         db.replace_symbol_graph_facts(
             vec![
-                symbol_fact(theme, "theme", theme_file, 1, SymbolKind::Constant),
-                symbol_fact(button, "Button", app_file, 1, SymbolKind::Function),
-                symbol_fact(SymbolId(30), "Button", app_file, 10, SymbolKind::Class),
+                symbol_fact(
+                    &interner,
+                    theme,
+                    "theme",
+                    theme_file,
+                    1,
+                    SymbolKind::Constant,
+                ),
+                symbol_fact(
+                    &interner,
+                    button,
+                    "Button",
+                    app_file,
+                    1,
+                    SymbolKind::Function,
+                ),
+                symbol_fact(
+                    &interner,
+                    SymbolId(30),
+                    "Button",
+                    app_file,
+                    10,
+                    SymbolKind::Class,
+                ),
             ],
             vec![definition_fact(
+                &interner,
                 DefinitionId(30),
                 button,
                 "Button",
@@ -120,28 +149,28 @@ mod symbol_graph_query {
             )],
             vec![
                 reference_fact(
+                    &interner,
                     ReferenceId(60),
                     "ambiguous",
-                    app_file,
-                    44,
+                    (app_file, 44),
                     None,
                     vec![button, theme],
                     SymbolResolutionStatus::Ambiguous,
                 ),
                 reference_fact(
+                    &interner,
                     ReferenceId(50),
                     "missing",
-                    app_file,
-                    35,
+                    (app_file, 35),
                     None,
                     Vec::new(),
                     SymbolResolutionStatus::Unresolved,
                 ),
                 reference_fact(
+                    &interner,
                     ReferenceId(40),
                     "theme",
-                    app_file,
-                    28,
+                    (app_file, 28),
                     Some(theme),
                     Vec::new(),
                     SymbolResolutionStatus::Resolved,
@@ -153,6 +182,7 @@ mod symbol_graph_query {
     }
 
     fn symbol_fact(
+        interner: &crate::core::StableKeyInterner,
         id: SymbolId,
         name: &str,
         file: FileId,
@@ -172,12 +202,13 @@ mod symbol_graph_query {
             owner: None,
             primary_span: Some(Span::point(file, 1, col)),
             is_exported: true,
-            stable_key: format!("symbol:{name}:{}", id.0),
+            stable_key: interner.intern(format!("symbol:{name}:{}", id.0)),
             precision: SymbolPrecision::ExactLocal,
         }
     }
 
     fn definition_fact(
+        interner: &crate::core::StableKeyInterner,
         id: DefinitionId,
         symbol: SymbolId,
         name: &str,
@@ -199,20 +230,21 @@ mod symbol_graph_query {
             primary_span: Some(Span::point(file, 1, col)),
             is_primary: true,
             is_exported: true,
-            stable_key: format!("definition:{name}:{}", id.0),
+            stable_key: interner.intern(format!("definition:{name}:{}", id.0)),
             precision: SymbolPrecision::ExactLocal,
         }
     }
 
     fn reference_fact(
+        interner: &crate::core::StableKeyInterner,
         id: ReferenceId,
         name: &str,
-        file: FileId,
-        col: u32,
+        location: (FileId, u32),
         target: Option<SymbolId>,
         candidates: Vec<SymbolId>,
         status: SymbolResolutionStatus,
     ) -> ReferenceFact {
+        let (file, col) = location;
         ReferenceFact {
             id,
             language: Language::TypeScript,
@@ -227,7 +259,7 @@ mod symbol_graph_query {
             primary_span: Some(Span::point(file, 1, col)),
             target,
             candidates,
-            stable_key: format!("reference:{name}:{}", id.0),
+            stable_key: interner.intern(format!("reference:{name}:{}", id.0)),
             status,
             precision: match status {
                 SymbolResolutionStatus::Resolved => SymbolPrecision::ExactLocal,

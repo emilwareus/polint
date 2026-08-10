@@ -429,7 +429,7 @@ fn target_stable_key(
         &[
             ("site", site.stable_key.clone()),
             ("algorithm", format!("{algorithm:?}")),
-            ("target", symbol.stable_key.clone()),
+            ("target", interner.resolve(symbol.stable_key).to_string()),
             ("provider", crate::core::CALLS_PROVIDER_ID.to_string()),
             ("schema", "calls-facts-1:1".to_string()),
             ("model", "absent".to_string()),
@@ -782,7 +782,10 @@ mod tests {
                 owner: None,
                 primary_span: Some(span(self.file, line)),
                 is_exported: true,
-                stable_key: format!("symbol:{name}"),
+                stable_key: self
+                    .db
+                    .stable_key_interner()
+                    .intern(format!("symbol:{name}")),
                 precision: SymbolPrecision::ExactSemantic,
             });
             self.definitions.push(DefinitionFact {
@@ -800,7 +803,10 @@ mod tests {
                 primary_span: Some(span(self.file, line)),
                 is_primary: true,
                 is_exported: true,
-                stable_key: format!("definition:{name}"),
+                stable_key: self
+                    .db
+                    .stable_key_interner()
+                    .intern(format!("definition:{name}")),
                 precision: SymbolPrecision::ExactSemantic,
             });
             assert_eq!(function.0, id.0 + 1);
@@ -829,7 +835,10 @@ mod tests {
                 primary_span: Some(span(self.file, line)),
                 target: Some(target),
                 candidates: vec![target],
-                stable_key: format!("reference:{name}:{}", id.0),
+                stable_key: self
+                    .db
+                    .stable_key_interner()
+                    .intern(format!("reference:{name}:{}", id.0)),
                 status: SymbolResolutionStatus::Resolved,
                 precision,
             });

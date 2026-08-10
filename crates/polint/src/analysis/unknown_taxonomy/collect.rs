@@ -181,7 +181,7 @@ fn symbol_unknowns(db: &AnalysisDb) -> Vec<UnknownRow> {
                     precision: Some(status.to_string()),
                     docs_path: Some("docs/facts/symbols-and-references.md".to_string()),
                     suggested_artifact: Some("model".to_string()),
-                    source_stable_key: Some(symbol.stable_key.clone()),
+                    source_stable_key: Some(interner.resolve(symbol.stable_key).to_string()),
                 },
             )
         })
@@ -214,7 +214,7 @@ fn reference_unknowns(db: &AnalysisDb) -> Vec<UnknownRow> {
                     precision: Some(symbol_precision_label(reference.precision).to_string()),
                     docs_path: Some("docs/facts/symbols-and-references.md".to_string()),
                     suggested_artifact: Some("model".to_string()),
-                    source_stable_key: Some(reference.stable_key.clone()),
+                    source_stable_key: Some(interner.resolve(reference.stable_key).to_string()),
                 },
             )
         })

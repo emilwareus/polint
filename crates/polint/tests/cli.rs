@@ -5443,6 +5443,7 @@ fn reference_target(reference: &ReferenceFact) -> String {
 
 fn report_symbol(
     ctx: &mut RuleCtx<'_>,
+    symbols: Symbols<'_>,
     case: &str,
     symbol: &SymbolFact,
     extra_label: &str,
@@ -5460,13 +5461,14 @@ fn report_symbol(
         .with_evidence("symbol_kind", format!("{:?}", symbol.kind))
         .with_evidence("symbol_precision", format!("{:?}", symbol.precision))
         .with_evidence("symbol_id", symbol.id.0.to_string())
-        .with_evidence("symbol_stable_key", symbol.stable_key.clone())
+        .with_evidence("symbol_stable_key", symbols.stable_key(symbol).to_string())
         .with_evidence(extra_label, extra_value),
     );
 }
 
 fn report_reference(
     ctx: &mut RuleCtx<'_>,
+    references: References<'_>,
     case: &str,
     symbol: Option<&SymbolFact>,
     reference: &ReferenceFact,
@@ -5503,7 +5505,10 @@ fn report_reference(
         .with_evidence("reference_status", format!("{:?}", reference.status))
         .with_evidence("reference_id", reference.id.0.to_string())
         .with_evidence("reference_target", reference_target(reference))
-        .with_evidence("reference_stable_key", reference.stable_key.clone()),
+        .with_evidence(
+            "reference_stable_key",
+            references.stable_key(reference).to_string(),
+        ),
     );
 }
 
@@ -5521,12 +5526,12 @@ fn ts_symbol_reference_public_sdk(
         .by_name("answer")
         .find(|symbol| symbol.kind == SymbolKind::Function)
     {
-        report_symbol(ctx, "ts-symbol:function", symbol, "definition_count", symbols.definitions(symbol.id).count().to_string());
+        report_symbol(ctx, symbols, "ts-symbol:function", symbol, "definition_count", symbols.definitions(symbol.id).count().to_string());
         if let Some(reference) = references
             .to(symbol.id)
             .find(|reference| reference.kind == ReferenceKind::Call)
         {
-            report_reference(ctx, "ts-reference:function-call", Some(symbol), reference);
+            report_reference(ctx, references, "ts-reference:function-call", Some(symbol), reference);
         }
     }
 
@@ -5534,12 +5539,12 @@ fn ts_symbol_reference_public_sdk(
         .by_name("localValue")
         .find(|symbol| symbol.kind == SymbolKind::Variable)
     {
-        report_symbol(ctx, "ts-symbol:local-variable", symbol, "definition_count", symbols.definitions(symbol.id).count().to_string());
+        report_symbol(ctx, symbols, "ts-symbol:local-variable", symbol, "definition_count", symbols.definitions(symbol.id).count().to_string());
         if let Some(reference) = references
             .to(symbol.id)
             .find(|reference| reference.kind == ReferenceKind::Read)
         {
-            report_reference(ctx, "ts-reference:local-variable", Some(symbol), reference);
+            report_reference(ctx, references, "ts-reference:local-variable", Some(symbol), reference);
         }
     }
 
@@ -5552,6 +5557,7 @@ fn ts_symbol_reference_public_sdk(
         if declaration_count >= 2 || merge_symbols.len() >= 2 {
             report_symbol(
                 ctx,
+                symbols,
                 "ts-symbol:declaration-merge",
                 symbol,
                 "declaration_count",
@@ -5566,14 +5572,14 @@ fn ts_symbol_reference_public_sdk(
             && reference.precision == SymbolPrecision::ModuleLinked
     }) {
         let symbol = reference.target.and_then(|target| symbols.get(target));
-        report_reference(ctx, "ts-reference:module-import", symbol, reference);
+        report_reference(ctx, references, "ts-reference:module-import", symbol, reference);
     }
 
     if let Some(reference) = references
         .unresolved()
         .find(|reference| reference.name == "missingGlobal")
     {
-        report_reference(ctx, "ts-reference:unresolved-global", None, reference);
+        report_reference(ctx, references, "ts-reference:unresolved-global", None, reference);
     }
 
     Ok(())
@@ -5632,6 +5638,8 @@ fn reference_target(reference: &ReferenceFact) -> String {
 
 fn report_reference(
     ctx: &mut RuleCtx<'_>,
+    symbols: Symbols<'_>,
+    references: References<'_>,
     case: &str,
     symbol: &SymbolFact,
     reference: &ReferenceFact,
@@ -5648,14 +5656,17 @@ fn report_reference(
         .with_evidence("symbol_kind", format!("{:?}", symbol.kind))
         .with_evidence("symbol_precision", format!("{:?}", symbol.precision))
         .with_evidence("symbol_id", symbol.id.0.to_string())
-        .with_evidence("symbol_stable_key", symbol.stable_key.clone())
+        .with_evidence("symbol_stable_key", symbols.stable_key(symbol).to_string())
         .with_evidence("reference_name", reference.name.clone())
         .with_evidence("reference_kind", format!("{:?}", reference.kind))
         .with_evidence("reference_precision", format!("{:?}", reference.precision))
         .with_evidence("reference_status", format!("{:?}", reference.status))
         .with_evidence("reference_id", reference.id.0.to_string())
         .with_evidence("reference_target", reference_target(reference))
-        .with_evidence("reference_stable_key", reference.stable_key.clone()),
+        .with_evidence(
+            "reference_stable_key",
+            references.stable_key(reference).to_string(),
+        ),
     );
 }
 
@@ -5677,7 +5688,7 @@ fn go_symbol_reference_public_sdk(
             .to(symbol.id)
             .find(|reference| reference.kind == ReferenceKind::Call)
         {
-            report_reference(ctx, "go-reference:function-call", symbol, reference);
+            report_reference(ctx, symbols, references, "go-reference:function-call", symbol, reference);
         }
     }
 
@@ -5689,7 +5700,7 @@ fn go_symbol_reference_public_sdk(
             .to(symbol.id)
             .find(|reference| reference.kind == ReferenceKind::Call)
         {
-            report_reference(ctx, "go-reference:method-call", symbol, reference);
+            report_reference(ctx, symbols, references, "go-reference:method-call", symbol, reference);
         }
     }
 
@@ -5701,7 +5712,7 @@ fn go_symbol_reference_public_sdk(
             .to(symbol.id)
             .find(|reference| reference.kind == ReferenceKind::MemberAccess)
         {
-            report_reference(ctx, "go-reference:field-selector", symbol, reference);
+            report_reference(ctx, symbols, references, "go-reference:field-selector", symbol, reference);
         }
     }
 
@@ -5713,7 +5724,7 @@ fn go_symbol_reference_public_sdk(
             .to(symbol.id)
             .find(|reference| reference.kind == ReferenceKind::Read)
         {
-            report_reference(ctx, "go-reference:local-variable", symbol, reference);
+            report_reference(ctx, symbols, references, "go-reference:local-variable", symbol, reference);
         }
     }
 
@@ -9697,7 +9708,7 @@ fn kernel_metadata_public_probe(
             "kernel metadata preserved public symbol facts",
         )
         .with_evidence("symbol_name", symbol.name.clone())
-        .with_evidence("symbol_stable_key", symbol.stable_key.clone())
+        .with_evidence("symbol_stable_key", symbols.stable_key(symbol).to_string())
         .with_evidence("reference_count", reference_count.to_string()),
     );
     Ok(())

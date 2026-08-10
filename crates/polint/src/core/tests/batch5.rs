@@ -195,6 +195,7 @@
             "export const theme = {};\n".to_string(),
         );
 
+        let interner = db.stable_key_interner();
         db.replace_symbol_graph_facts(
             vec![
                 SymbolFact {
@@ -210,7 +211,8 @@
                     owner: None,
                     primary_span: Some(test_span(app_file, 1)),
                     is_exported: true,
-                    stable_key: "ts|src/app.ts|value|function|Button|1:1".to_string(),
+                    stable_key: interner
+                        .intern("ts|src/app.ts|value|function|Button|1:1".to_string()),
                     precision: SymbolPrecision::ExactLocal,
                 },
                 SymbolFact {
@@ -226,7 +228,8 @@
                     owner: None,
                     primary_span: Some(test_span(theme_file, 1)),
                     is_exported: true,
-                    stable_key: "ts|src/theme.ts|value|constant|theme|1:1".to_string(),
+                    stable_key: interner
+                        .intern("ts|src/theme.ts|value|constant|theme|1:1".to_string()),
                     precision: SymbolPrecision::ModuleLinked,
                 },
             ],
@@ -245,7 +248,7 @@
                 primary_span: Some(test_span(app_file, 1)),
                 is_primary: true,
                 is_exported: true,
-                stable_key: "ts|src/app.ts|definition|Button|1:1".to_string(),
+                stable_key: interner.intern("ts|src/app.ts|definition|Button|1:1".to_string()),
                 precision: SymbolPrecision::ExactLocal,
             }],
             vec![
@@ -263,7 +266,8 @@
                     primary_span: Some(test_span(app_file, 1)),
                     target: Some(SymbolId(0xabc0_1234)),
                     candidates: Vec::new(),
-                    stable_key: "ts|src/app.ts|reference|theme|1:28".to_string(),
+                    stable_key: interner
+                        .intern("ts|src/app.ts|reference|theme|1:28".to_string()),
                     status: SymbolResolutionStatus::Resolved,
                     precision: SymbolPrecision::ModuleLinked,
                 },
@@ -281,7 +285,8 @@
                     primary_span: Some(test_span(app_file, 2)),
                     target: None,
                     candidates: vec![SymbolId(0xfeed_beef), SymbolId(0xabc0_1234)],
-                    stable_key: "ts|src/app.ts|reference|missing|2:1".to_string(),
+                    stable_key: interner
+                        .intern("ts|src/app.ts|reference|missing|2:1".to_string()),
                     status: SymbolResolutionStatus::Ambiguous,
                     precision: SymbolPrecision::Ambiguous,
                 },

@@ -224,7 +224,7 @@ fn symbol_key_map(db: &AnalysisDb) -> BTreeMap<SymbolId, String> {
 fn symbol_key(db: &AnalysisDb, symbol: &SymbolFact) -> String {
     db.metadata_for(FactRef::new(FactFamily::Symbol, symbol.id.0))
         .map(|metadata| metadata.stable_key.clone())
-        .unwrap_or_else(|| symbol.stable_key.clone())
+        .unwrap_or_else(|| db.resolve_stable_key(symbol.stable_key).to_string())
 }
 
 fn stable_site_key(keys: &BTreeMap<CallSiteId, String>, site: CallSiteId) -> String {
@@ -495,6 +495,7 @@ mod calls_provider {
             }
         }
 
+        let interner = db.stable_key_interner();
         let symbols = output
             .targets
             .iter()
@@ -512,7 +513,7 @@ mod calls_provider {
                 owner: None,
                 primary_span: Some(span(file, 20, 30)),
                 is_exported: true,
-                stable_key: target_symbol_key.to_string(),
+                stable_key: interner.intern(target_symbol_key.to_string()),
                 precision: SymbolPrecision::ExactSemantic,
             })
             .collect();

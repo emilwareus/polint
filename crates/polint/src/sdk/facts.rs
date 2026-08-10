@@ -514,6 +514,16 @@ impl<'a> Symbols<'a> {
         query::symbol_by_id(self.db, symbol)
     }
 
+    /// Resolves a symbol's stable identity text.
+    pub fn stable_key(self, symbol: &SymbolFact) -> std::sync::Arc<str> {
+        self.db.resolve_stable_key(symbol.stable_key)
+    }
+
+    /// Resolves a definition's stable identity text.
+    pub fn definition_stable_key(self, definition: &DefinitionFact) -> std::sync::Arc<str> {
+        self.db.resolve_stable_key(definition.stable_key)
+    }
+
     /// Returns symbol facts for one source file without cloning facts.
     pub fn for_file(self, file: FileId) -> impl Iterator<Item = &'a SymbolFact> {
         query::symbols_for_file(self.db, file)
@@ -580,6 +590,11 @@ impl<'a> References<'a> {
     /// Iterates all reference facts in deterministic database order.
     pub fn iter(self) -> std::slice::Iter<'a, ReferenceFact> {
         self.db.references().iter()
+    }
+
+    /// Resolves a reference's stable identity text.
+    pub fn stable_key(self, reference: &ReferenceFact) -> std::sync::Arc<str> {
+        self.db.resolve_stable_key(reference.stable_key)
     }
 
     /// Returns resolved references to a symbol without cloning facts.
@@ -1641,6 +1656,7 @@ mod tests {
         );
         let button = SymbolId(10);
         let theme = SymbolId(20);
+        let interner = db.stable_key_interner();
 
         db.replace_symbol_graph_facts(
             vec![
@@ -1657,7 +1673,7 @@ mod tests {
                     owner: None,
                     primary_span: Some(Span::point(app_file, 1, 1)),
                     is_exported: true,
-                    stable_key: "ts|src/app.ts|Button".to_string(),
+                    stable_key: interner.intern("ts|src/app.ts|Button".to_string()),
                     precision: SymbolPrecision::ExactLocal,
                 },
                 SymbolFact {
@@ -1673,7 +1689,7 @@ mod tests {
                     owner: None,
                     primary_span: Some(Span::point(theme_file, 1, 1)),
                     is_exported: true,
-                    stable_key: "ts|src/theme.ts|theme".to_string(),
+                    stable_key: interner.intern("ts|src/theme.ts|theme".to_string()),
                     precision: SymbolPrecision::ModuleLinked,
                 },
             ],
@@ -1692,7 +1708,7 @@ mod tests {
                 primary_span: Some(Span::point(app_file, 1, 1)),
                 is_primary: true,
                 is_exported: true,
-                stable_key: "ts|src/app.ts|definition|Button".to_string(),
+                stable_key: interner.intern("ts|src/app.ts|definition|Button".to_string()),
                 precision: SymbolPrecision::ExactLocal,
             }],
             vec![
@@ -1710,7 +1726,7 @@ mod tests {
                     primary_span: Some(Span::point(app_file, 1, 28)),
                     target: Some(theme),
                     candidates: Vec::new(),
-                    stable_key: "ts|src/app.ts|reference|theme".to_string(),
+                    stable_key: interner.intern("ts|src/app.ts|reference|theme".to_string()),
                     status: SymbolResolutionStatus::Resolved,
                     precision: SymbolPrecision::ModuleLinked,
                 },
@@ -1728,7 +1744,7 @@ mod tests {
                     primary_span: Some(Span::point(app_file, 1, 35)),
                     target: None,
                     candidates: Vec::new(),
-                    stable_key: "ts|src/app.ts|reference|missing".to_string(),
+                    stable_key: interner.intern("ts|src/app.ts|reference|missing".to_string()),
                     status: SymbolResolutionStatus::Unresolved,
                     precision: SymbolPrecision::Unresolved,
                 },
@@ -1746,7 +1762,7 @@ mod tests {
                     primary_span: Some(Span::point(app_file, 1, 44)),
                     target: None,
                     candidates: vec![button, theme],
-                    stable_key: "ts|src/app.ts|reference|ambiguous".to_string(),
+                    stable_key: interner.intern("ts|src/app.ts|reference|ambiguous".to_string()),
                     status: SymbolResolutionStatus::Ambiguous,
                     precision: SymbolPrecision::Ambiguous,
                 },

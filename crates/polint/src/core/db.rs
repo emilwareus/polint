@@ -293,6 +293,10 @@ impl AnalysisDb {
         self.stable_keys.clone()
     }
 
+    pub(crate) fn resolve_stable_key(&self, id: crate::core::StableKeyId) -> Arc<str> {
+        self.stable_keys.resolve(id)
+    }
+
     fn go_syntax_store(&self) -> &GoSyntaxStore {
         self.fact_store(GO_SYNTAX_STORE_FAMILY)
             .expect("GoSyntaxStore is installed when AnalysisDb is constructed")
@@ -3922,7 +3926,7 @@ impl AnalysisDb {
             SYMBOL_GRAPH_PROVIDER_ID,
             precision,
             confidence,
-            fact.stable_key.clone(),
+            self.resolve_stable_key(fact.stable_key).to_string(),
             stable_parts([
                 ("id", fact.id.0.to_string()),
                 ("language", language_label(fact.language).to_string()),
@@ -3948,7 +3952,7 @@ impl AnalysisDb {
             SYMBOL_GRAPH_PROVIDER_ID,
             precision,
             confidence,
-            fact.stable_key.clone(),
+            self.resolve_stable_key(fact.stable_key).to_string(),
             stable_parts([
                 ("id", fact.id.0.to_string()),
                 ("symbol", fact.symbol.0.to_string()),
@@ -3975,7 +3979,7 @@ impl AnalysisDb {
             SYMBOL_GRAPH_PROVIDER_ID,
             precision,
             confidence,
-            fact.stable_key.clone(),
+            self.resolve_stable_key(fact.stable_key).to_string(),
             stable_parts([
                 ("id", fact.id.0.to_string()),
                 ("language", language_label(fact.language).to_string()),

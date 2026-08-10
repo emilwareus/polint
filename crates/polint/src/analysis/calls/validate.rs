@@ -605,10 +605,11 @@ mod tests {
             cyclomatic_complexity: 1,
             calls: Vec::new(),
         });
+        let interner = db.stable_key_interner();
         db.replace_symbol_graph_facts(
             vec![
-                symbol(SymbolId(0), file, "app"),
-                symbol(SymbolId(1), file, "target"),
+                symbol(&interner, SymbolId(0), file, "app"),
+                symbol(&interner, SymbolId(1), file, "target"),
             ],
             Vec::new(),
             Vec::new(),
@@ -616,7 +617,12 @@ mod tests {
         db
     }
 
-    fn symbol(id: SymbolId, file: FileId, name: &str) -> SymbolFact {
+    fn symbol(
+        interner: &crate::core::StableKeyInterner,
+        id: SymbolId,
+        file: FileId,
+        name: &str,
+    ) -> SymbolFact {
         SymbolFact {
             id,
             language: Language::TypeScript,
@@ -630,7 +636,7 @@ mod tests {
             owner: None,
             primary_span: Some(span(file)),
             is_exported: true,
-            stable_key: format!("symbol:{name}"),
+            stable_key: interner.intern(format!("symbol:{name}")),
             precision: SymbolPrecision::ExactLocal,
         }
     }

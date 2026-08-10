@@ -2295,17 +2295,24 @@ mod symbol_graph_ts_local_symbols {
         db.add_file(path, relative_path.to_string(), source.to_string())
     }
 
-    fn derive_ts_symbol_facts(source: &str) -> (Vec<SymbolFact>, Vec<DefinitionFact>) {
+    fn derive_ts_symbol_facts(
+        source: &str,
+    ) -> (
+        crate::core::StableKeyInterner,
+        Vec<SymbolFact>,
+        Vec<DefinitionFact>,
+    ) {
         let temp = tempfile::tempdir().expect("tempdir");
         let mut db = AnalysisDb::new();
         add_file(&mut db, temp.path(), "src/component.ts", source);
         let loaded = load_config(temp.path()).expect("default config loads");
         let plan = AnalysisPlan::from_capability_names_for_test(&["symbols"]);
-        let mut builder = SymbolGraphBuilder::new();
+        let interner = db.stable_key_interner();
+        let mut builder = SymbolGraphBuilder::new(interner.clone());
 
         derive_ts_symbols(&mut builder, &db, &loaded, &plan);
         let output = builder.finish();
-        (output.symbols, output.definitions)
+        (interner, output.symbols, output.definitions)
     }
 
     fn symbol<'a>(symbols: &'a [SymbolFact], name: &str) -> &'a SymbolFact {
@@ -2317,7 +2324,7 @@ mod symbol_graph_ts_local_symbols {
 
     #[test]
     fn extracts_exported_and_local_symbols_from_oxc_semantic_data() {
-        let (symbols, _definitions) = derive_ts_symbol_facts(
+        let (_interner, symbols, _definitions) = derive_ts_symbol_facts(
             r#"
 export function exportedFn(param: string) {
     const localValue = param;
@@ -2349,7 +2356,7 @@ export class Widget {}
 
     #[test]
     fn declaration_merging_emits_one_symbol_with_multiple_definitions() {
-        let (symbols, definitions) = derive_ts_symbol_facts(
+        let (_interner, symbols, definitions) = derive_ts_symbol_facts(
             r#"
 export interface MergeMe {
     one: string;
@@ -2376,16 +2383,28 @@ export interface MergeMe {
     #[test]
     fn stable_symbol_ids_are_deterministic_across_repeated_extraction() {
         let source = "export const answer = 42;\n";
-        let (first_symbols, first_definitions) = derive_ts_symbol_facts(source);
-        let (second_symbols, second_definitions) = derive_ts_symbol_facts(source);
+        let (first_interner, first_symbols, first_definitions) = derive_ts_symbol_facts(source);
+        let (second_interner, second_symbols, second_definitions) = derive_ts_symbol_facts(source);
 
         let first = first_symbols
             .iter()
-            .map(|symbol| (symbol.name.as_str(), symbol.id, symbol.stable_key.as_str()))
+            .map(|symbol| {
+                (
+                    symbol.name.as_str(),
+                    symbol.id,
+                    first_interner.resolve(symbol.stable_key),
+                )
+            })
             .collect::<Vec<_>>();
         let second = second_symbols
             .iter()
-            .map(|symbol| (symbol.name.as_str(), symbol.id, symbol.stable_key.as_str()))
+            .map(|symbol| {
+                (
+                    symbol.name.as_str(),
+                    symbol.id,
+                    second_interner.resolve(symbol.stable_key),
+                )
+            })
             .collect::<Vec<_>>();
         assert_eq!(first, second);
 
@@ -2396,7 +2415,7 @@ export interface MergeMe {
                     definition.name.as_str(),
                     definition.id,
                     definition.symbol,
-                    definition.stable_key.as_str(),
+                    first_interner.resolve(definition.stable_key),
                 )
             })
             .collect::<Vec<_>>();
@@ -2407,7 +2426,7 @@ export interface MergeMe {
                     definition.name.as_str(),
                     definition.id,
                     definition.symbol,
-                    definition.stable_key.as_str(),
+                    second_interner.resolve(definition.stable_key),
                 )
             })
             .collect::<Vec<_>>();
@@ -2416,11 +2435,13 @@ export interface MergeMe {
 
     #[test]
     fn uses_repo_relative_file_keys_without_source_snippets() {
-        let (symbols, _definitions) = derive_ts_symbol_facts("export const answer = 42;\n");
+        let (interner, symbols, _definitions) =
+            derive_ts_symbol_facts("export const answer = 42;\n");
         let answer = symbol(&symbols, "answer");
+        let stable_key = interner.resolve(answer.stable_key);
 
-        assert!(answer.stable_key.contains("src/component.ts"));
-        assert!(!answer.stable_key.contains("export const answer"));
+        assert!(stable_key.contains("src/component.ts"));
+        assert!(!stable_key.contains("export const answer"));
     }
 }
 
@@ -2444,17 +2465,24 @@ mod symbol_graph_ts_references {
         db.add_file(path, relative_path.to_string(), source.to_string())
     }
 
-    fn derive_ts_reference_facts(source: &str) -> (Vec<SymbolFact>, Vec<ReferenceFact>) {
+    fn derive_ts_reference_facts(
+        source: &str,
+    ) -> (
+        crate::core::StableKeyInterner,
+        Vec<SymbolFact>,
+        Vec<ReferenceFact>,
+    ) {
         let temp = tempfile::tempdir().expect("tempdir");
         let mut db = AnalysisDb::new();
         add_file(&mut db, temp.path(), "src/component.ts", source);
         let loaded = load_config(temp.path()).expect("default config loads");
         let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
-        let mut builder = SymbolGraphBuilder::new();
+        let interner = db.stable_key_interner();
+        let mut builder = SymbolGraphBuilder::new(interner.clone());
 
         derive_ts_symbols(&mut builder, &db, &loaded, &plan);
         let output = builder.finish();
-        (output.symbols, output.references)
+        (interner, output.symbols, output.references)
     }
 
     fn symbol<'a>(symbols: &'a [SymbolFact], name: &str) -> &'a SymbolFact {
@@ -2478,7 +2506,7 @@ mod symbol_graph_ts_references {
 
     #[test]
     fn extracts_resolved_reference_kinds_from_oxc_semantic_data() {
-        let (symbols, references) = derive_ts_reference_facts(
+        let (_interner, symbols, references) = derive_ts_reference_facts(
             r#"
 type Model = { value: number };
 
@@ -2515,7 +2543,7 @@ count = helper({ value: count });
 
     #[test]
     fn emits_visible_unresolved_references_from_root_unresolved_set() {
-        let (_symbols, references) = derive_ts_reference_facts(
+        let (_interner, _symbols, references) = derive_ts_reference_facts(
             r#"
 export function run() {
     return missingValue + anotherMissing();
@@ -2539,8 +2567,9 @@ export function run() {
     #[test]
     fn stable_reference_ids_are_deterministic_across_repeated_extraction() {
         let source = "const value = 1;\nexport const doubled = value + value;\n";
-        let (_first_symbols, first_references) = derive_ts_reference_facts(source);
-        let (_second_symbols, second_references) = derive_ts_reference_facts(source);
+        let (first_interner, _first_symbols, first_references) = derive_ts_reference_facts(source);
+        let (second_interner, _second_symbols, second_references) =
+            derive_ts_reference_facts(source);
 
         let first = first_references
             .iter()
@@ -2550,7 +2579,7 @@ export function run() {
                     reference.id,
                     reference.target,
                     reference.status,
-                    reference.stable_key.as_str(),
+                    first_interner.resolve(reference.stable_key),
                 )
             })
             .collect::<Vec<_>>();
@@ -2562,7 +2591,7 @@ export function run() {
                     reference.id,
                     reference.target,
                     reference.status,
-                    reference.stable_key.as_str(),
+                    second_interner.resolve(reference.stable_key),
                 )
             })
             .collect::<Vec<_>>();
@@ -2635,7 +2664,7 @@ mod symbol_graph_ts_import_links {
     ) -> (Vec<SymbolFact>, Vec<ReferenceFact>) {
         let loaded = load_config(root).expect("default config loads");
         let plan = AnalysisPlan::from_capability_names_for_test(&["symbols", "references"]);
-        let mut builder = SymbolGraphBuilder::new();
+        let mut builder = SymbolGraphBuilder::new(crate::core::StableKeyInterner::default());
 
         derive_ts_symbols(&mut builder, db, &loaded, &plan);
         let output = builder.finish();
@@ -3066,7 +3095,13 @@ mod semantic_resolution {
         )
     }
 
-    fn derive_symbols_and_semantic(source: &str) -> (Vec<SymbolFact>, SemanticIndexOutput) {
+    fn derive_symbols_and_semantic(
+        source: &str,
+    ) -> (
+        crate::core::StableKeyInterner,
+        Vec<SymbolFact>,
+        SemanticIndexOutput,
+    ) {
         let file = SourceFile {
             id: FileId(0),
             path: PathBuf::from("src/resolution.ts"),
@@ -3075,19 +3110,14 @@ mod semantic_resolution {
             source: source.to_string().into(),
             content_hash: "test-hash".to_string(),
         };
-        let mut builder = SymbolGraphBuilder::new();
+        let interner = crate::core::StableKeyInterner::default();
+        let mut builder = SymbolGraphBuilder::new(interner.clone());
         let mut output = LanguageSymbolOutput::default();
 
-        derive_ts_file_symbols(
-            &crate::core::AnalysisDb::new().stable_key_interner(),
-            &mut builder,
-            &mut output,
-            &file,
-            false,
-        );
+        derive_ts_file_symbols(&interner, &mut builder, &mut output, &file, false);
         let symbol_output = builder.finish();
 
-        (symbol_output.symbols, output.semantic)
+        (interner, symbol_output.symbols, output.semantic)
     }
 
     #[test]
@@ -3153,7 +3183,8 @@ export const used = localThing;
 
     #[test]
     fn stable_export_symbol_key_matches_exported_symbol_fact_key() {
-        let (symbols, semantic) = derive_symbols_and_semantic("export const value = 1;\n");
+        let (interner, symbols, semantic) =
+            derive_symbols_and_semantic("export const value = 1;\n");
         let exported_symbol = symbols
             .iter()
             .find(|symbol| symbol.name == "value" && symbol.is_exported)
@@ -3164,12 +3195,15 @@ export const used = localThing;
             .find(|identity| identity.export_name == "value")
             .expect("stable export exists");
 
-        assert_eq!(stable_export.symbol_stable_key, exported_symbol.stable_key);
+        assert_eq!(
+            stable_export.symbol_stable_key,
+            interner.resolve(exported_symbol.stable_key).as_ref()
+        );
     }
 
     #[test]
     fn symbols_only_semantic_derivation_does_not_emit_reference_keyed_resolutions() {
-        let (_symbols, semantic) =
+        let (_interner, _symbols, semantic) =
             derive_symbols_and_semantic("const value = 1;\nexport const doubled = value;\n");
 
         assert!(semantic.resolutions.is_empty());

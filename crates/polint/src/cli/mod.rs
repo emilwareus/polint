@@ -2192,7 +2192,7 @@ fn facts_sample(root: &Path, args: &FactsSampleArgs) -> Result<u8> {
                     symbol.primary_span.as_ref().map(span_start),
                     "present",
                     Some(symbol_precision_label(symbol.precision).to_string()),
-                    Some(symbol.stable_key.clone()),
+                    Some(db.resolve_stable_key(symbol.stable_key).to_string()),
                 )
             })
             .collect(),
@@ -2208,7 +2208,7 @@ fn facts_sample(root: &Path, args: &FactsSampleArgs) -> Result<u8> {
                     reference.primary_span.as_ref().map(span_start),
                     symbol_status_label(reference.status),
                     Some(symbol_precision_label(reference.precision).to_string()),
-                    Some(reference.stable_key.clone()),
+                    Some(db.resolve_stable_key(reference.stable_key).to_string()),
                 )
             })
             .collect(),

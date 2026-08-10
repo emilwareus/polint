@@ -1836,7 +1836,7 @@ mod semantic_setup_missing {
   "errors":[]
 }"#,
         );
-        let mut builder = SymbolGraphBuilder::new();
+        let mut builder = SymbolGraphBuilder::new(crate::core::StableKeyInterner::default());
 
         convert_sidecar_output(&mut builder, &analysis_db_with(file), &sidecar);
         let graph = builder.finish();
@@ -2058,7 +2058,7 @@ module_roots = ["services/payments"]
         let temp = tempfile::tempdir().expect("tempdir");
         let mut db = AnalysisDb::new();
         add_go_file(&mut db, temp.path(), "main.go", "package main\n");
-        let mut builder = SymbolGraphBuilder::new();
+        let mut builder = SymbolGraphBuilder::new(crate::core::StableKeyInterner::default());
 
         let output = derive_go_symbols(
             &mut builder,
@@ -2096,7 +2096,7 @@ module_roots = ["services/payments"]
             "src/app.ts",
             "export function run() { return 1; }\n",
         );
-        let mut builder = SymbolGraphBuilder::new();
+        let mut builder = SymbolGraphBuilder::new(crate::core::StableKeyInterner::default());
 
         let output = derive_go_symbols(
             &mut builder,
@@ -2128,7 +2128,7 @@ module_roots = ["services/payments"]
         .expect("write go.mod");
         let mut db = AnalysisDb::new();
         add_go_file(&mut db, temp.path(), "main.go", "package main\n");
-        let mut builder = SymbolGraphBuilder::new();
+        let mut builder = SymbolGraphBuilder::new(crate::core::StableKeyInterner::default());
 
         let output = derive_go_symbols_with_runner(
             &mut builder,
@@ -2165,7 +2165,7 @@ module_roots = ["services/payments"]
         .expect("write go.mod");
         let mut db = AnalysisDb::new();
         add_go_file(&mut db, temp.path(), "main.go", "package main\n");
-        let mut builder = SymbolGraphBuilder::new();
+        let mut builder = SymbolGraphBuilder::new(crate::core::StableKeyInterner::default());
 
         let output = derive_go_symbols_with_runner(
             &mut builder,
@@ -2229,7 +2229,7 @@ module_roots = ["services/payments"]
         .expect("write go.mod");
         let mut db = AnalysisDb::new();
         add_go_file(&mut db, temp.path(), "main.go", "package main\n");
-        let mut builder = SymbolGraphBuilder::new();
+        let mut builder = SymbolGraphBuilder::new(crate::core::StableKeyInterner::default());
 
         let output = derive_go_symbols_with_runner(
             &mut builder,
@@ -2300,7 +2300,7 @@ mod symbol_graph_go {
         for (relative_path, source) in files {
             add_go_file(&mut db, temp.path(), relative_path, source);
         }
-        let mut builder = SymbolGraphBuilder::new();
+        let mut builder = SymbolGraphBuilder::new(crate::core::StableKeyInterner::default());
         let output = derive_go_symbols(
             &mut builder,
             &db,
@@ -2517,7 +2517,7 @@ func Build() string {
 }
 "#,
         );
-        let mut builder = SymbolGraphBuilder::new();
+        let mut builder = SymbolGraphBuilder::new(crate::core::StableKeyInterner::default());
         let output = derive_go_symbols(
             &mut builder,
             &db,

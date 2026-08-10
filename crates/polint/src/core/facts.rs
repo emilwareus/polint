@@ -1,3 +1,4 @@
+use super::StableKeyId;
 use super::ids::{
     BranchId, DefinitionId, FileId, FunctionId, ImportId, ModuleEdgeId, ModuleNodeId, PackageId,
     ReferenceId, ResolvedImportId, SymbolId,
@@ -271,7 +272,7 @@ pub enum SymbolResolutionStatus {
     Unsupported,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct SymbolFact {
     pub id: SymbolId,
@@ -286,11 +287,11 @@ pub struct SymbolFact {
     pub owner: Option<SymbolId>,
     pub primary_span: Option<Span>,
     pub is_exported: bool,
-    pub stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub precision: SymbolPrecision,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct DefinitionFact {
     pub id: DefinitionId,
@@ -307,11 +308,11 @@ pub struct DefinitionFact {
     pub primary_span: Option<Span>,
     pub is_primary: bool,
     pub is_exported: bool,
-    pub stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub precision: SymbolPrecision,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct ReferenceFact {
     pub id: ReferenceId,
@@ -327,7 +328,7 @@ pub struct ReferenceFact {
     pub primary_span: Option<Span>,
     pub target: Option<SymbolId>,
     pub candidates: Vec<SymbolId>,
-    pub stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     pub status: SymbolResolutionStatus,
     pub precision: SymbolPrecision,
 }

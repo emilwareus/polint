@@ -20,7 +20,10 @@ use crate::core::{
     FunctionFact, ImportFact, Language, PackageFact, ReferenceFact, SourceFile, Span, SymbolFact,
 };
 use crate::diagnostics::{Diagnostic, TextRange};
-use model::{SYMBOL_GRAPH_LAYER_SCHEMA, SymbolGraphBuilder, SymbolGraphLayerPayload};
+use model::{
+    CachedDefinitionFact, CachedReferenceFact, CachedSymbolFact, SYMBOL_GRAPH_LAYER_SCHEMA,
+    SymbolGraphBuilder, SymbolGraphLayerPayload,
+};
 use semantic::{
     AliasFact, ExportFact, GeneratedSymbolFact, ResolutionFact, ScopeFact, SemanticImportFact,
     SemanticIndexOutput, StableExportIdentity, alias_reexport_closure,
@@ -221,7 +224,7 @@ fn derive_requested_symbols_uncached_with_payload(
         return (SymbolGraphDerivation::default(), None);
     }
 
-    let mut builder = SymbolGraphBuilder::new();
+    let mut builder = SymbolGraphBuilder::new(interner_handle.clone());
     let mut derivation = SymbolGraphDerivation::default();
     let mut semantic_output = SemanticIndexOutput::default();
 
@@ -499,31 +502,57 @@ fn symbol_graph_layer_payload(
     db: &AnalysisDb,
     derivation: &SymbolGraphDerivation,
 ) -> SymbolGraphLayerPayload {
+    let interner = db.stable_key_interner();
     let mut symbols = db.symbols().to_vec();
     let mut definitions = db.definitions().to_vec();
     let mut references = db.references().to_vec();
-    sort_symbol_facts(&mut symbols);
-    sort_definition_facts(&mut definitions);
-    sort_reference_facts(&mut references);
+    sort_symbol_facts(&interner, &mut symbols);
+    sort_definition_facts(&interner, &mut definitions);
+    sort_reference_facts(&interner, &mut references);
 
     SymbolGraphLayerPayload {
         schema: SYMBOL_GRAPH_LAYER_SCHEMA.to_string(),
         diagnostics: derivation.diagnostics.clone(),
         capability_support: derivation.capability_support.clone(),
-        symbols,
-        definitions,
-        references,
+        symbols: symbols
+            .iter()
+            .map(|fact| CachedSymbolFact::from_fact(&interner, fact))
+            .collect(),
+        definitions: definitions
+            .iter()
+            .map(|fact| CachedDefinitionFact::from_fact(&interner, fact))
+            .collect(),
+        references: references
+            .iter()
+            .map(|fact| CachedReferenceFact::from_fact(&interner, fact))
+            .collect(),
         semantic_index: semantic_index_payload(db),
     }
 }
 
 fn restore_symbol_graph_layer_payload(db: &mut AnalysisDb, payload: &SymbolGraphLayerPayload) {
-    let mut symbols = payload.symbols.clone();
-    let mut definitions = payload.definitions.clone();
-    let mut references = payload.references.clone();
-    sort_symbol_facts(&mut symbols);
-    sort_definition_facts(&mut definitions);
-    sort_reference_facts(&mut references);
+    let interner = db.stable_key_interner();
+    let mut symbols = payload
+        .symbols
+        .clone()
+        .into_iter()
+        .map(|fact| fact.into_fact(&interner))
+        .collect::<Vec<_>>();
+    let mut definitions = payload
+        .definitions
+        .clone()
+        .into_iter()
+        .map(|fact| fact.into_fact(&interner))
+        .collect::<Vec<_>>();
+    let mut references = payload
+        .references
+        .clone()
+        .into_iter()
+        .map(|fact| fact.into_fact(&interner))
+        .collect::<Vec<_>>();
+    sort_symbol_facts(&interner, &mut symbols);
+    sort_definition_facts(&interner, &mut definitions);
+    sort_reference_facts(&interner, &mut references);
     db.replace_symbol_graph_facts(symbols, definitions, references);
     db.replace_semantic_index_facts(
         payload.semantic_index.scopes.clone(),
@@ -867,16 +896,18 @@ fn language_cache_label(language: Language) -> &'static str {
     }
 }
 
-fn sort_symbol_facts(symbols: &mut [SymbolFact]) {
+fn sort_symbol_facts(interner: &crate::core::StableKeyInterner, symbols: &mut [SymbolFact]) {
     symbols.sort_by(|left, right| {
+        let left_stable_key = interner.resolve(left.stable_key);
+        let right_stable_key = interner.resolve(right.stable_key);
         fact_order_key(
-            &left.stable_key,
+            &left_stable_key,
             left.file,
             left.primary_span.as_ref(),
             &left.name,
         )
         .cmp(&fact_order_key(
-            &right.stable_key,
+            &right_stable_key,
             right.file,
             right.primary_span.as_ref(),
             &right.name,
@@ -884,16 +915,21 @@ fn sort_symbol_facts(symbols: &mut [SymbolFact]) {
     });
 }
 
-fn sort_definition_facts(definitions: &mut [DefinitionFact]) {
+fn sort_definition_facts(
+    interner: &crate::core::StableKeyInterner,
+    definitions: &mut [DefinitionFact],
+) {
     definitions.sort_by(|left, right| {
+        let left_stable_key = interner.resolve(left.stable_key);
+        let right_stable_key = interner.resolve(right.stable_key);
         fact_order_key(
-            &left.stable_key,
+            &left_stable_key,
             left.file,
             left.primary_span.as_ref(),
             &left.name,
         )
         .cmp(&fact_order_key(
-            &right.stable_key,
+            &right_stable_key,
             right.file,
             right.primary_span.as_ref(),
             &right.name,
@@ -901,16 +937,21 @@ fn sort_definition_facts(definitions: &mut [DefinitionFact]) {
     });
 }
 
-fn sort_reference_facts(references: &mut [ReferenceFact]) {
+fn sort_reference_facts(
+    interner: &crate::core::StableKeyInterner,
+    references: &mut [ReferenceFact],
+) {
     references.sort_by(|left, right| {
+        let left_stable_key = interner.resolve(left.stable_key);
+        let right_stable_key = interner.resolve(right.stable_key);
         fact_order_key(
-            &left.stable_key,
+            &left_stable_key,
             left.file,
             left.primary_span.as_ref(),
             &left.name,
         )
         .cmp(&fact_order_key(
-            &right.stable_key,
+            &right_stable_key,
             right.file,
             right.primary_span.as_ref(),
             &right.name,
@@ -1120,7 +1161,7 @@ mod symbol_graph_derivation {
         db.add_file(path, relative_path.to_string(), source.to_string())
     }
 
-    fn stale_symbol_fact(file: FileId) -> SymbolFact {
+    fn stale_symbol_fact(interner: &crate::core::StableKeyInterner, file: FileId) -> SymbolFact {
         SymbolFact {
             id: SymbolId(999),
             language: Language::TypeScript,
@@ -1134,12 +1175,15 @@ mod symbol_graph_derivation {
             owner: None,
             primary_span: Some(Span::point(file, 1, 1)),
             is_exported: false,
-            stable_key: "stale:symbol".to_string(),
+            stable_key: interner.intern("stale:symbol".to_string()),
             precision: SymbolPrecision::Unsupported,
         }
     }
 
-    fn stale_definition_fact(file: FileId) -> DefinitionFact {
+    fn stale_definition_fact(
+        interner: &crate::core::StableKeyInterner,
+        file: FileId,
+    ) -> DefinitionFact {
         DefinitionFact {
             id: DefinitionId(999),
             symbol: SymbolId(999),
@@ -1155,12 +1199,15 @@ mod symbol_graph_derivation {
             primary_span: Some(Span::point(file, 1, 1)),
             is_primary: false,
             is_exported: false,
-            stable_key: "stale:definition".to_string(),
+            stable_key: interner.intern("stale:definition".to_string()),
             precision: SymbolPrecision::Unsupported,
         }
     }
 
-    fn stale_reference_fact(file: FileId) -> ReferenceFact {
+    fn stale_reference_fact(
+        interner: &crate::core::StableKeyInterner,
+        file: FileId,
+    ) -> ReferenceFact {
         ReferenceFact {
             id: ReferenceId(999),
             language: Language::TypeScript,
@@ -1175,7 +1222,7 @@ mod symbol_graph_derivation {
             primary_span: Some(Span::point(file, 1, 1)),
             target: None,
             candidates: Vec::new(),
-            stable_key: "stale:reference".to_string(),
+            stable_key: interner.intern("stale:reference".to_string()),
             status: SymbolResolutionStatus::Unsupported,
             precision: SymbolPrecision::Unsupported,
         }
@@ -1346,6 +1393,7 @@ export function answer() {{
             "src/app.ts".to_string(),
             "export const value = 1;\n".to_string(),
         );
+        let interner = db.stable_key_interner();
         let symbol = SymbolFact {
             id: SymbolId(7),
             language: Language::TypeScript,
@@ -1359,7 +1407,7 @@ export function answer() {{
             owner: None,
             primary_span: Some(Span::point(file, 1, 14)),
             is_exported: true,
-            stable_key: "symbol:key:value".to_string(),
+            stable_key: interner.intern("symbol:key:value".to_string()),
             precision: SymbolPrecision::ExactSemantic,
         };
         let definition = DefinitionFact {
@@ -1377,7 +1425,7 @@ export function answer() {{
             primary_span: Some(Span::point(file, 1, 14)),
             is_primary: true,
             is_exported: true,
-            stable_key: "definition:key:value".to_string(),
+            stable_key: interner.intern("definition:key:value".to_string()),
             precision: SymbolPrecision::ExactSemantic,
         };
         let reference = ReferenceFact {
@@ -1394,7 +1442,7 @@ export function answer() {{
             primary_span: Some(Span::point(file, 1, 14)),
             target: Some(symbol.id),
             candidates: Vec::new(),
-            stable_key: "reference:key:value".to_string(),
+            stable_key: interner.intern("reference:key:value".to_string()),
             status: SymbolResolutionStatus::Resolved,
             precision: SymbolPrecision::ExactSemantic,
         };
@@ -1429,6 +1477,7 @@ export function answer() {{
             "src/app.ts".to_string(),
             "missing;\n".to_string(),
         );
+        let interner = db.stable_key_interner();
         let reference = ReferenceFact {
             id: ReferenceId(23),
             language: Language::TypeScript,
@@ -1443,7 +1492,7 @@ export function answer() {{
             primary_span: Some(Span::point(file, 1, 1)),
             target: None,
             candidates: Vec::new(),
-            stable_key: "reference:key:missing".to_string(),
+            stable_key: interner.intern("reference:key:missing".to_string()),
             status: SymbolResolutionStatus::SetupMissing,
             precision: SymbolPrecision::SetupMissing,
         };
@@ -1562,10 +1611,11 @@ export function answer() {{
                 "export const value = 1;\n",
             );
             add_file(&mut db, temp.path(), "lib/main.go", "package lib\n");
+            let interner = db.stable_key_interner();
             db.replace_symbol_graph_facts(
-                vec![stale_symbol_fact(app)],
-                vec![stale_definition_fact(app)],
-                vec![stale_reference_fact(app)],
+                vec![stale_symbol_fact(&interner, app)],
+                vec![stale_definition_fact(&interner, app)],
+                vec![stale_reference_fact(&interner, app)],
             );
 
             let derivation = derive_requested_symbols(
@@ -1741,7 +1791,7 @@ export function answer() {{
             .iter()
             .map(|symbol| {
                 (
-                    symbol.stable_key.clone(),
+                    db.resolve_stable_key(symbol.stable_key).to_string(),
                     symbol.name.clone(),
                     symbol.kind,
                     symbol.precision,
@@ -1763,7 +1813,7 @@ export function answer() {{
             .iter()
             .map(|reference| {
                 (
-                    reference.stable_key.clone(),
+                    db.resolve_stable_key(reference.stable_key).to_string(),
                     reference.name.clone(),
                     reference.kind,
                     reference.status,

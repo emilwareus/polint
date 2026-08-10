@@ -2528,10 +2528,11 @@ mod calls {
             cyclomatic_complexity: 1,
             calls: Vec::new(),
         });
+        let interner = db.stable_key_interner();
         db.replace_symbol_graph_facts(
             vec![
-                symbol(SymbolId(0), file, "app"),
-                symbol(SymbolId(1), file, "target"),
+                symbol(&interner, SymbolId(0), file, "app"),
+                symbol(&interner, SymbolId(1), file, "target"),
             ],
             Vec::new(),
             Vec::new(),
@@ -2539,7 +2540,12 @@ mod calls {
         db
     }
 
-    fn symbol(id: SymbolId, file: FileId, name: &str) -> SymbolFact {
+    fn symbol(
+        interner: &crate::core::StableKeyInterner,
+        id: SymbolId,
+        file: FileId,
+        name: &str,
+    ) -> SymbolFact {
         SymbolFact {
             id,
             language: Language::TypeScript,
@@ -2553,7 +2559,7 @@ mod calls {
             owner: None,
             primary_span: Some(span(file)),
             is_exported: true,
-            stable_key: format!("symbol:{name}"),
+            stable_key: interner.intern(format!("symbol:{name}")),
             precision: SymbolPrecision::ExactLocal,
         }
     }
@@ -2841,6 +2847,7 @@ mod semantic_index {
             "src/app.ts".to_string(),
             "export const answer = 1;\n".to_string(),
         );
+        let interner = db.stable_key_interner();
         db.replace_symbol_graph_facts(
             vec![SymbolFact {
                 id: SymbolId(0),
@@ -2855,7 +2862,7 @@ mod semantic_index {
                 owner: None,
                 primary_span: Some(span(file, 13, 19)),
                 is_exported: true,
-                stable_key: "symbol:answer".to_string(),
+                stable_key: interner.intern("symbol:answer".to_string()),
                 precision: SymbolPrecision::ExactLocal,
             }],
             Vec::new(),
@@ -3312,12 +3319,12 @@ impl IdSets {
             symbol_stable_keys: db
                 .symbols()
                 .iter()
-                .map(|fact| fact.stable_key.clone())
+                .map(|fact| db.resolve_stable_key(fact.stable_key).to_string())
                 .collect(),
             reference_stable_keys: db
                 .references()
                 .iter()
-                .map(|fact| fact.stable_key.clone())
+                .map(|fact| db.resolve_stable_key(fact.stable_key).to_string())
                 .collect(),
         }
     }

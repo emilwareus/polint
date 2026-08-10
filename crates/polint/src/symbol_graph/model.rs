@@ -1,7 +1,7 @@
 use crate::core::{
     DefinitionFact, DefinitionId, DefinitionKind, FileId, Language, ModuleNodeId, PackageId,
-    ReferenceFact, ReferenceId, ReferenceKind, Span, SymbolFact, SymbolId, SymbolKind,
-    SymbolNamespace, SymbolPrecision, SymbolResolutionStatus,
+    ReferenceFact, ReferenceId, ReferenceKind, Span, StableKeyId, StableKeyInterner, SymbolFact,
+    SymbolId, SymbolKind, SymbolNamespace, SymbolPrecision, SymbolResolutionStatus,
 };
 use crate::diagnostics::{Diagnostic, TextRange};
 use crate::symbol_graph::semantic::SemanticIndexOutput;
@@ -28,14 +28,204 @@ pub(crate) struct SymbolGraphLayerPayload {
     pub(crate) schema: String,
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) capability_support: Vec<crate::core::CapabilitySupport>,
-    pub(crate) symbols: Vec<SymbolFact>,
-    pub(crate) definitions: Vec<DefinitionFact>,
-    pub(crate) references: Vec<ReferenceFact>,
+    pub(crate) symbols: Vec<CachedSymbolFact>,
+    pub(crate) definitions: Vec<CachedDefinitionFact>,
+    pub(crate) references: Vec<CachedReferenceFact>,
     pub(crate) semantic_index: SemanticIndexOutput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct CachedSymbolFact {
+    id: SymbolId,
+    language: Language,
+    name: String,
+    qualified_name: String,
+    kind: SymbolKind,
+    namespace: SymbolNamespace,
+    file: Option<FileId>,
+    package: Option<PackageId>,
+    module: Option<ModuleNodeId>,
+    owner: Option<SymbolId>,
+    primary_span: Option<Span>,
+    is_exported: bool,
+    #[serde(rename = "stable_key")]
+    stable_key_text: String,
+    precision: SymbolPrecision,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct CachedDefinitionFact {
+    id: DefinitionId,
+    symbol: SymbolId,
+    language: Language,
+    name: String,
+    qualified_name: String,
+    kind: DefinitionKind,
+    namespace: SymbolNamespace,
+    file: Option<FileId>,
+    package: Option<PackageId>,
+    module: Option<ModuleNodeId>,
+    owner: Option<SymbolId>,
+    primary_span: Option<Span>,
+    is_primary: bool,
+    is_exported: bool,
+    #[serde(rename = "stable_key")]
+    stable_key_text: String,
+    precision: SymbolPrecision,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct CachedReferenceFact {
+    id: ReferenceId,
+    language: Language,
+    name: String,
+    qualified_name: String,
+    kind: ReferenceKind,
+    namespace: SymbolNamespace,
+    file: Option<FileId>,
+    package: Option<PackageId>,
+    module: Option<ModuleNodeId>,
+    owner: Option<SymbolId>,
+    primary_span: Option<Span>,
+    target: Option<SymbolId>,
+    candidates: Vec<SymbolId>,
+    #[serde(rename = "stable_key")]
+    stable_key_text: String,
+    status: SymbolResolutionStatus,
+    precision: SymbolPrecision,
+}
+
+impl CachedSymbolFact {
+    pub(crate) fn from_fact(interner: &StableKeyInterner, fact: &SymbolFact) -> Self {
+        Self {
+            id: fact.id,
+            language: fact.language,
+            name: fact.name.clone(),
+            qualified_name: fact.qualified_name.clone(),
+            kind: fact.kind,
+            namespace: fact.namespace,
+            file: fact.file,
+            package: fact.package,
+            module: fact.module,
+            owner: fact.owner,
+            primary_span: fact.primary_span.clone(),
+            is_exported: fact.is_exported,
+            stable_key_text: interner.resolve(fact.stable_key).to_string(),
+            precision: fact.precision,
+        }
+    }
+
+    pub(crate) fn into_fact(self, interner: &StableKeyInterner) -> SymbolFact {
+        SymbolFact {
+            id: self.id,
+            language: self.language,
+            name: self.name,
+            qualified_name: self.qualified_name,
+            kind: self.kind,
+            namespace: self.namespace,
+            file: self.file,
+            package: self.package,
+            module: self.module,
+            owner: self.owner,
+            primary_span: self.primary_span,
+            is_exported: self.is_exported,
+            stable_key: interner.intern(self.stable_key_text),
+            precision: self.precision,
+        }
+    }
+}
+
+impl CachedDefinitionFact {
+    pub(crate) fn from_fact(interner: &StableKeyInterner, fact: &DefinitionFact) -> Self {
+        Self {
+            id: fact.id,
+            symbol: fact.symbol,
+            language: fact.language,
+            name: fact.name.clone(),
+            qualified_name: fact.qualified_name.clone(),
+            kind: fact.kind,
+            namespace: fact.namespace,
+            file: fact.file,
+            package: fact.package,
+            module: fact.module,
+            owner: fact.owner,
+            primary_span: fact.primary_span.clone(),
+            is_primary: fact.is_primary,
+            is_exported: fact.is_exported,
+            stable_key_text: interner.resolve(fact.stable_key).to_string(),
+            precision: fact.precision,
+        }
+    }
+
+    pub(crate) fn into_fact(self, interner: &StableKeyInterner) -> DefinitionFact {
+        DefinitionFact {
+            id: self.id,
+            symbol: self.symbol,
+            language: self.language,
+            name: self.name,
+            qualified_name: self.qualified_name,
+            kind: self.kind,
+            namespace: self.namespace,
+            file: self.file,
+            package: self.package,
+            module: self.module,
+            owner: self.owner,
+            primary_span: self.primary_span,
+            is_primary: self.is_primary,
+            is_exported: self.is_exported,
+            stable_key: interner.intern(self.stable_key_text),
+            precision: self.precision,
+        }
+    }
+}
+
+impl CachedReferenceFact {
+    pub(crate) fn from_fact(interner: &StableKeyInterner, fact: &ReferenceFact) -> Self {
+        Self {
+            id: fact.id,
+            language: fact.language,
+            name: fact.name.clone(),
+            qualified_name: fact.qualified_name.clone(),
+            kind: fact.kind,
+            namespace: fact.namespace,
+            file: fact.file,
+            package: fact.package,
+            module: fact.module,
+            owner: fact.owner,
+            primary_span: fact.primary_span.clone(),
+            target: fact.target,
+            candidates: fact.candidates.clone(),
+            stable_key_text: interner.resolve(fact.stable_key).to_string(),
+            status: fact.status,
+            precision: fact.precision,
+        }
+    }
+
+    pub(crate) fn into_fact(self, interner: &StableKeyInterner) -> ReferenceFact {
+        ReferenceFact {
+            id: self.id,
+            language: self.language,
+            name: self.name,
+            qualified_name: self.qualified_name,
+            kind: self.kind,
+            namespace: self.namespace,
+            file: self.file,
+            package: self.package,
+            module: self.module,
+            owner: self.owner,
+            primary_span: self.primary_span,
+            target: self.target,
+            candidates: self.candidates,
+            stable_key: interner.intern(self.stable_key_text),
+            status: self.status,
+            precision: self.precision,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct SymbolGraphBuilder {
+    interner: StableKeyInterner,
     hash: StableKeyHash,
     symbols: BTreeMap<String, SymbolFact>,
     definitions: BTreeMap<String, DefinitionFact>,
@@ -113,17 +303,18 @@ struct IdFamilyKey {
 }
 
 impl SymbolGraphBuilder {
-    pub(crate) fn new() -> Self {
-        Self::with_hash(default_stable_key_hash)
+    pub(crate) fn new(interner: StableKeyInterner) -> Self {
+        Self::with_hash(interner, default_stable_key_hash)
     }
 
     #[cfg(test)]
-    pub(crate) fn with_hash_for_test(hash: StableKeyHash) -> Self {
-        Self::with_hash(hash)
+    pub(crate) fn with_hash_for_test(interner: StableKeyInterner, hash: StableKeyHash) -> Self {
+        Self::with_hash(interner, hash)
     }
 
-    fn with_hash(hash: StableKeyHash) -> Self {
+    fn with_hash(interner: StableKeyInterner, hash: StableKeyHash) -> Self {
         Self {
+            interner,
             hash,
             symbols: BTreeMap::new(),
             definitions: BTreeMap::new(),
@@ -137,14 +328,14 @@ impl SymbolGraphBuilder {
     pub(crate) fn add_symbol(&mut self, draft: SymbolDraft) -> SymbolId {
         let stable_key_input = draft.stable_key_input();
         let id = symbol_id_from_key_with_hash(&stable_key_input, self.hash);
-        let stable_key = stable_key_input.stable_key();
-        let fact = draft.into_fact(id, stable_key.clone());
+        let stable_key_text = stable_key_input.stable_key();
+        let fact = draft.into_fact(id, self.interner.intern(stable_key_text.clone()));
 
-        self.record_id_key(IdFamily::Symbol, id.0, &stable_key);
+        self.record_id_key(IdFamily::Symbol, id.0, &stable_key_text);
         self.symbol_keys_by_id
             .entry(id)
             .or_insert_with(|| stable_key_input.clone());
-        self.insert_symbol(stable_key, fact);
+        self.insert_symbol(stable_key_text, fact);
         id
     }
 
@@ -164,11 +355,11 @@ impl SymbolGraphBuilder {
             .unwrap_or_else(|| fallback_span(draft.file));
         let stable_key_input = StableDefinitionKey::new(symbol_key, draft.file_key.clone(), span);
         let id = definition_id_from_key_with_hash(&stable_key_input, self.hash);
-        let stable_key = stable_key_input.stable_key();
-        let fact = draft.into_fact(id, symbol, stable_key.clone());
+        let stable_key_text = stable_key_input.stable_key();
+        let fact = draft.into_fact(id, symbol, self.interner.intern(stable_key_text.clone()));
 
-        self.record_id_key(IdFamily::Definition, id.0, &stable_key);
-        self.insert_definition(stable_key, fact);
+        self.record_id_key(IdFamily::Definition, id.0, &stable_key_text);
+        self.insert_definition(stable_key_text, fact);
         id
     }
 
@@ -262,9 +453,9 @@ impl SymbolGraphBuilder {
         let mut symbols = self.symbols.into_values().collect::<Vec<_>>();
         let mut definitions = self.definitions.into_values().collect::<Vec<_>>();
         let mut references = self.references.into_values().collect::<Vec<_>>();
-        symbols.sort_by(symbol_order);
-        definitions.sort_by(definition_order);
-        references.sort_by(reference_order);
+        symbols.sort_by(|left, right| symbol_order(&self.interner, left, right));
+        definitions.sort_by(|left, right| definition_order(&self.interner, left, right));
+        references.sort_by(|left, right| reference_order(&self.interner, left, right));
 
         let mut diagnostics = self.diagnostics.into_values().collect::<Vec<_>>();
         diagnostics.sort_by(|left, right| {
@@ -321,11 +512,17 @@ impl SymbolGraphBuilder {
                 },
             );
         let id = reference_id_from_key_with_hash(&stable_key_input, self.hash);
-        let stable_key = stable_key_input.stable_key();
-        let fact = draft.into_fact(id, target, candidates, stable_key.clone(), status);
+        let stable_key_text = stable_key_input.stable_key();
+        let fact = draft.into_fact(
+            id,
+            target,
+            candidates,
+            self.interner.intern(stable_key_text.clone()),
+            status,
+        );
 
-        self.record_id_key(IdFamily::Reference, id.0, &stable_key);
-        self.insert_reference(stable_key, fact);
+        self.record_id_key(IdFamily::Reference, id.0, &stable_key_text);
+        self.insert_reference(stable_key_text, fact);
         id
     }
 
@@ -415,7 +612,7 @@ impl SymbolDraft {
         )
     }
 
-    fn into_fact(self, id: SymbolId, stable_key: String) -> SymbolFact {
+    fn into_fact(self, id: SymbolId, stable_key: StableKeyId) -> SymbolFact {
         SymbolFact {
             id,
             language: self.language,
@@ -450,7 +647,12 @@ impl DefinitionDraft {
         )
     }
 
-    fn into_fact(self, id: DefinitionId, symbol: SymbolId, stable_key: String) -> DefinitionFact {
+    fn into_fact(
+        self,
+        id: DefinitionId,
+        symbol: SymbolId,
+        stable_key: StableKeyId,
+    ) -> DefinitionFact {
         DefinitionFact {
             id,
             symbol,
@@ -501,7 +703,7 @@ impl ReferenceDraft {
         id: ReferenceId,
         target: Option<SymbolId>,
         candidates: Vec<SymbolId>,
-        stable_key: String,
+        stable_key: StableKeyId,
         status: SymbolResolutionStatus,
     ) -> ReferenceFact {
         ReferenceFact {
@@ -581,16 +783,22 @@ fn same_reference_fact(left: &ReferenceFact, right: &ReferenceFact) -> bool {
         && left.precision == right.precision
 }
 
-fn symbol_order(left: &SymbolFact, right: &SymbolFact) -> std::cmp::Ordering {
+fn symbol_order(
+    interner: &StableKeyInterner,
+    left: &SymbolFact,
+    right: &SymbolFact,
+) -> std::cmp::Ordering {
+    let left_stable_key = interner.resolve(left.stable_key);
+    let right_stable_key = interner.resolve(right.stable_key);
     fact_order_key(
-        &left.stable_key,
+        &left_stable_key,
         left.file,
         left.primary_span.as_ref(),
         symbol_kind_rank(left.kind),
         &left.name,
     )
     .cmp(&fact_order_key(
-        &right.stable_key,
+        &right_stable_key,
         right.file,
         right.primary_span.as_ref(),
         symbol_kind_rank(right.kind),
@@ -598,16 +806,22 @@ fn symbol_order(left: &SymbolFact, right: &SymbolFact) -> std::cmp::Ordering {
     ))
 }
 
-fn definition_order(left: &DefinitionFact, right: &DefinitionFact) -> std::cmp::Ordering {
+fn definition_order(
+    interner: &StableKeyInterner,
+    left: &DefinitionFact,
+    right: &DefinitionFact,
+) -> std::cmp::Ordering {
+    let left_stable_key = interner.resolve(left.stable_key);
+    let right_stable_key = interner.resolve(right.stable_key);
     fact_order_key(
-        &left.stable_key,
+        &left_stable_key,
         left.file,
         left.primary_span.as_ref(),
         definition_kind_rank(left.kind),
         &left.name,
     )
     .cmp(&fact_order_key(
-        &right.stable_key,
+        &right_stable_key,
         right.file,
         right.primary_span.as_ref(),
         definition_kind_rank(right.kind),
@@ -615,16 +829,22 @@ fn definition_order(left: &DefinitionFact, right: &DefinitionFact) -> std::cmp::
     ))
 }
 
-fn reference_order(left: &ReferenceFact, right: &ReferenceFact) -> std::cmp::Ordering {
+fn reference_order(
+    interner: &StableKeyInterner,
+    left: &ReferenceFact,
+    right: &ReferenceFact,
+) -> std::cmp::Ordering {
+    let left_stable_key = interner.resolve(left.stable_key);
+    let right_stable_key = interner.resolve(right.stable_key);
     fact_order_key(
-        &left.stable_key,
+        &left_stable_key,
         left.file,
         left.primary_span.as_ref(),
         reference_kind_rank(left.kind),
         &left.name,
     )
     .cmp(&fact_order_key(
-        &right.stable_key,
+        &right_stable_key,
         right.file,
         right.primary_span.as_ref(),
         reference_kind_rank(right.kind),
@@ -707,8 +927,8 @@ fn family_label(family: IdFamily) -> &'static str {
 #[cfg(test)]
 mod symbol_graph_builder {
     use crate::core::{
-        DefinitionKind, FileId, Language, ReferenceKind, Span, SymbolKind, SymbolNamespace,
-        SymbolPrecision, SymbolResolutionStatus,
+        DefinitionKind, FileId, Language, ReferenceKind, Span, StableKeyInterner, SymbolKind,
+        SymbolNamespace, SymbolPrecision, SymbolResolutionStatus,
     };
     use crate::symbol_graph::model::{
         DefinitionDraft, ReferenceDraft, SymbolDraft, SymbolGraphBuilder,
@@ -786,7 +1006,8 @@ mod symbol_graph_builder {
     #[test]
     fn output_order_is_deterministic_across_insertion_order() {
         let file = FileId(0);
-        let mut left = SymbolGraphBuilder::new();
+        let left_interner = StableKeyInterner::default();
+        let mut left = SymbolGraphBuilder::new(left_interner.clone());
         let zeta = left.add_symbol(symbol_draft("zeta", file, 20));
         let alpha = left.add_symbol(symbol_draft("alpha", file, 10));
         left.add_definition(zeta, definition_draft("zeta", file, 20));
@@ -794,7 +1015,8 @@ mod symbol_graph_builder {
         left.add_reference(zeta, reference_draft("zeta", file, 80));
         left.add_reference(alpha, reference_draft("alpha", file, 70));
 
-        let mut right = SymbolGraphBuilder::new();
+        let right_interner = StableKeyInterner::default();
+        let mut right = SymbolGraphBuilder::new(right_interner.clone());
         let alpha = right.add_symbol(symbol_draft("alpha", file, 10));
         let zeta = right.add_symbol(symbol_draft("zeta", file, 20));
         right.add_reference(alpha, reference_draft("alpha", file, 70));
@@ -815,12 +1037,12 @@ mod symbol_graph_builder {
         assert_eq!(
             left.symbols
                 .iter()
-                .map(|symbol| symbol.stable_key.as_str())
+                .map(|symbol| left_interner.resolve(symbol.stable_key))
                 .collect::<Vec<_>>(),
             right
                 .symbols
                 .iter()
-                .map(|symbol| symbol.stable_key.as_str())
+                .map(|symbol| right_interner.resolve(symbol.stable_key))
                 .collect::<Vec<_>>()
         );
         assert_eq!(
@@ -843,7 +1065,8 @@ mod symbol_graph_builder {
         }
 
         let file = FileId(0);
-        let mut builder = SymbolGraphBuilder::with_hash_for_test(constant_hash);
+        let mut builder =
+            SymbolGraphBuilder::with_hash_for_test(StableKeyInterner::default(), constant_hash);
         let alpha = builder.add_symbol(symbol_draft("alpha", file, 10));
         let beta = builder.add_symbol(symbol_draft("beta", file, 20));
         let output = builder.finish();
@@ -864,7 +1087,7 @@ mod symbol_graph_builder {
     #[test]
     fn precision_and_reference_status_are_preserved() {
         let file = FileId(0);
-        let mut builder = SymbolGraphBuilder::new();
+        let mut builder = SymbolGraphBuilder::new(StableKeyInterner::default());
         let mut symbol = symbol_draft("alpha", file, 10);
         symbol.precision = SymbolPrecision::ExactSemantic;
         let alpha = builder.add_symbol(symbol);
