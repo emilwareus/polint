@@ -832,7 +832,7 @@
       "attempts": 1,
       "slice": null,
       "fact_family_locks": [],
-      "note": "rest-small-facts MERGED@00c25aed; remaining rest families still open (summaries/solver/slicing/residuals); T-INTERN-B not complete",
+      "note": "rest-small-facts MERGED@15aaf817; remaining rest families still open (summaries/solver/slicing/residuals); T-INTERN-B not complete",
       "slices_done": [
         "symbols",
         "mir",
@@ -844,11 +844,11 @@
         "rest-analysis-mid",
         "rest-small-facts"
       ],
-      "updated_at": "2026-08-10T23:03:50+02:00",
+      "updated_at": "2026-08-10T23:04:10+02:00",
       "slices": {
         "rest-small-facts": {
-          "commit": "00c25aed",
-          "merged_at": "2026-08-10T23:03:55+02:00"
+          "commit": "15aaf817",
+          "merged_at": "2026-08-10T23:04:10+02:00"
         }
       }
     },
@@ -935,7 +935,7 @@
   },
   "integration_branch": "static-analysis-architecture-review",
   "never_merge_to_main": true,
-  "integration_head": "00c25aed",
+  "integration_head": "4cc51efe",
   "m0_gate": {
     "status": "PASS",
     "completed_at": "2026-08-08T11:52:00+02:00",
@@ -1089,9 +1089,9 @@
       "commit": "5005df4e"
     },
     {
-      "at": "2026-08-10T23:03:55+02:00",
+      "at": "2026-08-10T23:04:10+02:00",
       "event": "T-INTERN-B rest-small-facts MERGED",
-      "commit": "00c25aed"
+      "commit": "15aaf817"
     }
   ],
   "ready": [],
