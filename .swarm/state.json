@@ -822,7 +822,7 @@
       "note": "StableKeyInterner + construction; facts still String until B"
     },
     "T-INTERN-B": {
-      "state": "CLAIMED",
+      "state": "MERGED",
       "depends_on": [
         "T-INTERN-A"
       ],
@@ -832,7 +832,9 @@
       "attempts": 1,
       "slice": null,
       "fact_family_locks": [],
-      "note": "rest-solver-summaries MERGED@1a2d6238; remaining residual/debug/wire + T-INTERN-C; T-INTERN-B not complete",
+      "note": "rest-boundaries MERGED; stable_key: String gate at 6 (C-owned only); T-INTERN-B complete",
+      "commit": "38c55c3d",
+      "merged_at": "2026-08-10T23:59:00+02:00",
       "slices_done": [
         "symbols",
         "mir",
@@ -843,9 +845,10 @@
         "rest-module-graph",
         "rest-analysis-mid",
         "rest-small-facts",
-        "rest-solver-summaries"
+        "rest-solver-summaries",
+        "rest-boundaries"
       ],
-      "updated_at": "2026-08-10T23:38:35+02:00",
+      "updated_at": "2026-08-10T23:59:00+02:00",
       "slices": {
         "rest-small-facts": {
           "commit": "15aaf817",
@@ -854,15 +857,20 @@
         "rest-solver-summaries": {
           "commit": "1a2d6238",
           "merged_at": "2026-08-10T23:38:35+02:00"
+        },
+        "rest-boundaries": {
+          "commit": "38c55c3d",
+          "merged_at": "2026-08-10T23:59:00+02:00"
         }
       }
     },
     "T-INTERN-C": {
-      "state": "BLOCKED",
+      "state": "READY",
       "depends_on": [
         "T-INTERN-B"
       ],
-      "created_at": "2026-08-10T10:04:15+02:00"
+      "created_at": "2026-08-10T10:04:15+02:00",
+      "note": "T-INTERN-B complete; stable_key: String count = 6 (C-owned metadata only)"
     },
     "T-SPLIT": {
       "state": "BLOCKED",
@@ -891,10 +899,10 @@
     "fact_family": {}
   },
   "milestone": "PRE-SHIP",
-  "READY": [],
-  "IN_FLIGHT": [
-    "T-INTERN-B"
+  "READY": [
+    "T-INTERN-C"
   ],
+  "IN_FLIGHT": [],
   "IN_REVIEW": [],
   "MERGED": [
     "W2.2",
@@ -1041,7 +1049,9 @@
     "2026-08-10T23:38:46+02:00: integration_head -> 99c8cbcd after rest-solver-summaries land notes",
     "2026-08-10T23:38:51+02:00: integration_head synced to tip 67084027",
     "2026-08-10T23:39:00+02:00: integration_head -> 751d6e9a",
-    "2026-08-10T23:39:20+02:00: integration_head set to rest-solver-summaries feat 1a2d6238 (T-INTERN-B remains open)"
+    "2026-08-10T23:39:20+02:00: integration_head set to rest-solver-summaries feat 1a2d6238 (T-INTERN-B remains open)",
+    "2026-08-10T23:55:00+02:00: T-INTERN-B claimed fact_family:residual_boundaries for rest-boundaries slice",
+    "2026-08-10T23:59:00+02:00: T-INTERN-B rest-boundaries complete; released fact_family:residual_boundaries; T-INTERN-B MERGED; T-INTERN-C READY"
   ],
   "events": [
     "2026-08-08T15:10:20+02:00: W2.2d+e landed FF @271ccd15; core/mod.rs 8739 LOC; capability+rule extracted; main untouched",
@@ -1110,6 +1120,16 @@
       "at": "2026-08-10T23:38:35+02:00",
       "event": "T-INTERN-B rest-solver-summaries MERGED",
       "commit": "1a2d6238"
+    },
+    {
+      "at": "2026-08-10T23:59:00+02:00",
+      "event": "T-INTERN-B rest-boundaries MERGED",
+      "commit": "38c55c3d"
+    },
+    {
+      "at": "2026-08-10T23:59:00+02:00",
+      "event": "T-INTERN-B MERGED",
+      "commit": "38c55c3d"
     }
   ],
   "ready": [],
