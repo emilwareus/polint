@@ -275,7 +275,16 @@ impl Default for AnalysisDb {
         fact_stores.insert(SEMANTIC_MIR_STORE_FAMILY, FactStoreEntry::new(semantic_mir));
         Self {
             files: Vec::new(),
-            stable_keys: StableKeyInterner::default(),
+            stable_keys: {
+                #[cfg(test)]
+                {
+                    crate::core::test_stable_key_interner()
+                }
+                #[cfg(not(test))]
+                {
+                    StableKeyInterner::default()
+                }
+            },
             fact_meta: FactMetaStore::default(),
             fact_stores,
             path_contexts: None,
@@ -798,7 +807,7 @@ impl AnalysisDb {
     }
 
     pub(crate) fn replace_topology_facts(&mut self, output: TopologyOutput) {
-        let output = output.normalized();
+        let output = output.normalized(&self.stable_keys);
         *self.module_topology_store_mut() = ModuleTopologyStore::from_output(output);
         self.refresh_topology_metadata();
     }
@@ -808,7 +817,7 @@ impl AnalysisDb {
             import_to_package_edges: edges,
             ..TopologyOutput::default()
         }
-        .normalized();
+        .normalized(&self.stable_keys);
         self.module_topology_store_mut()
             .replace_import_to_package_edges(output.import_to_package_edges);
         self.refresh_import_to_package_metadata();
@@ -2418,6 +2427,7 @@ impl AnalysisDb {
     }
 
     fn refresh_topology_metadata(&mut self) {
+        let interner = self.stable_key_interner();
         self.fact_meta.remove_family(FactFamily::WorkspaceRoot);
         self.fact_meta.remove_family(FactFamily::TopologyPackage);
         self.fact_meta.remove_family(FactFamily::SourceSet);
@@ -2439,7 +2449,7 @@ impl AnalysisDb {
                         FactFamily::WorkspaceRoot,
                         MODULE_GRAPH_PROVIDER_ID,
                         fact.precision,
-                        &fact.stable_key,
+                        interner.resolve(fact.stable_key).as_ref(),
                     ),
                 )
             })
@@ -2458,7 +2468,7 @@ impl AnalysisDb {
                         FactFamily::TopologyPackage,
                         MODULE_GRAPH_PROVIDER_ID,
                         fact.precision,
-                        &fact.stable_key,
+                        interner.resolve(fact.stable_key).as_ref(),
                     ),
                 )
             })
@@ -2477,7 +2487,7 @@ impl AnalysisDb {
                         FactFamily::SourceSet,
                         MODULE_GRAPH_PROVIDER_ID,
                         fact.precision,
-                        &fact.stable_key,
+                        interner.resolve(fact.stable_key).as_ref(),
                     ),
                 )
             })
@@ -2496,7 +2506,7 @@ impl AnalysisDb {
                         FactFamily::DependencyRequirement,
                         MODULE_GRAPH_PROVIDER_ID,
                         fact.precision,
-                        &fact.stable_key,
+                        interner.resolve(fact.stable_key).as_ref(),
                     ),
                 )
             })
@@ -2515,7 +2525,7 @@ impl AnalysisDb {
                         FactFamily::ResolvedDependencyEdge,
                         MODULE_GRAPH_PROVIDER_ID,
                         fact.precision,
-                        &fact.stable_key,
+                        interner.resolve(fact.stable_key).as_ref(),
                     ),
                 )
             })
@@ -2534,7 +2544,7 @@ impl AnalysisDb {
                         FactFamily::RepoTopologyOverlay,
                         MODULE_GRAPH_PROVIDER_ID,
                         fact.precision,
-                        &fact.stable_key,
+                        interner.resolve(fact.stable_key).as_ref(),
                     ),
                 )
             })
@@ -2553,6 +2563,7 @@ impl AnalysisDb {
     }
 
     fn refresh_import_to_package_metadata(&mut self) {
+        let interner = self.stable_key_interner();
         self.fact_meta.remove_family(FactFamily::ImportToPackage);
 
         let metadata = self
@@ -2565,7 +2576,7 @@ impl AnalysisDb {
                         FactFamily::ImportToPackage,
                         MODULE_TOPOLOGY_PROVIDER_ID,
                         fact.precision,
-                        &fact.stable_key,
+                        interner.resolve(fact.stable_key).as_ref(),
                     ),
                 )
             })

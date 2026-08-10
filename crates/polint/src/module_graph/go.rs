@@ -254,6 +254,18 @@ pub(crate) fn collect_go_topology(
     db: &AnalysisDb,
     metadata: &GoPackageIndex,
 ) -> TopologyOutput {
+    let interner = db.stable_key_interner();
+    crate::module_graph::with_module_graph_stable_keys(&interner, || {
+        collect_go_topology_inner(loaded, db, metadata, &interner)
+    })
+}
+
+fn collect_go_topology_inner(
+    loaded: &LoadedConfig,
+    db: &AnalysisDb,
+    metadata: &GoPackageIndex,
+    interner: &crate::core::StableKeyInterner,
+) -> TopologyOutput {
     let config = match GoAnalysisConfig::from_loaded(loaded, db) {
         Ok(config) => config,
         Err(_) => {
@@ -262,7 +274,7 @@ pub(crate) fn collect_go_topology(
                 source_sets: go_files_setup_missing(db, None),
                 ..TopologyOutput::default()
             }
-            .normalized();
+            .normalized(interner);
         }
     };
 
@@ -280,7 +292,9 @@ pub(crate) fn collect_go_topology(
             root_path: module_root.clone(),
             manifest_path: present.then_some(go_mod_path),
             language: Some(Language::Go),
-            stable_key: format!("go-root:{module_root}"),
+            stable_key: crate::module_graph::intern_module_graph_stable_key(format!(
+                "go-root:{module_root}"
+            )),
             producer_id: GO_TOPOLOGY_PROVIDER_ID,
             precision: TopologyPrecision::ExactStatic,
             status: if present {
@@ -302,7 +316,7 @@ pub(crate) fn collect_go_topology(
             root_path: ".".to_string(),
             manifest_path: Some("go.work".to_string()),
             language: Some(Language::Go),
-            stable_key: "go-work:.".to_string(),
+            stable_key: crate::module_graph::intern_module_graph_stable_key("go-work:."),
             producer_id: GO_TOPOLOGY_PROVIDER_ID,
             precision: TopologyPrecision::ExactStatic,
             status: TopologyStatus::Present,
@@ -345,7 +359,9 @@ pub(crate) fn collect_go_topology(
             version: None,
             path: module_root.clone(),
             language: Some(Language::Go),
-            stable_key: format!("go-module:{module_root}:{module_path}"),
+            stable_key: crate::module_graph::intern_module_graph_stable_key(format!(
+                "go-module:{module_root}:{module_path}"
+            )),
             producer_id: GO_TOPOLOGY_PROVIDER_ID,
             precision: TopologyPrecision::ExactStatic,
             status: TopologyStatus::Present,
@@ -382,7 +398,10 @@ pub(crate) fn collect_go_topology(
             version: package.module_version.clone(),
             path,
             language: Some(Language::Go),
-            stable_key: format!("go-package:{}", package.import_path),
+            stable_key: crate::module_graph::intern_module_graph_stable_key(format!(
+                "go-package:{}",
+                package.import_path
+            )),
             producer_id: GO_TOPOLOGY_PROVIDER_ID,
             precision: TopologyPrecision::ExactStatic,
             status: TopologyStatus::Present,
@@ -419,11 +438,11 @@ pub(crate) fn collect_go_topology(
             path: file.relative_path.clone(),
             language: Some(Language::Go),
             files: vec![file.id],
-            stable_key: format!(
+            stable_key: crate::module_graph::intern_module_graph_stable_key(format!(
                 "go-source-set:{}:{}",
                 source_set_kind_label(kind),
                 file.relative_path
-            ),
+            )),
             producer_id: GO_TOPOLOGY_PROVIDER_ID,
             precision: TopologyPrecision::ExactStatic,
             status,
@@ -440,7 +459,7 @@ pub(crate) fn collect_go_topology(
         &go_module_paths,
     );
 
-    output.normalized()
+    output.normalized(interner)
 }
 
 fn repository_root() -> WorkspaceRootFact {
@@ -450,7 +469,7 @@ fn repository_root() -> WorkspaceRootFact {
         root_path: ".".to_string(),
         manifest_path: None,
         language: None,
-        stable_key: "repository:.".to_string(),
+        stable_key: crate::module_graph::intern_module_graph_stable_key("repository:."),
         producer_id: GO_TOPOLOGY_PROVIDER_ID,
         precision: TopologyPrecision::ExactStatic,
         status: TopologyStatus::Present,
@@ -469,11 +488,11 @@ fn go_files_setup_missing(db: &AnalysisDb, root: Option<WorkspaceRootId>) -> Vec
             path: file.relative_path.clone(),
             language: Some(Language::Go),
             files: vec![file.id],
-            stable_key: format!(
+            stable_key: crate::module_graph::intern_module_graph_stable_key(format!(
                 "go-source-set:{}:{}",
                 source_set_kind_label(classify_go_source_set(file)),
                 file.relative_path
-            ),
+            )),
             producer_id: GO_TOPOLOGY_PROVIDER_ID,
             precision: TopologyPrecision::Unknown,
             status: TopologyStatus::SetupMissing,
@@ -500,11 +519,11 @@ fn emit_go_mod_requirements(
                 version_requirement: requirement.version_requirement.clone(),
                 kind: RequirementKind::Direct,
                 manifest_path: Some(manifest_path.to_string()),
-                stable_key: format!(
+                stable_key: crate::module_graph::intern_module_graph_stable_key(format!(
                     "go-require:{manifest_path}:{}:{}",
                     requirement.target_name,
                     requirement.version_requirement.as_deref().unwrap_or("")
-                ),
+                )),
                 producer_id: GO_TOPOLOGY_PROVIDER_ID,
                 precision: requirement.precision,
                 status: requirement.status,
@@ -521,13 +540,13 @@ fn emit_go_mod_requirements(
                 version_requirement: replacement.version_requirement.clone(),
                 kind: RequirementKind::Replace,
                 manifest_path: Some(manifest_path.to_string()),
-                stable_key: format!(
+                stable_key: crate::module_graph::intern_module_graph_stable_key(format!(
                     "go-replace:{manifest_path}:{}:{}=>{}:{}",
                     replacement.target_name,
                     replacement.version_requirement.as_deref().unwrap_or(""),
                     replacement.replacement_target,
                     replacement.replacement_version.as_deref().unwrap_or("")
-                ),
+                )),
                 producer_id: GO_TOPOLOGY_PROVIDER_ID,
                 precision: replacement.precision,
                 status: replacement.status,
@@ -544,11 +563,11 @@ fn emit_go_mod_requirements(
                 version_requirement: exclude.version_requirement.clone(),
                 kind: RequirementKind::Exclude,
                 manifest_path: Some(manifest_path.to_string()),
-                stable_key: format!(
+                stable_key: crate::module_graph::intern_module_graph_stable_key(format!(
                     "go-exclude:{manifest_path}:{}:{}",
                     exclude.target_name,
                     exclude.version_requirement.as_deref().unwrap_or("")
-                ),
+                )),
                 producer_id: GO_TOPOLOGY_PROVIDER_ID,
                 precision: exclude.precision,
                 status: exclude.status,
@@ -601,9 +620,9 @@ fn emit_go_sum_edges(
                         package_name: package_name.clone(),
                         resolved_version: Some(resolved_version.clone()),
                         kind: ResolvedDependencyKind::ChecksumEvidence,
-                        stable_key: format!(
+                        stable_key: crate::module_graph::intern_module_graph_stable_key(format!(
                             "go-sum-line:{go_sum_path}:{line_index}:{package_name}:{resolved_version}:source_label={source_label}"
-                        ),
+                        )),
                         producer_id: GO_TOPOLOGY_PROVIDER_ID,
                         precision: TopologyPrecision::ExactLockfile,
                         status: TopologyStatus::Resolved,
@@ -633,11 +652,11 @@ fn emit_go_sum_edges(
                     package_name: requirement.target_name.clone(),
                     resolved_version,
                     kind: ResolvedDependencyKind::ChecksumEvidence,
-                    stable_key: format!(
+                    stable_key: crate::module_graph::intern_module_graph_stable_key(format!(
                         "go.sum:absent:{go_sum_path}:{}:{}:source_label={source_label}",
                         requirement.target_name,
                         requirement.version_requirement.as_deref().unwrap_or("")
-                    ),
+                    )),
                     producer_id: GO_TOPOLOGY_PROVIDER_ID,
                     precision: TopologyPrecision::Unknown,
                     status: TopologyStatus::MissingLockfile,
@@ -1332,7 +1351,9 @@ mod dependency_topology {
                 && edge.kind == ResolvedDependencyKind::ChecksumEvidence
                 && edge.precision == TopologyPrecision::ExactLockfile
                 && edge.status == TopologyStatus::Resolved
-                && edge.stable_key.contains("go-sum-line")
+                && db
+                    .resolve_stable_key(edge.stable_key)
+                    .contains("go-sum-line")
         }));
     }
 

@@ -28,6 +28,7 @@ use model::{
     MODULE_GRAPH_LAYER_SCHEMA, MODULE_TOPOLOGY_LAYER_SCHEMA, ModuleGraphBuilder,
     ModuleGraphLayerPayload, ModuleTopologyLayerPayload, ResolverInput, sort_packages,
 };
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -40,6 +41,32 @@ use topology::{
 
 const MODULE_GRAPH_TRIGGER_CAPABILITIES: &[&str] =
     &["resolved_imports", "module_graph", "symbols", "references"];
+
+thread_local! {
+    static MODULE_GRAPH_STABLE_KEYS: RefCell<Option<crate::core::StableKeyInterner>> =
+        const { RefCell::new(None) };
+}
+
+pub(crate) fn with_module_graph_stable_keys<T>(
+    interner: &crate::core::StableKeyInterner,
+    f: impl FnOnce() -> T,
+) -> T {
+    MODULE_GRAPH_STABLE_KEYS.with(|slot| {
+        let previous = slot.replace(Some(interner.clone()));
+        let output = f();
+        slot.replace(previous);
+        output
+    })
+}
+
+pub(crate) fn intern_module_graph_stable_key(key: impl Into<String>) -> crate::core::StableKeyId {
+    MODULE_GRAPH_STABLE_KEYS.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .expect("module graph stable-key interner is installed during topology derivation")
+            .intern(key)
+    })
+}
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ModuleGraphDerivation {
@@ -425,12 +452,16 @@ pub(crate) fn module_graph_source_package_digests(db: &AnalysisDb) -> Vec<Digest
 }
 
 pub(crate) fn module_topology_base_topology_digests(db: &AnalysisDb) -> Vec<Digest> {
+    let interner = db.stable_key_interner();
     let mut digests = Vec::new();
     digests.extend(db.workspace_roots().iter().map(|row| {
         Digest::from_parts(
             DigestKind::ProviderParameters,
             "topology_workspace_root",
-            &[row.stable_key.as_str(), row.root_path.as_str()],
+            &[
+                interner.resolve(row.stable_key).as_ref(),
+                row.root_path.as_str(),
+            ],
         )
     }));
     digests.extend(db.topology_packages().iter().map(|row| {
@@ -438,7 +469,7 @@ pub(crate) fn module_topology_base_topology_digests(db: &AnalysisDb) -> Vec<Dige
             DigestKind::ProviderParameters,
             "topology_package",
             &[
-                row.stable_key.as_str(),
+                interner.resolve(row.stable_key).as_ref(),
                 row.name.as_str(),
                 row.path.as_str(),
             ],
@@ -448,21 +479,27 @@ pub(crate) fn module_topology_base_topology_digests(db: &AnalysisDb) -> Vec<Dige
         Digest::from_parts(
             DigestKind::ProviderParameters,
             "topology_source_set",
-            &[row.stable_key.as_str(), row.path.as_str()],
+            &[interner.resolve(row.stable_key).as_ref(), row.path.as_str()],
         )
     }));
     digests.extend(db.dependency_requirements().iter().map(|row| {
         Digest::from_parts(
             DigestKind::ProviderParameters,
             "topology_dependency_requirement",
-            &[row.stable_key.as_str(), row.target_name.as_str()],
+            &[
+                interner.resolve(row.stable_key).as_ref(),
+                row.target_name.as_str(),
+            ],
         )
     }));
     digests.extend(db.resolved_dependency_edges().iter().map(|row| {
         Digest::from_parts(
             DigestKind::ProviderParameters,
             "topology_resolved_dependency",
-            &[row.stable_key.as_str(), row.package_name.as_str()],
+            &[
+                interner.resolve(row.stable_key).as_ref(),
+                row.package_name.as_str(),
+            ],
         )
     }));
     digests.sort();
@@ -522,7 +559,7 @@ pub(crate) fn derive_import_to_package_edges(db: &AnalysisDb) -> Vec<ImportToPac
             let source_set = source_sets_by_file.get(&import.file).and_then(|sets| {
                 sets.iter()
                     .filter_map(|id| source_set_by_id(db.source_sets(), *id))
-                    .min_by_key(|set| set.stable_key.as_str())
+                    .min_by_key(|set| interner.resolve(set.stable_key))
             });
             let from_package = source_set
                 .and_then(|set| set.package)
@@ -537,7 +574,7 @@ pub(crate) fn derive_import_to_package_edges(db: &AnalysisDb) -> Vec<ImportToPac
             {
                 candidates.extend(package_candidates_for_file(db, file));
             }
-            candidates.sort_by(|left, right| left.stable_key.cmp(&right.stable_key));
+            candidates.sort_by_cached_key(|package| interner.resolve(package.stable_key));
             candidates.dedup_by_key(|package| package.id);
 
             let status = import_to_package_status(
@@ -561,10 +598,10 @@ pub(crate) fn derive_import_to_package_edges(db: &AnalysisDb) -> Vec<ImportToPac
                 .unique
                 .map(|fact| fact.import_path.clone())
                 .unwrap_or_else(|| import.path.clone());
-            let from_package_stable_key = from_package.map(|package| package.stable_key.clone());
-            let to_package_stable_key = to_package.map(|package| package.stable_key.clone());
-            let source_set_stable_key = source_set.map(|set| set.stable_key.clone());
-            let stable_key = stable_key_text_from_parts(
+            let from_package_stable_key = from_package.map(|package| package.stable_key);
+            let to_package_stable_key = to_package.map(|package| package.stable_key);
+            let source_set_stable_key = source_set.map(|set| set.stable_key);
+            let stable_key = interner.intern(stable_key_text_from_parts(
                 interner,
                 FactFamily::ImportToPackage,
                 &[
@@ -573,15 +610,13 @@ pub(crate) fn derive_import_to_package_edges(db: &AnalysisDb) -> Vec<ImportToPac
                     ("from_file", db.path_for(import.file)),
                     ("status", import_to_package_status_label(status).to_string()),
                 ],
-            );
+            ));
 
             ImportToPackageFact {
                 id: ImportToPackageId(index as u64),
                 syntax_import: Some(import.id),
                 resolved_import: resolved.map(|fact| fact.id),
-                semantic_import_stable_key: semantic
-                    .unique
-                    .map(|fact| db.resolve_stable_key(fact.stable_key).to_string()),
+                semantic_import_stable_key: semantic.unique.map(|fact| fact.stable_key),
                 from_file: Some(import.file),
                 from_package: from_package.map(|package| package.id),
                 to_package: to_package.map(|package| package.id),
@@ -614,6 +649,7 @@ pub(crate) fn derive_module_topology_with_cache_stats(
             output_digest: Some(module_topology_output_digest_for_payload(
                 &ModuleTopologyLayerPayload {
                     schema: MODULE_TOPOLOGY_LAYER_SCHEMA.to_string(),
+                    stable_key_texts: Vec::new(),
                     diagnostics: Vec::new(),
                     capability_support: Vec::new(),
                     import_to_package_edges: Vec::new(),
@@ -709,12 +745,7 @@ pub(crate) fn derive_module_topology_with_cache_stats(
 fn derive_module_topology_uncached(db: &mut AnalysisDb) -> ModuleTopologyDerivation {
     let import_to_package_edges = derive_import_to_package_edges(db);
     db.replace_import_to_package_facts(import_to_package_edges);
-    let payload = ModuleTopologyLayerPayload {
-        schema: MODULE_TOPOLOGY_LAYER_SCHEMA.to_string(),
-        diagnostics: Vec::new(),
-        capability_support: Vec::new(),
-        import_to_package_edges: db.import_to_package_edges().to_vec(),
-    };
+    let payload = module_topology_layer_payload(db, &ModuleTopologyDerivation::default());
     ModuleTopologyDerivation {
         diagnostics: Vec::new(),
         capability_support: Vec::new(),
@@ -1298,6 +1329,7 @@ fn derive_requested_module_graph_uncached(
     let diagnostics = setup_missing_diagnostics(&capability_support);
     let output_digest = Some(module_graph_output_digest_for_payload(
         &module_graph_layer_payload_parts(
+            &db.stable_key_interner(),
             &diagnostics,
             &capability_support,
             db.resolved_imports(),
@@ -1339,19 +1371,30 @@ fn module_graph_layer_payload(
     db: &AnalysisDb,
     derivation: &ModuleGraphDerivation,
 ) -> ModuleGraphLayerPayload {
+    let (topology, stable_key_texts) = TopologyOutput {
+        workspace_roots: db.workspace_roots().to_vec(),
+        packages: db.topology_packages().to_vec(),
+        source_sets: db.source_sets().to_vec(),
+        dependency_requirements: db.dependency_requirements().to_vec(),
+        resolved_dependency_edges: db.resolved_dependency_edges().to_vec(),
+        import_to_package_edges: Vec::new(),
+        overlays: db.repo_topology_overlays().to_vec(),
+    }
+    .canonicalized_for_cache(&db.stable_key_interner());
     ModuleGraphLayerPayload {
         schema: MODULE_GRAPH_LAYER_SCHEMA.to_string(),
+        stable_key_texts,
         diagnostics: derivation.diagnostics.clone(),
         capability_support: derivation.capability_support.clone(),
         resolved_imports: db.resolved_imports().to_vec(),
         nodes: db.module_nodes().to_vec(),
         edges: db.module_edges().to_vec(),
-        workspace_roots: db.workspace_roots().to_vec(),
-        topology_packages: db.topology_packages().to_vec(),
-        source_sets: db.source_sets().to_vec(),
-        dependency_requirements: db.dependency_requirements().to_vec(),
-        resolved_dependency_edges: db.resolved_dependency_edges().to_vec(),
-        repo_topology_overlays: db.repo_topology_overlays().to_vec(),
+        workspace_roots: topology.workspace_roots,
+        topology_packages: topology.packages,
+        source_sets: topology.source_sets,
+        dependency_requirements: topology.dependency_requirements,
+        resolved_dependency_edges: topology.resolved_dependency_edges,
+        repo_topology_overlays: topology.overlays,
     }
 }
 
@@ -1359,11 +1402,17 @@ fn module_topology_layer_payload(
     db: &AnalysisDb,
     derivation: &ModuleTopologyDerivation,
 ) -> ModuleTopologyLayerPayload {
+    let (topology, stable_key_texts) = TopologyOutput {
+        import_to_package_edges: db.import_to_package_edges().to_vec(),
+        ..TopologyOutput::default()
+    }
+    .canonicalized_for_cache(&db.stable_key_interner());
     ModuleTopologyLayerPayload {
         schema: MODULE_TOPOLOGY_LAYER_SCHEMA.to_string(),
+        stable_key_texts,
         diagnostics: derivation.diagnostics.clone(),
         capability_support: derivation.capability_support.clone(),
-        import_to_package_edges: db.import_to_package_edges().to_vec(),
+        import_to_package_edges: topology.import_to_package_edges,
     }
 }
 
@@ -1373,7 +1422,7 @@ fn restore_module_graph_layer_payload(db: &mut AnalysisDb, payload: &ModuleGraph
         payload.nodes.clone(),
         payload.edges.clone(),
     );
-    db.replace_topology_facts(TopologyOutput {
+    let topology = TopologyOutput {
         workspace_roots: payload.workspace_roots.clone(),
         packages: payload.topology_packages.clone(),
         source_sets: payload.source_sets.clone(),
@@ -1381,14 +1430,23 @@ fn restore_module_graph_layer_payload(db: &mut AnalysisDb, payload: &ModuleGraph
         resolved_dependency_edges: payload.resolved_dependency_edges.clone(),
         import_to_package_edges: Vec::new(),
         overlays: payload.repo_topology_overlays.clone(),
-    });
+    }
+    .reintern_cached(&payload.stable_key_texts, &db.stable_key_interner())
+    .expect("validated module graph cache contains stable-key text for every topology identity");
+    db.replace_topology_facts(topology);
 }
 
 fn restore_module_topology_layer_payload(
     db: &mut AnalysisDb,
     payload: &ModuleTopologyLayerPayload,
 ) {
-    db.replace_import_to_package_facts(payload.import_to_package_edges.clone());
+    let topology = TopologyOutput {
+        import_to_package_edges: payload.import_to_package_edges.clone(),
+        ..TopologyOutput::default()
+    }
+    .reintern_cached(&payload.stable_key_texts, &db.stable_key_interner())
+    .expect("validated module topology cache contains stable-key text for every identity");
+    db.replace_import_to_package_facts(topology.import_to_package_edges);
 }
 
 fn validate_module_graph_layer_payload(
@@ -1397,6 +1455,7 @@ fn validate_module_graph_layer_payload(
 ) -> bool {
     payload.schema == MODULE_GRAPH_LAYER_SCHEMA
         && topology_payload_stable_keys_are_unique(payload)
+        && cached_module_graph_topology(payload).is_some()
         && manifest.output_digest
             == module_graph_output_digest_for_payload(payload, Some(&manifest.key))
 }
@@ -1407,14 +1466,41 @@ pub(crate) fn validate_module_topology_layer_payload(
 ) -> bool {
     payload.schema == MODULE_TOPOLOGY_LAYER_SCHEMA
         && import_to_package_payload_stable_keys_are_unique(&payload.import_to_package_edges)
+        && cached_module_topology(payload).is_some()
         && manifest.output_digest
             == module_topology_output_digest_for_payload(payload, Some(&manifest.key))
 }
 
+fn cached_module_graph_topology(payload: &ModuleGraphLayerPayload) -> Option<TopologyOutput> {
+    TopologyOutput {
+        workspace_roots: payload.workspace_roots.clone(),
+        packages: payload.topology_packages.clone(),
+        source_sets: payload.source_sets.clone(),
+        dependency_requirements: payload.dependency_requirements.clone(),
+        resolved_dependency_edges: payload.resolved_dependency_edges.clone(),
+        import_to_package_edges: Vec::new(),
+        overlays: payload.repo_topology_overlays.clone(),
+    }
+    .reintern_cached(
+        &payload.stable_key_texts,
+        &crate::core::StableKeyInterner::default(),
+    )
+}
+
+fn cached_module_topology(payload: &ModuleTopologyLayerPayload) -> Option<TopologyOutput> {
+    TopologyOutput {
+        import_to_package_edges: payload.import_to_package_edges.clone(),
+        ..TopologyOutput::default()
+    }
+    .reintern_cached(
+        &payload.stable_key_texts,
+        &crate::core::StableKeyInterner::default(),
+    )
+}
+
 fn import_to_package_payload_stable_keys_are_unique(rows: &[ImportToPackageFact]) -> bool {
     let mut seen = BTreeSet::new();
-    rows.iter()
-        .all(|row| seen.insert(row.stable_key.as_str().to_string()))
+    rows.iter().all(|row| seen.insert(row.stable_key))
 }
 
 fn write_module_graph_layer_payload(
@@ -1545,6 +1631,7 @@ fn module_topology_output_digest(layer_key: &LayerKey, payload_digest: &Digest) 
     reason = "payload construction keeps persisted row families explicit and schema-aligned"
 )]
 fn module_graph_layer_payload_parts(
+    interner: &crate::core::StableKeyInterner,
     diagnostics: &[Diagnostic],
     capability_support: &[CapabilitySupport],
     resolved_imports: &[crate::core::ResolvedImportFact],
@@ -1557,65 +1644,67 @@ fn module_graph_layer_payload_parts(
     resolved_dependency_edges: &[ResolvedDependencyEdgeFact],
     repo_topology_overlays: &[RepoTopologyOverlayFact],
 ) -> ModuleGraphLayerPayload {
+    let (topology, stable_key_texts) = TopologyOutput {
+        workspace_roots: workspace_roots.to_vec(),
+        packages: topology_packages.to_vec(),
+        source_sets: source_sets.to_vec(),
+        dependency_requirements: dependency_requirements.to_vec(),
+        resolved_dependency_edges: resolved_dependency_edges.to_vec(),
+        import_to_package_edges: Vec::new(),
+        overlays: repo_topology_overlays.to_vec(),
+    }
+    .canonicalized_for_cache(interner);
     ModuleGraphLayerPayload {
         schema: MODULE_GRAPH_LAYER_SCHEMA.to_string(),
+        stable_key_texts,
         diagnostics: diagnostics.to_vec(),
         capability_support: capability_support.to_vec(),
         resolved_imports: resolved_imports.to_vec(),
         nodes: nodes.to_vec(),
         edges: edges.to_vec(),
-        workspace_roots: workspace_roots.to_vec(),
-        topology_packages: topology_packages.to_vec(),
-        source_sets: source_sets.to_vec(),
-        dependency_requirements: dependency_requirements.to_vec(),
-        resolved_dependency_edges: resolved_dependency_edges.to_vec(),
-        repo_topology_overlays: repo_topology_overlays.to_vec(),
+        workspace_roots: topology.workspace_roots,
+        topology_packages: topology.packages,
+        source_sets: topology.source_sets,
+        dependency_requirements: topology.dependency_requirements,
+        resolved_dependency_edges: topology.resolved_dependency_edges,
+        repo_topology_overlays: topology.overlays,
     }
 }
 
 fn topology_payload_stable_keys_are_unique(payload: &ModuleGraphLayerPayload) -> bool {
     topology_stable_keys_unique(
         "WorkspaceRootFact",
-        payload
-            .workspace_roots
-            .iter()
-            .map(|row| row.stable_key.as_str()),
+        payload.workspace_roots.iter().map(|row| row.stable_key),
     ) && topology_stable_keys_unique(
         "TopologyPackageFact",
-        payload
-            .topology_packages
-            .iter()
-            .map(|row| row.stable_key.as_str()),
+        payload.topology_packages.iter().map(|row| row.stable_key),
     ) && topology_stable_keys_unique(
         "SourceSetFact",
-        payload
-            .source_sets
-            .iter()
-            .map(|row| row.stable_key.as_str()),
+        payload.source_sets.iter().map(|row| row.stable_key),
     ) && topology_stable_keys_unique(
         "DependencyRequirementFact",
         payload
             .dependency_requirements
             .iter()
-            .map(|row| row.stable_key.as_str()),
+            .map(|row| row.stable_key),
     ) && topology_stable_keys_unique(
         "ResolvedDependencyEdgeFact",
         payload
             .resolved_dependency_edges
             .iter()
-            .map(|row| row.stable_key.as_str()),
+            .map(|row| row.stable_key),
     ) && topology_stable_keys_unique(
         "RepoTopologyOverlayFact",
         payload
             .repo_topology_overlays
             .iter()
-            .map(|row| row.stable_key.as_str()),
+            .map(|row| row.stable_key),
     )
 }
 
-fn topology_stable_keys_unique<'a>(
+fn topology_stable_keys_unique(
     family: &'static str,
-    stable_keys: impl Iterator<Item = &'a str>,
+    stable_keys: impl Iterator<Item = crate::core::StableKeyId>,
 ) -> bool {
     let mut seen = BTreeSet::new();
     for stable_key in stable_keys {
@@ -1633,6 +1722,7 @@ pub(crate) fn derive_base_topology(
     go_metadata: &go::GoPackageIndex,
     ts_resolver_context: Option<&ts::TsResolverContext>,
 ) -> TopologyOutput {
+    let interner = db.stable_key_interner();
     let mut output = go::collect_go_topology(loaded, db, go_metadata);
     output.merge(ts::collect_ts_topology(loaded, db, ts_resolver_context));
     output.overlays.extend(collect_repo_topology_overlays(
@@ -1640,12 +1730,22 @@ pub(crate) fn derive_base_topology(
         db,
         &output,
     ));
-    output.normalized()
+    output.normalized(&interner)
 }
 
 pub(crate) fn collect_repo_topology_overlays(
     root: &Path,
-    _db: &AnalysisDb,
+    db: &AnalysisDb,
+    topology: &TopologyOutput,
+) -> Vec<RepoTopologyOverlayFact> {
+    let interner = db.stable_key_interner();
+    with_module_graph_stable_keys(&interner, || {
+        collect_repo_topology_overlays_inner(root, topology)
+    })
+}
+
+fn collect_repo_topology_overlays_inner(
+    root: &Path,
     topology: &TopologyOutput,
 ) -> Vec<RepoTopologyOverlayFact> {
     let mut overlays = Vec::new();
@@ -1841,11 +1941,11 @@ fn push_repo_overlay(
     kind: RepoTopologyOverlayKind,
     label: String,
     path: Option<String>,
-    stable_key: String,
+    stable_key_text: String,
     precision: TopologyPrecision,
     status: TopologyStatus,
 ) {
-    if !seen_keys.insert(stable_key.clone()) {
+    if !seen_keys.insert(stable_key_text.clone()) {
         return;
     }
     overlays.push(RepoTopologyOverlayFact {
@@ -1856,7 +1956,7 @@ fn push_repo_overlay(
         kind,
         label,
         path,
-        stable_key,
+        stable_key: intern_module_graph_stable_key(stable_key_text),
         producer_id: "polint.module_graph",
         precision,
         status,
@@ -2307,27 +2407,27 @@ mod tests {
         vec![
             db.workspace_roots()
                 .iter()
-                .map(|row| row.stable_key.clone())
+                .map(|row| db.resolve_stable_key(row.stable_key).to_string())
                 .collect(),
             db.topology_packages()
                 .iter()
-                .map(|row| row.stable_key.clone())
+                .map(|row| db.resolve_stable_key(row.stable_key).to_string())
                 .collect(),
             db.source_sets()
                 .iter()
-                .map(|row| row.stable_key.clone())
+                .map(|row| db.resolve_stable_key(row.stable_key).to_string())
                 .collect(),
             db.dependency_requirements()
                 .iter()
-                .map(|row| row.stable_key.clone())
+                .map(|row| db.resolve_stable_key(row.stable_key).to_string())
                 .collect(),
             db.resolved_dependency_edges()
                 .iter()
-                .map(|row| row.stable_key.clone())
+                .map(|row| db.resolve_stable_key(row.stable_key).to_string())
                 .collect(),
             db.repo_topology_overlays()
                 .iter()
-                .map(|row| row.stable_key.clone())
+                .map(|row| db.resolve_stable_key(row.stable_key).to_string())
                 .collect(),
         ]
     }
@@ -2543,7 +2643,7 @@ mod tests {
     }
 
     #[test]
-    fn module_graph_layer_cache_topology_payload_contains_schema_v2_and_normalized_rows() {
+    fn module_graph_layer_cache_topology_payload_contains_schema_v3_and_normalized_rows() {
         let temp = tempfile::tempdir().expect("tempdir");
         write_file(
             temp.path(),
@@ -2570,7 +2670,7 @@ mod tests {
         let payload_text = fs::read_to_string(payload_path).expect("payload JSON readable");
         let payload: serde_json::Value =
             serde_json::from_str(&payload_text).expect("payload is JSON");
-        assert_eq!(payload["schema"], "module-graph-facts-v2");
+        assert_eq!(payload["schema"], "module-graph-facts-v3");
         for field in [
             "workspace_roots",
             "topology_packages",
@@ -2667,7 +2767,9 @@ mod tests {
             second
                 .workspace_roots()
                 .iter()
-                .filter(|row| row.stable_key == "repository:.")
+                .filter(|row| {
+                    second.resolve_stable_key(row.stable_key).as_ref() == "repository:."
+                })
                 .count(),
             1
         );
@@ -4090,19 +4192,23 @@ mod base_topology {
             );
         }
         assert!(overlays.iter().any(|overlay| {
-            overlay.stable_key == "repo-topology:ownership-zone:unknown"
+            db.resolve_stable_key(overlay.stable_key).as_ref()
+                == "repo-topology:ownership-zone:unknown"
                 && overlay.status == TopologyStatus::Unknown
         }));
         assert!(overlays.iter().any(|overlay| {
-            overlay.stable_key == "repo-topology:architecture-layer:unknown"
+            db.resolve_stable_key(overlay.stable_key).as_ref()
+                == "repo-topology:architecture-layer:unknown"
                 && overlay.status == TopologyStatus::Unknown
         }));
         assert!(overlays.iter().any(|overlay| {
-            overlay.stable_key == "repo-topology:deploy-unit:unknown"
+            db.resolve_stable_key(overlay.stable_key).as_ref()
+                == "repo-topology:deploy-unit:unknown"
                 && overlay.status == TopologyStatus::Unknown
         }));
         assert!(overlays.iter().any(|overlay| {
-            overlay.stable_key == "repo-topology:internal-public-api-boundary:unknown"
+            db.resolve_stable_key(overlay.stable_key).as_ref()
+                == "repo-topology:internal-public-api-boundary:unknown"
                 && overlay.status == TopologyStatus::Unknown
         }));
     }
@@ -4138,27 +4244,27 @@ mod base_topology {
         vec![
             db.workspace_roots()
                 .iter()
-                .map(|row| row.stable_key.clone())
+                .map(|row| db.resolve_stable_key(row.stable_key).to_string())
                 .collect(),
             db.topology_packages()
                 .iter()
-                .map(|row| row.stable_key.clone())
+                .map(|row| db.resolve_stable_key(row.stable_key).to_string())
                 .collect(),
             db.source_sets()
                 .iter()
-                .map(|row| row.stable_key.clone())
+                .map(|row| db.resolve_stable_key(row.stable_key).to_string())
                 .collect(),
             db.dependency_requirements()
                 .iter()
-                .map(|row| row.stable_key.clone())
+                .map(|row| db.resolve_stable_key(row.stable_key).to_string())
                 .collect(),
             db.resolved_dependency_edges()
                 .iter()
-                .map(|row| row.stable_key.clone())
+                .map(|row| db.resolve_stable_key(row.stable_key).to_string())
                 .collect(),
             db.repo_topology_overlays()
                 .iter()
-                .map(|row| row.stable_key.clone())
+                .map(|row| db.resolve_stable_key(row.stable_key).to_string())
                 .collect(),
         ]
     }
@@ -4312,7 +4418,7 @@ mod import_to_package {
             version: None,
             path: ".".to_string(),
             language: Some(Language::TypeScript),
-            stable_key: "package:app".to_string(),
+            stable_key: crate::core::stable_key_for_test("package:app"),
             producer_id: "test",
             precision: TopologyPrecision::ExactStatic,
             status: TopologyStatus::Present,
@@ -4327,7 +4433,7 @@ mod import_to_package {
             version: None,
             path: "src/target.ts".to_string(),
             language: Some(Language::TypeScript),
-            stable_key: "package:target".to_string(),
+            stable_key: crate::core::stable_key_for_test("package:target"),
             producer_id: "test",
             precision: TopologyPrecision::ExactStatic,
             status: TopologyStatus::Present,
@@ -4344,7 +4450,7 @@ mod import_to_package {
                 root_path: ".".to_string(),
                 manifest_path: None,
                 language: None,
-                stable_key: "root:repo".to_string(),
+                stable_key: crate::core::stable_key_for_test("root:repo"),
                 producer_id: "test",
                 precision: TopologyPrecision::ExactStatic,
                 status: TopologyStatus::Present,
@@ -4358,7 +4464,7 @@ mod import_to_package {
                 path: ".".to_string(),
                 language: Some(Language::TypeScript),
                 files: source_files,
-                stable_key: format!("source-set:{context:?}"),
+                stable_key: crate::core::stable_key_for_test(&format!("source-set:{context:?}")),
                 producer_id: "test",
                 precision: TopologyPrecision::ExactStatic,
                 status: TopologyStatus::Present,
@@ -4377,7 +4483,7 @@ mod import_to_package {
             version_requirement: Some("^1.0.0".to_string()),
             kind: RequirementKind::Runtime,
             manifest_path: Some("package.json".to_string()),
-            stable_key: format!("requirement:{target}"),
+            stable_key: crate::core::stable_key_for_test(&format!("requirement:{target}")),
             producer_id: "test",
             precision: TopologyPrecision::ExactStatic,
             status: TopologyStatus::Present,
@@ -4439,16 +4545,27 @@ mod import_to_package {
         assert_eq!(edge.syntax_import, Some(import));
         assert_eq!(edge.resolved_import, Some(ResolvedImportId(0)));
         assert_eq!(
-            edge.semantic_import_stable_key.as_deref(),
+            edge.semantic_import_stable_key
+                .map(|key| db.resolve_stable_key(key))
+                .as_deref(),
             Some("semantic-import:./target")
         );
-        assert_eq!(edge.from_package_stable_key.as_deref(), Some("package:app"));
         assert_eq!(
-            edge.to_package_stable_key.as_deref(),
+            edge.from_package_stable_key
+                .map(|key| db.resolve_stable_key(key))
+                .as_deref(),
+            Some("package:app")
+        );
+        assert_eq!(
+            edge.to_package_stable_key
+                .map(|key| db.resolve_stable_key(key))
+                .as_deref(),
             Some("package:target")
         );
         assert_eq!(
-            edge.source_set_stable_key.as_deref(),
+            edge.source_set_stable_key
+                .map(|key| db.resolve_stable_key(key))
+                .as_deref(),
             Some("source-set:Source")
         );
         assert_eq!(edge.context, ImportContextKind::Source);
@@ -4764,7 +4881,7 @@ mod import_to_package {
                 root_path: ".".to_string(),
                 manifest_path: Some("go.mod".to_string()),
                 language: Some(Language::Go),
-                stable_key: "go-root:.".to_string(),
+                stable_key: crate::core::stable_key_for_test("go-root:."),
                 producer_id: "test",
                 precision: TopologyPrecision::ExactStatic,
                 status: TopologyStatus::Present,
@@ -4780,7 +4897,9 @@ mod import_to_package {
                     version: None,
                     path: "cmd/app".to_string(),
                     language: Some(Language::Go),
-                    stable_key: "go-package:example.com/app/cmd/app".to_string(),
+                    stable_key: crate::core::stable_key_for_test(
+                        "go-package:example.com/app/cmd/app",
+                    ),
                     producer_id: "test",
                     precision: TopologyPrecision::ExactStatic,
                     status: TopologyStatus::Present,
@@ -4795,7 +4914,9 @@ mod import_to_package {
                     version: None,
                     path: "internal/foo".to_string(),
                     language: Some(Language::Go),
-                    stable_key: format!("go-package:{import_path}"),
+                    stable_key: crate::core::stable_key_for_test(&format!(
+                        "go-package:{import_path}"
+                    )),
                     producer_id: "test",
                     precision: TopologyPrecision::ExactStatic,
                     status: TopologyStatus::Present,
@@ -4810,7 +4931,9 @@ mod import_to_package {
                     path: "cmd/app/main.go".to_string(),
                     language: Some(Language::Go),
                     files: vec![from],
-                    stable_key: "go-source-set:source:cmd/app/main.go".to_string(),
+                    stable_key: crate::core::stable_key_for_test(
+                        "go-source-set:source:cmd/app/main.go",
+                    ),
                     producer_id: "test",
                     precision: TopologyPrecision::ExactStatic,
                     status: TopologyStatus::Present,
@@ -4823,7 +4946,9 @@ mod import_to_package {
                     path: "internal/foo/foo.go".to_string(),
                     language: Some(Language::Go),
                     files: vec![target],
-                    stable_key: "go-source-set:source:internal/foo/foo.go".to_string(),
+                    stable_key: crate::core::stable_key_for_test(
+                        "go-source-set:source:internal/foo/foo.go",
+                    ),
                     producer_id: "test",
                     precision: TopologyPrecision::ExactStatic,
                     status: TopologyStatus::Present,
@@ -4838,7 +4963,10 @@ mod import_to_package {
         assert_eq!(edges[0].status, ImportToPackageStatus::Resolved);
         assert_eq!(edges[0].to_package, Some(TopologyPackageId(1)));
         assert_eq!(
-            edges[0].to_package_stable_key.as_deref(),
+            edges[0]
+                .to_package_stable_key
+                .map(|key| db.resolve_stable_key(key))
+                .as_deref(),
             Some("go-package:example.com/app/internal/foo")
         );
     }
@@ -4889,7 +5017,7 @@ mod import_to_package {
                 root_path: ".".to_string(),
                 manifest_path: Some("go.mod".to_string()),
                 language: Some(Language::Go),
-                stable_key: "go-root:.".to_string(),
+                stable_key: crate::core::stable_key_for_test("go-root:."),
                 producer_id: "test",
                 precision: TopologyPrecision::ExactStatic,
                 status: TopologyStatus::Present,
@@ -4905,7 +5033,7 @@ mod import_to_package {
                     version: None,
                     path: ".".to_string(),
                     language: Some(Language::Go),
-                    stable_key: "go-module:.:example.com/app".to_string(),
+                    stable_key: crate::core::stable_key_for_test("go-module:.:example.com/app"),
                     producer_id: "test",
                     precision: TopologyPrecision::ExactStatic,
                     status: TopologyStatus::Present,
@@ -4920,7 +5048,9 @@ mod import_to_package {
                     version: None,
                     path: "cmd/app".to_string(),
                     language: Some(Language::Go),
-                    stable_key: "go-package:example.com/app/cmd/app".to_string(),
+                    stable_key: crate::core::stable_key_for_test(
+                        "go-package:example.com/app/cmd/app",
+                    ),
                     producer_id: "test",
                     precision: TopologyPrecision::ExactStatic,
                     status: TopologyStatus::Present,
@@ -4934,7 +5064,9 @@ mod import_to_package {
                 path: "cmd/app/main.go".to_string(),
                 language: Some(Language::Go),
                 files: vec![from],
-                stable_key: "go-source-set:source:cmd/app/main.go".to_string(),
+                stable_key: crate::core::stable_key_for_test(
+                    "go-source-set:source:cmd/app/main.go",
+                ),
                 producer_id: "test",
                 precision: TopologyPrecision::ExactStatic,
                 status: TopologyStatus::Present,
@@ -4947,7 +5079,9 @@ mod import_to_package {
                 version_requirement: Some("v1.2.3".to_string()),
                 kind: RequirementKind::Direct,
                 manifest_path: Some("go.mod".to_string()),
-                stable_key: "go-require:go.mod:github.com/acme/lib:v1.2.3".to_string(),
+                stable_key: crate::core::stable_key_for_test(
+                    "go-require:go.mod:github.com/acme/lib:v1.2.3",
+                ),
                 producer_id: "test",
                 precision: TopologyPrecision::ExactStatic,
                 status: TopologyStatus::Present,
@@ -5065,7 +5199,7 @@ mod import_to_package {
                     version: None,
                     path: "src/target.ts".to_string(),
                     language: Some(Language::TypeScript),
-                    stable_key: "package:second-target".to_string(),
+                    stable_key: crate::core::stable_key_for_test("package:second-target"),
                     producer_id: "test",
                     precision: TopologyPrecision::ExactStatic,
                     status: TopologyStatus::Present,
@@ -5256,7 +5390,7 @@ mod module_topology_layer_cache {
                 root_path: ".".to_string(),
                 manifest_path: None,
                 language: None,
-                stable_key: "root:repo".to_string(),
+                stable_key: crate::core::stable_key_for_test("root:repo"),
                 producer_id: "test",
                 precision: TopologyPrecision::ExactStatic,
                 status: TopologyStatus::Present,
@@ -5272,7 +5406,7 @@ mod module_topology_layer_cache {
                     version: None,
                     path: ".".to_string(),
                     language: Some(Language::TypeScript),
-                    stable_key: "package:app".to_string(),
+                    stable_key: crate::core::stable_key_for_test("package:app"),
                     producer_id: "test",
                     precision: TopologyPrecision::ExactStatic,
                     status: TopologyStatus::Present,
@@ -5287,7 +5421,7 @@ mod module_topology_layer_cache {
                     version: None,
                     path: "src/target.ts".to_string(),
                     language: Some(Language::TypeScript),
-                    stable_key: "package:target".to_string(),
+                    stable_key: crate::core::stable_key_for_test("package:target"),
                     producer_id: "test",
                     precision: TopologyPrecision::ExactStatic,
                     status: TopologyStatus::Present,
@@ -5301,7 +5435,7 @@ mod module_topology_layer_cache {
                 path: ".".to_string(),
                 language: Some(Language::TypeScript),
                 files: vec![from, target],
-                stable_key: "source-set:source".to_string(),
+                stable_key: crate::core::stable_key_for_test("source-set:source"),
                 producer_id: "test",
                 precision: TopologyPrecision::ExactStatic,
                 status: TopologyStatus::Present,
@@ -5355,7 +5489,7 @@ mod module_topology_layer_cache {
             source_set_stable_key: None,
             import_path: "stale".to_string(),
             context: ImportContextKind::Unknown,
-            stable_key: "import-to-package:stale".to_string(),
+            stable_key: crate::core::stable_key_for_test("import-to-package:stale"),
             producer_id: "polint.module_topology",
             precision: TopologyPrecision::Unknown,
             status: ImportToPackageStatus::Unresolved,
@@ -5409,7 +5543,7 @@ mod module_topology_layer_cache {
         let first_keys = first
             .import_to_package_edges()
             .iter()
-            .map(|row| row.stable_key.clone())
+            .map(|row| first.resolve_stable_key(row.stable_key).to_string())
             .collect::<Vec<_>>();
 
         let mut second = db_with_import_to_package_inputs();
@@ -5437,7 +5571,7 @@ mod module_topology_layer_cache {
             second
                 .import_to_package_edges()
                 .iter()
-                .map(|row| row.stable_key.clone())
+                .map(|row| second.resolve_stable_key(row.stable_key).to_string())
                 .collect::<Vec<_>>(),
             first_keys
         );

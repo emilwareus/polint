@@ -1,8 +1,17 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, serde::Serialize, serde::Deserialize,
+)]
 pub(crate) struct StableKeyId(pub(crate) u32);
+
+#[cfg(test)]
+impl StableKeyId {
+    pub(crate) fn contains(self, needle: &str) -> bool {
+        test_stable_key_interner().resolve(self).contains(needle)
+    }
+}
 
 #[derive(Debug, Default)]
 struct StableKeyInternerState {

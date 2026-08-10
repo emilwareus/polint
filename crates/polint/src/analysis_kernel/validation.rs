@@ -3018,7 +3018,7 @@ mod topology {
                 path: r"src\app.ts".to_string(),
                 language: Some(Language::TypeScript),
                 files: vec![FileId(404)],
-                stable_key: "source-set:bad".to_string(),
+                stable_key: crate::core::stable_key_for_test("source-set:bad"),
                 producer_id: "test",
                 precision: TopologyPrecision::ExactStatic,
                 status: TopologyStatus::Present,
@@ -3134,7 +3134,7 @@ mod topology {
                 version_requirement: Some("^18".to_string()),
                 kind: RequirementKind::Runtime,
                 manifest_path: Some("package.json".to_string()),
-                stable_key: "requirement:react".to_string(),
+                stable_key: crate::core::stable_key_for_test("requirement:react"),
                 producer_id: "test",
                 precision: TopologyPrecision::ExactLockfile,
                 status: TopologyStatus::Unsupported,
@@ -3147,7 +3147,7 @@ mod topology {
                 package_name: "react".to_string(),
                 resolved_version: None,
                 kind: ResolvedDependencyKind::Unknown,
-                stable_key: "resolved:react".to_string(),
+                stable_key: crate::core::stable_key_for_test("resolved:react"),
                 producer_id: "test",
                 precision: TopologyPrecision::ExactLockfile,
                 status: TopologyStatus::Unsupported,
@@ -3199,7 +3199,7 @@ mod topology {
                 package_name: format!("package-{index}"),
                 resolved_version: Some("1.0.0".to_string()),
                 kind,
-                stable_key: format!("resolved:package-{index}"),
+                stable_key: crate::core::stable_key_for_test(&format!("resolved:package-{index}")),
                 producer_id: "test",
                 precision: TopologyPrecision::ExactLockfile,
                 status: TopologyStatus::Resolved,
@@ -3223,7 +3223,7 @@ mod topology {
             root_path: path.to_string(),
             manifest_path: None,
             language: None,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
             producer_id: "test",
             precision: TopologyPrecision::ExactStatic,
             status: TopologyStatus::Present,
@@ -3248,7 +3248,7 @@ mod topology {
             version: None,
             path: path.to_string(),
             language: Some(Language::TypeScript),
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
             producer_id: "test",
             precision,
             status,
@@ -3268,7 +3268,9 @@ mod topology {
             id: ImportToPackageId(0),
             syntax_import,
             resolved_import,
-            semantic_import_stable_key,
+            semantic_import_stable_key: semantic_import_stable_key
+                .as_deref()
+                .map(crate::core::stable_key_for_test),
             from_file,
             from_package: Some(TopologyPackageId(404)),
             to_package: None,
@@ -3278,7 +3280,7 @@ mod topology {
             source_set_stable_key: None,
             import_path: "react".to_string(),
             context: ImportContextKind::Source,
-            stable_key: stable_key.to_string(),
+            stable_key: crate::core::stable_key_for_test(stable_key),
             producer_id: "test",
             precision,
             status,
@@ -4521,64 +4523,64 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
         diagnostics,
         FactFamily::WorkspaceRoot,
         db.workspace_roots(),
-        |row| row.stable_key.as_str(),
+        |row| db.resolve_stable_key(row.stable_key),
     );
     check_topology_family_stable_keys(
         diagnostics,
         FactFamily::TopologyPackage,
         db.topology_packages(),
-        |row| row.stable_key.as_str(),
+        |row| db.resolve_stable_key(row.stable_key),
     );
     check_topology_family_stable_keys(
         diagnostics,
         FactFamily::SourceSet,
         db.source_sets(),
-        |row| row.stable_key.as_str(),
+        |row| db.resolve_stable_key(row.stable_key),
     );
     check_topology_family_stable_keys(
         diagnostics,
         FactFamily::DependencyRequirement,
         db.dependency_requirements(),
-        |row| row.stable_key.as_str(),
+        |row| db.resolve_stable_key(row.stable_key),
     );
     check_topology_family_stable_keys(
         diagnostics,
         FactFamily::ResolvedDependencyEdge,
         db.resolved_dependency_edges(),
-        |row| row.stable_key.as_str(),
+        |row| db.resolve_stable_key(row.stable_key),
     );
     check_topology_family_stable_keys(
         diagnostics,
         FactFamily::ImportToPackage,
         db.import_to_package_edges(),
-        |row| row.stable_key.as_str(),
+        |row| db.resolve_stable_key(row.stable_key),
     );
     check_topology_family_stable_keys(
         diagnostics,
         FactFamily::RepoTopologyOverlay,
         db.repo_topology_overlays(),
-        |row| row.stable_key.as_str(),
+        |row| db.resolve_stable_key(row.stable_key),
     );
 
     for root in db.workspace_roots() {
         check_topology_path(
             diagnostics,
             FactFamily::WorkspaceRoot,
-            root.stable_key.as_str(),
+            db.resolve_stable_key(root.stable_key).as_ref(),
             "WorkspaceRootFact.root_path",
             root.root_path.as_str(),
         );
         check_topology_optional_path(
             diagnostics,
             FactFamily::WorkspaceRoot,
-            root.stable_key.as_str(),
+            db.resolve_stable_key(root.stable_key).as_ref(),
             "WorkspaceRootFact.manifest_path",
             root.manifest_path.as_deref(),
         );
         check_topology_precision(
             diagnostics,
             FactFamily::WorkspaceRoot,
-            root.stable_key.as_str(),
+            db.resolve_stable_key(root.stable_key).as_ref(),
             "WorkspaceRootFact.precision",
             root.precision,
             root.status,
@@ -4591,7 +4593,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.workspace_roots,
             FactFamily::TopologyPackage,
-            package.stable_key.as_str(),
+            db.resolve_stable_key(package.stable_key).as_ref(),
             "TopologyPackageFact.workspace_root",
             package.workspace_root,
         );
@@ -4599,7 +4601,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.packages,
             FactFamily::TopologyPackage,
-            package.stable_key.as_str(),
+            db.resolve_stable_key(package.stable_key).as_ref(),
             "TopologyPackageFact.package",
             package.package,
         );
@@ -4607,21 +4609,21 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.module_nodes,
             FactFamily::TopologyPackage,
-            package.stable_key.as_str(),
+            db.resolve_stable_key(package.stable_key).as_ref(),
             "TopologyPackageFact.module_node",
             package.module_node,
         );
         check_topology_path(
             diagnostics,
             FactFamily::TopologyPackage,
-            package.stable_key.as_str(),
+            db.resolve_stable_key(package.stable_key).as_ref(),
             "TopologyPackageFact.path",
             package.path.as_str(),
         );
         check_topology_precision(
             diagnostics,
             FactFamily::TopologyPackage,
-            package.stable_key.as_str(),
+            db.resolve_stable_key(package.stable_key).as_ref(),
             "TopologyPackageFact.precision",
             package.precision,
             package.status,
@@ -4634,7 +4636,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.topology_packages,
             FactFamily::SourceSet,
-            source_set.stable_key.as_str(),
+            db.resolve_stable_key(source_set.stable_key).as_ref(),
             "SourceSetFact.package",
             source_set.package,
         );
@@ -4642,7 +4644,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.workspace_roots,
             FactFamily::SourceSet,
-            source_set.stable_key.as_str(),
+            db.resolve_stable_key(source_set.stable_key).as_ref(),
             "SourceSetFact.root",
             source_set.root,
         );
@@ -4651,7 +4653,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
                 diagnostics,
                 &ids.files,
                 FactFamily::SourceSet,
-                source_set.stable_key.as_str(),
+                db.resolve_stable_key(source_set.stable_key).as_ref(),
                 "SourceSetFact.files",
                 *file,
             );
@@ -4659,14 +4661,14 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
         check_topology_path(
             diagnostics,
             FactFamily::SourceSet,
-            source_set.stable_key.as_str(),
+            db.resolve_stable_key(source_set.stable_key).as_ref(),
             "SourceSetFact.path",
             source_set.path.as_str(),
         );
         check_topology_precision(
             diagnostics,
             FactFamily::SourceSet,
-            source_set.stable_key.as_str(),
+            db.resolve_stable_key(source_set.stable_key).as_ref(),
             "SourceSetFact.precision",
             source_set.precision,
             source_set.status,
@@ -4679,7 +4681,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.topology_packages,
             FactFamily::DependencyRequirement,
-            requirement.stable_key.as_str(),
+            db.resolve_stable_key(requirement.stable_key).as_ref(),
             "DependencyRequirementFact.from_package",
             requirement.from_package,
         );
@@ -4687,21 +4689,21 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.topology_packages,
             FactFamily::DependencyRequirement,
-            requirement.stable_key.as_str(),
+            db.resolve_stable_key(requirement.stable_key).as_ref(),
             "DependencyRequirementFact.target_package",
             requirement.target_package,
         );
         check_topology_optional_path(
             diagnostics,
             FactFamily::DependencyRequirement,
-            requirement.stable_key.as_str(),
+            db.resolve_stable_key(requirement.stable_key).as_ref(),
             "DependencyRequirementFact.manifest_path",
             requirement.manifest_path.as_deref(),
         );
         check_topology_precision(
             diagnostics,
             FactFamily::DependencyRequirement,
-            requirement.stable_key.as_str(),
+            db.resolve_stable_key(requirement.stable_key).as_ref(),
             "DependencyRequirementFact.precision",
             requirement.precision,
             requirement.status,
@@ -4714,7 +4716,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.dependency_requirements,
             FactFamily::ResolvedDependencyEdge,
-            edge.stable_key.as_str(),
+            db.resolve_stable_key(edge.stable_key).as_ref(),
             "ResolvedDependencyEdgeFact.requirement",
             edge.requirement,
         );
@@ -4722,7 +4724,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.topology_packages,
             FactFamily::ResolvedDependencyEdge,
-            edge.stable_key.as_str(),
+            db.resolve_stable_key(edge.stable_key).as_ref(),
             "ResolvedDependencyEdgeFact.from_package",
             edge.from_package,
         );
@@ -4730,11 +4732,11 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.topology_packages,
             FactFamily::ResolvedDependencyEdge,
-            edge.stable_key.as_str(),
+            db.resolve_stable_key(edge.stable_key).as_ref(),
             "ResolvedDependencyEdgeFact.to_package",
             edge.to_package,
         );
-        check_resolved_dependency_precision(diagnostics, edge);
+        check_resolved_dependency_precision(db, diagnostics, edge);
     }
 
     for edge in db.import_to_package_edges() {
@@ -4742,7 +4744,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.imports,
             FactFamily::ImportToPackage,
-            edge.stable_key.as_str(),
+            db.resolve_stable_key(edge.stable_key).as_ref(),
             "ImportToPackageFact.syntax_import",
             edge.syntax_import,
         );
@@ -4750,7 +4752,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.resolved_imports,
             FactFamily::ImportToPackage,
-            edge.stable_key.as_str(),
+            db.resolve_stable_key(edge.stable_key).as_ref(),
             "ImportToPackageFact.resolved_import",
             edge.resolved_import,
         );
@@ -4758,7 +4760,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.files,
             FactFamily::ImportToPackage,
-            edge.stable_key.as_str(),
+            db.resolve_stable_key(edge.stable_key).as_ref(),
             "ImportToPackageFact.from_file",
             edge.from_file,
         );
@@ -4766,7 +4768,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.topology_packages,
             FactFamily::ImportToPackage,
-            edge.stable_key.as_str(),
+            db.resolve_stable_key(edge.stable_key).as_ref(),
             "ImportToPackageFact.from_package",
             edge.from_package,
         );
@@ -4774,7 +4776,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.topology_packages,
             FactFamily::ImportToPackage,
-            edge.stable_key.as_str(),
+            db.resolve_stable_key(edge.stable_key).as_ref(),
             "ImportToPackageFact.to_package",
             edge.to_package,
         );
@@ -4782,16 +4784,18 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.module_nodes,
             FactFamily::ImportToPackage,
-            edge.stable_key.as_str(),
+            db.resolve_stable_key(edge.stable_key).as_ref(),
             "ImportToPackageFact.target_node",
             edge.target_node,
         );
-        if let Some(key) = edge.semantic_import_stable_key.as_deref()
-            && !ids.semantic_import_stable_keys.contains(key)
+        if let Some(key) = edge.semantic_import_stable_key
+            && !ids
+                .semantic_import_stable_keys
+                .contains(db.resolve_stable_key(key).as_ref())
         {
             diagnostics.push(topology_diagnostic(
                 FactFamily::ImportToPackage,
-                edge.stable_key.as_str(),
+                db.resolve_stable_key(edge.stable_key).as_ref(),
                 "ImportToPackageFact.semantic_import_stable_key",
                 "semantic_import_stable_key_missing",
             ));
@@ -4799,7 +4803,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
         if edge.status == ImportToPackageStatus::Resolved && edge.to_package_stable_key.is_none() {
             diagnostics.push(topology_diagnostic(
                 FactFamily::ImportToPackage,
-                edge.stable_key.as_str(),
+                db.resolve_stable_key(edge.stable_key).as_ref(),
                 "ImportToPackageFact.to_package_stable_key",
                 "resolved_row_missing_to_package_stable_key",
             ));
@@ -4809,12 +4813,12 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
         {
             diagnostics.push(topology_diagnostic(
                 FactFamily::ImportToPackage,
-                edge.stable_key.as_str(),
+                db.resolve_stable_key(edge.stable_key).as_ref(),
                 "ImportToPackageFact.status",
                 "undeclared_row_has_matching_dependency_requirement",
             ));
         }
-        check_import_to_package_precision(diagnostics, edge);
+        check_import_to_package_precision(db, diagnostics, edge);
     }
 
     for overlay in db.repo_topology_overlays() {
@@ -4822,7 +4826,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.workspace_roots,
             FactFamily::RepoTopologyOverlay,
-            overlay.stable_key.as_str(),
+            db.resolve_stable_key(overlay.stable_key).as_ref(),
             "RepoTopologyOverlayFact.root",
             overlay.root,
         );
@@ -4830,7 +4834,7 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.topology_packages,
             FactFamily::RepoTopologyOverlay,
-            overlay.stable_key.as_str(),
+            db.resolve_stable_key(overlay.stable_key).as_ref(),
             "RepoTopologyOverlayFact.package",
             overlay.package,
         );
@@ -4838,21 +4842,21 @@ fn validate_topology_facts(db: &AnalysisDb, ids: &IdSets, diagnostics: &mut Vec<
             diagnostics,
             &ids.source_sets,
             FactFamily::RepoTopologyOverlay,
-            overlay.stable_key.as_str(),
+            db.resolve_stable_key(overlay.stable_key).as_ref(),
             "RepoTopologyOverlayFact.source_set",
             overlay.source_set,
         );
         check_topology_optional_path(
             diagnostics,
             FactFamily::RepoTopologyOverlay,
-            overlay.stable_key.as_str(),
+            db.resolve_stable_key(overlay.stable_key).as_ref(),
             "RepoTopologyOverlayFact.path",
             overlay.path.as_deref(),
         );
         check_topology_precision(
             diagnostics,
             FactFamily::RepoTopologyOverlay,
-            overlay.stable_key.as_str(),
+            db.resolve_stable_key(overlay.stable_key).as_ref(),
             "RepoTopologyOverlayFact.precision",
             overlay.precision,
             overlay.status,
@@ -4865,7 +4869,7 @@ fn check_topology_family_stable_keys<T: Serialize>(
     diagnostics: &mut Vec<Diagnostic>,
     family: FactFamily,
     rows: &[T],
-    stable_key: impl Fn(&T) -> &str,
+    stable_key: impl Fn(&T) -> std::sync::Arc<str>,
 ) {
     let mut seen = BTreeMap::<String, serde_json::Value>::new();
     for row in rows {
@@ -4980,6 +4984,7 @@ fn repo_relative_path_is_valid(path: &str) -> bool {
 }
 
 fn check_resolved_dependency_precision(
+    db: &AnalysisDb,
     diagnostics: &mut Vec<Diagnostic>,
     edge: &crate::module_graph::topology::ResolvedDependencyEdgeFact,
 ) {
@@ -4992,7 +4997,7 @@ fn check_resolved_dependency_precision(
     if edge.precision == TopologyPrecision::ExactLockfile && !exact_lockfile_allowed {
         diagnostics.push(topology_diagnostic(
             FactFamily::ResolvedDependencyEdge,
-            edge.stable_key.as_str(),
+            db.resolve_stable_key(edge.stable_key).as_ref(),
             "ResolvedDependencyEdgeFact.precision",
             "exact_lockfile_requires_lockfile_or_checksum_row",
         ));
@@ -5000,7 +5005,7 @@ fn check_resolved_dependency_precision(
     check_topology_precision(
         diagnostics,
         FactFamily::ResolvedDependencyEdge,
-        edge.stable_key.as_str(),
+        db.resolve_stable_key(edge.stable_key).as_ref(),
         "ResolvedDependencyEdgeFact.precision",
         edge.precision,
         edge.status,
@@ -5009,6 +5014,7 @@ fn check_resolved_dependency_precision(
 }
 
 fn check_import_to_package_precision(
+    db: &AnalysisDb,
     diagnostics: &mut Vec<Diagnostic>,
     edge: &crate::module_graph::topology::ImportToPackageFact,
 ) {
@@ -5023,7 +5029,7 @@ fn check_import_to_package_precision(
     ) {
         diagnostics.push(topology_diagnostic(
             FactFamily::ImportToPackage,
-            edge.stable_key.as_str(),
+            db.resolve_stable_key(edge.stable_key).as_ref(),
             "ImportToPackageFact.precision",
             "unsupported_or_dynamic_exactness",
         ));
@@ -5031,7 +5037,7 @@ fn check_import_to_package_precision(
     if edge.precision == TopologyPrecision::ExactLockfile {
         diagnostics.push(topology_diagnostic(
             FactFamily::ImportToPackage,
-            edge.stable_key.as_str(),
+            db.resolve_stable_key(edge.stable_key).as_ref(),
             "ImportToPackageFact.precision",
             "exact_lockfile_requires_lockfile_or_checksum_row",
         ));

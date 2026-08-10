@@ -320,9 +320,10 @@ mod topology {
         let output = collect_ts_topology(&loaded, &db, None);
 
         assert!(output.resolved_dependency_edges.iter().any(|edge| {
-            edge.stable_key.contains("js-lock-unsupported")
-                && edge
-                    .stable_key
+            db.resolve_stable_key(edge.stable_key)
+                .contains("js-lock-unsupported")
+                && db
+                    .resolve_stable_key(edge.stable_key)
                     .contains("reason=file-exceeds-topology-input-size-limit")
                 && edge.status == TopologyStatus::Unsupported
         }));
@@ -539,8 +540,12 @@ mod dependency_topology {
                 && edge.kind == ResolvedDependencyKind::LockfileSelected
                 && edge.precision == TopologyPrecision::ExactLockfile
                 && edge.status == TopologyStatus::Resolved
-                && edge.stable_key.contains("source=package-lock.json")
-                && edge.stable_key.contains("schema=package-lock-v3")
+                && db
+                    .resolve_stable_key(edge.stable_key)
+                    .contains("source=package-lock.json")
+                && db
+                    .resolve_stable_key(edge.stable_key)
+                    .contains("schema=package-lock-v3")
         }));
     }
 
@@ -580,7 +585,7 @@ mod dependency_topology {
         assert_eq!(react_edges.len(), 2);
         assert_ne!(react_edges[0].stable_key, react_edges[1].stable_key);
         assert!(react_edges.iter().any(|edge| {
-            edge.stable_key
+            db.resolve_stable_key(edge.stable_key)
                 .contains("node_modules/plugin/node_modules/react")
         }));
     }
@@ -682,7 +687,9 @@ mod dependency_topology {
         assert!(output.resolved_dependency_edges.iter().any(|edge| {
             edge.package_name == "react"
                 && edge.resolved_version.as_deref() == Some("18.3.0")
-                && edge.stable_key.contains("source=npm-shrinkwrap.json")
+                && db
+                    .resolve_stable_key(edge.stable_key)
+                    .contains("source=npm-shrinkwrap.json")
                 && edge.precision == TopologyPrecision::ExactLockfile
                 && edge.status == TopologyStatus::Resolved
         }));
@@ -721,8 +728,12 @@ importers:
         assert!(output.resolved_dependency_edges.iter().any(|edge| {
             edge.package_name == "react"
                 && edge.resolved_version.as_deref() == Some("18.2.0")
-                && edge.stable_key.contains("source=pnpm-lock.yaml")
-                && edge.stable_key.contains("schema=pnpm-lock-v9.0")
+                && db
+                    .resolve_stable_key(edge.stable_key)
+                    .contains("source=pnpm-lock.yaml")
+                && db
+                    .resolve_stable_key(edge.stable_key)
+                    .contains("schema=pnpm-lock-v9.0")
                 && edge.precision == TopologyPrecision::ExactLockfile
                 && edge.status == TopologyStatus::Resolved
         }));
@@ -959,8 +970,12 @@ react@^18.0.0:
         assert!(output.resolved_dependency_edges.iter().any(|edge| {
             edge.package_name == "react"
                 && edge.resolved_version.as_deref() == Some("18.2.0")
-                && edge.stable_key.contains("source=yarn.lock")
-                && edge.stable_key.contains("schema=yarn-classic-v1")
+                && db
+                    .resolve_stable_key(edge.stable_key)
+                    .contains("source=yarn.lock")
+                && db
+                    .resolve_stable_key(edge.stable_key)
+                    .contains("schema=yarn-classic-v1")
                 && edge.precision == TopologyPrecision::ExactLockfile
                 && edge.status == TopologyStatus::Resolved
         }));
@@ -995,8 +1010,12 @@ __metadata:
         assert!(output.resolved_dependency_edges.iter().any(|edge| {
             edge.package_name == "react"
                 && edge.resolved_version.as_deref() == Some("18.2.0")
-                && edge.stable_key.contains("source=yarn.lock")
-                && edge.stable_key.contains("schema=yarn-berry-v8")
+                && db
+                    .resolve_stable_key(edge.stable_key)
+                    .contains("source=yarn.lock")
+                && db
+                    .resolve_stable_key(edge.stable_key)
+                    .contains("schema=yarn-berry-v8")
                 && edge.precision == TopologyPrecision::ExactLockfile
                 && edge.status == TopologyStatus::Resolved
         }));
@@ -1029,8 +1048,12 @@ __metadata:
         assert!(output.resolved_dependency_edges.iter().any(|edge| {
             edge.package_name == "react"
                 && edge.resolved_version.as_deref() == Some("18.2.0")
-                && edge.stable_key.contains("source=bun.lock")
-                && edge.stable_key.contains("schema=bun-lock-v1")
+                && db
+                    .resolve_stable_key(edge.stable_key)
+                    .contains("source=bun.lock")
+                && db
+                    .resolve_stable_key(edge.stable_key)
+                    .contains("schema=bun-lock-v1")
                 && edge.precision == TopologyPrecision::ExactLockfile
                 && edge.status == TopologyStatus::Resolved
         }));
@@ -1066,10 +1089,13 @@ __metadata:
         let output = collect_ts_topology(&loaded, &db, None);
 
         assert!(output.resolved_dependency_edges.iter().any(|edge| {
-            edge.stable_key.contains("js-lock-problem")
-                && edge.stable_key.contains("source=bun.lock")
-                && edge
-                    .stable_key
+            db.resolve_stable_key(edge.stable_key)
+                .contains("js-lock-problem")
+                && db
+                    .resolve_stable_key(edge.stable_key)
+                    .contains("source=bun.lock")
+                && db
+                    .resolve_stable_key(edge.stable_key)
                     .contains("reason=no-parseable-selected-lockfile-entries")
                 && edge.status == TopologyStatus::Unsupported
                 && edge.precision == TopologyPrecision::Unsupported
@@ -1100,7 +1126,7 @@ react@^18.0.0:
         let output = collect_ts_topology(&loaded, &db, None);
 
         assert!(output.resolved_dependency_edges.iter().any(|edge| {
-            edge.stable_key
+            db.resolve_stable_key(edge.stable_key)
                 .contains("multiple-lockfile-managers-without-packageManager")
                 && edge.status == TopologyStatus::Ambiguous
                 && edge.precision == TopologyPrecision::Unknown
@@ -1129,7 +1155,9 @@ react@^18.0.0:
         assert!(output.resolved_dependency_edges.iter().any(|edge| {
             edge.package_name == "react"
                 && edge.status == TopologyStatus::MissingLockfile
-                && edge.stable_key.contains("source=pnpm-lock.yaml")
+                && db
+                    .resolve_stable_key(edge.stable_key)
+                    .contains("source=pnpm-lock.yaml")
         }));
         assert!(!output.resolved_dependency_edges.iter().any(|edge| {
             edge.package_name == "react" && edge.resolved_version.as_deref() == Some("18.2.0")
@@ -1154,7 +1182,9 @@ react@^18.0.0:
         assert!(output.resolved_dependency_edges.iter().any(|edge| {
             edge.package_name == "react"
                 && edge.status == TopologyStatus::MissingLockfile
-                && edge.stable_key.contains("source=bun.lock")
+                && db
+                    .resolve_stable_key(edge.stable_key)
+                    .contains("source=bun.lock")
         }));
         assert!(
             !output
@@ -1201,9 +1231,14 @@ react@^18.0.0:
         let output = collect_ts_topology(&loaded, &db, None);
 
         assert!(output.resolved_dependency_edges.iter().any(|edge| {
-            edge.stable_key.contains("js-lock-unsupported")
-                && edge.stable_key.contains("source=package-lock.json")
-                && edge.stable_key.contains("reason=malformed-json")
+            db.resolve_stable_key(edge.stable_key)
+                .contains("js-lock-unsupported")
+                && db
+                    .resolve_stable_key(edge.stable_key)
+                    .contains("source=package-lock.json")
+                && db
+                    .resolve_stable_key(edge.stable_key)
+                    .contains("reason=malformed-json")
                 && edge.status == TopologyStatus::Unsupported
                 && edge.precision == TopologyPrecision::Unsupported
         }));
@@ -1240,10 +1275,13 @@ react@^18.0.0:
         let output = collect_ts_topology(&loaded, &db, None);
 
         assert!(output.resolved_dependency_edges.iter().any(|edge| {
-            edge.stable_key.contains("js-lock-unsupported")
-                && edge.stable_key.contains("schema=package-lock-v1")
-                && edge
-                    .stable_key
+            db.resolve_stable_key(edge.stable_key)
+                .contains("js-lock-unsupported")
+                && db
+                    .resolve_stable_key(edge.stable_key)
+                    .contains("schema=package-lock-v1")
+                && db
+                    .resolve_stable_key(edge.stable_key)
                     .contains("reason=package-lock-v1-dependency-tree-is-not-supported")
                 && edge.status == TopologyStatus::Unsupported
                 && edge.precision == TopologyPrecision::Unsupported
@@ -1462,6 +1500,17 @@ pub(crate) fn collect_ts_topology(
     db: &AnalysisDb,
     _resolver: Option<&TsResolverContext>,
 ) -> TopologyOutput {
+    let interner = db.stable_key_interner();
+    crate::module_graph::with_module_graph_stable_keys(&interner, || {
+        collect_ts_topology_inner(loaded, db, &interner)
+    })
+}
+
+fn collect_ts_topology_inner(
+    loaded: &LoadedConfig,
+    db: &AnalysisDb,
+    interner: &crate::core::StableKeyInterner,
+) -> TopologyOutput {
     let mut output = TopologyOutput::default();
     let ts_files = db
         .files()
@@ -1482,7 +1531,9 @@ pub(crate) fn collect_ts_topology(
             root_path: package_path.clone(),
             manifest_path: Some(package_manifest_path(package_path)),
             language: Some(Language::TypeScript),
-            stable_key: format!("js-workspace:{package_path}"),
+            stable_key: crate::module_graph::intern_module_graph_stable_key(format!(
+                "js-workspace:{package_path}"
+            )),
             producer_id: TS_TOPOLOGY_PROVIDER_ID,
             precision: TopologyPrecision::ExactStatic,
             status: TopologyStatus::Present,
@@ -1510,10 +1561,10 @@ pub(crate) fn collect_ts_topology(
             version: manifest.version.clone(),
             path: package_path.clone(),
             language: Some(Language::TypeScript),
-            stable_key: format!(
+            stable_key: crate::module_graph::intern_module_graph_stable_key(format!(
                 "js-package:{package_path}:{}",
                 manifest.name.as_deref().unwrap_or("")
-            ),
+            )),
             producer_id: TS_TOPOLOGY_PROVIDER_ID,
             precision,
             status,
@@ -1567,18 +1618,18 @@ pub(crate) fn collect_ts_topology(
             path: file.relative_path.clone(),
             language: Some(file.language),
             files: vec![file.id],
-            stable_key: format!(
+            stable_key: crate::module_graph::intern_module_graph_stable_key(format!(
                 "ts-source-set:{}:{}",
                 source_set_kind_label(kind),
                 file.relative_path
-            ),
+            )),
             producer_id: TS_TOPOLOGY_PROVIDER_ID,
             precision: TopologyPrecision::ExactStatic,
             status: TopologyStatus::Present,
         });
     }
 
-    output.normalized()
+    output.normalized(interner)
 }
 
 const TS_TOPOLOGY_PROVIDER_ID: &str = "polint.module_graph";
@@ -2161,12 +2212,12 @@ fn emit_package_requirements(
                 version_requirement: dependency.version_requirement.clone(),
                 kind,
                 manifest_path: Some(package_manifest_path(package_path)),
-                stable_key: format!(
+                stable_key: crate::module_graph::intern_module_graph_stable_key(format!(
                     "js-require:{package_path}:{}:{}:{}",
                     dependency.section,
                     dependency.target_name,
                     dependency.version_requirement.as_deref().unwrap_or("")
-                ),
+                )),
                 producer_id: TS_TOPOLOGY_PROVIDER_ID,
                 precision: dependency.precision,
                 status: dependency.status,
@@ -2261,10 +2312,10 @@ fn emit_lockfile_unsupported_edges(
                 package_name: String::new(),
                 resolved_version: None,
                 kind: ResolvedDependencyKind::LockfileSelected,
-                stable_key: format!(
+                stable_key: crate::module_graph::intern_module_graph_stable_key(format!(
                     "js-lock-unsupported:{package_path}:{}:source={}:schema={}:reason={reason}",
                     unsupported.source_path, unsupported.source_label, manifest.schema_label
-                ),
+                )),
                 producer_id: TS_TOPOLOGY_PROVIDER_ID,
                 precision: unsupported.precision,
                 status: unsupported.status,
@@ -2314,7 +2365,7 @@ fn emit_selected_lockfile_package_edges(
                 package_name: package.name.clone(),
                 resolved_version: Some(package.version.clone()),
                 kind: ResolvedDependencyKind::LockfileSelected,
-                stable_key,
+                stable_key: crate::module_graph::intern_module_graph_stable_key(stable_key),
                 producer_id: TS_TOPOLOGY_PROVIDER_ID,
                 precision: package.precision,
                 status: package.status,
@@ -2387,9 +2438,9 @@ fn emit_lockfile_problem_edge(
             package_name: String::new(),
             resolved_version: None,
             kind: ResolvedDependencyKind::LockfileSelected,
-            stable_key: format!(
+            stable_key: crate::module_graph::intern_module_graph_stable_key(format!(
                 "js-lock-problem:{package_path}:source={source_label}:reason={reason}"
-            ),
+            )),
             producer_id: TS_TOPOLOGY_PROVIDER_ID,
             precision,
             status,
@@ -2429,10 +2480,10 @@ fn emit_missing_lockfile_edges(
                 package_name: target_name.clone(),
                 resolved_version: version_requirement.clone(),
                 kind: ResolvedDependencyKind::LockfileSelected,
-                stable_key: format!(
+                stable_key: crate::module_graph::intern_module_graph_stable_key(format!(
                     "js-lock-missing:{package_path}:{target_name}:{}:source={source_label}",
                     version_requirement.as_deref().unwrap_or("")
-                ),
+                )),
                 producer_id: TS_TOPOLOGY_PROVIDER_ID,
                 precision: TopologyPrecision::Unknown,
                 status: TopologyStatus::MissingLockfile,
@@ -2676,10 +2727,10 @@ fn push_overlay(
         package: None,
         source_set: None,
         kind: RepoTopologyOverlayKind::SourceOfTruthDirectory,
-        stable_key: format!(
+        stable_key: crate::module_graph::intern_module_graph_stable_key(format!(
             "ts-overlay:{package_path}:{label}:{}",
             path.as_deref().unwrap_or("")
-        ),
+        )),
         label,
         path,
         producer_id: TS_TOPOLOGY_PROVIDER_ID,

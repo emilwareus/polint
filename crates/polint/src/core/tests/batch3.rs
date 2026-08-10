@@ -6,7 +6,10 @@
 
         assert_eq!(db.workspace_roots().len(), 1);
         assert_eq!(db.workspace_roots()[0].id.0, 0);
-        assert_eq!(db.workspace_roots()[0].stable_key, "second:root");
+        assert_eq!(
+            db.resolve_stable_key(db.workspace_roots()[0].stable_key).as_ref(),
+            "second:root"
+        );
         assert_eq!(db.topology_packages()[0].id.0, 0);
         assert_eq!(db.source_sets()[0].id.0, 0);
         assert_eq!(db.dependency_requirements()[0].id.0, 0);
@@ -32,20 +35,37 @@
 
         db.replace_import_to_package_facts(edges);
 
-        assert_eq!(db.workspace_roots()[0].stable_key, "base:root");
-        assert_eq!(db.topology_packages()[0].stable_key, "base:package");
-        assert_eq!(db.source_sets()[0].stable_key, "base:source-set");
         assert_eq!(
-            db.dependency_requirements()[0].stable_key,
+            db.resolve_stable_key(db.workspace_roots()[0].stable_key).as_ref(),
+            "base:root"
+        );
+        assert_eq!(
+            db.resolve_stable_key(db.topology_packages()[0].stable_key)
+                .as_ref(),
+            "base:package"
+        );
+        assert_eq!(
+            db.resolve_stable_key(db.source_sets()[0].stable_key).as_ref(),
+            "base:source-set"
+        );
+        assert_eq!(
+            db.resolve_stable_key(db.dependency_requirements()[0].stable_key)
+                .as_ref(),
             "base:requirement"
         );
         assert_eq!(
-            db.resolved_dependency_edges()[0].stable_key,
+            db.resolve_stable_key(db.resolved_dependency_edges()[0].stable_key)
+                .as_ref(),
             "base:resolved"
         );
-        assert_eq!(db.repo_topology_overlays()[0].stable_key, "base:overlay");
         assert_eq!(
-            db.import_to_package_edges()[0].stable_key,
+            db.resolve_stable_key(db.repo_topology_overlays()[0].stable_key)
+                .as_ref(),
+            "base:overlay"
+        );
+        assert_eq!(
+            db.resolve_stable_key(db.import_to_package_edges()[0].stable_key)
+                .as_ref(),
             "updated:import-to-package"
         );
         assert_eq!(db.import_to_package_edges()[0].id.0, 0);

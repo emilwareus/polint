@@ -1,4 +1,7 @@
-use crate::core::{FileId, ImportId, Language, ModuleNodeId, PackageId, ResolvedImportId};
+use crate::core::{
+    FileId, ImportId, Language, ModuleNodeId, PackageId, ResolvedImportId, StableKeyId,
+    StableKeyInterner,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -52,7 +55,7 @@ pub(crate) struct WorkspaceRootFact {
     pub(crate) root_path: String,
     pub(crate) manifest_path: Option<String>,
     pub(crate) language: Option<Language>,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     #[serde(skip_deserializing, default = "module_graph_producer_id")]
     pub(crate) producer_id: &'static str,
     pub(crate) precision: TopologyPrecision,
@@ -70,7 +73,7 @@ pub(crate) struct TopologyPackageFact {
     pub(crate) version: Option<String>,
     pub(crate) path: String,
     pub(crate) language: Option<Language>,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     #[serde(skip_deserializing, default = "module_graph_producer_id")]
     pub(crate) producer_id: &'static str,
     pub(crate) precision: TopologyPrecision,
@@ -86,7 +89,7 @@ pub(crate) struct SourceSetFact {
     pub(crate) path: String,
     pub(crate) language: Option<Language>,
     pub(crate) files: Vec<FileId>,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     #[serde(skip_deserializing, default = "module_graph_producer_id")]
     pub(crate) producer_id: &'static str,
     pub(crate) precision: TopologyPrecision,
@@ -102,7 +105,7 @@ pub(crate) struct DependencyRequirementFact {
     pub(crate) version_requirement: Option<String>,
     pub(crate) kind: RequirementKind,
     pub(crate) manifest_path: Option<String>,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     #[serde(skip_deserializing, default = "module_graph_producer_id")]
     pub(crate) producer_id: &'static str,
     pub(crate) precision: TopologyPrecision,
@@ -118,7 +121,7 @@ pub(crate) struct ResolvedDependencyEdgeFact {
     pub(crate) package_name: String,
     pub(crate) resolved_version: Option<String>,
     pub(crate) kind: ResolvedDependencyKind,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     #[serde(skip_deserializing, default = "module_graph_producer_id")]
     pub(crate) producer_id: &'static str,
     pub(crate) precision: TopologyPrecision,
@@ -130,17 +133,17 @@ pub(crate) struct ImportToPackageFact {
     pub(crate) id: ImportToPackageId,
     pub(crate) syntax_import: Option<ImportId>,
     pub(crate) resolved_import: Option<ResolvedImportId>,
-    pub(crate) semantic_import_stable_key: Option<String>,
+    pub(crate) semantic_import_stable_key: Option<StableKeyId>,
     pub(crate) from_file: Option<FileId>,
     pub(crate) from_package: Option<TopologyPackageId>,
     pub(crate) to_package: Option<TopologyPackageId>,
     pub(crate) target_node: Option<ModuleNodeId>,
-    pub(crate) from_package_stable_key: Option<String>,
-    pub(crate) to_package_stable_key: Option<String>,
-    pub(crate) source_set_stable_key: Option<String>,
+    pub(crate) from_package_stable_key: Option<StableKeyId>,
+    pub(crate) to_package_stable_key: Option<StableKeyId>,
+    pub(crate) source_set_stable_key: Option<StableKeyId>,
     pub(crate) import_path: String,
     pub(crate) context: ImportContextKind,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     #[serde(skip_deserializing, default = "module_topology_producer_id")]
     pub(crate) producer_id: &'static str,
     pub(crate) precision: TopologyPrecision,
@@ -156,7 +159,7 @@ pub(crate) struct RepoTopologyOverlayFact {
     pub(crate) kind: RepoTopologyOverlayKind,
     pub(crate) label: String,
     pub(crate) path: Option<String>,
-    pub(crate) stable_key: String,
+    pub(crate) stable_key: StableKeyId,
     #[serde(skip_deserializing, default = "module_graph_producer_id")]
     pub(crate) producer_id: &'static str,
     pub(crate) precision: TopologyPrecision,
@@ -327,47 +330,54 @@ impl TopologyOutput {
         self.overlays.extend(other.overlays);
     }
 
-    pub(crate) fn normalized(mut self) -> Self {
+    pub(crate) fn normalized(mut self, interner: &StableKeyInterner) -> Self {
         let root_ids = normalize_rows(
             &mut self.workspace_roots,
             |row| row.id,
-            |row| &row.stable_key,
+            |row| row.stable_key,
+            interner,
             |row, id| row.id = WorkspaceRootId(id),
         );
         let package_ids = normalize_rows(
             &mut self.packages,
             |row| row.id,
-            |row| &row.stable_key,
+            |row| row.stable_key,
+            interner,
             |row, id| row.id = TopologyPackageId(id),
         );
         let source_set_ids = normalize_rows(
             &mut self.source_sets,
             |row| row.id,
-            |row| &row.stable_key,
+            |row| row.stable_key,
+            interner,
             |row, id| row.id = SourceSetId(id),
         );
         let requirement_ids = normalize_rows(
             &mut self.dependency_requirements,
             |row| row.id,
-            |row| &row.stable_key,
+            |row| row.stable_key,
+            interner,
             |row, id| row.id = DependencyRequirementId(id),
         );
         normalize_rows(
             &mut self.resolved_dependency_edges,
             |row| row.id,
-            |row| &row.stable_key,
+            |row| row.stable_key,
+            interner,
             |row, id| row.id = ResolvedDependencyEdgeId(id),
         );
         normalize_rows(
             &mut self.import_to_package_edges,
             |row| row.id,
-            |row| &row.stable_key,
+            |row| row.stable_key,
+            interner,
             |row, id| row.id = ImportToPackageId(id),
         );
         normalize_rows(
             &mut self.overlays,
             |row| row.id,
-            |row| &row.stable_key,
+            |row| row.stable_key,
+            interner,
             |row, id| row.id = RepoTopologyOverlayId(id),
         );
         for package in &mut self.packages {
@@ -396,6 +406,99 @@ impl TopologyOutput {
             remap_option(&mut overlay.source_set, &source_set_ids);
         }
         self
+    }
+
+    pub(crate) fn canonicalized_for_cache(
+        mut self,
+        interner: &StableKeyInterner,
+    ) -> (Self, Vec<String>) {
+        let mut texts = self
+            .stable_key_ids()
+            .into_iter()
+            .map(|key| interner.resolve(key).to_string())
+            .collect::<Vec<_>>();
+        texts.sort();
+        texts.dedup();
+        let ids_by_text = texts
+            .iter()
+            .enumerate()
+            .map(|(index, text)| (text.as_str(), StableKeyId(index as u32)))
+            .collect::<BTreeMap<_, _>>();
+        self.remap_stable_keys(|key| ids_by_text[interner.resolve(key).as_ref()]);
+        (self, texts)
+    }
+
+    pub(crate) fn reintern_cached(
+        mut self,
+        stable_key_texts: &[String],
+        interner: &StableKeyInterner,
+    ) -> Option<Self> {
+        let ids = stable_key_texts
+            .iter()
+            .map(|text| interner.intern(text.clone()))
+            .collect::<Vec<_>>();
+        let mut valid = true;
+        self.remap_stable_keys(|key| {
+            ids.get(key.0 as usize).copied().unwrap_or_else(|| {
+                valid = false;
+                StableKeyId(0)
+            })
+        });
+        valid.then_some(self)
+    }
+
+    fn stable_key_ids(&self) -> Vec<StableKeyId> {
+        let mut ids = Vec::new();
+        ids.extend(self.workspace_roots.iter().map(|row| row.stable_key));
+        ids.extend(self.packages.iter().map(|row| row.stable_key));
+        ids.extend(self.source_sets.iter().map(|row| row.stable_key));
+        ids.extend(
+            self.dependency_requirements
+                .iter()
+                .map(|row| row.stable_key),
+        );
+        ids.extend(
+            self.resolved_dependency_edges
+                .iter()
+                .map(|row| row.stable_key),
+        );
+        for row in &self.import_to_package_edges {
+            ids.push(row.stable_key);
+            ids.extend(row.semantic_import_stable_key);
+            ids.extend(row.from_package_stable_key);
+            ids.extend(row.to_package_stable_key);
+            ids.extend(row.source_set_stable_key);
+        }
+        ids.extend(self.overlays.iter().map(|row| row.stable_key));
+        ids
+    }
+
+    fn remap_stable_keys(&mut self, mut remap: impl FnMut(StableKeyId) -> StableKeyId) {
+        for row in &mut self.workspace_roots {
+            row.stable_key = remap(row.stable_key);
+        }
+        for row in &mut self.packages {
+            row.stable_key = remap(row.stable_key);
+        }
+        for row in &mut self.source_sets {
+            row.stable_key = remap(row.stable_key);
+        }
+        for row in &mut self.dependency_requirements {
+            row.stable_key = remap(row.stable_key);
+        }
+        for row in &mut self.resolved_dependency_edges {
+            row.stable_key = remap(row.stable_key);
+        }
+        for row in &mut self.import_to_package_edges {
+            row.stable_key = remap(row.stable_key);
+            row.semantic_import_stable_key = row.semantic_import_stable_key.map(&mut remap);
+            row.from_package_stable_key = row.from_package_stable_key.map(&mut remap);
+            row.to_package_stable_key = row.to_package_stable_key.map(&mut remap);
+            row.source_set_stable_key = row.source_set_stable_key.map(&mut remap);
+        }
+        for row in &mut self.overlays {
+            row.stable_key = remap(row.stable_key);
+        }
     }
 }
 
@@ -481,13 +584,14 @@ fn offset_option_id<Id: OffsetTopologyId>(value: &mut Option<Id>, offset: u64) {
 fn normalize_rows<T, Id>(
     rows: &mut [T],
     id: impl Fn(&T) -> Id,
-    stable_key: impl Fn(&T) -> &str,
+    stable_key: impl Fn(&T) -> StableKeyId,
+    interner: &StableKeyInterner,
     mut assign_id: impl FnMut(&mut T, u64),
 ) -> BTreeMap<Id, Id>
 where
     Id: Copy + Ord + From<u64>,
 {
-    rows.sort_by(|left, right| stable_key(left).cmp(stable_key(right)));
+    rows.sort_by_cached_key(|row| interner.resolve(stable_key(row)));
     let mut ids = BTreeMap::new();
     for (index, row) in rows.iter_mut().enumerate() {
         let old_id = id(row);
@@ -518,6 +622,10 @@ fn module_topology_producer_id() -> &'static str {
 mod tests {
     use super::*;
 
+    fn stable_key(key: &str) -> StableKeyId {
+        crate::core::stable_key_for_test(key)
+    }
+
     fn root(key: &str, id: u64) -> WorkspaceRootFact {
         WorkspaceRootFact {
             id: WorkspaceRootId(id),
@@ -525,7 +633,7 @@ mod tests {
             root_path: ".".to_string(),
             manifest_path: None,
             language: None,
-            stable_key: key.to_string(),
+            stable_key: stable_key(key),
             producer_id: "test",
             precision: TopologyPrecision::ExactStatic,
             status: TopologyStatus::Present,
@@ -543,7 +651,7 @@ mod tests {
             version: None,
             path: ".".to_string(),
             language: Some(Language::TypeScript),
-            stable_key: key.to_string(),
+            stable_key: stable_key(key),
             producer_id: "test",
             precision: TopologyPrecision::ExactStatic,
             status: TopologyStatus::Present,
@@ -559,7 +667,7 @@ mod tests {
             path: "src".to_string(),
             language: Some(Language::TypeScript),
             files: vec![FileId(0)],
-            stable_key: key.to_string(),
+            stable_key: stable_key(key),
             producer_id: "test",
             precision: TopologyPrecision::ExactStatic,
             status: TopologyStatus::Present,
@@ -575,7 +683,7 @@ mod tests {
             version_requirement: Some("^1.0.0".to_string()),
             kind: RequirementKind::Runtime,
             manifest_path: Some("package.json".to_string()),
-            stable_key: key.to_string(),
+            stable_key: stable_key(key),
             producer_id: "test",
             precision: TopologyPrecision::ExactStatic,
             status: TopologyStatus::Present,
@@ -591,7 +699,7 @@ mod tests {
             package_name: key.to_string(),
             resolved_version: Some("1.0.0".to_string()),
             kind: ResolvedDependencyKind::Lockfile,
-            stable_key: key.to_string(),
+            stable_key: stable_key(key),
             producer_id: "test",
             precision: TopologyPrecision::ExactLockfile,
             status: TopologyStatus::Resolved,
@@ -613,7 +721,7 @@ mod tests {
             source_set_stable_key: None,
             import_path: "example".to_string(),
             context: ImportContextKind::Source,
-            stable_key: key.to_string(),
+            stable_key: stable_key(key),
             producer_id: "test",
             precision: TopologyPrecision::ExactStatic,
             status: ImportToPackageStatus::Resolved,
@@ -629,7 +737,7 @@ mod tests {
             kind: RepoTopologyOverlayKind::OwnershipZone,
             label: key.to_string(),
             path: Some("src".to_string()),
-            stable_key: key.to_string(),
+            stable_key: stable_key(key),
             producer_id: "test",
             precision: TopologyPrecision::Heuristic,
             status: TopologyStatus::Present,
@@ -656,31 +764,37 @@ mod tests {
             import_to_package_edges: vec![import_edge("import:z", 99), import_edge("import:a", 42)],
             overlays: vec![overlay("overlay:z", 99), overlay("overlay:a", 42)],
         }
-        .normalized();
+        .normalized(&crate::core::test_stable_key_interner());
 
         assert_eq!(output.workspace_roots[0].id, WorkspaceRootId(0));
-        assert_eq!(output.workspace_roots[0].stable_key, "root:a");
+        assert_eq!(output.workspace_roots[0].stable_key, stable_key("root:a"));
         assert_eq!(output.packages[0].id, TopologyPackageId(0));
-        assert_eq!(output.packages[0].stable_key, "package:a");
+        assert_eq!(output.packages[0].stable_key, stable_key("package:a"));
         assert_eq!(output.source_sets[0].id, SourceSetId(0));
-        assert_eq!(output.source_sets[0].stable_key, "source-set:a");
+        assert_eq!(output.source_sets[0].stable_key, stable_key("source-set:a"));
         assert_eq!(
             output.dependency_requirements[0].id,
             DependencyRequirementId(0)
         );
         assert_eq!(
             output.dependency_requirements[0].stable_key,
-            "requirement:a"
+            stable_key("requirement:a")
         );
         assert_eq!(
             output.resolved_dependency_edges[0].id,
             ResolvedDependencyEdgeId(0)
         );
-        assert_eq!(output.resolved_dependency_edges[0].stable_key, "resolved:a");
+        assert_eq!(
+            output.resolved_dependency_edges[0].stable_key,
+            stable_key("resolved:a")
+        );
         assert_eq!(output.import_to_package_edges[0].id, ImportToPackageId(0));
-        assert_eq!(output.import_to_package_edges[0].stable_key, "import:a");
+        assert_eq!(
+            output.import_to_package_edges[0].stable_key,
+            stable_key("import:a")
+        );
         assert_eq!(output.overlays[0].id, RepoTopologyOverlayId(0));
-        assert_eq!(output.overlays[0].stable_key, "overlay:a");
+        assert_eq!(output.overlays[0].stable_key, stable_key("overlay:a"));
     }
 
     #[test]
@@ -705,98 +819,148 @@ mod tests {
         };
 
         left.merge(right);
-        let output = left.normalized();
+        let output = left.normalized(&crate::core::test_stable_key_interner());
 
         let source_set_a = output
             .source_sets
             .iter()
-            .find(|row| row.stable_key == "source-set:a")
+            .find(|row| row.stable_key == stable_key("source-set:a"))
             .expect("right source set survives merge");
         assert_eq!(
             stable_key_for_root(&output, source_set_a.root),
-            Some("root:a")
+            Some(stable_key("root:a"))
         );
         assert_eq!(
             stable_key_for_package(&output, source_set_a.package),
-            Some("package:a")
+            Some(stable_key("package:a"))
         );
 
         let requirement_a = output
             .dependency_requirements
             .iter()
-            .find(|row| row.stable_key == "requirement:a")
+            .find(|row| row.stable_key == stable_key("requirement:a"))
             .expect("right requirement survives merge");
         assert_eq!(
             stable_key_for_package(&output, requirement_a.from_package),
-            Some("package:a")
+            Some(stable_key("package:a"))
         );
 
         let resolved_a = output
             .resolved_dependency_edges
             .iter()
-            .find(|row| row.stable_key == "resolved:a")
+            .find(|row| row.stable_key == stable_key("resolved:a"))
             .expect("right resolved edge survives merge");
         assert_eq!(
             stable_key_for_requirement(&output, resolved_a.requirement),
-            Some("requirement:a")
+            Some(stable_key("requirement:a"))
         );
         assert_eq!(
             stable_key_for_package(&output, resolved_a.from_package),
-            Some("package:a")
+            Some(stable_key("package:a"))
         );
 
         let overlay_a = output
             .overlays
             .iter()
-            .find(|row| row.stable_key == "overlay:a")
+            .find(|row| row.stable_key == stable_key("overlay:a"))
             .expect("right overlay survives merge");
-        assert_eq!(stable_key_for_root(&output, overlay_a.root), Some("root:a"));
+        assert_eq!(
+            stable_key_for_root(&output, overlay_a.root),
+            Some(stable_key("root:a"))
+        );
         assert_eq!(
             stable_key_for_package(&output, overlay_a.package),
-            Some("package:a")
+            Some(stable_key("package:a"))
         );
         assert_eq!(
             stable_key_for_source_set(&output, overlay_a.source_set),
-            Some("source-set:a")
+            Some(stable_key("source-set:a"))
         );
     }
 
-    fn stable_key_for_root(output: &TopologyOutput, id: Option<WorkspaceRootId>) -> Option<&str> {
+    #[test]
+    fn cache_identity_table_reinterns_into_an_independent_interner() {
+        let source = StableKeyInterner::default();
+        let output = TopologyOutput {
+            workspace_roots: vec![WorkspaceRootFact {
+                stable_key: source.intern("root:z"),
+                ..root("root:a", 0)
+            }],
+            import_to_package_edges: vec![ImportToPackageFact {
+                stable_key: source.intern("import:a"),
+                from_package_stable_key: Some(source.intern("package:a")),
+                ..import_edge("import:unused", 0)
+            }],
+            ..TopologyOutput::default()
+        };
+
+        let (cached, texts) = output.canonicalized_for_cache(&source);
+        let target = StableKeyInterner::default();
+        target.intern("unrelated");
+        let restored = cached
+            .reintern_cached(&texts, &target)
+            .expect("cache table covers every identity");
+
+        assert_eq!(
+            target
+                .resolve(restored.workspace_roots[0].stable_key)
+                .as_ref(),
+            "root:z"
+        );
+        assert_eq!(
+            target
+                .resolve(
+                    restored.import_to_package_edges[0]
+                        .from_package_stable_key
+                        .expect("related package identity"),
+                )
+                .as_ref(),
+            "package:a"
+        );
+    }
+
+    fn stable_key_for_root(
+        output: &TopologyOutput,
+        id: Option<WorkspaceRootId>,
+    ) -> Option<StableKeyId> {
         output
             .workspace_roots
             .iter()
             .find(|row| Some(row.id) == id)
-            .map(|row| row.stable_key.as_str())
+            .map(|row| row.stable_key)
     }
 
     fn stable_key_for_package(
         output: &TopologyOutput,
         id: Option<TopologyPackageId>,
-    ) -> Option<&str> {
+    ) -> Option<StableKeyId> {
         output
             .packages
             .iter()
             .find(|row| Some(row.id) == id)
-            .map(|row| row.stable_key.as_str())
+            .map(|row| row.stable_key)
     }
 
-    fn stable_key_for_source_set(output: &TopologyOutput, id: Option<SourceSetId>) -> Option<&str> {
+    fn stable_key_for_source_set(
+        output: &TopologyOutput,
+        id: Option<SourceSetId>,
+    ) -> Option<StableKeyId> {
         output
             .source_sets
             .iter()
             .find(|row| Some(row.id) == id)
-            .map(|row| row.stable_key.as_str())
+            .map(|row| row.stable_key)
     }
 
     fn stable_key_for_requirement(
         output: &TopologyOutput,
         id: Option<DependencyRequirementId>,
-    ) -> Option<&str> {
+    ) -> Option<StableKeyId> {
         output
             .dependency_requirements
             .iter()
             .find(|row| Some(row.id) == id)
-            .map(|row| row.stable_key.as_str())
+            .map(|row| row.stable_key)
     }
 
     #[test]

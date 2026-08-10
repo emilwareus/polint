@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-pub(crate) const MODULE_GRAPH_LAYER_SCHEMA: &str = "module-graph-facts-v2";
-pub(crate) const MODULE_TOPOLOGY_LAYER_SCHEMA: &str = "module-topology-facts-v1";
+pub(crate) const MODULE_GRAPH_LAYER_SCHEMA: &str = "module-graph-facts-v3";
+pub(crate) const MODULE_TOPOLOGY_LAYER_SCHEMA: &str = "module-topology-facts-v2";
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ModuleGraphOutput {
@@ -25,6 +25,7 @@ pub(crate) struct ModuleGraphOutput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ModuleGraphLayerPayload {
     pub(crate) schema: String,
+    pub(crate) stable_key_texts: Vec<String>,
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) capability_support: Vec<CapabilitySupport>,
     pub(crate) resolved_imports: Vec<ResolvedImportFact>,
@@ -41,6 +42,7 @@ pub(crate) struct ModuleGraphLayerPayload {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ModuleTopologyLayerPayload {
     pub(crate) schema: String,
+    pub(crate) stable_key_texts: Vec<String>,
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) capability_support: Vec<CapabilitySupport>,
     pub(crate) import_to_package_edges: Vec<ImportToPackageFact>,

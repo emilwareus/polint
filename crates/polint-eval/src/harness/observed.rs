@@ -1417,7 +1417,7 @@ fn topology_facts(db: &AnalysisDb) -> Vec<ObservedItem> {
     facts.extend(db.workspace_roots().iter().map(|row| {
         topology_fact(
             "WorkspaceRoot",
-            row.stable_key.as_str(),
+            db.resolve_stable_key(row.stable_key).as_ref(),
             row.producer_id,
             row.precision,
             topology_status(row.status),
@@ -1432,7 +1432,7 @@ fn topology_facts(db: &AnalysisDb) -> Vec<ObservedItem> {
     facts.extend(db.topology_packages().iter().map(|row| {
         topology_fact(
             "TopologyPackage",
-            row.stable_key.as_str(),
+            db.resolve_stable_key(row.stable_key).as_ref(),
             row.producer_id,
             row.precision,
             topology_status(row.status),
@@ -1445,7 +1445,7 @@ fn topology_facts(db: &AnalysisDb) -> Vec<ObservedItem> {
     facts.extend(db.source_sets().iter().map(|row| {
         topology_fact(
             "SourceSet",
-            row.stable_key.as_str(),
+            db.resolve_stable_key(row.stable_key).as_ref(),
             row.producer_id,
             row.precision,
             topology_status(row.status),
@@ -1458,7 +1458,7 @@ fn topology_facts(db: &AnalysisDb) -> Vec<ObservedItem> {
     facts.extend(db.dependency_requirements().iter().map(|row| {
         topology_fact(
             "DependencyRequirement",
-            row.stable_key.as_str(),
+            db.resolve_stable_key(row.stable_key).as_ref(),
             row.producer_id,
             row.precision,
             topology_status(row.status),
@@ -1475,7 +1475,7 @@ fn topology_facts(db: &AnalysisDb) -> Vec<ObservedItem> {
     facts.extend(db.resolved_dependency_edges().iter().map(|row| {
         topology_fact(
             "ResolvedDependencyEdge",
-            row.stable_key.as_str(),
+            db.resolve_stable_key(row.stable_key).as_ref(),
             row.producer_id,
             row.precision,
             topology_status(row.status),
@@ -1488,7 +1488,7 @@ fn topology_facts(db: &AnalysisDb) -> Vec<ObservedItem> {
     facts.extend(db.import_to_package_edges().iter().map(|row| {
         topology_fact(
             "ImportToPackage",
-            row.stable_key.as_str(),
+            db.resolve_stable_key(row.stable_key).as_ref(),
             row.producer_id,
             row.precision,
             import_to_package_status(row.status),
@@ -1496,17 +1496,25 @@ fn topology_facts(db: &AnalysisDb) -> Vec<ObservedItem> {
                 "import:{};context:{:?};from:{};to:{};source_set:{};semantic:{}",
                 row.import_path,
                 row.context,
-                row.from_package_stable_key.as_deref().unwrap_or(""),
-                row.to_package_stable_key.as_deref().unwrap_or(""),
-                row.source_set_stable_key.as_deref().unwrap_or(""),
-                row.semantic_import_stable_key.as_deref().unwrap_or("")
+                row.from_package_stable_key
+                    .map(|key| db.resolve_stable_key(key))
+                    .unwrap_or_default(),
+                row.to_package_stable_key
+                    .map(|key| db.resolve_stable_key(key))
+                    .unwrap_or_default(),
+                row.source_set_stable_key
+                    .map(|key| db.resolve_stable_key(key))
+                    .unwrap_or_default(),
+                row.semantic_import_stable_key
+                    .map(|key| db.resolve_stable_key(key))
+                    .unwrap_or_default()
             ),
         )
     }));
     facts.extend(db.repo_topology_overlays().iter().map(|row| {
         topology_fact(
             "RepoTopologyOverlay",
-            row.stable_key.as_str(),
+            db.resolve_stable_key(row.stable_key).as_ref(),
             row.producer_id,
             row.precision,
             topology_status(row.status),
